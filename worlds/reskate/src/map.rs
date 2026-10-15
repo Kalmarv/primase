@@ -1174,34 +1174,8 @@ pub struct Extras<'a> {
     pub grind: Vec<GrindCurve>,
 }
 
-/// `MathF.Round(x, digits)` (to even), in single precision.
-pub fn round_f32(x: f32, digits: u32) -> f32 {
-    if x.abs() < 1e8 {
-        let p = 10f32.powi(digits as i32);
-        (x * p).round_ties_even() / p
-    } else {
-        x
-    }
-}
-
 fn map_vec(v: Sdx) -> [f32; 3] {
     [v.x, v.z, -v.y]
-}
-
-/// Rounded to 4 decimals, half to even; 0 when not finite. Positions, light values and lengths in map.json and
-/// trainer.json are written at this precision.
-pub fn r4(v: f64) -> f64 {
-    if !v.is_finite() {
-        0.0
-    } else if v.abs() < 1e16 {
-        (v * 1e4).round_ties_even() / 1e4
-    } else {
-        v
-    }
-}
-
-fn r4s<const N: usize>(v: [f32; N]) -> [f64; N] {
-    v.map(|x| r4(f64::from(x)))
 }
 
 /// The lights a map keeps (at most `max` per 200 m cell: group "" first, then the highest priority), by position.
@@ -1270,28 +1244,28 @@ fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> (Vec<LightJson>,
                 name: format!("{prefix}{n:06}"),
                 source_path: l.source.clone(),
                 kind: if l.spot { "spot" } else { "point" },
-                position: r4s(map_vec(l.pos + off)),
-                direction: r4s(map_vec(fwd)),
+                position: map_vec(l.pos + off),
+                direction: map_vec(fwd),
                 basis: Basis {
-                    right: r4s(map_vec(right)),
-                    up: r4s(map_vec(up)),
-                    forward: r4s(map_vec(fwd)),
+                    right: map_vec(right),
+                    up: map_vec(up),
+                    forward: map_vec(fwd),
                 },
-                color_linear: r4s([l.r, l.g, l.b]),
-                energy: r4(f64::from(l.energy)),
+                color_linear: [l.r, l.g, l.b],
+                energy: l.energy,
                 normalize_power: true,
                 uses_light_nodes: false,
                 exposure: 0,
                 cast_shadow: l.cast_shadow,
                 use_custom_distance: true,
-                cutoff_distance: r4(f64::from(l.range)),
+                cutoff_distance: l.range,
                 diffuse_factor: 1,
                 specular_factor: 1,
                 time_of_day: l.time_of_day,
                 native_entity_authored: false,
-                radius: r4(f64::from(l.radius)),
-                spot_size_radians: l.spot.then(|| r4(f64::from(l.spot_size))),
-                spot_blend: l.spot.then(|| r4(f64::from(l.spot_blend))),
+                radius: l.radius,
+                spot_size_radians: l.spot.then_some(l.spot_size),
+                spot_blend: l.spot.then_some(l.spot_blend),
             }
         })
         .collect();
@@ -1547,7 +1521,7 @@ impl MapWriter {
                 }),
             metallic: m.metallic.unwrap_or(0.0),
             texture: file(m.tex),
-            base_color_factor: m.base_factor.map(r4s),
+            base_color_factor: m.base_factor,
             base_color_extension: m.wrap.clone(),
             normal_texture: file(m.normal),
             normal_srgb: (m.normal >= 0).then_some(false),
@@ -1859,7 +1833,7 @@ impl MapWriter {
         }
         let trigger_effects = self.effects_json(&markers, "trigger_effect", &col);
         let vfx_prefabs = self.effects_json(&markers, "vfx", &col);
-        let mut trainer: Vec<(String, [f64; 3])> = Vec::new();
+        let mut trainer: Vec<(String, [f32; 3])> = Vec::new();
         let mut travel_points = Vec::new();
         let (mut travel, mut n) = (0usize, 0usize);
         for (i, st) in markers.iter().enumerate() {
@@ -1893,7 +1867,7 @@ impl MapWriter {
             if off.z != 0.0 {
                 gy += f64::from(off.z);
             }
-            let p = [r4(f64::from(sx + off.x)), r4(gy), r4(f64::from(-(sy + off.y)))];
+            let p = [sx + off.x, gy as f32, -(sy + off.y)];
             travel_points.push(TravelPointJson {
                 name: id.clone(),
                 source_name: id.clone(),
@@ -1959,11 +1933,7 @@ impl MapWriter {
         }
         let spawn_json = |s: &(f32, f32, f32, f64, String), name: &str| SpawnJson {
             name: name.to_owned(),
-            position: [
-                r4(f64::from(s.0 + off.x)),
-                r4(f64::from(s.2)),
-                r4(f64::from(-(s.1 + off.y))),
-            ],
+            position: [s.0 + off.x, s.2, -(s.1 + off.y)],
             yaw: s.3,
         };
         let map = MapJson {
@@ -2027,9 +1997,9 @@ impl MapWriter {
             trainer.push((
                 name,
                 [
-                    r4(f64::from(sx + off.x)),
-                    r4(f64::from(gz) + lift + f64::from(off.z)),
-                    r4(f64::from(-(sy + off.y))),
+                    sx + off.x,
+                    (f64::from(gz) + lift + f64::from(off.z)) as f32,
+                    -(sy + off.y),
                 ],
             ));
         }
@@ -2071,7 +2041,7 @@ impl MapWriter {
                 .then(a.pass.cmp(&b.pass))
                 .then(a.order.cmp(&b.order))
         });
-        let r2 = |v: Sdx| [v.x, v.y, v.z].map(|x| round_f32(x, 2));
+        let r2 = |v: Sdx| [v.x, v.y, v.z];
         let pieces = PiecesJson {
             overlay_step_m: self.o.overlay_step,
             pieces: recs
@@ -2081,7 +2051,7 @@ impl MapWriter {
                     material: &p.material,
                     pass: p.pass,
                     order: p.order,
-                    shift_mm: round_f32(p.shift_mm, 2),
+                    shift_mm: p.shift_mm,
                     tris: p.tris,
                     gta: r2(p.centre),
                     drawable: &p.drawable,
@@ -2126,8 +2096,8 @@ mod tests {
         }
     }
 
-    fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f64 {
+        (0..3).map(|i| f64::from(a[i]) * f64::from(b[i])).sum()
     }
 
     fn acc(seq: usize) -> Acc {
@@ -2186,10 +2156,10 @@ mod tests {
         for (l, j) in lights.iter().zip(&json) {
             let b = &j.basis;
             for (u, v) in [(b.right, b.up), (b.right, b.forward), (b.up, b.forward)] {
-                assert!(dot(u, v).abs() < 1e-3, "{:?}: not orthogonal {u:?} {v:?}", l.dir);
+                assert!(dot(u, v).abs() < 1e-6, "{:?}: not orthogonal {u:?} {v:?}", l.dir);
             }
             for u in [b.right, b.up, b.forward] {
-                assert!((dot(u, u) - 1.0).abs() < 1e-3, "{:?}: not unit {u:?}", l.dir);
+                assert!((dot(u, u) - 1.0).abs() < 1e-6, "{:?}: not unit {u:?}", l.dir);
             }
         }
         // Studio's frame (x, z, -y): the fallback axes and the kept tangent

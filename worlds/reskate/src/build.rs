@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::map::{Ctx, Extras, MapWriter, MeshSource, WriterOptions, r4};
+use crate::map::{Ctx, Extras, MapWriter, MeshSource, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
@@ -592,7 +592,7 @@ fn stats_json(
             lights_without_tangent: r.lights_without_tangent,
             grind_curves: r.grind_curves,
             grind_pieces: r.grind_pieces,
-            grind_length_m: r4(f64::from(r.grind_length)),
+            grind_length_m: r.grind_length,
             travel_points: r.travel_points,
             trainer_spots: r.trainer_spots,
             peak_mesh_bytes: r.peak_mesh_bytes,

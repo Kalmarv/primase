@@ -86,7 +86,7 @@ pub struct SurfaceMaterial {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_color_factor: Option<[f64; 4]>,
+    pub base_color_factor: Option<[f32; 4]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_color_extension: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,33 +138,33 @@ pub struct LightJson {
     pub source_path: String,
     #[serde(rename = "type")]
     pub kind: &'static str,
-    pub position: [f64; 3],
-    pub direction: [f64; 3],
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
     pub basis: Basis,
-    pub color_linear: [f64; 3],
-    pub energy: f64,
+    pub color_linear: [f32; 3],
+    pub energy: f32,
     pub normalize_power: bool,
     pub uses_light_nodes: bool,
     pub exposure: i32,
     pub cast_shadow: bool,
     pub use_custom_distance: bool,
-    pub cutoff_distance: f64,
+    pub cutoff_distance: f32,
     pub diffuse_factor: i32,
     pub specular_factor: i32,
     pub time_of_day: i32,
     pub native_entity_authored: bool,
-    pub radius: f64,
+    pub radius: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub spot_size_radians: Option<f64>,
+    pub spot_size_radians: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub spot_blend: Option<f64>,
+    pub spot_blend: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct Basis {
-    pub right: [f64; 3],
-    pub up: [f64; 3],
-    pub forward: [f64; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub forward: [f32; 3],
 }
 
 /// A trigger effect or a VFX prefab.
@@ -181,7 +181,7 @@ pub struct TravelPointJson {
     pub source_name: String,
     pub source_path: String,
     pub source_collections: [&'static str; 1],
-    pub position: [f64; 3],
+    pub position: [f32; 3],
     pub yaw: f32,
     pub stop_name: String,
     pub shelter: bool,
@@ -190,7 +190,7 @@ pub struct TravelPointJson {
 #[derive(Debug, Serialize)]
 pub struct SpawnJson {
     pub name: String,
-    pub position: [f64; 3],
+    pub position: [f32; 3],
     pub yaw: f64,
 }
 
@@ -227,7 +227,7 @@ pub struct TrainerJson<'a> {
 #[derive(Debug, Serialize)]
 pub struct TrainerSpot {
     pub name: String,
-    pub position: [f64; 3],
+    pub position: [f32; 3],
 }
 
 /// `pieces.json`: where each merged piece came from and how the overlay stack moved it.
@@ -315,7 +315,7 @@ pub struct Totals {
     pub lights_without_tangent: usize,
     pub grind_curves: i64,
     pub grind_pieces: i64,
-    pub grind_length_m: f64,
+    pub grind_length_m: f32,
     pub travel_points: usize,
     pub trainer_spots: usize,
     pub peak_mesh_bytes: i64,

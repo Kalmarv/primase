@@ -26,6 +26,10 @@
 //!   always), each such file counted and named;
 //! - every other file by bytes.
 //!
+//! Where the reference rounds what it writes (to 4 decimals: light values, spawn, travel and trainer positions, the
+//! budget's base colour factors, the grind length; to 2 decimals in pieces.json, our own log), our unrounded f32 may
+//! differ from its number by the rounding (plus one f32 step), counted and named per rounding.
+//!
 //! Not compared: `stats.json` `totals.seconds` (run time), and our own values that depend on our encoders: the PNG
 //! compressor and the GLB JSON text (`textures_index.json` `bytes` of `.png` entries, `stats.json`
 //! `totals.texture_file_bytes` and `totals.mesh_file_bytes`). `ui/map_image.png`, drawn in the textures' mean
@@ -512,6 +516,92 @@ fn prepared(rel: &str, mut v: Value, renames: Option<&Renames>) -> Value {
     v
 }
 
+/// How far from the reference's value ours may be where the reference rounds what it writes: to 4 decimals (lights,
+/// spawn and travel positions, trainer spots, the budget's base colour factors, the grind length) and, in our own
+/// piece log, to 2 decimals. `path`: `$` then `.key` and `[]` per level.
+fn reference_rounding(file: &str, path: &str) -> Option<f64> {
+    const LIGHT: [&str; 9] = [
+        "position",
+        "direction",
+        "basis",
+        "color_linear",
+        "energy",
+        "cutoff_distance",
+        "radius",
+        "spot_size_radians",
+        "spot_blend",
+    ];
+    let four = match file {
+        "map.json" => {
+            path.strip_prefix("$.lights[].")
+                .is_some_and(|k| LIGHT.iter().any(|l| k.starts_with(l)))
+                || [
+                    "$.spawn.position[]",
+                    "$.spawn_points[].position[]",
+                    "$.travel_points[].position[]",
+                ]
+                .contains(&path)
+                || (path.starts_with("$.materials.") && path.ends_with(".base_color_factor[]"))
+        }
+        "trainer.json" => path == "$.spots[].position[]",
+        "stats.json" => path == "$.totals.grind_length_m",
+        _ => false,
+    };
+    if four {
+        return Some(5e-5);
+    }
+    (file == "pieces.json"
+        && ["$.pieces[].gta[]", "$.pieces[].entity[]", "$.pieces[].shift_mm"].contains(&path))
+    .then_some(5e-3)
+}
+
+/// Numbers taken as the reference's because it rounds them (`reference_rounding`): how many, and the largest
+/// difference, per rounding.
+#[derive(Default)]
+struct Rounded {
+    count: BTreeMap<&'static str, u64>,
+    max: BTreeMap<&'static str, f64>,
+}
+
+/// Where the reference rounds a number and ours (an f32) is within the rounding of it (plus one f32 step, since
+/// the reference rounds the f32's exact value), take the reference's number, counted.
+fn fold_rounded(file: &str, theirs: &Value, ours: &mut Value, path: &str, r: &mut Rounded) {
+    match (theirs, ours) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, x) in a {
+                if let Some(y) = b.get_mut(k) {
+                    fold_rounded(file, x, y, &format!("{path}.{k}"), r);
+                }
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            for (x, y) in a.iter().zip(b.iter_mut()) {
+                fold_rounded(file, x, y, &format!("{path}[]"), r);
+            }
+        }
+        (Value::Number(x), y @ Value::Number(_)) => {
+            let Some(step) = reference_rounding(file, path) else {
+                return;
+            };
+            let (a, b) = (x.as_f64().unwrap(), y.as_f64().unwrap() as f32);
+            let d = (a - f64::from(b)).abs();
+            let spacing = f64::from(f32::from_bits(b.abs().to_bits() + 1) - b.abs());
+            if d > 0.0 && d <= step + spacing {
+                let name = if step < 1e-3 {
+                    "reference writer rounds to 4 decimals"
+                } else {
+                    "reference writer rounds to 2 decimals (pieces.json, our own log)"
+                };
+                *r.count.entry(name).or_default() += 1;
+                let m = r.max.entry(name).or_default();
+                *m = m.max(d);
+                *y = Value::Number(x.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The numbers the JSON comparisons saw, summed.
 #[derive(Default)]
 struct Numbers {
@@ -572,6 +662,7 @@ fn rust_writer_matches_the_reference() {
     );
     let mut dds_flag: Vec<String> = Vec::new();
     let mut numbers = Numbers::default();
+    let mut rounded = Rounded::default();
     let mut sections = GateReport::new(
         "objects: the primitive index points at a primitive of the object's material",
         Tolerance::Exact,
@@ -687,7 +778,8 @@ fn rust_writer_matches_the_reference() {
                 }
             } else if rel.ends_with(".json") {
                 let ja = prepared(rel, serde_json::from_slice(&a).unwrap(), None);
-                let jb = prepared(rel, serde_json::from_slice(&b).unwrap(), Some(&renames));
+                let mut jb = prepared(rel, serde_json::from_slice(&b).unwrap(), Some(&renames));
+                fold_rounded(rel, &ja, &mut jb, "$", &mut rounded);
                 let c = compare_json(&ja, &jb, 0);
                 numbers.add(&c);
                 if c.equal() {
@@ -760,6 +852,12 @@ fn rust_writer_matches_the_reference() {
             .collect::<String>(),
     )
     .unwrap();
+    for (name, n) in &rounded.count {
+        println!(
+            "{name}: {n} numbers within it, largest difference {:e}",
+            rounded.max[name]
+        );
+    }
     println!(
         "not compared: stats.json totals.seconds (run time); our own values: textures_index.json bytes of .png \
          entries, stats.json totals.texture_file_bytes, stats.json totals.mesh_file_bytes"
