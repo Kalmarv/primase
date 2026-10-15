@@ -28,6 +28,8 @@
 //!   (we decode BCn by the D3D rules, the reference with CodeWalker's arithmetic); each such texture is counted and
 //!   listed in `PRIMASE_OUT/reskate-gate/bcn_within_1.txt`; `ui/map_image.png` (drawn in those textures' mean
 //!   colours and shaded by slope from derived normals) within 2 per channel;
+//! - Normal PNGs referenced by materials: outside-disk XY with rebuilt Z is projected to unit length,
+//!   counted per pixel with encoded direction change <= 0.31 degrees; other pixels keep the codec channel bound.
 //! - DDS files by their header fields and payload, exactly, except that a single-mip texture may have the
 //!   `DDSD_MIPMAPCOUNT` flag on one side only (the DDS spec sets it for mipmapped textures, the reference writer
 //!   always), each such file counted and named;
@@ -140,6 +142,62 @@ fn png_diff(a: &[u8], b: &[u8]) -> Result<u32, String> {
             .unwrap_or(0)),
         _ => Err("sample layouts differ".into()),
     }
+}
+
+/// Normal PNGs retain the ordinary per-channel codec bound except for XY
+/// outside the disk with rebuilt blue 128. Those vectors must project onto the
+/// unit hemisphere and retain direction within 0.31 degrees after quantization.
+fn normal_png_diff(a: &[u8], b: &[u8], codec_bound: u8) -> Result<(u64, f64), String> {
+    png_diff(a, b)?; // Validate envelope and sample layout before pixel comparison.
+    let a = primase_image::read_png(a).map_err(|e| e.to_string())?.image;
+    let b = primase_image::read_png(b).map_err(|e| e.to_string())?.image;
+    let (primase_image::Samples::U8(a), primase_image::Samples::U8(b)) = (a.samples, b.samples) else {
+        return Err("normal gate requires RGBA8".into());
+    };
+    let mut count = 0;
+    let mut maximum = 0f64;
+    for (a, b) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
+        let decode = |p: &[u8; 4]| [p[0], p[1], p[2]].map(|v| f64::from(v) / 127.5 - 1.);
+        let x = decode(a);
+        let y = decode(b);
+        if x[0] * x[0] + x[1] * x[1] > 1. && a[2] == 128 {
+            let length = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let dot = x.iter().zip(y).map(|(a, b)| a * b).sum::<f64>();
+            let angle = (dot / (length(x) * length(y))).clamp(-1., 1.).acos().to_degrees();
+            // RGB8 unit-vector quantization error is at most sqrt(3)/255.
+            if angle > 0.31 || (length(y) - 1.).abs() > 3f64.sqrt() / 255. || b[2] != 128 || a[3] != b[3] {
+                return Err(format!(
+                    "projected normal direction {angle} degrees or unit/blue/alpha mismatch"
+                ));
+            }
+            count += 1;
+            maximum = maximum.max(angle);
+        } else if a.iter().zip(b).any(|(a, b)| a.abs_diff(*b) > codec_bound) {
+            return Err("unprojected normal exceeds codec channel bound".into());
+        }
+    }
+    Ok((count, maximum))
+}
+
+#[test]
+fn normal_projection_gate_measures_direction_and_rejects_wrong_vectors() {
+    let png = |rgba: Vec<u8>| {
+        primase_image::write_png(&primase_image::Image {
+            width: 1,
+            height: 1,
+            samples: primase_image::Samples::U8(rgba),
+        })
+        .unwrap()
+    };
+    let a = png(vec![10, 235, 128, 255]);
+    let b = png(vec![33, 214, 128, 255]);
+    assert_eq!(normal_png_diff(&a, &b, 0).unwrap().0, 1);
+    assert!(
+        normal_png_diff(&a, &a, 0).is_err(),
+        "unnormalized vector must fail"
+    );
+    assert!(normal_png_diff(&a, &png(vec![214, 33, 128, 255]), 0).is_err());
+    assert!(normal_png_diff(&a, &png(vec![33, 214, 128, 0]), 0).is_err());
 }
 
 /// `DDSD_MIPMAPCOUNT`, the DDS header flag that says the mip count field is valid.
@@ -856,6 +914,9 @@ fn rust_writer_matches_the_reference() {
         "PNG files from BCn sources: identical, or within 1 per channel (D3D vs CodeWalker BCn arithmetic)",
         Tolerance::Abs(1.0),
     );
+    let mut projected_normals =
+        GateReport::new("projected normal PNG direction in degrees", Tolerance::Abs(0.31));
+    let (mut normal_files, mut projected_pixels) = (0u64, 0u64);
     let mut bcn_within: Vec<String> = Vec::new();
     let mut pause_maps = GateReport::new(
         "pause map pictures within 2 per channel (BCn means + slope shading from derived normals)",
@@ -910,6 +971,12 @@ fn rust_writer_matches_the_reference() {
             .collect();
         let bcn = bcn_sourced(&read_json(&ref_dir.join("textures_index.json")));
         let ref_map = read_json(&ref_dir.join("map.json"));
+        let normal_textures: BTreeSet<_> = ref_map["materials"]
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.values())
+            .filter_map(|m| m["normal_texture"].as_str())
+            .collect();
         let our_map = read_json(&out.join("map.json"));
         let objects = our_map["objects"].as_array().map_or(0, Vec::len);
         let bad = misplaced_sections(&out, &our_map);
@@ -936,6 +1003,17 @@ fn rust_writer_matches_the_reference() {
             let (a, b) = (std::fs::read(pa).unwrap(), std::fs::read(pb).unwrap());
             if rel.ends_with(".png") {
                 let from_bcn = bcn.contains(rel.as_str());
+                if normal_textures.contains(rel.as_str()) {
+                    normal_files += 1;
+                    match normal_png_diff(&a, &b, u8::from(from_bcn)) {
+                        Ok((count, angle)) => {
+                            projected_pixels += count;
+                            projected_normals.record(&item, angle);
+                        }
+                        Err(e) => projected_normals.fail(&item, e),
+                    }
+                    continue;
+                }
                 let gate = if rel == "ui/map_image.png" {
                     &mut pause_maps
                 } else if from_bcn {
@@ -1063,6 +1141,7 @@ fn rust_writer_matches_the_reference() {
             renames.materials
         );
     }
+    println!("normal PNGs {normal_files}, projected pixels {projected_pixels}; direction bound 0.31 degrees");
     let gates = [
         &sets,
         &json,
@@ -1072,6 +1151,7 @@ fn rust_writer_matches_the_reference() {
         &pngs,
         &bcn_pngs,
         &pause_maps,
+        &projected_normals,
         &dds,
     ];
     for g in gates {
@@ -1153,5 +1233,90 @@ fn rust_writer_matches_the_reference() {
     );
     for g in gates {
         assert!(g.failures.is_empty(), "{g}");
+    }
+}
+
+/// Real normal-map writer differential, with exact unprojected pixels and a
+/// counted 0.31-degree direction bound only on outside-disk reconstruction.
+#[test]
+fn real_normal_writer_images() {
+    let (Some(reference), Some(scenes), Some(output)) = (
+        real_data("PRIMASE_RESKATE_NORMAL_REF"),
+        real_data("PRIMASE_RESKATE_NORMAL_SCENES"),
+        std::env::var_os("PRIMASE_OUT").map(PathBuf::from),
+    ) else {
+        return;
+    };
+    let mut areas: Vec<_> = std::fs::read_dir(&reference)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().join("map.json").is_file())
+        .collect();
+    areas.sort_by_key(|e| e.file_name());
+    assert!(!areas.is_empty());
+    for area in areas {
+        let reference = area.path();
+        let scene = scenes.join(area.file_name());
+        let manifest = read_json(&scene.join("scene.json"));
+        let rebuild = manifest["textures"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|t| t["z"].as_str() == Some("rebuild"));
+        let mut world = World::new();
+        primase_skate_scene::read(&scene, &mut world).unwrap();
+        let options = BuildOptions {
+            out_root: output.clone(),
+            tex_cap: 256,
+            water_ocean: true,
+            lights_max_per_cell: 256,
+            ..BuildOptions::default()
+        };
+        primase_reskate::build(&world, &scene, &options).unwrap();
+        let ours = output.join(manifest["name"].as_str().unwrap());
+        let renames = pair_names(&reference, &ours);
+        let map = read_json(&reference.join("map.json"));
+        let normal_files: BTreeSet<_> = map["materials"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|m| m["normal_texture"].as_str())
+            .collect();
+        assert!(!normal_files.is_empty(), "real normal coverage required");
+        let paired: BTreeMap<_, _> = files(&ours)
+            .into_iter()
+            .map(|(name, path)| (renames.get(&name).to_owned(), path))
+            .collect();
+        let (mut pixels, mut projected, mut changed, mut maximum) = (0u64, 0u64, 0u64, 0f64);
+        for file in &normal_files {
+            let a = std::fs::read(reference.join(file)).unwrap();
+            let b = std::fs::read(&paired[*file]).unwrap();
+            if rebuild {
+                let (n, angle) = normal_png_diff(&a, &b, 0).unwrap_or_else(|e| panic!("{file}: {e}"));
+                projected += n;
+                maximum = maximum.max(angle);
+            } else {
+                assert_eq!(png_diff(&a, &b).unwrap(), 0, "{file}");
+            }
+            let a = primase_image::read_png(&a).unwrap().image;
+            let b = primase_image::read_png(&b).unwrap().image;
+            let (primase_image::Samples::U8(a), primase_image::Samples::U8(b)) = (a.samples, b.samples)
+            else {
+                panic!("RGBA8 required")
+            };
+            pixels += a.len() as u64 / 4;
+            changed += a
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(b.as_chunks::<4>().0)
+                .filter(|(a, b)| a != b)
+                .count() as u64;
+        }
+        println!(
+            "{}: {} normal PNGs, {pixels} pixels, {projected} outside-disk pixels, {changed} changed, maximum direction {maximum} degrees; unprojected pixels exact",
+            area.file_name().to_string_lossy(),
+            normal_files.len()
+        );
     }
 }

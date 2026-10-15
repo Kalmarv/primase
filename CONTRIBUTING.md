@@ -113,6 +113,8 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_SCENES_GTA` | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
+| `PRIMASE_RESKATE_NORMAL_REF` | Reference map folders containing normal PNGs; `worlds/reskate/tests/map_gate.rs::real_normal_writer_images`. |
+| `PRIMASE_RESKATE_NORMAL_SCENES` | Matching scene folders for the normal-writer image differential; same schema as `PRIMASE_RESKATE_SCENES`. |
 | `PRIMASE_RESKATE_REF` | a folder of map folders written by the reference C# map writer, one per area (each holding a `map.json`) |
 | `PRIMASE_RESKATE_SCENES` | the skate-scene folders those maps were built from, one per area, named like the map folders |
 | `PRIMASE_RESKATE_CAPS` | optional: the per-texture size caps file the reference build used (`--tex-caps`) |

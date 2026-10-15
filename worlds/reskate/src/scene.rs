@@ -1058,11 +1058,7 @@ impl Materializer {
                             q[1] = 255 - q[1];
                         }
                         if t.z_rebuild {
-                            let x = f32::from(q[0]) / 255.0 * 2.0 - 1.0;
-                            let y = f32::from(q[1]) / 255.0 * 2.0 - 1.0;
-                            let z = ((0f32.max(1.0 - x * x - y * y)).sqrt() * 0.5 + 0.5) * 255.0;
-                            // to the nearest level, half to even: the rebuilt blue channel's definition
-                            q[2] = (z.round_ties_even() as i32).clamp(0, 255) as u8;
+                            primase_image::rebuild_normal_z(q);
                         }
                         q[3] = 255;
                     }
