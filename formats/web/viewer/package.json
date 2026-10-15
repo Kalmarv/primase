@@ -1,7 +1,0 @@
-{
-  "name": "primase-web-proof",
-  "private": true,
-  "type": "module",
-  "scripts": { "audit": "node audit.mjs", "test": "node --test report.test.mjs" },
-  "devDependencies": { "three": "0.186.1" }
-}

@@ -85,10 +85,10 @@ Render and collision filenames include the full SHA256 of their own bytes.
 Collision names are finalized before their references are embedded in render
 tiles. `write_to` rejects missing files, mismatched lengths, and stale hashes
 before publishing anything. `tiles.json` is written last and stays unhashed.
-For deployment, export into a fresh staging folder, copy immutable assets first,
-then publish the new index last; retain older assets while clients may reference
-them. Viewer entry points and indexes need short cache lifetimes, whereas the
-content-addressed assets may be cached immutably.
+When publishing a new export over an old one, copy the immutable assets first
+and replace `tiles.json` last, and keep older assets while clients may still
+reference them. Indexes need short cache lifetimes; the content-addressed assets
+may be cached immutably.
 The example omits collision soups with no triangles; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
@@ -97,27 +97,11 @@ loads a skate-scene folder and writes compressed tiles, a `plain/` comparison
 set, and `proof.json` with artifact and decoded-stream SHA256 hashes. This is an
 example composition; the library does not depend on a source dialect.
 
-The static `viewer/` page uses pinned Three.js ES modules from a CDN, without a
-build step. Serve it alongside the output and select a relative tile folder with
-`?scene=folder/`. Orbit/pan controls stream tiles by distance from the view target;
-the checkbox shows curves, markers and wireframe collision. `window.primaseProof`
-reports loaded tiles, triangles, pending requests, failures and rendered frames.
-Initial framing uses tiles with render triangles. `cam=x,y,z,tx,ty,tz` and optional
-`fov` URL parameters restore a camera; `window.primaseCamera()` returns its current
-coordinates. **Copy view** (C) copies a JSON report containing that URL, viewer
-build, camera, optional note and the object/material/source metadata beneath the
-last canvas click (or screen centre). **Screenshot** (S) downloads a PNG named
-with scene, camera and time. Shortcuts are disabled while entering text. If
-clipboard access is unavailable, the report appears as selected text for manual
-copying. `npm test` checks the JSON/URL camera round trip and filename handling.
-
-For the local geometry proof, run `npm ci --ignore-scripts` in `viewer/`, then
-`npm run audit -- <output>`. This uses Three.js GLTFLoader and MeshoptDecoder to
-load every tile, compare each compressed stream against the Rust decoder hash,
-and compare placed triangle counts against the index. It reads PNG dimensions
-for loader setup but does not render textures; browser inspection is a separate
-gate. The official validator does not implement the instancing or meshopt
-extensions, so its zero-error result supplements rather than replaces this gate.
+To look at the output, use [primase-viewer](https://github.com/kalmarv/primase-viewer), an example
+consumer of this format (a three.js viewer, not part of the library). Its `audit.mjs` loads every tile with
+three.js' GLTFLoader and MeshoptDecoder, compares each compressed stream with the Rust decoder's hashes and the
+placed triangle counts with the index. The official glTF validator does not implement the instancing or meshopt
+extensions, so its zero-error result supplements rather than replaces that audit.
 
 ## Optional KTX2 evaluation
 
@@ -158,12 +142,12 @@ ignore alpha error. Shared images use all applicable binding requirements.
 `cargo test -p primase-web --features ktx2` checks a pure-Rust independent
 decoder, all mip dimensions, role metadata and separate-process SHA256 equality.
 The synthetic gradient bound is 8 channel values (measured maximum 1); this is
-not a bound for arbitrary images. Real-corpus colour and normal-angular error
-measurements, the independent browser WASM transcoder, and browser memory gates
-remain required before accepting this experimental lowering for deployment.
+not a bound for arbitrary images. Real-corpus colour and normal-angular error,
+an independent WASM transcoder and peak browser memory are measured separately
+for each export.
 
 The `ktx2_audit` example hashes every decoded mip with the pure-Rust oracle;
-`viewer/audit-ktx2.mjs` produces corresponding hashes with Three.js' pinned WASM
+primase-viewer's `audit-ktx2.mjs` produces corresponding hashes with Three.js' pinned WASM
 transcoder. When `plain/tiles.json` is available, the Rust audit additionally
 reports per-role channel maxima/means and normal-angle maxima/means/p99.
 Quality samples are deduplicated by source content, role, output dimensions and encoded content.
@@ -173,21 +157,3 @@ The latter includes resolution loss and does not model GPU filtering.
 The p99 angle is an upper bound using 0.001-degree bins; max and mean use the
 unbinned angles. The geometry audit treats both PNG and KTX2 as dimension-only
 textures; these independent pixel audits supply the separate texture gate.
-
-### Object-storage staging
-
-Keep a build directory containing only the viewer files, scene manifests and
-referenced assets. Upload it to a fresh `staging/<build>/` prefix in a private
-R2 bucket using an authenticated storage client. Upload immutable hashed assets
-and viewer modules first; upload each `tiles.json` and then `index.html` last.
-For example, `rclone copy <build-dir> <remote>:<bucket>/staging/<build>/
---exclude index.html --exclude tiles.json` copies the payload before separate
-manifest uploads. Credentials belong in the deployment environment, never here.
-
-List the uploaded objects and compare every path and byte length with the local
-manifest; compare server-reported content hashes when available. Test the staged
-viewer through the authenticated public origin, including decoder CDN requests,
-loading failures, screenshots and peak browser memory. Promotion to the live
-prefix is a separate release operation after these checks; staging uploads must
-never overwrite the live root. Keep old assets until deployment synchronization
-and cache expiry make their removal safe.

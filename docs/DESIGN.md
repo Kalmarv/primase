@@ -138,6 +138,10 @@ crate. Dependencies point down only (`cli -> worlds/formats -> toolkit -> core`)
 other. `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
 two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or go to Blender.
 
+**Scope of this repository.** It holds library crates, thin CLIs and small examples only. Applications that consume
+primase output (viewers, editors, services) live in their own repositories and depend on documented output formats,
+not on this repository's internals.
+
 **Dependencies: small, focused, maintained crates that do one job well; no umbrella crates.** Each sits behind our own
 trait (`TexDecoder`, `Compressor`, ...), so swapping it is local, and each is held to the same gates as our code.
 Versions are pinned and default features off.
