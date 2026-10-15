@@ -1,13 +1,10 @@
-//! ReSkate (skate.): the writer of ReSkate Studio normalized map folders from skate-scene worlds, a port of the
-//! reference C# writer gated byte for byte against it (`map.json`, `meshes/*.glb`, `textures/*`, `ui/*`,
-//! `trainer.json`, `stats.json`, `pieces.json`, `textures_index.json`).
-//!
-//! The writer's numbers follow the reference runtime exactly: [`dotnet`] holds .NET's number text and JSON layout,
-//! [`vec`] the two vector types' rounding.
+//! ReSkate (skate.): the writer of ReSkate Studio normalized map folders from skate-scene worlds (`map.json`,
+//! `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`, `pieces.json`, `textures_index.json`), gated
+//! against the reference C# writer by what Studio reads: meshes, tables and texture payloads exactly, JSON as parsed
+//! values, PNGs by pixels.
 
 pub mod build;
 pub mod collision;
-pub mod dotnet;
 pub mod glb;
 pub mod grind;
 pub mod map;
@@ -15,6 +12,7 @@ pub mod material;
 pub mod model;
 pub mod overlay;
 pub mod pausemap;
+pub mod records;
 pub mod scene;
 pub mod texture;
 pub mod vec;
@@ -33,6 +31,19 @@ pub enum Error {
     Texture(String),
     #[error("not supported yet: {0}")]
     Unsupported(String),
+    #[error("{file}: {source}")]
+    Json {
+        file: String,
+        source: primase_core::JsonError,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// The JSON text of one of the map's files (`primase_core::json::to_vec`: a non-finite number is an error).
+pub(crate) fn json_bytes<T: serde::Serialize + ?Sized>(file: &str, v: &T, pretty: bool) -> Result<Vec<u8>> {
+    primase_core::json::to_vec(v, pretty).map_err(|source| Error::Json {
+        file: file.to_owned(),
+        source,
+    })
+}

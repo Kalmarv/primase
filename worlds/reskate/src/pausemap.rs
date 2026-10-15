@@ -1,7 +1,8 @@
 //! The pause-menu map picture (ui/map_image.png, ui/map_image.json, ui/map_clouds.png): a top-down software
 //! rasteriser drawing every triangle in its texture's mean colour, highest surface on top, shaded by slope.
 
-use crate::dotnet::JsonWriter;
+use crate::Result;
+use crate::records::MapImageJson;
 use crate::vec::Sdx;
 
 #[derive(Debug)]
@@ -189,7 +190,7 @@ impl PauseMap {
     }
 
     /// ui/map_image.png, ui/map_image.json, ui/map_clouds.png.
-    pub fn save(&mut self) -> Vec<(String, Vec<u8>)> {
+    pub fn save(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
         if !self.given && self.sea_tint {
             for i in 0..self.rgba.len() {
                 let z = self.depth[i];
@@ -211,15 +212,19 @@ impl PauseMap {
             samples: primase_image::Samples::U8(bytes),
         })
         .expect("valid image");
-        let mut j = JsonWriter::new(true);
-        j.start_object();
-        j.f32("min_x", self.min_x);
-        j.f32("max_x", self.max_x);
-        j.f32("min_z", -self.max_y);
-        j.f32("max_z", -self.min_y);
-        j.end_object();
-        let json = j.finish().into_bytes();
+        let json = crate::json_bytes(
+            "ui/map_image.json",
+            &MapImageJson {
+                min_x: self.min_x,
+                max_x: self.max_x,
+                min_z: -self.max_y,
+                max_z: -self.min_y,
+            },
+            true,
+        )?;
 
+        // The cloud mask: coverage on a 256 grid, cleared by a margin and faded, scaled to 1024. The grid sizes round
+        // half to even; that is part of the picture's definition (it decides which cells are covered), not a format.
         const GRID: usize = 256;
         const SIZE: usize = 1024;
         let rows = ((GRID as f32 * self.h as f32 / self.w as f32).round_ties_even() as i32).max(1) as usize;
@@ -276,10 +281,10 @@ impl PauseMap {
             samples: primase_image::Samples::U8(mask),
         })
         .expect("valid image");
-        vec![
+        Ok(vec![
             ("ui/map_image.png".into(), image),
             ("ui/map_image.json".into(), json),
             ("ui/map_clouds.png".into(), clouds),
-        ]
+        ])
     }
 }

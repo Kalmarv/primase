@@ -655,6 +655,7 @@ dependencies = [
  "primase-skate-scene",
  "primase-texcodec",
  "primase-vertex",
+ "serde",
  "serde_json",
  "thiserror",
 ]

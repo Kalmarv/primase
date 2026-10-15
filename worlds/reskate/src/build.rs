@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::dotnet::{JsonWriter, r4};
-use crate::map::{Ctx, Extras, MapWriter, MeshSource, WriterOptions};
+use crate::map::{Ctx, Extras, MapWriter, MeshSource, WriterOptions, r4};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
+use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
 use crate::texture::TexSource;
-use crate::vec::Sdx;
+
 use crate::{Error, Result};
 
 /// The options of `scene-skate build`.
@@ -513,7 +513,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
             std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
         }
     }
-    let stats = stats_json(&writer, &s, &o, placements.len(), lift, failed);
+    let stats = stats_json(&writer, &s, &o, placements.len(), lift, failed)?;
     let p = out_dir.join("stats.json");
     std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
     let r = &writer.r;
@@ -538,115 +538,101 @@ fn stats_json(
     placements: usize,
     lift: f32,
     failed: i64,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let r = &writer.r;
     let col = r.collision.as_ref().expect("finished");
-    let mut w = JsonWriter::new(true);
-    w.start_object();
-    w.string("name", &o.name);
     let full = std::path::absolute(&s.dir).unwrap_or_else(|_| s.dir.clone());
-    w.string("scene", &full.to_string_lossy());
-    w.start_array_named("region");
-    for v in o.region {
-        w.f64_value(v);
-    }
-    w.end_array();
-    w.f32("tile_size", o.tile);
-    w.f32("lift_m", lift);
-    w.start_object_named("totals");
-    w.int("placements", placements as i64);
-    w.int("placements_degenerate", r.degenerate);
-    w.int("placements_stubs_left_out", 0);
-    w.int("placed_parts_stubs_left_out", 0);
-    w.int("placements_clipped_away", r.far_dropped);
-    w.int("prototypes_placed", r.archetypes as i64);
-    w.int("prototypes_failed", failed);
-    w.int("tiles", r.tiles.len() as i64);
-    w.int("object_records", r.object_records as i64);
-    w.int("merged_placements", r.merged_entities);
-    w.int("merged_triangles", r.merged_tris);
-    w.int("instances", r.instances);
-    w.int("instanced_triangles_drawn", r.instanced_tris);
-    w.int("prototypes", r.proto_list.len() as i64);
-    w.int("prototype_triangles", r.prototype_tris);
-    w.int("collision_pieces", col.pieces);
-    w.int("collision_triangles", col.triangles);
-    w.int("collision_hulls", col.hulls);
-    w.int("materials", r.materials as i64);
-    let out_tex = writer.ctx.tex.all().iter().filter(|t| !t.removed).count();
-    w.int("textures", out_tex as i64);
-    w.int("textures_flattened_by_budget", r.budget_flattened);
-    w.int("texture_file_bytes", r.tex_bytes as i64);
-    w.int("texture_pixels", r.tex_pixels as i64);
-    w.int("mesh_file_bytes", r.mesh_bytes as i64);
-    w.int("textures_unsupported", writer.ctx.tex.unsupported as i64);
-    w.int("placements_with_empty_mesh", r.empty_mesh);
-    w.int("lights_written", r.lights_written as i64);
-    w.int("lights_dropped_by_cell_cap", r.lights_dropped as i64);
-    w.int("grind_curves", r.grind_curves);
-    w.int("grind_pieces", r.grind_pieces);
-    w.f64("grind_length_m", r4(f64::from(r.grind_length)));
-    w.int("travel_points", r.travel_points as i64);
-    w.int("trainer_spots", r.trainer_spots as i64);
-    w.int("peak_mesh_bytes", r.peak_mesh_bytes);
-    w.f64("seconds", 0.0);
-    w.end_object();
-    w.start_array_named("soups");
-    for sd in &s.soups {
-        w.start_object();
-        w.string("file", &sd.file);
-        w.string(
-            "mode",
-            match sd.mode {
-                CollisionMode::TriangleMesh => "triangle_mesh",
-                CollisionMode::Water => "water",
-                CollisionMode::Hull => "hull",
-            },
-        );
-        w.int("read", sd.surf.len() as i64);
-        w.int("cut_by_region", sd.cut);
-        w.int("kept_before_cleaning", sd.kept);
-        w.end_object();
-    }
-    w.end_array();
-    w.start_object_named("collision_dropped");
-    w.int("degenerate", col.cut_degenerate);
-    w.int("beyond_map_edge", col.cut_beyond_limit);
-    w.end_object();
-    w.start_object_named("overlay_stack");
-    let ov = &r.overlay;
-    w.f32("step_m", o.overlay_step);
-    w.int("overlay_pieces", ov.pieces);
-    w.int("shifted", ov.shifted);
-    w.int("water_shifted", ov.water_shifted);
-    w.f32("max_shift_m", ov.max_shift);
-    w.int("order_cycles_broken", ov.cycles);
-    w.end_object();
-    w.start_object_named("texture_formats");
+    let kept: Vec<_> = writer.ctx.tex.all().iter().filter(|t| !t.removed).collect();
     let mut formats: BTreeMap<&str, i64> = BTreeMap::new();
-    for t in writer.ctx.tex.all().iter().filter(|t| !t.removed) {
+    for t in &kept {
         *formats.entry(t.format.as_str()).or_default() += 1;
     }
-    for (k, n) in formats {
-        w.int(k, n);
-    }
-    w.end_object();
-    w.start_object_named("prop_collision_top");
     let mut top: Vec<(&String, &i64)> = r.prop_col_tris.iter().collect();
     top.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-    for (k, v) in top.into_iter().take(40) {
-        w.int(k, *v);
-    }
-    w.end_object();
-    w.start_array_named("warnings");
     let mut seen = HashSet::new();
-    for x in &r.warnings {
-        if seen.insert(x.clone()) {
-            w.string_value(x);
-        }
-    }
-    w.end_array();
-    w.end_object();
-    let _ = Sdx::ZERO;
-    w.finish().into_bytes()
+    let ov = &r.overlay;
+    let stats = StatsJson {
+        name: &o.name,
+        scene: full.to_string_lossy().into_owned(),
+        region: o.region,
+        tile_size: o.tile,
+        lift_m: lift,
+        totals: Totals {
+            placements,
+            placements_degenerate: r.degenerate,
+            placements_stubs_left_out: 0,
+            placed_parts_stubs_left_out: 0,
+            placements_clipped_away: r.far_dropped,
+            prototypes_placed: r.archetypes,
+            prototypes_failed: failed,
+            tiles: r.tiles.len(),
+            object_records: r.object_records,
+            merged_placements: r.merged_entities,
+            merged_triangles: r.merged_tris,
+            instances: r.instances,
+            instanced_triangles_drawn: r.instanced_tris,
+            prototypes: r.proto_list.len(),
+            prototype_triangles: r.prototype_tris,
+            collision_pieces: col.pieces,
+            collision_triangles: col.triangles,
+            collision_hulls: col.hulls,
+            materials: r.materials,
+            textures: kept.len(),
+            textures_flattened_by_budget: r.budget_flattened,
+            texture_file_bytes: r.tex_bytes,
+            texture_pixels: r.tex_pixels,
+            mesh_file_bytes: r.mesh_bytes,
+            textures_unsupported: writer.ctx.tex.unsupported,
+            placements_with_empty_mesh: r.empty_mesh,
+            lights_written: r.lights_written,
+            lights_dropped_by_cell_cap: r.lights_dropped,
+            grind_curves: r.grind_curves,
+            grind_pieces: r.grind_pieces,
+            grind_length_m: r4(f64::from(r.grind_length)),
+            travel_points: r.travel_points,
+            trainer_spots: r.trainer_spots,
+            peak_mesh_bytes: r.peak_mesh_bytes,
+            seconds: 0.0,
+        },
+        soups: s
+            .soups
+            .iter()
+            .map(|sd| SoupStats {
+                file: &sd.file,
+                mode: match sd.mode {
+                    CollisionMode::TriangleMesh => "triangle_mesh",
+                    CollisionMode::Water => "water",
+                    CollisionMode::Hull => "hull",
+                },
+                read: sd.surf.len(),
+                cut_by_region: sd.cut,
+                kept_before_cleaning: sd.kept,
+            })
+            .collect(),
+        collision_dropped: CollisionDropped {
+            degenerate: col.cut_degenerate,
+            beyond_map_edge: col.cut_beyond_limit,
+        },
+        overlay_stack: OverlayStack {
+            step_m: o.overlay_step,
+            overlay_pieces: ov.pieces,
+            shifted: ov.shifted,
+            water_shifted: ov.water_shifted,
+            max_shift_m: ov.max_shift,
+            order_cycles_broken: ov.cycles,
+        },
+        texture_formats: formats,
+        prop_collision_top: top
+            .into_iter()
+            .take(40)
+            .map(|(k, v)| (k.clone(), serde_json::Value::from(*v)))
+            .collect(),
+        warnings: r
+            .warnings
+            .iter()
+            .filter(|x| seen.insert(x.as_str()))
+            .map(String::as_str)
+            .collect(),
+    };
+    crate::json_bytes("stats.json", &stats, true)
 }

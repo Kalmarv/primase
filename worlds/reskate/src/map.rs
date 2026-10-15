@@ -6,13 +6,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::Result;
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
-use crate::dotnet::{JsonWriter, r4};
 use crate::glb::{self, GlbPrim};
 use crate::grind;
 use crate::material::{MatLib, Material, VClass};
 use crate::model::{CollisionMode, Hull, MapObject, Placement, ProtoInfo, SrcMesh, SrcPart, TileOut};
 use crate::overlay::{self, OverlayStats, Parts, Piece};
 use crate::pausemap::PauseMap;
+use crate::records::{
+    Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, PieceJson, PiecesJson,
+    SpawnJson, StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
+    TravelPointJson,
+};
 use crate::scene::{GrindCurve, Marker, PlacedLight, SnapMode, SurfaceTable, WaterQuad};
 use crate::texture::TexLib;
 use crate::vec::{Num, Sdx};
@@ -299,6 +303,17 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
 pub const MAX_SECTION_VERTS: usize = 60000;
 
 /// The GLB primitives of merged parts, in the order of their material names.
+/// The overlay stack's pass of a material: opaque 0, alpha tested or blended 1, water 2.
+fn overlay_pass(m: &Material) -> i32 {
+    if m.class == VClass::Water {
+        2
+    } else if m.alpha == 1 {
+        0
+    } else {
+        1
+    }
+}
+
 fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib) -> Vec<GlbPrim> {
     let mut list = Vec::new();
     let mut order: Vec<(&usize, &Acc)> = parts.iter().collect();
@@ -449,13 +464,7 @@ impl MapWriter {
         let keys: Vec<usize> = parts.keys().copied().collect();
         for (pi, mat) in keys.iter().enumerate() {
             let m = self.ctx.mats.by_id(*mat);
-            let pass = if m.class == VClass::Water {
-                2
-            } else if m.alpha == 1 {
-                0
-            } else {
-                1
-            };
+            let pass = overlay_pass(m);
             let a = &parts[mat];
             for (i, pc) in a.pieces.iter().enumerate() {
                 pieces.push(Piece {
@@ -608,7 +617,7 @@ impl MapWriter {
         self.r.proto_list[info].file = format!("{stem}.glb");
         let pr = prims(&parts, &self.ctx.mats);
         self.mesh_files
-            .insert(format!("{stem}.glb"), glb::write(&stem, &pr));
+            .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
         let origins = pr
             .iter()
             .map(|p| {
@@ -964,7 +973,7 @@ impl MapWriter {
                     );
                     let file = to.mesh.clone().expect("mesh");
                     self.mesh_files
-                        .insert(file.clone(), glb::write(&format!("t_{tx}_{ty}"), &pr));
+                        .insert(file.clone(), glb::write(&format!("t_{tx}_{ty}"), &pr)?);
                     for (i, p) in pr.iter().enumerate() {
                         let name = if pr.len() == 1 {
                             format!("t_{tx}_{ty}")
@@ -1091,12 +1100,20 @@ fn map_vec(v: Sdx) -> [f32; 3] {
     [v.x, v.z, -v.y]
 }
 
-fn arr_r(w: &mut JsonWriter, k: &str, v: &[f32]) {
-    w.start_array_named(k);
-    for x in v {
-        w.f64_value(r4(f64::from(*x)));
+/// Rounded to 4 decimals, half to even; 0 when not finite. Positions, light values and lengths in map.json and
+/// trainer.json are written at this precision.
+pub fn r4(v: f64) -> f64 {
+    if !v.is_finite() {
+        0.0
+    } else if v.abs() < 1e16 {
+        (v * 1e4).round_ties_even() / 1e4
+    } else {
+        v
     }
-    w.end_array();
+}
+
+fn r4s<const N: usize>(v: [f32; N]) -> [f64; N] {
+    v.map(|x| r4(f64::from(x)))
 }
 
 /// The lights a map keeps (at most `max` per 200 m cell: group "" first, then the highest priority), by position.
@@ -1138,48 +1155,50 @@ pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
     keep
 }
 
-fn write_lights(w: &mut JsonWriter, kept: &[PlacedLight], off: Sdx, prefix: &str) {
-    for (n, l) in kept.iter().enumerate() {
-        let fwd = l.dir;
-        let mut right = l.tan - fwd * l.tan.dot(fwd);
-        if right.length_squared() > 1e-12 {
-            right = right.normalize();
-        } else if fwd.x.abs() < 0.9 {
-            right = Sdx::UNIT_X;
-        } else {
-            right = (Sdx::UNIT_Y - fwd * fwd.y).normalize();
-        }
-        let up = fwd.cross(right).normalize();
-        w.start_object();
-        w.string("name", &format!("{prefix}{n:06}"));
-        w.string("source_path", &l.source);
-        w.string("type", if l.spot { "spot" } else { "point" });
-        arr_r(w, "position", &map_vec(l.pos + off));
-        arr_r(w, "direction", &map_vec(fwd));
-        w.start_object_named("basis");
-        arr_r(w, "right", &map_vec(right));
-        arr_r(w, "up", &map_vec(up));
-        arr_r(w, "forward", &map_vec(fwd));
-        w.end_object();
-        arr_r(w, "color_linear", &[l.r, l.g, l.b]);
-        w.f64("energy", r4(f64::from(l.energy)));
-        w.bool("normalize_power", true);
-        w.bool("uses_light_nodes", false);
-        w.int("exposure", 0);
-        w.bool("cast_shadow", l.cast_shadow);
-        w.bool("use_custom_distance", true);
-        w.f64("cutoff_distance", r4(f64::from(l.range)));
-        w.int("diffuse_factor", 1);
-        w.int("specular_factor", 1);
-        w.int("time_of_day", i64::from(l.time_of_day));
-        w.bool("native_entity_authored", false);
-        w.f64("radius", r4(f64::from(l.radius)));
-        if l.spot {
-            w.f64("spot_size_radians", r4(f64::from(l.spot_size)));
-            w.f64("spot_blend", r4(f64::from(l.spot_blend)));
-        }
-        w.end_object();
-    }
+/// The light records of `kept`, named `prefix` + number.
+fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> Vec<LightJson> {
+    kept.iter()
+        .enumerate()
+        .map(|(n, l)| {
+            let fwd = l.dir;
+            let mut right = l.tan - fwd * l.tan.dot(fwd);
+            if right.length_squared() > 1e-12 {
+                right = right.normalize();
+            } else if fwd.x.abs() < 0.9 {
+                right = Sdx::UNIT_X;
+            } else {
+                right = (Sdx::UNIT_Y - fwd * fwd.y).normalize();
+            }
+            let up = fwd.cross(right).normalize();
+            LightJson {
+                name: format!("{prefix}{n:06}"),
+                source_path: l.source.clone(),
+                kind: if l.spot { "spot" } else { "point" },
+                position: r4s(map_vec(l.pos + off)),
+                direction: r4s(map_vec(fwd)),
+                basis: Basis {
+                    right: r4s(map_vec(right)),
+                    up: r4s(map_vec(up)),
+                    forward: r4s(map_vec(fwd)),
+                },
+                color_linear: r4s([l.r, l.g, l.b]),
+                energy: r4(f64::from(l.energy)),
+                normalize_power: true,
+                uses_light_nodes: false,
+                exposure: 0,
+                cast_shadow: l.cast_shadow,
+                use_custom_distance: true,
+                cutoff_distance: r4(f64::from(l.range)),
+                diffuse_factor: 1,
+                specular_factor: 1,
+                time_of_day: l.time_of_day,
+                native_entity_authored: false,
+                radius: r4(f64::from(l.radius)),
+                spot_size_radians: l.spot.then(|| r4(f64::from(l.spot_size))),
+                spot_blend: l.spot.then(|| r4(f64::from(l.spot_blend))),
+            }
+        })
+        .collect()
 }
 
 /// Sutherland-Hodgman, one step.
@@ -1212,7 +1231,7 @@ fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(
 
 impl MapWriter {
     /// The water surfaces that touch the region as one mesh with Studio's ocean material.
-    fn water(&mut self, quads: &[WaterQuad], material: &str) -> Option<MapObject> {
+    fn water(&mut self, quads: &[WaterQuad], material: &str) -> Result<Option<MapObject>> {
         let (r, off, limit) = (self.o.region, self.off, self.o.limit);
         let origin = Sdx::new((r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0, 0.0);
         let (mut pos, mut nrm, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u32>::new());
@@ -1265,7 +1284,7 @@ impl MapWriter {
             }
         }
         if idx.is_empty() {
-            return None;
+            return Ok(None);
         }
         self.mesh_files.insert(
             "water.glb".into(),
@@ -1278,7 +1297,7 @@ impl MapWriter {
                     uv: Some(uv),
                     idx,
                 }],
-            ),
+            )?,
         );
         let mut ob = MapObject::new(
             "water".into(),
@@ -1292,7 +1311,7 @@ impl MapWriter {
         ob.material = Some(material.to_owned());
         ob.collision_mode = "water";
         ob.collision_packed = MapObject::WATER_PACKED;
-        Some(ob)
+        Ok(Some(ob))
     }
 
     /// --tex-budget: the colour textures covering the least area become a shared white texture with their mean.
@@ -1395,96 +1414,63 @@ impl MapWriter {
         ));
     }
 
-    fn write_material(&self, w: &mut JsonWriter, m: &Material) {
+    fn material_json(&self, m: &Material) -> MaterialJson {
         let files = self.ctx.tex.all();
         if m.ocean.unwrap_or(self.o.water_ocean) && m.class == VClass::Water {
-            w.start_object_named(&m.name);
-            w.string("surface", "water");
-            w.bool("srgb", true);
-            w.string("domain", "ocean");
-            w.string("shader_override", "ocean");
-            w.string("alpha", "opaque");
-            w.end_object();
-            return;
+            return MaterialJson::Ocean(OceanMaterial::OCEAN);
         }
         let domain = match m.domain {
             1 => "decal",
             2 => "foliage",
             _ => "surface",
         };
-        let alpha = match m.alpha {
-            2 => "mask",
-            3 => "blend",
-            _ => "opaque",
-        };
-        w.start_object_named(&m.name);
-        w.string("surface", "default");
-        w.bool("srgb", m.srgb);
-        w.string("domain", domain);
-        w.string("shader_override", domain);
-        w.string(
-            "alpha_source",
-            if m.alpha == 1 {
+        let file = |t: i32| (t >= 0).then(|| format!("textures/{}", files[t as usize].file));
+        MaterialJson::Surface(Box::new(SurfaceMaterial {
+            surface: "default",
+            srgb: m.srgb,
+            domain,
+            shader_override: domain,
+            alpha_source: if m.alpha == 1 {
                 "constant"
             } else {
                 "base_color_texture"
             },
-        );
-        w.f32("alpha_cutoff", m.cutoff);
-        w.bool(
-            "cast_shadows",
-            m.cast_shadows
+            alpha_cutoff: m.cutoff,
+            cast_shadows: m
+                .cast_shadows
                 .unwrap_or(m.class != VClass::Decal && m.class != VClass::Water),
-        );
-        w.bool("double_sided", m.two_sided);
-        w.bool("transparent_shadow", m.alpha == 2);
-        w.string("alpha", alpha);
-        w.string("blend_method", if m.alpha == 3 { "blend" } else { "clip" });
-        w.f64(
-            "roughness",
-            m.roughness
+            double_sided: m.two_sided,
+            transparent_shadow: m.alpha == 2,
+            alpha: match m.alpha {
+                2 => "mask",
+                3 => "blend",
+                _ => "opaque",
+            },
+            blend_method: if m.alpha == 3 { "blend" } else { "clip" },
+            roughness: m
+                .roughness
                 .unwrap_or(if matches!(m.class, VClass::Glass | VClass::Water) {
                     0.15
                 } else {
                     0.85
                 }),
-        );
-        w.f64("metallic", m.metallic.unwrap_or(0.0));
-        if m.tex >= 0 {
-            w.string("texture", &format!("textures/{}", files[m.tex as usize].file));
-        }
-        if let Some(f) = m.base_factor {
-            arr_r(w, "base_color_factor", &f);
-        }
-        if let Some(wr) = &m.wrap {
-            w.string("base_color_extension", wr);
-        }
-        if m.normal >= 0 {
-            w.string(
-                "normal_texture",
-                &format!("textures/{}", files[m.normal as usize].file),
-            );
-            w.bool("normal_srgb", false);
-        }
-        if m.mask >= 0 {
-            w.string(
-                "mask_texture",
-                &format!("textures/{}", files[m.mask as usize].file),
-            );
-            w.bool("mask_srgb", false);
-        }
-        w.end_object();
+            metallic: m.metallic.unwrap_or(0.0),
+            texture: file(m.tex),
+            base_color_factor: m.base_factor.map(r4s),
+            base_color_extension: m.wrap.clone(),
+            normal_texture: file(m.normal),
+            normal_srgb: (m.normal >= 0).then_some(false),
+            mask_texture: file(m.mask),
+            mask_srgb: (m.mask >= 0).then_some(false),
+        }))
     }
 
-    fn write_effects(
+    fn effects_json(
         &mut self,
-        w: &mut JsonWriter,
-        key: &str,
         markers: &[Marker],
         kind: &str,
         col: &collision::CollisionResult,
-    ) {
-        w.start_array_named(key);
+    ) -> Vec<EffectJson> {
         let mut fx: Vec<(String, String, [f32; 12])> = Vec::new();
         for (i, m) in markers.iter().enumerate() {
             if m.kind != kind {
@@ -1538,100 +1524,71 @@ impl MapWriter {
                 std::cmp::Ordering::Equal
             })
         });
-        for (name, bp, t) in fx {
-            w.start_object();
-            w.string("name", &name);
-            w.string("blueprint", &bp);
-            w.start_array_named("transform");
-            for v in t {
-                w.f32_value(v);
-            }
-            w.end_array();
-            w.end_object();
-        }
-        w.end_array();
+        fx.into_iter()
+            .map(|(name, blueprint, transform)| EffectJson {
+                name,
+                blueprint,
+                transform,
+            })
+            .collect()
     }
 
-    fn write_object(w: &mut JsonWriter, ob: &MapObject) {
-        w.start_object();
-        w.string("name", &ob.name);
-        w.string("placement_mode", "authored_mesh");
-        if ob.render {
-            w.string("mesh", ob.mesh.as_deref().unwrap_or(""));
-            w.int("primitive", ob.primitive as i64);
-            w.string("material", ob.material.as_deref().unwrap_or(""));
-            if let Some(o) = ob.shared_origin {
-                w.bool("world_transform_baked", false);
-                w.bool("shared_geometry", true);
-                w.start_array_named("native_render_origin");
-                for v in o {
-                    w.f32_value(v);
-                }
-                w.end_array();
-            }
-        } else {
-            w.bool("render", false);
-            w.string("collision_mesh", ob.collision_mesh.as_deref().unwrap_or(""));
+    fn object_json(ob: &MapObject) -> ObjectJson<'_> {
+        let shared = ob.render && ob.shared_origin.is_some();
+        ObjectJson {
+            name: &ob.name,
+            placement_mode: "authored_mesh",
+            mesh: ob.render.then(|| ob.mesh.as_deref().unwrap_or("")),
+            primitive: ob.render.then_some(ob.primitive),
+            material: ob.render.then(|| ob.material.as_deref().unwrap_or("")),
+            shared_geometry: shared.then_some(true),
+            native_render_origin: if ob.render { ob.shared_origin } else { None },
+            render: (!ob.render).then_some(false),
+            collision_mesh: (!ob.render).then(|| ob.collision_mesh.as_deref().unwrap_or("")),
+            transform: ob.transform,
+            is_static: true,
+            collision_mode: ob.collision_mode,
+            collision_material: format!("material_{:04}", ob.collision_packed),
+            collision_material_packed: ob.collision_packed,
+            world_transform_baked: if ob.grind_source.is_some() {
+                Some(true)
+            } else {
+                shared.then_some(false)
+            },
+            source_object: ob.grind_source.as_deref(),
+            grind_curve: ob.grind_source.is_some().then_some(true),
         }
-        w.start_array_named("transform");
-        for v in ob.transform {
-            w.f32_value(v);
-        }
-        w.end_array();
-        w.bool("static", true);
-        w.string("collision_mode", ob.collision_mode);
-        w.string(
-            "collision_material",
-            &format!("material_{:04}", ob.collision_packed),
-        );
-        w.int("collision_material_packed", i64::from(ob.collision_packed));
-        if let Some(g) = &ob.grind_source {
-            w.bool("world_transform_baked", true);
-            w.string("source_object", g);
-            w.bool("grind_curve", true);
-        }
-        w.end_object();
     }
 
-    fn write_index(&mut self) {
+    fn write_index(&mut self) -> Result<()> {
         let o = &self.o;
         let mut out_tex: Vec<&crate::texture::OutTexture> =
             self.ctx.tex.all().iter().filter(|t| !t.removed).collect();
         out_tex.sort_by(|a, b| a.file.cmp(&b.file));
-        let mut iw = JsonWriter::new(false);
-        iw.start_object();
-        iw.int("tex_cap", i64::from(o.tex_cap));
-        iw.string("tex_caps", o.tex_caps.as_deref().unwrap_or(""));
-        iw.start_array_named("textures");
-        for t in &out_tex {
-            iw.start_object();
-            iw.string("file", &format!("textures/{}", t.file));
-            iw.int("w", i64::from(t.w));
-            iw.int("h", i64::from(t.h));
-            iw.int("src_w", i64::from(t.source_w));
-            iw.int("src_h", i64::from(t.source_h));
-            iw.string("src_format", &t.source_format);
-            iw.int("bytes", t.bytes as i64);
-            iw.start_array_named("sources");
-            for n in &t.sources {
-                iw.string_value(n);
-            }
-            iw.end_array();
-            if t.source_variants.len() > 1 {
-                iw.start_array_named("src_variants");
-                for n in &t.source_variants {
-                    iw.string_value(n);
-                }
-                iw.end_array();
-            }
-            iw.end_object();
-        }
-        iw.end_array();
-        iw.end_object();
+        let index = TexturesIndex {
+            tex_cap: o.tex_cap,
+            tex_caps: o.tex_caps.as_deref().unwrap_or(""),
+            textures: out_tex
+                .iter()
+                .map(|t| TextureEntry {
+                    file: format!("textures/{}", t.file),
+                    w: t.w,
+                    h: t.h,
+                    src_w: t.source_w,
+                    src_h: t.source_h,
+                    src_format: &t.source_format,
+                    bytes: t.bytes,
+                    sources: t.sources.iter().map(String::as_str).collect(),
+                    src_variants: (t.source_variants.len() > 1)
+                        .then(|| t.source_variants.iter().map(String::as_str).collect()),
+                })
+                .collect(),
+        };
+        let bytes = crate::json_bytes("textures_index.json", &index, false)?;
         self.r.tex_bytes = out_tex.iter().map(|t| t.bytes).sum();
         self.r.tex_pixels = out_tex.iter().map(|t| u64::from(t.w) * u64::from(t.h)).sum();
-        self.files
-            .insert("textures_index.json".into(), iw.finish().into_bytes());
+        self.files.insert("textures_index.json".into(), bytes);
+        Ok(())
     }
 
     /// Collision, water, grind curves, markers, lights, textures_index.json, pieces.json, map.json, trainer.json.
@@ -1668,7 +1625,7 @@ impl MapWriter {
             })
             .collect();
         self.pm.sea_tint = !x.water.is_empty();
-        for (f, b) in self.pm.save() {
+        for (f, b) in self.pm.save()? {
             self.files.insert(f, b);
         }
         let surfaces = self.surfaces.clone();
@@ -1690,18 +1647,18 @@ impl MapWriter {
             &props,
             &x.water,
             &snap_extra,
-        );
+        )?;
         let water_props = join(&self.water_parts);
         if x.water_world.is_some() || !water_props.is_empty() {
             let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
-            let wc = collision.build_water(ww, r, &mut col_files, &water_props);
+            let wc = collision.build_water(ww, r, &mut col_files, &water_props)?;
             col.objects.extend(wc.objects);
             col.pieces += wc.pieces;
             col.water_triangles += wc.water_triangles + wc.prop_triangles;
             col.split_cells += wc.split_cells;
         }
         for h in &hulls {
-            collision.add_hull(&mut col, &h.name, &h.pos, &h.idx, h.surface, &mut col_files);
+            collision.add_hull(&mut col, &h.name, &h.pos, &h.idx, h.surface, &mut col_files)?;
         }
         self.mesh_files.extend(col_files);
 
@@ -1740,7 +1697,7 @@ impl MapWriter {
                         uv: None,
                         idx: gidx,
                     }],
-                ),
+                )?,
             );
             let mut ob = MapObject::new(name.clone(), MapObject::translation(0.0, 0.0, 0.0));
             ob.collision_mesh = Some(format!("meshes/{name}.glb"));
@@ -1756,7 +1713,7 @@ impl MapWriter {
 
         const OCEAN: &str = "ocean_water";
         let water = if o.water && !x.water.is_empty() {
-            self.water(&x.water, OCEAN)
+            self.water(&x.water, OCEAN)?
         } else {
             None
         };
@@ -1776,12 +1733,12 @@ impl MapWriter {
             .filter(|t| *t >= 0)
             .collect();
         self.r.tex_removed = self.ctx.tex.prune(&used);
-        self.write_index();
+        self.write_index()?;
         for m in &mut self.ctx.mats.list {
             m.tris = self.mat_tris.get(&m.id).copied().unwrap_or(0) as u64;
         }
         if self.piece_log.is_some() {
-            self.write_pieces();
+            self.write_pieces()?;
         }
 
         let used_mats: BTreeSet<String> = self.objects.iter().filter_map(|ob| ob.material.clone()).collect();
@@ -1796,63 +1753,22 @@ impl MapWriter {
         self.r.lights_written = kept_lights.len();
         self.r.lights_dropped = x.lights.len() - kept_lights.len();
 
-        let mut trainer: Vec<(String, [f64; 3])> = Vec::new();
-        let mut w = JsonWriter::new(true);
-        w.start_object();
-        w.int("format", 1);
-        w.string("name", &o.name);
-        w.string("display_name", o.display_name.as_deref().unwrap_or(&o.name));
-        w.string("units", "meters");
-        w.string("up", "y");
-        w.string("forward", "-z");
-        w.string("generator", &o.generator);
-        w.start_object_named("materials");
-        let mut mats_sorted: Vec<Material> = self.ctx.mats.list.clone();
-        mats_sorted.sort_by(|a, b| a.name.cmp(&b.name));
-        for m in &mats_sorted {
-            if used_mats.contains(&m.name) {
-                self.write_material(&mut w, m);
-            }
-        }
+        let lights = lights_json(&kept_lights, off, &o.light_prefix);
+        let mut materials: BTreeMap<String, MaterialJson> = self
+            .ctx
+            .mats
+            .list
+            .iter()
+            .filter(|m| used_mats.contains(&m.name))
+            .map(|m| (m.name.clone(), self.material_json(m)))
+            .collect();
         if water.is_some() {
-            w.start_object_named(OCEAN);
-            w.string("surface", "water");
-            w.bool("srgb", true);
-            w.string("domain", "ocean");
-            w.string("shader_override", "ocean");
-            w.string("alpha", "opaque");
-            w.end_object();
+            materials.insert(OCEAN.to_owned(), MaterialJson::Ocean(OceanMaterial::OCEAN));
         }
-        w.end_object();
-        w.start_object_named("surface_profiles");
-        w.end_object();
-        w.start_object_named("streaming_distances");
-        w.f64("near", o.streaming_distances[0]);
-        w.f64("medium", o.streaming_distances[1]);
-        w.f64("far", o.streaming_distances[2]);
-        w.end_object();
-        w.start_array_named("objects");
-        for ob in &obj_arr {
-            Self::write_object(&mut w, ob);
-        }
-        w.end_array();
-        w.start_array_named("lights");
-        write_lights(&mut w, &kept_lights, off, &o.light_prefix);
-        w.end_array();
-        for k in ["audio_volumes", "audio_emitters", "interaction_prefabs"] {
-            w.start_array_named(k);
-            w.end_array();
-        }
-        self.write_effects(&mut w, "trigger_effects", &markers, "trigger_effect", &col);
-        self.write_effects(&mut w, "vfx_prefabs", &markers, "vfx", &col);
-        w.start_array_named("npc_routes");
-        w.end_array();
-        w.start_array_named("warnings");
-        for s in &o.warnings {
-            w.string_value(s);
-        }
-        w.end_array();
-        w.start_array_named("travel_points");
+        let trigger_effects = self.effects_json(&markers, "trigger_effect", &col);
+        let vfx_prefabs = self.effects_json(&markers, "vfx", &col);
+        let mut trainer: Vec<(String, [f64; 3])> = Vec::new();
+        let mut travel_points = Vec::new();
         let (mut travel, mut n) = (0usize, 0usize);
         for (i, st) in markers.iter().enumerate() {
             if st.kind != "travel" {
@@ -1885,29 +1801,22 @@ impl MapWriter {
             if off.z != 0.0 {
                 gy += f64::from(off.z);
             }
-            w.start_object();
-            w.string("name", &id);
-            w.string("source_name", &id);
-            w.string("source_path", &id);
-            w.start_array_named("source_collections");
-            w.string_value("Markers");
-            w.end_array();
             let p = [r4(f64::from(sx + off.x)), r4(gy), r4(f64::from(-(sy + off.y)))];
-            w.start_array_named("position");
-            for v in p {
-                w.f64_value(v);
-            }
-            w.end_array();
-            w.f32("yaw", st.yaw as f32);
-            w.string("stop_name", st.name.as_deref().unwrap_or(""));
-            w.bool("shelter", st.shelter);
-            w.end_object();
+            travel_points.push(TravelPointJson {
+                name: id.clone(),
+                source_name: id.clone(),
+                source_path: id,
+                source_collections: ["Markers"],
+                position: p,
+                yaw: st.yaw as f32,
+                stop_name: st.name.clone().unwrap_or_default(),
+                shelter: st.shelter,
+            });
             travel += 1;
             if st.trainer {
                 trainer.push((st.name.clone().unwrap_or_default(), p));
             }
         }
-        w.end_array();
         self.r.travel_points = travel;
         if travel > 25 {
             self.r
@@ -1956,30 +1865,45 @@ impl MapWriter {
                 sp.name.clone().unwrap_or_else(|| "spawn".into()),
             ));
         }
-        let spawn_body = |w: &mut JsonWriter, s: &(f32, f32, f32, f64, String)| {
-            w.start_array_named("position");
-            w.f64_value(r4(f64::from(s.0 + off.x)));
-            w.f64_value(r4(f64::from(s.2)));
-            w.f64_value(r4(f64::from(-(s.1 + off.y))));
-            w.end_array();
-            w.f64("yaw", s.3);
+        let spawn_json = |s: &(f32, f32, f32, f64, String), name: &str| SpawnJson {
+            name: name.to_owned(),
+            position: [
+                r4(f64::from(s.0 + off.x)),
+                r4(f64::from(s.2)),
+                r4(f64::from(-(s.1 + off.y))),
+            ],
+            yaw: s.3,
         };
-        w.start_object_named("spawn");
-        w.string("name", "spawn");
-        spawn_body(&mut w, &spawns[0]);
-        w.end_object();
-        if spawns.len() > 1 {
-            w.start_array_named("spawn_points");
-            for s in &spawns {
-                w.start_object();
-                w.string("name", &s.4);
-                spawn_body(&mut w, s);
-                w.end_object();
-            }
-            w.end_array();
-        }
-        w.end_object();
-        self.files.insert("map.json".into(), w.finish().into_bytes());
+        let map = MapJson {
+            format: 1,
+            name: &o.name,
+            display_name: o.display_name.as_deref().unwrap_or(&o.name),
+            units: "meters",
+            up: "y",
+            forward: "-z",
+            generator: &o.generator,
+            materials,
+            surface_profiles: serde_json::Map::new(),
+            streaming_distances: StreamingDistances {
+                near: o.streaming_distances[0],
+                medium: o.streaming_distances[1],
+                far: o.streaming_distances[2],
+            },
+            objects: obj_arr.iter().map(Self::object_json).collect(),
+            lights,
+            audio_volumes: [],
+            audio_emitters: [],
+            interaction_prefabs: [],
+            trigger_effects,
+            vfx_prefabs,
+            npc_routes: [],
+            warnings: &o.warnings,
+            travel_points,
+            spawn: spawn_json(&spawns[0], "spawn"),
+            spawn_points: (spawns.len() > 1).then(|| spawns.iter().map(|s| spawn_json(s, &s.4)).collect()),
+        };
+        let bytes = crate::json_bytes("map.json", &map, true)?;
+        self.files.insert("map.json".into(), bytes);
 
         // trainer.json: the trainer spots and the travel points listed too
         for (i, m) in markers.iter().enumerate() {
@@ -2026,38 +1950,28 @@ impl MapWriter {
         }
         self.r.trainer_spots = trainer.len();
         if !trainer.is_empty() {
-            let mut t = JsonWriter::new(true);
-            t.start_object();
-            t.int("schema", 1);
-            t.string(
-                "note",
-                o.trainer_note
+            let t = TrainerJson {
+                schema: 1,
+                note: o
+                    .trainer_note
                     .as_deref()
                     .or(o.display_name.as_deref())
                     .unwrap_or(&o.name),
-            );
-            t.start_array_named("spots");
-            for (name, pos) in &trainer {
-                t.start_object();
-                t.string("name", name);
-                t.start_array_named("position");
-                for v in pos {
-                    t.f64_value(*v);
-                }
-                t.end_array();
-                t.end_object();
-            }
-            t.end_array();
-            t.end_object();
-            self.files.insert("trainer.json".into(), t.finish().into_bytes());
+                spots: trainer
+                    .into_iter()
+                    .map(|(name, position)| TrainerSpot { name, position })
+                    .collect(),
+            };
+            let bytes = crate::json_bytes("trainer.json", &t, true)?;
+            self.files.insert("trainer.json".into(), bytes);
         }
         self.r.mesh_bytes = self.mesh_files.values().map(|b| b.len() as u64).sum();
         self.r.collision = Some(col);
         Ok(())
     }
 
-    fn write_pieces(&mut self) {
-        let Some(log) = &self.piece_log else { return };
+    fn write_pieces(&mut self) -> Result<()> {
+        let Some(log) = &self.piece_log else { return Ok(()) };
         let mut recs: Vec<&PieceRec> = log.iter().collect();
         recs.sort_by(|a, b| {
             a.mesh
@@ -2065,38 +1979,31 @@ impl MapWriter {
                 .then(a.pass.cmp(&b.pass))
                 .then(a.order.cmp(&b.order))
         });
-        let mut w = JsonWriter::new(true);
-        w.start_object();
-        w.f32("overlay_step_m", self.o.overlay_step);
-        w.start_array_named("pieces");
-        for p in recs {
-            w.start_object();
-            w.string("mesh", &p.mesh);
-            w.string("material", &p.material);
-            w.int("pass", i64::from(p.pass));
-            w.int("order", i64::from(p.order));
-            w.f32("shift_mm", round_f32(p.shift_mm, 2));
-            w.int("tris", p.tris as i64);
-            w.start_array_named("gta");
-            for v in [p.centre.x, p.centre.y, p.centre.z] {
-                w.f32_value(round_f32(v, 2));
-            }
-            w.end_array();
-            w.string("drawable", &p.drawable);
-            w.start_array_named("entity");
-            for v in [p.entity.x, p.entity.y, p.entity.z] {
-                w.f32_value(round_f32(v, 2));
-            }
-            w.end_array();
-            w.string("shader", &p.shader);
-            w.int("bucket", i64::from(p.bucket));
-            w.int("model", i64::from(p.model));
-            w.int("geometry", i64::from(p.geom));
-            w.int("entity_no", i64::from(p.entity_no));
-            w.end_object();
-        }
-        w.end_array();
-        w.end_object();
-        self.files.insert("pieces.json".into(), w.finish().into_bytes());
+        let r2 = |v: Sdx| [v.x, v.y, v.z].map(|x| round_f32(x, 2));
+        let pieces = PiecesJson {
+            overlay_step_m: self.o.overlay_step,
+            pieces: recs
+                .into_iter()
+                .map(|p| PieceJson {
+                    mesh: &p.mesh,
+                    material: &p.material,
+                    pass: p.pass,
+                    order: p.order,
+                    shift_mm: round_f32(p.shift_mm, 2),
+                    tris: p.tris,
+                    gta: r2(p.centre),
+                    drawable: &p.drawable,
+                    entity: r2(p.entity),
+                    shader: &p.shader,
+                    bucket: p.bucket,
+                    model: p.model,
+                    geometry: p.geom,
+                    entity_no: p.entity_no,
+                })
+                .collect(),
+        };
+        let bytes = crate::json_bytes("pieces.json", &pieces, true)?;
+        self.files.insert("pieces.json".into(), bytes);
+        Ok(())
     }
 }

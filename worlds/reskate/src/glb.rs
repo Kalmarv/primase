@@ -1,8 +1,101 @@
 //! The map's GLB files: one mesh, one primitive per material, in Studio's y-up frame (x, z, -y from the writer's
-//! z-up frame), the layout and JSON of the reference writer exactly (compact JSON, buffer views 4-aligned, the JSON
-//! chunk padded with spaces).
+//! z-up frame): per primitive positions, normals, uvs, then indices, each buffer view 4-aligned; compact JSON padded
+//! with spaces.
 
-use crate::dotnet::JsonWriter;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct GltfJson<'a> {
+    asset: Asset,
+    scene: u32,
+    scenes: [SceneJson; 1],
+    nodes: [Node<'a>; 1],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    materials: Vec<Named<'a>>,
+    meshes: [MeshJson<'a>; 1],
+    accessors: Vec<AccessorJson>,
+    #[serde(rename = "bufferViews")]
+    buffer_views: Vec<ViewJson>,
+    buffers: [Buffer; 1],
+}
+
+#[derive(Serialize)]
+struct Asset {
+    version: &'static str,
+    generator: &'static str,
+}
+
+#[derive(Serialize)]
+struct SceneJson {
+    nodes: [u32; 1],
+}
+
+#[derive(Serialize)]
+struct Node<'a> {
+    name: &'a str,
+    mesh: u32,
+}
+
+#[derive(Serialize)]
+struct Named<'a> {
+    name: &'a str,
+}
+
+#[derive(Serialize)]
+struct MeshJson<'a> {
+    name: &'a str,
+    primitives: Vec<PrimitiveJson>,
+}
+
+#[derive(Serialize)]
+struct PrimitiveJson {
+    attributes: Attributes,
+    indices: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    material: Option<usize>,
+    mode: u32,
+}
+
+#[derive(Serialize)]
+struct Attributes {
+    #[serde(rename = "POSITION")]
+    position: usize,
+    #[serde(rename = "NORMAL", skip_serializing_if = "Option::is_none")]
+    normal: Option<usize>,
+    #[serde(rename = "TEXCOORD_0", skip_serializing_if = "Option::is_none")]
+    texcoord_0: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct AccessorJson {
+    #[serde(rename = "bufferView")]
+    buffer_view: usize,
+    #[serde(rename = "componentType")]
+    component_type: u32,
+    count: usize,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max: Option<[f32; 3]>,
+}
+
+#[derive(Serialize)]
+struct ViewJson {
+    buffer: u32,
+    #[serde(rename = "byteOffset")]
+    byte_offset: usize,
+    #[serde(rename = "byteLength")]
+    byte_length: usize,
+    target: u32,
+}
+
+#[derive(Serialize)]
+struct Buffer {
+    #[serde(rename = "byteLength")]
+    byte_length: usize,
+}
 
 /// One primitive, in the writer's frame (z up). `nrm` and `uv` may be absent; `material` names a map material.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -20,8 +113,9 @@ fn f32_bytes(v: &[f32], out: &mut Vec<u8>) {
     }
 }
 
-/// The GLB of `prims`, its node and mesh named `name`.
-pub fn write(name: &str, prims: &[GlbPrim]) -> Vec<u8> {
+/// The GLB of `prims`, its node and mesh named `name`. A non-finite position is an error (its bounds would not be
+/// JSON numbers).
+pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
     let mut bin: Vec<u8> = Vec::new();
     let mut views: Vec<(usize, usize, u32)> = Vec::new();
     // accessors: (view, component type, count, type, bounds)
@@ -147,106 +241,56 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> Vec<u8> {
         bin.push(0);
     }
 
-    let mut w = JsonWriter::new(false);
-    w.start_object();
-    w.start_object_named("asset");
-    w.string("version", "2.0");
-    w.string("generator", "gta-skate");
-    w.end_object();
-    w.int("scene", 0);
-    w.start_array_named("scenes");
-    w.start_object();
-    w.start_array_named("nodes");
-    w.int_value(0);
-    w.end_array();
-    w.end_object();
-    w.end_array();
-    w.start_array_named("nodes");
-    w.start_object();
-    w.string("name", name);
-    w.int("mesh", 0);
-    w.end_object();
-    w.end_array();
-    if !mat_names.is_empty() {
-        w.start_array_named("materials");
-        for m in &mat_names {
-            w.start_object();
-            w.string("name", m);
-            w.end_object();
-        }
-        w.end_array();
-    }
-    w.start_array_named("meshes");
-    w.start_object();
-    w.string("name", name);
-    w.start_array_named("primitives");
-    for PrimJson {
-        pos,
-        nrm,
-        uv,
-        idx,
-        mat,
-    } in &prim_json
-    {
-        w.start_object();
-        w.start_object_named("attributes");
-        w.int("POSITION", *pos as i64);
-        if let Some(n) = nrm {
-            w.int("NORMAL", *n as i64);
-        }
-        if let Some(u) = uv {
-            w.int("TEXCOORD_0", *u as i64);
-        }
-        w.end_object();
-        w.int("indices", *idx as i64);
-        if let Some(m) = mat {
-            w.int("material", *m as i64);
-        }
-        w.int("mode", 4);
-        w.end_object();
-    }
-    w.end_array();
-    w.end_object();
-    w.end_array();
-    w.start_array_named("accessors");
-    for a in &accs {
-        w.start_object();
-        w.int("bufferView", a.view as i64);
-        w.int("componentType", i64::from(a.comp));
-        w.int("count", a.count as i64);
-        w.string("type", a.kind);
-        if let Some((mn, mx)) = a.bounds {
-            w.start_array_named("min");
-            for v in mn {
-                w.f32_value(v);
-            }
-            w.end_array();
-            w.start_array_named("max");
-            for v in mx {
-                w.f32_value(v);
-            }
-            w.end_array();
-        }
-        w.end_object();
-    }
-    w.end_array();
-    w.start_array_named("bufferViews");
-    for (off, len, target) in &views {
-        w.start_object();
-        w.int("buffer", 0);
-        w.int("byteOffset", *off as i64);
-        w.int("byteLength", *len as i64);
-        w.int("target", i64::from(*target));
-        w.end_object();
-    }
-    w.end_array();
-    w.start_array_named("buffers");
-    w.start_object();
-    w.int("byteLength", bin.len() as i64);
-    w.end_object();
-    w.end_array();
-    w.end_object();
-    let mut js = w.finish().into_bytes();
+    let gltf = GltfJson {
+        asset: Asset {
+            version: "2.0",
+            generator: "gta-skate",
+        },
+        scene: 0,
+        scenes: [SceneJson { nodes: [0] }],
+        nodes: [Node { name, mesh: 0 }],
+        materials: mat_names.iter().map(|m| Named { name: m }).collect(),
+        meshes: [MeshJson {
+            name,
+            primitives: prim_json
+                .iter()
+                .map(|p| PrimitiveJson {
+                    attributes: Attributes {
+                        position: p.pos,
+                        normal: p.nrm,
+                        texcoord_0: p.uv,
+                    },
+                    indices: p.idx,
+                    material: p.mat,
+                    mode: 4,
+                })
+                .collect(),
+        }],
+        accessors: accs
+            .iter()
+            .map(|a| AccessorJson {
+                buffer_view: a.view,
+                component_type: a.comp,
+                count: a.count,
+                kind: a.kind,
+                min: a.bounds.map(|b| b.0),
+                max: a.bounds.map(|b| b.1),
+            })
+            .collect(),
+        buffer_views: views
+            .iter()
+            .map(|&(off, len, target)| ViewJson {
+                buffer: 0,
+                byte_offset: off,
+                byte_length: len,
+                target,
+            })
+            .collect(),
+        buffers: [Buffer {
+            byte_length: bin.len(),
+        }],
+    };
+    let mut js = crate::json_bytes(&format!("{name}.glb"), &gltf, false)?;
     while !js.len().is_multiple_of(4) {
         js.push(b' ');
     }
@@ -261,5 +305,5 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> Vec<u8> {
     out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
     out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
     out.extend_from_slice(&bin);
-    out
+    Ok(out)
 }

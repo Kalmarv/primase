@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::Result;
 use crate::glb::{self, GlbPrim};
 use crate::model::MapObject;
 use crate::scene::{SnapMode, SnapSpec, SurfaceTable, WaterQuad};
@@ -212,8 +213,8 @@ impl<'a> Collision<'a> {
         props: &BTreeMap<(i32, i32), PropSoup>,
         water: &[WaterQuad],
         snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
-    ) -> CollisionResult {
-        let mut res = self.cells(source, region, files, queries, props, "c", false);
+    ) -> Result<CollisionResult> {
+        let mut res = self.cells(source, region, files, queries, props, "c", false)?;
         self.extra = snap_extra
             .iter()
             .map(|(pos, idx, ground)| TileData {
@@ -274,7 +275,7 @@ impl<'a> Collision<'a> {
             }
         }
         self.kept.clear();
-        res
+        Ok(res)
     }
 
     /// Water-mode collision: cells like `build`, pieces in collision mode water.
@@ -284,7 +285,7 @@ impl<'a> Collision<'a> {
         region: [f64; 4],
         files: &mut Files,
         props: &BTreeMap<(i32, i32), PropSoup>,
-    ) -> CollisionResult {
+    ) -> Result<CollisionResult> {
         self.cells(source, region, files, &[], props, "w", true)
     }
 
@@ -297,9 +298,9 @@ impl<'a> Collision<'a> {
         idx: &[u32],
         surface: usize,
         files: &mut Files,
-    ) {
+    ) -> Result<()> {
         if idx.is_empty() {
-            return;
+            return Ok(());
         }
         let (mut mn, mut mx) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
         for v in (0..pos.len().saturating_sub(2)).step_by(3) {
@@ -326,7 +327,7 @@ impl<'a> Collision<'a> {
                     uv: None,
                     idx: idx.to_vec(),
                 }],
-            ),
+            )?,
         );
         let mut ob = MapObject::new(name.to_owned(), self.at(origin));
         ob.collision_mesh = Some(format!("meshes/{file}"));
@@ -336,6 +337,7 @@ impl<'a> Collision<'a> {
         res.objects.push(ob);
         res.hulls += 1;
         res.triangles += (idx.len() / 3) as i64;
+        Ok(())
     }
 
     fn street_kinds(&self) -> [u8; 256] {
@@ -363,7 +365,7 @@ impl<'a> Collision<'a> {
         props: &BTreeMap<(i32, i32), PropSoup>,
         prefix: &str,
         water: bool,
-    ) -> CollisionResult {
+    ) -> Result<CollisionResult> {
         let mut res = CollisionResult {
             placed: queries.iter().map(|q| (q.x, q.y)).collect(),
             ground: vec![f32::NAN; queries.len()],
@@ -464,12 +466,12 @@ impl<'a> Collision<'a> {
                 files,
                 &mut res,
                 water,
-            );
+            )?;
             if wanted.contains(&(tx, ty)) {
                 self.kept.insert((tx, ty), (td, n_static));
             }
         }
-        res
+        Ok(res)
     }
 
     /// The world triangles of a cell without degenerate ones and those beyond the map edge, with facing counts.
@@ -537,9 +539,9 @@ impl<'a> Collision<'a> {
         files: &mut Files,
         res: &mut CollisionResult,
         water: bool,
-    ) {
+    ) -> Result<()> {
         if tris.is_empty() {
-            return;
+            return Ok(());
         }
         let (mut mn, mut mx) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
         for &t in tris {
@@ -577,9 +579,9 @@ impl<'a> Collision<'a> {
                     files,
                     res,
                     water,
-                );
+                )?;
             }
-            return;
+            return Ok(());
         }
         if dense {
             res.dense_leaves += 1;
@@ -640,7 +642,8 @@ impl<'a> Collision<'a> {
                     })
                 })
                 .collect();
-            let welded = primase_meshops::weld_quantized(&corners, 1000.0).expect("finite collision");
+            let welded = primase_meshops::weld_quantized(&corners, 1000.0)
+                .map_err(|e| crate::Error::Scene(format!("collision {name}: {e}")))?;
             if welded.indices.is_empty() {
                 continue;
             }
@@ -687,7 +690,7 @@ impl<'a> Collision<'a> {
                             uv: None,
                             idx: i,
                         }],
-                    ),
+                    )?,
                 );
                 let mut ob = MapObject::new(stem_c, self.at(origin));
                 ob.collision_mesh = Some(format!("meshes/{file}"));
@@ -703,6 +706,7 @@ impl<'a> Collision<'a> {
                 res.pieces += 1;
             }
         }
+        Ok(())
     }
 }
 
