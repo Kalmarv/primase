@@ -6,6 +6,7 @@ pub mod components;
 pub mod frame;
 pub mod gate;
 pub mod pass;
+pub mod pbr;
 pub mod texformat;
 pub mod world;
 

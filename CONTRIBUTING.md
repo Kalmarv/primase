@@ -75,6 +75,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_SCENES_GTA` | a folder whose subfolders are GTA V skate-scene folders |
 | `PRIMASE_SCENES_SEKIRO` | a folder whose `scene_*` subfolders are Sekiro skate-scene folders |
 | `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`) |
+| `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 
