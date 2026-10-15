@@ -86,6 +86,9 @@ The file's dimensions and mip levels are authoritative; source resolution is
 not an implicit promise. Texture lowering metadata is advisory, not required
 for rendering.
 
+Lights (`KHR_lights_punctual`) are not carried in 1.x tiles: the writer
+writes a tile's placements and what they refer to, not the world's lights.
+
 ## Collision sidecars
 
 Collision GLBs use the same world coordinate frame. Each mesh contains indexed

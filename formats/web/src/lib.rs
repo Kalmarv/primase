@@ -120,14 +120,6 @@ pub struct TileSet {
     pub index: Index,
     pub files: BTreeMap<String, Vec<u8>>,
 }
-#[derive(Clone, Debug)]
-struct Placement {
-    entity: Entity,
-    prototype: Entity,
-    variant: u32,
-    transform: Transform,
-    mesh: Option<Mesh>,
-}
 /// Add `name` to a glTF document's `extensionsUsed` and `extensionsRequired`, keeping the extensions already there.
 pub(crate) fn require_extension(doc: &mut serde_json::Value, name: &str) {
     for key in ["extensionsUsed", "extensionsRequired"] {
@@ -231,14 +223,78 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
     }
     Ok(())
 }
-/// Produce one deterministic GLB per occupied tile and an index. Triangle-centre
-/// partitioning assigns complete triangles (no clipping), so bounds may exceed the
-/// nominal cell. Shared prototypes retain sharing for pivot-filed placements.
-/// Degenerate placements are counted and omitted, as in the glTF writer.
-pub fn write(world: &World, options: &Options) -> Result<TileSet> {
+/// One placement as a tile holds it: the whole prototype, or (filed by triangle centre) the triangles of each of its
+/// primitives that fall in the tile, by index into that primitive's triangle list.
+#[derive(Clone, Debug)]
+struct Placement {
+    entity: Entity,
+    prototype: Entity,
+    variant: u32,
+    transform: Transform,
+    triangles: Option<Vec<(usize, Vec<u32>)>>,
+}
+/// A planned cell: its placements and the indices of its viewer records.
+#[derive(Clone, Debug, Default)]
+struct Cell {
+    placements: Vec<Placement>,
+    items: Vec<usize>,
+}
+/// One written tile: its index entry, its GLB and its collision sidecar, for the caller to keep or store.
+#[derive(Clone, Debug)]
+pub struct WrittenTile {
+    pub info: TileInfo,
+    pub bytes: Vec<u8>,
+    pub collision: Option<(String, Vec<u8>)>,
+}
+impl WrittenTile {
+    /// Write the tile's GLB and collision sidecar into `folder`.
+    pub fn write_to(&self, folder: &Path) -> Result<()> {
+        std::fs::create_dir_all(folder).map_err(|source| Error::Io {
+            path: folder.into(),
+            source,
+        })?;
+        for (name, bytes) in
+            std::iter::once((&self.info.file, &self.bytes)).chain(self.collision.iter().map(|(n, b)| (n, b)))
+        {
+            let path = folder.join(name);
+            std::fs::write(&path, bytes).map_err(|source| Error::Io { path, source })?;
+        }
+        Ok(())
+    }
+}
+/// What goes in which tile, decided before any tile is written: placements by pivot (or, for
+/// [`Options::split_by_tile`], by transformed triangle centre), viewer records and the world's collision by anchor.
+///
+/// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`], as a
+/// [`World::subset`], with its meshes and textures loaded and lowered to PBR, then [`TilePlan::write_cell`]; then
+/// [`TilePlan::finish`]. The writer neither loads nor lowers: it fails, as before, on what is missing. Placements
+/// filed by triangle centre need their prototype's geometry to be planned: [`TilePlan::split`] each of
+/// [`TilePlan::unsplit`] first, from a world holding that prototype loaded.
+pub struct TilePlan {
+    options: Options,
+    items: Vec<ViewerItem>,
+    placements: BTreeSet<Entity>,
+    cells: BTreeMap<(i32, i32), Cell>,
+    unsplit: Vec<Placement>,
+    written: BTreeSet<(i32, i32)>,
+    tiles: Vec<TileInfo>,
+    skipped: u64,
+    without_mesh: u64,
     #[cfg(feature = "ktx2")]
-    let mut texture_encoder =
-        ktx2::TextureEncoder::new(options.texture_caps, options.texture_caps_by_name.clone())?;
+    textures: ktx2::TextureEncoder,
+}
+impl std::fmt::Debug for TilePlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TilePlan")
+            .field("cells", &self.cells.len())
+            .field("unsplit", &self.unsplit.len())
+            .field("written", &self.written.len())
+            .field("tiles", &self.tiles.len())
+            .finish()
+    }
+}
+/// Plan `world`'s tiles. Geometry may still be in files; the world's collision and viewer records are read now.
+pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
     if !options.tile_size.is_finite() || options.tile_size <= 0. {
         return Err(Error::Invalid("tile size must be finite and positive".into()));
     }
@@ -257,7 +313,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 prototype: i.prototype,
                 variant: i.variant,
                 transform: *t,
-                mesh: None,
+                triangles: None,
             },
         );
     }
@@ -272,7 +328,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                     prototype: e,
                     variant: 0,
                     transform: t,
-                    mesh: None,
+                    triangles: None,
                 },
             );
         }
@@ -282,37 +338,68 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             return Err(Error::Invalid(format!("split marker {e:?} is not a placement")));
         }
     }
-    let mut tiles = BTreeMap::<(i32, i32), Vec<Placement>>::new();
-    let mut skipped = 0;
-    let mut without_mesh = 0;
-    for p in placements.values() {
+    let mut plan = TilePlan {
+        options: Options {
+            viewer_items: Vec::new(),
+            ..options.clone()
+        },
+        items: options.viewer_items.clone(),
+        placements: placements.keys().copied().collect(),
+        cells: BTreeMap::new(),
+        unsplit: Vec::new(),
+        written: BTreeSet::new(),
+        tiles: Vec::new(),
+        skipped: 0,
+        without_mesh: 0,
+        #[cfg(feature = "ktx2")]
+        textures: ktx2::TextureEncoder::new(options.texture_caps, options.texture_caps_by_name.clone())?,
+    };
+    for p in placements.into_values() {
         if p.transform.classify() == TransformKind::Degenerate {
-            skipped += 1;
+            plan.skipped += 1;
             continue;
         }
-        let Some(mesh) = world.get::<Mesh>(p.prototype) else {
-            if world.has::<primase_core::MeshFile>(p.prototype) {
-                return Err(Error::Invalid(format!(
-                    "prototype {:?} has no loaded mesh",
-                    p.prototype
-                )));
-            }
-            without_mesh += 1;
+        if !world.has::<Mesh>(p.prototype) && !world.has::<primase_core::MeshFile>(p.prototype) {
+            plan.without_mesh += 1;
             continue;
-        };
-        validate_mesh(mesh)?;
-        if !options.split_by_tile.contains(&p.entity) {
+        }
+        if options.split_by_tile.contains(&p.entity) {
+            plan.unsplit.push(p);
+        } else {
             let key = coordinate(p.transform.cols[3].map(f64::from), options.tile_size)?;
-            tiles.entry(key).or_default().push(p.clone());
-            continue;
+            plan.cells.entry(key).or_default().placements.push(p);
         }
-        let variants = world.get::<MaterialVariants>(p.prototype);
-        if variants.is_some_and(|v| v.0.len() != mesh.primitives.len()) {
+    }
+    // the world's collision geometry, in world space, after the caller's viewer items
+    plan.items.extend(collision::world_items(world)?);
+    for (i, item) in plan.items.iter().enumerate() {
+        if item.anchor.iter().any(|v| !v.is_finite()) || item.kind.is_empty() {
             return Err(Error::Invalid(
-                "material variant count differs from primitive count".into(),
+                "viewer item needs a finite anchor and nonempty kind".into(),
             ));
         }
-        let mut chunks = BTreeMap::<(i32, i32), Mesh>::new();
+        let key = coordinate(item.anchor, options.tile_size)?;
+        plan.cells.entry(key).or_default().items.push(i);
+    }
+    Ok(plan)
+}
+impl TilePlan {
+    /// Placements filed by triangle centre that still wait for [`TilePlan::split`].
+    pub fn unsplit(&self) -> Vec<Entity> {
+        self.unsplit.iter().map(|p| p.entity).collect()
+    }
+    /// File the triangles of placement `e` (one of [`TilePlan::unsplit`]) by their transformed centres. `world`
+    /// holds its prototype's mesh loaded.
+    pub fn split(&mut self, world: &World, e: Entity) -> Result<()> {
+        let i = self
+            .unsplit
+            .iter()
+            .position(|p| p.entity == e)
+            .ok_or_else(|| Error::Invalid(format!("{e:?} is not a placement waiting to be split")))?;
+        let p = self.unsplit.remove(i);
+        let mesh = loaded(world, p.prototype)?;
+        validate_mesh(mesh)?;
+        let mut parts = BTreeMap::<(i32, i32), Vec<(usize, Vec<u32>)>>::new();
         for (part, prim) in mesh.primitives.iter().enumerate() {
             if prim.topology != Topology::Triangles {
                 return Err(Error::Invalid("split-by-tile requires triangle lists".into()));
@@ -322,56 +409,122 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 .ok_or_else(|| Error::Invalid("missing positions".into()))?;
             let idx = indices(prim);
             let mut pieces = BTreeMap::<(i32, i32), Vec<u32>>::new();
-            for tri in idx.as_chunks::<3>().0 {
+            for (t, tri) in idx.as_chunks::<3>().0.iter().enumerate() {
                 let points = tri.map(|i| point(p.transform, pos[i as usize]));
                 let centre = std::array::from_fn(|k| (points[0][k] + points[1][k] + points[2][k]) / 3.);
                 pieces
-                    .entry(coordinate(centre, options.tile_size)?)
+                    .entry(coordinate(centre, self.options.tile_size)?)
                     .or_default()
-                    .extend_from_slice(tri);
+                    .push(t as u32);
             }
-            for (key, idx) in pieces {
-                let mut sub = subset(prim, &idx);
-                sub.material = variants
-                    .and_then(|v| v.0[part].get(&p.variant).copied())
-                    .or(prim.material);
-                chunks.entry(key).or_default().primitives.push(sub);
+            for (key, tris) in pieces {
+                parts.entry(key).or_default().push((part, tris));
             }
         }
-        for (key, mesh) in chunks {
-            let mut p = p.clone();
-            p.mesh = Some(mesh);
-            tiles.entry(key).or_default().push(p);
+        for (key, triangles) in parts {
+            self.cells.entry(key).or_default().placements.push(Placement {
+                triangles: Some(triangles),
+                ..p.clone()
+            });
         }
+        Ok(())
     }
-    let mut set = TileSet {
-        collision_files: BTreeMap::new(),
-        index: Index {
-            format_version: "1.0",
-            empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
-            version: 1,
-            tile_size: options.tile_size,
-            tiles: Vec::new(),
-            skipped_degenerate: skipped,
-            placements_without_mesh: without_mesh,
-        },
-        files: BTreeMap::new(),
-    };
-    for ((col, row), group) in tiles {
-        let mut w = world.clone();
-        for &e in placements.keys() {
-            w.remove::<Instance>(e);
-            w.remove::<Transform>(e);
+    /// The planned cells, in order.
+    pub fn cells(&self) -> Vec<(i32, i32)> {
+        self.cells.keys().copied().collect()
+    }
+    /// The entities a cell's tiles are written from: its placements and their prototypes. A driver prepares the
+    /// world's [`World::closure`] of them.
+    pub fn roots(&self, cell: (i32, i32)) -> BTreeSet<Entity> {
+        self.cells
+            .get(&cell)
+            .into_iter()
+            .flat_map(|c| &c.placements)
+            .flat_map(|p| [p.entity, p.prototype])
+            .collect()
+    }
+    /// Write cell `cell` from `world`: exactly the closure of its [`TilePlan::roots`], meshes and textures loaded and
+    /// materials lowered. Each tile is written from its own entities moved out of `world` ([`World::split_off`])
+    /// and moved back, so nothing is copied; `world` is left as it was (on success) for another plan to write the
+    /// same cell. Returns its tiles (none for a cell with nothing to draw or show).
+    pub fn write_cell(&mut self, cell: (i32, i32), world: &mut World) -> Result<Vec<WrittenTile>> {
+        if !self.unsplit.is_empty() {
+            return Err(Error::Invalid(
+                "split every placement filed by triangle centre before writing".into(),
+            ));
         }
+        if !self.written.insert(cell) {
+            return Err(Error::Invalid(format!("cell {cell:?} written twice")));
+        }
+        let Some(content) = self.cells.get(&cell).cloned() else {
+            return Err(Error::Invalid(format!("cell {cell:?} is not planned")));
+        };
+        let closure = world.closure(self.roots(cell));
+        if closure.len() != world.entity_count() {
+            return Err(Error::Invalid(format!(
+                "cell {cell:?}: the world has {} entities, the closure of the cell's roots {}",
+                world.entity_count(),
+                closure.len()
+            )));
+        }
+        if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
+            return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
+        }
+        let mut part = world.split_off(&closure);
+        let tile = self.tile(cell, &mut part, &content);
+        world.absorb(part);
+        Ok(tile?.into_iter().collect())
+    }
+    /// One tile of `content` from `w`, the closure of its placements. `w` is left as it was.
+    fn tile(&mut self, (col, row): (i32, i32), w: &mut World, content: &Cell) -> Result<Option<WrittenTile>> {
+        let mut meshes = Vec::with_capacity(content.placements.len());
+        for p in &content.placements {
+            let mesh = loaded(w, p.prototype)?;
+            validate_mesh(mesh)?;
+            meshes.push(match &p.triangles {
+                None => None,
+                Some(parts) => {
+                    let variants = w.get::<MaterialVariants>(p.prototype);
+                    if variants.is_some_and(|v| v.0.len() != mesh.primitives.len()) {
+                        return Err(Error::Invalid(
+                            "material variant count differs from primitive count".into(),
+                        ));
+                    }
+                    let mut chunk = Mesh::default();
+                    for (part, tris) in parts {
+                        let prim = &mesh.primitives[*part];
+                        let all = indices(prim);
+                        let idx: Vec<u32> = tris
+                            .iter()
+                            .flat_map(|&t| all[3 * t as usize..3 * t as usize + 3].iter().copied())
+                            .collect();
+                        let mut sub = subset(prim, &idx);
+                        sub.material = variants
+                            .and_then(|v| v.0[*part].get(&p.variant).copied())
+                            .or(prim.material);
+                        chunk.primitives.push(sub);
+                    }
+                    Some(chunk)
+                }
+            });
+        }
+        // only this tile's placements are placed while it is written; the others' are put back after
+        let mut saved = Vec::new();
+        for e in self
+            .placements
+            .iter()
+            .copied()
+            .filter(|&e| w.is_alive(e))
+            .collect::<Vec<_>>()
+        {
+            saved.push((e, w.remove::<Instance>(e), w.remove::<Transform>(e)));
+        }
+        let mut spawned = Vec::new();
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];
         let mut triangles = 0;
-        for p in &group {
-            let mesh = p
-                .mesh
-                .as_ref()
-                .or_else(|| world.get::<Mesh>(p.prototype))
-                .ok_or_else(|| Error::Invalid("missing mesh".into()))?;
+        for (p, chunk) in content.placements.iter().zip(meshes) {
+            let mesh = chunk.as_ref().map_or_else(|| loaded(w, p.prototype), Ok)?;
             for prim in &mesh.primitives {
                 let pos = prim
                     .positions()
@@ -388,11 +541,12 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                     }
                 }
             }
-            let proto = if let Some(mesh) = &p.mesh {
+            let proto = if let Some(mesh) = chunk {
                 let e = w.spawn();
-                w.insert(e, mesh.clone());
-                if let Some(n) = world.get::<Name>(p.prototype) {
-                    w.insert(e, n.clone());
+                spawned.push(e);
+                w.insert(e, mesh);
+                if let Some(n) = w.get::<Name>(p.prototype).cloned() {
+                    w.insert(e, n);
                 }
                 e
             } else {
@@ -415,88 +569,103 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 },
             );
         }
-        if triangles == 0 {
-            continue;
-        }
-        if !min.iter().chain(&max).all(|v| v.is_finite()) {
-            return Err(Error::Invalid("tile has no finite geometry".into()));
-        }
-        let (bytes, report) = primase_gltf::write(
-            &w,
-            &primase_gltf::WriteOptions {
-                group_by: primase_gltf::GroupBy::None,
-                base_dir: options.base_dir.clone(),
-                ..Default::default()
-            },
-        )?;
-        if !report.textures_skipped.is_empty() {
-            return Err(Error::Invalid(format!(
-                "load textures before web export: {:?}",
-                report.textures_skipped
-            )));
-        }
-        let transforms = group.iter().map(|p| (p.entity.index(), p.transform)).collect();
-        let (bytes, instanced_placements) = instancing::apply(bytes, &transforms, options.gpu_instancing)?;
-        #[cfg(feature = "ktx2")]
-        let bytes = if options.ktx2 {
-            texture_encoder.apply(bytes)?
+        let written: &World = w;
+        let render = if triangles == 0 {
+            Ok(None)
         } else {
-            bytes
+            (|| -> Result<Option<(TileInfo, Vec<u8>)>> {
+                if !min.iter().chain(&max).all(|v| v.is_finite()) {
+                    return Err(Error::Invalid("tile has no finite geometry".into()));
+                }
+                let (bytes, report) = primase_gltf::write(
+                    written,
+                    &primase_gltf::WriteOptions {
+                        group_by: primase_gltf::GroupBy::None,
+                        base_dir: self.options.base_dir.clone(),
+                        ..Default::default()
+                    },
+                )?;
+                if !report.textures_skipped.is_empty() {
+                    return Err(Error::Invalid(format!(
+                        "load textures before web export: {:?}",
+                        report.textures_skipped
+                    )));
+                }
+                let transforms = content
+                    .placements
+                    .iter()
+                    .map(|p| (p.entity.index(), p.transform))
+                    .collect();
+                let (bytes, instanced_placements) =
+                    instancing::apply(bytes, &transforms, self.options.gpu_instancing)?;
+                #[cfg(feature = "ktx2")]
+                let bytes = if self.options.ktx2 {
+                    self.textures.apply(bytes)?
+                } else {
+                    bytes
+                };
+                let bytes = if self.options.compress {
+                    compression::apply(bytes)?
+                } else {
+                    bytes
+                };
+                Ok(Some(TileInfo {
+                    collision: None,
+                    content: TileContent::Geometry,
+                    col,
+                    row,
+                    file: String::new(),
+                    min,
+                    max,
+                    triangles,
+                    placements: content.placements.len() as u64,
+                    instanced_placements,
+                    viewer_items: 0,
+                    bytes: bytes.len() as u64,
+                })
+                .map(|info| (info, bytes)))
+            })()
         };
-        let bytes = if options.compress {
-            compression::apply(bytes)?
-        } else {
-            bytes
-        };
-        let file = format!("tile_{col}_{row}.glb");
-        set.index.tiles.push(TileInfo {
-            collision: None,
-            content: TileContent::Geometry,
-            col,
-            row,
-            file: file.clone(),
-            min,
-            max,
-            triangles,
-            placements: group.len() as u64,
-            instanced_placements,
-            viewer_items: 0,
-            bytes: bytes.len() as u64,
-        });
-        set.files.insert(file, bytes);
-    }
-    // the world's collision geometry, in world space, after the caller's viewer items
-    let mut items = options.viewer_items.clone();
-    items.extend(collision::world_items(world)?);
-    append_viewer_items(&mut set, &items, options)?;
-    let mut named = BTreeMap::new();
-    for tile in &mut set.index.tiles {
-        let bytes = set.files.remove(&tile.file).expect("generated tile");
-        tile.file = asset_name("tile", tile.col, tile.row, &bytes);
-        named.insert(tile.file.clone(), bytes);
-    }
-    set.files = named;
-    Ok(set)
-}
-fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
-    let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
-    format!("{kind}_{col}_{row}.{hash}.glb")
-}
-fn append_viewer_items(set: &mut TileSet, items: &[ViewerItem], options: &Options) -> Result<()> {
-    use serde_json::{Value, json};
-    let mut groups = BTreeMap::<(i32, i32), Vec<(usize, &ViewerItem)>>::new();
-    for (i, item) in items.iter().enumerate() {
-        if item.anchor.iter().any(|v| !v.is_finite()) || item.kind.is_empty() {
-            return Err(Error::Invalid(
-                "viewer item needs a finite anchor and nonempty kind".into(),
-            ));
+        for p in &content.placements {
+            w.remove::<Instance>(p.entity);
+            w.remove::<Transform>(p.entity);
+            w.remove_opaque(p.entity, "web.placement_key");
         }
-        groups
-            .entry(coordinate(item.anchor, options.tile_size)?)
-            .or_default()
-            .push((i, item));
+        for e in spawned {
+            w.despawn(e);
+        }
+        for (e, instance, transform) in saved {
+            if let Some(i) = instance {
+                w.insert(e, i);
+            }
+            if let Some(t) = transform {
+                w.insert(e, t);
+            }
+        }
+        let Some(mut tile) = self.attach_items((col, row), render?, &content.items)? else {
+            return Ok(None);
+        };
+        tile.info.file = asset_name("tile", col, row, &tile.bytes);
+        self.tiles.push(tile.info.clone());
+        Ok(Some(tile))
     }
-    for ((col, row), items) in groups {
+    /// The tile with viewer records `items` added as identity nodes (and their collision as a sidecar): a
+    /// metadata-only tile without `render`; `None` when there is neither.
+    fn attach_items(
+        &self,
+        (col, row): (i32, i32),
+        render: Option<(TileInfo, Vec<u8>)>,
+        items: &[usize],
+    ) -> Result<Option<WrittenTile>> {
+        use serde_json::{Value, json};
+        if items.is_empty() {
+            return Ok(render.map(|(info, bytes)| WrittenTile {
+                info,
+                bytes,
+                collision: None,
+            }));
+        }
+        let items: Vec<(usize, &ViewerItem)> = items.iter().map(|&i| (i, &self.items[i])).collect();
         let mut collision_name = String::new();
         let collisions: Vec<_> = items
             .iter()
@@ -508,16 +677,9 @@ fn append_viewer_items(set: &mut TileSet, items: &[ViewerItem], options: &Option
         } else {
             let bytes = collision::write(&collisions)?;
             collision_name = asset_name("collision", col, row, &bytes);
-            let descriptor = CollisionFile {
-                file: collision_name.clone(),
-                bytes: bytes.len() as u64,
-                records: collisions.len(),
-            };
-            set.collision_files.insert(collision_name.clone(), bytes);
-            Some(descriptor)
+            Some((collision_name.clone(), bytes))
         };
-        let file = format!("tile_{col}_{row}.glb");
-        let (mut doc, bin) = if let Some(bytes) = set.files.get(&file) {
+        let (mut doc, bin) = if let Some((_, bytes)) = &render {
             let chunks = primase_gltf::glb::parse(bytes)?;
             (
                 serde_json::from_slice::<Value>(chunks.json)?,
@@ -563,21 +725,30 @@ fn append_viewer_items(set: &mut TileSet, items: &[ViewerItem], options: &Option
                 .push(json!(index));
         }
         let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?;
-        if let Some(tile) = set.index.tiles.iter_mut().find(|t| t.col == col && t.row == row) {
-            tile.collision = collision;
-            tile.viewer_items = items.len() as u64;
-            tile.bytes = bytes.len() as u64;
-            for k in 0..3 {
-                tile.min[k] = tile.min[k].min(min[k]);
-                tile.max[k] = tile.max[k].max(max[k]);
+        let descriptor = collision.as_ref().map(|(file, b)| CollisionFile {
+            file: file.clone(),
+            bytes: b.len() as u64,
+            records: collisions.len(),
+        });
+        let info = match render {
+            Some((mut info, _)) => {
+                for k in 0..3 {
+                    info.min[k] = info.min[k].min(min[k]);
+                    info.max[k] = info.max[k].max(max[k]);
+                }
+                TileInfo {
+                    collision: descriptor,
+                    viewer_items: items.len() as u64,
+                    bytes: bytes.len() as u64,
+                    ..info
+                }
             }
-        } else {
-            set.index.tiles.push(TileInfo {
-                collision,
+            None => TileInfo {
+                collision: descriptor,
                 content: TileContent::MetadataOnly,
                 col,
                 row,
-                file: file.clone(),
+                file: String::new(),
                 min,
                 max,
                 triangles: 0,
@@ -585,12 +756,106 @@ fn append_viewer_items(set: &mut TileSet, items: &[ViewerItem], options: &Option
                 instanced_placements: 0,
                 viewer_items: items.len() as u64,
                 bytes: bytes.len() as u64,
-            });
-        }
-        set.files.insert(file, bytes);
+            },
+        };
+        Ok(Some(WrittenTile {
+            info,
+            bytes,
+            collision,
+        }))
     }
-    set.index.tiles.sort_by_key(|t| (t.col, t.row));
-    Ok(())
+    /// The index of every tile written; fails unless every planned cell was.
+    pub fn finish(self) -> Result<Index> {
+        if let Some(cell) = self.cells.keys().find(|c| !self.written.contains(c)) {
+            return Err(Error::Invalid(format!(
+                "cell {cell:?} was planned but not written"
+            )));
+        }
+        let mut tiles = self.tiles;
+        tiles.sort_by_key(|t| (t.col, t.row));
+        Ok(Index {
+            format_version: "1.0",
+            empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
+            version: 1,
+            tile_size: self.options.tile_size,
+            tiles,
+            skipped_degenerate: self.skipped,
+            placements_without_mesh: self.without_mesh,
+        })
+    }
+}
+/// `e`'s mesh, which must be loaded.
+fn loaded(w: &World, e: Entity) -> Result<&Mesh> {
+    w.get::<Mesh>(e).ok_or_else(|| {
+        Error::Invalid(if w.has::<primase_core::MeshFile>(e) {
+            format!("prototype {e:?} has no loaded mesh")
+        } else {
+            format!("prototype {e:?} has no mesh")
+        })
+    })
+}
+/// Every tile of an already prepared `world` (meshes and textures loaded, materials PBR): [`plan`], each cell
+/// written from the world's closure of it, [`TilePlan::finish`]. Placements are partitioned whole by pivot, or with
+/// [`Options::split_by_tile`] by triangle centre, assigning complete triangles (no clipping), so bounds may exceed
+/// the nominal cell; prototypes keep their sharing within a tile. Degenerate placements are counted and omitted, as
+/// in the glTF writer.
+pub fn write(world: &World, options: &Options) -> Result<TileSet> {
+    let mut plan = plan(world, options)?;
+    for e in plan.unsplit() {
+        plan.split(world, e)?;
+    }
+    let mut set = TileSet {
+        collision_files: BTreeMap::new(),
+        index: Index {
+            format_version: "1.0",
+            empty_tile_policy: "",
+            version: 1,
+            tile_size: options.tile_size,
+            tiles: Vec::new(),
+            skipped_degenerate: 0,
+            placements_without_mesh: 0,
+        },
+        files: BTreeMap::new(),
+    };
+    for cell in plan.cells() {
+        let mut w = world.subset(&world.closure(plan.roots(cell)));
+        for tile in plan.write_cell(cell, &mut w)? {
+            set.files.insert(tile.info.file.clone(), tile.bytes);
+            if let Some((name, bytes)) = tile.collision {
+                set.collision_files.insert(name, bytes);
+            }
+        }
+    }
+    set.index = plan.finish()?;
+    Ok(set)
+}
+fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
+    let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{kind}_{col}_{row}.{hash}.glb")
+}
+impl Index {
+    /// Publish `tiles.json` in `folder`, after checking that every tile and collision file it names is there with
+    /// its length (a driver writes each [`WrittenTile`] first).
+    pub fn write_to(&self, folder: &Path) -> Result<()> {
+        for (file, bytes) in self.tiles.iter().flat_map(|t| {
+            std::iter::once((&t.file, t.bytes)).chain(t.collision.iter().map(|c| (&c.file, c.bytes)))
+        }) {
+            let path = folder.join(file);
+            let len = std::fs::metadata(&path)
+                .map_err(|source| Error::Io {
+                    path: path.clone(),
+                    source,
+                })?
+                .len();
+            if len != bytes {
+                return Err(Error::Invalid(format!(
+                    "{file} is {len} bytes, the index says {bytes}"
+                )));
+            }
+        }
+        let path = folder.join("tiles.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(self)?).map_err(|source| Error::Io { path, source })
+    }
 }
 impl TileSet {
     /// Write only generated tile filenames, then publish tiles.json after every tile

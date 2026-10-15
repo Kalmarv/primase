@@ -102,7 +102,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let set = primase_web::write(&world, &options)?;
     set.write_to(&output)?;
-    support::write_proof(&set, &output)?;
+    let mut proof = Vec::new();
+    for tile in &set.index.tiles {
+        proof.push(support::tile_proof(&tile.file, &set.files[&tile.file])?);
+    }
+    support::write_entries(&proof, &output)?;
     let mut reference = Vec::new();
     for tile in &set.index.tiles {
         let chunks = primase_gltf::glb::parse(&set.files[&tile.file])?;

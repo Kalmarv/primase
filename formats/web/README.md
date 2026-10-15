@@ -2,7 +2,20 @@
 
 `write(&World, &Options)` produces deterministic GLBs and a `tiles.json` index;
 `TileSet::write_to` writes them to a directory. Load mesh/texture files and lower
-materials to PBR before export. The world uses metres and +Y up. Ground tiles
+materials to PBR before export.
+
+A scene too large to hold loaded at once goes through the same writer one cell at
+a time. `plan(&World, &Options)` assigns placements, viewer records and the
+world's collision to cells without loading anything; `TilePlan::split` files the
+triangles of each `split_by_tile` placement from a world holding its prototype
+loaded. Then, per cell, the driver takes the world's `World::closure` of
+`TilePlan::roots(cell)` as a `World::subset`, loads its meshes and textures,
+lowers its materials, calls `TilePlan::write_cell` and stores each `WrittenTile`
+(`WrittenTile::write_to`) before dropping that world. `TilePlan::finish` returns
+the index, and `Index::write_to` publishes `tiles.json` once every file it names
+is in place. `write` is that pipeline over an already prepared world. The writer
+never loads or lowers: what it needs missing is an error. A tile holds its
+placements and what they refer to; the world's lights are not written. The world uses metres and +Y up. Ground tiles
 use floor(east/tile_size), floor(north/tile_size), with a default size of 200 metres.
 The shared ground frame maps east to X and north to -Z.
 Negative coordinates use floor, not truncation toward zero.
@@ -94,7 +107,8 @@ and do not create an origin tile merely because their empty bounds default to ze
 
 `cargo run --release -p primase-web --example scene_to_tiles -- <scene> <output>`
 loads a skate-scene folder and writes compressed tiles, a `plain/` comparison
-set, and `proof.json` with artifact and decoded-stream SHA256 hashes. This is an
+set, and `proof.json` with artifact and decoded-stream SHA256 hashes, preparing
+one cell at a time for both sets, so memory holds one cell's closure. This is an
 example composition; the library does not depend on a source dialect.
 
 To look at the output, use [primase-viewer](https://github.com/kalmarv/primase-viewer), an example
