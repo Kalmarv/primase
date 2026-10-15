@@ -664,6 +664,7 @@ dependencies = [
  "primase-dds",
  "primase-gltf",
  "primase-hash",
+ "primase-havok",
  "primase-image",
  "primase-meshops",
  "primase-skate-scene",
@@ -691,6 +692,14 @@ dependencies = [
 [[package]]
 name = "primase-hash"
 version = "0.1.0"
+
+[[package]]
+name = "primase-havok"
+version = "0.1.0"
+dependencies = [
+ "primase-vertex",
+ "thiserror",
+]
 
 [[package]]
 name = "primase-image"

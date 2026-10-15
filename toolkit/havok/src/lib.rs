@@ -1,0 +1,30 @@
+//! Bounds-checked views of Havok binary tagfiles and their type compendia.
+//! Type indices are one-based; zero denotes a null type or object reference.
+
+mod mesh;
+mod section;
+pub use mesh::{CompressedMesh, Triangle, compressed_mesh};
+mod tagfile;
+mod types;
+mod value;
+pub use tagfile::{Item, Tagfile};
+pub use types::{Compendium, Field, Type};
+pub use value::{Array, Value};
+
+pub use section::{Section, sections};
+
+#[derive(Debug, thiserror::Error)]
+#[error("Havok at {offset:#x}: {detail}")]
+pub struct Error {
+    pub offset: usize,
+    pub detail: String,
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+fn invalid(offset: usize, detail: impl Into<String>) -> Error {
+    Error {
+        offset,
+        detail: detail.into(),
+    }
+}

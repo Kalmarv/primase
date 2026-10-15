@@ -3,6 +3,7 @@ pub mod archive;
 pub mod bhd;
 pub mod binder;
 mod bytes;
+pub mod collision;
 pub mod dcx;
 pub mod flver;
 mod keys;
@@ -20,6 +21,8 @@ pub enum Error {
         offset: usize,
         detail: String,
     },
+    #[error("{0}")]
+    Havok(#[from] primase_havok::Error),
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error("compression: {0}")]

@@ -9,6 +9,7 @@ members = [
     "toolkit/meshops",
     "toolkit/compress",
     "toolkit/hash",
+    "toolkit/havok",
     "formats/skate-scene",
     "formats/gltf",
     "formats/web",
@@ -46,6 +47,7 @@ primase-vertex = { path = "toolkit/vertex" }
 primase-meshops = { path = "toolkit/meshops" }
 primase-compress = { path = "toolkit/compress" }
 primase-hash = { path = "toolkit/hash" }
+primase-havok = { path = "toolkit/havok" }
 primase-skate-scene = { path = "formats/skate-scene" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }

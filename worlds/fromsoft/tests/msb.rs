@@ -5,6 +5,7 @@ fn part() -> Part {
         name: "synthetic".into(),
         kind: PartKind::MapPiece,
         model: None,
+        hit_filter: None,
         position: [0.; 3],
         rotation_degrees: [0.; 3],
         scale: [1.; 3],

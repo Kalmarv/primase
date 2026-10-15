@@ -268,3 +268,24 @@ basis at absolute component tolerance 1e-6. `PRIMASE_FROMSOFT_NORMAL_CURL` suppl
 a JSON array of independently measured `name` and `verdict` values; the gate
 reports all classifications and names every OpenGL verdict as a measurement,
 not a conversion exception. These gates require no installed archive reads.
+
+## Collision reader (in progress)
+
+Raw map collision uses `primase-havok` for tagfiles, compendia and compressed
+meshes. The FromSoft layer maps left-aligned shape keys through fsnp material
+records. All-ones invalid keys are counted; missing materials remain -1 and are
+counted separately. Contradictory bindings for a valid key fail.
+
+Area assembly selects high-resolution map collision placed with hit filters 8
+(world) and 27 (water). This is a named rideable-map lowering policy. HitMtrl
+IDs map by their base value modulo 100 to the standard skate surfaces. Blockers
+and clouds are excluded; water gets a separate water-mode soup. Selection uses
+triangle centroids within the requested region plus 50 metres. Map offsets
+apply once, and the core source frame reflects Z and reverses winding.
+
+The reader preserves raw authored roof collision. Roof smoothing, generated
+opened-up surfaces, and object collision are not included in this step.
+The whole-install collision census includes map h/l/f binders and all HKX members
+of object binders, counting nonphysics animation/cloth variants separately.
+Named character/ragdoll binders are counted but outside this reader's scope.
+Container parsing does not imply geometry support for every observed shape.

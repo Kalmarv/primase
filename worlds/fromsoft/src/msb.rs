@@ -59,6 +59,8 @@ pub struct Part {
     pub name: String,
     pub kind: PartKind,
     pub model: Option<usize>,
+    /// Collision-part hit filter; absent on other part kinds.
+    pub hit_filter: Option<u8>,
     pub position: [f32; 3],
     pub rotation_degrees: [f32; 3],
     pub scale: [f32; 3],
@@ -235,6 +237,11 @@ impl MapLayout {
                 name,
                 kind,
                 model,
+                hit_filter: if kind == PartKind::Collision {
+                    Some(r.slice(r.size(104)?, 1)?[0])
+                } else {
+                    None
+                },
                 position: vector(&r, 32)?,
                 rotation_degrees: vector(&r, 44)?,
                 scale: vector(&r, 56)?,
@@ -311,6 +318,7 @@ impl MapOffset {
             name: String::new(),
             kind: PartKind::MapPiece,
             model: None,
+            hit_filter: None,
             position: self.position,
             rotation_degrees: [0., self.degrees, 0.],
             scale: [1.; 3],

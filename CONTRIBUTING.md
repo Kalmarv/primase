@@ -140,6 +140,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | independent MTD fields and area material assignments; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_SCENE` | reference area skate-scene folder containing placement sources and tables |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |
+| `PRIMASE_HAVOK_CORPUS` | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.

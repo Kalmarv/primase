@@ -1,6 +1,7 @@
-//! Sekiro area assembly. Geometry is unbaked; collision, lights and ledges are
-//! separate future readers. Texture normal conventions are explicit policy.
+//! Sekiro area assembly: unbaked geometry and raw map collision. Lights,
+//! ledges and object collision remain separate reader steps.
 mod assets;
+pub mod collision;
 pub mod normals;
 mod textures;
 use crate::{
@@ -42,6 +43,7 @@ impl Default for Options {
 }
 #[derive(Default, Debug)]
 pub struct Report {
+    pub collision: collision::Report,
     pub prototypes: usize,
     pub placements: usize,
     pub materials: usize,
@@ -405,13 +407,14 @@ pub fn read_area(
         world.insert(e, SkatePlacement::default());
         report.placements += 1;
     }
+    report.collision = collision::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     world.insert_resource(SkateScene {
         name: format!("sekiro_{area}"),
         generator: Some("primase".into()),
         region: options.region,
         placements: Some(TableRef::single("tables/placements.bin")),
         warnings: Some(vec![
-            "Unbaked geometry only; collision, lights and ledges are not imported.".into(),
+            "Unbaked geometry and raw map collision; object collision, lights, ledges, roof smoothing and opened-up surfaces are not imported.".into(),
         ]),
         ..Default::default()
     });
