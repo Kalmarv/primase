@@ -1,9 +1,10 @@
 //! A core world raised into the `skate.*` dialect (pass `raise-skate`), so [`crate::write`] can write it: what any
 //! reader's world (core geometry, `pbr.material`, `core.collision`, `core.light`) needs to become a skate scene.
 //!
-//! - every texture a material uses: a `skate.texture` (`textures/<key>.png`; normal maps must already be in glTF's
-//!   convention, a normal pass converts them);
-//! - every `pbr.material`: a `skate.material`, class by alpha mode (opaque, cutout for a mask, alpha for a blend),
+//! - every texture a raised material uses: a `skate.texture` (`textures/<key>.png`; normal maps must already be in
+//!   glTF's convention, a normal pass converts them);
+//! - every `pbr.material` a placed prototype's primitive is drawn with (its own or a variant's; the others are left
+//!   out, counted): a `skate.material`, class by alpha mode (opaque, cutout for a mask, alpha for a blend),
 //!   the base texture, normal map, the base colour factor as `base_color` without a texture or as `tint` with one
 //!   (sRGB bytes; a factor's alpha with a texture is not kept, counted), cutoff, sidedness, metallic, roughness and
 //!   the base texture's wrap; texture transforms must already be baked;
@@ -23,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, Wrap as PbrWrap};
 use primase_core::{
-    ColorSpace, Entity, Instance, Light, LightKind, Mesh, Name, NormalConvention, NormalGreen, NormalZ,
-    Surfaces, TexRole, Texture, Transform, World,
+    ColorSpace, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, Name, NormalConvention,
+    NormalGreen, NormalZ, Surfaces, TexRole, Texture, Transform, World,
 };
 
 use crate::components::{
@@ -125,9 +126,26 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         w.get::<Name>(e)
             .map_or_else(|| format!("{kind}_{e:?}"), |n| n.0.clone())
     };
-    // textures the materials use
-    let materials: Vec<(Entity, PbrMaterial)> =
-        world.iter::<PbrMaterial>().map(|(e, m)| (e, m.clone())).collect();
+    // the materials placed primitives are drawn with, and the textures they use
+    let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+    let mut drawn: BTreeSet<Entity> = BTreeSet::new();
+    for &p in &placed {
+        if let Some(mesh) = world.get::<Mesh>(p) {
+            drawn.extend(mesh.primitives.iter().filter_map(|q| q.material));
+        }
+        if let Some(v) = world.get::<MaterialVariants>(p) {
+            drawn.extend(v.0.iter().flat_map(|o| o.values().copied()));
+        }
+    }
+    let materials: Vec<(Entity, PbrMaterial)> = world
+        .iter::<PbrMaterial>()
+        .filter(|(e, _)| drawn.contains(e))
+        .map(|(e, m)| (e, m.clone()))
+        .collect();
+    log.count(
+        "materials no placed primitive is drawn with, not raised",
+        (world.iter::<PbrMaterial>().count() - materials.len()) as u64,
+    );
     let mut used: BTreeSet<Entity> = BTreeSet::new();
     for (_, m) in &materials {
         for r in [m.base_color_texture, m.normal_texture].into_iter().flatten() {
@@ -225,7 +243,6 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         log.count("materials", 1);
     }
     // prototypes and placements
-    let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
     let mut taken = BTreeSet::new();
     for p in placed {
         let Some(parts) = world.get::<Mesh>(p).map(|m| m.primitives.len()) else {

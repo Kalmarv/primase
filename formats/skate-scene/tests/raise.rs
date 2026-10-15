@@ -164,8 +164,26 @@ fn options() -> RaiseOptions {
 #[test]
 fn a_core_world_becomes_a_scene() {
     let mut w = world();
+    // a material nothing placed is drawn with, its transform unbaked: left out, not refused
+    let (base, _) = w.iter::<Texture>().next().unwrap();
+    let unused = w.spawn();
+    w.insert(
+        unused,
+        PbrMaterial {
+            base_color_texture: Some(TextureRef {
+                transform: Some(UvTransform::from_bottom_left([2.0, 2.0], [0.0, 0.0])),
+                ..TextureRef::new(base)
+            }),
+            ..PbrMaterial::default()
+        },
+    );
     let log = scene::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["materials"], 2);
+    assert_eq!(
+        log.counts["materials no placed primitive is drawn with, not raised"],
+        1
+    );
+    assert!(!w.has::<SkateMaterial>(unused));
     assert_eq!(log.counts["textures"], 2);
     assert_eq!(log.counts["prototypes"], 1);
     assert_eq!(log.counts["lights"], 1);
