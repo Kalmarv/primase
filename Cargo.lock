@@ -812,6 +812,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-dxbc"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-fromsoft"
 version = "0.1.0"
 dependencies = [

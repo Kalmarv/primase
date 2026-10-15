@@ -158,6 +158,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_HAVOK_CORPUS` | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md |
 | `PRIMASE_FROMSOFT_UV_FRAME_CENSUS` | independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
+| `PRIMASE_DXBC_SHADERS` | shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 
