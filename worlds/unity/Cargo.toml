@@ -1,0 +1,21 @@
+[package]
+name = "primase-unity"
+description = "Unity players' data files (SerializedFile, type trees, streamed resources) read into the world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+thiserror.workspace = true
+lz4_flex.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true

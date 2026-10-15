@@ -116,6 +116,9 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_RESKATE_REF` | a folder of map folders written by the reference C# map writer, one per area (each holding a `map.json`) |
 | `PRIMASE_RESKATE_SCENES` | the skate-scene folders those maps were built from, one per area, named like the map folders |
 | `PRIMASE_RESKATE_CAPS` | optional: the per-texture size caps file the reference build used (`--tex-caps`) |
+| `PRIMASE_UNITY_DATA` | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
+| `PRIMASE_UNITY_TPK` | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
+| `PRIMASE_UNITY_ORACLE` | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |
