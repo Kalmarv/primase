@@ -388,11 +388,13 @@ The optional `PRIMASE_FROMSOFT_LAYER_PILOT` fixture directory contains:
 
 The pilot reports max/p99 per channel, time, decoded image bytes, and executed
 instructions/samples per pixel. It compares identical decoded inputs separately
-from D3D-decoded inputs. Its initial one-level output bound is a hypothesis;
-an over-bound result requires diagnosis before any whole-area bake.
+from D3D-decoded inputs. Arithmetic with identical inputs has a one-level bound.
 
 The pilot also requires `d3d-control/<id>-<cap>-<variant>-{albedo,normal}.rgba`:
 run the same independent producer with only its decoded texture pixels replaced
 by the D3D decoder's RGBA8 images. This control isolates input convention effects
-from shader arithmetic. The original comparison remains present and retains
-its initial bound; the control is diagnostic, not a replacement oracle.
+from shader arithmetic. For D3D inputs this control is the gate oracle: the GPU
+uses the D3D BC convention. The original decoder differs from that convention;
+the shader amplifies its input differences to measured albedo maxima [2,3,4,0]
+and normal maxima [2,2,1,0]. Those original-oracle differences remain reported
+diagnostics. The same-input arithmetic bound remains one level.

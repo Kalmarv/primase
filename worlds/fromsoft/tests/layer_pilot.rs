@@ -1,5 +1,10 @@
 //! Bounded layered-material pilot. Same decoded inputs isolate shader arithmetic;
 //! D3D-decoded inputs separately expose codec convention differences.
+//! The GPU uses the D3D BC convention. For that path the independent producer
+//! receives the same D3D-decoded pixels; its arithmetic still has a one-level
+//! bound. The original producer's decoder changes inputs, amplified to measured
+//! albedo [2,3,4,0] and normal [2,2,1,0] maxima. Those remain diagnostics, not
+//! an increased arithmetic tolerance or a reason to copy its decoding convention.
 use primase_core::gate::real_data;
 use primase_fromsoft::{
     layer_bake::{BaseMipBilinearWrap, Inputs, Prepared},
@@ -26,6 +31,9 @@ fn five_permutation_pilot() -> Result<()> {
     let cases: Value = serde_json::from_slice(&std::fs::read(root.join("cases.json"))?)?;
     let references: Value = serde_json::from_slice(&std::fs::read(root.join("reference.json"))?)?;
     let mut failures = Vec::new();
+    let mut checked = 0;
+    assert_eq!(cases.as_array().ok_or("cases")?.len(), 5);
+    assert_eq!(references.as_array().ok_or("reference")?.len(), 30);
     for case in cases.as_array().ok_or("cases")? {
         let id = case["id"].as_u64().ok_or("id")?;
         let metadata: Value = serde_json::from_slice(&std::fs::read(root.join(format!("{id}.json")))?)?;
@@ -186,9 +194,13 @@ fn five_permutation_pilot() -> Result<()> {
                                 .unwrap()
                         });
                         println!("{kind}/{reference_kind}: max {max:?}, p99 {p99:?}");
-                        // One encoded level is the pilot hypothesis, not permission
-                        // to widen the bound if a nonlinear shader amplifies error.
-                        if max.iter().any(|&v| v > 1) {
+                        let gate = mode == "same-input" || reference_kind == "d3d-control";
+                        if gate {
+                            checked += 1;
+                        }
+                        // Keep arithmetic at one level with identical decoded
+                        // inputs. Cross-decoder output remains reported above.
+                        if gate && max.iter().any(|&v| v > 1) {
                             failures.push(format!(
                                 "{id}/{mode}/{}/{variant}/{kind}/{reference_kind}: {max:?}",
                                 r["cap"]
@@ -199,6 +211,14 @@ fn five_permutation_pilot() -> Result<()> {
             }
         }
     }
+    assert_eq!(
+        checked, 120,
+        "complete five-permutation, two-size, three-weight coverage"
+    );
+    println!(
+        "pilot arithmetic gates: {checked} image comparisons, {} failed",
+        failures.len()
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
 }
