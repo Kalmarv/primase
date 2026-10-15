@@ -79,6 +79,18 @@ fn five_permutation_pilot() -> Result<()> {
                         let rgba = Decoder::default()
                             .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
                             .map_err(decode_error)?;
+                        let oracle = std::fs::read(root.join(m["file"].as_str().unwrap()))?;
+                        assert_eq!(rgba.len(), oracle.len());
+                        let mut max = [0u8; 4];
+                        let mut changed = [0u64; 4];
+                        for (i, (&a, &b)) in rgba.iter().zip(&oracle).enumerate() {
+                            max[i % 4] = max[i % 4].max(a.abs_diff(b));
+                            changed[i % 4] += u64::from(a != b);
+                        }
+                        println!(
+                            "input {name} {:?}: max {max:?}, changed components {changed:?}",
+                            t.format
+                        );
                         (t.width, t.height, rgba)
                     } else {
                         (
@@ -94,6 +106,19 @@ fn five_permutation_pilot() -> Result<()> {
                 "case {id}/{mode}: decoded bytes {}, policies {:?}",
                 prepared.decoded_bytes, prepared.policies
             );
+            if case["shader"] == "M[Multiple]" && case["switch"] == 27 {
+                assert_eq!(
+                    prepared
+                        .policies
+                        .get("preview default for missing NormalMap binding"),
+                    Some(&1)
+                );
+                assert!(
+                    !prepared
+                        .policies
+                        .contains_key("preview default for missing ? binding")
+                );
+            }
             for r in references
                 .as_array()
                 .ok_or("reference")?

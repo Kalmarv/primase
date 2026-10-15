@@ -94,6 +94,20 @@ fn slot_name(kind: &str) -> Option<(u32, &str)> {
     let (slot, role) = rest.split_once('_')?;
     Some((slot.parse().ok()?, role.split('_').next()?))
 }
+fn declared_role(material: &LayeredMaterial, slot: u32) -> Result<&str> {
+    let mut role = None;
+    for texture in &material.definition.textures {
+        if let Some((index, found)) = slot_name(&texture.kind)
+            && index == slot
+        {
+            if role.is_some_and(|r| r != found) {
+                return Err(invalid("layer binding", 0, "conflicting declared texture roles"));
+            }
+            role = Some(found);
+        }
+    }
+    Ok(role.unwrap_or("?"))
+}
 impl Prepared {
     /// Frozen-frame preview binding: caller supplies decoded views by texture
     /// name and sRGB flag. Missing slots use explicitly counted preview defaults;
@@ -195,9 +209,13 @@ impl Prepared {
                         format!("unrecognized texture binding {}", resource.name),
                     )
                 })?;
+            // A declared slot retains its semantic role even without a path.
+            // In particular an unbound normal uses the named flat-normal
+            // preview default, not the unknown-resource zero default.
+            let fallback_role = declared_role(material, slot)?;
             let (role, binding) = slots
                 .get(&slot)
-                .map_or(("?", None), |(role, b)| (*role, Some(*b)));
+                .map_or((fallback_role, None), |(role, b)| (*role, Some(*b)));
             let mut source = None;
             if let Some(b) = binding {
                 let key = (b.texture.clone(), role == "AlbedoMap");
