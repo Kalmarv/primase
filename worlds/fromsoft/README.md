@@ -390,3 +390,9 @@ The pilot reports max/p99 per channel, time, decoded image bytes, and executed
 instructions/samples per pixel. It compares identical decoded inputs separately
 from D3D-decoded inputs. Its initial one-level output bound is a hypothesis;
 an over-bound result requires diagnosis before any whole-area bake.
+
+The pilot also requires `d3d-control/<id>-<cap>-<variant>-{albedo,normal}.rgba`:
+run the same independent producer with only its decoded texture pixels replaced
+by the D3D decoder's RGBA8 images. This control isolates input convention effects
+from shader arithmetic. The original comparison remains present and retains
+its initial bound; the control is diagnostic, not a replacement oracle.

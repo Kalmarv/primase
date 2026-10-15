@@ -155,31 +155,45 @@ fn five_permutation_pilot() -> Result<()> {
                     bake.samples / (size as u64 * size as u64)
                 );
                 for (kind, pixels) in [("albedo", &bake.albedo), ("normal", &bake.normal)] {
-                    let reference =
-                        std::fs::read(root.join(format!("{id}-{}-{variant}-{kind}.rgba", r["cap"])))?;
-                    assert_eq!(pixels.len(), reference.len());
-                    let mut hist = [[0u64; 256]; 4];
-                    for (i, (a, b)) in pixels.iter().zip(&reference).enumerate() {
-                        hist[i % 4][a.abs_diff(*b) as usize] += 1;
-                    }
-                    let max: [usize; 4] =
-                        std::array::from_fn(|c| hist[c].iter().rposition(|&n| n != 0).unwrap());
-                    let p99: [usize; 4] = std::array::from_fn(|c| {
-                        let target = (size as u64 * size as u64 * 99).div_ceil(100);
-                        let mut sum = 0;
-                        hist[c]
-                            .iter()
-                            .position(|n| {
-                                sum += n;
-                                sum >= target
-                            })
-                            .unwrap()
-                    });
-                    println!("{kind}: max {max:?}, p99 {p99:?}");
-                    // One encoded level is the pilot hypothesis, not permission
-                    // to widen the bound if a nonlinear shader amplifies error.
-                    if max.iter().any(|&v| v > 1) {
-                        failures.push(format!("{id}/{mode}/{}/{variant}/{kind}: {max:?}", r["cap"]));
+                    for reference_kind in ["original", "d3d-control"] {
+                        if reference_kind == "d3d-control" && mode != "D3D" {
+                            continue;
+                        }
+                        let reference_root = if reference_kind == "original" {
+                            root.clone()
+                        } else {
+                            root.join("d3d-control")
+                        };
+                        let reference = std::fs::read(
+                            reference_root.join(format!("{id}-{}-{variant}-{kind}.rgba", r["cap"])),
+                        )?;
+                        assert_eq!(pixels.len(), reference.len());
+                        let mut hist = [[0u64; 256]; 4];
+                        for (i, (a, b)) in pixels.iter().zip(&reference).enumerate() {
+                            hist[i % 4][a.abs_diff(*b) as usize] += 1;
+                        }
+                        let max: [usize; 4] =
+                            std::array::from_fn(|c| hist[c].iter().rposition(|&n| n != 0).unwrap());
+                        let p99: [usize; 4] = std::array::from_fn(|c| {
+                            let target = (size as u64 * size as u64 * 99).div_ceil(100);
+                            let mut sum = 0;
+                            hist[c]
+                                .iter()
+                                .position(|n| {
+                                    sum += n;
+                                    sum >= target
+                                })
+                                .unwrap()
+                        });
+                        println!("{kind}/{reference_kind}: max {max:?}, p99 {p99:?}");
+                        // One encoded level is the pilot hypothesis, not permission
+                        // to widen the bound if a nonlinear shader amplifies error.
+                        if max.iter().any(|&v| v > 1) {
+                            failures.push(format!(
+                                "{id}/{mode}/{}/{variant}/{kind}/{reference_kind}: {max:?}",
+                                r["cap"]
+                            ));
+                        }
                     }
                 }
             }
