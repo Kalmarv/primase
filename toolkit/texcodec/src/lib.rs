@@ -5,7 +5,10 @@
 use primase_core::TexFormat;
 use thiserror::Error;
 mod blocks;
+mod flip;
 mod pixels;
+
+pub use flip::flip_vertical;
 
 #[derive(Debug, Error)]
 pub enum Error {
