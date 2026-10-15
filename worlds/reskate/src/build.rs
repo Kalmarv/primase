@@ -1,5 +1,7 @@
 //! A skate-scene world -> a ReSkate Studio normalized map folder (the reference `scene-skate build`).
 
+mod floor;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -436,14 +438,11 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         ));
     }
     let cut = s.region;
-    let placements = writer_placements(&s, o.tile, cut);
+    let mut placements = writer_placements(&s, o.tile, cut);
     o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
-    let min_height = a.min_height.unwrap_or(s.min_height);
-    if !min_height.is_nan() {
-        return Err(Error::Unsupported("min_height (the lift to a floor)".into()));
-    }
-    let drop_below = f32::NEG_INFINITY;
-    let lift = 0f32;
+    let floor = floor::prepare(&s, &mut placements, a)?;
+    let drop_below = floor.drop_below;
+    let lift = floor.lift;
     o.offset = [a.offset[0], a.offset[1], f64::from(lift)];
 
     let out_dir = a.out_root.join(&o.name);
@@ -517,7 +516,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
             std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
         }
     }
-    let stats = stats_json(&writer, &s, &o, placements.len(), lift, failed)?;
+    let stats = stats_json(&writer, &s, &o, placements.len(), &floor, failed)?;
     let p = out_dir.join("stats.json");
     std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
     let r = &writer.r;
@@ -542,7 +541,7 @@ fn stats_json(
     s: &Scene,
     o: &WriterOptions,
     placements: usize,
-    lift: f32,
+    floor: &floor::FloorLift,
     failed: i64,
 ) -> Result<Vec<u8>> {
     let r = &writer.r;
@@ -562,12 +561,12 @@ fn stats_json(
         scene: full.to_string_lossy().into_owned(),
         region: o.region,
         tile_size: o.tile,
-        lift_m: lift,
+        lift_m: floor.lift,
         totals: Totals {
             placements,
             placements_degenerate: r.degenerate,
-            placements_stubs_left_out: 0,
-            placed_parts_stubs_left_out: 0,
+            placements_stubs_left_out: floor.placements_removed,
+            placed_parts_stubs_left_out: floor.parts_removed,
             placements_clipped_away: r.far_dropped,
             prototypes_placed: r.archetypes,
             prototypes_failed: failed,

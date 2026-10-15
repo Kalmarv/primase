@@ -969,7 +969,29 @@ fn rust_writer_matches_the_reference() {
             .into_iter()
             .map(|(rel, p)| (renames.get(&rel).to_owned(), p))
             .collect();
-        let bcn = bcn_sourced(&read_json(&ref_dir.join("textures_index.json")));
+        let texture_index = read_json(&ref_dir.join("textures_index.json"));
+        let bcn = bcn_sourced(&texture_index);
+        let scene_manifest = read_json(&scene.join("scene.json"));
+        let rebuild_sources: BTreeSet<_> = scene_manifest["textures"]
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.values())
+            .filter(|t| t["z"].as_str() == Some("rebuild"))
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        let rebuilt_files: BTreeSet<_> = texture_index["textures"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| {
+                t["sources"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|s| s.as_str().is_some_and(|s| rebuild_sources.contains(s)))
+            })
+            .filter_map(|t| t["file"].as_str())
+            .collect();
         let ref_map = read_json(&ref_dir.join("map.json"));
         let normal_textures: BTreeSet<_> = ref_map["materials"]
             .as_object()
@@ -1003,7 +1025,7 @@ fn rust_writer_matches_the_reference() {
             let (a, b) = (std::fs::read(pa).unwrap(), std::fs::read(pb).unwrap());
             if rel.ends_with(".png") {
                 let from_bcn = bcn.contains(rel.as_str());
-                if normal_textures.contains(rel.as_str()) {
+                if normal_textures.contains(rel.as_str()) && rebuilt_files.contains(rel.as_str()) {
                     normal_files += 1;
                     match normal_png_diff(&a, &b, u8::from(from_bcn)) {
                         Ok((count, angle)) => {
@@ -1141,7 +1163,9 @@ fn rust_writer_matches_the_reference() {
             renames.materials
         );
     }
-    println!("normal PNGs {normal_files}, projected pixels {projected_pixels}; direction bound 0.31 degrees");
+    println!(
+        "rebuilt normal PNGs {normal_files}, projected pixels {projected_pixels}; direction bound 0.31 degrees"
+    );
     let gates = [
         &sets,
         &json,
