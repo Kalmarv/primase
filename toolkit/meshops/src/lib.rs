@@ -340,3 +340,45 @@ pub fn split_long(mesh: &Mesh, max: f32, split_limit: usize) -> Result<(Mesh, us
 }
 mod primitives;
 pub use primitives::{box_mesh, capsule, cylinder, disc, sphere};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn independent_sharpdx_vector_bits() {
+        let bytes = include_bytes!("../tests/fixtures/vectors.bin");
+        let mut words = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b));
+        let count = words.next().unwrap();
+        for case in 0..count {
+            let a = std::array::from_fn(|_| f32::from_bits(words.next().unwrap()));
+            let b = std::array::from_fn(|_| f32::from_bits(words.next().unwrap()));
+            let t = f32::from_bits(words.next().unwrap());
+            let len2 = dot(a, a);
+            let len = (len2 as f64).sqrt() as f32;
+            let n = unit(a);
+            let divided = if t != 0. { a.map(|v| v / t) } else { a };
+            let actual = [
+                len,
+                len2,
+                n[0],
+                n[1],
+                n[2],
+                divided[0],
+                divided[1],
+                divided[2],
+                dot(a, b),
+                cross(a, b)[0],
+                cross(a, b)[1],
+                cross(a, b)[2],
+            ];
+            for (channel, v) in actual.into_iter().enumerate() {
+                assert_eq!(
+                    v.to_bits(),
+                    words.next().unwrap(),
+                    "case {case} channel {channel}"
+                );
+            }
+        }
+        assert!(words.next().is_none());
+    }
+}
