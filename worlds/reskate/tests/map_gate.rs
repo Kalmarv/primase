@@ -7,7 +7,13 @@
 //! pieces.json) into `PRIMASE_OUT`, and every file is compared:
 //! - JSON files as parsed values (`primase_core::gate::compare_json`: keys and structure, array order kept, integers
 //!   exactly, other numbers as f64 or else as f32, counted);
-//! - GLB files by their JSON chunk, as parsed values, and their binary chunk, exactly;
+//! - GLB files by their JSON chunk, as parsed values, and their binary chunk, exactly; stored attributes (texture
+//!   coordinates, indices) always exactly, derived normals (shared vector maths against the reference's) per
+//!   component within four f32 epsilon at max(1, |reference|), counted; positions exactly, but those the overlay stack
+//!   lifted along a derived normal (by the writer's lift record, `BuildReport::lifts`) within the lift times that
+//!   bound plus two f32 steps at the vertex's largest |coordinate|, since the lift distance is itself derived
+//!   (positions dotted with derived normals), and `stats.json` `overlay_stack.max_shift_m` within four f32 epsilon
+//!   relative, both counted ('decal lift along derived normal'); POSITION bounds those of the data, by value;
 //!
 //! except for the order of a mesh's primitives. We draw a mesh's parts in a semantic order (draw class, then under
 //! before over by the overlay stack, then first use; a unit test checks it), the reference writer by material name,
@@ -20,7 +26,8 @@
 //!   (besides IDAT and IEND: none may change the meaning), and the decoded pixels: exactly, except that a texture
 //!   whose source is block compressed (BC1-5, by the reference's `textures_index.json`) may differ by 1 per channel
 //!   (we decode BCn by the D3D rules, the reference with CodeWalker's arithmetic); each such texture is counted and
-//!   listed in `PRIMASE_OUT/reskate-gate/bcn_within_1.txt`;
+//!   listed in `PRIMASE_OUT/reskate-gate/bcn_within_1.txt`; `ui/map_image.png` (drawn in those textures' mean
+//!   colours and shaded by slope from derived normals) within 2 per channel;
 //! - DDS files by their header fields and payload, exactly, except that a single-mip texture may have the
 //!   `DDSD_MIPMAPCOUNT` flag on one side only (the DDS spec sets it for mipmapped textures, the reference writer
 //!   always), each such file counted and named;
@@ -32,8 +39,7 @@
 //!
 //! Not compared: `stats.json` `totals.seconds` (run time), and our own values that depend on our encoders: the PNG
 //! compressor and the GLB JSON text (`textures_index.json` `bytes` of `.png` entries, `stats.json`
-//! `totals.texture_file_bytes` and `totals.mesh_file_bytes`). `ui/map_image.png`, drawn in the textures' mean
-//! colours, is compared like a texture from BCn sources.
+//! `totals.texture_file_bytes` and `totals.mesh_file_bytes`).
 //!
 //! Texture file names end in a hash of the written pixels and material names in a hash of their textures, so a
 //! texture whose pixels differ by the BCn arithmetic has another name, and so do the materials using it. Before
@@ -332,49 +338,213 @@ fn data_hash(b: &[u8]) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// A GLB's JSON with its primitives as a set: the mesh's primitives sorted, each with its material's name and its
-/// accessors (fields and the data of their views); materials, accessors, views and buffers taken out.
-fn glb_canonical(json: &Value, bin: &[u8]) -> Value {
+/// One primitive's data that is compared with a tolerance: its normals (derived), its positions (exact, but for the
+/// overlay lift) and its index in the file.
+struct PrimData {
+    normals: Vec<f32>,
+    positions: Vec<f32>,
+    index: usize,
+}
+
+fn f32s(b: &[u8]) -> Vec<f32> {
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
+}
+
+/// A GLB taken apart for comparing: its JSON with the mesh's primitives as a sorted set (each its material's name
+/// and its accessors, the stored ones with the data of their views; NORMAL, and POSITION with its bounds, without
+/// their data) and materials, accessors, views and buffers taken out; and, in that order, each primitive's normals and
+/// positions. Fails when a POSITION accessor's bounds are not those of its data.
+fn glb_canonical(json: &Value, bin: &[u8]) -> Result<(Value, Vec<PrimData>), String> {
     let names: Vec<Value> = json["materials"]
         .as_array()
         .map(|m| m.iter().map(|x| x["name"].clone()).collect())
         .unwrap_or_default();
-    let accessor = |i: &Value| -> Value {
+    let view = |i: &Value| -> &[u8] {
         let a = &json["accessors"][i.as_u64().unwrap() as usize];
         let v = &json["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
         let off = v["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let len = v["byteLength"].as_u64().unwrap() as usize;
-        let mut out = a.clone();
+        &bin[off..off + v["byteLength"].as_u64().unwrap() as usize]
+    };
+    let accessor = |i: &Value, stored: bool| -> Value {
+        let mut out = json["accessors"][i.as_u64().unwrap() as usize].clone();
         let o = out.as_object_mut().unwrap();
         o.remove("bufferView");
-        o.insert("data".into(), Value::from(data_hash(&bin[off..off + len])));
+        if stored {
+            o.insert("data".into(), Value::from(data_hash(view(i))));
+        }
         out
     };
-    let mut prims: Vec<Value> = json["meshes"][0]["primitives"]
+    let mut prims: Vec<(String, PrimData)> = Vec::new();
+    for (index, p) in json["meshes"][0]["primitives"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|p| {
-            let mut attrs = serde_json::Map::new();
-            for (k, i) in p["attributes"].as_object().unwrap() {
-                attrs.insert(k.clone(), accessor(i));
+        .enumerate()
+    {
+        let mut attrs = serde_json::Map::new();
+        let (mut normals, mut positions) = (Vec::new(), Vec::new());
+        for (k, i) in p["attributes"].as_object().unwrap() {
+            match k.as_str() {
+                "NORMAL" | "TANGENT" => {
+                    attrs.insert(k.clone(), accessor(i, false));
+                    normals = f32s(view(i));
+                }
+                "POSITION" => {
+                    let mut acc = accessor(i, false);
+                    let o = acc.as_object_mut().unwrap();
+                    let bounds = (o.remove("min"), o.remove("max"));
+                    attrs.insert(k.clone(), acc);
+                    positions = f32s(view(i));
+                    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                    for v in positions.as_chunks::<3>().0 {
+                        for c in 0..3 {
+                            lo[c] = lo[c].min(v[c]);
+                            hi[c] = hi[c].max(v[c]);
+                        }
+                    }
+                    // by value: the sign of a zero bound means nothing (the reference writes 0 for -0.0)
+                    let same = |b: &Option<Value>, want: &[f32; 3]| {
+                        b.as_ref().and_then(|v| v.as_array()).is_some_and(|v| {
+                            v.len() == 3
+                                && v.iter()
+                                    .zip(want)
+                                    .all(|(x, w)| x.as_f64().is_some_and(|x| x as f32 == *w))
+                        })
+                    };
+                    if !positions.is_empty() && !(same(&bounds.0, &lo) && same(&bounds.1, &hi)) {
+                        return Err(format!("primitive {index}: POSITION bounds are not its data's"));
+                    }
+                }
+                _ => {
+                    attrs.insert(k.clone(), accessor(i, true));
+                }
             }
-            serde_json::json!({
-                "material": p.get("material").and_then(|m| m.as_u64()).map_or(Value::Null, |m| names[m as usize].clone()),
-                "mode": p["mode"],
-                "indices": accessor(&p["indices"]),
-                "attributes": attrs,
-            })
-        })
-        .collect();
-    prims.sort_by_key(|p| p.to_string());
+        }
+        let rec = serde_json::json!({
+            "material": p.get("material").and_then(|m| m.as_u64()).map_or(Value::Null, |m| names[m as usize].clone()),
+            "mode": p["mode"],
+            "indices": accessor(&p["indices"], true),
+            "attributes": attrs,
+        });
+        prims.push((
+            rec.to_string(),
+            PrimData {
+                normals,
+                positions,
+                index,
+            },
+        ));
+    }
+    prims.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = json.clone();
     let o = out.as_object_mut().unwrap();
     for k in ["materials", "accessors", "bufferViews", "buffers"] {
         o.remove(k);
     }
-    o["meshes"][0]["primitives"] = Value::Array(prims);
-    out
+    o["meshes"][0]["primitives"] = Value::Array(
+        prims
+            .iter()
+            .map(|p| serde_json::from_str(&p.0).unwrap())
+            .collect(),
+    );
+    Ok((out, prims.into_iter().map(|p| p.1).collect()))
+}
+
+/// Positions compared, per vertex: an unlifted one (by the writer's lift record) must be exact; a lifted one may
+/// differ per component by its lift times the normals' bound (four f32 epsilon) plus two f32 steps at the vertex's
+/// largest |coordinate| (the lift distance is itself derived).
+#[derive(Default)]
+struct Positions {
+    vertices: u64,
+    exact: u64,
+    lifted_within: u64,
+    lifted_beyond: u64,
+    unlifted_moved: u64,
+    max_lifted_abs: f64,
+    /// The largest lifted difference as a fraction of its bound.
+    max_ratio: f64,
+}
+
+impl Positions {
+    fn compare(&mut self, theirs: &[f32], ours: &[f32], lift: &[f32]) {
+        for (v, (a, b)) in theirs
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(ours.as_chunks::<3>().0)
+            .enumerate()
+        {
+            self.vertices += 1;
+            if a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()) {
+                self.exact += 1;
+                continue;
+            }
+            let l = f64::from(lift.get(v).copied().unwrap_or(0.0));
+            if l <= 0.0 {
+                self.unlifted_moved += 1;
+                continue;
+            }
+            let mut ok = true;
+            // the lift distance is itself derived (positions dotted with derived normals), so beyond the normal's
+            // bound the vertex may move by two f32 steps at its own coordinate scale
+            let scale = a.iter().fold(0f32, |m, c| m.max(c.abs()));
+            let steps = 2.0 * f64::from(f32::from_bits(scale.to_bits() + 1) - scale);
+            for (&x, &y) in a.iter().zip(b) {
+                let d = (f64::from(x) - f64::from(y)).abs();
+                let bound = l * 4.0 * f64::from(f32::EPSILON) + steps;
+                self.max_lifted_abs = self.max_lifted_abs.max(d);
+                self.max_ratio = self.max_ratio.max(d / bound);
+                ok &= d <= bound;
+            }
+            if ok {
+                self.lifted_within += 1;
+            } else {
+                self.lifted_beyond += 1;
+            }
+        }
+    }
+
+    fn add(&mut self, o: &Positions) {
+        self.vertices += o.vertices;
+        self.exact += o.exact;
+        self.lifted_within += o.lifted_within;
+        self.lifted_beyond += o.lifted_beyond;
+        self.unlifted_moved += o.unlifted_moved;
+        self.max_lifted_abs = self.max_lifted_abs.max(o.max_lifted_abs);
+        self.max_ratio = self.max_ratio.max(o.max_ratio);
+    }
+}
+
+/// Derived normal components compared: exact, or within four f32 epsilon at max(1, |reference|) (the shared
+/// vector maths' bound), else beyond it.
+#[derive(Default)]
+struct Normals {
+    checked: u64,
+    exact: u64,
+    within: u64,
+    beyond: u64,
+    max_abs: f64,
+}
+
+impl Normals {
+    fn compare(&mut self, theirs: &[f32], ours: &[f32]) {
+        for (&a, &b) in theirs.iter().zip(ours) {
+            self.checked += 1;
+            let d = (f64::from(a) - f64::from(b)).abs();
+            self.max_abs = self.max_abs.max(d);
+            if a.to_bits() == b.to_bits() {
+                self.exact += 1;
+            } else if d <= 4.0 * f64::from(f32::EPSILON) * f64::from(a.abs().max(1.0)) {
+                self.within += 1;
+            } else {
+                self.beyond += 1;
+            }
+        }
+    }
 }
 
 /// The materials (paired names) whose first primitive comes at another place in our GLB than in the reference's.
@@ -520,6 +690,10 @@ fn prepared(rel: &str, mut v: Value, renames: Option<&Renames>) -> Value {
 /// spawn and travel positions, trainer spots, the budget's base colour factors, the grind length) and, in our own
 /// piece log, to 2 decimals. `path`: `$` then `.key` and `[]` per level.
 fn reference_rounding(file: &str, path: &str) -> Option<f64> {
+    // not a rounding: the largest lift, derived, within 4 f32 epsilon relative (see `fold_rounded`)
+    if file == "stats.json" && path == "$.overlay_stack.max_shift_m" {
+        return Some(-4.0 * f64::from(f32::EPSILON));
+    }
     const LIGHT: [&str; 9] = [
         "position",
         "direction",
@@ -586,8 +760,17 @@ fn fold_rounded(file: &str, theirs: &Value, ours: &mut Value, path: &str, r: &mu
             let (a, b) = (x.as_f64().unwrap(), y.as_f64().unwrap() as f32);
             let d = (a - f64::from(b)).abs();
             let spacing = f64::from(f32::from_bits(b.abs().to_bits() + 1) - b.abs());
-            if d > 0.0 && d <= step + spacing {
-                let name = if step < 1e-3 {
+            // a negative step: relative (a derived value), else absolute plus one f32 step
+            let bound = if step < 0.0 {
+                -step * a.abs()
+            } else {
+                step + spacing
+            };
+            // bits, not value: a rounded zero may carry the other sign
+            if a.to_bits() != f64::from(b).to_bits() && d <= bound {
+                let name = if step < 0.0 {
+                    "decal lift along derived normal (stats.json max_shift_m)"
+                } else if step < 1e-3 {
                     "reference writer rounds to 4 decimals"
                 } else {
                     "reference writer rounds to 2 decimals (pieces.json, our own log)"
@@ -656,6 +839,10 @@ fn rust_writer_matches_the_reference() {
         Tolerance::Abs(1.0),
     );
     let mut bcn_within: Vec<String> = Vec::new();
+    let mut pause_maps = GateReport::new(
+        "pause map pictures within 2 per channel (BCn means + slope shading from derived normals)",
+        Tolerance::Abs(2.0),
+    );
     let mut dds = GateReport::new(
         "DDS files: header fields and payload exact, but DDSD_MIPMAPCOUNT on single-mip textures",
         Tolerance::Exact,
@@ -663,6 +850,8 @@ fn rust_writer_matches_the_reference() {
     let mut dds_flag: Vec<String> = Vec::new();
     let mut numbers = Numbers::default();
     let mut rounded = Rounded::default();
+    let mut normals = Normals::default();
+    let mut positions = Positions::default();
     let mut sections = GateReport::new(
         "objects: the primitive index points at a primitive of the object's material",
         Tolerance::Exact,
@@ -690,7 +879,7 @@ fn rust_writer_matches_the_reference() {
         }
         let mut w = World::new();
         primase_skate_scene::read(&scene, &mut w).unwrap();
-        primase_reskate::build(&w, &scene, &o).unwrap();
+        let report = primase_reskate::build(&w, &scene, &o).unwrap();
         let renames = pair_names(&ref_dir, &out);
         renamed_textures += renames.textures;
         renamed_materials += renames.materials;
@@ -727,8 +916,14 @@ fn rust_writer_matches_the_reference() {
             sets.record(&item, 0.0);
             let (a, b) = (std::fs::read(pa).unwrap(), std::fs::read(pb).unwrap());
             if rel.ends_with(".png") {
-                let from_bcn = bcn.contains(rel.as_str()) || rel == "ui/map_image.png";
-                let gate = if from_bcn { &mut bcn_pngs } else { &mut pngs };
+                let from_bcn = bcn.contains(rel.as_str());
+                let gate = if rel == "ui/map_image.png" {
+                    &mut pause_maps
+                } else if from_bcn {
+                    &mut bcn_pngs
+                } else {
+                    &mut pngs
+                };
                 match png_diff(&a, &b) {
                     Ok(d) => {
                         gate.record(&item, f64::from(d));
@@ -757,21 +952,58 @@ fn rust_writer_matches_the_reference() {
                         if c.equal() && ba == bb {
                             glbs.record(&item, 0.0);
                         } else {
-                            let cc = compare_json(&glb_canonical(&ja, &ba), &glb_canonical(&jb, &bb), 0);
-                            if cc.equal() {
+                            let (ga, gb) = (glb_canonical(&ja, &ba), glb_canonical(&jb, &bb));
+                            let ((ca, da), (cb, db)) = match (ga, gb) {
+                                (Ok(x), Ok(y)) => (x, y),
+                                (Err(e), _) | (_, Err(e)) => {
+                                    glbs.fail(&item, e);
+                                    continue;
+                                }
+                            };
+                            let cc = compare_json(&ca, &cb, 0);
+                            let mut n = Normals::default();
+                            let mut pos = Positions::default();
+                            let lifts = report.lifts.get(rel.as_str());
+                            for (x, y) in da.iter().zip(&db) {
+                                n.compare(&x.normals, &y.normals);
+                                let lift = lifts.and_then(|l| l.get(y.index)).map_or(&[][..], Vec::as_slice);
+                                pos.compare(&x.positions, &y.positions, lift);
+                            }
+                            positions.add(&pos);
+                            if !cc.equal() {
+                                glbs.fail(&item, cc.differences.join("; "));
+                            } else if pos.unlifted_moved > 0 || pos.lifted_beyond > 0 {
+                                glbs.fail(
+                                    &item,
+                                    format!(
+                                        "{} unlifted positions moved, {} lifted beyond the bound (max {:e}, {:.2} of \
+                                         the bound)",
+                                        pos.unlifted_moved, pos.lifted_beyond, pos.max_lifted_abs, pos.max_ratio
+                                    ),
+                                );
+                            } else if n.beyond > 0 {
+                                glbs.fail(
+                                    &item,
+                                    format!(
+                                        "{} normal components beyond the bound (max {:e})",
+                                        n.beyond, n.max_abs
+                                    ),
+                                );
+                            } else {
                                 glbs.record(&item, 0.0);
                                 let moved = moved_materials(&ja, &jb);
                                 let mats = &ref_map["materials"];
                                 if moved.iter().any(|m| order_sensitive(mats, m)) {
                                     reordered_sensitive.push(format!("{item} ({})", moved.join(", ")));
-                                } else {
+                                } else if !moved.is_empty() {
                                     reordered_opaque.push(item.clone());
                                 }
-                            } else if c.equal() {
-                                glbs.fail(&item, "binary chunks differ");
-                            } else {
-                                glbs.fail(&item, cc.differences.join("; "));
                             }
+                            normals.checked += n.checked;
+                            normals.exact += n.exact;
+                            normals.within += n.within;
+                            normals.beyond += n.beyond;
+                            normals.max_abs = normals.max_abs.max(n.max_abs);
                         }
                     }
                     (Err(e), _) | (_, Err(e)) => glbs.fail(&item, e),
@@ -790,7 +1022,13 @@ fn rust_writer_matches_the_reference() {
                     json.record(&item, 0.0);
                     reordered_maps.push(item.clone());
                 } else {
-                    json.fail(&item, c.differences.join("; "));
+                    let d = if rel == "map.json" {
+                        // the differences that remain with sections reordered
+                        compare_json(&objects_canonical(&ja), &objects_canonical(&jb), 0).differences
+                    } else {
+                        c.differences
+                    };
+                    json.fail(&item, d.join("; "));
                 }
             } else {
                 bytes.compare_bytes(&item, &a, &b);
@@ -804,7 +1042,17 @@ fn rust_writer_matches_the_reference() {
             renames.materials
         );
     }
-    let gates = [&sets, &json, &glbs, &sections, &bytes, &pngs, &bcn_pngs, &dds];
+    let gates = [
+        &sets,
+        &json,
+        &glbs,
+        &sections,
+        &bytes,
+        &pngs,
+        &bcn_pngs,
+        &pause_maps,
+        &dds,
+    ];
     for g in gates {
         println!("{g}");
     }
@@ -852,6 +1100,23 @@ fn rust_writer_matches_the_reference() {
             .collect::<String>(),
     )
     .unwrap();
+    println!(
+        "derived normals: shared maths vs reference SharpDX (components of GLBs not byte-identical): {} checked, {} \
+         exact, {} within 4 f32 epsilon, {} beyond; largest difference {:e}",
+        normals.checked, normals.exact, normals.within, normals.beyond, normals.max_abs
+    );
+    println!(
+        "decal lift along derived normal (positions of GLBs not byte-identical, by the writer's lift record): {} \
+         vertices, {} exact, {} lifted within lift x 4 f32 epsilon + 2 f32 steps at the vertex's scale, {} lifted beyond, {} unlifted \
+         moved; largest lifted difference {:e} ({:.2} of its bound)",
+        positions.vertices,
+        positions.exact,
+        positions.lifted_within,
+        positions.lifted_beyond,
+        positions.unlifted_moved,
+        positions.max_lifted_abs,
+        positions.max_ratio
+    );
     for (name, n) in &rounded.count {
         println!(
             "{name}: {n} numbers within it, largest difference {:e}",
