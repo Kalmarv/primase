@@ -79,6 +79,16 @@ impl Transform {
         cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 0.]],
     };
 
+    /// Point `p` through the transform, `M p + t`, computed in f64 and rounded once to f32.
+    pub fn apply(&self, p: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|i| {
+            (f64::from(self.cols[3][i])
+                + (0..3)
+                    .map(|j| f64::from(self.cols[j][i]) * f64::from(p[j]))
+                    .sum::<f64>()) as f32
+        })
+    }
+
     /// The skate-scene v1 placement rule: with `u_i = c_i / |c_i|`, degenerate when some
     /// `|c_i| < 1e-6` or `|det| <= 1e-6 |c0||c1||c2|`; sheared when some `|u_i . u_j| > 1e-4`; mirrored when `det < 0`.
     /// Computed in f64.
