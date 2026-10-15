@@ -662,9 +662,32 @@ fn objects_canonical(map: &Value) -> Value {
             o
         })
         .collect();
+    // Parsed objects retain producer field order. Sort keys recursively before
+    // serializing the comparison key, so equivalent records stay paired.
+    for o in &mut objs {
+        o.sort_all_objects();
+    }
     objs.sort_by_key(|o| o.to_string());
     out["objects"] = Value::Array(objs);
     out
+}
+
+#[test]
+fn canonical_objects_ignore_nested_field_order() {
+    let a: Value = serde_json::from_str(
+        r#"{"objects":[{"name":"b / section 1","primitive":0,"meta":{"z":2,"a":1}},
+        {"name":"a / section 2","primitive":1,"meta":{"z":4,"a":3}}]}"#,
+    )
+    .unwrap();
+    let b: Value = serde_json::from_str(
+        r#"{"objects":[{"meta":{"a":3,"z":4},"primitive":7,"name":"a / section 8"},
+        {"meta":{"a":1,"z":2},"primitive":6,"name":"b / section 9"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(objects_canonical(&a), objects_canonical(&b));
+    let mut different = b;
+    different["objects"][0]["meta"]["a"] = Value::from(9);
+    assert_ne!(objects_canonical(&a), objects_canonical(&different));
 }
 
 /// Objects whose primitive index does not point at a primitive of their material in their (our) GLB.
