@@ -15,7 +15,6 @@ pub mod pausemap;
 pub mod records;
 pub mod scene;
 pub mod texture;
-pub mod vec;
 
 use std::path::PathBuf;
 

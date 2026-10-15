@@ -3,7 +3,7 @@
 
 use crate::Result;
 use crate::records::MapImageJson;
-use crate::vec::Sdx;
+use primase_meshops::vector::Vec3;
 
 #[derive(Debug)]
 pub struct PauseMap {
@@ -27,7 +27,7 @@ const MIN_HALF_HEIGHT: f32 = 25.0;
 
 impl PauseMap {
     /// A front end's own picture (RGBA, row 0 north) covering `bounds` (ground frame, before the offset).
-    pub fn given(w: usize, h: usize, rgba: &[u8], bounds: [f64; 4], off: Sdx) -> PauseMap {
+    pub fn given(w: usize, h: usize, rgba: &[u8], bounds: [f64; 4], off: Vec3) -> PauseMap {
         let px: Vec<u32> = rgba
             .as_chunks::<4>()
             .0
@@ -53,7 +53,7 @@ impl PauseMap {
         }
     }
 
-    pub fn new(region: [f64; 4], off: Sdx, height: usize) -> PauseMap {
+    pub fn new(region: [f64; 4], off: Vec3, height: usize) -> PauseMap {
         let h = height;
         let w = height * 16 / 9;
         let (low_x, high_x) = (region[0] as f32 + off.x, region[2] as f32 + off.x);
@@ -85,7 +85,7 @@ impl PauseMap {
 
     /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), in one colour.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(&mut self, pos: &[f32], idx: &[u32], origin: Sdx, ex: Sdx, ey: Sdx, ez: Sdx, rgb: u32) {
+    pub fn draw(&mut self, pos: &[f32], idx: &[u32], origin: Vec3, ex: Vec3, ey: Vec3, ez: Vec3, rgb: u32) {
         let (r, g, b) = (
             ((rgb >> 16) & 255) as f32,
             ((rgb >> 8) & 255) as f32,

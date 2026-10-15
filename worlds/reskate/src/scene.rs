@@ -20,16 +20,16 @@ use primase_skate_scene::{
 use crate::material::{MatLib, MaterialSpec, VClass};
 use crate::model::{CollisionMode, SrcMesh, SrcPart};
 use crate::texture::{MASK_TAG, NORMAL_TAG, TexLib, TexRef, TexSource};
-use crate::vec::{Num, Sdx};
 use crate::{Error, Result};
+use primase_meshops::vector::Vec3;
 
 /// Scene space to the writer's frame: (x, y, z) -> (x, -z, y).
-pub fn w(x: f32, y: f32, z: f32) -> Sdx {
-    Sdx::new(x, -z, y)
+pub fn w(x: f32, y: f32, z: f32) -> Vec3 {
+    Vec3::new(x, -z, y)
 }
 
-pub fn w_at(v: &[f32], o: usize) -> Sdx {
-    Sdx::new(v[o], -v[o + 2], v[o + 1])
+pub fn w_at(v: &[f32], o: usize) -> Vec3 {
+    Vec3::new(v[o], -v[o + 2], v[o + 1])
 }
 
 /// The collision surfaces: Studio packed materials; the first 17 the standard table.
@@ -199,9 +199,9 @@ impl SnapSpec {
 #[derive(Clone, Debug)]
 pub struct PlacedLight {
     pub spot: bool,
-    pub pos: Sdx,
-    pub dir: Sdx,
-    pub tan: Sdx,
+    pub pos: Vec3,
+    pub dir: Vec3,
+    pub tan: Vec3,
     pub r: f32,
     pub g: f32,
     pub b: f32,
@@ -220,7 +220,7 @@ pub struct PlacedLight {
 /// A grind curve in the writer's frame.
 #[derive(Clone, Debug)]
 pub struct GrindCurve {
-    pub points: Vec<Num>,
+    pub points: Vec<Vec3>,
     pub closed: bool,
     pub radius: f32,
     pub surface: usize,
@@ -685,7 +685,7 @@ impl Scene {
         let curves = world
             .iter::<SkateGrindCurve>()
             .map(|(_, c)| GrindCurve {
-                points: c.points.iter().map(|p| Num::new(p[0], -p[2], p[1])).collect(),
+                points: c.points.iter().map(|p| Vec3::new(p[0], -p[2], p[1])).collect(),
                 closed: c.closed,
                 radius: if c.radius == 0.0 {
                     0.03
@@ -1105,7 +1105,7 @@ pub fn build_mesh(
         has_variants,
         ..SrcMesh::default()
     };
-    let (mut mn, mut mx) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
+    let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     for (i, g) in prims.iter().enumerate() {
         let d = &p.parts[i];
         let nv = g.pos.len() / 3;
@@ -1194,8 +1194,8 @@ pub fn build_mesh(
         mesh.parts.push(part);
     }
     if mesh.tris == 0 {
-        mn = Sdx::ZERO;
-        mx = Sdx::ZERO;
+        mn = Vec3::ZERO;
+        mx = Vec3::ZERO;
     }
     mesh.min = mn;
     mesh.max = mx;

@@ -19,7 +19,7 @@ use crate::records::{
 };
 use crate::scene::{GrindCurve, Marker, PlacedLight, SnapMode, SurfaceTable, WaterQuad};
 use crate::texture::TexLib;
-use crate::vec::{Num, Sdx};
+use primase_meshops::vector::Vec3;
 
 /// What the writer is told (defaults are gta-skate's).
 #[derive(Clone, Debug)]
@@ -82,6 +82,9 @@ pub struct WriteResult {
     pub lights_dropped: usize,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
+    /// The overlay stack's lift record: per mesh file (`meshes/...`), per primitive in file order, each vertex's lift
+    /// along its derived normal in metres (an empty list: nothing lifted). Meshes without a lifted vertex are left out.
+    pub lifts: BTreeMap<String, Vec<Vec<f32>>>,
     pub grind_curves: i64,
     pub grind_pieces: i64,
     pub grind_length: f32,
@@ -96,6 +99,8 @@ pub struct WriteResult {
 struct Acc {
     /// First use of the part's material in the mesh (0, 1, ...): the stable source order.
     seq: usize,
+    /// How far the overlay stack lifted each vertex along its derived normal, in metres (empty: none lifted).
+    lift: Vec<f32>,
     pos: Vec<f32>,
     nrm: Vec<f32>,
     uv: Vec<f32>,
@@ -119,7 +124,7 @@ struct AccPiece {
 #[derive(Clone, Debug)]
 struct PieceSrc {
     drawable: String,
-    entity: Sdx,
+    entity: Vec3,
     shader: String,
     bucket: u8,
     model: i32,
@@ -138,9 +143,9 @@ struct PieceRec {
     order: i32,
     shift_mm: f32,
     tris: usize,
-    centre: Sdx,
+    centre: Vec3,
     drawable: String,
-    entity: Sdx,
+    entity: Vec3,
     shader: String,
     bucket: u8,
     model: i32,
@@ -220,7 +225,7 @@ fn kept(
 }
 
 /// Append a part, moved by pos + basis (`s` none: as it is); with `only`, just those triangles and their vertices.
-fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin: Sdx, only: Option<&[u32]>) {
+fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin: Vec3, only: Option<&[u32]>) {
     let vbase = (a.pos.len() / 3) as u32;
     let Some((s, sh)) = s else {
         a.pos.extend_from_slice(&p.pos);
@@ -380,9 +385,11 @@ fn draw_order(
     out
 }
 
-/// The mesh's primitives, its parts in `order` (material ids; see [`draw_order`]).
-fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> Vec<GlbPrim> {
+/// The mesh's primitives, its parts in `order` (material ids; see [`draw_order`]), and each primitive's vertex lifts
+/// (empty: none lifted).
+fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> (Vec<GlbPrim>, Vec<Vec<f32>>) {
     let mut list = Vec::new();
+    let mut lifts = Vec::new();
     for mat in order {
         let Some(a) = parts.get(mat) else { continue };
         let name = mats.by_id(*mat).name.clone();
@@ -394,6 +401,7 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> Vec<Gl
                 uv: Some(a.uv.clone()),
                 idx: a.idx.clone(),
             });
+            lifts.push(a.lift.clone());
             continue;
         }
         for c in primase_vertex::split_by_vertex_budget(&a.idx, a.pos.len() / 3, MAX_SECTION_VERTS)
@@ -405,6 +413,11 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> Vec<Gl
                     .flat_map(|&v| src[v as usize * n..v as usize * n + n].to_vec())
                     .collect::<Vec<f32>>()
             };
+            lifts.push(if a.lift.is_empty() {
+                Vec::new()
+            } else {
+                take(&a.lift, 1)
+            });
             list.push(GlbPrim {
                 material: Some(name.clone()),
                 pos: take(&a.pos, 3),
@@ -414,15 +427,22 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> Vec<Gl
             });
         }
     }
-    list
+    (list, lifts)
+}
+
+/// Record a mesh's lifts (when it has a lifted vertex).
+fn record_lifts(r: &mut WriteResult, file: String, lifts: Vec<Vec<f32>>) {
+    if lifts.iter().any(|l| l.iter().any(|&x| x > 0.0)) {
+        r.lifts.insert(file, lifts);
+    }
 }
 
 fn area(pos: &[f32], idx: &[u32]) -> f64 {
     let mut s = 0f64;
     for t in idx.as_chunks::<3>().0 {
-        let a = Sdx::at(pos, t[0] as usize * 3);
-        let b = Sdx::at(pos, t[1] as usize * 3);
-        let c = Sdx::at(pos, t[2] as usize * 3);
+        let a = Vec3::at(pos, t[0] as usize * 3);
+        let b = Vec3::at(pos, t[1] as usize * 3);
+        let c = Vec3::at(pos, t[2] as usize * 3);
         s += f64::from((b - a).cross(c - a).length()) * 0.5;
     }
     s
@@ -448,7 +468,7 @@ pub struct MapWriter {
     pub ctx: Ctx,
     pub surfaces: SurfaceTable,
     pub r: WriteResult,
-    off: Sdx,
+    off: Vec3,
     pm: PauseMap,
     objects: Vec<MapObject>,
     mat_tris: HashMap<usize, i64>,
@@ -476,7 +496,7 @@ const APRON: f32 = 30.0;
 
 impl MapWriter {
     pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
-        let off = Sdx::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
+        let off = Vec3::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
         let pm = match &o.pause_picture {
             Some((w, h, rgba, b)) => PauseMap::given(*w, *h, rgba, *b, off),
             None => PauseMap::new(o.region, off, o.map_height),
@@ -524,7 +544,7 @@ impl MapWriter {
     fn stack_overlays(
         &mut self,
         parts: &mut BTreeMap<usize, Acc>,
-        origin: Sdx,
+        origin: Vec3,
         mesh: &str,
     ) -> Vec<(usize, usize)> {
         let step = self.o.overlay_step;
@@ -574,6 +594,15 @@ impl MapWriter {
             under.sort_unstable();
             under.dedup();
         }
+        for (k, p) in pieces.iter().enumerate() {
+            if p.shift > 0.0 {
+                let a = parts.get_mut(&src[k].0).expect("a piece's part");
+                a.lift.resize(a.pos.len() / 3, 0.0);
+                for l in &mut a.lift[p.v0..p.v1] {
+                    *l = l.max(p.shift);
+                }
+            }
+        }
         let Some(log) = &mut self.piece_log else {
             return under;
         };
@@ -583,9 +612,9 @@ impl MapWriter {
             }
             let (mat, i) = src[k];
             let a = &parts[&mat];
-            let mut c = Sdx::ZERO;
+            let mut c = Vec3::ZERO;
             for v in p.v0..p.v1 {
-                c += Sdx::new(a.pos[v * 3], a.pos[v * 3 + 1], a.pos[v * 3 + 2]);
+                c += Vec3::new(a.pos[v * 3], a.pos[v * 3 + 1], a.pos[v * 3 + 2]);
             }
             c = c / (p.v1 - p.v0).max(1) as f32 + origin;
             let PieceSrc {
@@ -621,7 +650,7 @@ impl MapWriter {
         a: &mut Acc,
         p: &SrcPart,
         s: Option<(&Placement, Shape)>,
-        origin: Sdx,
+        origin: Vec3,
         order: i32,
         only: Option<&[u32]>,
         drawable: &str,
@@ -640,7 +669,7 @@ impl MapWriter {
             });
             a.src.push(PieceSrc {
                 drawable: drawable.to_owned(),
-                entity: s.map_or(Sdx::ZERO, |x| x.0.pos),
+                entity: s.map_or(Vec3::ZERO, |x| x.0.pos),
                 shader: p.shader.clone(),
                 bucket: p.bucket,
                 model: p.model,
@@ -668,14 +697,14 @@ impl MapWriter {
                 part(&mut parts, mat),
                 p,
                 None,
-                Sdx::ZERO,
+                Vec3::ZERO,
                 order as i32,
                 None,
                 &m.name,
                 0,
             );
         }
-        let under = self.stack_overlays(&mut parts, Sdx::ZERO, &format!("proto {}", m.name));
+        let under = self.stack_overlays(&mut parts, Vec3::ZERO, &format!("proto {}", m.name));
         if self.o.max_render_edge > 0.0 {
             for a in parts.values_mut() {
                 split_long(a, self.o.max_render_edge);
@@ -701,15 +730,16 @@ impl MapWriter {
         self.r.proto_list[info].file = format!("{stem}.glb");
         let mats = &self.ctx.mats;
         let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
-        let pr = prims(&parts, mats, &order);
+        let (pr, lifts) = prims(&parts, mats, &order);
+        record_lifts(&mut self.r, format!("meshes/{stem}.glb"), lifts);
         self.mesh_files
             .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
         let origins = pr
             .iter()
             .map(|p| {
-                let (mut lo, mut hi) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
+                let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
                 for v in (0..p.pos.len().saturating_sub(2)).step_by(3) {
-                    let q = Sdx::new(p.pos[v], p.pos[v + 1], p.pos[v + 2]);
+                    let q = Vec3::new(p.pos[v], p.pos[v + 1], p.pos[v + 2]);
                     lo = lo.min(q);
                     hi = hi.max(q);
                 }
@@ -781,7 +811,7 @@ impl MapWriter {
                 groups[i].1.push(s);
             }
             for ((tx, ty), mut g) in groups {
-                let origin = Sdx::new((tx as f32 + 0.5) * o.tile, (ty as f32 + 0.5) * o.tile, 0.0);
+                let origin = Vec3::new((tx as f32 + 0.5) * o.tile, (ty as f32 + 0.5) * o.tile, 0.0);
                 let mut to = TileOut::new(tx, ty);
                 let mut parts: BTreeMap<usize, Acc> = BTreeMap::new();
                 let (mut piece_order, mut entity_no, mut hull_no) = (0i32, 0i32, 0usize);
@@ -1001,10 +1031,10 @@ impl MapWriter {
                                 self.pm.draw(
                                     &a.pos,
                                     &a.idx,
-                                    Sdx::new(origin.x + off.x, origin.y + off.y, off.z),
-                                    Sdx::UNIT_X,
-                                    Sdx::UNIT_Y,
-                                    Sdx::UNIT_Z,
+                                    Vec3::new(origin.x + off.x, origin.y + off.y, off.z),
+                                    Vec3::UNIT_X,
+                                    Vec3::UNIT_Y,
+                                    Vec3::UNIT_Z,
                                     pc,
                                 );
                             }
@@ -1027,7 +1057,8 @@ impl MapWriter {
                             if keep_idx.len() != a.idx.len() {
                                 self.r.clipped += ((a.idx.len() - keep_idx.len()) / 3) as i64;
                                 let mut remap = vec![u32::MAX; a.pos.len() / 3];
-                                let (mut cp, mut cn, mut cu) = (Vec::new(), Vec::new(), Vec::new());
+                                let (mut cp, mut cn, mut cu, mut cl) =
+                                    (Vec::new(), Vec::new(), Vec::new(), Vec::new());
                                 for i in &mut keep_idx {
                                     let vi = *i as usize;
                                     if remap[vi] == u32::MAX {
@@ -1035,12 +1066,16 @@ impl MapWriter {
                                         cp.extend_from_slice(&a.pos[vi * 3..vi * 3 + 3]);
                                         cn.extend_from_slice(&a.nrm[vi * 3..vi * 3 + 3]);
                                         cu.extend_from_slice(&a.uv[vi * 2..vi * 2 + 2]);
+                                        if !a.lift.is_empty() {
+                                            cl.push(a.lift[vi]);
+                                        }
                                     }
                                     *i = remap[vi];
                                 }
                                 a.pos = cp;
                                 a.nrm = cn;
                                 a.uv = cu;
+                                a.lift = cl;
                                 a.idx = keep_idx;
                             }
                         }
@@ -1053,13 +1088,14 @@ impl MapWriter {
                     }
                     let mats = &self.ctx.mats;
                     let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
-                    let pr = prims(&parts, mats, &order);
+                    let (pr, lifts) = prims(&parts, mats, &order);
                     let rows = MapObject::translation(
                         origin.x + off.x,
                         origin.y + off.y,
                         if off.z != 0.0 { origin.z + off.z } else { origin.z },
                     );
                     let file = to.mesh.clone().expect("mesh");
+                    record_lifts(&mut self.r, format!("meshes/{file}"), lifts);
                     self.mesh_files
                         .insert(file.clone(), glb::write(&format!("t_{tx}_{ty}"), &pr)?);
                     for (i, p) in pr.iter().enumerate() {
@@ -1144,6 +1180,11 @@ fn split_long(a: &mut Acc, max: f32) {
     a.nrm = out.normals.iter().flatten().copied().collect();
     a.uv = out.uv.iter().flatten().copied().collect();
     a.idx = out.indices;
+    // a new vertex is the midpoint of two others, so its lift error is at most the larger of theirs
+    if !a.lift.is_empty() {
+        let top = a.lift.iter().copied().fold(0.0, f32::max);
+        a.lift.resize(a.pos.len() / 3, top);
+    }
 }
 
 /// Joins the props of each collision tile in map-tile order (row, then column).
@@ -1174,7 +1215,7 @@ pub struct Extras<'a> {
     pub grind: Vec<GrindCurve>,
 }
 
-fn map_vec(v: Sdx) -> [f32; 3] {
+fn map_vec(v: Vec3) -> [f32; 3] {
     [v.x, v.z, -v.y]
 }
 
@@ -1220,7 +1261,7 @@ pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
 /// The light records of `kept`, named `prefix` + number, and how many had no usable tangent (their basis is built
 /// from a fallback axis: X, or Z for a light along X, made square to the light, since Studio refuses a basis that is
 /// not orthogonal).
-fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> (Vec<LightJson>, usize) {
+fn lights_json(kept: &[PlacedLight], off: Vec3, prefix: &str) -> (Vec<LightJson>, usize) {
     let mut fallback = 0;
     let lights = kept
         .iter()
@@ -1232,9 +1273,9 @@ fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> (Vec<LightJson>,
                 right = right.normalize();
             } else {
                 let axis = if fwd.x.abs() < 0.9 {
-                    Sdx::UNIT_X
+                    Vec3::UNIT_X
                 } else {
-                    Sdx::UNIT_Z
+                    Vec3::UNIT_Z
                 };
                 right = (axis - fwd * axis.dot(fwd)).normalize();
                 fallback += 1;
@@ -1304,7 +1345,7 @@ impl MapWriter {
     /// The water surfaces that touch the region as one mesh with Studio's ocean material.
     fn water(&mut self, quads: &[WaterQuad], material: &str) -> Result<Option<MapObject>> {
         let (r, off, limit) = (self.o.region, self.off, self.o.limit);
-        let origin = Sdx::new((r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0, 0.0);
+        let origin = Vec3::new((r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0, 0.0);
         let (mut pos, mut nrm, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u32>::new());
         for q in quads {
             if f64::from(q.x1) <= r[0]
@@ -1559,10 +1600,10 @@ impl MapWriter {
             let yaw = m.yaw * std::f64::consts::PI / 180.0;
             let mut t = m.transform.unwrap_or_else(|| {
                 MapObject::rows(
-                    Sdx::new(yaw.cos() as f32, (-yaw.sin()) as f32, 0.0),
-                    Sdx::new(yaw.sin() as f32, yaw.cos() as f32, 0.0),
-                    Sdx::UNIT_Z,
-                    Sdx::ZERO,
+                    Vec3::new(yaw.cos() as f32, (-yaw.sin()) as f32, 0.0),
+                    Vec3::new(yaw.sin() as f32, yaw.cos() as f32, 0.0),
+                    Vec3::UNIT_Z,
+                    Vec3::ZERO,
                 )
             });
             t[9] = x + self.off.x;
@@ -1736,7 +1777,7 @@ impl MapWriter {
                     .push(format!("grind curve {i} has no usable points"));
                 continue;
             }
-            let (mut lo, mut hi) = (Num::splat(f32::MAX), Num::splat(f32::MIN));
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             for p in &gpos {
                 lo = lo.min(*p);
                 hi = hi.max(*p);
@@ -2041,7 +2082,7 @@ impl MapWriter {
                 .then(a.pass.cmp(&b.pass))
                 .then(a.order.cmp(&b.order))
         });
-        let r2 = |v: Sdx| [v.x, v.y, v.z];
+        let r2 = |v: Vec3| [v.x, v.y, v.z];
         let pieces = PiecesJson {
             overlay_step_m: self.o.overlay_step,
             pieces: recs
@@ -2074,10 +2115,10 @@ impl MapWriter {
 mod tests {
     use super::*;
 
-    fn light(dir: Sdx, tan: Sdx) -> PlacedLight {
+    fn light(dir: Vec3, tan: Vec3) -> PlacedLight {
         PlacedLight {
             spot: true,
-            pos: Sdx::ZERO,
+            pos: Vec3::ZERO,
             dir,
             tan,
             r: 1.0,
@@ -2143,15 +2184,15 @@ mod tests {
         let tilt = 0.7f32.to_radians();
         let lights = [
             // 0.7 degrees off straight down, no tangent
-            light(Sdx::new(tilt.sin(), 0.0, -tilt.cos()), Sdx::ZERO),
+            light(Vec3::new(tilt.sin(), 0.0, -tilt.cos()), Vec3::ZERO),
             // along X, a tangent parallel to it
-            light(Sdx::UNIT_X, Sdx::UNIT_X),
+            light(Vec3::UNIT_X, Vec3::UNIT_X),
             // straight down: X is already square to it
-            light(Sdx::new(0.0, 0.0, -1.0), Sdx::ZERO),
+            light(Vec3::new(0.0, 0.0, -1.0), Vec3::ZERO),
             // a usable tangent is kept
-            light(Sdx::new(0.0, 0.0, -1.0), Sdx::UNIT_Y),
+            light(Vec3::new(0.0, 0.0, -1.0), Vec3::UNIT_Y),
         ];
-        let (json, fallback) = lights_json(&lights, Sdx::ZERO, "l");
+        let (json, fallback) = lights_json(&lights, Vec3::ZERO, "l");
         assert_eq!(fallback, 3);
         for (l, j) in lights.iter().zip(&json) {
             let b = &j.basis;

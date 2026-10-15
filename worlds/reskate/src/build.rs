@@ -83,6 +83,8 @@ pub struct BuildReport {
     pub collision_tris: i64,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
+    /// The overlay stack's lift record (see `WriteResult::lifts`).
+    pub lifts: BTreeMap<String, Vec<Vec<f32>>>,
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
@@ -531,6 +533,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         textures: writer.ctx.tex.all().iter().filter(|t| !t.removed).count(),
         collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
         lights_without_tangent: r.lights_without_tangent,
+        lifts: r.lifts.clone(),
     })
 }
 

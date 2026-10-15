@@ -8,7 +8,7 @@ use crate::Result;
 use crate::glb::{self, GlbPrim};
 use crate::model::MapObject;
 use crate::scene::{SnapMode, SnapSpec, SurfaceTable, WaterQuad};
-use crate::vec::Sdx;
+use primase_meshops::vector::Vec3;
 
 pub const SRC_TILE: f32 = 256.0;
 pub const MAX_HALF_EDGES_PER_METRE: f32 = 600.0;
@@ -78,10 +78,10 @@ pub fn add_prop(
     col_idx: &[u32],
     col_surf: &[u8],
     col_ground: bool,
-    p: Sdx,
-    ex: Sdx,
-    ey: Sdx,
-    ez: Sdx,
+    p: Vec3,
+    ex: Vec3,
+    ey: Vec3,
+    ez: Vec3,
     bbox: Option<[f32; 4]>,
 ) -> i64 {
     let key = ((p.x / SRC_TILE).floor() as i32, (p.y / SRC_TILE).floor() as i32);
@@ -162,9 +162,9 @@ pub struct Collision<'a> {
     extra: Vec<TileData>,
 }
 
-fn p3(v: &[f32], i: u32) -> Sdx {
+fn p3(v: &[f32], i: u32) -> Vec3 {
     let i = i as usize * 3;
-    Sdx::new(v[i], v[i + 1], v[i + 2])
+    Vec3::new(v[i], v[i + 1], v[i + 2])
 }
 
 const PLACE_STEP: f32 = 4.0;
@@ -194,7 +194,7 @@ impl<'a> Collision<'a> {
         }
     }
 
-    fn at(&self, o: Sdx) -> [f32; 12] {
+    fn at(&self, o: Vec3) -> [f32; 12] {
         MapObject::translation(
             o.x + self.off_x,
             o.y + self.off_y,
@@ -302,9 +302,9 @@ impl<'a> Collision<'a> {
         if idx.is_empty() {
             return Ok(());
         }
-        let (mut mn, mut mx) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
+        let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for v in (0..pos.len().saturating_sub(2)).step_by(3) {
-            let p = Sdx::new(pos[v], pos[v + 1], pos[v + 2]);
+            let p = Vec3::new(pos[v], pos[v + 1], pos[v + 2]);
             mn = mn.min(p);
             mx = mx.max(p);
         }
@@ -543,7 +543,7 @@ impl<'a> Collision<'a> {
         if tris.is_empty() {
             return Ok(());
         }
-        let (mut mn, mut mx) = (Sdx::splat(f32::MAX), Sdx::splat(f32::MIN));
+        let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for &t in tris {
             for k in 0..3 {
                 let p = p3(&td.v, td.t[t * 3 + k]);
@@ -626,7 +626,7 @@ impl<'a> Collision<'a> {
                 *i = Some(s);
             }
         }
-        let origin = Sdx::new(x0 + size / 2.0, y0 + size / 2.0, 0.0);
+        let origin = Vec3::new(x0 + size / 2.0, y0 + size / 2.0, 0.0);
         for s in 0..ns {
             if count[s] == 0 || into[s] != Some(s) {
                 continue;
@@ -720,7 +720,7 @@ fn around(
     let (ax0, ay0, ax1, ay1) = place_tiles(qx, qy);
     let (mut v, mut s, mut rock) = (Vec::new(), Vec::new(), Vec::new());
     let mut n_static = 0;
-    let reach = |a: Sdx, b: Sdx, c: Sdx| {
+    let reach = |a: Vec3, b: Vec3, c: Vec3| {
         !(a.x.max(b.x.max(c.x)) < qx - PLACE_REACH
             || a.x.min(b.x.min(c.x)) > qx + PLACE_REACH
             || a.y.max(b.y.max(c.y)) < qy - PLACE_REACH
@@ -794,7 +794,7 @@ fn around(
 }
 
 /// Height of triangle t of `td` at (x, y), NaN when it does not cover the point; with its (unnormalised) normal.
-fn height_at(td: &TileData, t: usize, x: f32, y: f32) -> (f32, Sdx) {
+fn height_at(td: &TileData, t: usize, x: f32, y: f32) -> (f32, Vec3) {
     let (a, b, c) = (p3(&td.v, td.t[t]), p3(&td.v, td.t[t + 1]), p3(&td.v, td.t[t + 2]));
     let n = (b - a).cross(c - a);
     let d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);

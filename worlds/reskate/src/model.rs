@@ -1,7 +1,7 @@
 //! What the map writer works on, in its z-up frame (east, north, up): prototypes made of parts, and placements.
 
 use crate::material::VClass;
-use crate::vec::Sdx;
+use primase_meshops::vector::Vec3;
 
 /// A run of triangles of a prototype sharing one material choice.
 #[derive(Clone, Debug, Default)]
@@ -45,8 +45,8 @@ pub struct SrcMesh {
     pub hash: u32,
     pub name: String,
     pub parts: Vec<SrcPart>,
-    pub min: Sdx,
-    pub max: Sdx,
+    pub min: Vec3,
+    pub max: Vec3,
     pub tris: i64,
     pub verts: i64,
     pub is_tree: bool,
@@ -64,10 +64,10 @@ pub struct SrcMesh {
 pub struct Placement {
     pub proto: u32,
     pub variant: u32,
-    pub pos: Sdx,
-    pub ex: Sdx,
-    pub ey: Sdx,
-    pub ez: Sdx,
+    pub pos: Vec3,
+    pub ex: Vec3,
+    pub ey: Vec3,
+    pub ez: Vec3,
     pub radius: f32,
     pub tx: i32,
     pub ty: i32,
@@ -171,7 +171,7 @@ impl MapObject {
     }
 
     /// Studio's 12 numbers for a z-up basis and position: conv(v) = (x, z, -y).
-    pub fn rows(ex: Sdx, ey: Sdx, ez: Sdx, p: Sdx) -> [f32; 12] {
+    pub fn rows(ex: Vec3, ey: Vec3, ez: Vec3, p: Vec3) -> [f32; 12] {
         [
             ex.x, ex.z, -ex.y, ez.x, ez.z, -ez.y, -ey.x, -ey.z, ey.y, p.x, p.z, -p.y,
         ]

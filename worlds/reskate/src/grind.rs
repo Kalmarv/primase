@@ -2,7 +2,7 @@
 //! than 75 degrees, an invisible 8-sided collision prism hanging under each run with one edge on the line.
 
 use crate::scene::GrindCurve;
-use crate::vec::Num;
+use primase_meshops::vector::Vec3;
 
 /// Studio's smooth-grind surfaces.
 pub const SURFACES: [(&str, i32); 5] = [
@@ -21,7 +21,7 @@ fn split_cosine() -> f32 {
     (75.0f32 * std::f32::consts::PI / 180.0).cos()
 }
 
-fn simplify(pts: &[Num], tol: f32) -> Vec<Num> {
+fn simplify(pts: &[Vec3], tol: f32) -> Vec<Vec3> {
     if pts.len() < 3 {
         return pts.to_vec();
     }
@@ -59,7 +59,7 @@ fn simplify(pts: &[Num], tol: f32) -> Vec<Num> {
         .collect()
 }
 
-fn sharp(m: &[Num], i: usize) -> bool {
+fn sharp(m: &[Vec3], i: usize) -> bool {
     let n = m.len();
     let before = (m[i] - m[(i + n - 1) % n]).normalize();
     let after = (m[(i + 1) % n] - m[i]).normalize();
@@ -67,7 +67,7 @@ fn sharp(m: &[Num], i: usize) -> bool {
 }
 
 /// Simplified point runs for prisms.
-pub fn runs(points: &[Num], closed: bool) -> Vec<(Vec<Num>, bool)> {
+pub fn runs(points: &[Vec3], closed: bool) -> Vec<(Vec<Vec3>, bool)> {
     let mut src = points.to_vec();
     if closed {
         src.push(points[0]);
@@ -120,14 +120,14 @@ pub fn runs(points: &[Num], closed: bool) -> Vec<(Vec<Num>, bool)> {
 }
 
 /// Positions and indices of an open-ended prism hanging under a run (faces wind outward, z up).
-pub fn prism(pts: &[Num], closed: bool, radius: f32, pos: &mut Vec<Num>, idx: &mut Vec<u32>) {
+pub fn prism(pts: &[Vec3], closed: bool, radius: f32, pos: &mut Vec<Vec3>, idx: &mut Vec<u32>) {
     let count = pts.len();
     let segments = if closed { count } else { count - 1 };
     let b0 = pos.len();
-    let dirs: Vec<Num> = (0..segments)
+    let dirs: Vec<Vec3> = (0..segments)
         .map(|i| (pts[(i + 1) % count] - pts[i]).normalize())
         .collect();
-    let mut prev_up: Option<Num> = None;
+    let mut prev_up: Option<Vec3> = None;
     for i in 0..count {
         let (before, after) = if closed {
             (dirs[(i + segments - 1) % segments], dirs[i % segments])
@@ -140,9 +140,9 @@ pub fn prism(pts: &[Num], closed: bool, radius: f32, pos: &mut Vec<Num>, idx: &m
         } else {
             after
         };
-        let mut up = Num::UNIT_Z - tangent * Num::UNIT_Z.dot(tangent);
+        let mut up = Vec3::UNIT_Z - tangent * Vec3::UNIT_Z.dot(tangent);
         if up.length() < 1e-3 {
-            let fb = prev_up.unwrap_or(Num::UNIT_Y);
+            let fb = prev_up.unwrap_or(Vec3::UNIT_Y);
             up = fb - tangent * fb.dot(tangent);
         }
         up = up.normalize();
@@ -155,7 +155,7 @@ pub fn prism(pts: &[Num], closed: bool, radius: f32, pos: &mut Vec<Num>, idx: &m
             bend = bend.normalize();
             stretch = 1.0 / before.dot(tangent).clamp(0.5, 1.0) - 1.0;
         }
-        let mut ring = [Num::ZERO; SIDES];
+        let mut ring = [Vec3::ZERO; SIDES];
         for (c, r) in ring.iter_mut().enumerate() {
             let a = 2.0 * std::f32::consts::PI * c as f32 / SIDES as f32;
             let mut o = (up * a.cos() + side * a.sin()) * radius;
@@ -181,7 +181,7 @@ pub fn prism(pts: &[Num], closed: bool, radius: f32, pos: &mut Vec<Num>, idx: &m
 }
 
 /// The prism of a whole curve; with the number of runs and their length.
-pub fn build(g: &GrindCurve) -> (Vec<Num>, Vec<u32>, i32, f32) {
+pub fn build(g: &GrindCurve) -> (Vec<Vec3>, Vec<u32>, i32, f32) {
     let (mut pos, mut idx) = (Vec::new(), Vec::new());
     let (mut pieces, mut length) = (0, 0f32);
     for (run, closed) in runs(&g.points, g.closed) {

@@ -1,11 +1,11 @@
 //! Stacked overlay lifts for one merged mesh: decal- and water-class pieces moved along their faces' normals until
 //! each lies at least `step` in front of every parallel surface it overlaps that should be under it (water over
 //! everything; inside one entity the geometry order; across entities an opaque decal under an alpha-tested or
-//! blended one, then the tile loop's order). The reference writer's OverlayStack, in System.Numerics arithmetic.
+//! blended one, then the tile loop's order), in the shared vector arithmetic (`primase_meshops::vector`).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::vec::Num;
+use primase_meshops::vector::Vec3;
 
 const BEHIND: f32 = 0.005;
 const PARALLEL: f32 = 0.995;
@@ -34,10 +34,10 @@ pub struct Piece {
 
 #[derive(Clone, Copy, Debug)]
 struct Tri {
-    a: Num,
-    b: Num,
-    c: Num,
-    n: Num,
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    n: Vec3,
     piece: usize,
     t: usize,
 }
@@ -96,8 +96,8 @@ fn on_top(a: &Piece, b: &Piece) -> bool {
     a.pass > b.pass
 }
 
-fn v(pos: &[f32], i: usize) -> Num {
-    Num::new(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])
+fn v(pos: &[f32], i: usize) -> Vec3 {
+    Vec3::new(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])
 }
 
 fn make(parts: &Parts, p: &Piece, t: usize, k: usize) -> Tri {
@@ -115,20 +115,20 @@ fn make(parts: &Parts, p: &Piece, t: usize, k: usize) -> Tri {
         a,
         b,
         c,
-        n: if len > 1e-10 { n / len } else { Num::ZERO },
+        n: if len > 1e-10 { n / len } else { Vec3::ZERO },
         piece: k,
         t,
     }
 }
 
 fn cells(t: &Tri) -> ((i32, i32, i32), (i32, i32, i32)) {
-    let mn = t.a.min(t.b.min(t.c)) - Num::splat(PAD);
-    let mx = t.a.max(t.b.max(t.c)) + Num::splat(PAD);
+    let mn = t.a.min(t.b.min(t.c)) - Vec3::splat(PAD);
+    let mx = t.a.max(t.b.max(t.c)) + Vec3::splat(PAD);
     let f = |x: f32| (x / CELL).floor() as i32;
     ((f(mn.x), f(mn.y), f(mn.z)), (f(mx.x), f(mx.y), f(mx.z)))
 }
 
-fn inside(p: Num, u: &Tri) -> bool {
+fn inside(p: Vec3, u: &Tri) -> bool {
     let q = p - u.n * (p - u.a).dot(u.n);
     let (v0, v1, v2) = (u.c - u.a, u.b - u.a, q - u.a);
     let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
@@ -144,9 +144,9 @@ fn inside(p: Num, u: &Tri) -> bool {
 fn overlaps(t: &Tri, u: &Tri) -> bool {
     let c = (t.a + t.b + t.c) / 3.0;
     if inside(c, u)
-        || inside(Num::lerp(t.a, c, 0.25), u)
-        || inside(Num::lerp(t.b, c, 0.25), u)
-        || inside(Num::lerp(t.c, c, 0.25), u)
+        || inside(Vec3::lerp(t.a, c, 0.25), u)
+        || inside(Vec3::lerp(t.b, c, 0.25), u)
+        || inside(Vec3::lerp(t.c, c, 0.25), u)
     {
         return true;
     }
@@ -165,7 +165,7 @@ fn related(t: &Tri, u: &Tri) -> Option<f32> {
 fn shift(parts: &mut Parts, p: &Piece, by: f32) {
     let idx = parts.idx[p.part];
     let pos = &mut *parts.pos[p.part];
-    let mut fnrm = vec![Num::ZERO; p.v1 - p.v0];
+    let mut fnrm = vec![Vec3::ZERO; p.v1 - p.v0];
     for t in p.t0..p.t1 {
         let (a, b, c) = (
             idx[t * 3] as usize,
@@ -204,7 +204,7 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
         let mut list = Vec::with_capacity(p.t1 - p.t0);
         for t in p.t0..p.t1 {
             let tr = make(parts, p, t, k);
-            if tr.n == Num::ZERO {
+            if tr.n == Vec3::ZERO {
                 continue;
             }
             list.push(tris.len());
