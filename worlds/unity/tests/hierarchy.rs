@@ -149,9 +149,10 @@ fn renderers_match_the_scan() {
             }
             // the component a later lowering needs: a Shapes behaviour with its fields
             assert!(
-                behaviours
-                    .iter()
-                    .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty()),
+                !why.0.starts_with("procedural")
+                    || behaviours
+                        .iter()
+                        .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty()),
                 "{}: no Shapes component data",
                 r.path
             );

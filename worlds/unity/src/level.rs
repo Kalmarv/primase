@@ -9,7 +9,8 @@
 //!
 //! Renderers whose material builds its geometry in the vertex shader from component data ([`procedural`]) draw a
 //! placeholder mesh: they are left out (an entity with their transform, renderer, the GameObject's MonoBehaviours as
-//! bytes and [`UnityLeftOut`], no instance), counted by shader and placeholder mesh.
+//! bytes and [`UnityLeftOut`], no instance), counted by shader and placeholder mesh. Renderers whose mesh has no
+//! submesh with indices draw nothing and are left out the same way, counted.
 
 use std::collections::BTreeMap;
 
@@ -636,6 +637,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     }
     let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
     let mut prototypes: BTreeMap<(ObjRef, Option<(u32, u32)>), Proto> = BTreeMap::new();
+    // meshes (or batch slices) that draw nothing
+    let mut empty: std::collections::BTreeSet<(ObjRef, Option<(u32, u32)>)> =
+        std::collections::BTreeSet::new();
     let placed = renderers
         .iter()
         .map(|r| (None, r))
@@ -685,31 +689,49 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             None => (0, data.submeshes.len()),
         };
         let key = (r.mesh.clone(), r.submeshes);
-        if !prototypes.contains_key(&key) {
+        if !prototypes.contains_key(&key) && !empty.contains(&key) {
             let (drawn, primitives): (Vec<u32>, Vec<_>) = data
                 .primitives(first as usize..first as usize + count)?
                 .into_iter()
                 .map(|(k, p)| (k as u32, p))
                 .unzip();
-            b.report.primitives += primitives.len();
+            if primitives.is_empty() {
+                empty.insert(key.clone());
+            } else {
+                b.report.primitives += primitives.len();
+                let e = w.spawn();
+                w.insert(e, Mesh { primitives });
+                w.insert(
+                    e,
+                    UnityMesh {
+                        mesh: UnityObject::from(&r.mesh),
+                        submeshes: r.submeshes,
+                        drawn: drawn.clone(),
+                    },
+                );
+                prototypes.insert(
+                    key.clone(),
+                    Proto {
+                        entity: e,
+                        drawn,
+                        variants: Vec::new(),
+                    },
+                );
+            }
+        }
+        // a mesh with no submesh that has indices draws nothing: the renderer is left out
+        if empty.contains(&key) {
+            b.note(
+                "renderers left out: their mesh draws nothing (no submesh with indices)",
+                1,
+            );
             let e = w.spawn();
-            w.insert(e, Mesh { primitives });
-            w.insert(
-                e,
-                UnityMesh {
-                    mesh: UnityObject::from(&r.mesh),
-                    submeshes: r.submeshes,
-                    drawn: drawn.clone(),
-                },
-            );
-            prototypes.insert(
-                key.clone(),
-                Proto {
-                    entity: e,
-                    drawn,
-                    variants: Vec::new(),
-                },
-            );
+            w.insert(e, UNITY.transform(&transform_of(&r.world)));
+            w.insert(e, Name(r.path.clone()));
+            w.insert(e, unity_renderer(r));
+            w.insert(e, UnityLeftOut("draws nothing: an empty mesh".into()));
+            b.report.left_out += 1;
+            continue;
         }
         let proto = prototypes.get_mut(&key).expect("inserted");
         let variant = match proto.variants.iter().position(|v| *v == materials) {
