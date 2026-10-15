@@ -296,7 +296,9 @@ impl Material {
             alpha: None,
             cutoff: masked.then_some(primase_core::json::f32_decimal(self.cutoff)),
             two_sided: (self.two_sided != masked).then_some(self.two_sided),
-            domain: None,
+            // Consumer comparison: these leaves render lit in the surface
+            // domain and black in the foliage domain. Keep the leaves class.
+            domain: (self.class == "leaves").then_some(primase_skate_scene::Domain::Surface),
             metallic: None,
             roughness: None,
             wrap: None,
