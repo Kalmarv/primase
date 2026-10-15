@@ -79,6 +79,13 @@ impl Transform {
         cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 0.]],
     };
 
+    /// The determinant of the linear part, in f64: negative for a mirroring transform, which reverses the winding of
+    /// triangles mapped through it.
+    pub fn determinant(&self) -> f64 {
+        let c: [[f64; 3]; 3] = std::array::from_fn(|i| self.cols[i].map(f64::from));
+        dot(c[0], cross(c[1], c[2]))
+    }
+
     /// Point `p` through the transform, `M p + t`, computed in f64 and rounded once to f32.
     pub fn apply(&self, p: [f32; 3]) -> [f32; 3] {
         std::array::from_fn(|i| {
