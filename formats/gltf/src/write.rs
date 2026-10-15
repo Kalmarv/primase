@@ -18,8 +18,9 @@
 //!   [`fallback_material`] (light grey, dielectric, rough) and counted. A primitive with no material has none in
 //!   glTF (the reader's default material) and is counted.
 //! - **Textures**: a `core.texture_file` PNG is embedded as-is (bytes checked to be PNG, identical files embedded
-//!   once). DDS files and in-memory `core.texture`s are skipped (they wait for the DDS/PNG crates) and counted; the
-//!   material slot is left empty.
+//!   once). In-memory textures take priority and embed their largest level as deterministic RGBA8 PNG.
+//!   Normal maps must already be green-up with stored Z; use the explicit normalization pass first.
+//!   Unloaded DDS files are skipped and counted; load them with the texture-loading pass.
 //! - **Extras**: every component with a JSON form (`core.source`, dialect and opaque JSON components) that the glTF
 //!   itself does not express goes into the extras of the object made from its entity, keyed by component name:
 //!   placement -> node, prototype -> mesh, material -> material, texture -> texture; opaque world resources -> the
@@ -99,7 +100,7 @@ pub struct WriteReport {
     pub primitives_without_material: u64,
     /// Primitives given zero texture coordinates for a set their material samples but they lack.
     pub primitives_texcoords_zero_filled: u64,
-    /// Texture slots left empty, by reason (`dds`, `in-memory texture`, ...), counted per texture entity.
+    /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
     pub textures_skipped: BTreeMap<String, u64>,
     /// Material texture slots left empty because their texture was skipped.
     pub texture_slots_dropped: u64,
@@ -976,7 +977,7 @@ impl Writer<'_> {
         Ok(Some(i))
     }
 
-    /// The image of a texture entity: a PNG file embedded as-is, once per distinct content.
+    /// The image of a texture entity: canonical PNG for loaded pixels, otherwise a PNG file as-is.
     fn image(&mut self, e: Entity) -> Result<Option<usize>> {
         if let Some(&i) = self.image_of_entity.get(&e) {
             return Ok(i);
@@ -986,43 +987,65 @@ impl Writer<'_> {
             w.image_of_entity.insert(e, None);
             Ok(None)
         };
-        let Some(file) = self.world.get::<TextureFile>(e) else {
-            return if self.world.has::<Texture>(e) {
-                skip(self, "in-memory texture (needs the PNG encoder)")
-            } else {
-                Err(Error::World {
+        let (bytes, image_name) = if let Some(texture) = self.world.get::<Texture>(e) {
+            if texture.role == primase_core::TexRole::Normal
+                && texture.normal
+                    != Some(primase_core::NormalConvention {
+                        green: primase_core::NormalGreen::Up,
+                        z: primase_core::NormalZ::Stored,
+                    })
+            {
+                return Err(Error::World {
                     entity: e,
-                    detail: "texture entity with neither core.texture_file nor core.texture".into(),
-                })
-            };
+                    detail: "normal texture requires green-up and stored Z; run normalize-normals first"
+                        .into(),
+                });
+            }
+            let bytes = primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
+                entity: e,
+                detail: error.to_string(),
+            })?;
+            (bytes, self.name_of(e, "image"))
+        } else {
+            let file = self.world.get::<TextureFile>(e).ok_or_else(|| Error::World {
+                entity: e,
+                detail: "texture entity with neither core.texture_file nor core.texture".into(),
+            })?;
+            let ext = file
+                .path
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(str::to_ascii_lowercase);
+            match ext.as_deref() {
+                Some("png") => {}
+                Some("dds") => return skip(self, "dds"),
+                _ => return skip(self, "other file format"),
+            }
+            let path = self.options.base_dir.join(&file.path);
+            let bytes = std::fs::read(&path).map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+            check_png(&bytes).map_err(|detail| Error::World {
+                entity: e,
+                detail: format!("{}: {detail}", path.display()),
+            })?;
+            (
+                bytes,
+                file.path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("image")
+                    .to_owned(),
+            )
         };
-        let ext = file
-            .path
-            .extension()
-            .and_then(|x| x.to_str())
-            .map(str::to_ascii_lowercase);
-        match ext.as_deref() {
-            Some("png") => {}
-            Some("dds") => return skip(self, "dds"),
-            _ => return skip(self, "other file format"),
-        }
-        let path = self.options.base_dir.join(&file.path);
-        let bytes = std::fs::read(&path).map_err(|source| Error::Io {
-            path: path.clone(),
-            source,
-        })?;
-        check_png(&bytes).map_err(|detail| Error::World {
-            entity: e,
-            detail: format!("{}: {detail}", path.display()),
-        })?;
         let hash: [u8; 32] = Sha256::digest(&bytes).into();
         let index = match self.image_by_hash.get(&hash) {
             Some(&i) => i,
             None => {
                 let view = self.view(&bytes, None);
-                let stem = file.path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
                 self.images
-                    .push(json!({"name": stem, "mimeType": "image/png", "bufferView": view}));
+                    .push(json!({"name": image_name, "mimeType": "image/png", "bufferView": view}));
                 self.report.images += 1;
                 self.report.image_bytes += bytes.len() as u64;
                 let i = self.images.len() - 1;

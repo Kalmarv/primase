@@ -632,3 +632,51 @@ fn khronos_validator_accepts_output() {
         "{warnings:?}"
     );
 }
+
+#[test]
+fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
+    use primase_core::{
+        ColorSpace, NormalConvention, NormalGreen, NormalZ, TexFormat, TexRole, Texture, TextureFile,
+    };
+    let mut b = build(&scratch("memory-textures"));
+    let pixels = vec![128, 64, 0, 255];
+    let t = Texture {
+        width: 1,
+        height: 1,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![pixels.clone()],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Other,
+        normal: None,
+    };
+    let entities: Vec<_> = b.world.iter::<TextureFile>().map(|(e, _)| e).collect();
+    for e in entities {
+        b.world.insert(e, t.clone());
+    }
+    let (g, r, bytes) = written(&b);
+    assert!(r.textures_skipped.is_empty());
+    assert_eq!(r.images, 1);
+    let view = g.json()["images"][0]["bufferView"].as_u64().unwrap() as usize;
+    assert_eq!(
+        primase_image::read_png(g.buffer_view(view).unwrap())
+            .unwrap()
+            .image
+            .samples,
+        primase_image::Samples::U8(pixels)
+    );
+    assert_eq!(bytes, written(&b).2);
+    let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
+    n.role = TexRole::Normal;
+    n.normal = Some(NormalConvention {
+        green: NormalGreen::Down,
+        z: NormalZ::Rebuild,
+    });
+    assert!(
+        write(&b.world, &options(&b))
+            .unwrap_err()
+            .to_string()
+            .contains("normalize-normals")
+    );
+    primase_image::normalize_normals(&mut b.world).unwrap();
+    assert!(written(&b).1.textures_skipped.is_empty());
+}

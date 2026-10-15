@@ -32,3 +32,17 @@ promised: the contract is exact pixel roundtrip and deterministic output.
 
 Censuses deduplicate input files by SHA256 within each configured root, reporting
 path counts separately from checked distinct contents. All paths are read and hashed.
+
+`LoadTextures` / `load_textures` load PNG and DDS file components atomically,
+retaining file provenance and stored mip levels. Absolute paths are used directly;
+relative paths resolve against the optional base directory. Existing textures take
+priority. PNG samples retain 8/16-bit precision and default to sRGB; semantic
+lowerings assign role and normal convention. No colour transfer is performed.
+
+`texture_level_png` decodes a selected level through the texture decoder and emits
+deterministic RGBA8 PNG, including the decoder's clamped projection for HDR data.
+`NormalizeNormals` / `normalize_normals` explicitly convert normal maps to green-up
+and stored positive-hemisphere Z across every mip. Green uses `255-G`; reconstructed
+Z uses `sqrt(max(0,1-x*x-y*y))` and nearest byte rounding. Changed textures become
+RGBA8 and lose their file component; unchanged textures retain it. Missing normal
+metadata fails before mutation. The pass log records reconstruction and decoding.

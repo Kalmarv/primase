@@ -1,10 +1,23 @@
 //! PNG to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
+mod texture;
 use std::io::Cursor;
+pub use texture::{
+    LoadTextures, NormalizeNormals, TextureLoadReport, load_textures, normalize_normals, texture_level_png,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("{path}: {source}")]
+    Io {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+    #[error("DDS: {0}")]
+    Dds(#[from] primase_dds::Error),
+    #[error("texture decode: {0}")]
+    Texture(#[from] primase_texcodec::Error),
     #[error("invalid image: {0}")]
     Invalid(String),
     #[error("PNG decoding: {0}")]

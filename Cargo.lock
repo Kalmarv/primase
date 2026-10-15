@@ -525,6 +525,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "primase-core",
+ "primase-image",
  "serde_json",
  "sha2",
  "thiserror",
@@ -540,6 +541,8 @@ version = "0.1.0"
 dependencies = [
  "png",
  "primase-core",
+ "primase-dds",
+ "primase-texcodec",
  "sha2",
  "thiserror",
 ]

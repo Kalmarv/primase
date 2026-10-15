@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-dds.workspace = true
+primase-texcodec.workspace = true
 thiserror.workspace = true
 png.workspace = true
 
