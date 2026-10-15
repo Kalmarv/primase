@@ -30,6 +30,8 @@ publish = false
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
 [workspace.dependencies]
+basisu_c_sys = { version = "=0.9.1", default-features = false, features = ["std", "encoder", "extra", "transcode_default"] }
+basisu = { version = "=0.1.0", default-features = false, features = ["std", "zstd"] }
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 meshopt = { version = "=0.6.2", default-features = false }
 aes = { version = "=0.9.3", default-features = false }

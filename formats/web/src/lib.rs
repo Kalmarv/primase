@@ -4,9 +4,12 @@ use primase_core::{
     World,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 mod collision;
 mod compression;
 mod instancing;
+#[cfg(feature = "ktx2")]
+pub mod ktx2;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -29,6 +32,9 @@ pub struct Options {
     pub gpu_instancing: bool,
     /// Quantize vertex attributes and encode vertex streams with meshopt.
     pub compress: bool,
+    /// Optional web texture lowering; PNG embedding remains the default.
+    #[cfg(feature = "ktx2")]
+    pub ktx2: bool,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
@@ -41,6 +47,8 @@ impl Default for Options {
             tile_size: 200.,
             gpu_instancing: true,
             compress: true,
+            #[cfg(feature = "ktx2")]
+            ktx2: false,
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
@@ -216,6 +224,8 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
 /// nominal cell. Shared prototypes retain sharing for pivot-filed placements.
 /// Degenerate placements are counted and omitted, as in the glTF writer.
 pub fn write(world: &World, options: &Options) -> Result<TileSet> {
+    #[cfg(feature = "ktx2")]
+    let mut texture_encoder = ktx2::TextureEncoder::default();
     if !options.tile_size.is_finite() || options.tile_size <= 0. {
         return Err(Error::Invalid("tile size must be finite and positive".into()));
     }
@@ -413,6 +423,12 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         }
         let transforms = group.iter().map(|p| (p.entity.index(), p.transform)).collect();
         let (bytes, instanced_placements) = instancing::apply(bytes, &transforms, options.gpu_instancing)?;
+        #[cfg(feature = "ktx2")]
+        let bytes = if options.ktx2 {
+            texture_encoder.apply(bytes)?
+        } else {
+            bytes
+        };
         let bytes = if options.compress {
             compression::apply(bytes)?
         } else {
@@ -436,7 +452,18 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         set.files.insert(file, bytes);
     }
     append_viewer_items(&mut set, options)?;
+    let mut named = BTreeMap::new();
+    for tile in &mut set.index.tiles {
+        let bytes = set.files.remove(&tile.file).expect("generated tile");
+        tile.file = asset_name("tile", tile.col, tile.row, &bytes);
+        named.insert(tile.file.clone(), bytes);
+    }
+    set.files = named;
     Ok(set)
+}
+fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
+    let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{kind}_{col}_{row}.{hash}.glb")
 }
 fn append_viewer_items(set: &mut TileSet, options: &Options) -> Result<()> {
     use serde_json::{Value, json};
@@ -453,7 +480,7 @@ fn append_viewer_items(set: &mut TileSet, options: &Options) -> Result<()> {
             .push((i, item));
     }
     for ((col, row), items) in groups {
-        let collision_name = format!("collision_{col}_{row}.glb");
+        let mut collision_name = String::new();
         let collisions: Vec<_> = items
             .iter()
             .filter(|(_, item)| item.kind == "collision")
@@ -463,6 +490,7 @@ fn append_viewer_items(set: &mut TileSet, options: &Options) -> Result<()> {
             None
         } else {
             let bytes = collision::write(&collisions)?;
+            collision_name = asset_name("collision", col, row, &bytes);
             let descriptor = CollisionFile {
                 file: collision_name.clone(),
                 bytes: bytes.len() as u64,
@@ -555,8 +583,9 @@ impl TileSet {
         if names.len() != self.index.tiles.len()
             || names.len() != self.files.len()
             || self.index.tiles.iter().any(|t| {
-                t.file != format!("tile_{}_{}.glb", t.col, t.row)
-                    || self.files.get(&t.file).is_none_or(|b| b.len() as u64 != t.bytes)
+                self.files.get(&t.file).is_none_or(|b| {
+                    b.len() as u64 != t.bytes || t.file != asset_name("tile", t.col, t.row, b)
+                })
             })
         {
             return Err(Error::Invalid("tile index does not match generated files".into()));
@@ -570,11 +599,9 @@ impl TileSet {
             .collect();
         if collision_entries.len() != self.collision_files.len()
             || collision_entries.iter().any(|(t, c)| {
-                c.file != format!("collision_{}_{}.glb", t.col, t.row)
-                    || self
-                        .collision_files
-                        .get(&c.file)
-                        .is_none_or(|b| b.len() as u64 != c.bytes)
+                self.collision_files.get(&c.file).is_none_or(|b| {
+                    b.len() as u64 != c.bytes || c.file != asset_name("collision", t.col, t.row, b)
+                })
             })
         {
             return Err(Error::Invalid(

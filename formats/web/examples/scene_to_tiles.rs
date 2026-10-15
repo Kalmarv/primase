@@ -20,8 +20,8 @@ fn hash(bytes: &[u8]) -> String {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 {
-        return Err("usage: scene_to_tiles <scene folder> <output folder>".into());
+    if args.len() != 3 && !(args.len() == 4 && args[3] == "--ktx2") {
+        return Err("usage: scene_to_tiles <scene folder> <output folder> [--ktx2]".into());
     }
     let folder = Path::new(&args[1]);
     let output = Path::new(&args[2]);
@@ -35,6 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_dir: folder.into(),
         ..Default::default()
     };
+    if args.len() == 4 {
+        #[cfg(feature = "ktx2")]
+        {
+            options.ktx2 = true;
+        }
+        #[cfg(not(feature = "ktx2"))]
+        return Err("--ktx2 requires the ktx2 cargo feature".into());
+    }
     options.split_by_tile = world
         .iter::<SkatePlacement>()
         .filter_map(|(e, p)| p.split_by_tile.then_some(e))
@@ -121,6 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(output.join("proof.json"), serde_json::to_vec_pretty(&proof)?)?;
     options.compress = false;
     options.gpu_instancing = false;
+    #[cfg(feature = "ktx2")]
+    {
+        options.ktx2 = false;
+    }
     let plain = primase_web::write(&world, &options)?;
     plain.write_to(&output.join("plain"))?;
     println!(

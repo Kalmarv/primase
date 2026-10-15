@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { Box3, Matrix4, Vector3, BufferGeometry } from 'three';
+import { Box3, Matrix4, Vector3, BufferGeometry, Texture } from 'three';
 import { contentBounds, curvePoints, parseCamera } from './geometry.js';
 // Box3.setFromObject's precise path excludes InstancedMesh. Measure actual
 // transformed vertices on both sides instead of comparing conservative boxes.
@@ -42,11 +42,34 @@ assert.deepEqual(contentBounds([{triangles:1,min:[10,20,30],max:[20,30,40]},{tri
 const proof = JSON.parse(await fs.readFile(path.join(root, 'proof.json')));
 await MeshoptDecoder.ready;
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+// Geometry-only stand-in, like createImageBitmap above. Actual KTX2 pixels are
+// independently checked by audit-ktx2.mjs and the Rust ktx2_audit example.
+loader.setKTX2Loader({load(url,onLoad,onProgress,onError){
+  fetch(url).then(r=>r.arrayBuffer()).then(data=>{
+    const bytes=new DataView(data);
+    onLoad(new Texture({width:bytes.getUint32(20,true),height:bytes.getUint32(24,true)}));
+  }).catch(onError);
+}});
+function materialSemantics(doc) {
+  return (doc.materials??[]).map(material=>{
+    const result=structuredClone(material);
+    for(const [owner,key] of [[result.pbrMetallicRoughness,'baseColorTexture'],[result.pbrMetallicRoughness,'metallicRoughnessTexture'],[result,'normalTexture'],[result,'emissiveTexture'],[result,'occlusionTexture']]) {
+      if(!owner?.[key])continue;
+      const texture=structuredClone(doc.textures[owner[key].index]);
+      const source=texture.extensions?.KHR_texture_basisu?.source??texture.source;
+      delete texture.source;
+      if(texture.extensions?.KHR_texture_basisu){delete texture.extensions.KHR_texture_basisu;if(!Object.keys(texture.extensions).length)delete texture.extensions;}
+      owner[key].index={texture,image:doc.images[source].name};
+    }
+    return result;
+  });
+}
 let streams=0, meshes=0, triangles=0, instances=0, maxBoundError=0, transformedSlots=0;
 for (const tile of index.tiles) {
   if(tile.collision){
     const payload=await fs.readFile(path.join(root,tile.collision.file));
     assert.equal(payload.length,tile.collision.bytes);
+    assert.ok(tile.collision.file.endsWith(`.${hash(payload)}.glb`),'collision filename hash');
     const collision=await loader.parseAsync(payload.buffer.slice(payload.byteOffset,payload.byteOffset+payload.length),'');
     let records=0;
     const surfaceChecks=[];
@@ -56,6 +79,7 @@ for (const tile of index.tiles) {
     assert.equal(records,tile.collision.records);
   }
   const bytes = await fs.readFile(path.join(root,tile.file));
+  assert.ok(tile.file.endsWith(`.${hash(bytes)}.glb`),'render filename hash');
   const expected = proof.find(p=>p.file===tile.file);
   assert.equal(hash(bytes), expected.sha256);
   const jsonLength=bytes.readUInt32LE(12);
@@ -111,17 +135,20 @@ for (const tile of index.tiles) {
     }
   });
   assert.equal(tileTriangles,tile.triangles,`${tile.file} triangles`);
-  const plainBytes=await fs.readFile(path.join(root,'plain',tile.file));
+  const plainIndex=JSON.parse(await fs.readFile(path.join(root,'plain','tiles.json'),'utf8'));
+  const plainTile=plainIndex.tiles.find(t=>t.col===tile.col&&t.row===tile.row);
+  assert.ok(plainTile,`${tile.file} plain tile coordinates`);
+  const plainBytes=await fs.readFile(path.join(root,'plain',plainTile.file));
   const plainJsonLength=plainBytes.readUInt32LE(12);
   const plainDoc=JSON.parse(plainBytes.subarray(20,20+plainJsonLength));
   const plainBin=plainBytes.subarray(28+plainJsonLength);
-  assert.deepEqual(doc.materials,plainDoc.materials,`${tile.file} materials including doubleSided`);
+  assert.deepEqual(materialSemantics(doc),materialSemantics(plainDoc),`${tile.file} materials including texture bindings and doubleSided`);
   const viewBytes=(document,binary,view)=>{const v=document.bufferViews[view];return binary.subarray(v.byteOffset??0,(v.byteOffset??0)+v.byteLength);};
   for(let m=0;m<(doc.meshes?.length??0);m++)for(let p=0;p<doc.meshes[m].primitives.length;p++){
     const a=doc.accessors[doc.meshes[m].primitives[p].indices],b=plainDoc.accessors[plainDoc.meshes[m].primitives[p].indices];
     assert.deepEqual(viewBytes(doc,bin,a.bufferView),viewBytes(plainDoc,plainBin,b.bufferView),`${tile.file} triangle order`);
   }
-  for(let i=0;i<(doc.images?.length??0);i++)assert.equal(hash(viewBytes(doc,bin,doc.images[i].bufferView)),hash(viewBytes(plainDoc,plainBin,plainDoc.images[i].bufferView)),`${tile.file} unchanged PNG`);
+  if(!doc.extensionsRequired?.includes('KHR_texture_basisu'))for(let i=0;i<(doc.images?.length??0);i++)assert.equal(hash(viewBytes(doc,bin,doc.images[i].bufferView)),hash(viewBytes(plainDoc,plainBin,plainDoc.images[i].bufferView)),`${tile.file} unchanged PNG`);
   const plain=await loader.parseAsync(plainBytes.buffer.slice(plainBytes.byteOffset,plainBytes.byteOffset+plainBytes.length),'');
   plain.scene.updateMatrixWorld(true);result.scene.updateMatrixWorld(true);
   let mirroredPlain=0,mirroredOutput=0;

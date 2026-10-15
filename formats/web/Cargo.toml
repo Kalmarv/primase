@@ -8,7 +8,14 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+ktx2 = ["dep:basisu_c_sys", "dep:primase-image"]
+
 [dependencies]
+basisu_c_sys = { workspace = true, optional = true }
+primase-image = { workspace = true, optional = true }
+sha2.workspace = true
 meshopt.workspace = true
 primase-core.workspace = true
 primase-gltf.workspace = true
@@ -17,6 +24,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+basisu.workspace = true
 primase-image.workspace = true
 primase-skate-scene.workspace = true
 sha2.workspace = true

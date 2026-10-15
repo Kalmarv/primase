@@ -49,3 +49,10 @@ metadata fails before mutation. The pass log records reconstruction and decoding
 `write_png_rgb(width, height, rgb)` emits 8-bit RGB (PNG colour type 2) for
 textures without alpha. Its input must contain exactly width*height*3 samples;
 `write_png` continues to preserve RGBA8/16 input. Neither applies colour transfer.
+
+Normal-map filtering is explicit: `resize_normals` and `normal_mip_chain`
+normalize RGBA8 source vectors, average in vector space and renormalize. Means
+shorter than sqrt(3)/255 become flat +Z; the returned count records each such
+replacement. Alpha is averaged separately and no sRGB transfer is applied.
+Generic `half`/`mip_chain` continue to filter stored channel values; callers
+with normal-map semantics must use the normal-specific functions.

@@ -81,6 +81,14 @@ The index's `empty_tile_policy` omits tiles with neither geometry nor viewer
 records. A tile with only records has `content: "metadata_only"`: its GLB contains
 identity nodes and extras, with no meshes, buffers or binary mesh payload.
 Geometry tiles have `content: "geometry"`.
+Render and collision filenames include the full SHA256 of their own bytes.
+Collision names are finalized before their references are embedded in render
+tiles. `write_to` rejects missing files, mismatched lengths, and stale hashes
+before publishing anything. `tiles.json` is written last and stays unhashed.
+For deployment, export into a fresh staging folder, copy immutable assets first,
+then publish the new index last; retain older assets while clients may reference
+them. Viewer entry points and indexes need short cache lifetimes, whereas the
+content-addressed assets may be cached immutably.
 The example omits collision soups with no triangles; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
@@ -110,3 +118,76 @@ and compare placed triangle counts against the index. It reads PNG dimensions
 for loader setup but does not render textures; browser inspection is a separate
 gate. The official validator does not implement the instancing or meshopt
 extensions, so its zero-error result supplements rather than replaces this gate.
+
+## Optional KTX2 evaluation
+
+Build with `--features ktx2` and set `Options.ktx2 = true` (or pass `--ktx2`
+to the example). The default remains PNG. The optional encoder is pinned to
+`basisu_c_sys = 0.9.1`; see [source identity and licences](third-party/README.md).
+Only this feature adds the native Basis encoder and bindgen/libclang requirement.
+
+The web lowering uses UASTC LDR 4x4 with Zstandard, quality 75, effort 2,
+threaded encoding disabled, and a complete wrapping mip chain. Colour maps are
+sRGB; normal and mask maps are linear. A shared source used for different roles
+gets separate texture bindings. The DFD primaries are BT709 for colour and
+unspecified for data, as required by
+[KHR_texture_basisu](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_texture_basisu).
+
+Colour uses UASTC quality 100 (RDO disabled), effort 2, with 512 pixels per
+axis and 360,448 encoded bytes; masks use 256 pixels and 98,304 bytes. Normals
+use lossless PNG at up to 512 pixels per axis, with no encoded-byte cap. Each
+axis is lowered to a power of two, at least four pixels. Small axes are
+replicated. Source/output dimensions, role, caps and actual bytes are recorded
+in image extras. These limits describe the web target, not the source format.
+
+Colour filtering averages in linear light. Normal filtering uses
+`primase_image::resize_normals`: normalize source vectors, average them, then
+normalize the mean. Means shorter than sqrt(3)/255 become flat (0,0,1); image
+extras count these replacements. `normal_mip_chain` exposes the same policy to
+other writers. PNG carries one level; browser-generated mip filtering is not
+claimed to implement this vector filter. Resolution loss is measured separately
+from codec error, including its angular distribution.
+
+The encoder checks alpha against the capped source before accepting a colour
+image. Every cutout binding must change visibility for fewer than 0.1% of pixels
+at its material cutoff (including base-colour alpha factor). Blended alpha must
+have p99 absolute error at most 8 levels. Otherwise the capped image stays PNG.
+The decision and per-binding counts are stored in image extras; opaque bindings
+ignore alpha error. Shared images use all applicable binding requirements.
+
+`cargo test -p primase-web --features ktx2` checks a pure-Rust independent
+decoder, all mip dimensions, role metadata and separate-process SHA256 equality.
+The synthetic gradient bound is 8 channel values (measured maximum 1); this is
+not a bound for arbitrary images. Real-corpus colour and normal-angular error
+measurements, the independent browser WASM transcoder, and browser memory gates
+remain required before accepting this experimental lowering for deployment.
+
+The `ktx2_audit` example hashes every decoded mip with the pure-Rust oracle;
+`viewer/audit-ktx2.mjs` produces corresponding hashes with Three.js' pinned WASM
+transcoder. When `plain/tiles.json` is available, the Rust audit additionally
+reports per-role channel maxima/means and normal-angle maxima/means/p99.
+Quality samples are deduplicated by source content, role, output dimensions and encoded content.
+Two comparisons distinguish codec error against capped reference pixels from
+end-to-end error against original pixels with nearest-centre reconstruction.
+The latter includes resolution loss and does not model GPU filtering.
+The p99 angle is an upper bound using 0.001-degree bins; max and mean use the
+unbinned angles. The geometry audit treats both PNG and KTX2 as dimension-only
+textures; these independent pixel audits supply the separate texture gate.
+
+### Object-storage staging
+
+Keep a build directory containing only the viewer files, scene manifests and
+referenced assets. Upload it to a fresh `staging/<build>/` prefix in a private
+R2 bucket using an authenticated storage client. Upload immutable hashed assets
+and viewer modules first; upload each `tiles.json` and then `index.html` last.
+For example, `rclone copy <build-dir> <remote>:<bucket>/staging/<build>/
+--exclude index.html --exclude tiles.json` copies the payload before separate
+manifest uploads. Credentials belong in the deployment environment, never here.
+
+List the uploaded objects and compare every path and byte length with the local
+manifest; compare server-reported content hashes when available. Test the staged
+viewer through the authenticated public origin, including decoder CDN requests,
+loading failures, screenshots and peak browser memory. Promotion to the live
+prefix is a separate release operation after these checks; staging uploads must
+never overwrite the live root. Keep old assets until deployment synchronization
+and cache expiry make their removal safe.

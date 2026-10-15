@@ -1,6 +1,6 @@
 import { parseCamera } from './geometry.js';
 
-export const VIEWER_BUILD='1.1.0';
+export const VIEWER_BUILD='1.2.0';
 
 export function cameraFromUrl(value) {
   const url=new URL(value);

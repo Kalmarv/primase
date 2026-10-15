@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { contentBounds, curvePoints } from './geometry.js';
 import { cameraFromUrl, viewReport, screenshotName, VIEWER_BUILD } from './report.js';
 const status=document.querySelector('#status');
@@ -12,6 +13,8 @@ const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamp
 window.primaseCamera=()=>[...camera.position.toArray(),...controls.target.toArray()].join(',');
 scene.add(new THREE.HemisphereLight(0xdcecff,0x737061,2.5));const sun=new THREE.DirectionalLight(0xfff4dd,3);sun.position.set(100,250,80);scene.add(sun);
 const loader=new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const ktx2Loader=new KTX2Loader().setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/libs/basis/').detectSupport(renderer);
+loader.setKTX2Loader(ktx2Loader);
 const loaded=new Map();const pending=new Set();const failed=new Set();let failures=0;let renderedFrames=0;
 // Diagnostic picking for reproducible visual investigations (CSS pixel coordinates).
 window.primasePick=(x,y)=>{

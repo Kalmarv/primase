@@ -7,6 +7,31 @@ fn plain() -> Options {
         ..Options::default()
     }
 }
+#[test]
+fn asset_names_hash_their_own_bytes_and_reject_stale_content() {
+    use sha2::{Digest, Sha256};
+    let mut world = World::new();
+    let entity = world.spawn();
+    world.insert(entity, mesh());
+    let placement = world.spawn();
+    world.insert(
+        placement,
+        Instance {
+            prototype: entity,
+            variant: 0,
+        },
+    );
+    world.insert(placement, Transform::IDENTITY);
+    let mut set = write(&world, &plain()).unwrap();
+    for (name, bytes) in &set.files {
+        let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        assert!(name.ends_with(&format!(".{hash}.glb")));
+    }
+    let name = set.index.tiles[0].file.clone();
+    set.files.get_mut(&name).unwrap()[0] ^= 1;
+    let destination = std::env::temp_dir().join("primase-rejected-stale-tile");
+    assert!(set.write_to(&destination).is_err());
+}
 fn mesh() -> Mesh {
     Mesh {
         primitives: vec![Primitive {
@@ -430,6 +455,9 @@ fn collision_payload_is_external_and_referenced() {
     let tile = &set.index.tiles[0];
     let collision = tile.collision.as_ref().unwrap();
     let bytes = &set.collision_files[&collision.file];
+    use sha2::{Digest, Sha256};
+    let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    assert!(collision.file.ends_with(&format!(".{hash}.glb")));
     assert_eq!(bytes.len() as u64, collision.bytes);
     let collision_chunks = primase_gltf::glb::parse(bytes).unwrap();
     let collision_doc: serde_json::Value = serde_json::from_slice(collision_chunks.json).unwrap();

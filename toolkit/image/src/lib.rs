@@ -1,6 +1,8 @@
 //! PNG to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
+mod normals;
 mod texture;
+pub use normals::{NormalFilter, normal_mip_chain, resize_normals};
 use std::io::Cursor;
 pub use texture::{
     LoadTextures, NormalizeNormals, TextureLoadReport, load_textures, normalize_normals, texture_level_png,
