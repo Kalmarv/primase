@@ -768,7 +768,9 @@ version = "0.1.0"
 dependencies = [
  "lz4_flex",
  "primase-core",
+ "primase-image",
  "primase-meshops",
+ "primase-texcodec",
  "primase-vertex",
  "serde",
  "serde_json",

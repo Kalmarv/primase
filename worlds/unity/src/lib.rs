@@ -11,6 +11,7 @@
 //! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
+//! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 
 pub mod components;
 pub mod level;
@@ -19,6 +20,7 @@ pub mod player;
 pub mod resource;
 pub mod scene;
 pub mod serialized;
+pub mod texture;
 pub mod tpk;
 pub mod typetree;
 pub mod value;
