@@ -7,11 +7,11 @@ use crate::{
     msb::{MapLayout, PartKind},
 };
 use primase_core::{
-    Transform, World,
+    Collision, Surfaces, Transform, World,
     frame::{Axis, SourceFrame},
 };
 use primase_havok::Compendium;
-use primase_skate_scene::{CollisionMode, SkateCollision, SkateSoup, SoupRef, TableRef};
+use primase_skate_scene::{CollisionMode, SkateCollision, SoupRef, TableRef};
 use std::collections::{BTreeMap, BTreeSet};
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
@@ -27,22 +27,22 @@ pub struct Report {
 }
 /// Rideable-map lowering policy: hundreds digits retain the base material;
 /// blockers/cloud/water do not become solid surfaces. Water has its own soup.
-pub fn surface(id: i32) -> Option<u8> {
+pub fn surface(id: i32) -> Option<&'static str> {
     if id < 0 {
-        return Some(0);
+        return Some("default");
     }
     Some(match id % 100 {
         22 | 29 | 36 | 40 => return None,
-        1 | 46 => 1,
-        3 | 15 | 18 | 27 | 30 | 33 | 45 => 9,
-        4 | 7 | 8 | 28 | 32 | 47 => 4,
-        5 | 9 | 10 | 31 | 37 | 38 => 6,
-        6 => 11,
-        11 | 19 => 3,
-        13 => 10,
-        16 => 16,
-        34 => 5,
-        _ => 0,
+        1 | 46 => "concrete",
+        3 | 15 | 18 | 27 | 30 | 33 | 45 => "earth",
+        4 | 7 | 8 | 28 | 32 | 47 => "wood",
+        5 | 9 | 10 | 31 | 37 | 38 => "grass",
+        6 => "gravel",
+        11 | 19 => "metal",
+        13 => "sand",
+        16 => "roofing",
+        34 => "marble",
+        _ => "default",
     })
 }
 fn leaf(name: &str) -> String {
@@ -52,7 +52,7 @@ fn leaf(name: &str) -> String {
         .trim_end_matches(".dcx")
         .to_ascii_lowercase()
 }
-pub(super) fn push(soup: &mut SkateSoup, vertices: [[f32; 3]; 3], surface: u8) -> Result<()> {
+pub(super) fn push(soup: &mut Collision, vertices: [[f32; 3]; 3], surface: u16) -> Result<()> {
     let start =
         u32::try_from(soup.positions.len()).map_err(|_| invalid("collision", 0, "too many soup vertices"))?;
     if start > u32::MAX - 3 {
@@ -63,7 +63,7 @@ pub(super) fn push(soup: &mut SkateSoup, vertices: [[f32; 3]; 3], surface: u8) -
     soup.surfaces.push(surface);
     Ok(())
 }
-pub(super) fn attach(world: &mut World, soup: SkateSoup, path: &str, water: bool) {
+pub(super) fn attach(world: &mut World, soup: Collision, path: &str, water: bool) {
     if soup.triangles.is_empty() {
         return;
     }
@@ -145,8 +145,9 @@ pub fn assemble(
         .filter(|f| f.name.as_deref().is_some_and(|n| leaf(n).ends_with(".hkx")))
         .collect::<Vec<_>>();
     files.sort_by_key(|f| leaf(f.name.as_deref().unwrap_or("")));
-    let mut solid = SkateSoup::default();
-    let mut water = SkateSoup::default();
+    let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
+    let mut solid = Collision::default();
+    let mut water = Collision::default();
     for file in files {
         let name = leaf(file.name.as_deref().unwrap_or(""));
         if !selected.remove(&name) {
@@ -166,10 +167,10 @@ pub fn assemble(
                 continue;
             }
             if material >= 0 && [22, 36].contains(&(material % 100)) {
-                push(&mut water, vertices, 0)?;
+                push(&mut water, vertices, surfaces.index("default"))?;
                 report.water_triangles += 1;
             } else if let Some(surface) = surface(material) {
-                push(&mut solid, vertices, surface)?;
+                push(&mut solid, vertices, surfaces.index(surface))?;
                 report.solid_triangles += 1;
             } else {
                 report.excluded_material_triangles += 1;
@@ -183,6 +184,7 @@ pub fn assemble(
             format!("missing selected files {selected:?}"),
         ));
     }
+    world.insert_resource(surfaces);
     attach(world, solid, "collision/game.bin", false);
     attach(world, water, "collision/water.bin", true);
     Ok(report)

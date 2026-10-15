@@ -1,7 +1,7 @@
 //! Full-area object SOUP against reference collision revision bd77fcb.
 //! Stored classifications are exact. Independent convex tessellation is compared
 //! by bidirectional, material-preserving surface probes within 0.2 mm after placement.
-use primase_core::{World, gate::real_data};
+use primase_core::{Collision, Surfaces, World, gate::real_data};
 use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_skate_scene::{SkateCollision, SkateScene, SkateSoup};
 use std::collections::BTreeMap;
@@ -77,14 +77,15 @@ fn placed_object_soup() -> Result<()> {
         report.keyframed_left_out,
         serde_json::from_value::<Vec<String>>(expected["keyframed_left_out"].clone())?
     );
-    let (entity, soup) = world
-        .iter::<SkateSoup>()
+    let (entity, collision) = world
+        .iter::<Collision>()
         .find(|(e, _)| {
             world
                 .get::<SkateCollision>(*e)
                 .is_some_and(|c| c.0.table.files.iter().any(|f| f.path == "collision/objects.bin"))
         })
         .ok_or("object soup")?;
+    let soup = primase_skate_scene::collision::soup(&world, entity, None)?.ok_or("converted soup")?;
     let want =
         primase_skate_scene::tables::read_soup(&std::fs::read(reference.join("collision/objects.bin"))?, 17)?;
     let want = SkateSoup {
@@ -92,8 +93,8 @@ fn placed_object_soup() -> Result<()> {
         triangles: want.triangles,
         surfaces: want.surfaces,
     };
-    let (forward, max_forward) = surface_probes(soup, &want);
-    let (reverse, max_reverse) = surface_probes(&want, soup);
+    let (forward, max_forward) = surface_probes(&soup, &want);
+    let (reverse, max_reverse) = surface_probes(&want, &soup);
     println!(
         "object SOUP reference bd77fcb: triangles ours {} reference {}; material-preserving probes {} + {}, max {} m; bound 0.0002 m",
         soup.triangles.len(),
@@ -105,7 +106,8 @@ fn placed_object_soup() -> Result<()> {
     assert!(max_forward <= 2e-4 && max_reverse <= 2e-4);
     let mut collision_world = World::default();
     let e = collision_world.spawn();
-    collision_world.insert(e, soup.clone());
+    collision_world.insert(e, collision.clone());
+    collision_world.insert_resource(world.resource::<Surfaces>().unwrap().clone());
     collision_world.insert(e, world.get::<SkateCollision>(entity).unwrap().clone());
     collision_world.insert_resource(SkateScene {
         name: "object_collision_gate".into(),

@@ -12,10 +12,8 @@ use crate::{
     invalid,
     msb::MapLayout,
 };
-use primase_core::{Name, Source, Transform, World};
-use primase_skate_scene::{
-    CollisionMode, MarkerKind, SkateCollision, SkateMarker, SkateSoup, Snap, SnapMode,
-};
+use primase_core::{Collision, Name, Source, Surfaces, Transform, World};
+use primase_skate_scene::{CollisionMode, MarkerKind, SkateCollision, SkateMarker, Snap, SnapMode};
 #[derive(Debug, Default)]
 pub struct Report {
     pub hang_segments: usize,
@@ -117,9 +115,12 @@ pub fn assemble(
     let soups = world
         .iter::<SkateCollision>()
         .filter(|(_, c)| c.0.mode == Some(CollisionMode::TriangleMesh))
-        .filter_map(|(e, _)| world.get::<SkateSoup>(e))
+        .filter_map(|(e, _)| world.get::<Collision>(e))
         .collect::<Vec<_>>();
-    let surface = GameSurfaceIndex::new(&soups)?;
+    let surface = GameSurfaceIndex::new(
+        &soups,
+        world.resource::<Surfaces>().unwrap_or(&Surfaces::default()),
+    )?;
     for curve in chain(&segments, 1., inside, &surface)? {
         let e = world.spawn();
         world.insert(e, curve);

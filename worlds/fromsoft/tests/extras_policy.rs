@@ -60,7 +60,7 @@ fn named_srgb_energy_and_axis_policy() {
 #[test]
 fn ledge_join_uses_distance_across_cells_not_cell_identity() {
     use primase_fromsoft::sekiro::ledges::{GameSurfaceIndex, chain};
-    let surface = GameSurfaceIndex::new(&[]).unwrap();
+    let surface = GameSurfaceIndex::new(&[], &primase_core::Surfaces::default()).unwrap();
     let joined = chain(
         &[[[-1., 0., 0.], [0.009, 0., 0.]], [[0.011, 0., 0.], [1., 0., 0.]]],
         0.,
@@ -109,14 +109,16 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
 }
 #[test]
 fn ledges_chain_closed_and_open_segments_and_use_only_supplied_map_surfaces() {
+    use primase_core::{Collision, Surfaces};
     use primase_fromsoft::sekiro::ledges::{GameSurfaceIndex, chain};
-    use primase_skate_scene::SkateSoup;
-    let map = SkateSoup {
+    let mut surfaces = Surfaces::default();
+    let wood = surfaces.index("wood");
+    let map = Collision {
         positions: vec![[-5., 0., -5.], [5., 0., -5.], [0., 0., 5.]],
         triangles: vec![[0, 1, 2]],
-        surfaces: vec![4],
+        surfaces: vec![wood],
     };
-    let surface = GameSurfaceIndex::new(&[&map]).unwrap();
+    let surface = GameSurfaceIndex::new(&[&map], &surfaces).unwrap();
     let curves = chain(
         &[
             [[0., 1., 0.], [1., 1., 0.]],
@@ -132,7 +134,7 @@ fn ledges_chain_closed_and_open_segments_and_use_only_supplied_map_surfaces() {
     assert!(curves[0].closed);
     assert_eq!(curves[0].points.len(), 3);
     assert_eq!(curves[0].surface, 4);
-    let empty = GameSurfaceIndex::new(&[]).unwrap();
+    let empty = GameSurfaceIndex::new(&[], &primase_core::Surfaces::default()).unwrap();
     assert_eq!(
         chain(&[[[0., 0., 0.], [2., 0., 0.]]], 1., |_| true, &empty).unwrap()[0].surface,
         3

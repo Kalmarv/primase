@@ -1,7 +1,8 @@
 //! Ledge chaining is a lowering policy: one-centimetre endpoint distance, one-metre
 //! minimum length and wood/concrete selected from game-map collision only.
 use crate::{Result, invalid};
-use primase_skate_scene::{SkateGrindCurve, SkateSoup};
+use primase_core::{Collision, Surfaces};
+use primase_skate_scene::SkateGrindCurve;
 use std::collections::{BTreeMap, VecDeque};
 fn key(p: [f32; 3]) -> [i64; 3] {
     p.map(|x| (f64::from(x) * 100.).floor() as i64)
@@ -15,12 +16,12 @@ fn nearby(a: [f32; 3], b: [f32; 3]) -> bool {
 }
 #[derive(Debug)]
 pub struct GameSurfaceIndex {
-    triangles: Vec<([[f64; 3]; 3], u8)>,
+    triangles: Vec<([[f64; 3]; 3], bool)>,
     cells: BTreeMap<[i64; 2], Vec<usize>>,
 }
 impl GameSurfaceIndex {
     /// The caller supplies map soups, before adding object collision.
-    pub fn new(soups: &[&SkateSoup]) -> Result<Self> {
+    pub fn new(soups: &[&Collision], surfaces: &Surfaces) -> Result<Self> {
         let mut out = Self {
             triangles: vec![],
             cells: BTreeMap::new(),
@@ -55,7 +56,13 @@ impl GameSurfaceIndex {
                     return Err(invalid("ledge surface", i, "triangle spans too many index cells"));
                 }
                 let index = out.triangles.len();
-                out.triangles.push((points, surface));
+                let wood = surfaces
+                    .0
+                    .get(usize::from(surface))
+                    .ok_or_else(|| invalid("ledge surface", i, "unknown surface"))?
+                    .name
+                    == "wood";
+                out.triangles.push((points, wood));
                 for x in bounds[0].0..=bounds[0].1 {
                     for z in bounds[1].0..=bounds[1].1 {
                         out.cells.entry([x, z]).or_default().push(index);
@@ -78,7 +85,7 @@ impl GameSurfaceIndex {
                 let d = primase_meshops::point_triangle_distance_squared(p.map(f64::from), t);
                 if d < best {
                     best = d;
-                    wood = surface == 4;
+                    wood = surface;
                 }
             }
         }

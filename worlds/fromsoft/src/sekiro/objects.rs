@@ -2,11 +2,11 @@
 //! omitted and named. Convex material is the dominant colliding render surface.
 use crate::{Archive, Binder, Result, collision, dcx::Decoder, invalid, materials::Material};
 use primase_core::{
-    Instance, Mesh, Semantic, Source, Stream, Transform, World,
+    Collision, Instance, Mesh, Semantic, Source, Stream, Surfaces, Transform, World,
     frame::{Axis, SourceFrame},
 };
 use primase_meshops::vector::Vec3;
-use primase_skate_scene::{SkatePrototype, SkateSoup};
+use primase_skate_scene::SkatePrototype;
 use std::collections::BTreeMap;
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
@@ -83,7 +83,8 @@ pub fn assemble(
 ) -> Result<Report> {
     let mut report = Report::default();
     let mut cache = BTreeMap::new();
-    let mut soup = SkateSoup::default();
+    let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
+    let mut soup = Collision::default();
     for (e, instance) in world.iter::<Instance>() {
         let Some(proto) = world.get::<SkatePrototype>(instance.prototype) else {
             continue;
@@ -148,7 +149,7 @@ pub fn assemble(
                     report.excluded_material_triangles += 1;
                     continue;
                 };
-                super::collision::push(&mut soup, v, surface)?;
+                super::collision::push(&mut soup, v, surfaces.index(surface))?;
                 report.written_triangles += 1;
             }
             report.batches.push(Batch {
@@ -159,6 +160,7 @@ pub fn assemble(
             });
         }
     }
+    world.insert_resource(surfaces);
     super::collision::attach(world, soup, "collision/objects.bin", false);
     Ok(report)
 }
