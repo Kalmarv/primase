@@ -328,3 +328,32 @@ impl Component for UnityTreeInstance {
         }
     }
 }
+
+/// A light as Unity stores it, on an entity placed by its Transform (Unity's light shines along its local +Z: the
+/// world's -Z after the frame conversion). See [`crate::scene::LightComponent`] for the fields.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityLight {
+    pub light: UnityObject,
+    pub kind: i64,
+    pub color: [f32; 4],
+    pub intensity: f32,
+    pub range: f32,
+    pub spot_angle: f32,
+    pub inner_spot_angle: f32,
+    pub shadows: i64,
+    pub color_temperature: Option<f32>,
+    pub bounce_intensity: f32,
+    pub light_unit: Option<i64>,
+    pub lux_at_distance: Option<f32>,
+    pub area_size: [f32; 2],
+    pub render_mode: i64,
+    pub culling_mask: u32,
+    pub cookie: Option<UnityObject>,
+}
+
+impl Component for UnityLight {
+    const NAME: &'static str = "unity.light";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}

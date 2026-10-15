@@ -483,6 +483,77 @@ impl Scene {
         Ok((out, skipped))
     }
 
+    /// The lights that shine (GameObject active, Light enabled), in the order of the scene's object table, and how
+    /// many do not.
+    pub fn lights(&self, player: &Player) -> Result<(Vec<LightComponent>, u64)> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
+        let (mut out, mut off) = (Vec::new(), 0);
+        for o in f.objects.iter().filter(|o| class(o.path_id) == "Light") {
+            let l = player.decode(&r(o.path_id))?;
+            let Some(tp) = self.transform_of(path_id(&l, "m_GameObject")?) else {
+                continue;
+            };
+            if !self.active(tp) || !flag(&l, "m_Enabled")? {
+                off += 1;
+                continue;
+            }
+            let fl = |k: &str| l.get(k).and_then(Value::as_f32);
+            let int = |k: &str| l.get(k).and_then(Value::as_i64);
+            let c = l.get("m_Color").ok_or_else(|| invalid("light: no m_Color"))?;
+            let area = l.get("m_AreaSize");
+            out.push(LightComponent {
+                light: r(o.path_id),
+                path: self.path(tp),
+                world: self.world_of(tp)?,
+                kind: int("m_Type").ok_or_else(|| invalid("light: no m_Type"))?,
+                color: [num(c, "r")?, num(c, "g")?, num(c, "b")?, num(c, "a")?].map(|x| x as f32),
+                intensity: fl("m_Intensity").unwrap_or(1.0),
+                range: fl("m_Range").unwrap_or(10.0),
+                spot_angle: fl("m_SpotAngle").unwrap_or(30.0),
+                inner_spot_angle: fl("m_InnerSpotAngle").unwrap_or(0.0),
+                shadows: l
+                    .at(&["m_Shadows", "m_Type"])
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0),
+                color_temperature: if l
+                    .get("m_UseColorTemperature")
+                    .is_some_and(|v| v.as_bool() == Some(true) || v.as_i64() == Some(1))
+                {
+                    fl("m_ColorTemperature")
+                } else {
+                    None
+                },
+                bounce_intensity: fl("m_BounceIntensity").unwrap_or(1.0),
+                light_unit: int("m_LightUnit"),
+                lux_at_distance: fl("m_LuxAtDistance"),
+                area_size: [
+                    area.and_then(|a| a.get("x"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(1.0),
+                    area.and_then(|a| a.get("y"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(1.0),
+                ],
+                render_mode: int("m_RenderMode").unwrap_or(0),
+                culling_mask: l
+                    .at(&["m_CullingMask", "m_Bits"])
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1) as u32,
+                cookie: match l.get("m_Cookie") {
+                    Some(p) => player.resolve(file, p)?,
+                    None => None,
+                },
+            });
+        }
+        Ok((out, off))
+    }
+
     /// The drawn terrains (GameObject active, Terrain enabled), in the order of the scene's object table.
     pub fn terrains(&self, player: &Player) -> Result<Vec<TerrainComponent>> {
         let file = self.file.as_str();
@@ -539,6 +610,31 @@ impl Scene {
         }
         Ok(out)
     }
+}
+
+/// A light as stored: Unity's LightType (0 spot, 1 directional, 2 point, 3 rectangle, 4 disc), colour as stored
+/// (gamma-encoded), intensity, range, spot angles in degrees (full cone), shadow type, colour temperature (Kelvin, when
+/// used), bounce intensity, URP's light unit and lux-at-distance, area size, render mode and culling mask.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightComponent {
+    pub light: ObjRef,
+    pub path: String,
+    pub world: Matrix,
+    pub kind: i64,
+    pub color: [f32; 4],
+    pub intensity: f32,
+    pub range: f32,
+    pub spot_angle: f32,
+    pub inner_spot_angle: f32,
+    pub shadows: i64,
+    pub color_temperature: Option<f32>,
+    pub bounce_intensity: f32,
+    pub light_unit: Option<i64>,
+    pub lux_at_distance: Option<f32>,
+    pub area_size: [f32; 2],
+    pub render_mode: i64,
+    pub culling_mask: u32,
+    pub cookie: Option<ObjRef>,
 }
 
 /// A terrain's collider: its own TerrainData (which may differ from the drawn one), physic material, tree colliders.

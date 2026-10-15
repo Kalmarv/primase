@@ -18,9 +18,9 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, Transform, Wo
 
 use crate::Result;
 use crate::components::{
-    UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityMaterial, UnityMesh, UnityObject, UnityRenderer,
-    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
-    UnityTreeInstance,
+    UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityLight, UnityMaterial, UnityMesh, UnityObject,
+    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
+    UnityTree, UnityTreeInstance,
 };
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
@@ -77,6 +77,9 @@ pub struct LevelReport {
     /// Renderers left out (procedural geometry).
     pub left_out: usize,
     pub terrains: usize,
+    pub lights: usize,
+    /// Lights whose GameObject is inactive or that are disabled (not read).
+    pub lights_off: u64,
     /// Renderers placed by terrain trees (their prefab's drawn renderers, per tree).
     pub tree_renderers: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
@@ -590,6 +593,35 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             w.insert(p.entity, MaterialVariants(overrides));
         }
     }
+    let (lights, off) = scene.lights(player)?;
+    for l in &lights {
+        let e = w.spawn();
+        w.insert(e, Name(l.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&l.world)));
+        w.insert(
+            e,
+            UnityLight {
+                light: UnityObject::from(&l.light),
+                kind: l.kind,
+                color: l.color,
+                intensity: l.intensity,
+                range: l.range,
+                spot_angle: l.spot_angle,
+                inner_spot_angle: l.inner_spot_angle,
+                shadows: l.shadows,
+                color_temperature: l.color_temperature,
+                bounce_intensity: l.bounce_intensity,
+                light_unit: l.light_unit,
+                lux_at_distance: l.lux_at_distance,
+                area_size: l.area_size,
+                render_mode: l.render_mode,
+                culling_mask: l.culling_mask,
+                cookie: l.cookie.as_ref().map(UnityObject::from),
+            },
+        );
+    }
+    b.report.lights = lights.len();
+    b.report.lights_off = off;
     b.report.renderers = renderers.len();
     b.report.tree_renderers = trees.len();
     b.report.prototypes = prototypes.len();
