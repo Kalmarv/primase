@@ -151,6 +151,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MSB_ORACLE` | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
+| `PRIMASE_FROMSOFT_BLOCKER_ORACLE` | blocker-card reference cases.json; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_SCENE` | reference area skate-scene folder containing placement sources and tables |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |

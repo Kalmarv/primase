@@ -1,4 +1,5 @@
 //! Sekiro area assembly: geometry, raw collision, ledges, lights and markers.
+pub mod blockers;
 pub mod collision;
 pub mod extras;
 pub mod ledges;
@@ -27,132 +28,35 @@ use std::{
     path::Path,
 };
 
-#[derive(Clone, Debug)]
-pub struct Options {
-    /// East/north rectangle in the source map frame. None imports the whole area.
-    pub region: Option<[f32; 4]>,
-    pub region_margin: f32,
-    pub include_far: bool,
-    /// Pin the source floor in metres for a shared scene lift to 100.01 m.
-    /// None emits no floor policy; geometry stays in the source world frame.
-    pub floor: Option<f64>,
+struct AreaGeometry {
+    area: String,
+    archive: Archive,
+    layout: MapLayout,
+    catalog: textures::Catalog,
+    report: Report,
+    prototypes: BTreeMap<String, Prototype>,
+    selected: Vec<(String, String, Transform)>,
+    used: BTreeSet<String>,
+    blocker_cards: blockers::BlockerCards,
 }
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            region: None,
-            region_margin: 30.,
-            include_far: false,
-            floor: None,
-        }
-    }
-}
-impl Options {
-    fn min_height(&self) -> Result<Option<MinHeight>> {
-        self.floor
-            .map(|floor| {
-                if !floor.is_finite() || !(-1e6..=1e6).contains(&floor) {
-                    return Err(invalid(
-                        "Sekiro area",
-                        0,
-                        "floor must be finite and within +/-1000000 metres",
-                    ));
-                }
-                Ok(MinHeight {
-                    height: Some(100.01),
-                    stub_below: Some(250.),
-                    floor: Some(floor),
-                    other: Default::default(),
-                })
-            })
-            .transpose()
-    }
-}
-#[derive(Default, Debug)]
-pub struct Report {
-    pub rigid_skinning: primase_core::pass::PassLog,
-    pub extras: extras::Report,
-    pub collision: collision::Report,
-    pub object_collision: objects::Report,
-    pub prototypes: usize,
-    pub placements: usize,
-    pub materials: usize,
-    pub textures: usize,
-    pub missing_models: Vec<String>,
-    pub skipped_far: usize,
-    pub skipped_empty: usize,
-    pub skipped_outside: usize,
-    pub normal_basis_assumptions: BTreeMap<String, usize>,
-    pub shader_parts: BTreeMap<String, usize>,
-}
-struct Prototype {
-    mesh: Mesh,
-    materials: Vec<materials::Material>,
-    min: [f32; 3],
-    max: [f32; 3],
-}
-fn file(path: String) -> FileRef {
-    FileRef { path, sha256: None }
-}
-fn area_name(area: &str) -> Result<String> {
-    let value = if area.len() == 6 {
-        format!("{area}_00_00")
-    } else {
-        area.to_owned()
-    };
-    if value.len() != 12
-        || !value.bytes().enumerate().all(|(i, b)| match i {
-            0 => b == b'm',
-            3 | 6 | 9 => b == b'_',
-            _ => b.is_ascii_digit(),
-        })
-    {
-        return Err(invalid("Sekiro area", 0, "expected mNN_NN or mNN_NN_NN_NN"));
-    }
-    Ok(value)
-}
-fn point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| t.cols[0][i] * p[0] + t.cols[1][i] * p[1] + t.cols[2][i] * p[2] + t.cols[3][i])
-}
-fn inside(proto: &Prototype, t: &Transform, o: &Options) -> bool {
-    let Some(r) = o.region else { return true };
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for mask in 0..8 {
-        let p = point(
-            t,
-            std::array::from_fn(|i| {
-                if mask & (1 << i) == 0 {
-                    proto.min[i]
-                } else {
-                    proto.max[i]
-                }
-            }),
-        );
-        let p = [p[0], p[1], -p[2]];
-        for i in 0..3 {
-            min[i] = min[i].min(p[i]);
-            max[i] = max[i].max(p[i]);
-        }
-    }
-    max[0] >= r[0] - o.region_margin
-        && min[0] < r[2] + o.region_margin
-        && max[2] >= r[1] - o.region_margin
-        && min[2] < r[3] + o.region_margin
-}
-/// Read an area directly from installed archives into an empty world. The caller
-/// supplies its trusted decompressor; no environment variables or install paths
-/// are guessed. On failure the destination world is unchanged.
-pub fn read_area(
+
+/// Read the same selected geometry as `read_area`, retaining only blocker records.
+/// This inventory does not decode texture pixels or choose a consumer normal basis.
+pub fn read_blocker_cards(
     install: impl AsRef<Path>,
     area: &str,
     decoder: &Decoder<'_>,
     options: &Options,
-    destination: &mut World,
-) -> Result<Report> {
-    if destination.entities().next().is_some() {
-        return Err(invalid("Sekiro area", 0, "destination must be empty"));
-    }
+) -> Result<blockers::BlockerCards> {
+    Ok(select_geometry(install.as_ref(), area, decoder, options)?.blocker_cards)
+}
+
+fn select_geometry(
+    install: &Path,
+    area: &str,
+    decoder: &Decoder<'_>,
+    options: &Options,
+) -> Result<AreaGeometry> {
     if !options.region_margin.is_finite()
         || options.region_margin < 0.
         || options
@@ -161,7 +65,6 @@ pub fn read_area(
     {
         return Err(invalid("Sekiro area", 0, "invalid region"));
     }
-    let min_height = options.min_height()?;
     let area = area_name(area)?;
     let archive = Archive::open(install)?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
@@ -251,12 +154,18 @@ pub fn read_area(
         let mut max = [f32::NEG_INFINITY; 3];
         let mut materials = Vec::new();
         let mut mesh = Mesh::default();
+        let mut cards = Vec::new();
         for part in parts {
             for p in &part.mesh.positions {
                 for i in 0..3 {
                     min[i] = min[i].min(p[i]);
                     max[i] = max[i].max(p[i]);
                 }
+            }
+            if blockers::is_card(&resolved[part.material]) {
+                let material = resolved[part.material].clone();
+                cards.push(blockers::Card::from_part(part, material));
+                continue;
             }
             materials.push(resolved[part.material].clone());
             let tangents = part.tangents;
@@ -281,6 +190,7 @@ pub fn read_area(
         prototypes.insert(
             key,
             Prototype {
+                cards,
                 mesh,
                 materials,
                 min,
@@ -288,10 +198,14 @@ pub fn read_area(
             },
         );
     }
+    let mut blocker_cards = blockers::BlockerCards::default();
     let mut selected = Vec::new();
     let mut used = BTreeSet::new();
     for (key, p) in placements {
-        let Some(proto) = prototypes.get(&key).filter(|p| !p.mesh.primitives.is_empty()) else {
+        let Some(proto) = prototypes
+            .get(&key)
+            .filter(|p| !p.mesh.primitives.is_empty() || !p.cards.is_empty())
+        else {
             report.skipped_empty += 1;
             continue;
         };
@@ -300,9 +214,169 @@ pub fn read_area(
             report.skipped_outside += 1;
             continue;
         }
+        blocker_cards.record(&key, format!("{area}:{}", p.name), &transform, &proto.cards);
+        if proto.mesh.primitives.is_empty() {
+            report.skipped_empty += 1;
+            continue;
+        }
         used.insert(key.clone());
         selected.push((key, p.name.clone(), transform));
     }
+    Ok(AreaGeometry {
+        area,
+        archive,
+        layout,
+        catalog,
+        report,
+        prototypes,
+        selected,
+        used,
+        blocker_cards,
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// East/north rectangle in the source map frame. None imports the whole area.
+    pub region: Option<[f32; 4]>,
+    pub region_margin: f32,
+    pub include_far: bool,
+    /// Pin the source floor in metres for a shared scene lift to 100.01 m.
+    /// None emits no floor policy; geometry stays in the source world frame.
+    pub floor: Option<f64>,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            region: None,
+            region_margin: 30.,
+            include_far: false,
+            floor: None,
+        }
+    }
+}
+impl Options {
+    fn min_height(&self) -> Result<Option<MinHeight>> {
+        self.floor
+            .map(|floor| {
+                if !floor.is_finite() || !(-1e6..=1e6).contains(&floor) {
+                    return Err(invalid(
+                        "Sekiro area",
+                        0,
+                        "floor must be finite and within +/-1000000 metres",
+                    ));
+                }
+                Ok(MinHeight {
+                    height: Some(100.01),
+                    stub_below: Some(250.),
+                    floor: Some(floor),
+                    other: Default::default(),
+                })
+            })
+            .transpose()
+    }
+}
+#[derive(Default, Debug)]
+pub struct Report {
+    pub blocker_meshes: usize,
+    pub blocker_placements: usize,
+    pub blocker_triangles: usize,
+    pub rigid_skinning: primase_core::pass::PassLog,
+    pub extras: extras::Report,
+    pub collision: collision::Report,
+    pub object_collision: objects::Report,
+    pub prototypes: usize,
+    pub placements: usize,
+    pub materials: usize,
+    pub textures: usize,
+    pub missing_models: Vec<String>,
+    pub skipped_far: usize,
+    pub skipped_empty: usize,
+    pub skipped_outside: usize,
+    pub normal_basis_assumptions: BTreeMap<String, usize>,
+    pub shader_parts: BTreeMap<String, usize>,
+}
+struct Prototype {
+    cards: Vec<blockers::Card>,
+    mesh: Mesh,
+    materials: Vec<materials::Material>,
+    min: [f32; 3],
+    max: [f32; 3],
+}
+fn file(path: String) -> FileRef {
+    FileRef { path, sha256: None }
+}
+fn area_name(area: &str) -> Result<String> {
+    let value = if area.len() == 6 {
+        format!("{area}_00_00")
+    } else {
+        area.to_owned()
+    };
+    if value.len() != 12
+        || !value.bytes().enumerate().all(|(i, b)| match i {
+            0 => b == b'm',
+            3 | 6 | 9 => b == b'_',
+            _ => b.is_ascii_digit(),
+        })
+    {
+        return Err(invalid("Sekiro area", 0, "expected mNN_NN or mNN_NN_NN_NN"));
+    }
+    Ok(value)
+}
+fn point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| t.cols[0][i] * p[0] + t.cols[1][i] * p[1] + t.cols[2][i] * p[2] + t.cols[3][i])
+}
+fn inside(proto: &Prototype, t: &Transform, o: &Options) -> bool {
+    let Some(r) = o.region else { return true };
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for mask in 0..8 {
+        let p = point(
+            t,
+            std::array::from_fn(|i| {
+                if mask & (1 << i) == 0 {
+                    proto.min[i]
+                } else {
+                    proto.max[i]
+                }
+            }),
+        );
+        let p = [p[0], p[1], -p[2]];
+        for i in 0..3 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    max[0] >= r[0] - o.region_margin
+        && min[0] < r[2] + o.region_margin
+        && max[2] >= r[1] - o.region_margin
+        && min[2] < r[3] + o.region_margin
+}
+/// Read an area directly from installed archives into an empty world. The caller
+/// supplies its trusted decompressor; no environment variables or install paths
+/// are guessed. On failure the destination world is unchanged.
+pub fn read_area(
+    install: impl AsRef<Path>,
+    area: &str,
+    decoder: &Decoder<'_>,
+    options: &Options,
+    destination: &mut World,
+) -> Result<Report> {
+    if destination.entities().next().is_some() {
+        return Err(invalid("Sekiro area", 0, "destination must be empty"));
+    }
+    let min_height = options.min_height()?;
+    let AreaGeometry {
+        area,
+        archive,
+        layout,
+        catalog,
+        mut report,
+        mut prototypes,
+        selected,
+        used,
+        blocker_cards,
+    } = select_geometry(install.as_ref(), area, decoder, options)?;
     let mut wanted = BTreeSet::new();
     let mut roles = BTreeSet::new();
     for key in &used {
@@ -326,6 +400,10 @@ pub fn read_area(
     }
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let mut world = World::default();
+    report.blocker_meshes = blocker_cards.meshes();
+    report.blocker_placements = blocker_cards.placements.len();
+    report.blocker_triangles = blocker_cards.triangles();
+    world.insert_resource(blocker_cards);
     let mut texture_entities = BTreeMap::new();
     for (name, normal) in roles {
         let mut texture = primase_dds::read(&payloads[&name]).map_err(|e| invalid("Sekiro DDS", 0, e))?;
@@ -433,11 +511,27 @@ pub fn read_area(
     report.collision = collision::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
+    let cards = world
+        .resource::<blockers::BlockerCards>()
+        .expect("recorded cards");
+    let extension = primase_core::json::to_value(cards).map_err(|e| invalid("blocker cards", 0, e))?;
+    let other = serde_json::Map::from_iter([(
+        "extensions".into(),
+        serde_json::json!({
+            "sekiro": { "blocker_cards": {
+                "rule": blockers::RULE, "drawn": false,
+                "placement_count": report.blocker_placements,
+                "triangles": report.blocker_triangles,
+                "records": extension
+            }}
+        }),
+    )]);
     world.insert_resource(SkateScene {
         name: format!("sekiro_{area}"),
         generator: Some("primase".into()),
         region: options.region,
         min_height,
+        other,
         placements: Some(TableRef::single("tables/placements.bin")),
         lights: Some(TableRef::single("tables/lights.bin")),
         grind_curves: Some(TableRef::single("tables/grind.bin")),

@@ -332,3 +332,25 @@ The full-castle gate covers 749 placed prototypes, with 8,660,257 stored vertice
 positions agree within 0.2 mm and inverse-transpose normal components within
 2e-5 scaled by max(1, magnitude). Placed collision is compared bidirectionally
 within 0.2 mm with surface IDs enforced, independent of convex triangulation.
+
+### Interior blocker cards
+
+The area reader excludes only meshes whose non-skipped resolved material uses a
+`GXFlver_Col*` shader and an exact `m[0-9][0-9]_black_a` main albedo. Other meshes
+in the same prototype remain renderable. Ordinary unlit ground fills and missing
+albedos do not match. This is an explicit export policy: the source game draws
+these black interior blockers, but exported worlds omit them from render geometry.
+Their local geometry, material, original FLVER mesh index and placed transforms
+remain in the `fromsoft.blocker_cards` resource. Scene output also records them in
+`extensions.sekiro.blocker_cards`, with the rule, `drawn: false`, placement and
+triangle counts, and `records`. They never become collision geometry.
+
+`PRIMASE_FROMSOFT_BLOCKER_ORACLE` points to a directory with `cases.json`, an array
+of objects containing `name`, `area`, `region` (null or source rectangle),
+`placements` (source labels), `prototypes` (identity strings), `mesh_identities`
+(array of `[prototype, original_flver_mesh_index]`), `meshes` and `triangles`.
+The gate checks the shared geometry-selection stage used by the area reader.
+Cases with `assemble: true` also run full area assembly, compare its retained
+records and verify no matching material is attached to render geometry. This
+allows inventories without choosing a normal basis for unrelated shaders. Exported part indices must be mapped
+back to original FLVER mesh indices when layer splitting changes them.
