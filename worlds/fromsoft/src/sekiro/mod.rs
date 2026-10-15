@@ -20,7 +20,7 @@ use primase_core::{
 };
 pub use primase_skate_scene::prepare_scene_assets;
 use primase_skate_scene::{
-    FileRef, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
+    FileRef, MinHeight, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -33,6 +33,9 @@ pub struct Options {
     pub region: Option<[f32; 4]>,
     pub region_margin: f32,
     pub include_far: bool,
+    /// Pin the source floor in metres for a shared scene lift to 100.01 m.
+    /// None emits no floor policy; geometry stays in the source world frame.
+    pub floor: Option<f64>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -40,7 +43,29 @@ impl Default for Options {
             region: None,
             region_margin: 30.,
             include_far: false,
+            floor: None,
         }
+    }
+}
+impl Options {
+    fn min_height(&self) -> Result<Option<MinHeight>> {
+        self.floor
+            .map(|floor| {
+                if !floor.is_finite() || !(-1e6..=1e6).contains(&floor) {
+                    return Err(invalid(
+                        "Sekiro area",
+                        0,
+                        "floor must be finite and within +/-1000000 metres",
+                    ));
+                }
+                Ok(MinHeight {
+                    height: Some(100.01),
+                    stub_below: Some(250.),
+                    floor: Some(floor),
+                    other: Default::default(),
+                })
+            })
+            .transpose()
     }
 }
 #[derive(Default, Debug)]
@@ -136,6 +161,7 @@ pub fn read_area(
     {
         return Err(invalid("Sekiro area", 0, "invalid region"));
     }
+    let min_height = options.min_height()?;
     let area = area_name(area)?;
     let archive = Archive::open(install)?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
@@ -411,6 +437,7 @@ pub fn read_area(
         name: format!("sekiro_{area}"),
         generator: Some("primase".into()),
         region: options.region,
+        min_height,
         placements: Some(TableRef::single("tables/placements.bin")),
         lights: Some(TableRef::single("tables/lights.bin")),
         grind_curves: Some(TableRef::single("tables/grind.bin")),
@@ -421,4 +448,33 @@ pub fn read_area(
     });
     *destination = world;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+    #[test]
+    fn floor_policy_preserves_the_shared_height_without_rounding() {
+        assert!(Options::default().min_height().unwrap().is_none());
+        let policy = Options {
+            floor: Some(-81.60212345),
+            ..Options::default()
+        }
+        .min_height()
+        .unwrap()
+        .unwrap();
+        assert_eq!(policy.floor, Some(-81.60212345));
+        assert_eq!(policy.height, Some(100.01));
+        assert_eq!(policy.stub_below, Some(250.));
+        for floor in [f64::NAN, f64::INFINITY, -1000001., 1000001.] {
+            assert!(
+                Options {
+                    floor: Some(floor),
+                    ..Options::default()
+                }
+                .min_height()
+                .is_err()
+            );
+        }
+    }
 }

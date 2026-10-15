@@ -45,6 +45,7 @@ fn installed_area_scene() -> Result<()> {
         &decoder,
         &sekiro::Options {
             region: Some(region),
+            floor: want["min_height"]["floor"].as_f64(),
             ..Default::default()
         },
         &mut world,
@@ -287,7 +288,7 @@ fn written_manifest_values() -> Result<()> {
             .keys()
             .collect::<Vec<_>>()
     );
-    for field in ["format", "version", "placement_sources"] {
+    for field in ["format", "version", "placement_sources", "min_height"] {
         assert_eq!(actual[field], expected[field], "{field}");
     }
     let ar: [f32; 4] = serde_json::from_value(actual["region"].clone())?;
