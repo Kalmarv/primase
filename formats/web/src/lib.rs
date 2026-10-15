@@ -4,6 +4,7 @@ use primase_core::{
     World,
 };
 use serde::Serialize;
+mod instancing;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -23,6 +24,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub struct Options {
     pub tile_size: f64,
+    pub gpu_instancing: bool,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
     pub split_by_tile: BTreeSet<Entity>,
     pub base_dir: PathBuf,
@@ -31,6 +33,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             tile_size: 200.,
+            gpu_instancing: true,
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
         }
@@ -45,6 +48,7 @@ pub struct TileInfo {
     pub max: [f64; 3],
     pub triangles: u64,
     pub placements: u64,
+    pub instanced_placements: u64,
     pub bytes: u64,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -313,6 +317,14 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 },
             );
             w.insert(p.entity, p.transform);
+            w.insert_opaque(
+                p.entity,
+                "web.placement_key",
+                primase_core::Opaque {
+                    version: 1,
+                    data: primase_core::OpaqueData::Json(serde_json::json!(p.entity.index())),
+                },
+            );
         }
         if !min.iter().chain(&max).all(|v| v.is_finite()) {
             return Err(Error::Invalid("tile has no finite geometry".into()));
@@ -331,6 +343,8 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 report.textures_skipped
             )));
         }
+        let transforms = group.iter().map(|p| (p.entity.index(), p.transform)).collect();
+        let (bytes, instanced_placements) = instancing::apply(bytes, &transforms, options.gpu_instancing)?;
         let file = format!("tile_{col}_{row}.glb");
         set.index.tiles.push(TileInfo {
             col,
@@ -340,6 +354,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             max,
             triangles,
             placements: group.len() as u64,
+            instanced_placements,
             bytes: bytes.len() as u64,
         });
         set.files.insert(file, bytes);

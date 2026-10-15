@@ -22,3 +22,10 @@ validated before filesystem writes; unrelated destination files are retained.
 `cargo test -p primase-web` checks deterministic bytes, negative boundaries,
 triangle-centre partitioning, bounds and invalid inputs. Set
 `PRIMASE_GLTF_VALIDATOR` for the optional official validator gate.
+
+GPU instancing is enabled by default (`Options::gpu_instancing`). Compatible
+positive TRS placements sharing a resolved mesh become `EXT_mesh_gpu_instancing`
+nodes. Mirrored/sheared placements stay plain nodes, as do matrices whose
+normalized basis cannot be reconstructed within 1e-6 per element. Instance TRS
+uses f32 accessors; source names/extras survive in `web.instances` metadata.
+`instanced_placements` reports how many placements were packed in each tile.

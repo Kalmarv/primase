@@ -32,7 +32,11 @@ fn pivot_tiles_negative_coordinates_and_determinism() {
         t.cols[3][0] = x;
         w.insert(e, t);
     }
-    let a = write(&w, &Options::default()).unwrap();
+    let options = Options {
+        gpu_instancing: false,
+        ..Options::default()
+    };
+    let a = write(&w, &options).unwrap();
     assert_eq!(
         a.index
             .tiles
@@ -41,7 +45,7 @@ fn pivot_tiles_negative_coordinates_and_determinism() {
             .collect::<Vec<_>>(),
         vec![(-1, 0, 1, 1), (0, 0, 2, 2), (1, 0, 1, 1)]
     );
-    assert_eq!(a.files, write(&w, &Options::default()).unwrap().files);
+    assert_eq!(a.files, write(&w, &options).unwrap().files);
     for t in &a.index.tiles {
         let g = primase_gltf::Gltf::from_glb(&a.files[&t.file]).unwrap();
         assert_eq!(g.mesh_count(), 1);
@@ -134,4 +138,112 @@ fn validator_and_index_file() {
     let mut invalid = set.clone();
     invalid.index.tiles[0].file = "../escape.glb".into();
     assert!(invalid.write_to(&dir).is_err());
+}
+
+#[test]
+fn instancing_trs_and_plain_mirrors_shears() {
+    let mut w = World::new();
+    let p = w.spawn();
+    w.insert(p, mesh());
+    let mut transforms = Vec::new();
+    for i in 0..5 {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: p,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [10. + i as f32, 2., 10.];
+        if i == 2 {
+            t.cols[0] = [0., 2., 0.];
+            t.cols[1] = [-3., 0., 0.];
+            t.cols[2] = [0., 0., 4.];
+        }
+        if i == 3 {
+            t.cols[0][0] = -1.;
+        }
+        if i == 4 {
+            t.cols[1][0] = 0.5;
+        }
+        w.insert(e, t);
+        transforms.push(t);
+    }
+    let out = write(&w, &Options::default()).unwrap();
+    let tile = &out.index.tiles[0];
+    assert_eq!(tile.placements, 5);
+    assert_eq!(tile.instanced_placements, 3);
+    let bytes = &out.files[&tile.file];
+    assert_eq!(*bytes, write(&w, &Options::default()).unwrap().files[&tile.file]);
+    let chunks = primase_gltf::glb::parse(bytes).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    let nodes = doc["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 3);
+    let node = nodes
+        .iter()
+        .find(|n| n["extensions"]["EXT_mesh_gpu_instancing"].is_object())
+        .unwrap();
+    let attrs = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+    let read = |name: &str, components: usize| {
+        let a = &doc["accessors"][attrs[name].as_u64().unwrap() as usize];
+        assert_eq!(a["count"], 3);
+        let view = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+        let off = view["byteOffset"].as_u64().unwrap() as usize;
+        chunks.bin.unwrap()[off..off + 3 * components * 4]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect::<Vec<_>>()
+    };
+    let translation = read("TRANSLATION", 3);
+    let rotation = read("ROTATION", 4);
+    let scale = read("SCALE", 3);
+    for i in 0..3 {
+        assert_eq!(&translation[i * 3..i * 3 + 3], &transforms[i].cols[3]);
+        let q = &rotation[i * 4..i * 4 + 4];
+        let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+        let cols = [
+            [
+                1. - 2. * (y * y + z * z),
+                2. * (x * y + z * w),
+                2. * (x * z - y * w),
+            ],
+            [
+                2. * (x * y - z * w),
+                1. - 2. * (x * x + z * z),
+                2. * (y * z + x * w),
+            ],
+            [
+                2. * (x * z + y * w),
+                2. * (y * z - x * w),
+                1. - 2. * (x * x + y * y),
+            ],
+        ];
+        for (c, column) in cols.iter().enumerate() {
+            for (r, value) in column.iter().enumerate() {
+                assert!((*value * scale[i * 3 + c] - transforms[i].cols[c][r]).abs() < 1e-5);
+            }
+        }
+    }
+    assert_eq!(
+        node["extras"]["primase"]["web.instances"]["value"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    if let Some(validator) = primase_core::gate::real_data("PRIMASE_GLTF_VALIDATOR") {
+        let path = std::env::temp_dir().join(format!("primase-web-instance-{}.glb", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let output = std::process::Command::new(validator)
+            .arg("-o")
+            .arg(path)
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["issues"]["numErrors"], 0, "{report}");
+    }
 }
