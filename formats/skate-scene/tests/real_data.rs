@@ -5,8 +5,9 @@
 //! - Agreement: the reference accepts a folder exactly when our reader does; when both refuse, the causes are
 //!   compared as text (a different cause is reported, not failed).
 //! - For accepted folders: every binary table written back byte-identical; the manifest equal as parsed JSON
-//!   (numbers by value, floats by f32 bit pattern where the text differs, counted); every referenced file copied
-//!   byte-identical; the reference validator accepts the output with the same summary and the same warnings.
+//!   (`primase_core::gate::compare_json`: integers exactly, other numbers as f64 or else as f32, counted); every
+//!   referenced file copied byte-identical; the reference validator accepts the output with the same summary and the
+//!   same warnings.
 //!
 //! Counts: agreement, manifests and re-validation per folder; tables and referenced files per file. An input folder
 //! whose scene.json or referenced files change (size or modification time) while it is checked is reported as
@@ -20,9 +21,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use primase_core::World;
-use primase_core::gate::{GateReport, Tolerance, real_data};
-use primase_skate_scene::json::{self, J};
+use primase_core::gate::{GateReport, Tolerance, compare_json, real_data};
 use primase_skate_scene::{self as scene};
+use serde_json::Value;
 
 fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {
     if root.join("scene.json").is_file() {
@@ -76,12 +77,12 @@ fn validate(validator: &Path, dir: &Path) -> Result<(String, Vec<String>), Strin
 }
 
 /// Every file the manifest references, split into tables (written by us) and copied files.
-fn referenced(m: &J) -> (Vec<String>, Vec<String>) {
-    fn refs(v: &J, out: &mut Vec<String>) {
+fn referenced(m: &Value) -> (Vec<String>, Vec<String>) {
+    fn refs(v: &Value, out: &mut Vec<String>) {
         match v {
-            J::Str(s) => out.push(s.clone()),
-            J::Arr(items) => items.iter().for_each(|x| refs(x, out)),
-            J::Obj(_) => {
+            Value::String(s) => out.push(s.clone()),
+            Value::Array(items) => items.iter().for_each(|x| refs(x, out)),
+            Value::Object(_) => {
                 if let Some(f) = v.get("file") {
                     refs(f, out)
                 }
@@ -96,7 +97,7 @@ fn referenced(m: &J) -> (Vec<String>, Vec<String>) {
             refs(v, &mut tables);
         }
     }
-    if let Some(J::Arr(ps)) = m.get("prototypes") {
+    if let Some(Value::Array(ps)) = m.get("prototypes") {
         for p in ps {
             if let Some(c) = p.get("collision") {
                 refs(c, &mut tables);
@@ -106,7 +107,7 @@ fn referenced(m: &J) -> (Vec<String>, Vec<String>) {
             }
         }
     }
-    if let Some(J::Obj(ts)) = m.get("textures") {
+    if let Some(Value::Object(ts)) = m.get("textures") {
         for (_, t) in ts {
             refs(t, &mut files);
         }
@@ -160,8 +161,8 @@ fn norm_cause(msg: &str, dir: &Path) -> String {
     m
 }
 
-fn manifest(dir: &Path) -> J {
-    json::parse(&std::fs::read(dir.join("scene.json")).expect("scene.json")).expect("parse")
+fn manifest(dir: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(dir.join("scene.json")).expect("scene.json")).expect("parse")
 }
 
 /// Size and modification time of scene.json and every file it references (None: missing), to notice an input
@@ -178,7 +179,7 @@ fn snapshot(dir: &Path) -> Snapshot {
     snap.insert("scene.json".into(), stat("scene.json"));
     let parsed = std::fs::read(dir.join("scene.json"))
         .ok()
-        .and_then(|b| json::parse(&b).ok());
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     if let Some(m) = parsed {
         let (t, f) = referenced(&m);
         for rel in t.iter().chain(&f) {
@@ -197,7 +198,8 @@ struct Gates {
     revalid: GateReport,
     notes: Vec<String>,
     tolerated: BTreeMap<String, u64>,
-    f64_equal: u64,
+    numbers: u64,
+    integer_and_float: u64,
     f32_equal: u64,
     /// Folders that passed every check that applied to them.
     folders_passed: u64,
@@ -219,7 +221,8 @@ impl Gates {
             ),
             notes: Vec::new(),
             tolerated: BTreeMap::new(),
-            f64_equal: 0,
+            numbers: 0,
+            integer_and_float: 0,
             f32_equal: 0,
             folders_passed: 0,
         }
@@ -250,7 +253,8 @@ impl Gates {
         for (k, c) in o.tolerated {
             *self.tolerated.entry(k).or_default() += c;
         }
-        self.f64_equal += o.f64_equal;
+        self.numbers += o.numbers;
+        self.integer_and_float += o.integer_and_float;
         self.f32_equal += o.f32_equal;
         self.folders_passed += o.folders_passed;
     }
@@ -299,8 +303,9 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
         return (g, false);
     }
     let (min, mout) = (manifest(dir), manifest(out));
-    let c = json::compare(&min, &mout);
-    g.f64_equal = c.f64_equal;
+    let c = compare_json(&min, &mout, 0);
+    g.numbers = c.numbers;
+    g.integer_and_float = c.integer_and_float;
     g.f32_equal = c.f32_equal;
     if c.differences.is_empty() {
         g.manifests.record(&item, 0.0);
@@ -402,8 +407,8 @@ fn scene_folders_round_trip() {
         println!("{g}");
     }
     println!(
-        "manifest numbers equal by value (text differs): {}; equal only as f32: {}",
-        total.f64_equal, total.f32_equal
+        "manifest numbers: {} compared; {} equal with one side an integer and the other a float; {} equal only as f32",
+        total.numbers, total.integer_and_float, total.f32_equal
     );
     println!("tolerated: {:?}", total.tolerated);
     println!(
@@ -424,4 +429,134 @@ fn scene_folders_round_trip() {
         "{} input folders changed during the run (PRIMASE_ALLOW_LIVE=1 reports and continues)",
         changed.len()
     );
+}
+
+/// A JSON document walked only to refuse an object with a key twice (serde_json's `Value` keeps the last one).
+struct UniqueKeys;
+
+impl<'de> serde::Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(UniqueKeys)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeys {
+    type Value = UniqueKeys;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_str<E>(self, _: &str) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_unit<E>(self) -> Result<UniqueKeys, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut a: A) -> Result<UniqueKeys, A::Error> {
+        while a.next_element::<UniqueKeys>()?.is_some() {}
+        Ok(UniqueKeys)
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut a: A) -> Result<UniqueKeys, A::Error> {
+        let mut seen = std::collections::HashSet::new();
+        while let Some(k) = a.next_key::<String>()? {
+            if !seen.insert(k.clone()) {
+                return Err(serde::de::Error::custom(format!("key {k:?} twice in one object")));
+            }
+            a.next_value::<UniqueKeys>()?;
+        }
+        Ok(UniqueKeys)
+    }
+}
+
+/// The text of every number in a JSON document that parses.
+fn number_texts(b: &[u8]) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = i;
+                while i < b.len() && matches!(b[i], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
+                    i += 1;
+                }
+                out.push(std::str::from_utf8(&b[start..i]).expect("ASCII"));
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// Census behind reading manifests with plain serde_json: every scene.json under the roots is strict JSON (serde_json
+/// refuses a byte-order mark, comments, NaN and infinity), no object has a key twice, and every number gives the
+/// same f32 read through f64 (what the reader does) as read straight from its text. A failure means the real data
+/// now needs more than plain serde_json.
+#[test]
+fn manifests_need_only_plain_json() {
+    let roots: Vec<PathBuf> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
+        .iter()
+        .filter_map(|v| real_data(v))
+        .collect();
+    if roots.is_empty() {
+        return;
+    }
+    let mut folders = Vec::new();
+    for r in &roots {
+        scene_folders(r, &mut folders);
+    }
+    let mut gate = GateReport::new(
+        "manifests: strict JSON, unique keys, every number the same f32 through f64",
+        Tolerance::Exact,
+    );
+    let mut numbers = 0u64;
+    for dir in &folders {
+        let path = dir.join("scene.json");
+        let item = path.display().to_string();
+        let bytes = std::fs::read(&path).expect("scene.json");
+        if let Err(e) = serde_json::from_slice::<UniqueKeys>(&bytes) {
+            gate.fail(&item, e.to_string());
+            continue;
+        }
+        let differ: Vec<&str> = number_texts(&bytes)
+            .into_iter()
+            .inspect(|_| numbers += 1)
+            .filter(|t| {
+                let direct: f32 = t.parse().expect("a JSON number");
+                let via = t.parse::<f64>().expect("a JSON number") as f32;
+                direct.to_bits() != via.to_bits()
+            })
+            .collect();
+        if differ.is_empty() {
+            gate.record(&item, 0.0);
+        } else {
+            gate.fail(
+                &item,
+                format!(
+                    "{} numbers round differently through f64: {:?}",
+                    differ.len(),
+                    &differ[..differ.len().min(5)]
+                ),
+            );
+        }
+    }
+    println!("{gate}\n{numbers} numbers");
+    gate.assert_passed();
 }

@@ -5,10 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
+use primase_core::gate::compare_json;
 use primase_core::{Instance, Source, Transform, World};
-use primase_skate_scene::json::{self, J};
 use primase_skate_scene::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
 use primase_skate_scene::{self as scene, SkateLight, SkatePrototype, SkateScene};
+use serde_json::{Value, json};
 
 /// A fresh folder under the target directory's tmp.
 fn tmp(name: &str) -> PathBuf {
@@ -298,8 +299,8 @@ fn read_err(dir: &Path) -> String {
     }
 }
 
-fn manifest(dir: &Path) -> J {
-    json::parse(&std::fs::read(dir.join("scene.json")).unwrap()).unwrap()
+fn manifest(dir: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(dir.join("scene.json")).unwrap()).unwrap()
 }
 
 fn same_tree(a: &Path, b: &Path, rels: &[&str]) {
@@ -337,7 +338,7 @@ fn round_trip_is_exact() {
     std::fs::remove_dir(&out).unwrap();
     scene::write(&w, &out).unwrap();
     same_tree(&src, &out, ALL_FILES);
-    let c = json::compare(&manifest(&src), &manifest(&out));
+    let c = compare_json(&manifest(&src), &manifest(&out), 0);
     assert!(c.differences.is_empty(), "{:?}", c.differences);
     // the region's 0.30000001192092896 comes back as its shortest f32 form, 0.3
     assert_eq!(c.f32_equal, 1);
@@ -409,14 +410,8 @@ fn edits_are_written() {
     assert_eq!(w2.get::<Transform>(pe2).unwrap().cols[3], [1., 2., 3.]);
     let m = manifest(&out);
     // new strings appended, the old order kept
-    assert_eq!(
-        m.get("light_groups"),
-        Some(&J::Arr(vec![J::str(""), J::str("interior"), J::str("street")]))
-    );
-    assert_eq!(
-        m.get("light_sources"),
-        Some(&J::Arr(vec![J::str("l0"), J::str("new_light")]))
-    );
+    assert_eq!(m.get("light_groups"), Some(&json!(["", "interior", "street"])));
+    assert_eq!(m.get("light_sources"), Some(&json!(["l0", "new_light"])));
     let (le2, _) = w2.iter::<SkateLight>().next().unwrap();
     assert_eq!(w2.get::<SkateLight>(le2).unwrap().group, "street");
 }
@@ -488,7 +483,7 @@ fn sha256_is_checked_and_rewritten() {
     let got = manifest(&out);
     assert_eq!(
         got.get("textures").unwrap().get("wall_n").unwrap().get("sha256"),
-        Some(&J::str(&h))
+        Some(&json!(h))
     );
     let bad = fixture_with("sha_bad", &m.replace(&h.to_uppercase(), &"0".repeat(64)), |_| {});
     assert!(read_err(&bad).contains("sha256"), "{}", read_err(&bad));
@@ -673,7 +668,7 @@ fn invalid_input_fails_with_its_reason() {
             "json",
             MANIFEST.replace(r#""light_prefix": "fx_","#, r#""light_prefix": "fx_",,"#),
             Box::new(|_| {}),
-            "scene.json: line 6, column 25: expected a key",
+            "scene.json: key must be a string at line 6 column 25",
         ),
         (
             "streaming",

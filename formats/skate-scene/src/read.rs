@@ -13,9 +13,9 @@ use primase_core::{
 };
 
 use crate::components::*;
-use crate::json::{self, J};
 use crate::tables::{self, flags};
 use crate::{Error, Result};
+use serde_json::{Map, Value};
 
 /// What the reader noticed but did not refuse.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -49,40 +49,52 @@ pub fn fnv32(s: &str) -> u32 {
     h
 }
 
+/// What a JSON value is, for messages.
+fn kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "a bool",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
 /// The manifest object of one item, handing out its keys and keeping the rest as `other`.
 struct Obj<'a> {
     what: String,
-    kv: &'a [(String, J)],
-    used: Vec<bool>,
+    map: &'a Map<String, Value>,
+    used: HashSet<&'a str>,
 }
 
 impl<'a> Obj<'a> {
-    fn new(v: &'a J, what: impl Into<String>) -> Result<Obj<'a>> {
+    fn new(v: &'a Value, what: impl Into<String>) -> Result<Obj<'a>> {
         let what = what.into();
         match v {
-            J::Obj(kv) => Ok(Obj {
+            Value::Object(map) => Ok(Obj {
                 what,
-                used: vec![false; kv.len()],
-                kv,
+                map,
+                used: HashSet::new(),
             }),
             other => Err(bad(format!(
                 "{what}: {} where an object was expected",
-                other.kind()
+                kind(other)
             ))),
         }
     }
 
     /// The value of a key, null included.
-    fn raw(&mut self, k: &str) -> Option<&'a J> {
-        let i = self.kv.iter().position(|(x, _)| x == k)?;
-        self.used[i] = true;
-        Some(&self.kv[i].1)
+    fn raw(&mut self, k: &str) -> Option<&'a Value> {
+        let (key, v) = self.map.get_key_value(k)?;
+        self.used.insert(key.as_str());
+        Some(v)
     }
 
     /// The value of a key; `null` counts as absent (and is reported).
-    fn take(&mut self, k: &str, rep: &mut ReadReport) -> Option<&'a J> {
+    fn take(&mut self, k: &str, rep: &mut ReadReport) -> Option<&'a Value> {
         match self.raw(k) {
-            Some(J::Null) => {
+            Some(Value::Null) => {
                 rep.tolerate("explicit null for an optional key (read and written as absent)");
                 None
             }
@@ -97,27 +109,24 @@ impl<'a> Obj<'a> {
     fn str(&mut self, k: &str, rep: &mut ReadReport) -> Result<Option<String>> {
         match self.take(k, rep) {
             None => Ok(None),
-            Some(J::Str(s)) => Ok(Some(s.clone())),
-            Some(v) => Err(self.err(format!("'{k}' is {} where a string was expected", v.kind()))),
+            Some(Value::String(s)) => Ok(Some(s.clone())),
+            Some(v) => Err(self.err(format!("'{k}' is {} where a string was expected", kind(v)))),
         }
     }
 
     fn bool(&mut self, k: &str, rep: &mut ReadReport) -> Result<Option<bool>> {
         match self.take(k, rep) {
             None => Ok(None),
-            Some(J::Bool(b)) => Ok(Some(*b)),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
             Some(_) => Err(self.err(format!("'{k}' is not true or false"))),
         }
     }
 
-    /// A number read as f64 (`Num` in the reference reader): absent or null is `None`, anything else must be finite.
+    /// A number read as f64: absent or null is `None`, anything else must be a number.
     fn f64(&mut self, k: &str, rep: &mut ReadReport) -> Result<Option<f64>> {
         match self.take(k, rep) {
             None => Ok(None),
-            Some(J::Num(t)) => match t.parse::<f64>() {
-                Ok(x) if x.is_finite() => Ok(Some(x)),
-                _ => Err(self.err(format!("'{k}': not a finite number"))),
-            },
+            Some(Value::Number(n)) => Ok(Some(n.as_f64().expect("a JSON number has an f64 value"))),
             Some(_) => Err(self.err(format!("'{k}': not a finite number"))),
         }
     }
@@ -134,24 +143,21 @@ impl<'a> Obj<'a> {
     }
 
     fn other(&self) -> Result<Other> {
-        let mut m = Other::new();
-        for ((k, v), used) in self.kv.iter().zip(&self.used) {
-            if !used {
-                m.insert(
-                    k.clone(),
-                    json::to_value(v).map_err(|e| self.err(format!("'{k}': {e}")))?,
-                );
-            }
-        }
-        Ok(m)
+        Ok(self
+            .map
+            .iter()
+            .filter(|(k, _)| !self.used.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
     }
 }
 
-/// An f32 as the reference reader takes it (straight from the decimal text), finite.
-fn f32_of(v: &J, what: &str) -> Result<f32> {
+/// An f32: the number's f64 value rounded to f32, finite. (The nearest f32 of the decimal text in every case the
+/// real-data census has seen: see the census test.)
+fn f32_of(v: &Value, what: &str) -> Result<f32> {
     match v {
-        J::Num(t) => match t.parse::<f32>() {
-            Ok(x) if x.is_finite() => Ok(x),
+        Value::Number(n) => match n.as_f64().map(|x| x as f32) {
+            Some(x) if x.is_finite() => Ok(x),
             _ => Err(bad(format!("{what}: not finite"))),
         },
         _ => Err(bad(format!("{what}: not a number"))),
@@ -159,9 +165,9 @@ fn f32_of(v: &J, what: &str) -> Result<f32> {
 }
 
 /// `n` f32s.
-fn floats<const N: usize>(v: &J, what: &str) -> Result<[f32; N]> {
+fn floats<const N: usize>(v: &Value, what: &str) -> Result<[f32; N]> {
     match v {
-        J::Arr(items) if items.len() == N => {
+        Value::Array(items) if items.len() == N => {
             let mut out = [0.0; N];
             for (o, x) in out.iter_mut().zip(items) {
                 *o = f32_of(x, what)?;
@@ -172,19 +178,20 @@ fn floats<const N: usize>(v: &J, what: &str) -> Result<[f32; N]> {
     }
 }
 
-fn int_of<T: std::str::FromStr>(v: &J, what: &str) -> Result<T> {
+/// An integer (written without a fraction or exponent) that fits `T`.
+fn int_of<T: TryFrom<i64> + TryFrom<u64>>(v: &Value, what: &str) -> Result<T> {
+    let range = |n: &serde_json::Number| bad(format!("{what}: {n} out of range"));
     match v {
-        J::Num(t) if json::is_integer_text(t) => {
-            t.parse().map_err(|_| bad(format!("{what}: {t} out of range")))
-        }
+        Value::Number(n) if n.is_i64() => T::try_from(n.as_i64().expect("an i64")).map_err(|_| range(n)),
+        Value::Number(n) if n.is_u64() => T::try_from(n.as_u64().expect("a u64")).map_err(|_| range(n)),
         _ => Err(bad(format!("{what}: not an integer"))),
     }
 }
 
-fn bytes_of<const N: usize>(v: &J, what: &str, key: &str) -> Result<[u8; N]> {
+fn bytes_of<const N: usize>(v: &Value, what: &str, key: &str) -> Result<[u8; N]> {
     let err = || bad(format!("{what}: '{key}' is not {N} integers 0-255"));
     match v {
-        J::Arr(items) if items.len() == N => {
+        Value::Array(items) if items.len() == N => {
             let mut out = [0u8; N];
             for (o, x) in out.iter_mut().zip(items) {
                 *o = int_of::<u8>(x, what).map_err(|_| err())?;
@@ -195,27 +202,27 @@ fn bytes_of<const N: usize>(v: &J, what: &str, key: &str) -> Result<[u8; N]> {
     }
 }
 
-fn str_list(v: &J, what: &str, rep: &mut ReadReport) -> Result<Vec<String>> {
+fn str_list(v: &Value, what: &str, rep: &mut ReadReport) -> Result<Vec<String>> {
     match v {
-        J::Arr(items) => items
+        Value::Array(items) => items
             .iter()
             .map(|x| match x {
-                J::Str(s) => Ok(s.clone()),
-                J::Null => {
+                Value::String(s) => Ok(s.clone()),
+                Value::Null => {
                     rep.tolerate("null in a string list (read as \"\")");
                     Ok(String::new())
                 }
-                _ => Err(bad(format!("{what}: {} in a list of strings", x.kind()))),
+                _ => Err(bad(format!("{what}: {} in a list of strings", kind(x)))),
             })
             .collect(),
         _ => Err(bad(format!("{what}: not a list"))),
     }
 }
 
-fn array<'a>(v: &'a J, what: &str) -> Result<&'a [J]> {
+fn array<'a>(v: &'a Value, what: &str) -> Result<&'a [Value]> {
     match v {
-        J::Arr(items) => Ok(items),
-        other => Err(bad(format!("{what}: {} where a list was expected", other.kind()))),
+        Value::Array(items) => Ok(items),
+        other => Err(bad(format!("{what}: {} where a list was expected", kind(other)))),
     }
 }
 
@@ -278,18 +285,18 @@ impl Files<'_> {
     }
 
     /// A file reference: a string, `{"file": "...", "sha256"?}`, or the same object nested as `"file"`.
-    fn file_ref(&self, v: &J, what: &str, rep: &mut ReadReport) -> Result<(FileRef, PathBuf)> {
-        if let Some(n @ J::Obj(_)) = v.get("file") {
+    fn file_ref(&self, v: &Value, what: &str, rep: &mut ReadReport) -> Result<(FileRef, PathBuf)> {
+        if let Some(n @ Value::Object(_)) = v.get("file") {
             rep.tolerate("nested file reference object (written flat)");
             return self.file_ref(n, what, rep);
         }
         let (rel, sha) = match v {
-            J::Str(s) => (s.clone(), None),
-            J::Obj(_) => match v.get("file") {
-                Some(J::Str(s)) => {
+            Value::String(s) => (s.clone(), None),
+            Value::Object(_) => match v.get("file") {
+                Some(Value::String(s)) => {
                     let sha = match v.get("sha256") {
-                        None | Some(J::Null) => None,
-                        Some(J::Str(h)) => Some(h.clone()),
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(h)) => Some(h.clone()),
                         Some(_) => return Err(bad(format!("{what}: sha256 is not a string"))),
                     };
                     (s.clone(), sha)
@@ -309,11 +316,11 @@ impl Files<'_> {
     }
 
     /// One file reference or a list (a table in chunks, read in order); an object's `file` may be the list.
-    fn table_ref(&self, v: &J, what: &str, rep: &mut ReadReport) -> Result<(TableRef, Vec<PathBuf>)> {
-        let (items, list, object): (Vec<&J>, bool, bool) = match v {
-            J::Arr(items) => (items.iter().collect(), true, false),
-            J::Obj(_) => match v.get("file") {
-                Some(J::Arr(items)) => (items.iter().collect(), true, true),
+    fn table_ref(&self, v: &Value, what: &str, rep: &mut ReadReport) -> Result<(TableRef, Vec<PathBuf>)> {
+        let (items, list, object): (Vec<&Value>, bool, bool) = match v {
+            Value::Array(items) => (items.iter().collect(), true, false),
+            Value::Object(_) => match v.get("file") {
+                Some(Value::Array(items)) => (items.iter().collect(), true, true),
                 _ => (vec![v], false, true),
             },
             _ => (vec![v], false, false),
@@ -326,7 +333,7 @@ impl Files<'_> {
             } else {
                 what.to_owned()
             };
-            if list && matches!(x, J::Obj(_)) && x.get("sha256").is_none() {
+            if list && matches!(x, Value::Object(_)) && x.get("sha256").is_none() {
                 rep.tolerate("list item {\"file\": ...} without sha256 (written as a string)");
             }
             let (f, p) = self.file_ref(x, &w, rep)?;
@@ -429,7 +436,7 @@ pub fn read(dir: &Path, w: &mut World) -> Result<ReadReport> {
     if !path.is_file() {
         return Err(bad(format!("{}: no scene.json", dir.display())));
     }
-    let root = json::parse(&read_file(&path)?).map_err(|source| Error::Json {
+    let root: Value = serde_json::from_slice(&read_file(&path)?).map_err(|source| Error::Json {
         path: path.clone(),
         source,
     })?;
@@ -450,17 +457,14 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    fn read(&mut self, root: &J) -> Result<()> {
+    fn read(&mut self, root: &Value) -> Result<()> {
         let mut top = Obj::new(root, "scene.json")?;
-        let key_order: Vec<String> = match root {
-            J::Obj(kv) => kv.iter().map(|(k, _)| k.clone()).collect(),
-            _ => unreachable!(),
-        };
-        if top.raw("format") != Some(&J::Str("skate-scene".into())) {
+        let key_order: Vec<String> = top.map.keys().cloned().collect();
+        if top.raw("format") != Some(&Value::String("skate-scene".into())) {
             return Err(bad("format is not \"skate-scene\""));
         }
         match top.raw("version") {
-            Some(v @ J::Num(_)) if int_of::<i32>(v, "version").ok() == Some(1) => {}
+            Some(v @ Value::Number(_)) if int_of::<i32>(v, "version").ok() == Some(1) => {}
             _ => return Err(bad("version is not 1")),
         }
         let rep = &mut *self.rep;
@@ -600,7 +604,7 @@ impl Reader<'_> {
             scene.warnings = Some(str_list(v, "warnings", rep)?);
         }
         if let Some(v) = top.take("stats", rep) {
-            scene.stats = Some(json::to_value(v).map_err(|e| bad(format!("stats: {e}")))?);
+            scene.stats = Some(v.clone());
         }
         if let Some(v) = top.take("pause_map", rep) {
             let mut o = Obj::new(v, "pause_map")?;
@@ -625,10 +629,13 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_textures(&mut self, v: Option<&J>) -> Result<BTreeMap<String, (Entity, Option<&'static str>)>> {
+    fn read_textures(
+        &mut self,
+        v: Option<&Value>,
+    ) -> Result<BTreeMap<String, (Entity, Option<&'static str>)>> {
         let mut out = BTreeMap::new();
         let Some(v) = v else { return Ok(out) };
-        let J::Obj(kv) = v else {
+        let Value::Object(kv) = v else {
             return Err(bad("textures: not an object"));
         };
         let mut names: HashSet<String> = HashSet::new();
@@ -636,12 +643,12 @@ impl Reader<'_> {
             let what = format!("texture '{key}'");
             let rep = &mut *self.rep;
             let (file, path) = self.files.file_ref(e, &what, rep)?;
-            if matches!(e, J::Str(_)) {
+            if matches!(e, Value::String(_)) {
                 rep.tolerate("texture given as a bare file string (written as {\"file\": ...})");
             }
             let tex = self.w.spawn();
             let (name, stem, source_format, source_size, linear, green, z, source, other) = match e {
-                J::Obj(_) => {
+                Value::Object(_) => {
                     let mut o = Obj::new(e, what.clone())?;
                     o.raw("file");
                     o.raw("sha256");
@@ -649,7 +656,7 @@ impl Reader<'_> {
                     let stem = o.str("stem", rep)?;
                     let source_format = o.str("source_format", rep)?;
                     let source_size = match o.take("source_size", rep) {
-                        Some(J::Arr(a)) if a.len() == 2 => {
+                        Some(Value::Array(a)) if a.len() == 2 => {
                             Some([int_of(&a[0], &what)?, int_of(&a[1], &what)?])
                         }
                         Some(_) => return Err(bad(format!("{what}: source_size is not [w, h]"))),
@@ -730,13 +737,13 @@ impl Reader<'_> {
 
     fn read_materials(
         &mut self,
-        v: Option<&J>,
+        v: Option<&Value>,
         textures: &BTreeMap<String, (Entity, Option<&'static str>)>,
     ) -> Result<BTreeMap<String, Entity>> {
         let mut out = BTreeMap::new();
         let mut roles: BTreeMap<String, &'static str> = BTreeMap::new();
         if let Some(v) = v {
-            let J::Obj(kv) = v else {
+            let Value::Object(kv) = v else {
                 return Err(bad("materials: not an object"));
             };
             let mut lower: HashSet<String> = HashSet::new();
@@ -794,7 +801,7 @@ impl Reader<'_> {
                 let cast_shadows = o.bool("cast_shadows", rep)?;
                 let label = match o.take("label", rep) {
                     None => None,
-                    Some(J::Str(s)) => Some(s.clone()),
+                    Some(Value::String(s)) => Some(s.clone()),
                     Some(_) => return Err(bad(format!("{what}: label is not a string"))),
                 };
                 let source = source_string(&mut o, rep);
@@ -839,7 +846,7 @@ impl Reader<'_> {
 
     fn read_prototypes(
         &mut self,
-        v: Option<&J>,
+        v: Option<&Value>,
         materials: &BTreeMap<String, Entity>,
         n_surfaces: usize,
     ) -> Result<Vec<Proto>> {
@@ -885,7 +892,7 @@ impl Reader<'_> {
             };
             let glb = match o.raw("glb") {
                 None => return Err(bad(format!("{what}: no glb (null for none)"))),
-                Some(J::Null) => None,
+                Some(Value::Null) => None,
                 Some(g) => Some(self.files.file_ref(g, &format!("{what} glb"), rep)?),
             };
             let collision = match o.take("collision", rep) {
@@ -900,8 +907,8 @@ impl Reader<'_> {
             for (pi, pe) in array(parts_j, &format!("{what} parts"))?.iter().enumerate() {
                 let mut po = Obj::new(pe, format!("{what} part {pi}"))?;
                 let material = match po.raw("material") {
-                    None | Some(J::Null) => None,
-                    Some(J::Str(m)) => Some(
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(m)) => Some(
                         *materials
                             .get(m)
                             .ok_or_else(|| bad(format!("{what}: material '{m}' unknown")))?,
@@ -911,14 +918,14 @@ impl Reader<'_> {
                 let mut vmap = BTreeMap::new();
                 let has_variants = match po.take("variants", rep) {
                     None => false,
-                    Some(J::Obj(vs)) => {
+                    Some(Value::Object(vs)) => {
                         for (vk, vv) in vs {
                             let vi: u32 = vk
                                 .parse()
                                 .ok()
                                 .filter(|n: &u32| n.to_string() == *vk)
                                 .ok_or_else(|| bad(format!("{what}: variant '{vk}' is not a number")))?;
-                            let J::Str(mk) = vv else {
+                            let Value::String(mk) = vv else {
                                 return Err(bad(format!("{what}: variant '{vk}' is not a material key")));
                             };
                             let me = materials
@@ -930,10 +937,7 @@ impl Reader<'_> {
                     }
                     Some(_) => return Err(bad(format!("{what} part {pi}: variants is not an object"))),
                 };
-                let source = match po.take("source", rep) {
-                    None => None,
-                    Some(s) => Some(json::to_value(s).map_err(|e| bad(format!("{what} part {pi}: {e}")))?),
-                };
+                let source = po.take("source", rep).cloned();
                 mats.push(material);
                 variants.push((has_variants, vmap));
                 parts.push(Part {
@@ -1007,7 +1011,7 @@ impl Reader<'_> {
     }
 
     /// A soup reference (world `collision[i]` or a prototype's `collision`), its files checked.
-    fn soup_ref(&mut self, v: &J, what: &str, world: bool) -> Result<(SoupRef, Vec<PathBuf>)> {
+    fn soup_ref(&mut self, v: &Value, what: &str, world: bool) -> Result<(SoupRef, Vec<PathBuf>)> {
         let (table, paths) = self.files.table_ref(v, what, self.rep)?;
         let list = table.list;
         let mut sref = SoupRef {
@@ -1017,7 +1021,7 @@ impl Reader<'_> {
             region_cut: None,
             other: Other::new(),
         };
-        if let J::Obj(_) = v {
+        if let Value::Object(_) = v {
             let rep = &mut *self.rep;
             let mut o = Obj::new(v, what)?;
             o.raw("file");
@@ -1045,7 +1049,7 @@ impl Reader<'_> {
 
     fn read_placements(
         &mut self,
-        v: Option<&J>,
+        v: Option<&Value>,
         protos: &[Proto],
         sources: &[String],
         scene: &mut SkateScene,
@@ -1174,7 +1178,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_world_soups(&mut self, v: Option<&J>, n_surfaces: usize) -> Result<()> {
+    fn read_world_soups(&mut self, v: Option<&Value>, n_surfaces: usize) -> Result<()> {
         let Some(v) = v else { return Ok(()) };
         for (i, e) in array(v, "collision")?.iter().enumerate() {
             let what = format!("collision[{i}]");
@@ -1189,7 +1193,7 @@ impl Reader<'_> {
 
     fn read_lights(
         &mut self,
-        v: Option<&J>,
+        v: Option<&Value>,
         groups: &[String],
         sources: &[String],
         scene: &mut SkateScene,
@@ -1258,7 +1262,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_curves(&mut self, v: Option<&J>, scene: &mut SkateScene) -> Result<()> {
+    fn read_curves(&mut self, v: Option<&Value>, scene: &mut SkateScene) -> Result<()> {
         let Some(v) = v else { return Ok(()) };
         let (mut table, paths) = self.files.table_ref(v, "grind_curves", self.rep)?;
         for (f, p) in table.files.clone().iter().zip(&paths) {
@@ -1296,7 +1300,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_water(&mut self, v: Option<&J>) -> Result<()> {
+    fn read_water(&mut self, v: Option<&Value>) -> Result<()> {
         let Some(v) = v else { return Ok(()) };
         for (i, e) in array(v, "water")?.iter().enumerate() {
             let what = format!("water[{i}]");
@@ -1308,7 +1312,7 @@ impl Reader<'_> {
             let corners: Vec<[f32; 2]> = array(cj, &what)?
                 .iter()
                 .map(|c| match c {
-                    J::Arr(a) if a.len() == 2 => Ok([
+                    Value::Array(a) if a.len() == 2 => Ok([
                         f32_of(&a[0], &format!("{what} corner"))?,
                         f32_of(&a[1], &format!("{what} corner"))?,
                     ]),
@@ -1347,7 +1351,7 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_markers(&mut self, v: Option<&J>) -> Result<()> {
+    fn read_markers(&mut self, v: Option<&Value>) -> Result<()> {
         let Some(v) = v else { return Ok(()) };
         let mut travel = 0;
         for (i, e) in array(v, "markers")?.iter().enumerate() {
@@ -1365,11 +1369,11 @@ impl Reader<'_> {
             let name = o.str("name", rep)?;
             let position = match o.take("position", rep) {
                 None => None,
-                Some(J::Arr(p)) if p.len() == 3 => {
+                Some(Value::Array(p)) if p.len() == 3 => {
                     let x = f32_of(&p[0], &format!("{what} position"))?;
                     let z = f32_of(&p[2], &format!("{what} position"))?;
                     let y = match &p[1] {
-                        J::Null => None,
+                        Value::Null => None,
                         y => Some(f32_of(y, &format!("{what} position"))?),
                     };
                     Some(([x, z], y))
@@ -1441,14 +1445,14 @@ impl Reader<'_> {
     }
 }
 
-fn read_snap(s: &J, no_height: bool, what: &str, rep: &mut ReadReport) -> Result<Snap> {
+fn read_snap(s: &Value, no_height: bool, what: &str, rep: &mut ReadReport) -> Result<Snap> {
     let mode_of = |m: Option<&str>| {
         m.and_then(SnapMode::parse)
             .ok_or_else(|| bad(format!("{what}: snap mode '{}'", m.unwrap_or_default())))
     };
     let snap = match s {
-        J::Str(m) => Snap::Mode(mode_of(Some(m))?),
-        J::Obj(_) => {
+        Value::String(m) => Snap::Mode(mode_of(Some(m))?),
+        Value::Object(_) => {
             let w = format!("{what}.snap");
             let mut o = Obj::new(s, w.clone())?;
             let mode = mode_of(o.str("mode", rep)?.as_deref())?;
@@ -1460,10 +1464,12 @@ fn read_snap(s: &J, no_height: bool, what: &str, rep: &mut ReadReport) -> Result
             let from = o.str("from", rep)?;
             let rings = match o.take("rings", rep) {
                 None => None,
-                Some(J::Arr(rs)) => Some(
+                Some(Value::Array(rs)) => Some(
                     rs.iter()
                         .map(|r| match r {
-                            J::Num(t) if t.parse::<f64>().is_ok_and(|x| x > 0.0 && x < 1e6) => f32_of(r, &w),
+                            Value::Number(n) if n.as_f64().is_some_and(|x| x > 0.0 && x < 1e6) => {
+                                f32_of(r, &w)
+                            }
                             _ => Err(bad(format!("{w}: rings must be positive distances"))),
                         })
                         .collect::<Result<Vec<f32>>>()?,
@@ -1516,19 +1522,12 @@ fn enum_field<T>(
 
 /// A string `source` becomes `core.source`; another value stays in `other`.
 fn source_string(o: &mut Obj, _rep: &mut ReadReport) -> Option<String> {
-    match o
-        .kv
-        .iter()
-        .position(|(k, v)| k == "source" && matches!(v, J::Str(_)))
-    {
-        Some(i) => {
-            o.used[i] = true;
-            match &o.kv[i].1 {
-                J::Str(s) => Some(s.clone()),
-                _ => unreachable!(),
-            }
+    match o.map.get_key_value("source") {
+        Some((k, Value::String(s))) => {
+            o.used.insert(k.as_str());
+            Some(s.clone())
         }
-        None => None,
+        _ => None,
     }
 }
 

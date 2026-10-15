@@ -6,7 +6,6 @@
 //! world writes the same tables byte for byte, the same manifest as parsed values, and the referenced files copied.
 
 pub mod components;
-pub mod json;
 pub mod lower;
 pub mod read;
 pub mod tables;
@@ -24,7 +23,10 @@ pub enum Error {
     #[error("{}: {source}", path.display())]
     Io { path: PathBuf, source: std::io::Error },
     #[error("{}: {source}", path.display())]
-    Json { path: PathBuf, source: json::ParseError },
+    Json {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
     /// The manifest or a table breaks a rule of the format; the message names the item.
     #[error("{0}")]
     Scene(String),

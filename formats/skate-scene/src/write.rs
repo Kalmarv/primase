@@ -16,10 +16,11 @@ use primase_core::{
 };
 
 use crate::components::*;
-use crate::json::{self, J};
 use crate::read::sha256_file;
 use crate::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
 use crate::{Error, Result};
+use primase_core::json::{f32_value, f32s_value, f64_value};
+use serde_json::{Map, Value};
 
 /// What the writer did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -131,7 +132,9 @@ pub fn write(w: &World, out: &Path) -> Result<WriteReport> {
         }
     }
     let path = out.join("scene.json");
-    std::fs::write(&path, json::write(&manifest)).map_err(|source| Error::Io { path, source })?;
+    let mut text = serde_json::to_string_pretty(&manifest).expect("a JSON value serializes");
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|source| Error::Io { path, source })?;
     Ok(report)
 }
 
@@ -143,29 +146,37 @@ struct Writer<'a> {
 
 /// Builds a JSON object in order.
 #[derive(Default)]
-struct ObjB(Vec<(String, J)>);
+struct ObjB(Map<String, Value>);
 
 impl ObjB {
-    fn put(&mut self, k: &str, v: J) {
-        self.0.push((k.to_owned(), v));
+    fn put(&mut self, k: &str, v: Value) {
+        self.0.insert(k.to_owned(), v);
     }
-    fn opt<T>(&mut self, k: &str, v: Option<T>, f: impl FnOnce(T) -> J) {
+    fn opt<T>(&mut self, k: &str, v: Option<T>, f: impl FnOnce(T) -> Value) {
         if let Some(v) = v {
             self.put(k, f(v));
         }
     }
     fn other(&mut self, other: &Other) {
         for (k, v) in other {
-            self.put(k, json::from_value(v));
+            self.put(k, v.clone());
         }
     }
-    fn done(self) -> J {
-        J::Obj(self.0)
+    fn done(self) -> Value {
+        Value::Object(self.0)
     }
 }
 
-fn f32s(v: &[f32]) -> J {
-    J::Arr(v.iter().map(|x| J::f32(*x)).collect())
+fn text(s: &str) -> Value {
+    Value::String(s.to_owned())
+}
+
+/// `{"file": path, "sha256": hash}`.
+fn file_object(path: &str, sha256: &str) -> Value {
+    let mut o = ObjB::default();
+    o.put("file", text(path));
+    o.put("sha256", text(sha256));
+    o.done()
 }
 
 /// A string list that keeps the order it was read in and appends new strings.
@@ -213,17 +224,14 @@ impl Writer<'_> {
     }
 
     /// The reference as written: a string, `{"file", "sha256"}`, a list, or an object around them.
-    fn table_ref(&self, t: &TableRef, fields: Vec<(String, J)>) -> J {
+    fn table_ref(&self, t: &TableRef, fields: Map<String, Value>) -> Value {
         let item = |f: &FileRef| match &f.sha256 {
-            None => J::str(&f.path),
-            Some(h) => J::Obj(vec![
-                ("file".into(), J::str(&f.path)),
-                ("sha256".into(), J::str(h)),
-            ]),
+            None => text(&f.path),
+            Some(h) => file_object(&f.path, h),
         };
         let mut o = ObjB::default();
         if t.list {
-            let inner = J::Arr(t.files.iter().map(item).collect());
+            let inner = Value::Array(t.files.iter().map(item).collect());
             if !t.object && fields.is_empty() {
                 return inner;
             }
@@ -231,10 +239,10 @@ impl Writer<'_> {
         } else {
             let f = &t.files[0];
             if !t.object && fields.is_empty() && f.sha256.is_none() {
-                return J::str(&f.path);
+                return text(&f.path);
             }
-            o.put("file", J::str(&f.path));
-            o.opt("sha256", f.sha256.as_ref(), J::str);
+            o.put("file", text(&f.path));
+            o.opt("sha256", f.sha256.as_ref(), |x| text(x));
         }
         o.0.extend(fields);
         o.done()
@@ -275,7 +283,7 @@ impl Writer<'_> {
         Ok(out)
     }
 
-    fn soup_tables(&mut self, r: &SoupRef, soup: &SkateSoup, what: &str) -> Result<J> {
+    fn soup_tables(&mut self, r: &SoupRef, soup: &SkateSoup, what: &str) -> Result<Value> {
         if soup.triangles.len() != soup.surfaces.len() {
             return Err(bad(format!(
                 "{what}: {} triangles, {} surface bytes",
@@ -332,40 +340,40 @@ impl Writer<'_> {
         };
         let table = self.tables(&table, bytes)?;
         let mut fields = ObjB::default();
-        fields.opt("mode", r.mode, |m| J::str(m.as_str()));
-        fields.opt("ground", r.ground, J::Bool);
-        fields.opt("region_cut", r.region_cut, J::Bool);
+        fields.opt("mode", r.mode, |m| text(m.as_str()));
+        fields.opt("ground", r.ground, Value::Bool);
+        fields.opt("region_cut", r.region_cut, Value::Bool);
         fields.other(&r.other);
         Ok(self.table_ref(&table, fields.0))
     }
 
-    fn manifest(&mut self) -> Result<J> {
+    fn manifest(&mut self) -> Result<Value> {
         let w = self.w;
         let scene = self.scene;
         let present = |k: &str| scene.key_order.iter().any(|x| x == k);
-        let mut known: Vec<(&'static str, Option<J>)> = Vec::new();
-        let mut put = |k: &'static str, v: Option<J>| known.push((k, v));
+        let mut known: Vec<(&'static str, Option<Value>)> = Vec::new();
+        let mut put = |k: &'static str, v: Option<Value>| known.push((k, v));
 
-        put("format", Some(J::str("skate-scene")));
-        put("version", Some(J::int(1)));
-        put("generator", scene.generator.as_ref().map(J::str));
-        put("name", Some(J::str(&scene.name)));
-        put("display_name", scene.display_name.as_ref().map(J::str));
-        put("region", scene.region.map(|r| f32s(&r)));
+        put("format", Some(text("skate-scene")));
+        put("version", Some(Value::from(1)));
+        put("generator", scene.generator.as_ref().map(|x| text(x)));
+        put("name", Some(text(&scene.name)));
+        put("display_name", scene.display_name.as_ref().map(|x| text(x)));
+        put("region", scene.region.map(|r| f32s_value(&r)));
         put(
             "surfaces",
             scene
                 .surfaces
                 .as_ref()
-                .map(|s| J::Arr(s.iter().map(J::str).collect())),
+                .map(|s| Value::Array(s.iter().map(|x| text(x)).collect())),
         );
         put(
             "streaming_distances",
             scene.streaming_distances.as_ref().map(|s| {
                 let mut o = ObjB::default();
-                o.opt("near", s.near, J::f64);
-                o.opt("medium", s.medium, J::f64);
-                o.opt("far", s.far, J::f64);
+                o.opt("near", s.near, f64_value);
+                o.opt("medium", s.medium, f64_value);
+                o.opt("far", s.far, f64_value);
                 o.other(&s.other);
                 o.done()
             }),
@@ -374,8 +382,8 @@ impl Writer<'_> {
             "texture_budget",
             scene.texture_budget.as_ref().map(|s| {
                 let mut o = ObjB::default();
-                o.opt("max", s.max, J::f64);
-                o.opt("aux_weight", s.aux_weight, J::f64);
+                o.opt("max", s.max, f64_value);
+                o.opt("aux_weight", s.aux_weight, f64_value);
                 o.other(&s.other);
                 o.done()
             }),
@@ -384,14 +392,14 @@ impl Writer<'_> {
             "min_height",
             scene.min_height.as_ref().map(|s| {
                 let mut o = ObjB::default();
-                o.opt("height", s.height, J::f64);
-                o.opt("stub_below", s.stub_below, J::f64);
-                o.opt("floor", s.floor, J::f64);
+                o.opt("height", s.height, f64_value);
+                o.opt("stub_below", s.stub_below, f64_value);
+                o.opt("floor", s.floor, f64_value);
                 o.other(&s.other);
                 o.done()
             }),
         );
-        put("max_render_edge", scene.max_render_edge.map(J::f64));
+        put("max_render_edge", scene.max_render_edge.map(f64_value));
         let pause = match &scene.pause_map {
             None => None,
             Some(pm) => {
@@ -400,30 +408,27 @@ impl Writer<'_> {
                 o.put(
                     "image",
                     match &image.sha256 {
-                        None => J::str(&image.path),
-                        Some(h) => J::Obj(vec![
-                            ("file".into(), J::str(&image.path)),
-                            ("sha256".into(), J::str(h)),
-                        ]),
+                        None => text(&image.path),
+                        Some(h) => file_object(&image.path, h),
                     },
                 );
-                o.put("bounds", f32s(&pm.bounds));
+                o.put("bounds", f32s_value(&pm.bounds));
                 o.other(&pm.other);
                 Some(o.done())
             }
         };
-        let mut put = |k: &'static str, v: Option<J>| known.push((k, v));
+        let mut put = |k: &'static str, v: Option<Value>| known.push((k, v));
         put("pause_map", pause);
-        put("trainer_note", scene.trainer_note.as_ref().map(J::str));
-        put("light_prefix", scene.light_prefix.as_ref().map(J::str));
+        put("trainer_note", scene.trainer_note.as_ref().map(|x| text(x)));
+        put("light_prefix", scene.light_prefix.as_ref().map(|x| text(x)));
         put(
             "warnings",
             scene
                 .warnings
                 .as_ref()
-                .map(|s| J::Arr(s.iter().map(J::str).collect())),
+                .map(|s| Value::Array(s.iter().map(|x| text(x)).collect())),
         );
-        put("stats", scene.stats.as_ref().map(json::from_value));
+        put("stats", scene.stats.as_ref().cloned());
 
         // textures
         let mut tex_key: HashMap<Entity, String> = HashMap::new();
@@ -434,30 +439,30 @@ impl Writer<'_> {
                 .ok_or_else(|| bad(format!("texture '{}' has no core.texture_file", t.key)))?;
             let file = self.copy(&t.file, &src.path)?;
             let mut o = ObjB::default();
-            o.put("file", J::str(&file.path));
-            o.opt("sha256", file.sha256, J::Str);
-            o.opt("name", w.get::<Name>(e), |n| J::str(&n.0));
-            o.opt("stem", t.stem.as_ref(), J::str);
-            o.opt("source_format", t.source_format.as_ref(), J::str);
+            o.put("file", text(&file.path));
+            o.opt("sha256", file.sha256, Value::String);
+            o.opt("name", w.get::<Name>(e), |n| text(&n.0));
+            o.opt("stem", t.stem.as_ref(), |x| text(x));
+            o.opt("source_format", t.source_format.as_ref(), |x| text(x));
             o.opt("source_size", t.source_size, |s| {
-                J::Arr(vec![J::int(s[0]), J::int(s[1])])
+                Value::Array(vec![Value::from(s[0]), Value::from(s[1])])
             });
             o.opt("color_space", t.linear, |l| {
-                J::str(if l { "linear" } else { "srgb" })
+                text(if l { "linear" } else { "srgb" })
             });
             o.opt("green", t.green, |g| {
-                J::str(match g {
+                text(match g {
                     NormalGreen::Up => "up",
                     NormalGreen::Down => "down",
                 })
             });
             o.opt("z", t.z, |z| {
-                J::str(match z {
+                text(match z {
                     NormalZ::Stored => "stored",
                     NormalZ::Rebuild => "rebuild",
                 })
             });
-            o.opt("source", w.get::<Source>(e), |s| J::str(&s.0));
+            o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&t.other);
             if tex_key.insert(e, t.key.clone()).is_some() || textures.0.iter().any(|(k, _)| *k == t.key) {
                 return Err(bad(format!("texture key '{}' twice", t.key)));
@@ -469,9 +474,9 @@ impl Writer<'_> {
         let mut mat_key: HashMap<Entity, String> = HashMap::new();
         let mut materials = ObjB::default();
         for (e, m) in w.iter::<SkateMaterial>() {
-            let tref = |te: Option<Entity>, role: &str| -> Result<Option<J>> {
+            let tref = |te: Option<Entity>, role: &str| -> Result<Option<Value>> {
                 te.map(|te| {
-                    tex_key.get(&te).map(J::str).ok_or_else(|| {
+                    tex_key.get(&te).map(|x| text(x)).ok_or_else(|| {
                         bad(format!(
                             "material '{}': its {role} {te:?} is not a texture",
                             m.key
@@ -481,26 +486,28 @@ impl Writer<'_> {
                 .transpose()
             };
             let mut o = ObjB::default();
-            o.put("class", J::str(m.class.as_str()));
+            o.put("class", text(m.class.as_str()));
             o.opt("base", tref(m.base, "base")?, |j| j);
             o.opt("normal", tref(m.normal, "normal")?, |j| j);
             o.opt("mask", tref(m.mask, "mask")?, |j| j);
             o.opt("base_color", m.base_color, |c| {
-                J::Arr(c.iter().map(|x| J::int(*x)).collect())
+                Value::Array(c.iter().map(|x| Value::from(*x)).collect())
             });
-            o.opt("tint", m.tint, |c| J::Arr(c.iter().map(|x| J::int(*x)).collect()));
-            o.opt("alpha", m.alpha, |a| J::str(a.as_str()));
-            o.opt("cutoff", m.cutoff, J::f64);
-            o.opt("two_sided", m.two_sided, J::Bool);
-            o.opt("domain", m.domain, |d| J::str(d.as_str()));
-            o.opt("metallic", m.metallic, J::f64);
-            o.opt("roughness", m.roughness, J::f64);
-            o.opt("wrap", m.wrap, |x| J::str(x.as_str()));
-            o.opt("ocean", m.ocean, J::Bool);
-            o.opt("cast_shadows", m.cast_shadows, J::Bool);
-            o.opt("emissive", m.emissive, J::Bool);
-            o.opt("label", w.get::<Name>(e), |n| J::str(&n.0));
-            o.opt("source", w.get::<Source>(e), |s| J::str(&s.0));
+            o.opt("tint", m.tint, |c| {
+                Value::Array(c.iter().map(|x| Value::from(*x)).collect())
+            });
+            o.opt("alpha", m.alpha, |a| text(a.as_str()));
+            o.opt("cutoff", m.cutoff, f64_value);
+            o.opt("two_sided", m.two_sided, Value::Bool);
+            o.opt("domain", m.domain, |d| text(d.as_str()));
+            o.opt("metallic", m.metallic, f64_value);
+            o.opt("roughness", m.roughness, f64_value);
+            o.opt("wrap", m.wrap, |x| text(x.as_str()));
+            o.opt("ocean", m.ocean, Value::Bool);
+            o.opt("cast_shadows", m.cast_shadows, Value::Bool);
+            o.opt("emissive", m.emissive, Value::Bool);
+            o.opt("label", w.get::<Name>(e), |n| text(&n.0));
+            o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&m.other);
             if materials.0.iter().any(|(k, _)| k.eq_ignore_ascii_case(&m.key)) {
                 return Err(bad(format!("material key '{}' twice (up to case)", m.key)));
@@ -508,10 +515,10 @@ impl Writer<'_> {
             mat_key.insert(e, m.key.clone());
             materials.put(&m.key, o.done());
         }
-        let mkey = |e: Entity, what: &str| -> Result<J> {
+        let mkey = |e: Entity, what: &str| -> Result<Value> {
             mat_key
                 .get(&e)
-                .map(J::str)
+                .map(|x| text(x))
                 .ok_or_else(|| bad(format!("{what}: {e:?} is not a material")))
         };
 
@@ -523,13 +530,13 @@ impl Writer<'_> {
             let what = format!("prototype '{}'", p.id);
             proto_index.insert(e, i as u32);
             let mut o = ObjB::default();
-            o.put("id", J::str(&p.id));
-            o.opt("name", w.get::<Name>(e), |n| J::str(&n.0));
-            o.opt("key", p.key, |k| J::uint(u64::from(k)));
+            o.put("id", text(&p.id));
+            o.opt("name", w.get::<Name>(e), |n| text(&n.0));
+            o.opt("key", p.key, |k| Value::from(u64::from(k)));
             let mesh_file = w.get::<MeshFile>(e);
             let mats: Vec<Option<Entity>> = match (&p.glb, mesh_file) {
                 (None, _) => {
-                    o.put("glb", J::Null);
+                    o.put("glb", Value::Null);
                     if !p.parts.is_empty() {
                         return Err(bad(format!("{what}: parts without geometry")));
                     }
@@ -540,15 +547,12 @@ impl Writer<'_> {
                     o.put(
                         "glb",
                         match &g.sha256 {
-                            None => J::str(&g.path),
-                            Some(h) => J::Obj(vec![
-                                ("file".into(), J::str(&g.path)),
-                                ("sha256".into(), J::str(h)),
-                            ]),
+                            None => text(&g.path),
+                            Some(h) => file_object(&g.path, h),
                         },
                     );
                     if mf.mesh != 0 {
-                        o.put("mesh", J::uint(u64::from(mf.mesh)));
+                        o.put("mesh", Value::from(u64::from(mf.mesh)));
                     }
                     mf.materials.clone()
                 }
@@ -572,15 +576,15 @@ impl Writer<'_> {
                     "{what}: material variants for a different number of parts"
                 )));
             }
-            o.opt("source", w.get::<Source>(e), |s| J::str(&s.0));
-            o.opt("foliage", p.foliage, J::Bool);
-            o.opt("ground", p.ground, J::Bool);
+            o.opt("source", w.get::<Source>(e), |s| text(&s.0));
+            o.opt("foliage", p.foliage, Value::Bool);
+            o.opt("ground", p.ground, Value::Bool);
             let mut parts = Vec::new();
             for (pi, (part, mat)) in p.parts.iter().zip(&mats).enumerate() {
                 let mut po = ObjB::default();
                 po.put(
                     "material",
-                    mat.map(|m| mkey(m, &what)).transpose()?.unwrap_or(J::Null),
+                    mat.map(|m| mkey(m, &what)).transpose()?.unwrap_or(Value::Null),
                 );
                 let vm = variants.map(|v| &v.0[pi]);
                 if part.variants_key || vm.is_some_and(|m| !m.is_empty()) {
@@ -590,11 +594,11 @@ impl Writer<'_> {
                     }
                     po.put("variants", vo.done());
                 }
-                po.opt("source", part.source.as_ref(), json::from_value);
+                po.opt("source", part.source.as_ref(), Value::clone);
                 po.other(&part.other);
                 parts.push(po.done());
             }
-            o.put("parts", J::Arr(parts));
+            o.put("parts", Value::Array(parts));
             match (&p.collision, w.get::<SkateSoup>(e)) {
                 (Some(r), Some(soup)) => {
                     let j = self.soup_tables(r, soup, &format!("{what} collision"))?;
@@ -683,7 +687,7 @@ impl Writer<'_> {
                 None => (Self::whole(&t), vec![tables::write_placements(&recs)]),
             };
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Vec::new()))
+            Some(self.table_ref(&t, Map::new()))
         } else {
             None
         };
@@ -742,7 +746,7 @@ impl Writer<'_> {
                 None => (Self::whole(&t), vec![tables::write_lights(&lrecs)]),
             };
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Vec::new()))
+            Some(self.table_ref(&t, Map::new()))
         } else {
             None
         };
@@ -779,46 +783,50 @@ impl Writer<'_> {
                 at += n;
             }
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Vec::new()))
+            Some(self.table_ref(&t, Map::new()))
         } else {
             None
         };
 
         // water and markers
-        let water: Vec<J> = w
+        let water: Vec<Value> = w
             .iter::<SkateWater>()
             .map(|(_, wa)| {
                 let mut o = ObjB::default();
-                o.put("corners", J::Arr(wa.corners.iter().map(|c| f32s(c)).collect()));
-                o.opt("height", wa.height, J::f64);
+                o.put(
+                    "corners",
+                    Value::Array(wa.corners.iter().map(|c| f32s_value(c)).collect()),
+                );
+                o.opt("height", wa.height, f64_value);
                 o.other(&wa.other);
                 o.done()
             })
             .collect();
-        let markers: Vec<J> = w
+        let markers: Vec<Value> = w
             .iter::<SkateMarker>()
             .map(|(e, m)| {
                 let mut o = ObjB::default();
-                o.put("kind", J::str(m.kind.as_str()));
-                o.opt("name", w.get::<Name>(e), |n| J::str(&n.0));
+                o.put("kind", text(m.kind.as_str()));
+                o.opt("name", w.get::<Name>(e), |n| text(&n.0));
                 o.opt("position", m.position, |([x, z], y)| {
-                    J::Arr(vec![J::f32(x), y.map_or(J::Null, J::f32), J::f32(z)])
+                    Value::Array(vec![f32_value(x), y.map_or(Value::Null, f32_value), f32_value(z)])
                 });
-                o.opt("yaw", m.yaw, J::f64);
-                o.opt("m", m.m, |t| f32s(&t));
-                o.opt("blueprint", m.blueprint.as_ref(), J::str);
+                o.opt("yaw", m.yaw, f64_value);
+                o.opt("m", m.m, |t| f32s_value(&t));
+                o.opt("blueprint", m.blueprint.as_ref(), |x| text(x));
                 o.opt("snap", m.snap.as_ref(), snap_json);
-                o.opt("lift", m.lift, J::f64);
-                o.opt("shelter", m.shelter, J::Bool);
-                o.opt("trainer", m.trainer, J::Bool);
+                o.opt("lift", m.lift, f64_value);
+                o.opt("shelter", m.shelter, Value::Bool);
+                o.opt("trainer", m.trainer, Value::Bool);
                 o.other(&m.other);
                 o.done()
             })
             .collect();
 
-        let list = |items: Vec<J>, k: &str| (!items.is_empty() || present(k)).then_some(J::Arr(items));
+        let list =
+            |items: Vec<Value>, k: &str| (!items.is_empty() || present(k)).then_some(Value::Array(items));
         let strs = |t: &StrTable, read: bool, k: &str| {
-            (read || t.appended || present(k)).then(|| J::Arr(t.list.iter().map(J::str).collect()))
+            (read || t.appended || present(k)).then(|| Value::Array(t.list.iter().map(|x| text(x)).collect()))
         };
         known.push((
             "materials",
@@ -862,7 +870,7 @@ impl Writer<'_> {
                     done.push(k.clone());
                 }
             } else if let Some(v) = scene.other.get(k) {
-                out.put(k, json::from_value(v));
+                out.put(k, v.clone());
                 done.push(k.clone());
             }
         }
@@ -874,16 +882,16 @@ impl Writer<'_> {
         }
         for (k, v) in &scene.other {
             if !done.contains(k) {
-                out.put(k, json::from_value(v));
+                out.put(k, v.clone());
             }
         }
         Ok(out.done())
     }
 }
 
-fn snap_json(s: &Snap) -> J {
+fn snap_json(s: &Snap) -> Value {
     match s {
-        Snap::Mode(m) => J::str(m.as_str()),
+        Snap::Mode(m) => text(m.as_str()),
         Snap::Object {
             mode,
             above,
@@ -896,14 +904,14 @@ fn snap_json(s: &Snap) -> J {
             other,
         } => {
             let mut o = ObjB::default();
-            o.put("mode", J::str(mode.as_str()));
-            o.opt("above", *above, J::f64);
-            o.opt("from", from.as_ref(), J::str);
-            o.opt("min_up", *min_up, J::f64);
-            o.opt("rings", rings.as_ref(), |r| f32s(r));
-            o.opt("directions", *directions, J::f64);
-            o.opt("max_above_ground", *max_above_ground, J::f64);
-            o.opt("headroom", *headroom, J::f64);
+            o.put("mode", text(mode.as_str()));
+            o.opt("above", *above, f64_value);
+            o.opt("from", from.as_ref(), |x| text(x));
+            o.opt("min_up", *min_up, f64_value);
+            o.opt("rings", rings.as_ref(), |r| f32s_value(r));
+            o.opt("directions", *directions, f64_value);
+            o.opt("max_above_ground", *max_above_ground, f64_value);
+            o.opt("headroom", *headroom, f64_value);
             o.other(other);
             o.done()
         }
