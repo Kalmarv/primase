@@ -68,6 +68,7 @@ fn pivot_tiles_negative_coordinates_and_determinism() {
         ..plain()
     };
     let a = write(&w, &options).unwrap();
+    assert_eq!(serde_json::to_value(&a.index).unwrap()["format_version"], "1.0");
     assert_eq!(
         a.index
             .tiles

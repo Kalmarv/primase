@@ -95,6 +95,8 @@ pub struct CollisionFile {
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Index {
+    /// Tile-set contract version, independent of component extras versions.
+    pub format_version: &'static str,
     pub empty_tile_policy: &'static str,
     pub version: u32,
     pub tile_size: f64,
@@ -334,6 +336,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     let mut set = TileSet {
         collision_files: BTreeMap::new(),
         index: Index {
+            format_version: "1.0",
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: options.tile_size,
