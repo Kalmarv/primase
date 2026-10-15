@@ -103,6 +103,10 @@ fn renderers_match_the_scan() {
     // into the world: each renderer an entity, its transform Unity's matrix (rounded once to f32) converted exactly
     let mut w = World::new();
     let rep = read_level(&player, level, &mut w).unwrap();
+    println!(
+        "world: {} materials, {} textures, not decoded {:?}; not reproduced {:?}",
+        rep.materials, rep.textures, rep.textures_not_decoded, rep.not_reproduced
+    );
     let mut placed = GateReport::new(
         "world: renderer transforms, back in Unity's frame, the f32 matrix bit for bit",
         Tolerance::Exact,

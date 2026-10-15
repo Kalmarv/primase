@@ -122,6 +122,8 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_UNITY_SCAN` | optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`) |
 | `PRIMASE_UNITY_MESHES` | optional: an independent reader's decoded meshes of that folder (JSON; schema in `worlds/unity/tests/mesh.rs`) |
 | `PRIMASE_UNITY_TEXTURES` | optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`) |
+| `PRIMASE_UNITY_MATERIALS` | optional: an independent reader's materials of that folder (JSON; schema in `worlds/unity/tests/material.rs`) |
+| `PRIMASE_UNITY_PORT`, `PRIMASE_UNITY_PORT_MATERIALS` | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) |
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |

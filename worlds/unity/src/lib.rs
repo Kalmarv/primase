@@ -12,9 +12,13 @@
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
+//! - [`material`]: materials as stored (shader, saved properties, keywords).
+//! - [`lower`]: materials lowered to `pbr.material` by shader.
 
 pub mod components;
 pub mod level;
+pub mod lower;
+pub mod material;
 pub mod mesh;
 pub mod player;
 pub mod resource;

@@ -13,6 +13,7 @@ primase-core.workspace = true
 primase-vertex.workspace = true
 primase-meshops.workspace = true
 primase-texcodec.workspace = true
+primase-image.workspace = true
 thiserror.workspace = true
 lz4_flex.workspace = true
 serde.workspace = true
@@ -20,7 +21,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true
-primase-image.workspace = true
 
 [lints]
 workspace = true
