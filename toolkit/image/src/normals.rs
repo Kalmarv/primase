@@ -1,5 +1,29 @@
 use crate::{Error, Image, Result, Samples, allocate, sample_count};
 
+/// Rebuild positive-hemisphere Z from encoded RG, projecting XY onto the unit
+/// disk when necessary. Returns whether XY was projected; alpha is untouched.
+/// Decode and geometry use f64; all encoded channels round to nearest, ties-even.
+/// This is the reference map writer's blue-channel rounding rule. Exhausting
+/// all 65,536 XY pairs gives identical blue bytes with f32 or f64 arithmetic,
+/// and with ties-away or ties-even rounding (before radial projection).
+pub fn rebuild_normal_z(pixel: &mut [u8; 4]) -> bool {
+    let x = f64::from(pixel[0]) / 127.5 - 1.;
+    let y = f64::from(pixel[1]) / 127.5 - 1.;
+    let radius_squared = x * x + y * y;
+    let projected = radius_squared > 1.;
+    let encode = |v: f64| ((v * 0.5 + 0.5) * 255.).round_ties_even() as u8;
+    let z = if projected {
+        let radius = radius_squared.sqrt();
+        pixel[0] = encode(x / radius);
+        pixel[1] = encode(y / radius);
+        0.
+    } else {
+        (1. - radius_squared).sqrt()
+    };
+    pixel[2] = encode(z);
+    projected
+}
+
 /// Vector-filtered image and the number of ambiguous averages replaced by +Z.
 #[derive(Debug)]
 pub struct NormalFilter {

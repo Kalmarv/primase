@@ -199,3 +199,42 @@ fn rebuild_projects_outside_disk_on_every_mip_without_changing_alpha() {
     assert_eq!(log.counts["normal pixels projected onto unit disk"], 4);
     assert!(normalize_normals(&mut world).unwrap().counts.is_empty());
 }
+
+#[test]
+fn rebuild_blue_rounding_matches_reference_for_every_xy_pair() {
+    let mut projected = 0;
+    let mut maximum_angle = 0f64;
+    for r in 0..=255u8 {
+        for g in 0..=255u8 {
+            let x = f32::from(r) / 255. * 2. - 1.;
+            let y = f32::from(g) / 255. * 2. - 1.;
+            let reference = ((1f32 - x * x - y * y).max(0.).sqrt() * 0.5 + 0.5) * 255.;
+            let x = f64::from(r) / 127.5 - 1.;
+            let y = f64::from(g) / 127.5 - 1.;
+            let blue = ((1f64 - x * x - y * y).max(0.).sqrt() * 0.5 + 0.5) * 255.;
+            assert_eq!(blue.round() as u8, blue.round_ties_even() as u8);
+            assert_eq!(blue.round_ties_even() as u8, reference.round_ties_even() as u8);
+            let mut pixel = [r, g, 0, 71];
+            let changed = primase_image::rebuild_normal_z(&mut pixel);
+            assert_eq!(changed, x * x + y * y > 1.);
+            assert_eq!(pixel[2], reference.round_ties_even() as u8);
+            assert_eq!(pixel[3], 71);
+            if changed {
+                projected += 1;
+                let old = [x, y, 1. / 255.];
+                let new = [pixel[0], pixel[1], pixel[2]].map(|v| f64::from(v) / 127.5 - 1.);
+                let norm = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+                let dot = old.iter().zip(new).map(|(a, b)| a * b).sum::<f64>();
+                let angle = (dot / (norm(old) * norm(new))).clamp(-1., 1.).acos().to_degrees();
+                maximum_angle = maximum_angle.max(angle);
+                assert!(angle <= 0.31, "{r},{g}: {angle}");
+            } else {
+                assert_eq!(&pixel[..2], &[r, g]);
+            }
+        }
+    }
+    assert!(projected > 0);
+    println!(
+        "65536 XY pairs, {projected} projected, maximum encoded direction change {maximum_angle} degrees"
+    );
+}

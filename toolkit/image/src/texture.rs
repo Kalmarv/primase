@@ -146,7 +146,7 @@ pub fn texture_level_png(t: &Texture, level: usize) -> Result<Vec<u8>> {
 }
 /// Explicitly convert normal maps to glTF's convention: X in red, green up, stored
 /// positive-hemisphere Z. X kept in alpha moves to red (alpha unchanged); green flips as 255-G; Z=sqrt(max(0,1-x*x-y*y)), x/y=2*byte/255-1,
-/// encoded with nearest rounding. Bitangent/tangent source coordinates swap
+/// encoded with nearest, ties-even rounding. Bitangent/tangent source coordinates swap
 /// after source-channel extraction and sign decoding. Mesh tangents must describe
 /// the same frame; this pass does not regenerate tangents from UV coordinates.
 /// Every stored mip is decoded to RGBA8; alpha
@@ -176,23 +176,8 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
                 if convention.basis == NormalBasis::BitangentTangent {
                     p.swap(0, 1);
                 }
-                if convention.z == NormalZ::Rebuild {
-                    let x = p[0] as f64 / 127.5 - 1.;
-                    let y = p[1] as f64 / 127.5 - 1.;
-                    let radius_squared = x * x + y * y;
-                    // Reconstruct a unit vector even for quantized XY outside
-                    // the disk. Projection preserves its direction, sets Z=0,
-                    // and leaves unrelated alpha data untouched.
-                    let z = if radius_squared > 1. {
-                        let radius = radius_squared.sqrt();
-                        p[0] = ((x / radius * 0.5 + 0.5) * 255.).round() as u8;
-                        p[1] = ((y / radius * 0.5 + 0.5) * 255.).round() as u8;
-                        log.count("normal pixels projected onto unit disk", 1);
-                        0.
-                    } else {
-                        (1. - radius_squared).sqrt()
-                    };
-                    p[2] = ((z * 0.5 + 0.5) * 255.).round() as u8;
+                if convention.z == NormalZ::Rebuild && crate::rebuild_normal_z(p) {
+                    log.count("normal pixels projected onto unit disk", 1);
                 }
             }
             levels.push(rgba);
