@@ -8,6 +8,10 @@
 //!   (numbers by value, floats by f32 bit pattern where the text differs, counted); every referenced file copied
 //!   byte-identical; the reference validator accepts the output with the same summary and the same warnings.
 //!
+//! Counts: agreement, manifests and re-validation per folder; tables and referenced files per file. An input folder
+//! whose scene.json or referenced files change (size or modification time) while it is checked is reported as
+//! changed and counted in no gate; the test fails on one unless `PRIMASE_ALLOW_LIVE=1`.
+//!
 //! Outputs go to `PRIMASE_OUT` (default: the OS temp folder) and are deleted when they pass.
 //! `PRIMASE_SCENE_FILTER` keeps only folders whose path contains it.
 
@@ -160,6 +164,193 @@ fn manifest(dir: &Path) -> J {
     json::parse(&std::fs::read(dir.join("scene.json")).expect("scene.json")).expect("parse")
 }
 
+/// Size and modification time of scene.json and every file it references (None: missing), to notice an input
+/// folder that another process rewrites while the gate reads it.
+type Snapshot = BTreeMap<String, Option<(u64, std::time::SystemTime)>>;
+
+fn snapshot(dir: &Path) -> Snapshot {
+    let stat = |rel: &str| {
+        std::fs::metadata(dir.join(rel))
+            .ok()
+            .map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)))
+    };
+    let mut snap = Snapshot::new();
+    snap.insert("scene.json".into(), stat("scene.json"));
+    let parsed = std::fs::read(dir.join("scene.json"))
+        .ok()
+        .and_then(|b| json::parse(&b).ok());
+    if let Some(m) = parsed {
+        let (t, f) = referenced(&m);
+        for rel in t.iter().chain(&f) {
+            snap.insert(rel.clone(), stat(rel));
+        }
+    }
+    snap
+}
+
+/// The gates, per folder or summed.
+struct Gates {
+    agree: GateReport,
+    tables: GateReport,
+    manifests: GateReport,
+    copies: GateReport,
+    revalid: GateReport,
+    notes: Vec<String>,
+    tolerated: BTreeMap<String, u64>,
+    f64_equal: u64,
+    f32_equal: u64,
+    /// Folders that passed every check that applied to them.
+    folders_passed: u64,
+}
+
+impl Gates {
+    fn new() -> Gates {
+        Gates {
+            agree: GateReport::new(
+                "folders: reader agrees with the reference validator",
+                Tolerance::Exact,
+            ),
+            tables: GateReport::new("tables byte-identical", Tolerance::Exact),
+            manifests: GateReport::new("folders: manifest equal as JSON", Tolerance::Exact),
+            copies: GateReport::new("referenced files byte-identical", Tolerance::Exact),
+            revalid: GateReport::new(
+                "folders: output accepted by the reference validator, same summary and warnings",
+                Tolerance::Exact,
+            ),
+            notes: Vec::new(),
+            tolerated: BTreeMap::new(),
+            f64_equal: 0,
+            f32_equal: 0,
+            folders_passed: 0,
+        }
+    }
+
+    fn all(&mut self) -> [&mut GateReport; 5] {
+        [
+            &mut self.agree,
+            &mut self.tables,
+            &mut self.manifests,
+            &mut self.copies,
+            &mut self.revalid,
+        ]
+    }
+
+    fn passed(&mut self) -> bool {
+        self.all().iter().all(|g| g.failures.is_empty())
+    }
+
+    fn add(&mut self, mut o: Gates) {
+        for (t, p) in self.all().into_iter().zip(o.all()) {
+            t.checked += p.checked;
+            t.exact += p.exact;
+            t.within += p.within;
+            t.failures.append(&mut p.failures);
+        }
+        self.notes.append(&mut o.notes);
+        for (k, c) in o.tolerated {
+            *self.tolerated.entry(k).or_default() += c;
+        }
+        self.f64_equal += o.f64_equal;
+        self.f32_equal += o.f32_equal;
+        self.folders_passed += o.folders_passed;
+    }
+}
+
+/// One folder through every gate. Returns the gates and whether the output folder may be removed.
+fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, bool) {
+    let mut g = Gates::new();
+    let item = dir.display().to_string();
+    let reference = validator.map(|v| validate(v, dir));
+    let mut w = World::new();
+    let ours = scene::read(dir, &mut w);
+    match (&ours, &reference) {
+        (Ok(_), Some(Err(msg))) => {
+            g.agree
+                .fail(&item, format!("we accept, the reference refuses: {msg}"));
+            return (g, true);
+        }
+        (Err(e), Some(Ok(_))) => {
+            g.agree
+                .fail(&item, format!("we refuse, the reference accepts: {e}"));
+            return (g, true);
+        }
+        (Err(e), Some(Err(msg))) => {
+            g.agree.record(&item, 0.0);
+            if norm_cause(&e.to_string(), dir) != norm_cause(msg, dir) {
+                g.notes.push(format!("{item}\n    ours: {e}\n    ref:  {msg}"));
+            }
+            g.folders_passed += 1;
+            return (g, true);
+        }
+        (Err(e), None) => {
+            g.notes
+                .push(format!("{item}: refused (no reference to compare): {e}"));
+            return (g, true);
+        }
+        (Ok(_), _) => g.agree.record(&item, 0.0),
+    }
+    let rep = ours.expect("accepted");
+    g.tolerated = rep.tolerated.clone();
+    if out.exists() {
+        std::fs::remove_dir_all(out).expect("clear the output");
+    }
+    if let Err(e) = scene::write(&w, out) {
+        g.manifests.fail(&item, format!("write failed: {e}"));
+        return (g, false);
+    }
+    let (min, mout) = (manifest(dir), manifest(out));
+    let c = json::compare(&min, &mout);
+    g.f64_equal = c.f64_equal;
+    g.f32_equal = c.f32_equal;
+    if c.differences.is_empty() {
+        g.manifests.record(&item, 0.0);
+    } else {
+        g.manifests.fail(&item, c.differences.join("; "));
+    }
+    let (tin, fin) = referenced(&min);
+    for (gate, rels) in [(&mut g.tables, &tin), (&mut g.copies, &fin)] {
+        for r in rels {
+            let what = format!("{item}/{r}");
+            match same_file(&dir.join(r), &out.join(r)) {
+                Ok(true) => gate.record(what, 0.0),
+                Ok(false) => gate.fail(what, "bytes differ"),
+                Err(e) => gate.fail(what, e),
+            }
+        }
+    }
+    if let (Some(v), Some(Ok((summary, warnings)))) = (validator, &reference) {
+        match validate(v, out) {
+            Ok((s2, w2)) if s2 == *summary && w2 == *warnings => g.revalid.record(&item, 0.0),
+            Ok((s2, w2)) => g.revalid.fail(
+                &item,
+                format!(
+                    "summary {s2:?} vs {summary:?}; warnings {} vs {}",
+                    w2.len(),
+                    warnings.len()
+                ),
+            ),
+            Err(e) => g.revalid.fail(&item, e),
+        }
+        // our reader's warnings against the reference's (GLB warnings excepted: we do not read GLBs)
+        let mut a = rep.warnings.clone();
+        let mut b = warnings.clone();
+        a.sort();
+        b.sort();
+        if a != b {
+            g.notes.push(format!(
+                "{item}: warnings differ: ours {} vs ref {}",
+                a.len(),
+                b.len()
+            ));
+        }
+    }
+    let ok = g.passed();
+    if ok {
+        g.folders_passed += 1;
+    }
+    (g, ok)
+}
+
 #[test]
 fn scene_folders_round_trip() {
     let roots: Vec<PathBuf> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
@@ -171,6 +362,7 @@ fn scene_folders_round_trip() {
     }
     let validator = real_data("PRIMASE_SCENE_SKATE");
     let filter = std::env::var("PRIMASE_SCENE_FILTER").unwrap_or_default();
+    let allow_live = std::env::var("PRIMASE_ALLOW_LIVE").is_ok_and(|v| v == "1");
     let out_root = std::env::var_os("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
@@ -181,153 +373,55 @@ fn scene_folders_round_trip() {
     }
     folders.retain(|f| f.to_string_lossy().contains(&filter));
 
-    let mut agree = GateReport::new("reader agrees with the reference validator", Tolerance::Exact);
-    let mut tables = GateReport::new("tables byte-identical", Tolerance::Exact);
-    let mut manifests = GateReport::new("manifest equal as JSON", Tolerance::Exact);
-    let mut copies = GateReport::new("referenced files byte-identical", Tolerance::Exact);
-    let mut revalid = GateReport::new(
-        "output accepted by the reference validator, same summary and warnings",
-        Tolerance::Exact,
-    );
-    let mut causes: Vec<String> = Vec::new();
-    let mut tolerated: BTreeMap<String, u64> = BTreeMap::new();
-    let (mut f64_equal, mut f32_equal) = (0u64, 0u64);
-
+    let mut total = Gates::new();
+    let mut changed: Vec<String> = Vec::new();
     for (n, dir) in folders.iter().enumerate() {
-        let item = dir.display().to_string();
-        let reference = validator.as_ref().map(|v| validate(v, dir));
-        let mut w = World::new();
-        let ours = scene::read(dir, &mut w);
-        match (&ours, &reference) {
-            (Ok(_), Some(Err(msg))) => {
-                agree.fail(&item, format!("we accept, the reference refuses: {msg}"));
-                continue;
-            }
-            (Err(e), Some(Ok(_))) => {
-                agree.fail(&item, format!("we refuse, the reference accepts: {e}"));
-                continue;
-            }
-            (Err(e), Some(Err(msg))) => {
-                agree.record(&item, 0.0);
-                if norm_cause(&e.to_string(), dir) != norm_cause(msg, dir) {
-                    causes.push(format!("{item}\n    ours: {e}\n    ref:  {msg}"));
-                }
-                continue;
-            }
-            (Err(e), None) => {
-                causes.push(format!("{item}: refused (no reference to compare): {e}"));
-                continue;
-            }
-            (Ok(_), _) => agree.record(&item, 0.0),
-        }
-        let rep = ours.expect("accepted");
-        for (k, c) in &rep.tolerated {
-            *tolerated.entry(k.clone()).or_default() += c;
-        }
         let out = out_root.join(format!("{n:03}"));
-        if out.exists() {
-            std::fs::remove_dir_all(&out).expect("clear the output");
-        }
-        if let Err(e) = scene::write(&w, &out) {
-            manifests.fail(&item, format!("write failed: {e}"));
-            continue;
-        }
-        let mut ok = true;
-        let (min, mout) = (manifest(dir), manifest(&out));
-        let c = json::compare(&min, &mout);
-        f64_equal += c.f64_equal;
-        f32_equal += c.f32_equal;
-        if c.differences.is_empty() {
-            manifests.record(&item, 0.0);
+        let before = snapshot(dir);
+        let (g, remove) = check_folder(dir, &out, validator.as_deref());
+        if snapshot(dir) != before {
+            // another process rewrote the input while we read it: neither a pass nor a mismatch
+            changed.push(dir.display().to_string());
         } else {
-            ok = false;
-            manifests.fail(&item, c.differences.join("; "));
+            total.add(g);
         }
-        let (tin, fin) = referenced(&min);
-        for t in &tin {
-            match same_file(&dir.join(t), &out.join(t)) {
-                Ok(true) => tables.record(format!("{item}/{t}"), 0.0),
-                Ok(false) => {
-                    ok = false;
-                    tables.fail(format!("{item}/{t}"), "bytes differ");
-                }
-                Err(e) => {
-                    ok = false;
-                    tables.fail(format!("{item}/{t}"), e);
-                }
-            }
-        }
-        let mut files_ok = true;
-        for f in &fin {
-            match same_file(&dir.join(f), &out.join(f)) {
-                Ok(true) => {}
-                Ok(false) => {
-                    files_ok = false;
-                    copies.fail(format!("{item}/{f}"), "bytes differ");
-                }
-                Err(e) => {
-                    files_ok = false;
-                    copies.fail(format!("{item}/{f}"), e);
-                }
-            }
-        }
-        if files_ok {
-            copies.record(format!("{item} ({} files)", fin.len()), 0.0);
-        }
-        ok &= files_ok;
-        if let (Some(v), Some(Ok((summary, warnings)))) = (&validator, &reference) {
-            match validate(v, &out) {
-                Ok((s2, w2)) if s2 == *summary && w2 == *warnings => revalid.record(&item, 0.0),
-                Ok((s2, w2)) => {
-                    ok = false;
-                    revalid.fail(
-                        &item,
-                        format!(
-                            "summary {s2:?} vs {summary:?}; warnings {} vs {}",
-                            w2.len(),
-                            warnings.len()
-                        ),
-                    );
-                }
-                Err(e) => {
-                    ok = false;
-                    revalid.fail(&item, e);
-                }
-            }
-            // our reader's warnings against the reference's (GLB warnings excepted: we do not read GLBs)
-            let mut a = rep.warnings.clone();
-            let mut b = warnings.clone();
-            a.sort();
-            b.sort();
-            if a != b {
-                causes.push(format!(
-                    "{item}: warnings differ: ours {} vs ref {}",
-                    a.len(),
-                    b.len()
-                ));
-            }
-        }
-        if ok {
+        if remove && out.exists() {
             std::fs::remove_dir_all(&out).expect("remove a passing output");
         }
     }
-    println!("{} scene folders", folders.len());
-    for g in [&agree, &tables, &manifests, &copies, &revalid] {
+    println!(
+        "{} scene folders: {} passed, {} changed during the run (not counted)",
+        folders.len(),
+        total.folders_passed,
+        changed.len()
+    );
+    for c in &changed {
+        println!("  input changed during run: {c}");
+    }
+    for g in total.all() {
         println!("{g}");
     }
-    println!("manifest numbers equal by value (text differs): {f64_equal}; equal only as f32: {f32_equal}");
-    println!("tolerated: {tolerated:?}");
+    println!(
+        "manifest numbers equal by value (text differs): {}; equal only as f32: {}",
+        total.f64_equal, total.f32_equal
+    );
+    println!("tolerated: {:?}", total.tolerated);
     println!(
         "{} other notes (different refusal causes, warning mismatches):",
-        causes.len()
+        total.notes.len()
     );
-    for c in &causes {
+    for c in &total.notes {
         println!("  {c}");
     }
-    for g in [&agree, &tables, &manifests, &copies] {
-        assert!(g.failures.is_empty(), "{g}");
+    let need_reference = validator.is_some();
+    for (i, g) in total.all().into_iter().enumerate() {
+        if i < 4 || need_reference {
+            assert!(g.failures.is_empty(), "{g}");
+        }
     }
-    if validator.is_some() {
-        assert!(revalid.failures.is_empty(), "{revalid}");
-    }
+    assert!(
+        changed.is_empty() || allow_live,
+        "{} input folders changed during the run (PRIMASE_ALLOW_LIVE=1 reports and continues)",
+        changed.len()
+    );
 }

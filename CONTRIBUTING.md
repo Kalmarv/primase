@@ -76,6 +76,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
+| `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |
 | `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable) |
 | `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
