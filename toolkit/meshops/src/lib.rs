@@ -1,9 +1,11 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
 mod distance;
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};
+mod hull;
 mod primitive;
 mod texcoords;
 pub mod vector;
+pub use hull::convex_hull;
 pub use primitive::{CompactedPrimitive, compact_primitive};
 use std::collections::BTreeMap;
 pub use texcoords::{BakeTextureTransforms, bake_texture_transforms};
