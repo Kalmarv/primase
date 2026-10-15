@@ -4,6 +4,7 @@ members = [
     "core",
     "toolkit/texcodec",
     "toolkit/dds",
+    "toolkit/image",
     "toolkit/compress",
     "toolkit/hash",
     "formats/skate-scene",
@@ -29,6 +30,7 @@ oozextract = { version = "=0.5.5", default-features = false, features = ["verbos
 primase-core = { path = "core" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
+primase-image = { path = "toolkit/image" }
 primase-compress = { path = "toolkit/compress" }
 primase-hash = { path = "toolkit/hash" }
 primase-skate-scene = { path = "formats/skate-scene" }
@@ -41,6 +43,9 @@ indexmap = { version = "=2.14.2", default-features = false, features = ["std"] }
 bytemuck = { version = "=1.25.2", default-features = false, features = ["derive"] }
 half = { version = "=2.7.1", default-features = false }
 sha2 = { version = "=0.11.1", default-features = false }
+
+png = { version = "=0.18.1", default-features = false }
+bcdec_rs = { version = "=0.2.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

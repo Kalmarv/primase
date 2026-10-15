@@ -12,5 +12,13 @@ publish.workspace = true
 primase-core.workspace = true
 thiserror.workspace = true
 
+bcdec_rs.workspace = true
+half.workspace = true
+
 [lints]
 workspace = true
+
+
+[dev-dependencies]
+primase-dds.workspace = true
+sha2.workspace = true

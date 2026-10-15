@@ -74,6 +74,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 |---|---|
 | `PRIMASE_SCENES_GTA` | a folder whose subfolders are GTA V skate-scene folders |
 | `PRIMASE_SCENES_SEKIRO` | a folder whose `scene_*` subfolders are Sekiro skate-scene folders |
+| `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |
 | `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`) |
 | `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
 | `PRIMASE_OODLE5` | explicit trusted Oodle version-5 game DLL path |
