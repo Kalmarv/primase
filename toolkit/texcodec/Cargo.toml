@@ -1,0 +1,16 @@
+[package]
+name = "primase-texcodec"
+description = "Texture block codecs behind one TexFormat: BCn decode/encode, SNORM BC4/BC5, gates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,650 @@
+//! The world store: entities, typed components, opaque (unknown) components and world resources.
+//!
+//! Deliberately small and deterministic. Every column keeps its entities in ascending order, so iteration order is a
+//! function of the world's contents, never of hashing or insertion timing; writers that walk the world produce the
+//! same bytes for the same world.
+
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+
+/// An entity: a plain id. Ids are never reused within one world, so a stale id finds nothing rather than another
+/// entity's components.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Entity(u32);
+
+impl Entity {
+    /// The entity's index in creation order (serialisation uses it).
+    pub fn index(self) -> u32 {
+        self.0
+    }
+
+    /// The entity with this index. For readers of serialised worlds: an index the world never spawned finds nothing.
+    pub fn from_index(index: u32) -> Self {
+        Entity(index)
+    }
+}
+
+/// JSON (and any serde form) shows an entity as its index.
+impl serde::Serialize for Entity {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.0)
+    }
+}
+
+impl fmt::Debug for Entity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "e{}", self.0)
+    }
+}
+
+/// A typed component. `NAME` is namespaced and stable (`core.transform`, `skate.material`, `fromsoft.layered_material`):
+/// serialisation, pass declarations and reports use it, so renaming one is a format change.
+pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
+    const NAME: &'static str;
+    /// Schema version of the component's content. Bump it when the meaning or layout of a field changes.
+    const VERSION: u32 = 1;
+
+    /// The component as JSON, for glTF extras, the debug text form and golden tests; `None` for components that are
+    /// not shown (bulk data, handles). Components that can be shown derive `serde::Serialize` and override this
+    /// with `serde_json::to_value(self).ok()`.
+    fn to_json(&self) -> Option<serde_json::Value> {
+        None
+    }
+}
+
+/// A world resource: one value per world (the frame, a game's archive index, a run's options).
+pub trait Resource: Any + Clone + fmt::Debug + Send + Sync {
+    const NAME: &'static str;
+    const VERSION: u32 = 1;
+}
+
+/// The content of a component this build does not know: carried through reading and writing untouched.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OpaqueData {
+    Json(serde_json::Value),
+    Bytes(Vec<u8>),
+}
+
+/// An opaque component value with the schema version it was written with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opaque {
+    pub version: u32,
+    pub data: OpaqueData,
+}
+
+/// The storage of one component type: entity -> value, ordered by entity.
+#[derive(Clone, Debug)]
+pub struct Column<T> {
+    values: BTreeMap<Entity, T>,
+}
+
+impl<T> Default for Column<T> {
+    fn default() -> Self {
+        Column {
+            values: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> Column<T> {
+    pub fn get(&self, e: Entity) -> Option<&T> {
+        self.values.get(&e)
+    }
+
+    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
+        self.values.get_mut(&e)
+    }
+
+    pub fn contains(&self, e: Entity) -> bool {
+        self.values.contains_key(&e)
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Entities and values in ascending entity order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Entity, &T)> + ExactSizeIterator {
+        self.values.iter().map(|(e, v)| (*e, v))
+    }
+
+    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
+        self.values.iter_mut().map(|(e, v)| (*e, v))
+    }
+
+    pub fn entities(&self) -> impl DoubleEndedIterator<Item = Entity> + ExactSizeIterator + '_ {
+        self.values.keys().copied()
+    }
+
+    fn insert(&mut self, e: Entity, value: T) -> Option<T> {
+        self.values.insert(e, value)
+    }
+
+    fn remove(&mut self, e: Entity) -> Option<T> {
+        self.values.remove(&e)
+    }
+}
+
+/// Type-erased operations the world needs on every column.
+trait AnyColumn: Any + Send + Sync {
+    fn name(&self) -> &'static str;
+    fn len(&self) -> usize;
+    fn contains(&self, e: Entity) -> bool;
+    fn remove_entity(&mut self, e: Entity);
+    /// `None` when the entity has no such component; `Some(None)` when it has one that is not shown as JSON.
+    fn json(&self, e: Entity) -> Option<Option<serde_json::Value>>;
+    fn clone_box(&self) -> Box<dyn AnyColumn>;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T: Component> AnyColumn for Column<T> {
+    fn name(&self) -> &'static str {
+        T::NAME
+    }
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+    fn contains(&self, e: Entity) -> bool {
+        self.values.contains_key(&e)
+    }
+    fn remove_entity(&mut self, e: Entity) {
+        self.values.remove(&e);
+    }
+    fn json(&self, e: Entity) -> Option<Option<serde_json::Value>> {
+        self.values.get(&e).map(Component::to_json)
+    }
+    fn clone_box(&self) -> Box<dyn AnyColumn> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+trait AnyResource: Any + Send + Sync {
+    fn clone_box(&self) -> Box<dyn AnyResource>;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T: Resource> AnyResource for T {
+    fn clone_box(&self) -> Box<dyn AnyResource> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+/// Entities with their components, opaque components and resources.
+#[derive(Default)]
+pub struct World {
+    next: u32,
+    /// Alive entities. Despawned ids stay out forever.
+    alive: std::collections::BTreeSet<Entity>,
+    columns: HashMap<TypeId, Box<dyn AnyColumn>>,
+    /// Component name -> owning type, to refuse two Rust types claiming one name.
+    names: BTreeMap<&'static str, TypeId>,
+    opaque: BTreeMap<String, BTreeMap<Entity, Opaque>>,
+    resources: HashMap<TypeId, Box<dyn AnyResource>>,
+    opaque_resources: BTreeMap<String, Opaque>,
+}
+
+impl Clone for World {
+    fn clone(&self) -> Self {
+        World {
+            next: self.next,
+            alive: self.alive.clone(),
+            columns: self.columns.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
+            names: self.names.clone(),
+            opaque: self.opaque.clone(),
+            resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
+            opaque_resources: self.opaque_resources.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for World {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for c in self.columns.values() {
+            counts.insert(c.name(), c.len());
+        }
+        for (name, col) in &self.opaque {
+            counts.insert(name, col.len());
+        }
+        f.debug_struct("World")
+            .field("entities", &self.alive.len())
+            .field("components", &counts)
+            .finish()
+    }
+}
+
+impl World {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn spawn(&mut self) -> Entity {
+        let e = Entity(self.next);
+        self.next = self.next.checked_add(1).expect("more than u32::MAX entities");
+        self.alive.insert(e);
+        e
+    }
+
+    /// Spawn with an explicit id, for readers of serialised worlds that keep the file's ids. Ids must come in
+    /// ascending order (gaps allowed); panics on an id at or below one already handed out, so ids stay unique.
+    pub fn spawn_at(&mut self, e: Entity) -> Entity {
+        assert!(
+            e.0 >= self.next,
+            "entity {e:?} is not above every id already used"
+        );
+        self.alive.insert(e);
+        self.next = e.0.checked_add(1).expect("more than u32::MAX entities");
+        e
+    }
+
+    /// Remove an entity and all its components. Returns false if it was not alive.
+    pub fn despawn(&mut self, e: Entity) -> bool {
+        if !self.alive.remove(&e) {
+            return false;
+        }
+        for c in self.columns.values_mut() {
+            c.remove_entity(e);
+        }
+        for col in self.opaque.values_mut() {
+            col.remove(&e);
+        }
+        true
+    }
+
+    pub fn is_alive(&self, e: Entity) -> bool {
+        self.alive.contains(&e)
+    }
+
+    /// Alive entities in ascending order.
+    pub fn entities(&self) -> impl DoubleEndedIterator<Item = Entity> + '_ {
+        self.alive.iter().copied()
+    }
+
+    pub fn entity_count(&self) -> usize {
+        self.alive.len()
+    }
+
+    fn register<T: Component>(&mut self) -> &mut Column<T> {
+        let id = TypeId::of::<T>();
+        if let Some(&owner) = self.names.get(T::NAME) {
+            assert!(owner == id, "two component types share the name {:?}", T::NAME);
+        } else {
+            self.names.insert(T::NAME, id);
+        }
+        self.columns
+            .entry(id)
+            .or_insert_with(|| Box::new(Column::<T>::default()))
+            .as_any_mut()
+            .downcast_mut::<Column<T>>()
+            .expect("column type matches its TypeId")
+    }
+
+    /// Attach (or replace) a component. Panics if the entity is not alive: attaching to a dead entity is a bug.
+    pub fn insert<T: Component>(&mut self, e: Entity, value: T) -> Option<T> {
+        assert!(self.alive.contains(&e), "insert {} on dead entity {e:?}", T::NAME);
+        self.register::<T>().insert(e, value)
+    }
+
+    pub fn remove<T: Component>(&mut self, e: Entity) -> Option<T> {
+        self.column_mut_existing::<T>()?.remove(e)
+    }
+
+    pub fn get<T: Component>(&self, e: Entity) -> Option<&T> {
+        self.column::<T>()?.get(e)
+    }
+
+    pub fn get_mut<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
+        self.column_mut_existing::<T>()?.get_mut(e)
+    }
+
+    pub fn has<T: Component>(&self, e: Entity) -> bool {
+        self.column::<T>().is_some_and(|c| c.contains(e))
+    }
+
+    /// The column of `T`, if any entity ever had one.
+    pub fn column<T: Component>(&self) -> Option<&Column<T>> {
+        self.columns
+            .get(&TypeId::of::<T>())
+            .map(|c| c.as_any().downcast_ref().expect("column type"))
+    }
+
+    fn column_mut_existing<T: Component>(&mut self) -> Option<&mut Column<T>> {
+        self.columns
+            .get_mut(&TypeId::of::<T>())
+            .map(|c| c.as_any_mut().downcast_mut().expect("column type"))
+    }
+
+    /// Mutable access to the values of `T` (entities cannot be added or removed through it).
+    pub fn column_mut<T: Component>(&mut self) -> Option<ColumnMut<'_, T>> {
+        self.column_mut_existing::<T>().map(ColumnMut)
+    }
+
+    /// Two different columns at once, e.g. writing `B` while reading `A` of the same entities.
+    /// Panics if `A` and `B` are the same type.
+    pub fn columns2_mut<A: Component, B: Component>(
+        &mut self,
+    ) -> (Option<ColumnMut<'_, A>>, Option<ColumnMut<'_, B>>) {
+        let (a, b) = (TypeId::of::<A>(), TypeId::of::<B>());
+        assert!(a != b, "columns2_mut needs two different component types");
+        let [ca, cb] = self.columns.get_disjoint_mut([&a, &b]);
+        (
+            ca.map(|c| ColumnMut(c.as_any_mut().downcast_mut().expect("column type"))),
+            cb.map(|c| ColumnMut(c.as_any_mut().downcast_mut().expect("column type"))),
+        )
+    }
+
+    /// Entities with `T`, in ascending order.
+    pub fn iter<T: Component>(&self) -> impl DoubleEndedIterator<Item = (Entity, &T)> {
+        self.column::<T>().into_iter().flat_map(|c| c.iter())
+    }
+
+    /// Entities with both `A` and `B`, in ascending order.
+    pub fn iter2<A: Component, B: Component>(&self) -> impl Iterator<Item = (Entity, &A, &B)> {
+        let b = self.column::<B>();
+        self.iter::<A>()
+            .filter_map(move |(e, va)| Some((e, va, b?.get(e)?)))
+    }
+
+    /// Names of every component kind present (typed and opaque), sorted.
+    pub fn component_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .columns
+            .values()
+            .filter(|c| c.len() > 0)
+            .map(|c| c.name())
+            .collect();
+        names.extend(
+            self.opaque
+                .iter()
+                .filter(|(_, c)| !c.is_empty())
+                .map(|(n, _)| n.as_str()),
+        );
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// Whether any entity has a component of this name (typed or opaque).
+    pub fn has_component_named(&self, name: &str) -> bool {
+        self.columns.values().any(|c| c.name() == name && c.len() > 0)
+            || self.opaque.get(name).is_some_and(|c| !c.is_empty())
+    }
+
+    /// Whether this entity has a component of this name (typed or opaque).
+    pub fn entity_has_named(&self, e: Entity, name: &str) -> bool {
+        self.columns.values().any(|c| c.name() == name && c.contains(e))
+            || self.opaque.get(name).is_some_and(|c| c.contains_key(&e))
+    }
+
+    /// Every component of an entity as JSON, sorted by name: typed ones through [`Component::to_json`], opaque JSON
+    /// ones as they are. Components without a JSON view (opaque bytes, typed ones that are not shown) are listed with
+    /// `None`, so callers can count them.
+    pub fn components_json(&self, e: Entity) -> Vec<(&str, Option<serde_json::Value>)> {
+        let mut out: Vec<(&str, Option<serde_json::Value>)> = self
+            .columns
+            .values()
+            .filter_map(|c| Some((c.name(), c.json(e)?)))
+            .collect();
+        for (name, col) in &self.opaque {
+            if let Some(o) = col.get(&e) {
+                let v = match &o.data {
+                    OpaqueData::Json(v) => Some(v.clone()),
+                    OpaqueData::Bytes(_) => None,
+                };
+                out.push((name.as_str(), v));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(b.0));
+        out
+    }
+
+    // ---- opaque components -------------------------------------------------------------------------------------
+
+    /// Attach a component this build does not model. Panics if a typed component owns the name: a reader that
+    /// knows the type must decode it.
+    pub fn insert_opaque(&mut self, e: Entity, name: &str, value: Opaque) -> Option<Opaque> {
+        assert!(self.alive.contains(&e), "insert {name} on dead entity {e:?}");
+        assert!(
+            !self.names.contains_key(name),
+            "{name} is a typed component; decode it instead"
+        );
+        self.opaque.entry(name.to_owned()).or_default().insert(e, value)
+    }
+
+    pub fn get_opaque(&self, e: Entity, name: &str) -> Option<&Opaque> {
+        self.opaque.get(name)?.get(&e)
+    }
+
+    pub fn remove_opaque(&mut self, e: Entity, name: &str) -> Option<Opaque> {
+        self.opaque.get_mut(name)?.remove(&e)
+    }
+
+    /// Every opaque component kind with its values, by name then entity.
+    pub fn opaque_components(&self) -> impl Iterator<Item = (&str, &BTreeMap<Entity, Opaque>)> {
+        self.opaque.iter().map(|(n, c)| (n.as_str(), c))
+    }
+
+    // ---- resources ---------------------------------------------------------------------------------------------
+
+    pub fn insert_resource<T: Resource>(&mut self, value: T) -> Option<T> {
+        let old = self.resources.insert(TypeId::of::<T>(), Box::new(value))?;
+        let any: Box<dyn Any> = old;
+        any.downcast::<T>().ok().map(|b| *b)
+    }
+
+    pub fn resource<T: Resource>(&self) -> Option<&T> {
+        self.resources
+            .get(&TypeId::of::<T>())
+            .and_then(|r| r.as_any().downcast_ref())
+    }
+
+    pub fn resource_mut<T: Resource>(&mut self) -> Option<&mut T> {
+        self.resources
+            .get_mut(&TypeId::of::<T>())
+            .and_then(|r| r.as_any_mut().downcast_mut())
+    }
+
+    pub fn remove_resource<T: Resource>(&mut self) -> Option<T> {
+        let old = self.resources.remove(&TypeId::of::<T>())?;
+        let any: Box<dyn Any> = old;
+        any.downcast::<T>().ok().map(|b| *b)
+    }
+
+    pub fn insert_opaque_resource(&mut self, name: &str, value: Opaque) -> Option<Opaque> {
+        self.opaque_resources.insert(name.to_owned(), value)
+    }
+
+    pub fn opaque_resources(&self) -> impl Iterator<Item = (&str, &Opaque)> {
+        self.opaque_resources.iter().map(|(n, v)| (n.as_str(), v))
+    }
+}
+
+/// Mutable access to one column's values without changing which entities it holds.
+#[derive(Debug)]
+pub struct ColumnMut<'w, T>(&'w mut Column<T>);
+
+impl<T> ColumnMut<'_, T> {
+    pub fn get(&self, e: Entity) -> Option<&T> {
+        self.0.get(e)
+    }
+    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
+        self.0.get_mut(e)
+    }
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Entity, &T)> + ExactSizeIterator {
+        self.0.iter()
+    }
+    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
+        self.0.iter_mut()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct A(u32);
+    impl Component for A {
+        const NAME: &'static str = "test.a";
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct B(&'static str);
+    impl Component for B {
+        const NAME: &'static str = "test.b";
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct Same;
+    impl Component for Same {
+        const NAME: &'static str = "test.a";
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct R(i32);
+    impl Resource for R {
+        const NAME: &'static str = "test.r";
+    }
+
+    #[test]
+    fn iteration_is_in_entity_order_regardless_of_insert_order() {
+        let mut w = World::new();
+        let es: Vec<Entity> = (0..5).map(|_| w.spawn()).collect();
+        for &e in es.iter().rev() {
+            w.insert(e, A(e.index() * 10));
+        }
+        let got: Vec<u32> = w.iter::<A>().map(|(_, a)| a.0).collect();
+        assert_eq!(got, [0, 10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn iter2_joins_and_despawn_removes_everything() {
+        let mut w = World::new();
+        let e0 = w.spawn();
+        let e1 = w.spawn();
+        w.insert(e0, A(1));
+        w.insert(e1, A(2));
+        w.insert(e1, B("x"));
+        w.insert_opaque(
+            e1,
+            "game.thing",
+            Opaque {
+                version: 3,
+                data: OpaqueData::Bytes(vec![1, 2]),
+            },
+        );
+        assert_eq!(w.iter2::<A, B>().map(|(e, ..)| e).collect::<Vec<_>>(), [e1]);
+        assert!(w.entity_has_named(e1, "game.thing"));
+        assert_eq!(w.component_names(), ["game.thing", "test.a", "test.b"]);
+        assert!(w.despawn(e1));
+        assert!(!w.has::<A>(e1) && w.get_opaque(e1, "game.thing").is_none());
+        assert_eq!(w.component_names(), ["test.a"]);
+        let e2 = w.spawn();
+        assert_ne!(e2, e1, "ids are never reused");
+    }
+
+    #[test]
+    fn columns2_mut_reads_one_writes_another() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(7));
+        w.insert(e, B("a"));
+        let (a, b) = w.columns2_mut::<A, B>();
+        let (a, mut b) = (a.unwrap(), b.unwrap());
+        if a.get(e).unwrap().0 == 7 {
+            *b.get_mut(e).unwrap() = B("seven");
+        }
+        assert_eq!(w.get::<B>(e), Some(&B("seven")));
+    }
+
+    #[test]
+    #[should_panic(expected = "share the name")]
+    fn two_types_cannot_share_a_name() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        w.insert(e, Same);
+    }
+
+    #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+    struct Shown {
+        x: u32,
+        of: Entity,
+    }
+    impl Component for Shown {
+        const NAME: &'static str = "test.shown";
+        fn to_json(&self) -> Option<serde_json::Value> {
+            serde_json::to_value(self).ok()
+        }
+    }
+
+    #[test]
+    fn components_json_lists_every_component_sorted() {
+        let mut w = World::new();
+        let e0 = w.spawn();
+        let e = w.spawn();
+        w.insert(e, Shown { x: 3, of: e0 });
+        w.insert(e, A(1));
+        w.insert_opaque(
+            e,
+            "game.bytes",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Bytes(vec![9]),
+            },
+        );
+        w.insert_opaque(
+            e,
+            "game.json",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Json(serde_json::json!({"k": 1})),
+            },
+        );
+        assert_eq!(
+            w.components_json(e),
+            [
+                ("game.bytes", None),
+                ("game.json", Some(serde_json::json!({"k": 1}))),
+                ("test.a", None),
+                ("test.shown", Some(serde_json::json!({"x": 3, "of": 0}))),
+            ]
+        );
+        assert!(w.components_json(e0).is_empty());
+    }
+
+    #[test]
+    fn resources_and_clone() {
+        let mut w = World::new();
+        assert!(w.insert_resource(R(1)).is_none());
+        assert_eq!(w.insert_resource(R(2)), Some(R(1)));
+        let e = w.spawn();
+        w.insert(e, A(5));
+        let w2 = w.clone();
+        w.get_mut::<A>(e).unwrap().0 = 6;
+        assert_eq!(w2.get::<A>(e), Some(&A(5)));
+        assert_eq!(w2.resource::<R>(), Some(&R(2)));
+    }
+}

@@ -1,0 +1,18 @@
+# build output
+/target
+**/*.rs.bk
+
+# anything a test, census or run writes
+/out
+/tmp
+**/test-output/
+**/census-output/
+*.log
+logs/
+
+# local notes, scripts and environment
+/notes
+/scratch
+*.ps1
+.env*
+.cargo/config.toml

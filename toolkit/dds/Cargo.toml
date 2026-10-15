@@ -1,0 +1,16 @@
+[package]
+name = "primase-dds"
+description = "DDS read and write (legacy FourCC and DX10 headers)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
