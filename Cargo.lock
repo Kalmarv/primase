@@ -642,6 +642,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-reskate"
+version = "0.1.0"
+dependencies = [
+ "primase-core",
+ "primase-dds",
+ "primase-gltf",
+ "primase-hash",
+ "primase-image",
+ "primase-meshops",
+ "primase-skate-scene",
+ "primase-texcodec",
+ "primase-vertex",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-skate-scene"
 version = "0.1.0"
 dependencies = [

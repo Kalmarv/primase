@@ -92,6 +92,9 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_SCENES_GTA` | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
+| `PRIMASE_RESKATE_REF` | a folder of map folders written by the reference C# map writer, one per area (each holding a `map.json`) |
+| `PRIMASE_RESKATE_SCENES` | the skate-scene folders those maps were built from, one per area, named like the map folders |
+| `PRIMASE_RESKATE_CAPS` | optional: the per-texture size caps file the reference build used (`--tex-caps`) |
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |

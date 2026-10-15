@@ -1,0 +1,25 @@
+[package]
+name = "primase-reskate"
+description = "ReSkate (skate.): the Studio normalized map writer, and later the Frostbite readers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+primase-skate-scene.workspace = true
+primase-gltf.workspace = true
+primase-hash.workspace = true
+primase-image.workspace = true
+primase-texcodec.workspace = true
+primase-dds.workspace = true
+primase-vertex.workspace = true
+primase-meshops.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

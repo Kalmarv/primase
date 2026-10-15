@@ -14,6 +14,7 @@ members = [
     "formats/web",
     "cli",
     "worlds/fromsoft",
+    "worlds/reskate",
 ]
 
 [workspace.package]
@@ -45,6 +46,7 @@ primase-hash = { path = "toolkit/hash" }
 primase-skate-scene = { path = "formats/skate-scene" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
+primase-reskate = { path = "worlds/reskate" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
