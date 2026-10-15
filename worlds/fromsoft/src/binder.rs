@@ -21,14 +21,36 @@ pub struct Binder {
 }
 impl Binder {
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(data, None, decoder)
+        Self::read_inner(data, None, decoder, false)
     }
     /// Read a BHF4 index and its matching BDF4 payload file.
     pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
-        Self::read_inner(header, Some(payload), decoder)
+        Self::read_inner(header, Some(payload), decoder, false)
     }
-    fn read_inner(data: &[u8], payload: Option<&[u8]>, decoder: &Decoder<'_>) -> Result<Self> {
-        let split = payload.is_some();
+    /// Validate a split index and list names without touching its payload. Full
+    /// payload bounds and decompression are checked by `read_split` when loaded.
+    pub fn split_names(header: &[u8]) -> Result<Vec<String>> {
+        Ok(Self::read_inner(
+            header,
+            None,
+            &Decoder {
+                oodle: None,
+                max_output: 0,
+            },
+            true,
+        )?
+        .files
+        .into_iter()
+        .filter_map(|f| f.name)
+        .collect())
+    }
+    fn read_inner(
+        data: &[u8],
+        payload: Option<&[u8]>,
+        decoder: &Decoder<'_>,
+        index_only: bool,
+    ) -> Result<Self> {
+        let split = payload.is_some() || index_only;
         let mut v = View {
             data,
             format: if split { "BHF4" } else { "BND4" },
@@ -62,7 +84,7 @@ impl Binder {
             be: v.be,
         };
         let mut payload_spans = Vec::new();
-        if split {
+        if split && !index_only {
             pv.expect(0, b"BDF4")?;
             pv.boolean(4)?;
             pv.boolean(5)?;
@@ -185,6 +207,18 @@ impl Binder {
                 id = Some(v.u32(q)? as i32);
                 v.expect(q + 4, &[0; 4])?;
             }
+            if index_only {
+                if off < 48 {
+                    return Err(invalid("BHF4", off, "file overlaps payload header"));
+                }
+                files.push(BinderFile {
+                    id,
+                    name,
+                    flags,
+                    bytes: Vec::new(),
+                });
+                continue;
+            }
             let bytes = pv.slice(off, size)?;
             if off < if split { 48 } else { headerend } {
                 return Err(invalid("BND4", off, "file overlaps header"));
@@ -269,7 +303,7 @@ impl Binder {
             return Err(invalid("BND4", 56, "unexpected hash table"));
         }
         coverage(&v, spans, data.len(), 15)?;
-        if split {
+        if split && !index_only {
             coverage(&pv, payload_spans, pv.data.len(), 15)?;
         }
         Ok(Self {

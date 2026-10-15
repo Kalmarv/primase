@@ -202,3 +202,37 @@ using the oracle's availability input and compares assignments, then checks
 the material references on each part in `PRIMASE_FROMSOFT_SCENE`. It is not a
 gate of archive texture discovery, which belongs to area assembly. Both require
 `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`; absent inputs skip explicitly.
+
+## Area assembly and scene proof
+
+`sekiro::read_area` assembles a selected map into an empty `World`, preserving
+unbaked geometry, materials, source labels and explicit texture conventions.
+It takes an install root, a trusted decoder and options; it never guesses paths.
+A failed read leaves the destination unchanged. Region selection uses source
+map east/north coordinates and transformed prototype bounds with an explicit
+margin. Far map pieces are excluded by default. Missing model IDs are reported.
+
+`sekiro::prepare_scene_assets` writes prototype GLBs and PNG images through
+the toolkit into an empty asset directory, attaching file components required
+by `primase_skate_scene::write`. The scene output directory is separate.
+Normal green direction is an explicit import policy, not inferred from curl.
+Layered materials retain bindings for a later bake; collision/Havok, ledges,
+lights and shader baking are not yet imported.
+
+The installed-area integration gate uses `PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6`,
+`PRIMASE_FROMSOFT_SCENE`, `PRIMASE_SCENE_SKATE` (independent validator executable
+or DLL), and `PRIMASE_FROMSOFT_OUTPUT` (a fresh output directory). Outputs remain
+for review. It checks the written folder, not only the in-memory model:
+prototype selection, topology and positions exactly; normalized normal
+components within absolute 1e-6; UV differences only when explained by the
+selected material's tiling, within four f32 epsilon scaled by magnitude;
+material texture bindings and classes exactly; placement translations exactly
+and bases within 1e-6 per unit scale. It counts tolerance matches separately.
+
+`written_manifest_values` additionally audits a retained output folder supplied
+by `PRIMASE_FROMSOFT_WRITTEN_SCENE` against `PRIMASE_FROMSOFT_SCENE`: every
+per-part material field, cutoff at consumer f32 precision, texture identities,
+source labels and region. Material deduplication retains full source bindings,
+so material counts can exceed the reference's preview-only identities. Texture
+pixel parity with the reference's normal-processing heuristic is not asserted;
+source decoding is covered separately by the texture gates.

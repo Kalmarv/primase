@@ -297,11 +297,16 @@ fn split_binder_shares_file_table_and_checks_both_files() {
     let result = Binder::read_split(&header, &payload, &decoder()).expect("split binder");
     assert_eq!(result.files[0].bytes, b"twenty payload bytes");
     assert_eq!(result.files[0].name.as_deref(), Some("a"));
+    assert_eq!(Binder::split_names(&header).unwrap(), ["a"]);
+    for n in 0..90 {
+        assert!(Binder::split_names(&header[..n]).is_err());
+    }
     for n in 0..payload.len() {
         assert!(Binder::read_split(&header, &payload[..n], &decoder()).is_err());
     }
     u32le(&mut header, 80, 47);
     assert!(Binder::read_split(&header, &payload, &decoder()).is_err());
+    assert!(Binder::split_names(&header).is_err());
 }
 fn tpf() -> Vec<u8> {
     let mut b = vec![0; 48];

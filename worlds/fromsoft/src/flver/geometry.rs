@@ -1,7 +1,7 @@
 use super::Model;
 use crate::{Result, invalid};
 use primase_core::frame::{Axis, SourceFrame};
-use primase_meshops::{Mesh, compact};
+use primase_meshops::{Mesh, compact, vector::Vec3};
 
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 
@@ -25,9 +25,6 @@ pub struct Part {
     pub material: usize,
     pub mesh: Mesh,
     pub winding_flipped: bool,
-}
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 impl Model {
@@ -73,12 +70,7 @@ impl Model {
             }
             for n in &mut mesh.normals {
                 *n = FRAME.direction(*n);
-                let len = dot(*n, *n).sqrt();
-                *n = if len > 1e-6 && len.is_finite() {
-                    n.map(|x| x / len)
-                } else {
-                    [0., 1., 0.]
-                };
+                *n = Vec3::from(*n).normalize_or(Vec3::UNIT_Y).into();
             }
             for uv in &mut mesh.uv {
                 uv[0] *= mat.uv_scale[0];
@@ -92,14 +84,10 @@ impl Model {
                     mesh.positions[t[1] as usize],
                     mesh.positions[t[2] as usize],
                 ];
-                let ab: [f32; 3] = std::array::from_fn(|i| b[i] - a[i]);
-                let ac: [f32; 3] = std::array::from_fn(|i| c[i] - a[i]);
-                let cross = [
-                    ab[1] * ac[2] - ab[2] * ac[1],
-                    ab[2] * ac[0] - ab[0] * ac[2],
-                    ab[0] * ac[1] - ab[1] * ac[0],
-                ];
-                let area_squared = dot(cross, cross);
+                let ab = Vec3::from(b) - Vec3::from(a);
+                let ac = Vec3::from(c) - Vec3::from(a);
+                let cross = ab.cross(ac);
+                let area_squared = cross.length_squared();
                 if !area_squared.is_finite() {
                     return Err(invalid("FLVER geometry", source_mesh, "non-finite face area"));
                 }
@@ -111,7 +99,7 @@ impl Model {
                         + mesh.normals[t[1] as usize][i]
                         + mesh.normals[t[2] as usize][i]
                 });
-                score += f64::from(dot(cross, normal));
+                score += f64::from(cross.dot(Vec3::from(normal)));
                 kept.extend_from_slice(t);
             }
             if !score.is_finite() {

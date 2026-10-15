@@ -9,6 +9,7 @@ mod keys;
 pub mod materials;
 pub mod msb;
 pub mod mtd;
+pub mod sekiro;
 pub use archive::{Archive, NameDictionary};
 pub use binder::{Binder, BinderFile};
 #[derive(Debug, thiserror::Error)]

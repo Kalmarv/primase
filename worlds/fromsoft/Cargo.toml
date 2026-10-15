@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 [dependencies]
+primase-image.workspace = true
+primase-gltf.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 primase-skate-scene.workspace = true
