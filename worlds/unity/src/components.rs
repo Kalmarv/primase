@@ -46,18 +46,22 @@ impl Component for UnityRenderer {
     }
 }
 
-/// A prototype read from a Unity mesh (its geometry comes with the mesh reader).
+/// A prototype read from a Unity mesh: the mesh, and the slice of its submeshes (first, count) when a static-batched
+/// renderer draws only that part of a combined mesh; otherwise all of them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct UnityMesh(pub UnityObject);
+pub struct UnityMesh {
+    pub mesh: UnityObject,
+    pub submeshes: Option<(u32, u32)>,
+}
 
 impl Component for UnityMesh {
     const NAME: &'static str = "unity.mesh";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(&self.0).map(Some)
+        primase_core::json::to_value(self).map(Some)
     }
 
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
-        if self.0.path_id == 0 {
+        if self.mesh.path_id == 0 {
             return Err("a null mesh".into());
         }
         Ok(())

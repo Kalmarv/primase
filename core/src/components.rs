@@ -146,6 +146,7 @@ pub enum Semantic {
     Normal,
     /// xyz tangent, w the bitangent sign (glTF).
     Tangent,
+    /// u right, v down: (0, 0) is the image's top-left corner (glTF). Readers of bottom-left conventions store 1 - v.
     TexCoord(u8),
     Color(u8),
     Joints(u8),

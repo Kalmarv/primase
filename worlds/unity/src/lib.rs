@@ -10,9 +10,11 @@
 //! - [`player`]: a player's data folder: its files, pointers resolved across them.
 //! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
+//! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 
 pub mod components;
 pub mod level;
+pub mod mesh;
 pub mod player;
 pub mod resource;
 pub mod scene;

@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-vertex.workspace = true
+primase-meshops.workspace = true
 thiserror.workspace = true
 lz4_flex.workspace = true
 serde.workspace = true

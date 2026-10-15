@@ -23,6 +23,8 @@ pub struct Player {
     pub dir: PathBuf,
     /// By lower-case file name: `level1`, `sharedassets1.assets`, `unity default resources`, ...
     pub files: BTreeMap<String, SerializedFile>,
+    /// The folder each file is in (its streamed resources are beside it).
+    pub folders: BTreeMap<String, PathBuf>,
     package: TypeTreePackage,
     trees: Mutex<HashMap<(String, i32), std::sync::Arc<TypeTree>>>,
 }
@@ -40,6 +42,7 @@ impl Player {
     /// class layouts. Files of other kinds (resources, bundles, configs) are skipped.
     pub fn open(dir: &Path, package: TypeTreePackage) -> Result<Self> {
         let mut files = BTreeMap::new();
+        let mut folders = BTreeMap::new();
         for d in [dir.to_path_buf(), dir.join("Resources")] {
             let Ok(rd) = std::fs::read_dir(&d) else { continue };
             let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
@@ -57,12 +60,14 @@ impl Player {
                     .map(|n| n.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
                 let f = SerializedFile::parse(bytes).map_err(|e| invalid(format!("{}: {e}", p.display())))?;
+                folders.insert(name.clone(), d.clone());
                 files.insert(name, f);
             }
         }
         Ok(Player {
             dir: dir.to_path_buf(),
             files,
+            folders,
             package,
             trees: Mutex::new(HashMap::new()),
         })

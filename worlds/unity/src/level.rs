@@ -1,13 +1,15 @@
 //! A Unity scene into the world: one entity per drawn mesh renderer (its world [`Transform`], an [`Instance`] of a
-//! prototype per mesh, its GameObject path as [`Name`], the `unity.*` details), Unity's frame converted.
+//! prototype, its GameObject path as [`Name`], the `unity.*` details), Unity's frame converted. A prototype is a
+//! mesh, or the slice of a combined mesh a static-batched renderer draws, with its geometry as a [`Mesh`].
 
 use std::collections::BTreeMap;
 
 use primase_core::frame::{Axis, SourceFrame};
-use primase_core::{Entity, Instance, Name, Transform, World};
+use primase_core::{Entity, Instance, Mesh, Name, Transform, World};
 
 use crate::Result;
 use crate::components::{UnityMesh, UnityObject, UnityRenderer};
+use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
 use crate::scene::{Matrix, Scene, Skipped};
 
@@ -31,6 +33,8 @@ pub fn transform_of(m: &Matrix) -> Transform {
 pub struct LevelReport {
     pub renderers: usize,
     pub prototypes: usize,
+    /// Primitives of all prototypes (one per drawn submesh).
+    pub primitives: usize,
     pub skipped: Skipped,
 }
 
@@ -38,13 +42,39 @@ pub struct LevelReport {
 pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelReport> {
     let scene = Scene::read(player, level)?;
     let (renderers, skipped) = scene.renderers(player)?;
-    let mut prototypes: BTreeMap<ObjRef, Entity> = BTreeMap::new();
+    let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
+    let mut prototypes: BTreeMap<(ObjRef, Option<(u32, u32)>), Entity> = BTreeMap::new();
+    let mut primitives = 0;
     for r in &renderers {
-        let proto = *prototypes.entry(r.mesh.clone()).or_insert_with(|| {
-            let e = w.spawn();
-            w.insert(e, UnityMesh(UnityObject::from(&r.mesh)));
-            e
-        });
+        let key = (r.mesh.clone(), r.submeshes);
+        let proto = match prototypes.get(&key) {
+            Some(&e) => e,
+            None => {
+                if !meshes.contains_key(&r.mesh) {
+                    meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
+                }
+                let data = &meshes[&r.mesh];
+                let range = match r.submeshes {
+                    Some((first, count)) => first as usize..(first + count) as usize,
+                    None => 0..data.submeshes.len(),
+                };
+                let mesh = Mesh {
+                    primitives: data.primitives(range)?.into_iter().map(|(_, p)| p).collect(),
+                };
+                primitives += mesh.primitives.len();
+                let e = w.spawn();
+                w.insert(e, mesh);
+                w.insert(
+                    e,
+                    UnityMesh {
+                        mesh: UnityObject::from(&r.mesh),
+                        submeshes: r.submeshes,
+                    },
+                );
+                prototypes.insert(key, e);
+                e
+            }
+        };
         let e = w.spawn();
         w.insert(e, UNITY.transform(&transform_of(&r.world)));
         w.insert(
@@ -73,6 +103,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     Ok(LevelReport {
         renderers: renderers.len(),
         prototypes: prototypes.len(),
+        primitives,
         skipped,
     })
 }
