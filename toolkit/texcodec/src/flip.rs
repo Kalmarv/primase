@@ -1,5 +1,5 @@
 //! Vertical flips of whole textures, for games that store rows bottom first.
-use crate::{Error, Result, TexDecoder};
+use crate::{Error, Result, TexDecoder, validate};
 use primase_core::{TexFormat, Texture};
 
 /// Which sub-blocks of a BC1-5 block hold rows, and how: (offset, kind).
@@ -99,7 +99,22 @@ fn flip_pixels<T: Copy>(pixels: &[T], w: u32) -> Vec<T> {
 /// pixels: `Rgba8Unorm` for formats that decode to 8-bit unsigned values (BC1-3, BC4/BC5 unorm, BC7, ETC, ASTC),
 /// exact; `Rgba32Float` for the rest (BC6H, signed BC4/BC5). The result's format tells which happened.
 pub fn flip_vertical(t: &Texture, decoder: &impl TexDecoder) -> Result<Texture> {
+    let bad = || Error::Dimensions {
+        width: t.width,
+        height: t.height,
+    };
+    if t.width == 0 || t.height == 0 {
+        return Err(bad());
+    }
+    // a full chain ends at 1 x 1: 1 + log2 of the larger side levels
+    if t.levels.is_empty() || t.levels.len() > 1 + t.width.max(t.height).ilog2() as usize {
+        return Err(bad());
+    }
     let dims = |i: usize| ((t.width >> i).max(1), (t.height >> i).max(1));
+    for (i, l) in t.levels.iter().enumerate() {
+        let (w, h) = dims(i);
+        validate(t.format, w, h, l)?;
+    }
     let exact: Option<Vec<Vec<u8>>> = t
         .levels
         .iter()
@@ -124,12 +139,6 @@ pub fn flip_vertical(t: &Texture, decoder: &impl TexDecoder) -> Result<Texture> 
                 .collect()
         } else {
             flip_pixels(&decoder.decode_rgba8(t.format, w, h, l)?, w)
-        });
-    }
-    if levels.is_empty() {
-        return Err(Error::Dimensions {
-            width: t.width,
-            height: t.height,
         });
     }
     Ok(Texture {
@@ -232,6 +241,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn invalid_textures_are_refused() {
+        let d = Decoder::default();
+        let mut t = texture(TexFormat::Bc1, 8, 8);
+        t.levels.clear();
+        assert!(flip_vertical(&t, &d).is_err(), "no levels");
+        let mut t = texture(TexFormat::Rgba8Unorm, 4, 4);
+        t.width = 0;
+        t.levels = vec![Vec::new()];
+        assert!(flip_vertical(&t, &d).is_err(), "zero width");
+        let mut t = texture(TexFormat::Rgba8Unorm, 4, 4);
+        t.levels = vec![vec![0; 4]; 40];
+        t.levels[0] = vec![0; 64];
+        assert!(flip_vertical(&t, &d).is_err(), "more levels than the chain has");
+        let mut t = texture(TexFormat::Bc3, 8, 8);
+        t.levels[1].pop();
+        assert!(flip_vertical(&t, &d).is_err(), "a short level");
     }
 
     #[test]
