@@ -6,6 +6,10 @@
 //! Materials follow Unity's rule: material i draws submesh i. Renderers of one prototype that use other materials are
 //! its variants ([`MaterialVariants`], [`Instance::variant`]). Submeshes beyond a renderer's materials are not drawn
 //! and materials beyond its submeshes draw the last one again (an extra pass): neither is reproduced, both counted.
+//!
+//! Renderers whose material builds its geometry in the vertex shader from component data ([`procedural`]) draw a
+//! placeholder mesh: they are left out (an entity with their transform, renderer, the GameObject's MonoBehaviours as
+//! bytes and [`UnityLeftOut`], no instance), counted by shader and placeholder mesh.
 
 use std::collections::BTreeMap;
 
@@ -13,16 +17,40 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, Transform, World};
 
 use crate::Result;
-use crate::components::{UnityMaterial, UnityMesh, UnityObject, UnityRenderer, UnityTexEnv, UnityTexture};
+use crate::components::{
+    UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityMaterial, UnityMesh, UnityObject, UnityRenderer,
+    UnityTexEnv, UnityTexture,
+};
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
-use crate::scene::{Matrix, Scene, Skipped};
+use crate::scene::{Matrix, Renderer, Scene, Skipped};
 use crate::texture::UnityTexture as UnityTextureData;
+use crate::value::Value;
 
 /// Unity's frame: left-handed, +Y up, +Z forward, metres. Into the world (right-handed, +Y up, -Z north): x, y, -z,
 /// so Unity's forward is north; a mirroring frame (the mesh reader reverses triangle winding).
 pub const UNITY: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.0);
+
+/// Whether a shader builds its geometry from component data, drawing a placeholder mesh: Shapes (a widely used
+/// package's line, disc, triangle and sphere shaders).
+pub fn procedural(shader: &str) -> bool {
+    shader.starts_with("Shapes/")
+}
+
+fn unity_renderer(r: &Renderer) -> UnityRenderer {
+    UnityRenderer {
+        renderer: UnityObject::from(&r.renderer),
+        layer: r.layer,
+        materials: r
+            .materials
+            .iter()
+            .map(|m| m.as_ref().map(UnityObject::from))
+            .collect(),
+        submeshes: r.submeshes,
+        cast_shadows: r.cast_shadows,
+    }
+}
 
 /// A Unity world matrix as a transform in Unity's frame (each entry rounded once to f32).
 pub fn transform_of(m: &Matrix) -> Transform {
@@ -44,6 +72,8 @@ pub struct LevelReport {
     pub primitives: usize,
     pub materials: usize,
     pub textures: usize,
+    /// Renderers left out (procedural geometry).
+    pub left_out: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
     pub textures_not_decoded: BTreeMap<String, u64>,
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
@@ -72,6 +102,48 @@ impl Builder<'_> {
         if n > 0 {
             *self.report.not_reproduced.entry(what.into()).or_default() += n;
         }
+    }
+
+    /// The MonoBehaviours of GameObject `go` of `scene`, their script fields as bytes.
+    fn behaviours(&self, scene: &Scene, go: i64) -> Result<Vec<UnityBehaviour>> {
+        let mut out = Vec::new();
+        for &c in scene.game_objects.get(&go).map_or(&[][..], |g| &g.components) {
+            let r = ObjRef {
+                file: scene.file.clone(),
+                path_id: c,
+            };
+            if self.player.class_name(&r) != Some("MonoBehaviour") {
+                continue;
+            }
+            let (base, data) = self.player.behaviour(&r)?;
+            let script = match base.get("m_Script") {
+                Some(p) => match self.player.resolve(&r.file, p)? {
+                    Some(s) => {
+                        let s = self.player.decode(&s)?;
+                        let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                        let (ns, class) = (field("m_Namespace"), field("m_ClassName"));
+                        if ns.is_empty() {
+                            class
+                        } else {
+                            format!("{ns}.{class}")
+                        }
+                    }
+                    None => String::new(),
+                },
+                None => String::new(),
+            };
+            out.push(UnityBehaviour {
+                behaviour: UnityObject::from(&r),
+                script,
+                enabled: base
+                    .get("m_Enabled")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|x| x != 0)
+                    || base.get("m_Enabled").and_then(Value::as_bool) == Some(true),
+                data,
+            });
+        }
+        Ok(out)
     }
 
     fn texture(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
@@ -189,6 +261,34 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 None => None,
             });
         }
+        let shaders = materials
+            .iter()
+            .flatten()
+            .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.clone()));
+        if let Some(shader) = shaders.into_iter().find(|s| procedural(s)) {
+            b.note(
+                &format!("renderers left out: procedural geometry, shader {shader}"),
+                1,
+            );
+            b.note(
+                &format!(
+                    "renderers left out: procedural geometry, placeholder mesh {}/{}",
+                    r.mesh.file, r.mesh.path_id
+                ),
+                1,
+            );
+            let behaviours = b.behaviours(&scene, r.game_object)?;
+            let e = w.spawn();
+            w.insert(e, UNITY.transform(&transform_of(&r.world)));
+            w.insert(e, Name(r.path.clone()));
+            w.insert(e, unity_renderer(r));
+            w.insert(e, UnityLeftOut(format!("procedural geometry: {shader}")));
+            if !behaviours.is_empty() {
+                w.insert(e, UnityBehaviours(behaviours));
+            }
+            b.report.left_out += 1;
+            continue;
+        }
         if !meshes.contains_key(&r.mesh) {
             meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
         }
@@ -258,20 +358,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             },
         );
         w.insert(e, Name(r.path.clone()));
-        w.insert(
-            e,
-            UnityRenderer {
-                renderer: UnityObject::from(&r.renderer),
-                layer: r.layer,
-                materials: r
-                    .materials
-                    .iter()
-                    .map(|m| m.as_ref().map(UnityObject::from))
-                    .collect(),
-                submeshes: r.submeshes,
-                cast_shadows: r.cast_shadows,
-            },
-        );
+        w.insert(e, unity_renderer(r));
     }
     // each primitive's material from variant 0, the other variants' where they differ
     for (key, p) in &prototypes {

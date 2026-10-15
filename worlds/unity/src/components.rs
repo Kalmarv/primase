@@ -159,3 +159,46 @@ impl Component for UnityMaterial {
         Ok(())
     }
 }
+
+/// A MonoBehaviour as stored: its script (namespace and class) and the script's serialized fields, kept as bytes
+/// (a stripped build has no type tree for them).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityBehaviour {
+    pub behaviour: UnityObject,
+    pub script: String,
+    pub enabled: bool,
+    #[serde(skip)]
+    pub data: Vec<u8>,
+}
+
+/// The MonoBehaviours of a GameObject the world carries without understanding them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnityBehaviours(pub Vec<UnityBehaviour>);
+
+impl Component for UnityBehaviours {
+    const NAME: &'static str = "unity.behaviours";
+    /// Scripts and sizes, not the bytes.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::Value::Array(
+            self.0
+                .iter()
+                .map(|b| {
+                    serde_json::json!({"behaviour": [b.behaviour.file, b.behaviour.path_id], "script": b.script,
+                        "enabled": b.enabled, "bytes": b.data.len()})
+                })
+                .collect(),
+        )))
+    }
+}
+
+/// A renderer the world leaves out, and why (`procedural geometry: Shapes/Line 2D Opaque`): it keeps its transform,
+/// `unity.renderer` and the GameObject's `unity.behaviours`, but no instance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UnityLeftOut(pub String);
+
+impl Component for UnityLeftOut {
+    const NAME: &'static str = "unity.left_out";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}

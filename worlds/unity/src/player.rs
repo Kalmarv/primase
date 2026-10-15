@@ -121,6 +121,20 @@ impl Player {
         Ok(d.value)
     }
 
+    /// A MonoBehaviour's base fields and its script's serialized bytes, which a stripped build has no type tree for.
+    pub fn behaviour(&self, r: &ObjRef) -> Result<(Value, Vec<u8>)> {
+        let f = self.file(&r.file)?;
+        let o = f
+            .object(r.path_id)
+            .ok_or_else(|| invalid(format!("{}: no object {}", r.file, r.path_id)))?;
+        if o.class_id != crate::serialized::MONO_BEHAVIOUR {
+            return Err(invalid(format!("{}/{}: not a MonoBehaviour", r.file, r.path_id)));
+        }
+        let d = f.decode_with(o, &*self.tree(&r.file, f, o.class_id)?)?;
+        let bytes = f.bytes(o);
+        Ok((d.value, bytes[bytes.len() - d.rest..].to_vec()))
+    }
+
     /// The object a `PPtr` (`m_FileID`, `m_PathID`) found in `file` points at; `None` for a null pointer.
     pub fn resolve(&self, file: &str, pptr: &Value) -> Result<Option<ObjRef>> {
         let fid = pptr

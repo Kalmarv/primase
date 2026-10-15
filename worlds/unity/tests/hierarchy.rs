@@ -15,7 +15,7 @@
 use primase_core::gate::{GateReport, Tolerance, real_data};
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
 use primase_unity::TypeTreePackage;
-use primase_unity::components::{UnityMesh, UnityRenderer};
+use primase_unity::components::{UnityBehaviours, UnityLeftOut, UnityMesh, UnityRenderer};
 use primase_unity::level::{UNITY, read_level, transform_of};
 use primase_unity::mesh::UnityMeshData;
 use primase_unity::player::{ObjRef, Player};
@@ -112,6 +112,8 @@ fn renderers_match_the_scan() {
         Tolerance::Exact,
     );
     let entities: Vec<_> = w.iter::<UnityRenderer>().collect();
+    let mut left_out = std::collections::BTreeSet::new();
+    let mut left_out_scripts = std::collections::BTreeMap::new();
     assert_eq!(entities.len(), ours.len());
     for ((e, u), r) in entities.iter().zip(&ours) {
         assert_eq!(u.renderer.path_id, r.renderer.path_id);
@@ -129,18 +131,45 @@ fn renderers_match_the_scan() {
         } else {
             placed.fail(&r.path, format!("{:?} vs {:?}", back.cols, want.cols));
         }
+        if let Some(why) = w.get::<UnityLeftOut>(*e) {
+            assert!(
+                w.get::<Instance>(*e).is_none(),
+                "{}: left out ({}) but placed",
+                r.path,
+                why.0
+            );
+            left_out.insert(r.path.clone());
+            let behaviours = w.get::<UnityBehaviours>(*e).map_or(&[][..], |b| &b.0);
+            for b in behaviours {
+                *left_out_scripts.entry(b.script.clone()).or_insert(0u64) += 1;
+            }
+            // the component a later lowering needs: a Shapes behaviour with its fields
+            assert!(
+                behaviours
+                    .iter()
+                    .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty()),
+                "{}: no Shapes component data",
+                r.path
+            );
+            continue;
+        }
         let proto = w.get::<Instance>(*e).unwrap().prototype;
         let m = w.get::<UnityMesh>(proto).unwrap();
         assert_eq!((m.mesh.path_id, m.submeshes), (r.mesh.path_id, r.submeshes));
     }
+    assert_eq!(left_out.len(), rep.left_out);
+    println!("left out, their MonoBehaviours by script: {left_out_scripts:?}");
+    // the scan's meshes or slices of the renderers placed
     let slices: std::collections::BTreeSet<String> = theirs
         .iter()
+        .filter(|t| !left_out.contains(t["path"].as_str().unwrap()))
         .map(|t| format!("{} {}", t["mesh"], t.get("submeshes").unwrap_or(&Json::Null)))
         .collect();
     println!(
         "{placed}
-world: {} renderer entities, {} prototypes ({} meshes or batch slices in the scan's scene renderers), {} primitives",
+world: {} renderer entities ({} left out), {} prototypes ({} meshes or batch slices in the scan's scene renderers placed), {} primitives",
         rep.renderers,
+        rep.left_out,
         rep.prototypes,
         slices.len(),
         rep.primitives

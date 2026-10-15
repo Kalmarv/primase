@@ -126,6 +126,8 @@ struct Node {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Renderer {
     pub renderer: ObjRef,
+    /// Its GameObject, in the scene file.
+    pub game_object: i64,
     /// The GameObject path, names from the root joined by `/`.
     pub path: String,
     pub layer: u32,
@@ -415,6 +417,7 @@ impl Scene {
             let submeshes = (count > 0).then_some((first as u32, count as u32));
             out.push(Renderer {
                 renderer: r(o.path_id),
+                game_object: go,
                 path: self.path(tp),
                 layer: g.layer,
                 mesh,
