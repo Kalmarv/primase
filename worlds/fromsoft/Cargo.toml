@@ -1,0 +1,20 @@
+[package]
+name = "primase-fromsoft"
+description = "Strict FromSoftware archive and binder readers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+[dependencies]
+primase-compress.workspace = true
+primase-hash.workspace = true
+thiserror.workspace = true
+aes.workspace = true
+num-bigint.workspace = true
+[dev-dependencies]
+primase-core.workspace = true
+sha2.workspace = true
+[lints]
+workspace = true

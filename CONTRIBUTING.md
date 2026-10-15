@@ -84,6 +84,9 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_OODLE9` | explicit trusted Oodle version-9 game DLL path |
 | `PRIMASE_DCX` | folder recursively containing loose KRAK DCX files |
 | `PRIMASE_CAS_SAMPLES` | directory of indexed individual `.casblock` frames |
+| `PRIMASE_SEKIRO_DIR` | install folder containing Data1 through Data5 BHD/BDT pairs |
+| `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
+| `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
@@ -95,7 +98,7 @@ same gates as our code. Pinned in the root `Cargo.toml` `[workspace.dependencies
 off) and used with `workspace = true`. **No umbrella crates** (`image`, `image_dds`, engine frameworks like
 `bevy_ecs`). In use or approved: bcdec_rs, intel_tex_2 / texpresso, ddsfile, png, lz4_flex, flate2, binrw, bytemuck,
 half, meshopt, pyo3, csbindgen, libloading (a game's own Oodle DLL, loaded at run time from the install, never
-bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, criterion
+bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), criterion
 (benches). Propose anything else in the pull request, with what it does and why our own would be worse.
 
 Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-compatible.

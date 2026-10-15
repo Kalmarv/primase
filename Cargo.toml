@@ -10,6 +10,7 @@ members = [
     "formats/skate-scene",
     "formats/gltf",
     "cli",
+    "worlds/fromsoft",
 ]
 
 [workspace.package]
@@ -23,6 +24,9 @@ publish = false
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
 [workspace.dependencies]
+aes = { version = "=0.9.3", default-features = false }
+num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
+primase-fromsoft = { path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
