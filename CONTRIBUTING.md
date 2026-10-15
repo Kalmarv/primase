@@ -138,11 +138,14 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_CAS_SAMPLES` | directory of indexed individual `.casblock` frames |
 | `PRIMASE_SEKIRO_DIR` | install folder containing Data1 through Data5 BHD/BDT pairs |
 | `PRIMASE_FROMSOFT_RIGID_ORACLE` | independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs |
+| `PRIMASE_FROMSOFT_OBJECT_ORACLE` | independently decoded main-HKX body fixtures for reference bd77fcb; worlds/fromsoft/tests/object_collision.rs |
+| `PRIMASE_FROMSOFT_OBJECT_SCENE` | reference scene folder with scene.json, export_report.json and collision/objects.bin from corrected convex decoding; worlds/fromsoft/tests/object_scene.rs |
+| `PRIMASE_FROMSOFT_OUTPUT` | fresh output folder for written scene and object-collision gates; worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MSB_ORACLE` | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | independent MTD fields and area material assignments; schema in worlds/fromsoft/README.md |
+| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_SCENE` | reference area skate-scene folder containing placement sources and tables |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_HAVOK_CORPUS` | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md |

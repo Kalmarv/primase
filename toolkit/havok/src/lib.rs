@@ -1,7 +1,9 @@
 //! Bounds-checked views of Havok binary tagfiles and their type compendia.
 //! Type indices are one-based; zero denotes a null type or object reference.
 
+mod convex;
 mod mesh;
+pub use convex::ConvexCore;
 mod section;
 pub use mesh::{CompressedMesh, Triangle, compressed_mesh};
 mod tagfile;

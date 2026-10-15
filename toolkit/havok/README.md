@@ -18,7 +18,19 @@ operations reject nonfinite coordinates.
 11/11/10 and 21/21/22 position arithmetic, quad splitting, per-triangle shape
 keys, and a counted DEAD primitive sentinel. It returns shape-local geometry;
 rigid transforms and game-specific material mappings belong to its caller.
-Other shape geometries are not implemented yet.
+`ConvexCore` retains stored vertices, faces, planes and convex radius. Its
+`expanded_triangles` policy builds the intersection of offset half-spaces in
+f64, then a closed hull with adaptive exact orientation predicates. It retains
+new corners rather than moving each original corner by a least-squares fit.
+Output vertices are inside every plane and incident to at least three planes
+within 0.01 mm after f32 rounding; sub-nanometre duplicates are welded and
+zero-area triangles caused by f32 rounding are omitted. This is a sharp
+polytope approximation, not the rounded Havok surface. Capsule cores yield
+box approximations. Spheres are not implemented.
+
+`PRIMASE_HAVOK_OBJECT_CORPUS` points to loose self-contained object `.hkx`
+files for an independent half-space residual gate. Non-convex classes are
+counted separately, not silently claimed as decoded.
 
 Synthetic tests use hand-authored section/type/item records, including pointer
 arrays, bad references, oversized items and every truncated fixture prefix.

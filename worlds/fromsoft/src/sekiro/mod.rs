@@ -1,8 +1,8 @@
-//! Sekiro area assembly: unbaked geometry and raw map collision. Lights,
-//! ledges and object collision remain separate reader steps.
+//! Sekiro area assembly: geometry and raw map/object collision.
 mod assets;
 pub mod collision;
 pub mod normals;
+pub mod objects;
 mod textures;
 use crate::{
     Archive, Binder, Result,
@@ -43,7 +43,9 @@ impl Default for Options {
 }
 #[derive(Default, Debug)]
 pub struct Report {
+    pub rigid_skinning: primase_core::pass::PassLog,
     pub collision: collision::Report,
+    pub object_collision: objects::Report,
     pub prototypes: usize,
     pub placements: usize,
     pub materials: usize,
@@ -197,6 +199,8 @@ pub fn read_area(
             continue;
         };
         let model = Model::read(&f.bytes)?;
+        let model = crate::rigid::lower_model(&model, &mut report.rigid_skinning)
+            .map_err(|e| invalid("rigid skinning", 0, e))?;
         let resolved: Vec<_> = model
             .materials
             .iter()
@@ -401,13 +405,14 @@ pub fn read_area(
         report.placements += 1;
     }
     report.collision = collision::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
+    report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
     world.insert_resource(SkateScene {
         name: format!("sekiro_{area}"),
         generator: Some("primase".into()),
         region: options.region,
         placements: Some(TableRef::single("tables/placements.bin")),
         warnings: Some(vec![
-            "Unbaked geometry and raw map collision; object collision, lights, ledges, roof smoothing and opened-up surfaces are not imported.".into(),
+            "Unbaked geometry and raw collision; extras, roof smoothing and opened-up surfaces are not imported.".into(),
         ]),
         ..Default::default()
     });

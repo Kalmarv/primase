@@ -113,6 +113,27 @@ impl<'t, 'a> Value<'t, 'a> {
         self.pointer()?
             .ok_or_else(|| invalid(self.offset, "null pointer"))
     }
+    /// A tagfile string reference, bounded by its character ITEM.
+    pub fn string(self) -> Result<String> {
+        if self.format()? & 15 != 3 {
+            return Err(invalid(self.offset, "expected string"));
+        }
+        let index = self.reference_index()?;
+        if index == 0 {
+            return Ok(String::new());
+        }
+        let item = self.tag.item(index)?;
+        let mut bytes = Vec::new();
+        for i in 0..item.len() {
+            let byte = u8::try_from(item.get(i)?.unsigned()?)
+                .map_err(|_| invalid(self.offset, "string character exceeds byte"))?;
+            if byte == 0 {
+                return String::from_utf8(bytes).map_err(|_| invalid(self.offset, "invalid UTF-8 string"));
+            }
+            bytes.push(byte);
+        }
+        Err(invalid(self.offset, "unterminated string"))
+    }
     pub fn array(self) -> Result<Array<'t, 'a>> {
         let format = self.format()?;
         if format & 15 != 8 {

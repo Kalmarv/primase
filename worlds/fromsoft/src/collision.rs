@@ -112,6 +112,90 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     }
     Ok(soup)
 }
+#[derive(Debug)]
+pub struct Body {
+    pub name: String,
+    /// Stored motion classification; interpreting 2 as keyframed is policy.
+    pub motion_type: u64,
+    pub shape: String,
+    pub soup: Soup,
+}
+
+/// Object bodies in their file frame. Convex shapes use an explicitly named
+/// offset-plane tessellation policy; capsules become boxes around their core.
+/// Unsupported geometry is an error, never an empty successful body.
+pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>, convex_material: i32) -> Result<Vec<Body>> {
+    let tag = Tagfile::read(bytes, compendium)?;
+    let variants = tag.root()?.field("namedVariants")?.array()?;
+    let mut result = Vec::new();
+    for i in 0..variants.len() {
+        let variant = variants.get(i)?.field("variant")?.dereference()?;
+        if variant.type_name() != "hknpPhysicsSceneData" {
+            continue;
+        }
+        let systems = variant.field("systemDatas")?.array()?;
+        for j in 0..systems.len() {
+            let bodies = systems.get(j)?.dereference()?.field("bodyCinfos")?.array()?;
+            for k in 0..bodies.len() {
+                let body = bodies.get(k)?;
+                let p = body.field("position")?.vector::<4>()?;
+                let q = body.field("orientation")?.vector::<4>()?;
+                if p[..3].iter().chain(q.iter()).any(|f| !f.is_finite()) {
+                    return Err(invalid("collision", body.offset, "nonfinite body transform"));
+                }
+                let shape = body.field("shape")?.dereference()?;
+                let mut soup = Soup::default();
+                match shape.type_name() {
+                    "fsnpCustomParamCompressedMeshShape" | "hknpCompressedMeshShape" => {
+                        let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
+                        let (keys, invalid_keys) =
+                            if shape.type_name() == "fsnpCustomParamCompressedMeshShape" {
+                                material_keys(shape)?
+                            } else {
+                                (BTreeMap::new(), 0)
+                            };
+                        soup.invalid_material_keys = invalid_keys;
+                        soup.dead_primitives = mesh.dead_primitives;
+                        for tri in mesh.triangles {
+                            let material = keys.get(&tri.key).copied().unwrap_or(-1);
+                            soup.unmapped += usize::from(material == -1);
+                            soup.materials.push(material);
+                            soup.triangles.push(tri.vertices);
+                        }
+                    }
+                    "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" => {
+                        soup.triangles = primase_havok::ConvexCore::read(shape)?.expanded_triangles()?;
+                        soup.materials.resize(soup.triangles.len(), convex_material);
+                    }
+                    other => {
+                        return Err(invalid(
+                            "collision",
+                            shape.offset,
+                            format!("unsupported object shape {other}"),
+                        ));
+                    }
+                }
+                for tri in &mut soup.triangles {
+                    *tri = tri.map(|v| pose(v, p, q));
+                    if tri.iter().flatten().any(|f| !f.is_finite()) {
+                        return Err(invalid(
+                            "collision",
+                            body.offset,
+                            "nonfinite transformed position",
+                        ));
+                    }
+                }
+                result.push(Body {
+                    name: body.field("name")?.string()?,
+                    motion_type: body.field("motionType")?.unsigned()?,
+                    shape: shape.type_name().into(),
+                    soup,
+                });
+            }
+        }
+    }
+    Ok(result)
+}
 fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
     let [x, y, z, w] = q;
     let xx = x * x;

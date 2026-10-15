@@ -52,7 +52,7 @@ fn leaf(name: &str) -> String {
         .trim_end_matches(".dcx")
         .to_ascii_lowercase()
 }
-fn push(soup: &mut SkateSoup, vertices: [[f32; 3]; 3], surface: u8) -> Result<()> {
+pub(super) fn push(soup: &mut SkateSoup, vertices: [[f32; 3]; 3], surface: u8) -> Result<()> {
     let start =
         u32::try_from(soup.positions.len()).map_err(|_| invalid("collision", 0, "too many soup vertices"))?;
     if start > u32::MAX - 3 {
@@ -63,7 +63,7 @@ fn push(soup: &mut SkateSoup, vertices: [[f32; 3]; 3], surface: u8) -> Result<()
     soup.surfaces.push(surface);
     Ok(())
 }
-fn attach(world: &mut World, soup: SkateSoup, path: &str, water: bool) {
+pub(super) fn attach(world: &mut World, soup: SkateSoup, path: &str, water: bool) {
     if soup.triangles.is_empty() {
         return;
     }
