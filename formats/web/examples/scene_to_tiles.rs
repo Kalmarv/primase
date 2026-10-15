@@ -4,7 +4,6 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::{Name, World};
 use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
 use primase_web::{Options, ViewerItem};
-use serde_json::json;
 use std::path::Path;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();

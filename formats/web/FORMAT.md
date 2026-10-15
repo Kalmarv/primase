@@ -93,15 +93,20 @@ triangle geometry (`POSITION`, mode 4); triangle order is preserved. A surface
 is a **per-triangle** value, not a vertex attribute. Primitive extras contain:
 
 ```json
-{"primase.collision_surfaces":{"version":1,"domain":"triangle","accessor":2}}
+{"primase.collision_surfaces":{"version":2,"domain":"triangle","accessor":2,"names":["default","Snow"]}}
 ```
 
-The accessor is SCALAR, unsigned byte (componentType 5121), one element per
-triangle. Version 2 of these extras uses unsigned short (5123) and adds `names`,
-an array mapping surface IDs to names. These extras versions are independent of
-the tile format version. Consumers must read the accessor type, not assume a
-byte per surface; unknown extras versions must not be interpreted as known ones.
-Names are labels, not universal physical properties. Rendering collision is
+The writer emits version 2: the accessor is SCALAR, unsigned short
+(componentType 5123), one surface ID per triangle, and `names` maps surface IDs
+to names (the world's `core.surfaces`; empty when the records given to the
+writer name none, in which case IDs are only IDs). Every ID is below the length
+of a non-empty `names`. Version 1, written by earlier tile sets, has an unsigned
+byte accessor (5121) and no `names`; it is no longer written. These extras
+versions are independent of the tile format version. Consumers must read the
+accessor type, not assume a byte per surface; unknown extras versions must not
+be interpreted as known ones. Names are labels, not universal physical
+properties. Triangles keep counter-clockwise fronts in world space: a soup placed
+through a mirroring transform has its triangles' index order flipped. Rendering collision is
 optional and does not contribute to `triangles` in the index.
 
 ## Optional viewer records
