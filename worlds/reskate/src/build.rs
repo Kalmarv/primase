@@ -81,6 +81,8 @@ pub struct BuildReport {
     pub materials: usize,
     pub textures: usize,
     pub collision_tris: i64,
+    /// Lights whose basis came from the fallback axis (no usable tangent).
+    pub lights_without_tangent: usize,
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
@@ -528,6 +530,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         materials: r.materials,
         textures: writer.ctx.tex.all().iter().filter(|t| !t.removed).count(),
         collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
+        lights_without_tangent: r.lights_without_tangent,
     })
 }
 
@@ -586,6 +589,7 @@ fn stats_json(
             placements_with_empty_mesh: r.empty_mesh,
             lights_written: r.lights_written,
             lights_dropped_by_cell_cap: r.lights_dropped,
+            lights_without_tangent: r.lights_without_tangent,
             grind_curves: r.grind_curves,
             grind_pieces: r.grind_pieces,
             grind_length_m: r4(f64::from(r.grind_length)),

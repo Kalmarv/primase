@@ -56,5 +56,11 @@ fn main() -> Result<(), BoxError> {
         r.collision_tris as f64 / 1e6,
         t0.elapsed().as_secs_f64()
     );
+    if r.lights_without_tangent > 0 {
+        println!(
+            "lights: {} without a usable tangent (basis from the fallback axis)",
+            r.lights_without_tangent
+        );
+    }
     Ok(())
 }

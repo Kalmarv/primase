@@ -80,6 +80,8 @@ pub struct WriteResult {
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
     pub lights_dropped: usize,
+    /// Lights whose basis came from the fallback axis (no usable tangent).
+    pub lights_without_tangent: usize,
     pub grind_curves: i64,
     pub grind_pieces: i64,
     pub grind_length: f32,
@@ -1241,19 +1243,27 @@ pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
     keep
 }
 
-/// The light records of `kept`, named `prefix` + number.
-fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> Vec<LightJson> {
-    kept.iter()
+/// The light records of `kept`, named `prefix` + number, and how many had no usable tangent (their basis is built
+/// from a fallback axis: X, or Z for a light along X, made square to the light, since Studio refuses a basis that is
+/// not orthogonal).
+fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> (Vec<LightJson>, usize) {
+    let mut fallback = 0;
+    let lights = kept
+        .iter()
         .enumerate()
         .map(|(n, l)| {
             let fwd = l.dir;
             let mut right = l.tan - fwd * l.tan.dot(fwd);
             if right.length_squared() > 1e-12 {
                 right = right.normalize();
-            } else if fwd.x.abs() < 0.9 {
-                right = Sdx::UNIT_X;
             } else {
-                right = (Sdx::UNIT_Y - fwd * fwd.y).normalize();
+                let axis = if fwd.x.abs() < 0.9 {
+                    Sdx::UNIT_X
+                } else {
+                    Sdx::UNIT_Z
+                };
+                right = (axis - fwd * axis.dot(fwd)).normalize();
+                fallback += 1;
             }
             let up = fwd.cross(right).normalize();
             LightJson {
@@ -1284,7 +1294,8 @@ fn lights_json(kept: &[PlacedLight], off: Sdx, prefix: &str) -> Vec<LightJson> {
                 spot_blend: l.spot.then(|| r4(f64::from(l.spot_blend))),
             }
         })
-        .collect()
+        .collect();
+    (lights, fallback)
 }
 
 /// Sutherland-Hodgman, one step.
@@ -1833,7 +1844,8 @@ impl MapWriter {
         self.r.lights_written = kept_lights.len();
         self.r.lights_dropped = x.lights.len() - kept_lights.len();
 
-        let lights = lights_json(&kept_lights, off, &o.light_prefix);
+        let (lights, without_tangent) = lights_json(&kept_lights, off, &o.light_prefix);
+        self.r.lights_without_tangent = without_tangent;
         let mut materials: BTreeMap<String, MaterialJson> = self
             .ctx
             .mats
@@ -2092,6 +2104,32 @@ impl MapWriter {
 mod tests {
     use super::*;
 
+    fn light(dir: Sdx, tan: Sdx) -> PlacedLight {
+        PlacedLight {
+            spot: true,
+            pos: Sdx::ZERO,
+            dir,
+            tan,
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            energy: 1.0,
+            range: 10.0,
+            radius: 0.1,
+            spot_size: 1.0,
+            spot_blend: 0.1,
+            time_of_day: 0,
+            cast_shadow: false,
+            priority: 0.0,
+            group: String::new(),
+            source: String::new(),
+        }
+    }
+
+    fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
     fn acc(seq: usize) -> Acc {
         Acc {
             seq,
@@ -2127,5 +2165,37 @@ mod tests {
         );
         // a cycle is broken at its first used part, after the parts that are free
         assert_eq!(draw_order(&parts, class, &[(1, 5), (5, 1)]), [9, 3, 7, 8, 1, 5]);
+    }
+
+    /// A light without a usable tangent gets a basis square to it: from X, or from Z for a light along X.
+    #[test]
+    fn a_tangentless_light_gets_an_orthogonal_basis() {
+        let tilt = 0.7f32.to_radians();
+        let lights = [
+            // 0.7 degrees off straight down, no tangent
+            light(Sdx::new(tilt.sin(), 0.0, -tilt.cos()), Sdx::ZERO),
+            // along X, a tangent parallel to it
+            light(Sdx::UNIT_X, Sdx::UNIT_X),
+            // straight down: X is already square to it
+            light(Sdx::new(0.0, 0.0, -1.0), Sdx::ZERO),
+            // a usable tangent is kept
+            light(Sdx::new(0.0, 0.0, -1.0), Sdx::UNIT_Y),
+        ];
+        let (json, fallback) = lights_json(&lights, Sdx::ZERO, "l");
+        assert_eq!(fallback, 3);
+        for (l, j) in lights.iter().zip(&json) {
+            let b = &j.basis;
+            for (u, v) in [(b.right, b.up), (b.right, b.forward), (b.up, b.forward)] {
+                assert!(dot(u, v).abs() < 1e-3, "{:?}: not orthogonal {u:?} {v:?}", l.dir);
+            }
+            for u in [b.right, b.up, b.forward] {
+                assert!((dot(u, u) - 1.0).abs() < 1e-3, "{:?}: not unit {u:?}", l.dir);
+            }
+        }
+        // Studio's frame (x, z, -y): the fallback axes and the kept tangent
+        assert!(json[0].basis.right[0] > 0.99, "from X: {:?}", json[0].basis.right);
+        assert_eq!(json[1].basis.right, [0.0, 1.0, 0.0], "from Z (up)");
+        assert_eq!(json[2].basis.right, [1.0, 0.0, 0.0], "X unchanged");
+        assert_eq!(json[3].basis.right, [0.0, 0.0, -1.0], "the tangent");
     }
 }

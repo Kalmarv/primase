@@ -312,6 +312,7 @@ pub struct Totals {
     pub placements_with_empty_mesh: i64,
     pub lights_written: usize,
     pub lights_dropped_by_cell_cap: usize,
+    pub lights_without_tangent: usize,
     pub grind_curves: i64,
     pub grind_pieces: i64,
     pub grind_length_m: f64,
