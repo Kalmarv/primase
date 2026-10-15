@@ -8,11 +8,16 @@ use primase_core::{NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ,
 
 /// Whether this family's static normal basis was observed in installed shaders.
 /// The three legacy names are an explicit assumption: their shader bundles are
-/// absent from the inspected install. Dynamic water buffers and layer blending
+/// absent from the inspected shaderbdle bundle; the separate GX shader bundle
+/// was not part of that inspection. Dynamic water buffers and layer blending
 /// are outside this static texture conversion.
 pub fn consumer_basis(shader: &str) -> Result<bool> {
     Ok(match shader {
-        "M[Multiple]"
+        // The GX G-buffer program samples t3 RG as 2*v-1: red multiplies
+        // normalized cross(N,T)*w, green multiplies normalized T. Positive Z
+        // is rebuilt from RG; sampled blue is written separately to o1.x.
+        "GXFlver_ColDifSpcBumpEmiIbl"
+        | "M[Multiple]"
         | "M[MultipleGround]"
         | "MetallicValue"
         | "MetallicTex"

@@ -204,3 +204,81 @@ fn uv_frame_classes_remain_measurements() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn gx_emissive_basis_rebuilds_z_independent_of_blue() {
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
+    use primase_fromsoft::sekiro::normals::{self, Consumer};
+    assert!(consumer_basis("GXFlver_ColDifSpcBumpEmiIbl").unwrap());
+    for consumer in [Consumer::Gltf, Consumer::Skate] {
+        let mut world = World::default();
+        let e = world.spawn();
+        world.insert(
+            e,
+            Texture {
+                width: 2,
+                height: 1,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![vec![100, 120, 0, 255, 100, 120, 255, 255]],
+                color_space: ColorSpace::Linear,
+                role: TexRole::Normal,
+                normal: Some(normals::SOURCE),
+            },
+        );
+        normals::lower(&mut world, consumer).unwrap();
+        let pixels = &world.get::<Texture>(e).unwrap().levels[0];
+        assert_eq!(&pixels[..4], &pixels[4..]);
+        assert!(pixels[2] > 200);
+    }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn castle_gx_emissive_geometry() -> Result<()> {
+    use primase_core::{Instance, Mesh, Name, TexRole, Texture, World};
+    use primase_fromsoft::{dcx::Decoder, materials::Material, sekiro};
+    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+        return Ok(());
+    };
+    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+        return Ok(());
+    };
+    // SAFETY: caller supplies a trusted native library.
+    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1024 * 1024 * 1024,
+    };
+    let mut world = World::default();
+    let report = sekiro::read_area(root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
+    let mut parts = 0;
+    let mut triangles = 0;
+    let mut placed = 0;
+    for (entity, mesh) in world.iter::<Mesh>() {
+        if world.get::<Name>(entity).is_none_or(|n| n.0 != "o006000") {
+            continue;
+        }
+        placed += world
+            .iter::<Instance>()
+            .filter(|(_, i)| i.prototype == entity)
+            .count();
+        for p in &mesh.primitives {
+            if p.material
+                .and_then(|e| world.get::<Material>(e))
+                .is_some_and(|m| m.shader == "GXFlver_ColDifSpcBumpEmiIbl")
+            {
+                parts += 1;
+                triangles += p.indices.as_ref().unwrap().len() / 3;
+            }
+        }
+    }
+    assert_eq!((parts, triangles, placed), (1, 2638, 1));
+    for (_, t) in world.iter::<Texture>().filter(|(_, t)| t.role == TexRole::Normal) {
+        assert_eq!(t.normal, Some(sekiro::normals::SOURCE));
+    }
+    println!(
+        "castle assembly {} placements; evidenced GX emissive: {parts} part, {triangles} triangles, {placed} placement",
+        report.placements
+    );
+    Ok(())
+}

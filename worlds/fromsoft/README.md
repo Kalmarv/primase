@@ -274,13 +274,20 @@ update scene normal declarations and discard stale file provenance.
 
 `sekiro::normals::consumer_basis` lists the inspected families. Three legacy
 families (`GXFlver_Col`, `GXFlver_ColDif`, `GXFlver_ColDifSpcBumpIbl`) are absent
-from the installed shader bundle and use the same mapping as a named assumption,
+from the inspected shaderbdle bundle (not proven absent from the install) and
+use the same mapping as a named assumption,
 counted per emitted part in `Report::normal_basis_assumptions`. Unclassified
 families are errors. Water's static texture uses this basis, but its runtime
 normal buffer remains an unsupported dynamic effect. Layer blending also remains
 part of the later shader bake; this conversion only preserves the chosen static
 texture contribution. Downstream consumers must preserve the emitted tangent
 stream rather than regenerate a different UV-derived frame.
+
+`GXFlver_ColDifSpcBumpEmiIbl` is present in the separate GX shader bundle. Its
+G-buffer program samples t3 RG as `2*v-1`, multiplies red by the normalized
+bitangent and green by the normalized tangent, rebuilds positive Z, and
+normalizes the result. Sampled blue goes separately to o1.x, not to normal Z.
+It uses the evidenced source basis and shared Z reconstruction.
 
 `PRIMASE_FROMSOFT_NORMAL_FRAMES` supplies `frames.jsonl` with independently sampled
 unit source normal `n`, tangent `t`, handedness `w`, and a model `key`. Two off-axis
