@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_hash::{content_bytes, content_finish, content_string, content_word};
-use primase_texcodec::{BcArithmetic, Decoder, TexDecoder};
+use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::{Error, Result};
 
@@ -323,9 +323,7 @@ impl TexSource {
             return Ok(None);
         }
         let mut d = b[off as usize..(off + len) as usize].to_vec();
-        let dec = Decoder {
-            arithmetic: BcArithmetic::CodeWalker,
-        };
+        let dec = Decoder::default();
         let err = |e: primase_texcodec::Error| Error::Texture(format!("{}: {e}", self.path.display()));
         Ok(Some(match self.kind {
             Kind::Dxt => {
