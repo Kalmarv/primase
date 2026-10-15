@@ -224,6 +224,7 @@ pub fn read_area(
                 }
             }
             materials.push(resolved[part.material].clone());
+            let tangents = part.tangents;
             mesh.primitives.push(Primitive {
                 topology: Topology::Triangles,
                 streams: BTreeMap::from([
@@ -234,6 +235,13 @@ pub fn read_area(
                 indices: Some(part.mesh.indices),
                 material: None,
             });
+            if !tangents.is_empty() {
+                mesh.primitives
+                    .last_mut()
+                    .expect("inserted primitive")
+                    .streams
+                    .insert(Semantic::Tangent, Stream::F32x4(tangents));
+            }
         }
         prototypes.insert(
             key,

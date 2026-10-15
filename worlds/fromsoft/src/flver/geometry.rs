@@ -1,7 +1,9 @@
 use super::Model;
 use crate::{Result, invalid};
 use primase_core::frame::{Axis, SourceFrame};
-use primase_meshops::{Mesh, compact, vector::Vec3};
+use primase_core::{Primitive, Semantic, Stream, Topology};
+use primase_meshops::{Mesh, compact_primitive, vector::Vec3};
+use std::collections::BTreeMap;
 
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 
@@ -25,6 +27,8 @@ pub struct Part {
     pub material: usize,
     pub mesh: Mesh,
     pub winding_flipped: bool,
+    /// Stored tangent frame after coordinate conversion, in compacted vertex order.
+    pub tangents: Vec<[f32; 4]>,
 }
 
 impl Model {
@@ -54,17 +58,71 @@ impl Model {
             if indices.is_empty() {
                 continue;
             }
-            let raw = Mesh {
-                positions: m.vertices.iter().map(|v| v.position).collect(),
-                normals: m.vertices.iter().map(|v| v.normal).collect(),
-                uv: m
-                    .vertices
-                    .iter()
-                    .map(|v| v.uvs.first().map_or([0.; 2], |uv| [uv[0], uv[1]]))
-                    .collect(),
-                indices,
+            let mut streams = BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(m.vertices.iter().map(|v| v.position).collect()),
+                ),
+                (
+                    Semantic::Normal,
+                    Stream::F32x3(m.vertices.iter().map(|v| v.normal).collect()),
+                ),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(
+                        m.vertices
+                            .iter()
+                            .map(|v| v.uvs.first().map_or([0.; 2], |uv| [uv[0], uv[1]]))
+                            .collect(),
+                    ),
+                ),
+            ]);
+            if m.vertices.iter().any(|v| !v.tangents.is_empty()) {
+                let tangents =
+                    m.vertices
+                        .iter()
+                        .map(|v| {
+                            v.tangents.first().copied().ok_or_else(|| {
+                                invalid("FLVER geometry", source_mesh, "partial tangent stream")
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+            }
+            let compacted = compact_primitive(&Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(indices),
+                material: None,
+            })
+            .map_err(|e| invalid("FLVER geometry", source_mesh, e))?;
+            let mut streams = compacted.primitive.streams;
+            let Some(Stream::F32x3(positions)) = streams.remove(&Semantic::Position) else {
+                unreachable!()
             };
-            let mut mesh = compact(&raw).map_err(|e| invalid("FLVER geometry", source_mesh, e))?;
+            let Some(Stream::F32x3(normals)) = streams.remove(&Semantic::Normal) else {
+                unreachable!()
+            };
+            let Some(Stream::F32x2(uv)) = streams.remove(&Semantic::TexCoord(0)) else {
+                unreachable!()
+            };
+            let mut tangents = match streams.remove(&Semantic::Tangent) {
+                Some(Stream::F32x4(v)) => v,
+                None => Vec::new(),
+                _ => unreachable!(),
+            };
+            for t in &mut tangents {
+                let direction = FRAME.direction([t[0], t[1], t[2]]);
+                let direction: [f32; 3] = Vec3::from(direction).normalize().into();
+                // The handedness changes under the frame's Z reflection.
+                *t = [direction[0], direction[1], direction[2], -t[3]];
+            }
+            let mut mesh = Mesh {
+                positions,
+                normals,
+                uv,
+                indices: compacted.primitive.indices.expect("indexed primitive"),
+            };
             for p in &mut mesh.positions {
                 *p = FRAME.point(*p);
             }
@@ -121,6 +179,7 @@ impl Model {
                 material: m.material,
                 mesh,
                 winding_flipped: score < 0.,
+                tangents,
             });
         }
         Ok(parts)
