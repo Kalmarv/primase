@@ -267,6 +267,9 @@ pub struct MapImageJson {
 /// `stats.json`: what the build did.
 #[derive(Debug, Serialize)]
 pub struct StatsJson<'a> {
+    /// Source scene statistics, preserved separately from this writer's counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub front_end: Option<&'a Value>,
     pub name: &'a str,
     pub scene: String,
     pub region: [f64; 4],

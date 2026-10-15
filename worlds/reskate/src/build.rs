@@ -557,6 +557,7 @@ fn stats_json(
     let mut seen = HashSet::new();
     let ov = &r.overlay;
     let stats = StatsJson {
+        front_end: s.stats.as_ref(),
         name: &o.name,
         scene: full.to_string_lossy().into_owned(),
         region: o.region,
