@@ -1,4 +1,6 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
+mod distance;
+pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};
 mod primitive;
 mod texcoords;
 pub mod vector;
