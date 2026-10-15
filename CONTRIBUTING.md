@@ -132,6 +132,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MSB_ORACLE` | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
+| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | independent MTD fields and area material assignments; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_SCENE` | reference area skate-scene folder containing placement sources and tables |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
@@ -145,7 +146,7 @@ same gates as our code. Pinned in the root `Cargo.toml` `[workspace.dependencies
 off) and used with `workspace = true`. **No umbrella crates** (`image`, `image_dds`, engine frameworks like
 `bevy_ecs`). In use or approved: bcdec_rs, intel_tex_2 / texpresso, ddsfile, png, lz4_flex, flate2, binrw, bytemuck,
 half, meshopt, pyo3, csbindgen, libloading (a game's own Oodle DLL, loaded at run time from the install, never
-bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), criterion
+bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), criterion
 (benches). Propose anything else in the pull request, with what it does and why our own would be worse.
 
 Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-compatible.

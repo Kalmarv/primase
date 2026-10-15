@@ -160,3 +160,45 @@ translations remain exact. Gates count exact and tolerance matches separately.
 labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
 references, exact translations and bases under the same stated tolerance.
 Both gates also require `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.
+
+## Material definitions and preview lowering
+
+`mtd::MaterialDefinition::read` validates typed structure, markers, counts
+and file bounds. Declared block lengths are diagnostic: stock values can
+exceed their structurally consumed end, including the file end. The reader
+retains every declared and consumed length without reading outside the file.
+This structure-authoritative rule is not a claim about the game's parser control flow. Shift-JIS strings decode strictly; malformed text is
+an error at its string offset. No replacement characters are introduced.
+
+`materials::resolve` applies an explicit main-layer preview policy. Nonempty
+FLVER slot paths override fixed MTD paths. Among available albedos it chooses
+slot 8, then the lowest slot; normals prefer a matching stem, then slots 3 and
+0, then the lowest slot. When shader-qualified names share a numeric slot,
+bindings declared by the selected MTD take precedence over foreign-family
+bindings; all bindings remain available to the later bake. The caller supplies
+texture availability. Shader names
+and blend/alpha parameters select preview classes; name-based collision surface
+choices are a documented approximation, not a claim about shader semantics.
+The selected albedo's positive FLVER tiling scale is kept for geometry lowering.
+
+`fromsoft.material` records these choices and all resolved bindings.
+`fromsoft.layered_material` additionally retains the complete MTD parameters,
+texture declarations, selected static switch, UV indices and binding scales
+for the later shader-aware bake. The preview does not execute layered shaders.
+`Material::skate_material` resolves colour and normal roles independently into
+texture entities, with deterministic fallback colours for missing base data.
+Metallic and emissive source slots survive even when the target preview does
+not consume them. Material identity is chosen by the caller, independently of
+any reference exporter's string formatting or key hashing.
+
+`PRIMASE_FROMSOFT_MATERIAL_ORACLE` supplies two independent outputs:
+`mtd-boundaries.jsonl` lists independently audited block starts, kinds, declared
+and consumed lengths for every file. The gate counts length mismatches.
+`mtd.jsonl` lists binder names, decoded SHA256, shader, description, typed
+parameters and every texture declaration; `models.jsonl` lists model keys,
+texture availability and per-FLVER-material assignments. The first gate compares
+stored fields exactly, including f32 bits. The second isolates selection policy
+using the oracle's availability input and compares assignments, then checks
+the material references on each part in `PRIMASE_FROMSOFT_SCENE`. It is not a
+gate of archive texture discovery, which belongs to area assembly. Both require
+`PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`; absent inputs skip explicitly.

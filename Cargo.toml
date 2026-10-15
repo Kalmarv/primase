@@ -28,6 +28,7 @@ publish = false
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
 [workspace.dependencies]
+encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 primase-fromsoft = { path = "worlds/fromsoft" }
