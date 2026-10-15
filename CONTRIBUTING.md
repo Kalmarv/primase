@@ -145,6 +145,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_FROMSOFT_EXTRAS_SCENE` | reference scene folder with lights/grind tables and markers; worlds/fromsoft/tests/extras_scene.rs |
 | `PRIMASE_FROMSOFT_EXTRAS_OUTPUT` | fresh extras scene output folder; worlds/fromsoft/tests/extras_scene.rs |
 | `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
+| `PRIMASE_FROMSOFT_NORMAL_SCENE` | reference normal PNGs and scene.json for offline cached-DDS comparison; worlds/fromsoft/tests/normal_images.rs |
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MSB_ORACLE` | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
