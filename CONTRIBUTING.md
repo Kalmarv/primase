@@ -76,6 +76,12 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_SCENES_SEKIRO` | a folder whose `scene_*` subfolders are Sekiro skate-scene folders |
 | `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`) |
 | `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
+| `PRIMASE_OODLE5` | explicit trusted Oodle version-5 game DLL path |
+| `PRIMASE_OODLE6` | explicit trusted Oodle version-6 game DLL path |
+| `PRIMASE_OODLE9` | explicit trusted Oodle version-9 game DLL path |
+| `PRIMASE_DCX` | folder recursively containing loose KRAK DCX files |
+| `PRIMASE_CAS_SAMPLES` | directory of indexed individual `.casblock` frames |
+| `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 

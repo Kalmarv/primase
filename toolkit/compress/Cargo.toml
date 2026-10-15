@@ -10,6 +10,13 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+lz4_flex.workspace = true
+flate2.workspace = true
+libloading.workspace = true
+
+[dev-dependencies]
+primase-core.workspace = true
+oozextract.workspace = true
 
 [lints]
 workspace = true
