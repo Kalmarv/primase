@@ -15,7 +15,7 @@
 use primase_core::gate::{GateReport, Tolerance, real_data};
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
 use primase_unity::TypeTreePackage;
-use primase_unity::components::{UnityBehaviours, UnityLeftOut, UnityMesh, UnityRenderer};
+use primase_unity::components::{UnityBehaviours, UnityLeftOut, UnityMesh, UnityRenderer, UnityTreeInstance};
 use primase_unity::level::{UNITY, read_level, transform_of};
 use primase_unity::mesh::UnityMeshData;
 use primase_unity::player::{ObjRef, Player};
@@ -111,7 +111,11 @@ fn renderers_match_the_scan() {
         "world: renderer transforms, back in Unity's frame, the f32 matrix bit for bit",
         Tolerance::Exact,
     );
-    let entities: Vec<_> = w.iter::<UnityRenderer>().collect();
+    // the scene's renderers (terrain trees are gated with the terrains)
+    let entities: Vec<_> = w
+        .iter::<UnityRenderer>()
+        .filter(|(e, _)| !w.has::<UnityTreeInstance>(*e))
+        .collect();
     let mut left_out = std::collections::BTreeSet::new();
     let mut left_out_scripts = std::collections::BTreeMap::new();
     assert_eq!(entities.len(), ours.len());
@@ -160,9 +164,17 @@ fn renderers_match_the_scan() {
     assert_eq!(left_out.len(), rep.left_out);
     println!("left out, their MonoBehaviours by script: {left_out_scripts:?}");
     // the scan's meshes or slices of the renderers placed
+    // and the terrain trees' (gated with the terrains)
+    let trees = scan["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["src"] == "tree");
     let slices: std::collections::BTreeSet<String> = theirs
         .iter()
+        .copied()
         .filter(|t| !left_out.contains(t["path"].as_str().unwrap()))
+        .chain(trees)
         .map(|t| format!("{} {}", t["mesh"], t.get("submeshes").unwrap_or(&Json::Null)))
         .collect();
     println!(

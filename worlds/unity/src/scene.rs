@@ -345,8 +345,47 @@ impl Scene {
         self.transform_of.get(&game_object).copied()
     }
 
+    /// A Transform's local matrix.
+    pub fn local_of(&self, tp: i64) -> Option<Matrix> {
+        self.nodes.get(&tp).map(|n| n.local)
+    }
+
+    /// The matrix of Transform `tp` relative to its ancestor `root` (the product of the locals below `root`), or
+    /// `None` when `root` is not `tp` or an ancestor of it.
+    pub fn relative_to(&self, tp: i64, root: i64) -> Option<Matrix> {
+        let mut chain = Vec::new();
+        let mut t = tp;
+        while t != root {
+            let n = self.nodes.get(&t)?;
+            chain.push(t);
+            if n.father == 0 || chain.len() > self.nodes.len() {
+                return None;
+            }
+            t = n.father;
+        }
+        Some(
+            chain
+                .iter()
+                .rev()
+                .fold(IDENTITY, |m, t| mul(&m, &self.nodes[t].local)),
+        )
+    }
+
     /// The drawn mesh renderers, in the order of the scene's object table, and what was skipped.
     pub fn renderers(&self, player: &Player) -> Result<(Vec<Renderer>, Skipped)> {
+        self.renderers_under(player, None)
+    }
+
+    /// The drawn mesh renderers of the GameObject `root` and its descendants (a prefab's), their matrices relative to
+    /// `root`; all of the file's with `None`.
+    pub fn renderers_under(&self, player: &Player, root: Option<i64>) -> Result<(Vec<Renderer>, Skipped)> {
+        let root_tp = match root {
+            Some(go) => Some(
+                self.transform_of(go)
+                    .ok_or_else(|| invalid(format!("GameObject {go} has no transform")))?,
+            ),
+            None => None,
+        };
         let file = self.file.as_str();
         let f = player.file(file)?;
         let r = |pid: i64| ObjRef {
@@ -379,6 +418,13 @@ impl Scene {
             let Some(tp) = self.transform_of(go) else {
                 *skipped.entry("no transform").or_default() += 1;
                 continue;
+            };
+            let relative = match root_tp {
+                Some(root) => match self.relative_to(tp, root) {
+                    Some(m) => Some(m),
+                    None => continue,
+                },
+                None => None,
             };
             if !self.active(tp) || !flag(&mr, "m_Enabled")? {
                 *skipped.entry("inactive or disabled").or_default() += 1;
@@ -425,7 +471,10 @@ impl Scene {
                 world: if submeshes.is_some() {
                     IDENTITY
                 } else {
-                    self.world_of(tp)?
+                    match relative {
+                        Some(m) => m,
+                        None => self.world_of(tp)?,
+                    }
                 },
                 submeshes,
                 cast_shadows: mr.get("m_CastShadows").and_then(Value::as_i64).unwrap_or(1),

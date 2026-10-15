@@ -20,6 +20,7 @@ use crate::Result;
 use crate::components::{
     UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityMaterial, UnityMesh, UnityObject, UnityRenderer,
     UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
+    UnityTreeInstance,
 };
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
@@ -76,6 +77,8 @@ pub struct LevelReport {
     /// Renderers left out (procedural geometry).
     pub left_out: usize,
     pub terrains: usize,
+    /// Renderers placed by terrain trees (their prefab's drawn renderers, per tree).
+    pub tree_renderers: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
     pub textures_not_decoded: BTreeMap<String, u64>,
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
@@ -223,6 +226,66 @@ impl Builder<'_> {
         Ok(e)
     }
 
+    /// The renderers terrain `t` places with its trees: per tree instance, its prototype prefab's drawn renderers
+    /// (LOD 0), each at T(terrain position + position x size) Ry(rotation) S(width, height, width) times its matrix
+    /// relative to the prefab's root; the root's own transform is not applied (counted when it is not the identity).
+    fn trees(
+        &mut self,
+        t: &crate::scene::TerrainComponent,
+        td: &TerrainData,
+        prefabs: &mut BTreeMap<String, Scene>,
+    ) -> Result<Vec<(usize, Renderer)>> {
+        let mut per_prototype = Vec::with_capacity(td.tree_prototypes.len());
+        for p in &td.tree_prototypes {
+            let Some(p) = p else {
+                per_prototype.push(None);
+                continue;
+            };
+            if !prefabs.contains_key(&p.file) {
+                prefabs.insert(p.file.clone(), Scene::read(self.player, &p.file)?);
+            }
+            let prefab = &prefabs[&p.file];
+            let root = prefab.transform_of(p.path_id).ok_or_else(|| {
+                crate::invalid(format!("tree prefab {}/{}: no transform", p.file, p.path_id))
+            })?;
+            let root_identity = prefab.local_of(root) == Some(IDENTITY);
+            self.note(
+                "tree prefab roots with a transform (not applied)",
+                u64::from(!root_identity),
+            );
+            let (rs, _) = prefab.renderers_under(self.player, Some(p.path_id))?;
+            per_prototype.push(Some((prefab.path(root), rs)));
+        }
+        let size = td.size();
+        let name = t.path.rsplit('/').next().unwrap_or(&t.path);
+        let mut out = Vec::new();
+        for (i, tree) in td.trees.iter().enumerate() {
+            let Some(Some((prefab_path, rs))) = per_prototype.get(tree.prototype) else {
+                self.note("trees whose prototype has no prefab", 1);
+                continue;
+            };
+            let (s, c) = f64::from(tree.rotation).sin_cos();
+            let (wd, ht) = (f64::from(tree.width_scale), f64::from(tree.height_scale));
+            let mut m = IDENTITY;
+            for k in 0..3 {
+                m[k][3] = t.world[k][3] + f64::from(tree.position[k]) * size[k];
+            }
+            m[0][0] = c * wd;
+            m[0][2] = s * wd;
+            m[1][1] = ht;
+            m[2][0] = -s * wd;
+            m[2][2] = c * wd;
+            for r in rs {
+                let mut r = r.clone();
+                // `<terrain>/tree<i>:<prefab>/<renderer's path in the prefab, its root included>`
+                r.path = format!("{name}/tree{i}:{prefab_path}/{}", r.path);
+                r.world = crate::scene::mul(&m, &r.world);
+                out.push((i, r));
+            }
+        }
+        Ok(out)
+    }
+
     fn shader(&mut self, r: &ObjRef) -> Result<String> {
         if let Some(n) = self.shaders.get(r) {
             return Ok(n.clone());
@@ -293,9 +356,101 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             ..LevelReport::default()
         },
     };
+    // terrains, and the renderers of their trees
+    let mut trees: Vec<((Entity, usize), Renderer)> = Vec::new();
+    let mut prefabs: BTreeMap<String, Scene> = BTreeMap::new();
+    for t in scene.terrains(player)? {
+        let td = TerrainData::read(player, &t.data)?;
+        let e = w.spawn();
+        if t.draw_trees {
+            trees.extend(
+                b.trees(&t, &td, &mut prefabs)?
+                    .into_iter()
+                    .map(|(i, r)| ((e, i), r)),
+            );
+        }
+        let mut layers = Vec::with_capacity(td.layers.len());
+        for l in &td.layers {
+            layers.push(l.as_ref().map(|l| b.layer(w, l)).transpose()?);
+        }
+        let mut alphamaps = Vec::with_capacity(td.alphamaps.len());
+        for a in &td.alphamaps {
+            alphamaps.push(b.texture_ref(w, a)?);
+        }
+        let material = t.material.as_ref().map(|m| b.material(w, m)).transpose()?;
+        let collider = match &t.collider {
+            Some(c) => Some(UnityTerrainCollider {
+                collider: UnityObject::from(&c.collider),
+                enabled: c.enabled,
+                other_data: c.data.as_ref().filter(|d| **d != t.data).map(UnityObject::from),
+                physic_material: match &c.material {
+                    Some(m) => player
+                        .decode(m)?
+                        .get("m_Name")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    None => None,
+                },
+                tree_colliders: c.tree_colliders,
+            }),
+            None => None,
+        };
+        // Unity places a terrain by its position only
+        let mut at = IDENTITY;
+        for (i, row) in at.iter_mut().enumerate().take(3) {
+            row[3] = t.world[i][3];
+        }
+        let linear_identity = (0..3).all(|i| (0..3).all(|j| t.world[i][j] == IDENTITY[i][j]));
+        b.note(
+            "terrain rotations or scales ignored (Unity places terrains by position)",
+            u64::from(!linear_identity),
+        );
+        w.insert(e, Name(t.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&at)));
+        w.insert(
+            e,
+            UnityTerrain {
+                terrain: UnityObject::from(&t.terrain),
+                data: UnityObject::from(&t.data),
+                resolution: td.resolution,
+                scale: td.scale,
+                heights: td.heights,
+                holes: td.holes,
+                layers,
+                alphamaps,
+                alphamap_resolution: td.alphamap_resolution,
+                material,
+                draw_heightmap: t.draw_heightmap,
+                draw_trees: t.draw_trees,
+                collider,
+                tree_prototypes: td
+                    .tree_prototypes
+                    .iter()
+                    .map(|p| p.as_ref().map(UnityObject::from))
+                    .collect(),
+                trees: td
+                    .trees
+                    .iter()
+                    .map(|i| UnityTree {
+                        position: i.position,
+                        width_scale: i.width_scale,
+                        height_scale: i.height_scale,
+                        rotation: i.rotation,
+                        color: i.color,
+                        prototype: i.prototype,
+                    })
+                    .collect(),
+            },
+        );
+        b.report.terrains += 1;
+    }
     let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
     let mut prototypes: BTreeMap<(ObjRef, Option<(u32, u32)>), Proto> = BTreeMap::new();
-    for r in &renderers {
+    let placed = renderers
+        .iter()
+        .map(|r| (None, r))
+        .chain(trees.iter().map(|(of, r)| (Some(*of), r)));
+    for (tree, r) in placed {
         let mut materials = Vec::with_capacity(r.materials.len());
         for m in &r.materials {
             materials.push(match m {
@@ -401,6 +556,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         );
         w.insert(e, Name(r.path.clone()));
         w.insert(e, unity_renderer(r));
+        if let Some((terrain, tree)) = tree {
+            w.insert(e, UnityTreeInstance { terrain, tree });
+        }
     }
     // each primitive's material from variant 0, the other variants' where they differ
     for (key, p) in &prototypes {
@@ -432,85 +590,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             w.insert(p.entity, MaterialVariants(overrides));
         }
     }
-    for t in scene.terrains(player)? {
-        let td = TerrainData::read(player, &t.data)?;
-        let mut layers = Vec::with_capacity(td.layers.len());
-        for l in &td.layers {
-            layers.push(l.as_ref().map(|l| b.layer(w, l)).transpose()?);
-        }
-        let mut alphamaps = Vec::with_capacity(td.alphamaps.len());
-        for a in &td.alphamaps {
-            alphamaps.push(b.texture_ref(w, a)?);
-        }
-        let material = t.material.as_ref().map(|m| b.material(w, m)).transpose()?;
-        let collider = match &t.collider {
-            Some(c) => Some(UnityTerrainCollider {
-                collider: UnityObject::from(&c.collider),
-                enabled: c.enabled,
-                other_data: c.data.as_ref().filter(|d| **d != t.data).map(UnityObject::from),
-                physic_material: match &c.material {
-                    Some(m) => player
-                        .decode(m)?
-                        .get("m_Name")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    None => None,
-                },
-                tree_colliders: c.tree_colliders,
-            }),
-            None => None,
-        };
-        // Unity places a terrain by its position only
-        let mut at = IDENTITY;
-        for (i, row) in at.iter_mut().enumerate().take(3) {
-            row[3] = t.world[i][3];
-        }
-        let linear_identity = (0..3).all(|i| (0..3).all(|j| t.world[i][j] == IDENTITY[i][j]));
-        b.note(
-            "terrain rotations or scales ignored (Unity places terrains by position)",
-            u64::from(!linear_identity),
-        );
-        let e = w.spawn();
-        w.insert(e, Name(t.path.clone()));
-        w.insert(e, UNITY.transform(&transform_of(&at)));
-        w.insert(
-            e,
-            UnityTerrain {
-                terrain: UnityObject::from(&t.terrain),
-                data: UnityObject::from(&t.data),
-                resolution: td.resolution,
-                scale: td.scale,
-                heights: td.heights,
-                holes: td.holes,
-                layers,
-                alphamaps,
-                alphamap_resolution: td.alphamap_resolution,
-                material,
-                draw_heightmap: t.draw_heightmap,
-                draw_trees: t.draw_trees,
-                collider,
-                tree_prototypes: td
-                    .tree_prototypes
-                    .iter()
-                    .map(|p| p.as_ref().map(UnityObject::from))
-                    .collect(),
-                trees: td
-                    .trees
-                    .iter()
-                    .map(|i| UnityTree {
-                        position: i.position,
-                        width_scale: i.width_scale,
-                        height_scale: i.height_scale,
-                        rotation: i.rotation,
-                        color: i.color,
-                        prototype: i.prototype,
-                    })
-                    .collect(),
-            },
-        );
-        b.report.terrains += 1;
-    }
     b.report.renderers = renderers.len();
+    b.report.tree_renderers = trees.len();
     b.report.prototypes = prototypes.len();
     Ok(b.report)
 }

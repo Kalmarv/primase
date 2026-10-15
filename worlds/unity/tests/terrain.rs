@@ -397,3 +397,97 @@ fn terrain_geometry_matches_the_port() {
     // a BC1 palette rounded otherwise moves each texel by at most 1, so the mean by at most 1/255
     assert!(mean_max <= 1.0 / 255.0, "layer means differ by {mean_max}");
 }
+
+/// Terrain trees against the scan's (`instances` with `src` "tree": `path`, `mesh`, `mats`, `M` rounded to 6
+/// decimals): every tree renderer placed, with its mesh, materials, and its world matrix back in Unity's frame within
+/// the scan's rounding (5e-7) plus half an f32 step at the entry (our transforms are f32).
+#[test]
+fn trees_match_the_scan() {
+    use primase_core::{Instance, Name, Transform, World};
+    use primase_unity::components::{UnityMesh, UnityRenderer};
+    use primase_unity::level::{UNITY, read_level};
+    use std::collections::BTreeMap;
+    let (Some(data), Some(tpk), Some(scan)) = (
+        real_data("PRIMASE_UNITY_DATA"),
+        real_data("PRIMASE_UNITY_TPK"),
+        real_data("PRIMASE_UNITY_SCAN"),
+    ) else {
+        return;
+    };
+    let scan: Json = serde_json::from_slice(&std::fs::read(&scan).unwrap()).unwrap();
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut w = World::new();
+    let rep = read_level(&player, scan["level"].as_str().unwrap(), &mut w).unwrap();
+    let ours: BTreeMap<&str, primase_core::Entity> = w
+        .iter::<UnityRenderer>()
+        .filter_map(|(e, _)| {
+            let n = &w.get::<Name>(e).unwrap().0;
+            n.contains("/tree").then_some((n.as_str(), e))
+        })
+        .collect();
+    let theirs: Vec<&Json> = scan["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["src"] == "tree")
+        .collect();
+    assert_eq!(rep.tree_renderers, theirs.len(), "tree renderers");
+    let mut records = GateReport::new("trees: path, mesh, materials", Tolerance::Exact);
+    let mut matrices = GateReport::new(
+        "trees: world matrix (scan rounding + half an f32 step)",
+        Tolerance::Exact,
+    );
+    let mut worst = 0f64;
+    for t in theirs {
+        let path = t["path"].as_str().unwrap();
+        let Some(&e) = ours.get(path) else {
+            records.fail(path, "not placed");
+            continue;
+        };
+        let u: &UnityRenderer = w.get(e).unwrap();
+        let proto = w.get::<Instance>(e).unwrap().prototype;
+        let m = w.get::<UnityMesh>(proto).unwrap();
+        let mats: Vec<Json> = u
+            .materials
+            .iter()
+            .map(|m| m.as_ref().map_or(Json::Null, |m| json!([m.file, m.path_id])))
+            .collect();
+        let mine = json!({"mesh": [m.mesh.file, m.mesh.path_id], "mats": mats});
+        let want = json!({"mesh": t["mesh"], "mats": t["mats"]});
+        if mine == want {
+            records.record(path, 0.0);
+        } else {
+            records.fail(path, format!("{mine} vs {want}"));
+        }
+        let back = UNITY.transform_to_source(w.get::<Transform>(e).unwrap());
+        let mut beyond = Vec::new();
+        for i in 0..3 {
+            for j in 0..4 {
+                let ours = f64::from(back.cols[j][i]);
+                let theirs = t["M"][i][j].as_f64().unwrap();
+                let bound = 5e-7 + theirs.abs() * f64::from(f32::EPSILON) / 2.0;
+                let d = (ours - theirs).abs();
+                worst = worst.max(d / bound);
+                if d > bound {
+                    beyond.push(format!("[{i}][{j}] {ours} vs {theirs}"));
+                }
+            }
+        }
+        if beyond.is_empty() {
+            matrices.record(path, 0.0);
+        } else {
+            matrices.fail(path, beyond.join(", "));
+        }
+    }
+    println!("{records}\n{matrices}\nworst difference: {worst:.3} of the bound");
+    println!(
+        "level: {} tree renderers; not reproduced {:?}",
+        rep.tree_renderers, rep.not_reproduced
+    );
+    records.assert_passed();
+    matrices.assert_passed();
+}

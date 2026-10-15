@@ -306,3 +306,25 @@ impl Component for UnityTerrain {
         Ok(())
     }
 }
+
+/// A renderer placed by a terrain's tree: the terrain's entity and the tree's index in its `unity.terrain` trees.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UnityTreeInstance {
+    pub terrain: Entity,
+    pub tree: usize,
+}
+
+impl Component for UnityTreeInstance {
+    const NAME: &'static str = "unity.tree_instance";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        match w.get::<UnityTerrain>(self.terrain) {
+            Some(t) if self.tree < t.trees.len() => Ok(()),
+            Some(_) => Err(format!("tree {} past the terrain's trees", self.tree)),
+            None => Err("the terrain entity has no unity.terrain".into()),
+        }
+    }
+}
