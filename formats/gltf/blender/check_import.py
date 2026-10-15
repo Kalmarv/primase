@@ -85,6 +85,16 @@ def prop_census(ids):
             if k.startswith("_") or k == "cycles":
                 continue
             v = idb[k]
+            if k == "primase" and hasattr(v, "keys"):
+                # extras.primase = {"<component>": {"version": n, "value": ...}}: count per component
+                for name in v.keys():
+                    sub = v[name]
+                    entry = out.setdefault("primase/" + name, [0, 0])
+                    entry[0] += 1
+                    val = sub.get("value") if hasattr(sub, "get") else sub
+                    if isinstance(sub, str) or (isinstance(val, str) and val[:1] in "{["):
+                        entry[1] += 1
+                continue
             entry = out.setdefault(k, [0, 0])
             entry[0] += 1
             if isinstance(v, str) and v[:1] in "{[":

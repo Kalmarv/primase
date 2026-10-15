@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use primase_core::Entity;
 
-pub use load::{LoadReport, load_mesh_files};
+pub use load::{LoadMeshFiles, LoadReport, load_mesh_files, register};
 pub use read::{Gltf, ReadMesh, ReadPrimitive};
 pub use write::{GroupBy, WriteOptions, WriteReport, fallback_material, write, write_file};
 

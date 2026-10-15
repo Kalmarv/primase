@@ -902,3 +902,75 @@ fn writer_refuses_unsafe_outputs() {
             .contains("no skate.scene")
     );
 }
+
+/// lower-skate-pbr: class defaults, colours to linear factors, texture roles and normal convention set on loaded
+/// textures, the skate material kept.
+#[test]
+fn lowering_to_pbr() {
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+    use primase_core::pbr::{AlphaMode, PbrMaterial, Wrap};
+    use primase_core::{ColorSpace, NormalGreen, NormalZ, TexFormat, TexRole, Texture};
+    use primase_skate_scene::{SkateMaterial, SkateTexture};
+
+    let (mut w, _) = read(&fixture("lower"));
+    let key = |w: &World, k: &str| w.iter::<SkateMaterial>().find(|(_, m)| m.key == k).unwrap().0;
+    let tex = |w: &World, k: &str| w.iter::<SkateTexture>().find(|(_, t)| t.key == k).unwrap().0;
+    // wall_n is loaded (as a texture pass would), wall_d stays a file
+    let wall_n = tex(&w, "wall_n");
+    w.insert(
+        wall_n,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![128, 128, 255, 255]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Other,
+            normal: None,
+        },
+    );
+    let mut reg = PassRegistry::new();
+    primase_skate_scene::lower::register(&mut reg);
+    let m = PassManager::new(reg);
+    let mut report = RunReport::default();
+    m.run(&mut w, &m.registry.parse("lower-skate-pbr").unwrap(), &mut report)
+        .unwrap();
+    assert_eq!(report.steps[0].log.counts.get("materials"), Some(&3));
+
+    let wall = w.get::<PbrMaterial>(key(&w, "wall")).unwrap();
+    assert_eq!(
+        wall.base_color_texture.map(|t| t.texture),
+        Some(tex(&w, "wall_d"))
+    );
+    assert_eq!(
+        wall.normal_texture.map(|t| t.texture),
+        Some(wall_n),
+        "loaded: kept for the normal pass"
+    );
+    assert_eq!(
+        (wall.metallic, wall.roughness, wall.alpha_mode),
+        (0.0, 0.6, AlphaMode::Opaque)
+    );
+    let t = w.get::<Texture>(wall_n).unwrap();
+    assert_eq!((t.role, t.color_space), (TexRole::Normal, ColorSpace::Linear));
+    assert_eq!(
+        t.normal.map(|n| (n.green, n.z)),
+        Some((NormalGreen::Down, NormalZ::Rebuild))
+    );
+
+    let trim = w.get::<PbrMaterial>(key(&w, "trim_red")).unwrap();
+    // [200, 40, 40] sRGB -> linear
+    assert_eq!(trim.base_color[3], 1.0);
+    assert!(
+        (trim.base_color[0] - 0.577_580_3).abs() < 1e-6 && (trim.base_color[1] - 0.021_219_01).abs() < 1e-6
+    );
+    assert_eq!(trim.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+    assert!(trim.double_sided, "cutout is two-sided by default");
+
+    let glass = w.get::<PbrMaterial>(key(&w, "glass")).unwrap();
+    assert_eq!((glass.roughness, glass.alpha_mode), (0.15, AlphaMode::Blend));
+    assert_eq!(glass.base_color_texture, None);
+    let _ = Wrap::Clamp;
+    // lower and keep
+    assert_eq!(w.iter::<SkateMaterial>().count(), 3);
+}

@@ -7,6 +7,7 @@
 
 pub mod components;
 pub mod json;
+pub mod lower;
 pub mod read;
 pub mod tables;
 pub mod write;
@@ -14,6 +15,7 @@ pub mod write;
 use std::path::PathBuf;
 
 pub use components::*;
+pub use lower::{LowerSkatePbr, lower_material};
 pub use read::{ReadReport, read};
 pub use write::{WriteReport, write};
 

@@ -64,3 +64,50 @@ pub fn load_mesh_files(world: &mut World, base_dir: &Path) -> Result<LoadReport>
     }
     Ok(report)
 }
+
+/// [`load_mesh_files`] as a pass (`load-mesh-files{base_dir=...}`; paths a reader resolved are absolute, so the
+/// option is only for relative ones).
+#[derive(Clone, Debug, Default)]
+pub struct LoadMeshFiles {
+    pub base_dir: PathBuf,
+}
+
+impl primase_core::pass::Pass for LoadMeshFiles {
+    fn name(&self) -> &'static str {
+        "load-mesh-files"
+    }
+    fn options(&self) -> primase_core::pass::Options {
+        let mut o = primase_core::pass::Options::new();
+        if !self.base_dir.as_os_str().is_empty() {
+            o.insert("base_dir".into(), self.base_dir.to_string_lossy().into_owned());
+        }
+        o
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["core.mesh_file"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["core.mesh"]
+    }
+    fn run(&self, w: &mut World, log: &mut primase_core::pass::PassLog) -> std::result::Result<(), String> {
+        let r = load_mesh_files(w, &self.base_dir).map_err(|e| e.to_string())?;
+        log.count("meshes", r.meshes);
+        log.count("files", r.files);
+        log.count("primitives", r.primitives);
+        Ok(())
+    }
+}
+
+/// Register this crate's passes.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.register("load-mesh-files", |o| {
+        let mut p = LoadMeshFiles::default();
+        for (k, v) in o {
+            match k.as_str() {
+                "base_dir" => p.base_dir = PathBuf::from(v),
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(Box::new(p))
+    });
+}
