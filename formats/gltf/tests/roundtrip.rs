@@ -340,7 +340,30 @@ fn round_trip_materials_textures_and_extras() {
         normal["extensions"]["KHR_texture_transform"],
         json!({"offset": [0.25, -0.5], "scale": [2.0, 4.0]})
     );
-    assert_eq!(doc["extensionsUsed"], json!(["KHR_texture_transform"]));
+    assert_eq!(
+        doc["extensionsUsed"],
+        json!(["KHR_texture_transform", "KHR_lights_punctual"])
+    );
+    // lights: KHR_lights_punctual, defaults left out, a directional light without its range
+    assert_eq!(
+        doc["extensions"]["KHR_lights_punctual"]["lights"],
+        json!([
+            {"name": "lamp", "type": "spot", "spot": {"innerConeAngle": 0.25, "outerConeAngle": 0.5},
+             "color": [1.0, 0.5, 0.25], "intensity": 40.0, "range": 12.0},
+            {"name": "sun", "type": "directional", "intensity": 2.0}
+        ])
+    );
+    let lamp = arr(doc, "nodes").iter().find(|n| n["name"] == "lamp").unwrap();
+    assert_eq!(lamp["extensions"]["KHR_lights_punctual"]["light"], 0);
+    assert_eq!(
+        lamp["matrix"],
+        json!([
+            0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 3.0, 4.0, 1.0
+        ])
+    );
+    let sun = arr(doc, "nodes").iter().find(|n| n["name"] == "sun").unwrap();
+    assert!(sun.get("matrix").is_none());
+    assert_eq!(report.lights, 2);
     assert!(pmr["baseColorTexture"].get("extensions").is_none());
     assert_eq!(
         image_bytes(normal),
@@ -429,6 +452,8 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
         .unwrap()
         .iter()
         .map(|i| &arr(doc, "nodes")[i.as_u64().unwrap() as usize])
+        // lights are root nodes of their own
+        .filter(|n| n.get("extensions").is_none())
         .collect();
     let names: Vec<&str> = roots.iter().map(|n| n["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["rich", "big", "rail", "terrain"]);
@@ -455,11 +480,9 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|i| {
-            arr(&doc, "nodes")[i.as_u64().unwrap() as usize]["name"]
-                .as_str()
-                .unwrap()
-        })
+        .map(|i| &arr(&doc, "nodes")[i.as_u64().unwrap() as usize])
+        .filter(|n| n.get("extensions").is_none())
+        .map(|n| n["name"].as_str().unwrap())
         .collect();
     assert_eq!(roots, ["tile_3_-1", "untiled"]);
 
@@ -469,8 +492,8 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
     let doc = Gltf::from_glb(&bytes).unwrap().json().clone();
     assert_eq!(
         doc["scenes"][0]["nodes"].as_array().unwrap().len(),
-        9,
-        "8 placements and the unplaced prototype"
+        11,
+        "8 placements, the unplaced prototype and 2 lights"
     );
     assert_eq!((report.group_nodes, report.prototypes_unplaced), (0, 1));
 }

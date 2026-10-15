@@ -432,6 +432,38 @@ pub fn build(dir: &Path) -> Built {
         },
     );
 
+    // lights: a spot placed and turned, an unplaced directional sun
+    let spot = w.spawn();
+    w.insert(spot, Name("lamp".into()));
+    w.insert(
+        spot,
+        primase_core::Light {
+            kind: primase_core::LightKind::Spot {
+                inner_cone: 0.25,
+                outer_cone: 0.5,
+            },
+            color: [1.0, 0.5, 0.25],
+            intensity: 40.0,
+            range: Some(12.0),
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[0] = [0.0, 0.0, -1.0];
+    t.cols[2] = [1.0, 0.0, 0.0];
+    t.cols[3] = [2.0, 3.0, 4.0];
+    w.insert(spot, t);
+    let sun = w.spawn();
+    w.insert(sun, Name("sun".into()));
+    w.insert(
+        sun,
+        primase_core::Light {
+            kind: primase_core::LightKind::Directional,
+            color: [1.0; 3],
+            intensity: 2.0,
+            range: Some(10.0),
+        },
+    );
+
     Built {
         world: w,
         dir: dir.to_owned(),

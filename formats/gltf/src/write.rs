@@ -37,8 +37,8 @@ use std::path::{Path, PathBuf};
 
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    Component, ComponentJson, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic,
-    Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
+    Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
+    Primitive, Semantic, Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -79,6 +79,8 @@ pub struct WriteOptions {
 pub struct WriteReport {
     pub nodes: u64,
     pub group_nodes: u64,
+    /// Lights written (`KHR_lights_punctual`).
+    pub lights: u64,
     pub meshes: u64,
     pub primitives: u64,
     pub triangles: u64,
@@ -170,6 +172,9 @@ pub fn fallback_material() -> PbrMaterial {
 /// Components the glTF expresses itself, per kind of object; everything else with a JSON form goes to extras.
 /// The extension a texture slot's [`UvTransform`] is written as.
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
+/// The extension lights are written as.
+const LIGHTS: &str = "KHR_lights_punctual";
+const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
 const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME];
 const CONSUMED_PROTOTYPE: &[&str] = &[Name::NAME, Mesh::NAME, MaterialVariants::NAME, MeshFile::NAME];
 const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME];
@@ -283,6 +288,37 @@ impl Writer<'_> {
                 None => roots.push(index),
             }
         }
+        // lights: root nodes placed by their transform, the light in KHR_lights_punctual
+        let mut lights = Vec::new();
+        let world = self.world;
+        for (e, l) in world.iter::<Light>() {
+            let mut node = Map::new();
+            node.insert("name".into(), Value::String(self.name_of(e, "light")));
+            if let Some(t) = world.get::<Transform>(e)
+                && *t != Transform::IDENTITY
+            {
+                let c = t.cols;
+                let m = [
+                    c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1],
+                    c[2][2], 0.0, c[3][0], c[3][1], c[3][2], 1.0,
+                ];
+                if m.iter().any(|x| !x.is_finite()) {
+                    return Err(Error::World {
+                        entity: e,
+                        detail: "non-finite transform".into(),
+                    });
+                }
+                node.insert("matrix".into(), f32s_value(&m));
+            }
+            node.insert("extensions".into(), json!({ LIGHTS: {"light": lights.len()} }));
+            if let Some(extras) = self.extras(e, CONSUMED_LIGHT)? {
+                node.insert("extras".into(), extras);
+            }
+            lights.push(self.light(e, l)?);
+            nodes.push(Value::Object(node));
+            roots.push(nodes.len() - 1);
+        }
+        self.report.lights = lights.len() as u64;
         self.report.nodes = nodes.len() as u64;
         for (key, children) in groups {
             let name = match key {
@@ -322,8 +358,16 @@ impl Writer<'_> {
             "asset".into(),
             json!({"version": "2.0", "generator": concat!("primase-gltf ", env!("CARGO_PKG_VERSION"))}),
         );
+        let mut used = Vec::new();
         if self.texture_transform_used {
-            root.insert("extensionsUsed".into(), json!([TEXTURE_TRANSFORM]));
+            used.push(TEXTURE_TRANSFORM);
+        }
+        if !lights.is_empty() {
+            used.push(LIGHTS);
+            root.insert("extensions".into(), json!({ LIGHTS: {"lights": lights} }));
+        }
+        if !used.is_empty() {
+            root.insert("extensionsUsed".into(), json!(used));
         }
         root.insert("scene".into(), json!(0));
         root.insert("scenes".into(), json!([Value::Object(scene)]));
@@ -920,6 +964,41 @@ impl Writer<'_> {
         let i = self.materials.len() - 1;
         self.material_index.insert(e, (i, sets.clone()));
         Ok((i, sets))
+    }
+
+    /// A light as `KHR_lights_punctual` writes it (defaults left out: white, intensity 1, no range).
+    fn light(&self, e: Entity, l: &Light) -> Result<Value> {
+        let mut o = Map::new();
+        o.insert("name".into(), Value::String(self.name_of(e, "light")));
+        let kind = match l.kind {
+            LightKind::Point => "point",
+            LightKind::Directional => "directional",
+            LightKind::Spot {
+                inner_cone,
+                outer_cone,
+            } => {
+                let cones = self.factors(e, &[inner_cone, outer_cone])?;
+                o.insert(
+                    "spot".into(),
+                    json!({"innerConeAngle": cones[0], "outerConeAngle": cones[1]}),
+                );
+                "spot"
+            }
+        };
+        o.insert("type".into(), json!(kind));
+        if l.color != [1.0; 3] {
+            o.insert("color".into(), self.factors(e, &l.color)?);
+        }
+        if l.intensity != 1.0 {
+            o.insert("intensity".into(), self.factors(e, &[l.intensity])?[0].clone());
+        }
+        // a directional light has no range in KHR_lights_punctual
+        if let Some(r) = l.range
+            && l.kind != LightKind::Directional
+        {
+            o.insert("range".into(), self.factors(e, &[r])?[0].clone());
+        }
+        Ok(Value::Object(o))
     }
 
     fn factors(&self, e: Entity, xs: &[f32]) -> Result<Value> {
