@@ -51,6 +51,13 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     fn to_json(&self) -> Option<serde_json::Value> {
         None
     }
+
+    /// The component's own invariants on entity `e` (indices in range, entity references alive, stream lengths
+    /// equal, ...). The pass manager runs it on every component after the reader, after every pass and before the
+    /// writer. World-wide rules (one name -> one payload) are `pass::Validator`s instead.
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A world resource: one value per world (the frame, a game's archive index, a run's options).
@@ -138,6 +145,9 @@ trait AnyColumn: Any + Send + Sync {
     fn remove_entity(&mut self, e: Entity);
     /// `None` when the entity has no such component; `Some(None)` when it has one that is not shown as JSON.
     fn json(&self, e: Entity) -> Option<Option<serde_json::Value>>;
+    /// Every value's `Component::verify`, as (entity, message) for those that fail, in entity order.
+    fn verify(&self, w: &World) -> Vec<(Entity, String)>;
+    fn entities(&self) -> Vec<Entity>;
     fn clone_box(&self) -> Box<dyn AnyColumn>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -158,6 +168,15 @@ impl<T: Component> AnyColumn for Column<T> {
     }
     fn json(&self, e: Entity) -> Option<Option<serde_json::Value>> {
         self.values.get(&e).map(Component::to_json)
+    }
+    fn verify(&self, w: &World) -> Vec<(Entity, String)> {
+        self.values
+            .iter()
+            .filter_map(|(e, v)| v.verify(*e, w).err().map(|m| (*e, m)))
+            .collect()
+    }
+    fn entities(&self) -> Vec<Entity> {
+        self.values.keys().copied().collect()
     }
     fn clone_box(&self) -> Box<dyn AnyColumn> {
         Box::new(self.clone())
@@ -387,6 +406,34 @@ impl World {
     pub fn has_component_named(&self, name: &str) -> bool {
         self.columns.values().any(|c| c.name() == name && c.len() > 0)
             || self.opaque.get(name).is_some_and(|c| !c.is_empty())
+    }
+
+    /// Entities that have a component of this name (typed or opaque), ascending.
+    pub fn entities_named(&self, name: &str) -> Vec<Entity> {
+        let mut out: Vec<Entity> = self
+            .columns
+            .values()
+            .filter(|c| c.name() == name)
+            .flat_map(|c| c.entities())
+            .collect();
+        if let Some(col) = self.opaque.get(name) {
+            out.extend(col.keys().copied());
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Every typed component's [`Component::verify`]: (component name, entity, message) for each failure, by name
+    /// then entity.
+    pub fn verify_components(&self) -> Vec<(&'static str, Entity, String)> {
+        let mut out: Vec<(&'static str, Entity, String)> = self
+            .columns
+            .values()
+            .flat_map(|c| c.verify(self).into_iter().map(|(e, m)| (c.name(), e, m)))
+            .collect();
+        out.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        out
     }
 
     /// Whether this entity has a component of this name (typed or opaque).
