@@ -43,18 +43,19 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `empty_tile_policy` | `"omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload"` |
 | `skipped_degenerate` | Count of skipped placements with degenerate transforms |
 | `placements_without_mesh` | Count of placements without loaded render geometry |
-| `tiles` | Array of tile objects; deterministic order by `(col, row)` |
+| `tiles` | Array of tile objects; deterministic order by `(col, row)`, then `cell` as `(level, x, y)` |
 | `images` | Array of `{file, bytes}`: every image file the tiles reference, ordered by `file` |
 
 | Tile field | Type and meaning |
 |---|---|
 | `col`, `row` | Signed 32-bit integers; floor(east/tile_size), floor(north/tile_size) |
-| `file` | Relative GLB filename, resolved against the index directory |
+| `cell` (optional) | Object `{level, x, y}` for a subcell of the cell; absent for a whole cell |
+| `file` | Relative GLB filename, resolved against the index directory; the tile's identity |
 | `bytes` | Exact GLB byte length |
 | `content` | `"geometry"` or `"metadata_only"` |
 | `min`, `max` | Three-number world-space bounds in XYZ order |
 | `triangles` | Placed render triangle count, including each instance |
-| `placements` | Render placement count, not glTF mesh or primitive count |
+| `placements` | Render placements drawn by this tile, not glTF mesh or primitive count. A placement whose triangles are filed by cell counts in every tile that draws part of it, so the sum over tiles can exceed the scene's placements |
 | `instanced_placements` | Placements represented by GPU instancing |
 | `viewer_items` | Number of viewer records in this tile |
 | `collision` (optional) | Object `{file, bytes, records}` for a collision GLB |
@@ -71,7 +72,8 @@ Empty cells are omitted. Records without render geometry retain a metadata GLB.
 
 Asset filenames contain the full lowercase SHA256 of their own bytes:
 `tile_<col>_<row>.<sha256>.glb`, `collision_<col>_<row>.<sha256>.glb` and
-`images/<sha256>.<ext>`. Index references and lengths must match the files. The
+`images/<sha256>.<ext>`; a subcell's tile and collision files insert
+`_<level>-<x>-<y>` after the row. Index references and lengths must match the files. The
 index is not content-hashed. Tile and collision files are GLB 2.0 with embedded
 geometry and no external buffers; images are external (see [Images](#images)).
 
@@ -86,6 +88,31 @@ image file once and share it among the tiles that use it, releasing it when the
 last of them is unloaded; `tiles.json` lists every file with its length, so a
 consumer can prefetch them or account for them before loading a tile. Image files
 are immutable: the same name always holds the same bytes.
+
+## Byte budget and subcells
+
+The writer has a byte budget for each file a tile carries, its GLB and its
+collision sidecar alike (96 MiB by default; the producer may change or disable
+it). Image files are separate and not counted against a tile. A cell with a file
+over the budget is split into a quadtree: halved along both ground axes into four
+subcells, and each subcell still over the budget again, down to level 8 at most.
+Content is divided by the same rules as cells: placements by pivot, placements
+partitioned by triangle centre by their triangles' centres, and viewer records,
+collision references included, by anchor, and scene lights by position. A
+subcell's collision sidecar holds
+the collision records anchored in it. Empty subcells are omitted, and a cell that
+fits stays whole, with the bytes and name it would have without a budget.
+
+`cell: {level, x, y}` names a subcell: `level` (1 to 8) halvings of the cell, and
+`x` east and `y` north of the cell's minimum corner, each in `0..2^level`. A cell
+is either one whole tile or a set of subcell tiles, never both; the subcells of a
+cell may have different levels and do not overlap. `(col, row, cell)` is unique.
+Bounds are each tile's own content's, as for cells. Subcells of a cell share its
+image files like any other tiles.
+
+The budget is not a guarantee. A file can stay over it when what makes it too
+large is one placement or one record, which no cell boundary divides, or at the
+level limit. Such tiles are written as they are; they still load.
 
 ## Render GLBs
 

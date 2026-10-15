@@ -8,7 +8,7 @@ use primase_web::{Options, TilePlan, ViewerItem};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...]";
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget]";
 
 /// A prototype file mesh's local box, from its POSITION accessors' `min` and `max` (glTF requires them), reading only
 /// the GLB's JSON chunk; `None` for a mesh without positions.
@@ -139,12 +139,17 @@ fn prepare(
     Ok(w)
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut paths, mut ktx2, mut caps) = (Vec::new(), false, Vec::new());
+    let (mut paths, mut ktx2, mut caps, mut budget) = (Vec::new(), false, Vec::new(), None);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ktx2" => ktx2 = true,
             "--texture-cap" => caps.push(args.next().ok_or(USAGE)?),
+            "--no-budget" => budget = Some(None),
+            "--budget-mib" => {
+                let mib: u64 = args.next().ok_or(USAGE)?.parse()?;
+                budget = Some(Some(mib * 1024 * 1024));
+            }
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
             _ => paths.push(arg),
         }
@@ -162,6 +167,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_dir: folder.into(),
         ..Default::default()
     };
+    if let Some(budget) = budget {
+        options.tile_byte_budget = budget;
+    }
     if ktx2 {
         #[cfg(feature = "ktx2")]
         {
@@ -171,9 +179,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|rule| texture_cap(rule))
                 .collect::<Result<_, _>>()?;
         }
-        #[cfg(not(feature = "ktx2"))]
-        return Err("--ktx2 requires the ktx2 cargo feature".into());
     }
+    let mut world = World::new();
+    primase_skate_scene::read(folder, &mut world)?;
     options.split_by_tile = world
         .iter::<SkatePlacement>()
         .filter_map(|(e, p)| p.split_by_tile.then_some(e))
@@ -255,7 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bytes[i] += tile.bytes.len();
                 if i == 0 {
                     proof.insert(
-                        (tile.info.col, tile.info.row),
+                        (tile.info.col, tile.info.row, tile.info.cell),
                         support::tile_proof(&tile.info.file, &tile.bytes)?,
                     );
                 }
@@ -264,6 +272,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut indexes = Vec::new();
     for (plan, out) in plans {
+        for o in plan.over_budget() {
+            println!(
+                "over the budget: {}/{} ({} bytes): {}",
+                out.display(),
+                o.file,
+                o.bytes,
+                o.reason
+            );
+        }
         let index = plan.finish()?;
         index.write_to(out)?;
         indexes.push(index);

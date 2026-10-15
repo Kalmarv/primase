@@ -61,7 +61,7 @@ fn world() -> World {
         protos.push(proto);
     }
     for x in [10., 250.] {
-        for &proto in &protos {
+        for (k, &proto) in protos.iter().enumerate() {
             let e = w.spawn();
             w.insert(
                 e,
@@ -71,7 +71,7 @@ fn world() -> World {
                 },
             );
             let mut t = Transform::IDENTITY;
-            t.cols[3][0] = x;
+            t.cols[3][0] = x + 50. * k as f32;
             w.insert(e, t);
         }
     }
@@ -158,4 +158,23 @@ fn images_are_shared_files_and_tiles_reference_them() {
         stale.images.get_mut(&first).unwrap()[10] ^= 1;
         assert!(stale.write_to(&dir.join("stale")).is_err());
     }
+}
+
+#[test]
+fn subcells_share_their_cells_images() {
+    let whole = write(&world(), &Options::default()).unwrap();
+    let split = write(
+        &world(),
+        &Options {
+            // every GLB is over this: each cell splits until one placement is left
+            tile_byte_budget: Some(64),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    assert!(split.index.tiles.len() > whole.index.tiles.len());
+    assert!(split.index.tiles.iter().all(|t| t.cell.is_some()));
+    // the same two image files, the same bytes, however many tiles use them
+    assert_eq!(split.images, whole.images);
+    assert_eq!(split.index.images, whole.index.images);
 }

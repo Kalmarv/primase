@@ -13,7 +13,16 @@ loaded. Then, per cell, the driver takes the world's `World::closure` of
 lowers its materials, calls `TilePlan::write_cell` and stores each `WrittenTile`
 (`WrittenTile::write_to`) before dropping that world. `TilePlan::finish` returns
 the index, and `Index::write_to` publishes `tiles.json` once every file it names
-is in place. `write` is that pipeline over an already prepared world. The writer
+is in place. `write` is that pipeline over an already prepared world.
+
+`Options::tile_byte_budget` (96 MiB by default, `None` to disable) caps each file a
+tile carries, its GLB and its collision sidecar: a cell with a larger one is split
+into quadtree subcells, by the cell rules, until each fits (FORMAT.md, "Byte
+budget and subcells"). Cells that fit keep the bytes and names they would have
+without a budget. A tile still over it, because one placement or viewer record
+makes it so or at the level limit, is written and listed in
+`TilePlan::over_budget` (`TileSet::over_budget`). `scene_to_tiles` takes
+`--budget-mib N` or `--no-budget`. The writer
 never loads or lowers: what it needs missing is an error. A tile holds its
 placements and what they refer to; the world's lights are not written. The world uses metres and +Y up. Ground tiles
 use floor(east/tile_size), floor(north/tile_size), with a default size of 200 metres.

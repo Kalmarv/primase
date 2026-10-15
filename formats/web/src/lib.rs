@@ -47,7 +47,14 @@ pub struct Options {
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
     pub split_by_tile: BTreeSet<Entity>,
     pub base_dir: PathBuf,
+    /// The largest file a tile may carry, its GLB and its collision sidecar alike: a cell with a larger one is split
+    /// into quadtree [`Subcell`]s, recursively, until each file fits. `None` keeps every cell whole.
+    pub tile_byte_budget: Option<u64>,
 }
+/// The default [`Options::tile_byte_budget`], 96 MiB.
+pub const DEFAULT_TILE_BYTE_BUDGET: u64 = 96 * 1024 * 1024;
+/// The deepest [`Subcell::level`] a cell is split to.
+pub const MAX_SUBCELL_LEVEL: u8 = 8;
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -63,6 +70,7 @@ impl Default for Options {
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
+            tile_byte_budget: Some(DEFAULT_TILE_BYTE_BUDGET),
         }
     }
 }
@@ -83,6 +91,9 @@ pub struct TileInfo {
     pub content: TileContent,
     pub col: i32,
     pub row: i32,
+    /// The part of the cell this tile covers, when the cell was split to fit the byte budget; absent for a whole cell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<Subcell>,
     pub file: String,
     pub min: [f64; 3],
     pub max: [f64; 3],
@@ -109,6 +120,14 @@ pub struct ImageFile {
 }
 fn is_zero(n: &u64) -> bool {
     *n == 0
+}
+/// A quadtree subcell of a tile's ground cell: the cell halved `level` times (at least once) along both ground axes,
+/// and the subcell `x` east and `y` north of the cell's minimum corner, each in `0..2^level`.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Subcell {
+    pub level: u8,
+    pub x: u32,
+    pub y: u32,
 }
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -142,6 +161,16 @@ pub struct TileSet {
     pub files: BTreeMap<String, Vec<u8>>,
     /// The image files, `images/<sha256>.<ext>`, each once.
     pub images: BTreeMap<String, Vec<u8>>,
+    /// Tiles left over the byte budget (see [`TilePlan::over_budget`]).
+    pub over_budget: Vec<OverBudget>,
+}
+/// A tile with a file over [`Options::tile_byte_budget`], and why its cell was not split further.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverBudget {
+    pub file: String,
+    /// Its larger file's length: the GLB or the collision sidecar.
+    pub bytes: u64,
+    pub reason: &'static str,
 }
 /// Add `name` to a glTF document's `extensionsUsed` and `extensionsRequired`, keeping the extensions already there.
 pub(crate) fn require_extension(doc: &mut serde_json::Value, name: &str) {
@@ -164,6 +193,33 @@ fn point(t: Transform, p: [f32; 3]) -> [f64; 3] {
             + t.cols[2][k] as f64 * p[2] as f64
     })
 }
+/// A world-space point's ground coordinates (east, north), through the shared frame basis in f64: rounding
+/// transformed triangle centres to f32 here would move faces across exact cell boundaries.
+fn ground(p: [f64; 3]) -> [f64; 2] {
+    let axes = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]].map(primase_core::frame::ground);
+    std::array::from_fn(|k| (0..3).map(|i| p[i] * axes[i][k] as f64).sum())
+}
+/// The child of `parent` (`None`: the whole cell) of cell `(col, row)` that holds ground point `g`, clamped into the
+/// parent's own four children, so a point rounded across the parent's edge stays with the parent's content.
+fn child(col: i32, row: i32, parent: Option<Subcell>, g: [f64; 2], tile_size: f64) -> Subcell {
+    let (level, px, py) = parent.map_or((1, 0, 0), |s| (s.level + 1, s.x, s.y));
+    let n = f64::from(1u32 << level);
+    let size = tile_size / n;
+    let at = |v: f64, origin: i32, p: u32| -> u32 {
+        let lo = 2 * p;
+        let q = (v / size).floor() - f64::from(origin) * n;
+        if q.is_nan() {
+            lo
+        } else {
+            q.clamp(f64::from(lo), f64::from(lo + 1)) as u32
+        }
+    };
+    Subcell {
+        level,
+        x: at(g[0], col, px),
+        y: at(g[1], row, py),
+    }
+}
 fn coordinate(p: [f64; 3], size: f64) -> Result<(i32, i32)> {
     let coord = |v: f64| {
         let q = (v / size).floor();
@@ -173,11 +229,8 @@ fn coordinate(p: [f64; 3], size: f64) -> Result<(i32, i32)> {
             Err(Error::Invalid("tile coordinate outside i32".into()))
         }
     };
-    // Project through the shared frame basis in f64: rounding transformed triangle
-    // centres to f32 here would move faces across exact tile boundaries.
-    let axes = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]].map(primase_core::frame::ground);
-    let ground: [f64; 2] = std::array::from_fn(|k| (0..3).map(|i| p[i] * axes[i][k] as f64).sum());
-    Ok((coord(ground[0])?, coord(ground[1])?))
+    let g = ground(p);
+    Ok((coord(g[0])?, coord(g[1])?))
 }
 fn indices(p: &Primitive) -> Vec<u32> {
     p.indices
@@ -285,6 +338,7 @@ pub struct TilePlan {
     written: BTreeSet<(i32, i32)>,
     tiles: Vec<TileInfo>,
     images: BTreeMap<String, u64>,
+    over_budget: Vec<OverBudget>,
     skipped: u64,
     without_mesh: u64,
     #[cfg(feature = "ktx2")]
@@ -358,6 +412,7 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         written: BTreeSet::new(),
         images: BTreeMap::new(),
         tiles: Vec::new(),
+        over_budget: Vec::new(),
         skipped: 0,
         without_mesh: 0,
         #[cfg(feature = "ktx2")]
@@ -491,13 +546,163 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
-        let mut part = world.split_off(&closure);
-        let tile = self.tile(cell, &mut part, &content);
-        world.absorb(part);
-        Ok(tile?.into_iter().collect())
+        let mut out = Vec::new();
+        self.emit(cell, None, world, content, false, &mut out)?;
+        Ok(out)
     }
-    /// One tile of `content` from `w`, the closure of its placements. `w` is left as it was.
-    fn tile(&mut self, (col, row): (i32, i32), w: &mut World, content: &Cell) -> Result<Option<WrittenTile>> {
+    /// Tiles left over the byte budget so far: a cell is split until each file fits, except where what remains is
+    /// one placement or viewer record, which no cell boundary divides, or at [`MAX_SUBCELL_LEVEL`]. Such tiles are
+    /// written as they are (they still load; only their caching suffers) and listed here.
+    pub fn over_budget(&self) -> &[OverBudget] {
+        &self.over_budget
+    }
+    /// Write `content` of `cell`'s subcell `sub` (`None`: the whole cell), splitting it while a file is over the
+    /// budget. `over`: the content is already known to be too large (its parent's content, all in this subcell).
+    fn emit(
+        &mut self,
+        cell: (i32, i32),
+        sub: Option<Subcell>,
+        world: &mut World,
+        content: Cell,
+        over: bool,
+        out: &mut Vec<WrittenTile>,
+    ) -> Result<()> {
+        let level = sub.map_or(0, |s| s.level);
+        if !over {
+            let roots: BTreeSet<Entity> = content
+                .placements
+                .iter()
+                .flat_map(|p| [p.entity, p.prototype])
+                .collect();
+            let mut part = world.split_off(&world.closure(roots));
+            let built = self.tile(cell, sub, &mut part, &content);
+            world.absorb(part);
+            let Some(tile) = built? else {
+                return Ok(());
+            };
+            let largest = tile
+                .bytes
+                .len()
+                .max(tile.collision.as_ref().map_or(0, |(_, b)| b.len())) as u64;
+            if self.options.tile_byte_budget.is_none_or(|b| largest <= b) {
+                self.keep(tile, out);
+                return Ok(());
+            }
+            let units = content.items.len()
+                + content.lights.len()
+                + content
+                    .placements
+                    .iter()
+                    .map(|p| {
+                        p.triangles
+                            .as_ref()
+                            .map_or(1, |t| t.iter().map(|(_, t)| t.len()).sum())
+                    })
+                    .sum::<usize>();
+            if units <= 1 || level >= MAX_SUBCELL_LEVEL {
+                self.over_budget.push(OverBudget {
+                    file: tile.info.file.clone(),
+                    bytes: largest,
+                    reason: if units <= 1 {
+                        "one placement or viewer record, which no cell boundary divides"
+                    } else {
+                        "the subdivision limit"
+                    },
+                });
+                self.keep(tile, out);
+                return Ok(());
+            }
+        }
+        let children = self.children(cell, sub, world, content)?;
+        if children.len() == 1 && level + 1 < MAX_SUBCELL_LEVEL {
+            // all of it in one child: the same content, as large; split further without writing it
+            let (k, c) = children.into_iter().next().expect("one child");
+            return self.emit(cell, Some(k), world, c, true, out);
+        }
+        for (k, c) in children {
+            self.emit(cell, Some(k), world, c, false, out)?;
+        }
+        Ok(())
+    }
+    fn keep(&mut self, tile: WrittenTile, out: &mut Vec<WrittenTile>) {
+        for (name, bytes) in &tile.images {
+            self.images.insert(name.clone(), bytes.len() as u64);
+        }
+        self.tiles.push(tile.info.clone());
+        out.push(tile);
+    }
+    /// `content` of `cell`'s subcell `sub`, divided among its four children by the cell rules: placements by pivot,
+    /// placements filed by triangle centre by their triangles' centres (their prototype loaded in `world`), viewer
+    /// records by anchor, scene lights by position. Each child keeps the parent's order.
+    fn children(
+        &self,
+        (col, row): (i32, i32),
+        sub: Option<Subcell>,
+        world: &World,
+        content: Cell,
+    ) -> Result<BTreeMap<Subcell, Cell>> {
+        let size = self.options.tile_size;
+        let mut out = BTreeMap::<Subcell, Cell>::new();
+        for p in content.placements {
+            let Some(parts) = &p.triangles else {
+                let k = child(col, row, sub, ground(p.transform.cols[3].map(f64::from)), size);
+                out.entry(k).or_default().placements.push(p);
+                continue;
+            };
+            let mesh = loaded(world, p.prototype)?;
+            let mut by = BTreeMap::<Subcell, Vec<(usize, Vec<u32>)>>::new();
+            for (part, tris) in parts {
+                let prim = &mesh.primitives[*part];
+                let pos = prim
+                    .positions()
+                    .ok_or_else(|| Error::Invalid("missing positions".into()))?;
+                let idx = indices(prim);
+                let mut pieces = BTreeMap::<Subcell, Vec<u32>>::new();
+                for &t in tris {
+                    let tri = &idx[3 * t as usize..3 * t as usize + 3];
+                    let points: [[f64; 3]; 3] =
+                        std::array::from_fn(|c| point(p.transform, pos[tri[c] as usize]));
+                    let centre = std::array::from_fn(|k| (points[0][k] + points[1][k] + points[2][k]) / 3.);
+                    pieces
+                        .entry(child(col, row, sub, ground(centre), size))
+                        .or_default()
+                        .push(t);
+                }
+                for (k, v) in pieces {
+                    by.entry(k).or_default().push((*part, v));
+                }
+            }
+            for (k, triangles) in by {
+                out.entry(k).or_default().placements.push(Placement {
+                    triangles: Some(triangles),
+                    ..p.clone()
+                });
+            }
+        }
+        for i in content.items {
+            let k = child(col, row, sub, ground(self.items[i].anchor), size);
+            out.entry(k).or_default().items.push(i);
+        }
+        for i in content.lights {
+            let k = child(
+                col,
+                row,
+                sub,
+                ground(self.lights[i].transform.cols[3].map(f64::from)),
+                size,
+            );
+            out.entry(k).or_default().lights.push(i);
+        }
+        Ok(out)
+    }
+    /// One tile of `content` from `w`, the closure of its placements.
+    fn tile(
+        &mut self,
+        (col, row): (i32, i32),
+        sub: Option<Subcell>,
+        w: &mut World,
+        content: &Cell,
+    ) -> Result<Option<WrittenTile>> {
         let mut meshes = Vec::with_capacity(content.placements.len());
         for p in &content.placements {
             let mesh = loaded(w, p.prototype)?;
@@ -637,6 +842,7 @@ impl TilePlan {
                     content: TileContent::Geometry,
                     col,
                     row,
+                    cell: sub,
                     file: String::new(),
                     min,
                     max,
@@ -672,15 +878,12 @@ impl TilePlan {
             Some((info, bytes, files)) => (Some((info, bytes)), files),
             None => (None, Vec::new()),
         };
-        let Some(mut tile) = self.attach_items((col, row), render, &content.items, &content.lights)? else {
+        let Some(mut tile) = self.attach_items((col, row), sub, render, &content.items, &content.lights)?
+        else {
             return Ok(None);
         };
-        tile.info.file = asset_name("tile", col, row, &tile.bytes);
-        for (name, bytes) in &files {
-            self.images.insert(name.clone(), bytes.len() as u64);
-        }
+        tile.info.file = asset_name("tile", col, row, sub, &tile.bytes);
         tile.images = files;
-        self.tiles.push(tile.info.clone());
         Ok(Some(tile))
     }
     /// The tile with viewer records `items` added as identity nodes (and their collision as a sidecar) and `lights`
@@ -689,6 +892,7 @@ impl TilePlan {
     fn attach_items(
         &self,
         (col, row): (i32, i32),
+        sub: Option<Subcell>,
         render: Option<(TileInfo, Vec<u8>)>,
         items: &[usize],
         lights: &[usize],
@@ -713,7 +917,7 @@ impl TilePlan {
             None
         } else {
             let bytes = collision::write(&collisions)?;
-            collision_name = asset_name("collision", col, row, &bytes);
+            collision_name = asset_name("collision", col, row, sub, &bytes);
             Some((collision_name.clone(), bytes))
         };
         let (mut doc, bin) = if let Some((_, bytes)) = &render {
@@ -823,6 +1027,7 @@ impl TilePlan {
                 content: TileContent::MetadataOnly,
                 col,
                 row,
+                cell: sub,
                 file: String::new(),
                 min,
                 max,
@@ -851,7 +1056,7 @@ impl TilePlan {
             )));
         }
         let mut tiles = self.tiles;
-        tiles.sort_by_key(|t| (t.col, t.row));
+        tiles.sort_by_key(|t| (t.col, t.row, t.cell));
         Ok(Index {
             format_version: "2.0",
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
@@ -902,6 +1107,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         },
         files: BTreeMap::new(),
         images: BTreeMap::new(),
+        over_budget: Vec::new(),
     };
     for cell in plan.cells() {
         let mut w = world.subset(&world.closure(plan.roots(cell)));
@@ -913,12 +1119,17 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             }
         }
     }
+    set.over_budget = plan.over_budget().to_vec();
     set.index = plan.finish()?;
     Ok(set)
 }
-fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
+/// `<kind>_<col>_<row>.<sha256>.glb`, with `_<level>-<x>-<y>` after the row for a subcell.
+fn asset_name(kind: &str, col: i32, row: i32, cell: Option<Subcell>, bytes: &[u8]) -> String {
     let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
-    format!("{kind}_{col}_{row}.{hash}.glb")
+    match cell {
+        None => format!("{kind}_{col}_{row}.{hash}.glb"),
+        Some(c) => format!("{kind}_{col}_{row}_{}-{}-{}.{hash}.glb", c.level, c.x, c.y),
+    }
 }
 impl Index {
     /// Publish `tiles.json` in `folder`, after checking that every image, tile and collision file it names is there
@@ -958,7 +1169,7 @@ impl TileSet {
             || names.len() != self.files.len()
             || self.index.tiles.iter().any(|t| {
                 self.files.get(&t.file).is_none_or(|b| {
-                    b.len() as u64 != t.bytes || t.file != asset_name("tile", t.col, t.row, b)
+                    b.len() as u64 != t.bytes || t.file != asset_name("tile", t.col, t.row, t.cell, b)
                 })
             })
         {
@@ -974,7 +1185,7 @@ impl TileSet {
         if collision_entries.len() != self.collision_files.len()
             || collision_entries.iter().any(|(t, c)| {
                 self.collision_files.get(&c.file).is_none_or(|b| {
-                    b.len() as u64 != c.bytes || c.file != asset_name("collision", t.col, t.row, b)
+                    b.len() as u64 != c.bytes || c.file != asset_name("collision", t.col, t.row, t.cell, b)
                 })
             })
         {
