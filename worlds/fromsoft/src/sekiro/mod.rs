@@ -1,5 +1,4 @@
 //! Sekiro area assembly: geometry, raw collision, ledges, lights and markers.
-mod assets;
 pub mod collision;
 pub mod extras;
 pub mod ledges;
@@ -15,11 +14,11 @@ use crate::{
     msb::{MapLayout, PartKind},
     mtd::MaterialDefinition,
 };
-pub use assets::prepare_scene_assets;
 use primase_core::{
     ColorSpace, Instance, Mesh, Name, NormalGreen, NormalZ, Primitive, Semantic, Source, Stream, TexRole,
     Topology, Transform, World,
 };
+pub use primase_skate_scene::prepare_scene_assets;
 use primase_skate_scene::{
     FileRef, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
 };

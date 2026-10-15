@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-gltf.workspace = true
+primase-image.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 serde.workspace = true
