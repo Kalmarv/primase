@@ -71,3 +71,92 @@ fn lights_match_the_scan() {
     fields.assert_passed();
     matrices.assert_passed();
 }
+
+/// The lights lowered: one `core.light` per `unity.light` of a punctual type, its kind, cones, linear colour, intensity
+/// and range by the documented conversion, its direction (the transform's local -Z) Unity's forward (+Z) through the
+/// frame conversion, bit for bit.
+#[test]
+fn lights_lower_to_core() {
+    use primase_core::{Light, LightKind, Transform, World};
+    use primase_unity::components::UnityLight;
+    use primase_unity::level::{UNITY, read_level, transform_of};
+    use primase_unity::lower_lights::lower_unity_lights;
+    let (Some(data), Some(tpk), Some(scan)) = (
+        real_data("PRIMASE_UNITY_DATA"),
+        real_data("PRIMASE_UNITY_TPK"),
+        real_data("PRIMASE_UNITY_SCAN"),
+    ) else {
+        return;
+    };
+    let scan: Json = serde_json::from_slice(&std::fs::read(&scan).unwrap()).unwrap();
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut w = World::new();
+    read_level(&player, scan["level"].as_str().unwrap(), &mut w).unwrap();
+    let log = lower_unity_lights(&mut w).unwrap();
+    println!("light lowering: {:?}; {:?}", log.counts, log.approximations);
+    assert_eq!(w.verify_components(), Vec::new());
+    let scene = Scene::read(&player, scan["level"].as_str().unwrap()).unwrap();
+    let (stored, _) = scene.lights(&player).unwrap();
+    let mut gate = GateReport::new(
+        "lights lowered: kind, cones, colour, intensity, range, direction",
+        Tolerance::Exact,
+    );
+    let mut lowered = 0;
+    for (e, u) in w.iter::<UnityLight>() {
+        let s = stored
+            .iter()
+            .find(|s| s.light.path_id == u.light.path_id)
+            .unwrap();
+        let Some(l) = w.get::<Light>(e) else {
+            assert!(u.kind > 2, "a punctual light not lowered");
+            continue;
+        };
+        lowered += 1;
+        let mut problems = Vec::new();
+        let half = |deg: f32| (f64::from(deg) / 2.0).to_radians() as f32;
+        let want_kind = match u.kind {
+            0 => LightKind::Spot {
+                inner_cone: half(u.inner_spot_angle).min(half(u.spot_angle)),
+                outer_cone: half(u.spot_angle).min(std::f32::consts::FRAC_PI_2),
+            },
+            1 => LightKind::Directional,
+            _ => LightKind::Point,
+        };
+        if l.kind != want_kind {
+            problems.push(format!("kind {:?} vs {want_kind:?}", l.kind));
+        }
+        let srgb = |c: f32| {
+            let c = f64::from(c);
+            (if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }) as f32
+        };
+        if l.color != [0, 1, 2].map(|k| srgb(u.color[k])) || l.intensity != u.intensity {
+            problems.push(format!("colour {:?} intensity {}", l.color, l.intensity));
+        }
+        if l.range != (u.kind != 1).then_some(u.range) {
+            problems.push(format!("range {:?}", l.range));
+        }
+        // direction: the light's local -Z in the world, against Unity's local +Z through the frame
+        let t: &Transform = w.get(e).unwrap();
+        let ours = t.cols[2].map(|x| -x);
+        let unity = transform_of(&s.world).cols[2];
+        if ours.map(f32::to_bits) != UNITY.direction(unity).map(f32::to_bits) {
+            problems.push(format!("direction {ours:?} vs {:?}", UNITY.direction(unity)));
+        }
+        if problems.is_empty() {
+            gate.record(&s.path, 0.0);
+        } else {
+            gate.fail(&s.path, problems.join("; "));
+        }
+    }
+    println!("{gate}");
+    assert_eq!(lowered, stored.len());
+    gate.assert_passed();
+}

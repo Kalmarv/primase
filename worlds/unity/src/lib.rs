@@ -17,11 +17,13 @@
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
+//! - [`lower_lights`]: lights lowered to `core.light`.
 
 pub mod components;
 pub mod level;
 pub mod lower;
 pub mod lower_collision;
+pub mod lower_lights;
 pub mod lower_terrain;
 pub mod material;
 pub mod mesh;
