@@ -21,6 +21,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true
+primase-gltf.workspace = true
+primase-skate-scene.workspace = true
 
 [lints]
 workspace = true
