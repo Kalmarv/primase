@@ -549,7 +549,9 @@ name = "primase-skate-scene"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

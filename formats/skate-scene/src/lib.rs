@@ -1,1 +1,35 @@
-//! skate-scene interchange v1 (frozen) read and write, and the skate.* dialect components it carries.
+//! skate-scene interchange v1 (frozen) read and write, and the `skate.*` dialect components it carries.
+//!
+//! A scene folder is a JSON manifest (`scene.json`), little-endian binary tables (placements, lights, grind curves,
+//! collision soups) and the files they reference (prototype GLBs, textures). [`read`] attaches a folder to a
+//! [`primase_core::World`] (see [`components`] for the mapping); [`write`] writes a world back as a folder. An unchanged
+//! world writes the same tables byte for byte, the same manifest as parsed values, and the referenced files copied.
+
+pub mod components;
+pub mod json;
+pub mod read;
+pub mod tables;
+pub mod write;
+
+use std::path::PathBuf;
+
+pub use components::*;
+pub use read::{ReadReport, read};
+pub use write::{WriteReport, write};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{}: {source}", path.display())]
+    Io { path: PathBuf, source: std::io::Error },
+    #[error("{}: {source}", path.display())]
+    Json { path: PathBuf, source: json::ParseError },
+    /// The manifest or a table breaks a rule of the format; the message names the item.
+    #[error("{0}")]
+    Scene(String),
+    #[error("{path}: {message}")]
+    Table { path: String, message: String },
+    #[error("write: {0}")]
+    Write(String),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;

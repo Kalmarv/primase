@@ -72,10 +72,12 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 
 | variable | what |
 |---|---|
-| `PRIMASE_SCENES_GTA` | a folder whose subfolders are GTA V skate-scene folders |
-| `PRIMASE_SCENES_SEKIRO` | a folder whose `scene_*` subfolders are Sekiro skate-scene folders |
+| `PRIMASE_SCENES_GTA` | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) |
+| `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
+| `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
+| `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |
-| `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`) |
+| `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable) |
 | `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
 | `PRIMASE_OODLE5` | explicit trusted Oodle version-5 game DLL path |
 | `PRIMASE_OODLE6` | explicit trusted Oodle version-6 game DLL path |

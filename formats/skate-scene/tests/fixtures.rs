@@ -1,0 +1,892 @@
+//! Synthetic scene folders (made here, no game data): round trips, chunked tables, edits, determinism, and every
+//! kind of invalid input failing with its reason.
+
+#![allow(clippy::unwrap_used)]
+
+use std::path::{Path, PathBuf};
+
+use primase_core::{Instance, Source, Transform, World};
+use primase_skate_scene::json::{self, J};
+use primase_skate_scene::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
+use primase_skate_scene::{self as scene, SkateLight, SkatePrototype, SkateScene};
+
+/// A fresh folder under the target directory's tmp.
+fn tmp(name: &str) -> PathBuf {
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("skate-scene")
+        .join(name);
+    if d.exists() {
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn put(dir: &Path, rel: &str, bytes: &[u8]) {
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, bytes).unwrap();
+}
+
+static NORMAL_PNG: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= u32::from(b);
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+    }
+    !c
+}
+
+/// A w x h RGBA PNG of one colour (zlib stored blocks, no compression).
+fn png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for _ in 0..h {
+        raw.push(0);
+        raw.extend(rgba.iter().cycle().take(4 * w as usize));
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut z = vec![0x78, 0x01, 1];
+    z.extend_from_slice(&(raw.len() as u16).to_le_bytes());
+    z.extend_from_slice(&(!(raw.len() as u16)).to_le_bytes());
+    z.extend_from_slice(&raw);
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let chunk = |out: &mut Vec<u8>, t: &[u8], d: &[u8]| {
+        out.extend_from_slice(&(d.len() as u32).to_be_bytes());
+        let mut td = t.to_vec();
+        td.extend_from_slice(d);
+        out.extend_from_slice(&td);
+        out.extend_from_slice(&crc32(&td).to_be_bytes());
+    };
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// A GLB whose meshes have these many primitives, each one triangle (shared accessors), no materials.
+fn glb(meshes: &[usize]) -> Vec<u8> {
+    let mut bin = Vec::new();
+    for v in [[0f32, 0., 0.], [1., 0., 0.], [0., 0., -1.]] {
+        for x in v {
+            bin.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    for _ in 0..3 {
+        for x in [0f32, 1., 0.] {
+            bin.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    let prim = r#"{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}"#;
+    let ms: Vec<String> = meshes
+        .iter()
+        .map(|&n| format!(r#"{{"primitives": [{}]}}"#, vec![prim; n].join(",")))
+        .collect();
+    let mut js = format!(
+        r#"{{"asset": {{"version": "2.0"}}, "buffers": [{{"byteLength": 72}}], "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": 36}}, {{"buffer": 0, "byteOffset": 36, "byteLength": 36}}], "accessors": [{{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, -1], "max": [1, 0, 0]}}, {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}}], "meshes": [{}]}}"#,
+        ms.join(",")
+    )
+    .into_bytes();
+    while js.len() % 4 != 0 {
+        js.push(b' ');
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&((12 + 8 + js.len() + 8 + bin.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&(js.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+    out.extend_from_slice(&js);
+    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+    out.extend_from_slice(&bin);
+    out
+}
+
+fn plac(proto: u32, variant: u32, x: f32, fl: u32, source: u32) -> PlacementRec {
+    PlacementRec {
+        proto,
+        variant,
+        m: [1., 0., 0., 0., 1., 0., 0., 0., 1., x, -0.0, -40.],
+        tile: if fl & flags::TILE != 0 { [-1, 3] } else { [0, 0] },
+        radius: if fl & flags::RADIUS != 0 { 2.5 } else { 0.0 },
+        flags: fl,
+        source,
+    }
+}
+
+fn soup() -> SoupTable {
+    SoupTable {
+        positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 0., -1.], [5., 1., 5.]],
+        triangles: vec![[0, 1, 2], [1, 3, 2]],
+        surfaces: vec![1, 0x80 | 2],
+        reserved: 0,
+    }
+}
+
+fn light(group: u32, source: u32) -> LightRec {
+    LightRec {
+        kind: 1,
+        position: [1., 2., 3.],
+        direction: [0., -1., 0.],
+        tangent: [0.; 3],
+        color: [1., 0.9, 0.8],
+        energy: 300.,
+        range: 15.,
+        radius: 0.1,
+        spot_size: 1.2,
+        spot_blend: 0.3,
+        time_of_day: 24,
+        flags: flags::CAST_SHADOW,
+        priority: 0.,
+        group,
+        source,
+    }
+}
+
+const MANIFEST: &str = r#"{
+  "format": "skate-scene", "version": 1, "generator": "fixture 1",
+  "name": "fixture_a", "display_name": "Fixture A",
+  "region": [-100, -100.5, 100, 0.30000001192092896],
+  "surfaces": ["default", "concrete", "asphalt", "packed:524384"],
+  "light_prefix": "fx_",
+  "textures": {
+    "wall_d": {"file": "textures/wall_d.png", "name": "wall_d", "source_format": "D3DFMT_DXT1", "source_size": [512, 256], "extras": {"k": 1.0}},
+    "wall_n": {"file": "textures/wall_n.png", "green": "down", "z": "rebuild", "source": "tex:wall_n"}
+  },
+  "materials": {
+    "wall": {"class": "opaque", "base": "wall_d", "normal": "wall_n", "cutoff": 0.5, "roughness": 0.6, "label": "Wall"},
+    "trim_red": {"class": "cutout", "base_color": [200, 40, 40, 255], "alpha": "mask", "two_sided": true},
+    "glass": {"class": "glass", "metallic": 0.1, "wrap": "extend", "source": "mat:glass", "unknown_key": [1, 2]}
+  },
+  "prototypes": [
+    {"id": "wall_01", "name": "Wall", "key": 305419896, "glb": "prototypes/wall.glb", "source": "msb:wall_01",
+     "parts": [{"material": "wall", "source": {"shader": "a.sps", "bucket": 2, "model": 0, "geometry": 4}},
+               {"material": null, "variants": {"0": "trim_red", "3": "glass"}}],
+     "collision": {"file": "collision/wall.bin", "mode": "hull"}},
+    {"id": "shared", "glb": "prototypes/wall.glb", "mesh": 1, "foliage": true, "parts": [{"material": "glass"}]},
+    {"id": "empty", "glb": null, "parts": []}
+  ],
+  "placements": "tables/placements.bin",
+  "placement_sources": ["msb:a", "msb:b"],
+  "collision": [{"file": "collision/world.bin", "ground": true, "region_cut": false}, "collision/other.bin"],
+  "lights": "tables/lights.bin",
+  "light_groups": ["", "interior"],
+  "light_sources": ["l0"],
+  "grind_curves": "tables/grind.bin",
+  "water": [{"corners": [[0, 0], [10, 0], [10, 10], [0, 10]], "height": 1.5}],
+  "markers": [
+    {"kind": "spawn", "position": [0, 120, 0], "yaw": 0, "snap": "none"},
+    {"kind": "travel", "name": "Main Gate", "position": [12, null, -40], "yaw": 90.5, "snap": "street", "shelter": false},
+    {"kind": "trainer", "position": [80, 300, 12], "snap": {"mode": "ground", "above": 3, "rings": [4, 8]}},
+    {"kind": "vfx", "name": "snow", "blueprint": "vfx/weather/snowfall", "m": [1,0,0, 0,1,0, 0,0,1, 0,140,0]}
+  ],
+  "streaming_distances": {"near": 50, "medium": 250, "far": 500},
+  "min_height": {"height": 100.01, "stub_below": 250, "floor": -91.0},
+  "max_render_edge": 48,
+  "warnings": ["from the front end"],
+  "stats": {"front_end": "fixture", "lift": 3, "f": 0.25},
+  "extensions": {"fixture": {"x": [1, {"y": null}]}},
+  "extras": {"note": "kept"}
+}
+"#;
+
+/// The fixture folder: manifest, tables, files.
+fn fixture(name: &str) -> PathBuf {
+    fixture_with(name, MANIFEST, |_| {})
+}
+
+fn fixture_with(name: &str, manifest: &str, edit: impl FnOnce(&Path)) -> PathBuf {
+    let d = tmp(name);
+    put(&d, "scene.json", manifest.as_bytes());
+    put(&d, "textures/wall_d.png", &png(2, 2, [200, 100, 50, 255]));
+    put(
+        &d,
+        "textures/wall_n.png",
+        NORMAL_PNG.get_or_init(|| png(1, 1, [128, 128, 255, 255])),
+    );
+    put(&d, "prototypes/wall.glb", &glb(&[2, 1]));
+    put(
+        &d,
+        "tables/placements.bin",
+        &tables::write_placements(&[
+            plac(0, 0, 12., flags::TILE | flags::RADIUS, 0),
+            plac(0, 3, 13., flags::CLIP_GIVEN | flags::NO_COLLISION, 1),
+            plac(
+                1,
+                0,
+                14.,
+                flags::CLIP_GIVEN | flags::CLIP | flags::SPLIT,
+                u32::MAX,
+            ),
+            plac(2, 0, 15., 0, u32::MAX),
+        ]),
+    );
+    put(&d, "collision/wall.bin", &tables::write_soup(&soup()));
+    put(&d, "collision/world.bin", &tables::write_soup(&soup()));
+    put(
+        &d,
+        "collision/other.bin",
+        &tables::write_soup(&SoupTable::default()),
+    );
+    put(
+        &d,
+        "tables/lights.bin",
+        &tables::write_lights(&[light(0, 0), light(1, u32::MAX), light(1, 0)]),
+    );
+    put(
+        &d,
+        "tables/grind.bin",
+        &tables::write_curves(&CurveTable {
+            curves: vec![
+                CurveRec {
+                    first: 0,
+                    count: 2,
+                    flags: flags::CLOSED | (2 << 4),
+                    radius: 0.05,
+                    surface: 3,
+                },
+                CurveRec {
+                    first: 2,
+                    count: 3,
+                    flags: 0,
+                    radius: 0.0,
+                    surface: 0,
+                },
+            ],
+            points: vec![
+                [0., 1., 0.],
+                [1., 1., 0.],
+                [2., 1., 0.],
+                [3., 1., 1.],
+                [4., 1., 2.],
+            ],
+            reserved: 0,
+        }),
+    );
+    edit(&d);
+    d
+}
+
+fn read(dir: &Path) -> (World, scene::ReadReport) {
+    let mut w = World::new();
+    let rep = scene::read(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    (w, rep)
+}
+
+fn read_err(dir: &Path) -> String {
+    let mut w = World::new();
+    match scene::read(dir, &mut w) {
+        Ok(_) => panic!("{} read without error", dir.display()),
+        Err(e) => e.to_string(),
+    }
+}
+
+fn manifest(dir: &Path) -> J {
+    json::parse(&std::fs::read(dir.join("scene.json")).unwrap()).unwrap()
+}
+
+fn same_tree(a: &Path, b: &Path, rels: &[&str]) {
+    for r in rels {
+        assert_eq!(
+            std::fs::read(a.join(r)).unwrap(),
+            std::fs::read(b.join(r)).unwrap(),
+            "{r}"
+        );
+    }
+}
+
+const ALL_FILES: &[&str] = &[
+    "textures/wall_d.png",
+    "textures/wall_n.png",
+    "prototypes/wall.glb",
+    "tables/placements.bin",
+    "collision/wall.bin",
+    "collision/world.bin",
+    "collision/other.bin",
+    "tables/lights.bin",
+    "tables/grind.bin",
+];
+
+#[test]
+fn round_trip_is_exact() {
+    let src = fixture("rt_src");
+    let (w, rep) = read(&src);
+    assert_eq!(rep.tolerated.len(), 0, "{:?}", rep.tolerated);
+    assert_eq!(
+        rep.warnings,
+        ["prototype 'empty' has no geometry; its placements draw nothing"]
+    );
+    let out = tmp("rt_out");
+    std::fs::remove_dir(&out).unwrap();
+    scene::write(&w, &out).unwrap();
+    same_tree(&src, &out, ALL_FILES);
+    let c = json::compare(&manifest(&src), &manifest(&out));
+    assert!(c.differences.is_empty(), "{:?}", c.differences);
+    // the region's 0.30000001192092896 comes back as its shortest f32 form, 0.3
+    assert_eq!(c.f32_equal, 1);
+    // writing again gives the same bytes, also the manifest
+    let out2 = tmp("rt_out2");
+    scene::write(&w, &out2).unwrap();
+    same_tree(&out, &out2, &[&["scene.json"], ALL_FILES].concat());
+    // and reading the output gives a world that writes the same again
+    let (w3, _) = read(&out);
+    let out3 = tmp("rt_out3");
+    scene::write(&w3, &out3).unwrap();
+    same_tree(&out, &out3, &[&["scene.json"], ALL_FILES].concat());
+}
+
+#[test]
+fn the_world_holds_what_the_manifest_says() {
+    let (w, _) = read(&fixture("content"));
+    let s = w.resource::<SkateScene>().unwrap();
+    assert_eq!(s.name, "fixture_a");
+    assert_eq!(s.min_height.as_ref().unwrap().floor, Some(-91.0));
+    assert_eq!(s.key_order.first().map(String::as_str), Some("format"));
+    assert!(s.other.contains_key("extensions") && s.other.contains_key("extras"));
+    let protos: Vec<_> = w.iter::<SkatePrototype>().collect();
+    assert_eq!(protos.len(), 3);
+    let placements: Vec<_> = w.iter::<Instance>().collect();
+    assert_eq!(placements.len(), 4);
+    assert_eq!(placements[1].1.variant, 3);
+    assert_eq!(placements[1].1.prototype, protos[0].0);
+    assert_eq!(w.get::<Source>(placements[1].0).unwrap().0, "msb:b");
+    let t = w.get::<Transform>(placements[0].0).unwrap();
+    assert_eq!(t.cols[3][1].to_bits(), (-0.0f32).to_bits(), "signed zero kept");
+    let mf = w.get::<primase_core::MeshFile>(protos[0].0).unwrap();
+    assert_eq!(mf.materials.len(), 2);
+    assert!(mf.materials[0].is_some() && mf.materials[1].is_none());
+    let mv = w.get::<primase_core::MaterialVariants>(protos[0].0).unwrap();
+    assert_eq!(mv.0[1].len(), 2);
+    let groups: Vec<&str> = w.iter::<SkateLight>().map(|(_, l)| l.group.as_str()).collect();
+    assert_eq!(groups, ["", "interior", "interior"]);
+    // components show as JSON
+    let shown = w.components_json(protos[0].0);
+    assert!(shown.iter().any(|(n, v)| *n == "skate.prototype" && v.is_some()));
+}
+
+#[test]
+fn edits_are_written() {
+    let (mut w, _) = read(&fixture("edit_src"));
+    // move a placement, give a light a new group and source, drop a prototype's placements' sources
+    let (pe, _) = w.iter::<Instance>().next().unwrap();
+    w.get_mut::<Transform>(pe).unwrap().cols[3] = [1., 2., 3.];
+    let (le, _) = w.iter::<SkateLight>().next().unwrap();
+    w.get_mut::<SkateLight>(le).unwrap().group = "street".into();
+    w.insert(le, Source("new_light".into()));
+    let out = tmp("edit_out");
+    scene::write(&w, &out).unwrap();
+    let (w2, _) = read(&out);
+    let (pe2, _) = w2.iter::<Instance>().next().unwrap();
+    assert_eq!(w2.get::<Transform>(pe2).unwrap().cols[3], [1., 2., 3.]);
+    let m = manifest(&out);
+    // new strings appended, the old order kept
+    assert_eq!(
+        m.get("light_groups"),
+        Some(&J::Arr(vec![J::str(""), J::str("interior"), J::str("street")]))
+    );
+    assert_eq!(
+        m.get("light_sources"),
+        Some(&J::Arr(vec![J::str("l0"), J::str("new_light")]))
+    );
+    let (le2, _) = w2.iter::<SkateLight>().next().unwrap();
+    assert_eq!(w2.get::<SkateLight>(le2).unwrap().group, "street");
+}
+
+#[test]
+fn chunked_tables_keep_their_chunks() {
+    let m = MANIFEST
+        .replace(
+            r#""placements": "tables/placements.bin","#,
+            r#""placements": ["tables/p0.bin", {"file": "tables/p1.bin"}],"#,
+        )
+        .replace(
+            r#""collision/other.bin"]"#,
+            r#"{"file": ["collision/c0.bin", "collision/c1.bin"], "mode": "water"}]"#,
+        );
+    let src = fixture_with("chunks_src", &m, |d| {
+        put(
+            d,
+            "tables/p0.bin",
+            &tables::write_placements(&[plac(0, 0, 1., 0, 0), plac(1, 0, 2., 0, 1)]),
+        );
+        put(
+            d,
+            "tables/p1.bin",
+            &tables::write_placements(&[plac(2, 0, 3., 0, u32::MAX)]),
+        );
+        put(d, "collision/c0.bin", &tables::write_soup(&soup()));
+        put(d, "collision/c1.bin", &tables::write_soup(&soup()));
+    });
+    let (w, rep) = read(&src);
+    assert_eq!(w.iter::<Instance>().count(), 3);
+    assert_eq!(rep.tolerated.len(), 1, "{:?}", rep.tolerated); // the list item {"file"} without sha256
+    let out = tmp("chunks_out");
+    scene::write(&w, &out).unwrap();
+    same_tree(
+        &src,
+        &out,
+        &[
+            "tables/p0.bin",
+            "tables/p1.bin",
+            "collision/c0.bin",
+            "collision/c1.bin",
+        ],
+    );
+    // the merged soup indexes the second chunk's vertices rebased
+    let soups: Vec<_> = w.iter::<scene::SkateSoup>().collect();
+    let merged = soups.iter().find(|(_, s)| s.triangles.len() == 4).unwrap().1;
+    assert_eq!(merged.triangles[2], [4, 5, 6]);
+}
+
+#[test]
+fn sha256_is_checked_and_rewritten() {
+    use sha2::Digest;
+    let h: String = sha2::Sha256::digest(NORMAL_PNG.get_or_init(|| png(1, 1, [128, 128, 255, 255])))
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let m = MANIFEST.replace(
+        r#""wall_n": {"file": "textures/wall_n.png","#,
+        &format!(
+            r#""wall_n": {{"file": "textures/wall_n.png", "sha256": "{}","#,
+            h.to_uppercase()
+        ),
+    );
+    let src = fixture_with("sha_src", &m, |_| {});
+    let (w, _) = read(&src);
+    let out = tmp("sha_out");
+    scene::write(&w, &out).unwrap();
+    let got = manifest(&out);
+    assert_eq!(
+        got.get("textures").unwrap().get("wall_n").unwrap().get("sha256"),
+        Some(&J::str(&h))
+    );
+    let bad = fixture_with("sha_bad", &m.replace(&h.to_uppercase(), &"0".repeat(64)), |_| {});
+    assert!(read_err(&bad).contains("sha256"), "{}", read_err(&bad));
+}
+
+/// A case name, the manifest, an edit of the folder, and the reason expected.
+type Case = (&'static str, String, Box<dyn Fn(&Path)>, &'static str);
+
+/// One invalid change and the reason the reader gives (the reference validator's wording).
+#[test]
+fn invalid_input_fails_with_its_reason() {
+    let cases: Vec<Case> = vec![
+        (
+            "format",
+            MANIFEST.replace(r#""format": "skate-scene""#, r#""format": "other""#),
+            Box::new(|_| {}),
+            "format is not \"skate-scene\"",
+        ),
+        (
+            "version",
+            MANIFEST.replace(r#""version": 1"#, r#""version": 2"#),
+            Box::new(|_| {}),
+            "version is not 1",
+        ),
+        (
+            "name",
+            MANIFEST.replace("fixture_a", "fixture a"),
+            Box::new(|_| {}),
+            "name 'fixture a' is not [A-Za-z0-9_-]+",
+        ),
+        (
+            "region",
+            MANIFEST.replace("[-100, -100.5, 100, 0.30000001192092896]", "[1, 0, 0, 1]"),
+            Box::new(|_| {}),
+            "region is empty",
+        ),
+        (
+            "surface",
+            MANIFEST.replace("\"asphalt\"", "\"lava\""),
+            Box::new(|_| {}),
+            "surfaces[2]: unknown surface 'lava'",
+        ),
+        (
+            "packed",
+            MANIFEST.replace("packed:524384", "packed:7"),
+            Box::new(|_| {}),
+            "surfaces[3]: 'packed:7' is not a Studio packed material (n << 6 | 32)",
+        ),
+        (
+            "tex dup",
+            MANIFEST.replace(r#""green": "down""#, r#""name": "WALL_D", "green": "down""#),
+            Box::new(|_| {}),
+            "texture 'wall_n': name 'WALL_D' is used twice (one name, one image)",
+        ),
+        (
+            "tex missing",
+            MANIFEST.replace("textures/wall_n.png", "textures/none.png"),
+            Box::new(|_| {}),
+            "texture 'wall_n': 'textures/none.png' does not exist",
+        ),
+        (
+            "outside",
+            MANIFEST.replace("textures/wall_n.png", "../wall_n.png"),
+            Box::new(|_| {}),
+            "texture 'wall_n': '../wall_n.png' is outside the scene folder",
+        ),
+        (
+            "backslash",
+            MANIFEST.replace("textures/wall_n.png", "textures\\\\wall_n.png"),
+            Box::new(|_| {}),
+            "is not a relative path with forward slashes",
+        ),
+        (
+            "class",
+            MANIFEST.replace(r#""class": "glass""#, r#""class": "metal""#),
+            Box::new(|_| {}),
+            "material 'glass': class 'metal' unknown",
+        ),
+        (
+            "mat case",
+            MANIFEST.replace(r#""glass": {"class""#, r#""WALL": {"class""#),
+            Box::new(|_| {}),
+            "material keys 'WALL' and another differ only in case",
+        ),
+        (
+            "role",
+            MANIFEST.replace(r#""metallic": 0.1"#, r#""mask": "wall_d""#),
+            Box::new(|_| {}),
+            "texture 'wall_d' is used as color and as mask",
+        ),
+        (
+            "tex unknown",
+            MANIFEST.replace(r#""normal": "wall_n""#, r#""normal": "nope""#),
+            Box::new(|_| {}),
+            "material 'wall': normal texture 'nope' unknown",
+        ),
+        (
+            "bytes",
+            MANIFEST.replace("[200, 40, 40, 255]", "[200, 40, 400, 255]"),
+            Box::new(|_| {}),
+            "material 'trim_red': 'base_color' is not 4 integers 0-255",
+        ),
+        (
+            "range",
+            MANIFEST.replace(r#""roughness": 0.6"#, r#""roughness": 1.5"#),
+            Box::new(|_| {}),
+            "material 'wall': 'roughness' 1.5 is not in [0, 1]",
+        ),
+        (
+            "proto dup",
+            MANIFEST.replace(r#""id": "shared""#, r#""id": "wall_01""#),
+            Box::new(|_| {}),
+            "prototype id 'wall_01' twice",
+        ),
+        (
+            "key dup",
+            MANIFEST.replace(r#""foliage": true"#, r#""key": 305419896"#),
+            Box::new(|_| {}),
+            "prototypes 'wall_01' and 'shared' have the same key 305419896",
+        ),
+        (
+            "part mat",
+            MANIFEST.replace(r#"[{"material": "glass"}]"#, r#"[{"material": "nope"}]"#),
+            Box::new(|_| {}),
+            "prototype 'shared': material 'nope' unknown",
+        ),
+        (
+            "variant key",
+            MANIFEST.replace(r#""3": "glass""#, r#""x": "glass""#),
+            Box::new(|_| {}),
+            "prototype 'wall_01': variant 'x' is not a number",
+        ),
+        (
+            "col mode",
+            MANIFEST.replace(r#""mode": "hull""#, r#""mode": "lava""#),
+            Box::new(|_| {}),
+            "prototype 'wall_01': collision mode 'lava'",
+        ),
+        (
+            "water convex",
+            MANIFEST.replace(
+                "[[0, 0], [10, 0], [10, 10], [0, 10]]",
+                "[[0, 0], [10, 0], [1, 1], [0, 10]]",
+            ),
+            Box::new(|_| {}),
+            "water[0]: the outline is not convex",
+        ),
+        (
+            "water few",
+            MANIFEST.replace("[[0, 0], [10, 0], [10, 10], [0, 10]]", "[[0, 0], [10, 0]]"),
+            Box::new(|_| {}),
+            "water[0]: fewer than 3 corners",
+        ),
+        (
+            "kind",
+            MANIFEST.replace(r#""kind": "trainer""#, r#""kind": "boss""#),
+            Box::new(|_| {}),
+            "markers[2]: kind 'boss'",
+        ),
+        (
+            "blueprint",
+            MANIFEST.replace(r#""blueprint": "vfx/weather/snowfall", "#, ""),
+            Box::new(|_| {}),
+            "markers[3]: an effect needs a blueprint",
+        ),
+        (
+            "snap none",
+            MANIFEST.replace(r#""snap": "street""#, r#""snap": "none""#),
+            Box::new(|_| {}),
+            "markers[1]: snap none needs a height",
+        ),
+        (
+            "mirror m",
+            MANIFEST.replace(
+                "[1,0,0, 0,1,0, 0,0,1, 0,140,0]",
+                "[-1,0,0, 0,1,0, 0,0,1, 0,140,0]",
+            ),
+            Box::new(|_| {}),
+            "markers[3].m: a mirrored or zero-scale basis",
+        ),
+        (
+            "json",
+            MANIFEST.replace(r#""light_prefix": "fx_","#, r#""light_prefix": "fx_",,"#),
+            Box::new(|_| {}),
+            "scene.json: line 6, column 25: expected a key",
+        ),
+        (
+            "streaming",
+            MANIFEST.replace(r#""far": 500"#, r#""far": -5"#),
+            Box::new(|_| {}),
+            "streaming_distances: 'far' -5 is not in [0, 1000000]",
+        ),
+        // tables
+        (
+            "magic",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut b = std::fs::read(d.join("tables/lights.bin")).unwrap();
+                b[0] = b'X';
+                put(d, "tables/lights.bin", &b);
+            }),
+            "tables/lights.bin: not an SKST table",
+        ),
+        (
+            "size",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut b = std::fs::read(d.join("tables/placements.bin")).unwrap();
+                b.pop();
+                put(d, "tables/placements.bin", &b);
+            }),
+            "tables/placements.bin: 319 bytes, the header says 320",
+        ),
+        (
+            "proto index",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                put(
+                    d,
+                    "tables/placements.bin",
+                    &tables::write_placements(&[plac(7, 0, 1., 0, u32::MAX)]),
+                );
+            }),
+            "placement 0: prototype 7 of 3",
+        ),
+        (
+            "source index",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                put(
+                    d,
+                    "tables/placements.bin",
+                    &tables::write_placements(&[plac(0, 0, 1., 0, 2)]),
+                );
+            }),
+            "placement 0: source 2 of 2",
+        ),
+        (
+            "variant material",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                put(
+                    d,
+                    "tables/placements.bin",
+                    &tables::write_placements(&[plac(0, 5, 1., 0, 0)]),
+                );
+            }),
+            "prototype 'wall_01' part 1: no material for variant 5",
+        ),
+        (
+            "soup vertex",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut s = soup();
+                s.triangles[1][1] = 9;
+                put(d, "collision/world.bin", &tables::write_soup(&s));
+            }),
+            "collision/world.bin: triangle 1 indexes vertex 9 of 4",
+        ),
+        (
+            "soup surface",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut s = soup();
+                s.surfaces[0] = 4;
+                put(d, "collision/world.bin", &tables::write_soup(&s));
+            }),
+            "collision/world.bin: triangle 0 has surface 4 of 4",
+        ),
+        (
+            "light group",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                put(d, "tables/lights.bin", &tables::write_lights(&[light(2, 0)]));
+            }),
+            "light 0: group 2 of 2",
+        ),
+        (
+            "light type",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut l = light(0, 0);
+                l.kind = 2;
+                put(d, "tables/lights.bin", &tables::write_lights(&[l]));
+            }),
+            "light 0: type 2",
+        ),
+        (
+            "nan",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                let mut l = light(0, 0);
+                l.energy = f32::INFINITY;
+                put(d, "tables/lights.bin", &tables::write_lights(&[l]));
+            }),
+            "tables/lights.bin: a non-finite float at byte 68",
+        ),
+        (
+            "curve range",
+            MANIFEST.into(),
+            Box::new(|d: &Path| {
+                put(
+                    d,
+                    "tables/grind.bin",
+                    &tables::write_curves(&CurveTable {
+                        curves: vec![CurveRec {
+                            first: 1,
+                            count: 2,
+                            flags: 0,
+                            radius: 0.,
+                            surface: 0,
+                        }],
+                        points: vec![[0.; 3], [1.; 3]],
+                        reserved: 0,
+                    }),
+                );
+            }),
+            "tables/grind.bin: curve 0 indexes points 1+2 of 2",
+        ),
+    ];
+    let validator = primase_core::gate::real_data("PRIMASE_SCENE_SKATE");
+    let mut differ = Vec::new();
+    for (name, m, edit, want) in cases {
+        let d = fixture_with(&format!("bad_{}", name.replace(' ', "_")), &m, edit);
+        let got = read_err(&d);
+        assert!(got.contains(want), "{name}: got {got:?}, want {want:?}");
+        // the reference validator refuses it too, for the same reason
+        if let Some(v) = &validator {
+            match reference(v, &d) {
+                Ok(()) => panic!("{name}: the reference validator accepts it"),
+                // table messages: the reference names the file by its full path, we by the scene-relative one
+                Err(msg) if !norm(&msg).contains(want) && name != "json" => {
+                    differ.push(format!("{name}: ours {got:?}, reference {msg:?}"))
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "causes differ:
+{}",
+        differ.join(
+            "
+"
+        )
+    );
+}
+
+/// A reference message with the fixture folder's path taken out of file names.
+fn norm(msg: &str) -> String {
+    let m = msg.replace('\\', "/");
+    match m.find("/skate-scene/bad_") {
+        Some(i) => {
+            let rest = &m[i + "/skate-scene/bad_".len()..];
+            let head = m[..i].rfind(' ').map_or("", |j| &m[..j + 1]);
+            format!("{head}{}", rest.split_once('/').map_or(rest, |(_, r)| r))
+        }
+        None => m,
+    }
+}
+
+/// The reference validator on a folder: Ok, or its error message.
+fn reference(v: &Path, dir: &Path) -> Result<(), String> {
+    let mut cmd = if v.extension().is_some_and(|e| e == "dll") {
+        let mut c = std::process::Command::new("dotnet");
+        c.arg(v);
+        c
+    } else {
+        std::process::Command::new(v)
+    };
+    let out = cmd.arg("validate").arg(dir).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(text.trim().to_owned())
+    }
+}
+
+#[test]
+fn the_reference_validator_accepts_the_fixture_and_our_output() {
+    let Some(v) = primase_core::gate::real_data("PRIMASE_SCENE_SKATE") else {
+        return;
+    };
+    let src = fixture("oracle_src");
+    reference(&v, &src).unwrap();
+    let (w, _) = read(&src);
+    let out = tmp("oracle_out");
+    scene::write(&w, &out).unwrap();
+    reference(&v, &out).unwrap();
+}
+
+#[test]
+fn writer_refuses_unsafe_outputs() {
+    let (w, _) = read(&fixture("refuse_src"));
+    let out = tmp("refuse_out");
+    put(&out, "stale.txt", b"x");
+    assert!(
+        scene::write(&w, &out)
+            .unwrap_err()
+            .to_string()
+            .contains("is not empty")
+    );
+    let mut w2 = World::new();
+    w2.spawn();
+    assert!(
+        scene::write(&w2, &tmp("refuse_out2"))
+            .unwrap_err()
+            .to_string()
+            .contains("no skate.scene")
+    );
+}
