@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Primase tile viewer</title>
+<style>body{margin:0;background:#10151c;color:#e7edf5;font:14px system-ui}canvas{display:block}aside{position:fixed;top:16px;left:16px;padding:14px 18px;background:#15202de8;border-radius:8px;max-width:380px}h1{font-size:18px;margin:0 0 8px}input{vertical-align:middle}#status{margin:8px 0}small{color:#aab9cb}</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}</script></head>
+<body><aside><h1>Primase · tile viewer</h1><div id="status">Loading tile index…</div><label>Streaming radius <input id="radius" type="range" min="200" max="3000" value="800" step="100"><span id="radiusLabel">800 m</span></label><br><label><input id="extras" type="checkbox"> Show curves and markers</label><br><label><input id="collision" type="checkbox"> Show collision</label><p><label>Note (optional)<br><textarea id="note" rows="2" placeholder="What went wrong?"></textarea></label></p><button id="copyView">Copy view (C)</button> <button id="screenshot">Screenshot (S)</button><div id="reportStatus" role="status"></div><textarea id="reportText" rows="5" hidden readonly aria-label="View report JSON"></textarea><small id="build"></small><p><small>Drag to orbit · right-drag to pan · wheel to zoom</small></p></aside><script type="module" src="viewer.js"></script></body></html>
+
+

@@ -9,11 +9,17 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+meshopt.workspace = true
 primase-core.workspace = true
 primase-gltf.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+primase-image.workspace = true
+primase-skate-scene.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

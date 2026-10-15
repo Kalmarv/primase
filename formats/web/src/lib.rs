@@ -1,9 +1,11 @@
-//! Web tile sets in the core frame (metres, +Y up). Ground tile coordinates use X/Z.
+//! Web tile sets in the core frame (metres, +Y up). Tiles use east/north ground coordinates.
 use primase_core::{
     Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Stream, Topology, Transform, TransformKind,
     World,
 };
 use serde::Serialize;
+mod collision;
+mod compression;
 mod instancing;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,6 +27,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Options {
     pub tile_size: f64,
     pub gpu_instancing: bool,
+    /// Quantize vertex attributes and encode vertex streams with meshopt.
+    pub compress: bool,
+    /// Viewer-only records, already lowered from a source dialect into world space.
+    pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
     pub split_by_tile: BTreeSet<Entity>,
     pub base_dir: PathBuf,
@@ -34,13 +40,28 @@ impl Default for Options {
         Self {
             tile_size: 200.,
             gpu_instancing: true,
+            compress: true,
+            viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
         }
     }
 }
+/// A viewer component attached to an empty glTF node. Payload coordinates are in
+/// world space; the node is identity, and the anchor chooses its streaming tile.
+#[derive(Clone, Debug, Serialize)]
+pub struct ViewerItem {
+    pub name: String,
+    pub kind: String,
+    pub anchor: [f64; 3],
+    pub data: serde_json::Value,
+}
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TileInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collision: Option<CollisionFile>,
+    /// Metadata-only tiles contain viewer records and no mesh payload.
+    pub content: TileContent,
     pub col: i32,
     pub row: i32,
     pub file: String,
@@ -49,17 +70,33 @@ pub struct TileInfo {
     pub triangles: u64,
     pub placements: u64,
     pub instanced_placements: u64,
+    pub viewer_items: u64,
     pub bytes: u64,
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TileContent {
+    Geometry,
+    MetadataOnly,
+}
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CollisionFile {
+    pub file: String,
+    pub bytes: u64,
+    pub records: usize,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Index {
+    pub empty_tile_policy: &'static str,
     pub version: u32,
     pub tile_size: f64,
     pub tiles: Vec<TileInfo>,
     pub skipped_degenerate: u64,
+    pub placements_without_mesh: u64,
 }
 #[derive(Clone, Debug)]
 pub struct TileSet {
+    pub collision_files: BTreeMap<String, Vec<u8>>,
     pub index: Index,
     pub files: BTreeMap<String, Vec<u8>>,
 }
@@ -88,7 +125,11 @@ fn coordinate(p: [f64; 3], size: f64) -> Result<(i32, i32)> {
             Err(Error::Invalid("tile coordinate outside i32".into()))
         }
     };
-    Ok((coord(p[0])?, coord(p[2])?))
+    // Project through the shared frame basis in f64: rounding transformed triangle
+    // centres to f32 here would move faces across exact tile boundaries.
+    let axes = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]].map(primase_core::frame::ground);
+    let ground: [f64; 2] = std::array::from_fn(|k| (0..3).map(|i| p[i] * axes[i][k] as f64).sum());
+    Ok((coord(ground[0])?, coord(ground[1])?))
 }
 fn indices(p: &Primitive) -> Vec<u32> {
     p.indices
@@ -207,14 +248,22 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     }
     let mut tiles = BTreeMap::<(i32, i32), Vec<Placement>>::new();
     let mut skipped = 0;
+    let mut without_mesh = 0;
     for p in placements.values() {
         if p.transform.classify() == TransformKind::Degenerate {
             skipped += 1;
             continue;
         }
-        let mesh = world
-            .get::<Mesh>(p.prototype)
-            .ok_or_else(|| Error::Invalid(format!("prototype {:?} has no loaded mesh", p.prototype)))?;
+        let Some(mesh) = world.get::<Mesh>(p.prototype) else {
+            if world.has::<primase_core::MeshFile>(p.prototype) {
+                return Err(Error::Invalid(format!(
+                    "prototype {:?} has no loaded mesh",
+                    p.prototype
+                )));
+            }
+            without_mesh += 1;
+            continue;
+        };
         validate_mesh(mesh)?;
         if !options.split_by_tile.contains(&p.entity) {
             let key = coordinate(p.transform.cols[3].map(f64::from), options.tile_size)?;
@@ -260,11 +309,14 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         }
     }
     let mut set = TileSet {
+        collision_files: BTreeMap::new(),
         index: Index {
+            empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: options.tile_size,
             tiles: Vec::new(),
             skipped_degenerate: skipped,
+            placements_without_mesh: without_mesh,
         },
         files: BTreeMap::new(),
     };
@@ -326,6 +378,9 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
                 },
             );
         }
+        if triangles == 0 {
+            continue;
+        }
         if !min.iter().chain(&max).all(|v| v.is_finite()) {
             return Err(Error::Invalid("tile has no finite geometry".into()));
         }
@@ -345,8 +400,15 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         }
         let transforms = group.iter().map(|p| (p.entity.index(), p.transform)).collect();
         let (bytes, instanced_placements) = instancing::apply(bytes, &transforms, options.gpu_instancing)?;
+        let bytes = if options.compress {
+            compression::apply(bytes)?
+        } else {
+            bytes
+        };
         let file = format!("tile_{col}_{row}.glb");
         set.index.tiles.push(TileInfo {
+            collision: None,
+            content: TileContent::Geometry,
             col,
             row,
             file: file.clone(),
@@ -355,11 +417,122 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             triangles,
             placements: group.len() as u64,
             instanced_placements,
+            viewer_items: 0,
             bytes: bytes.len() as u64,
         });
         set.files.insert(file, bytes);
     }
+    append_viewer_items(&mut set, options)?;
     Ok(set)
+}
+fn append_viewer_items(set: &mut TileSet, options: &Options) -> Result<()> {
+    use serde_json::{Value, json};
+    let mut groups = BTreeMap::<(i32, i32), Vec<(usize, &ViewerItem)>>::new();
+    for (i, item) in options.viewer_items.iter().enumerate() {
+        if item.anchor.iter().any(|v| !v.is_finite()) || item.kind.is_empty() {
+            return Err(Error::Invalid(
+                "viewer item needs a finite anchor and nonempty kind".into(),
+            ));
+        }
+        groups
+            .entry(coordinate(item.anchor, options.tile_size)?)
+            .or_default()
+            .push((i, item));
+    }
+    for ((col, row), items) in groups {
+        let collision_name = format!("collision_{col}_{row}.glb");
+        let collisions: Vec<_> = items
+            .iter()
+            .filter(|(_, item)| item.kind == "collision")
+            .map(|(_, item)| *item)
+            .collect();
+        let collision = if collisions.is_empty() {
+            None
+        } else {
+            let bytes = collision::write(&collisions)?;
+            let descriptor = CollisionFile {
+                file: collision_name.clone(),
+                bytes: bytes.len() as u64,
+                records: collisions.len(),
+            };
+            set.collision_files.insert(collision_name.clone(), bytes);
+            Some(descriptor)
+        };
+        let file = format!("tile_{col}_{row}.glb");
+        let (mut doc, bin) = if let Some(bytes) = set.files.get(&file) {
+            let chunks = primase_gltf::glb::parse(bytes)?;
+            (
+                serde_json::from_slice::<Value>(chunks.json)?,
+                chunks.bin.unwrap_or(&[]).to_vec(),
+            )
+        } else {
+            (
+                json!({"asset":{"version":"2.0","generator":"primase-web"},"scene":0,"scenes":[{"nodes":[]}],"nodes":[]}),
+                Vec::new(),
+            )
+        };
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        let mut collision_index = 0usize;
+        for (i, item) in &items {
+            for k in 0..3 {
+                min[k] = min[k].min(item.anchor[k]);
+                max[k] = max[k].max(item.anchor[k]);
+            }
+            let safe: String = item
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let index = doc["nodes"].as_array().expect("nodes").len();
+            let value = if item.kind == "collision" {
+                let record = collision_index;
+                collision_index += 1;
+                json!({"name":item.name,"kind":"collision_reference","anchor":item.anchor,"data":{"file":collision_name,"record":record}})
+            } else {
+                serde_json::to_value(item)?
+            };
+            doc["nodes"].as_array_mut().expect("nodes").push(json!({"name":format!("Viewer_{safe}_{i}"),"extras":{"primase":{"web.viewer":{"version":1,"value":value}}}}));
+            doc["scenes"][0]["nodes"]
+                .as_array_mut()
+                .expect("roots")
+                .push(json!(index));
+        }
+        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?;
+        if let Some(tile) = set.index.tiles.iter_mut().find(|t| t.col == col && t.row == row) {
+            tile.collision = collision;
+            tile.viewer_items = items.len() as u64;
+            tile.bytes = bytes.len() as u64;
+            for k in 0..3 {
+                tile.min[k] = tile.min[k].min(min[k]);
+                tile.max[k] = tile.max[k].max(max[k]);
+            }
+        } else {
+            set.index.tiles.push(TileInfo {
+                collision,
+                content: TileContent::MetadataOnly,
+                col,
+                row,
+                file: file.clone(),
+                min,
+                max,
+                triangles: 0,
+                placements: 0,
+                instanced_placements: 0,
+                viewer_items: items.len() as u64,
+                bytes: bytes.len() as u64,
+            });
+        }
+        set.files.insert(file, bytes);
+    }
+    set.index.tiles.sort_by_key(|t| (t.col, t.row));
+    Ok(())
 }
 impl TileSet {
     /// Write only generated tile filenames, then publish tiles.json after every tile
@@ -376,11 +549,30 @@ impl TileSet {
             return Err(Error::Invalid("tile index does not match generated files".into()));
         }
         let index_bytes = serde_json::to_vec_pretty(&self.index)?;
+        let collision_entries: Vec<_> = self
+            .index
+            .tiles
+            .iter()
+            .filter_map(|t| t.collision.as_ref().map(|c| (t, c)))
+            .collect();
+        if collision_entries.len() != self.collision_files.len()
+            || collision_entries.iter().any(|(t, c)| {
+                c.file != format!("collision_{}_{}.glb", t.col, t.row)
+                    || self
+                        .collision_files
+                        .get(&c.file)
+                        .is_none_or(|b| b.len() as u64 != c.bytes)
+            })
+        {
+            return Err(Error::Invalid(
+                "collision index does not match generated files".into(),
+            ));
+        }
         std::fs::create_dir_all(folder).map_err(|source| Error::Io {
             path: folder.into(),
             source,
         })?;
-        for (name, bytes) in &self.files {
+        for (name, bytes) in self.files.iter().chain(&self.collision_files) {
             let path = folder.join(name);
             std::fs::write(&path, bytes).map_err(|source| Error::Io { path, source })?;
         }
