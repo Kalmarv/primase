@@ -154,6 +154,9 @@ impl Component for Instance {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.prototype);
+    }
 }
 
 /// A vertex attribute's meaning.
@@ -238,6 +241,9 @@ pub struct Mesh {
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.primitives.iter().filter_map(|p| p.material));
+    }
     /// Float streams finite (glTF and every writer we have refuse NaN and infinity).
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         for (i, p) in self.primitives.iter().enumerate() {
@@ -560,6 +566,9 @@ impl Component for MeshFile {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.materials.iter().flatten());
+    }
 }
 
 /// Per-placement material choices of a prototype: one map per primitive, variant -> material, overriding the
@@ -570,6 +579,9 @@ impl Component for MaterialVariants {
     const NAME: &'static str = "core.material_variants";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.0.iter().flat_map(|m| m.values().copied()));
     }
 }
 
@@ -820,5 +832,124 @@ mod tests {
             spot(0.25, 0.5).to_json().unwrap().unwrap()["kind"],
             serde_json::json!({"Spot": {"inner_cone": 0.25, "outer_cone": 0.5}})
         );
+    }
+
+    #[test]
+    fn closures_follow_declared_references_and_subsets_keep_ids() {
+        use crate::pbr::{PbrMaterial, TextureRef};
+        use crate::{Opaque, OpaqueData};
+        let mut w = crate::World::new();
+        let texture = w.spawn();
+        w.insert(texture, Name("albedo".into()));
+        let other_texture = w.spawn();
+        let material = w.spawn();
+        w.insert(
+            material,
+            PbrMaterial {
+                base_color_texture: Some(TextureRef::new(texture)),
+                ..PbrMaterial::default()
+            },
+        );
+        let variant = w.spawn();
+        w.insert(
+            variant,
+            PbrMaterial {
+                emissive_texture: Some(TextureRef::new(other_texture)),
+                ..PbrMaterial::default()
+            },
+        );
+        let prototype = w.spawn();
+        w.insert(
+            prototype,
+            MeshFile {
+                path: "a.glb".into(),
+                mesh: 0,
+                materials: vec![Some(material)],
+            },
+        );
+        w.insert(prototype, MaterialVariants(vec![BTreeMap::from([(1, variant)])]));
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            Instance {
+                prototype,
+                variant: 1,
+            },
+        );
+        w.insert(placement, Transform::IDENTITY);
+        // an opaque component naming an entity is carried, not followed
+        let unrelated = w.spawn();
+        w.insert(unrelated, Name("elsewhere".into()));
+        w.insert_opaque(
+            placement,
+            "game.link",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Json(json!(unrelated.index())),
+            },
+        );
+        w.insert_resource(crate::Surfaces::default());
+        let closure = w.closure([placement]);
+        assert_eq!(
+            closure,
+            [texture, other_texture, material, variant, prototype, placement].into()
+        );
+        let mut sub = w.subset(&closure);
+        assert!(!sub.is_alive(unrelated) && sub.get::<Name>(unrelated).is_none());
+        assert_eq!(sub.get::<Name>(texture), w.get::<Name>(texture));
+        assert_eq!(sub.get::<Instance>(placement), w.get::<Instance>(placement));
+        assert!(
+            sub.opaque_components()
+                .any(|(n, c)| n == "game.link" && c.contains_key(&placement))
+        );
+        assert!(sub.resource::<crate::Surfaces>().is_some());
+        assert_eq!(sub.verify_components(), Vec::new());
+        // ids stay unique: a new entity lands above every id of the source
+        assert!(sub.spawn().index() > unrelated.index());
+        // retain is the same subset in place
+        let mut kept = w.clone();
+        kept.retain(&closure);
+        assert_eq!(format!("{kept:?}"), format!("{:?}", w.subset(&closure)));
+        assert!(!kept.is_alive(unrelated));
+    }
+
+    #[test]
+    fn a_split_off_part_moves_out_and_back() {
+        let mut w = crate::World::new();
+        let texture = w.spawn();
+        w.insert(texture, Name("albedo".into()));
+        let prototype = w.spawn();
+        w.insert(prototype, Name("rock".into()));
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        w.insert(placement, Transform::IDENTITY);
+        let other = w.spawn();
+        w.insert(other, Name("elsewhere".into()));
+        let before = format!("{w:?}");
+        let next = w.clone().spawn();
+        let keep = w.closure([placement]);
+        let mut part = w.split_off(&keep);
+        assert!(!w.is_alive(placement) && w.get::<Name>(prototype).is_none());
+        assert_eq!(w.get::<Name>(other), Some(&Name("elsewhere".into())));
+        assert_eq!(
+            part.get::<Instance>(placement).map(|i| i.prototype),
+            Some(prototype)
+        );
+        assert!(!part.is_alive(other));
+        // the part spawns where a copy would, and what it spawns and despawns leaves no trace
+        let spawned = part.spawn();
+        assert_eq!(spawned, next);
+        part.insert(spawned, Name("chunk".into()));
+        part.despawn(spawned);
+        w.absorb(part);
+        assert_eq!(format!("{w:?}"), before);
+        assert_eq!(w.get::<Name>(texture), Some(&Name("albedo".into())));
+        assert_eq!(w.spawn(), next, "the next id is unchanged");
     }
 }

@@ -145,6 +145,10 @@ impl Component for UnityMaterial {
         primase_core::json::to_value(self).map(Some)
     }
 
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.textures.iter().filter_map(|t| t.texture));
+    }
+
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
         for t in &self.textures {
             if let Some(e) = t.texture
@@ -226,6 +230,10 @@ impl Component for UnityTerrainLayer {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
+
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend([self.diffuse, self.normal, self.mask].into_iter().flatten());
+    }
 }
 
 /// A terrain's collider as Unity stores it.
@@ -295,6 +303,11 @@ impl Component for UnityTerrain {
         Ok(Some(v))
     }
 
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.layers.iter().chain(&self.alphamaps).flatten());
+        out.extend(self.material);
+    }
+
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let n = self.resolution as usize;
         if self.heights.len() != n * n {
@@ -318,6 +331,10 @@ impl Component for UnityTreeInstance {
     const NAME: &'static str = "unity.tree_instance";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
+    }
+
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.terrain);
     }
 
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {

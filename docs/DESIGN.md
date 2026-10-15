@@ -48,8 +48,11 @@ whose name or version is unknown is an error, never an opaque component; opaque 
 build doesn't know. Entities stay untyped ("has a"); **roles are checked, not stored**: the core verifier enforces the
 role conventions (an `Instance` has a `Transform` and points at a live prototype; a primitive's material is alive and
 has a material component) and each dialect verifies its own components. A component with `Entity` fields reports them
-through its reference visitor: the verifier rejects references to dead entities, and the printer, the v2 writer and
-despawning passes use it. One component of a name per entity (a list is one component holding a list).
+through its reference visitor, `Component::references`: `World::closure` follows it from root entities (a tile's
+placements reach their prototypes, materials and textures), `World::subset` copies such a closure under the same ids, and
+the verifier, the printer, the v2 writer and despawning passes can use it. Opaque components declare no references:
+they travel with their entity but are not followed. One component of a name per entity (a list is one component holding
+a list).
 
 **Core components (fixed, versioned, small):**
 | component | content |

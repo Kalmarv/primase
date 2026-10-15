@@ -5,7 +5,7 @@
 //! same bytes for the same world.
 
 use std::any::{Any, TypeId};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::json::JsonError;
@@ -61,6 +61,10 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         Ok(())
     }
+
+    /// The entities this component refers to (a prototype, materials, textures), appended to `out`: the edges
+    /// [`World::closure`] follows. A component holding entity references must declare every one of them.
+    fn references(&self, _out: &mut Vec<Entity>) {}
 }
 
 /// A world resource: one value per world (the frame, a game's archive index, a run's options).
@@ -176,7 +180,17 @@ trait AnyColumn: Any + Send + Sync {
     /// Every value's `Component::verify`, as (entity, message) for those that fail, in entity order.
     fn verify(&self, w: &World) -> Vec<(Entity, String)>;
     fn entities(&self) -> Vec<Entity>;
+    /// [`Component::references`] of entity `e`'s value, if it has one.
+    fn references(&self, e: Entity, out: &mut Vec<Entity>);
     fn clone_box(&self) -> Box<dyn AnyColumn>;
+    /// A copy holding only the values of `keep`.
+    fn subset_box(&self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn>;
+    /// Drop the values of entities outside `keep`.
+    fn retain(&mut self, keep: &BTreeSet<Entity>);
+    /// Move the values of `keep` out into a column of their own.
+    fn split_off_box(&mut self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn>;
+    /// Move every value of `other`, a column of the same type, in.
+    fn absorb(&mut self, other: Box<dyn AnyColumn>);
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -209,14 +223,57 @@ impl<T: Component> AnyColumn for Column<T> {
     fn entities(&self) -> Vec<Entity> {
         self.values.keys().copied().collect()
     }
+    fn references(&self, e: Entity, out: &mut Vec<Entity>) {
+        if let Some(v) = self.values.get(&e) {
+            v.references(out);
+        }
+    }
     fn clone_box(&self) -> Box<dyn AnyColumn> {
         Box::new(self.clone())
+    }
+    fn subset_box(&self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn> {
+        Box::new(Column {
+            values: subset_of(&self.values, keep),
+        })
+    }
+    fn retain(&mut self, keep: &BTreeSet<Entity>) {
+        self.values.retain(|e, _| keep.contains(e));
+    }
+    fn split_off_box(&mut self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn> {
+        Box::new(Column {
+            values: keep
+                .iter()
+                .filter_map(|e| self.values.remove(e).map(|v| (*e, v)))
+                .collect(),
+        })
+    }
+    fn absorb(&mut self, mut other: Box<dyn AnyColumn>) {
+        let other = other
+            .as_any_mut()
+            .downcast_mut::<Column<T>>()
+            .expect("absorbing a column of the same type");
+        self.values.append(&mut other.values);
     }
     fn as_any(&self) -> &dyn Any {
         self
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+/// The entries of `values` whose entity is in `keep`, walking the smaller of the two.
+fn subset_of<T: Clone>(values: &BTreeMap<Entity, T>, keep: &BTreeSet<Entity>) -> BTreeMap<Entity, T> {
+    if keep.len() < values.len() {
+        keep.iter()
+            .filter_map(|e| values.get(e).map(|v| (*e, v.clone())))
+            .collect()
+    } else {
+        values
+            .iter()
+            .filter(|(e, _)| keep.contains(e))
+            .map(|(e, v)| (*e, v.clone()))
+            .collect()
     }
 }
 
@@ -334,6 +391,118 @@ impl World {
 
     pub fn is_alive(&self, e: Entity) -> bool {
         self.alive.contains(&e)
+    }
+
+    /// `roots` and every alive entity they reach through [`Component::references`], transitively. Opaque
+    /// components declare no references: an entity's opaque components travel with it in [`World::subset`], but
+    /// nothing they may name is followed.
+    pub fn closure(&self, roots: impl IntoIterator<Item = Entity>) -> BTreeSet<Entity> {
+        let mut seen = BTreeSet::new();
+        let mut todo: Vec<Entity> = roots.into_iter().collect();
+        let mut out = Vec::new();
+        while let Some(e) = todo.pop() {
+            if !self.alive.contains(&e) || !seen.insert(e) {
+                continue;
+            }
+            for c in self.columns.values() {
+                c.references(e, &mut out);
+            }
+            todo.append(&mut out);
+        }
+        seen
+    }
+
+    /// A world of only `keep`'s entities (those alive) with all their components, typed and opaque, under the
+    /// same ids, and every resource. Entities spawned in it get ids above every id of `self`.
+    pub fn subset(&self, keep: &BTreeSet<Entity>) -> World {
+        World {
+            next: self.next,
+            alive: self.alive.intersection(keep).copied().collect(),
+            columns: self
+                .columns
+                .iter()
+                .map(|(k, v)| (*k, v.subset_box(keep)))
+                .collect(),
+            names: self.names.clone(),
+            opaque: self
+                .opaque
+                .iter()
+                .map(|(k, v)| (k.clone(), subset_of(v, keep)))
+                .collect(),
+            resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
+            opaque_resources: self.opaque_resources.clone(),
+        }
+    }
+
+    /// Move `keep`'s entities (those alive), with all their components, out into a world of their own: what
+    /// [`World::subset`] copies, without copying. The part has every resource (copied) and spawns ids above every
+    /// id of `self`, as a subset does; [`World::absorb`] moves it back.
+    pub fn split_off(&mut self, keep: &BTreeSet<Entity>) -> World {
+        let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
+        for e in &alive {
+            self.alive.remove(e);
+        }
+        World {
+            next: self.next,
+            columns: self
+                .columns
+                .iter_mut()
+                .map(|(k, v)| (*k, v.split_off_box(&alive)))
+                .collect(),
+            names: self.names.clone(),
+            opaque: self
+                .opaque
+                .iter_mut()
+                .map(|(k, v)| {
+                    let part = alive
+                        .iter()
+                        .filter_map(|e| v.remove(e).map(|o| (*e, o)))
+                        .collect();
+                    (k.clone(), part)
+                })
+                .collect(),
+            alive,
+            resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
+            opaque_resources: self.opaque_resources.clone(),
+        }
+    }
+
+    /// Move every entity of `part` (a [`World::split_off`] of this world) back in, with its components; `part`'s
+    /// resources are dropped. Ids the part spawned and despawned again were never alive here and are not reserved, so
+    /// a split, written and absorbed part leaves this world as it was. Panics if an entity of `part` is alive here.
+    pub fn absorb(&mut self, part: World) {
+        for e in &part.alive {
+            assert!(!self.alive.contains(e), "absorbing {e:?}, which is alive here");
+        }
+        // ids the part spawned and despawned again are not taken here: the next id stays this world's own,
+        // unless the part brings back an entity at or above it
+        if let Some(last) = part.alive.last() {
+            self.next = self.next.max(last.0 + 1);
+        }
+        self.alive.extend(part.alive);
+        for (k, col) in part.columns {
+            match self.columns.get_mut(&k) {
+                Some(mine) => mine.absorb(col),
+                None => {
+                    self.names.insert(col.name(), k);
+                    self.columns.insert(k, col);
+                }
+            }
+        }
+        for (k, mut col) in part.opaque {
+            self.opaque.entry(k).or_default().append(&mut col);
+        }
+    }
+
+    /// Despawn every entity outside `keep`: in place, what [`World::subset`] copies.
+    pub fn retain(&mut self, keep: &BTreeSet<Entity>) {
+        self.alive.retain(|e| keep.contains(e));
+        for c in self.columns.values_mut() {
+            c.retain(keep);
+        }
+        for col in self.opaque.values_mut() {
+            col.retain(|e, _| keep.contains(e));
+        }
     }
 
     /// Alive entities in ascending order.

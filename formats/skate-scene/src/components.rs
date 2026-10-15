@@ -429,9 +429,18 @@ macro_rules! shown {
     )+};
 }
 
+impl Component for SkateMaterial {
+    const NAME: &'static str = "skate.material";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend([self.base, self.normal, self.mask].into_iter().flatten());
+    }
+}
+
 shown!(
     SkateTexture = "skate.texture",
-    SkateMaterial = "skate.material",
     SkatePrototype = "skate.prototype",
     SkatePlacement = "skate.placement",
     SkateCollision = "skate.collision",

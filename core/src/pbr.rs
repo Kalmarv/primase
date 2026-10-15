@@ -140,6 +140,9 @@ impl Component for PbrMaterial {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.textures().map(|r| r.texture));
+    }
 }
 
 impl Default for PbrMaterial {
