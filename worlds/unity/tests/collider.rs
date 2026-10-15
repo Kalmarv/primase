@@ -351,8 +351,17 @@ fn collision_matches_the_colliders() {
                 convex: true,
                 ..
             } => {
-                // every source vertex inside the hull, the hull's vertices among them, triangles outward
+                // every source vertex inside the hull, the hull's vertices among them, triangles outward; allowed:
+                // the hull's snapping (sqrt(3) / 2 of its grid step, in the collider's space, scaled to the world by the
+                // matrix's largest column) on top of the world transform's rounding
                 let g = geometry.as_ref().unwrap();
+                let used: std::collections::BTreeSet<u32> = g.triangles.iter().flatten().copied().collect();
+                let input: Vec<[f32; 3]> = used
+                    .iter()
+                    .map(|&i| UNITY.point(g.positions[i as usize]))
+                    .collect();
+                let step = primase_meshops::hull_step(&input).unwrap();
+                let snap = 3f64.sqrt() / 2.0 * step * (0..3).map(col_len).fold(0.0, f64::max);
                 let source: Vec<[f64; 3]> = g
                     .positions
                     .iter()
@@ -379,14 +388,14 @@ fn collision_matches_the_colliders() {
                         .iter()
                         .map(|q| dot(sub(*q, a), nn) / l)
                         .fold(f64::MIN, f64::max);
-                    if out > 1e-6 * magnitude.max(1.0) + bound {
+                    if out > snap + bound {
                         problems.push(format!("a source vertex {out:e} outside the hull"));
                         break;
                     }
                 }
                 if !world
                     .iter()
-                    .all(|p| source.iter().any(|q| len(sub(*p, *q)) <= bound))
+                    .all(|p| source.iter().any(|q| len(sub(*p, *q)) <= snap + bound))
                 {
                     problems.push("a hull vertex not among the source's".into());
                 }
