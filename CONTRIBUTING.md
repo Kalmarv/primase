@@ -137,6 +137,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_DCX` | folder recursively containing loose KRAK DCX files |
 | `PRIMASE_CAS_SAMPLES` | directory of indexed individual `.casblock` frames |
 | `PRIMASE_SEKIRO_DIR` | install folder containing Data1 through Data5 BHD/BDT pairs |
+| `PRIMASE_FROMSOFT_RIGID_ORACLE` | independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs |
 | `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |

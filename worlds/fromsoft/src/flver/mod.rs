@@ -63,13 +63,22 @@ impl FaceSet {
 }
 #[derive(Clone, Debug)]
 pub struct Mesh {
+    pub dynamic: bool,
     pub material: usize,
     pub layouts: Vec<usize>,
     pub vertices: Vec<Vertex>,
     pub faces: Vec<FaceSet>,
 }
 #[derive(Clone, Debug)]
+pub struct Bone {
+    pub translation: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: [f32; 3],
+    pub parent: i16,
+}
+#[derive(Clone, Debug)]
 pub struct Model {
+    pub bones: Vec<Bone>,
     pub version: u32,
     pub layouts: Vec<Vec<Member>>,
     pub materials: Vec<Material>,
@@ -199,10 +208,17 @@ impl Model {
             v.boolean(o + 47)?;
             v.expect(o + 56, &[0; 8])?;
         }
+        let mut bones = Vec::new();
         for i in 0..bone_count {
             let o = bone + i * 128;
             string(&meta, count(&v, o + 12)?)?;
             v.expect(o + 76, &[0; 52])?;
+            bones.push(Bone {
+                translation: [float(&v, o)?, float(&v, o + 4)?, float(&v, o + 8)?],
+                rotation: [float(&v, o + 16)?, float(&v, o + 20)?, float(&v, o + 24)?],
+                scale: [float(&v, o + 32)?, float(&v, o + 36)?, float(&v, o + 40)?],
+                parent: v.u16(o + 28)? as i16,
+            });
         }
         let mut layouts = Vec::new();
         for i in 0..layout_count {
@@ -338,7 +354,7 @@ impl Model {
         let mut meshes = Vec::new();
         for i in 0..mesh_count {
             let o = mesh + i * 48;
-            v.boolean(o)?;
+            let dynamic = v.boolean(o)?;
             v.expect(o + 1, &[0; 3])?;
             v.expect(o + 8, &[0; 8])?;
             let material = count(&v, o + 4)?;
@@ -419,6 +435,7 @@ impl Model {
                 mesh_faces.push(fs);
             }
             meshes.push(Mesh {
+                dynamic,
                 material,
                 layouts: streams.iter().map(|s| s.0).collect(),
                 vertices,
@@ -429,6 +446,7 @@ impl Model {
             return Err(invalid(v.format, mesh, "unclaimed face set or vertex buffer"));
         }
         Ok(Self {
+            bones,
             version,
             layouts,
             materials,
