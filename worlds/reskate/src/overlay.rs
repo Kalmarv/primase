@@ -42,6 +42,13 @@ struct Tri {
     t: usize,
 }
 
+/// What stacking did: its totals, and which overlay piece lies under which (`(below, above)` piece indices, sorted).
+#[derive(Clone, Debug, Default)]
+pub struct Stacked {
+    pub stats: OverlayStats,
+    pub under: Vec<(usize, usize)>,
+}
+
 /// Totals over a run.
 #[derive(Clone, Debug, Default)]
 pub struct OverlayStats {
@@ -183,10 +190,13 @@ fn shift(parts: &mut Parts, p: &Piece, by: f32) {
 }
 
 /// Stack the overlays of `pieces` (in place on `parts`), recording each piece's shift.
-pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> OverlayStats {
+pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
     let mut st = OverlayStats::default();
     if step <= 0.0 || !pieces.iter().any(|p| p.overlay) {
-        return st;
+        return Stacked {
+            stats: st,
+            under: Vec::new(),
+        };
     }
     let mut tris: Vec<Tri> = Vec::new();
     let mut piece_tris: Vec<Vec<usize>> = Vec::with_capacity(pieces.len());
@@ -400,5 +410,10 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> OverlayStats
         }
         placed[k] = true;
     }
-    st
+    let mut under: Vec<(usize, usize)> = above
+        .iter()
+        .flat_map(|(&k, ups)| ups.iter().map(move |&a| (k, a)))
+        .collect();
+    under.sort_unstable();
+    Stacked { stats: st, under }
 }

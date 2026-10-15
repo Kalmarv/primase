@@ -92,6 +92,8 @@ pub struct WriteResult {
 /// One merged part: its geometry and its pieces (one per append).
 #[derive(Clone, Debug, Default)]
 struct Acc {
+    /// First use of the part's material in the mesh (0, 1, ...): the stable source order.
+    seq: usize,
     pos: Vec<f32>,
     nrm: Vec<f32>,
     uv: Vec<f32>,
@@ -303,6 +305,15 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
 pub const MAX_SECTION_VERTS: usize = 60000;
 
 /// The GLB primitives of merged parts, in the order of their material names.
+/// The part of material `mat`, made on its first use in the mesh.
+fn part(parts: &mut BTreeMap<usize, Acc>, mat: usize) -> &mut Acc {
+    let seq = parts.len();
+    parts.entry(mat).or_insert_with(|| Acc {
+        seq,
+        ..Acc::default()
+    })
+}
+
 /// The overlay stack's pass of a material: opaque 0, alpha tested or blended 1, water 2.
 fn overlay_pass(m: &Material) -> i32 {
     if m.class == VClass::Water {
@@ -314,11 +325,64 @@ fn overlay_pass(m: &Material) -> i32 {
     }
 }
 
-fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib) -> Vec<GlbPrim> {
+/// A material's draw class: surfaces before overlays (decals, water), and in each, by the overlay pass.
+fn draw_class(m: &Material) -> (bool, i32) {
+    (matches!(m.class, VClass::Decal | VClass::Water), overlay_pass(m))
+}
+
+/// The order a mesh's parts are drawn in: by draw class; within one, under before over by the overlay stack's
+/// relations between their pieces (`under`: (below, above) materials), cycles broken by first use; then by first use
+/// in the mesh. Never by name: material names end in a content hash.
+fn draw_order(
+    parts: &BTreeMap<usize, Acc>,
+    class: impl Fn(usize) -> (bool, i32),
+    under: &[(usize, usize)],
+) -> Vec<usize> {
+    let mut by_class: BTreeMap<(bool, i32), BTreeSet<(usize, usize)>> = BTreeMap::new();
+    for (&m, a) in parts {
+        by_class.entry(class(m)).or_default().insert((a.seq, m));
+    }
+    let mut out = Vec::with_capacity(parts.len());
+    for (_, mut left) in by_class {
+        let members: HashMap<usize, usize> = left.iter().map(|&(s, m)| (m, s)).collect();
+        let mut ups: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut indeg: HashMap<usize, usize> = HashMap::new();
+        let mut edges: BTreeSet<(usize, usize)> = BTreeSet::new();
+        for &(lo, hi) in under {
+            if lo != hi && members.contains_key(&lo) && members.contains_key(&hi) && edges.insert((lo, hi)) {
+                ups.entry(lo).or_default().push(hi);
+                *indeg.entry(hi).or_default() += 1;
+            }
+        }
+        let mut ready: BTreeSet<(usize, usize)> = left
+            .iter()
+            .filter(|(_, m)| !indeg.contains_key(m))
+            .copied()
+            .collect();
+        while let Some(&first) = left.first() {
+            let next = ready.pop_first().unwrap_or(first);
+            left.remove(&next);
+            out.push(next.1);
+            for &a in ups.get(&next.1).into_iter().flatten() {
+                let key = (members[&a], a);
+                if left.contains(&key) {
+                    let d = indeg.get_mut(&a).expect("an edge counted");
+                    *d -= 1;
+                    if *d == 0 {
+                        ready.insert(key);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The mesh's primitives, its parts in `order` (material ids; see [`draw_order`]).
+fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> Vec<GlbPrim> {
     let mut list = Vec::new();
-    let mut order: Vec<(&usize, &Acc)> = parts.iter().collect();
-    order.sort_by(|a, b| mats.by_id(*a.0).name.cmp(&mats.by_id(*b.0).name));
-    for (mat, a) in order {
+    for mat in order {
+        let Some(a) = parts.get(mat) else { continue };
         let name = mats.by_id(*mat).name.clone();
         if a.pos.len() / 3 <= MAX_SECTION_VERTS {
             list.push(GlbPrim {
@@ -454,10 +518,16 @@ impl MapWriter {
     }
 
     /// OverlayStack over a set of merged parts; logs the overlay pieces with --piece-log.
-    fn stack_overlays(&mut self, parts: &mut BTreeMap<usize, Acc>, origin: Sdx, mesh: &str) {
+    /// Stack the mesh's overlay pieces; returns which material lies under which, `(below, above)`.
+    fn stack_overlays(
+        &mut self,
+        parts: &mut BTreeMap<usize, Acc>,
+        origin: Sdx,
+        mesh: &str,
+    ) -> Vec<(usize, usize)> {
         let step = self.o.overlay_step;
         if step <= 0.0 && self.piece_log.is_none() {
-            return;
+            return Vec::new();
         }
         let mut pieces: Vec<Piece> = Vec::new();
         let mut src: Vec<(usize, usize)> = Vec::new();
@@ -483,6 +553,7 @@ impl MapWriter {
                 src.push((*mat, i));
             }
         }
+        let mut under: Vec<(usize, usize)> = Vec::new();
         if step > 0.0 {
             let mut accs: Vec<&mut Acc> = parts.values_mut().collect();
             let idx: Vec<Vec<u32>> = accs.iter().map(|a| a.idx.clone()).collect();
@@ -490,10 +561,20 @@ impl MapWriter {
                 pos: accs.iter_mut().map(|a| &mut a.pos).collect(),
                 idx: idx.iter().collect(),
             };
-            let st = overlay::apply(step, &mut view, &mut pieces);
-            self.r.overlay.add(&st);
+            let stacked = overlay::apply(step, &mut view, &mut pieces);
+            self.r.overlay.add(&stacked.stats);
+            under = stacked
+                .under
+                .iter()
+                .map(|&(lo, hi)| (src[lo].0, src[hi].0))
+                .filter(|(lo, hi)| lo != hi)
+                .collect();
+            under.sort_unstable();
+            under.dedup();
         }
-        let Some(log) = &mut self.piece_log else { return };
+        let Some(log) = &mut self.piece_log else {
+            return under;
+        };
         for (k, p) in pieces.iter().enumerate() {
             if !p.overlay {
                 continue;
@@ -530,6 +611,7 @@ impl MapWriter {
                 entity_no: p.entity,
             });
         }
+        under
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -581,7 +663,7 @@ impl MapWriter {
         for (order, p) in m.parts.iter().enumerate() {
             let mat = source.material_of(p, row, &mut self.ctx)?;
             Self::append(
-                parts.entry(mat).or_default(),
+                part(&mut parts, mat),
                 p,
                 None,
                 Sdx::ZERO,
@@ -591,7 +673,7 @@ impl MapWriter {
                 0,
             );
         }
-        self.stack_overlays(&mut parts, Sdx::ZERO, &format!("proto {}", m.name));
+        let under = self.stack_overlays(&mut parts, Sdx::ZERO, &format!("proto {}", m.name));
         if self.o.max_render_edge > 0.0 {
             for a in parts.values_mut() {
                 split_long(a, self.o.max_render_edge);
@@ -615,7 +697,9 @@ impl MapWriter {
             (self.o.tex_budget > 0).then(|| parts.iter().map(|(k, a)| (*k, area(&a.pos, &a.idx))).collect());
         let stem = format!("p_{:08x}_{row}", m.hash);
         self.r.proto_list[info].file = format!("{stem}.glb");
-        let pr = prims(&parts, &self.ctx.mats);
+        let mats = &self.ctx.mats;
+        let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
+        let pr = prims(&parts, mats, &order);
         self.mesh_files
             .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
         let origins = pr
@@ -891,7 +975,7 @@ impl MapWriter {
                         let mat = source.material_of(p, row, &mut self.ctx)?;
                         let only = only.flatten();
                         Self::append(
-                            parts.entry(mat).or_default(),
+                            part(&mut parts, mat),
                             p,
                             Some((s, sh)),
                             origin,
@@ -903,7 +987,7 @@ impl MapWriter {
                         piece_order += 1;
                     }
                 }
-                self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"));
+                let under = self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"));
                 if !parts.is_empty() {
                     to.mesh = Some(format!("t_{tx}_{ty}.glb"));
                     if o.pause_picture.is_none() {
@@ -965,7 +1049,9 @@ impl MapWriter {
                             split_long(a, o.max_render_edge);
                         }
                     }
-                    let pr = prims(&parts, &self.ctx.mats);
+                    let mats = &self.ctx.mats;
+                    let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
+                    let pr = prims(&parts, mats, &order);
                     let rows = MapObject::translation(
                         origin.x + off.x,
                         origin.y + off.y,
@@ -1329,13 +1415,7 @@ impl MapWriter {
         tiles.sort_by(|a, b| a.0.1.cmp(&b.0.1).then(a.0.0.cmp(&b.0.0)));
         for (_, kv) in tiles {
             let mut items: Vec<(&usize, &f64)> = kv.iter().collect();
-            items.sort_by(|a, b| {
-                self.ctx
-                    .mats
-                    .by_id(*a.0)
-                    .name
-                    .cmp(&self.ctx.mats.by_id(*b.0).name)
-            });
+            items.sort_by_key(|(m, _)| **m);
             for (m, a) in items {
                 *area.entry(*m).or_default() += a;
             }
@@ -1350,9 +1430,9 @@ impl MapWriter {
                 *weight.entry(t).or_default() += v;
             }
         };
-        let mut by_name = used.clone();
-        by_name.sort_by(|a, b| self.ctx.mats.by_id(*a).name.cmp(&self.ctx.mats.by_id(*b).name));
-        for id in by_name {
+        // materials in first-use order, ties between textures by their first registration: never by name, since
+        // names end in a content hash
+        for &id in &used {
             let m = self.ctx.mats.by_id(id);
             let a = area.get(&id).copied().unwrap_or(0.0);
             let (t, n, k) = (m.tex, m.normal, m.mask);
@@ -1369,7 +1449,7 @@ impl MapWriter {
             weight[b]
                 .partial_cmp(&weight[a])
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then(files[*a as usize].file.cmp(&files[*b as usize].file))
+                .then(a.cmp(b))
         });
         let keep: BTreeSet<i32> = ranked.into_iter().take(self.o.tex_budget as usize - 1).collect();
         let mut white = -1;
@@ -2005,5 +2085,47 @@ impl MapWriter {
         let bytes = crate::json_bytes("pieces.json", &pieces, true)?;
         self.files.insert("pieces.json".into(), bytes);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acc(seq: usize) -> Acc {
+        Acc {
+            seq,
+            ..Acc::default()
+        }
+    }
+
+    /// Draw order: by class, then under before over by the overlay relations, then by first use; material ids
+    /// (and so names) chosen against first use, so neither can be what orders them.
+    #[test]
+    fn draw_order_is_class_then_overlay_then_first_use() {
+        let parts: BTreeMap<usize, Acc> = [
+            (9, acc(0)),
+            (3, acc(1)),
+            (7, acc(2)),
+            (1, acc(3)),
+            (5, acc(4)),
+            (8, acc(5)),
+        ]
+        .into();
+        // 9, 3: opaque surfaces; 7: an alpha-tested surface; 1, 5, 8: blended decals
+        let class = |m: usize| match m {
+            9 | 3 => (false, 0),
+            7 => (false, 1),
+            _ => (true, 1),
+        };
+        // without relations: first use within each class
+        assert_eq!(draw_order(&parts, class, &[]), [9, 3, 7, 1, 5, 8]);
+        // 8 under 5 under 1; a relation across classes does not move a class
+        assert_eq!(
+            draw_order(&parts, class, &[(5, 1), (8, 5), (1, 9)]),
+            [9, 3, 7, 8, 5, 1]
+        );
+        // a cycle is broken at its first used part, after the parts that are free
+        assert_eq!(draw_order(&parts, class, &[(1, 5), (5, 1)]), [9, 3, 7, 8, 1, 5]);
     }
 }
