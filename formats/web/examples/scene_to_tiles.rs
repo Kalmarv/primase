@@ -2,7 +2,7 @@
 mod support;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Name, World};
-use primase_skate_scene::{SkateCollision, SkateGrindCurve, SkateMarker, SkatePlacement, SkateSoup};
+use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
 use primase_web::{Options, ViewerItem};
 use serde_json::json;
 use std::path::Path;
@@ -68,19 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             data: serde_json::to_value(m)?,
         });
     }
-    for (e, _) in world.iter::<SkateCollision>() {
-        if let Some(s) = world.get::<SkateSoup>(e) {
-            if s.triangles.is_empty() {
-                continue;
-            }
-            options.viewer_items.push(ViewerItem {
-                name: name(e),
-                kind: "collision".into(),
-                anchor: s.positions.first().copied().unwrap_or([0.; 3]).map(f64::from),
-                data: json!({"positions":s.positions,"triangles":s.triangles,"surfaces":s.surfaces}),
-            });
-        }
-    }
+    // collision: the writer takes the world's core.collision itself
     let set = primase_web::write(&world, &options)?;
     set.write_to(output)?;
     support::write_proof(&set, output)?;

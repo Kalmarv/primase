@@ -588,3 +588,66 @@ fn texture_transforms_survive_instancing_and_compression() {
         serde_json::json!({"offset": [0.5, 0.25], "scale": [2.0, 2.0]})
     );
 }
+
+#[test]
+fn world_collision_is_placed_and_named() {
+    use primase_core::{Collision, Surfaces};
+    let mut w = World::new();
+    let mut surfaces = Surfaces::default();
+    let (snow, ice) = (surfaces.index("Snow"), surfaces.index("Ice"));
+    w.insert_resource(surfaces);
+    let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]];
+    // a prototype's collision, placed twice
+    let p = w.spawn();
+    let mut c = Collision::default();
+    c.extend(&tri, &[[0, 1, 2]], ice, |q| q);
+    w.insert(p, c);
+    for x in [0.0, 5.0] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: p,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [x, 1.0, 0.0];
+        w.insert(e, t);
+    }
+    // an entity's own collision, through its transform
+    let s = w.spawn();
+    let mut c = Collision::default();
+    c.extend(&tri, &[[0, 1, 2]], snow, |q| q);
+    w.insert(s, c);
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [2.0, 0.0, 0.0];
+    w.insert(s, t);
+    let set = write(&w, &plain()).unwrap();
+    let mut firsts = Vec::new();
+    for tile in &set.index.tiles {
+        let Some(c) = &tile.collision else { continue };
+        let chunks = primase_gltf::glb::parse(&set.collision_files[&c.file]).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+        let bin = chunks.bin.unwrap();
+        for m in doc["meshes"].as_array().unwrap() {
+            let prim = &m["primitives"][0];
+            let ext = &prim["extras"]["primase.collision_surfaces"];
+            assert_eq!(ext["version"], 2);
+            assert_eq!(ext["names"], serde_json::json!(["Snow", "Ice"]));
+            let a = &doc["accessors"][ext["accessor"].as_u64().unwrap() as usize];
+            assert_eq!(a["componentType"], 5123, "u16 surfaces");
+            let v = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+            let off = v["byteOffset"].as_u64().unwrap() as usize;
+            let surface = u16::from_le_bytes([bin[off], bin[off + 1]]);
+            let pa = &doc["accessors"][prim["attributes"]["POSITION"].as_u64().unwrap() as usize];
+            let pv = &doc["bufferViews"][pa["bufferView"].as_u64().unwrap() as usize];
+            let po = pv["byteOffset"].as_u64().unwrap() as usize;
+            let x = f32::from_le_bytes(bin[po..po + 4].try_into().unwrap());
+            let y = f32::from_le_bytes(bin[po + 4..po + 8].try_into().unwrap());
+            firsts.push((x, y, surface));
+        }
+    }
+    firsts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(firsts, [(0.0, 1.0, ice), (2.0, 0.0, snow), (5.0, 1.0, ice)]);
+}

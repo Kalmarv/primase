@@ -454,7 +454,10 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         });
         set.files.insert(file, bytes);
     }
-    append_viewer_items(&mut set, options)?;
+    // the world's collision geometry, in world space, after the caller's viewer items
+    let mut items = options.viewer_items.clone();
+    items.extend(collision::world_items(world)?);
+    append_viewer_items(&mut set, &items, options)?;
     let mut named = BTreeMap::new();
     for tile in &mut set.index.tiles {
         let bytes = set.files.remove(&tile.file).expect("generated tile");
@@ -468,10 +471,10 @@ fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
     let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
     format!("{kind}_{col}_{row}.{hash}.glb")
 }
-fn append_viewer_items(set: &mut TileSet, options: &Options) -> Result<()> {
+fn append_viewer_items(set: &mut TileSet, items: &[ViewerItem], options: &Options) -> Result<()> {
     use serde_json::{Value, json};
     let mut groups = BTreeMap::<(i32, i32), Vec<(usize, &ViewerItem)>>::new();
-    for (i, item) in options.viewer_items.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         if item.anchor.iter().any(|v| !v.is_finite()) || item.kind.is_empty() {
             return Err(Error::Invalid(
                 "viewer item needs a finite anchor and nonempty kind".into(),
