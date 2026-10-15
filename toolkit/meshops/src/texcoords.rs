@@ -72,8 +72,13 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
         if world.has::<Mesh>(e) {
             continue;
         }
+        let variants = world.get::<MaterialVariants>(e);
         for (i, m) in f.materials.iter().enumerate() {
-            uses.push(((e, i), m.iter().copied().collect(), false));
+            let mut ms: Vec<Entity> = m.iter().copied().collect();
+            if let Some(v) = variants.and_then(|v| v.0.get(i)) {
+                ms.extend(v.values().copied());
+            }
+            uses.push(((e, i), ms, false));
         }
     }
     let sets: std::collections::BTreeSet<u8> = world

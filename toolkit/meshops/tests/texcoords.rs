@@ -166,6 +166,35 @@ fn groups_that_cannot_bake_are_left_and_counted() {
     assert_eq!(base_transform(&w, m), Some(T));
     assert_eq!(log.counts["not baked: geometry still in a file"], 1);
 
+    // a material loaded geometry uses, also a variant of geometry not loaded (its base material other or none)
+    for base in [true, false] {
+        let mut w = World::new();
+        let m = material(&mut w, Some(T), None);
+        let n = material(&mut w, None, None);
+        let a = prototype(&mut w, vec![primitive(m, true)]);
+        let f = w.spawn();
+        w.insert(
+            f,
+            MeshFile {
+                path: "f.glb".into(),
+                mesh: 0,
+                materials: vec![base.then_some(n)],
+            },
+        );
+        w.insert(f, MaterialVariants(vec![BTreeMap::from([(1, m)])]));
+        let log = bake_texture_transforms(&mut w);
+        assert_eq!(base_transform(&w, m), Some(T), "base {base}");
+        assert_eq!(uv(&w, a, 0), UV.to_vec(), "base {base}");
+        // with a base material its untransformed slot already disagrees with the variant's; without one, the file
+        // geometry is what stops it (counted in slots: one each)
+        let (why, slots) = if base {
+            ("not baked: materials sample a set with different transforms", 2)
+        } else {
+            ("not baked: geometry still in a file", 1)
+        };
+        assert_eq!(log.counts.get(why), Some(&slots), "base {base}: {:?}", log.counts);
+    }
+
     // nothing uses it; and untransformed materials are not touched
     let mut w = World::new();
     let m = material(&mut w, Some(T), None);
