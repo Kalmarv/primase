@@ -1,9 +1,9 @@
-//! Exact area texture gates; cross-convention differences are reported separately.
+//! D3D pixels exact against bcdec; independent C# and Pillow values within one channel level.
 use primase_core::{
     TexFormat,
     gate::{GateReport, Tolerance, real_data},
 };
-use primase_texcodec::{BcArithmetic, Bcdec, Decoder, TexDecoder};
+use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,
     io::{BufReader, Read, Write},
@@ -69,11 +69,11 @@ fn area_pixels() -> Result<()> {
             }
         }
     }
-    let mut pillow = GateReport::new("TPF area Pillow arithmetic vs Pillow", Tolerance::Exact);
+    let mut pillow = GateReport::new("TPF area D3D vs Pillow", Tolerance::Abs(1.));
     let mut bcdec = GateReport::new("TPF area D3D arithmetic vs bcdec", Tolerance::Exact);
-    let mut csharp = GateReport::new("TPF area C# measured arithmetic", Tolerance::Exact);
+    let mut csharp = GateReport::new("TPF area D3D vs C#", Tolerance::Abs(1.));
     let mut hist = BTreeMap::<String, [u64; 256]>::new();
-    let mut exact = BTreeMap::<String, (usize, usize)>::new();
+    let mut by_format = BTreeMap::<String, GateReport>::new();
     let mut failures = Vec::new();
     for (hash, want) in &hashes {
         let path = root.join("tpf/area-dds").join(format!("{hash}.dds"));
@@ -97,34 +97,21 @@ fn area_pixels() -> Result<()> {
                 }
             }
             let independent = Bcdec.decode_rgba8(t.format, t.width, t.height, &t.levels[0])?;
-            for mode in [
-                BcArithmetic::Bcdec,
-                BcArithmetic::CodeWalker,
-                BcArithmetic::Pillow,
-            ] {
-                let rgba =
-                    Decoder { arithmetic: mode }.decode_rgba8(t.format, t.width, t.height, &t.levels[0])?;
-                assert_eq!(rgba.len(), reference.len());
-                let label = format!("{:?}/{mode:?}", t.format);
-                let histogram = hist.entry(label.clone()).or_insert([0; 256]);
-                for (a, b) in rgba.iter().zip(&reference) {
-                    histogram[a.abs_diff(*b) as usize] += 1;
-                }
-                let n = exact.entry(label).or_default();
-                n.0 += usize::from(rgba == reference);
-                n.1 += 1;
-                // Measured C# convention for this corpus: replicated 565 BC1
-                // endpoints, rounded BC4 interpolation; BC5/BC7/RGBA agree.
-                if (t.format == TexFormat::Bc1 && mode == BcArithmetic::Pillow)
-                    || (t.format != TexFormat::Bc1 && mode == BcArithmetic::Bcdec)
-                {
-                    csharp.compare_bytes(hash, &rgba, &reference);
-                }
-                if mode == BcArithmetic::Bcdec {
-                    bcdec.compare_bytes(hash, &rgba, &independent);
-                }
-                if mode == BcArithmetic::Pillow {
-                    pillow.compare_bytes(hash, &rgba, &pyref);
+            let rgba = Decoder::default().decode_rgba8(t.format, t.width, t.height, &t.levels[0])?;
+            bcdec.compare_bytes(hash, &rgba, &independent);
+            csharp.compare_bytes(hash, &rgba, &reference);
+            pillow.compare_bytes(hash, &rgba, &pyref);
+            for (name, reference) in [("C#", &reference), ("Pillow", &pyref)] {
+                let label = format!("{:?} vs {name}", t.format);
+                by_format
+                    .entry(label.clone())
+                    .or_insert_with(|| GateReport::new(&label, Tolerance::Abs(1.)))
+                    .compare_bytes(hash, &rgba, reference);
+                if rgba.len() == reference.len() {
+                    let histogram = hist.entry(label).or_insert([0; 256]);
+                    for (a, b) in rgba.iter().zip(reference) {
+                        histogram[a.abs_diff(*b) as usize] += 1;
+                    }
                 }
             }
             Ok(())
@@ -141,8 +128,8 @@ fn area_pixels() -> Result<()> {
     println!("{pillow}\n{bcdec}\n{csharp}");
     for (k, h) in hist {
         println!(
-            "{k} vs C# exact {:?}, histogram {:?}",
-            exact[&k],
+            "{}, channel histogram {:?}",
+            by_format[&k],
             h.iter().enumerate().filter(|(_, n)| **n > 0).collect::<Vec<_>>()
         );
     }

@@ -82,6 +82,8 @@ writes a binary response to stdout: status byte (0 success), little-endian u64
 length, and that many RGBA8 bytes (UTF-8 error text for nonzero status). Diagnostics
 must go to stderr. It uses the independent C# decoder with BC1 punch-through
 alpha enabled; BC4 grayscale presentation is normalized to red-only by the gate.
-Pillow 11 is queried through the shared texture-codec test oracle. Exact checks
-use each decoder's own arithmetic convention; cross-convention channel-error
-histograms are reported separately, without weakening the exact gates.
+Pillow 11 is queried through the shared texture-codec test oracle. Production
+D3D pixels must match bcdec exactly. C# and Pillow are independent value oracles:
+each channel may differ by at most one level. The gate reports exact/within/failed
+texture counts and channel-error histograms per format and oracle. It does not
+select alternate production arithmetic to reproduce an oracle's convention.
