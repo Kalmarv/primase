@@ -379,6 +379,56 @@ impl Component for Texture {
     }
 }
 
+/// What a [`Light`] is: glTF's `KHR_lights_punctual` types. A spot's cone angles are from its axis, in radians, the
+/// inner within the outer (full intensity inside the inner, falling to none at the outer).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum LightKind {
+    Point,
+    Spot { inner_cone: f32, outer_cone: f32 },
+    Directional,
+}
+
+/// A punctual light, exactly `KHR_lights_punctual`'s: placed by its entity's [`Transform`] and shining along that
+/// transform's local -Z (a point light shines everywhere); `color` linear RGB; `intensity` in candela for point and spot
+/// lights, in lux for a directional one; `range` the distance where it stops (`None`: unlimited, an inverse-square
+/// falloff to infinity). A game's own light model stays in its dialect; this is what a writer emits.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Light {
+    pub kind: LightKind,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: Option<f32>,
+}
+
+impl Component for Light {
+    const NAME: &'static str = "core.light";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    /// Finite, non-negative colour and intensity, a positive range, and a spot's cones within 0 <= inner <= outer <=
+    /// pi / 2.
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        finite(self.color.iter().copied().chain([self.intensity]), "light")?;
+        if self.color.iter().any(|&c| c < 0.0) || self.intensity < 0.0 {
+            return Err("a negative colour or intensity".into());
+        }
+        if self.range.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
+            return Err("a range that is not positive".into());
+        }
+        if let LightKind::Spot {
+            inner_cone,
+            outer_cone,
+        } = self.kind
+            && !(0.0 <= inner_cone && inner_cone <= outer_cone && outer_cone <= std::f32::consts::FRAC_PI_2)
+        {
+            return Err(format!(
+                "spot cones {inner_cone} and {outer_cone} not 0 <= inner <= outer <= pi / 2"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Collision geometry: a triangle soup in the entity's own space, each triangle made of a surface.
 ///
 /// Placed like a [`Mesh`]: on a prototype, by its [`Instance`]s; on an entity with a [`Transform`] that is not a
@@ -739,6 +789,36 @@ mod tests {
         assert_eq!(
             c.to_json().unwrap().unwrap(),
             json!({"positions": 6, "triangles": 2, "surfaces": {"0": 1, "1": 1}})
+        );
+    }
+
+    #[test]
+    fn lights_keep_to_khr_lights_punctual() {
+        let mut w = crate::World::new();
+        let e = w.spawn();
+        let spot = |inner: f32, outer: f32| Light {
+            kind: LightKind::Spot {
+                inner_cone: inner,
+                outer_cone: outer,
+            },
+            color: [1.0, 0.5, 0.25],
+            intensity: 10.0,
+            range: Some(5.0),
+        };
+        assert_eq!(spot(0.2, 0.6).verify(e, &w), Ok(()));
+        assert!(spot(0.7, 0.6).verify(e, &w).is_err(), "inner past outer");
+        assert!(spot(0.2, 2.0).verify(e, &w).is_err(), "outer past pi / 2");
+        let mut l = spot(0.2, 0.6);
+        l.range = Some(0.0);
+        assert!(l.verify(e, &w).is_err(), "a range that is not positive");
+        l.range = None;
+        l.intensity = -1.0;
+        assert!(l.verify(e, &w).is_err(), "a negative intensity");
+        l.intensity = f32::NAN;
+        assert!(l.verify(e, &w).is_err(), "non-finite");
+        assert_eq!(
+            spot(0.25, 0.5).to_json().unwrap().unwrap()["kind"],
+            serde_json::json!({"Spot": {"inner_cone": 0.25, "outer_cone": 0.5}})
         );
     }
 }
