@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
-    Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ, Source, Texture,
-    TextureFile, Tile, Transform, World,
+    Collision, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
+    Source, Texture, TextureFile, Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -608,7 +608,9 @@ impl Writer<'_> {
                 parts.push(po.done());
             }
             o.put("parts", Value::Array(parts));
-            match (&p.collision, w.get::<SkateSoup>(e)) {
+            let soup = crate::collision::soup(w, e, Some(scene))
+                .map_err(|m| bad(format!("{what} collision: {m}")))?;
+            match (&p.collision, soup.as_ref()) {
                 (Some(r), Some(soup)) => {
                     let j = self.soup_tables(r, soup, &format!("{what} collision"))?;
                     o.put("collision", j);
@@ -625,7 +627,7 @@ impl Writer<'_> {
                     o.put("collision", j);
                 }
                 (Some(_), None) => {
-                    return Err(bad(format!("{what}: a collision reference but no skate.soup")));
+                    return Err(bad(format!("{what}: a collision reference but no collision")));
                 }
                 (None, None) => {}
             }
@@ -701,13 +703,34 @@ impl Writer<'_> {
             None
         };
 
-        // world soups
+        // world soups: the scene's, then collision placed by an entity of its own (in scene space through its transform)
         let mut soups = Vec::new();
         for (e, c) in w.iter::<SkateCollision>() {
-            let soup = w
-                .get::<SkateSoup>(e)
-                .ok_or_else(|| bad(format!("collision {e:?}: no skate.soup")))?;
-            soups.push(self.soup_tables(&c.0, soup, &format!("collision {e:?}"))?);
+            let soup = crate::collision::soup(w, e, Some(scene))
+                .map_err(|m| bad(format!("collision {e:?}: {m}")))?
+                .ok_or_else(|| bad(format!("collision {e:?}: no collision")))?;
+            soups.push(self.soup_tables(&c.0, &soup, &format!("collision {e:?}"))?);
+        }
+        for (e, _) in w.iter::<Collision>() {
+            if w.has::<SkateCollision>(e) || w.has::<SkatePrototype>(e) {
+                continue;
+            }
+            let mut soup = crate::collision::soup(w, e, Some(scene))
+                .map_err(|m| bad(format!("collision {e:?}: {m}")))?
+                .expect("core.collision");
+            if let Some(t) = w.get::<Transform>(e) {
+                for p in &mut soup.positions {
+                    *p = t.apply(*p);
+                }
+            }
+            let r = SoupRef {
+                table: TableRef::single(&format!("collision/world_{}.bin", soups.len())),
+                mode: None,
+                ground: None,
+                region_cut: None,
+                other: Other::new(),
+            };
+            soups.push(self.soup_tables(&r, &soup, &format!("collision {e:?}"))?);
         }
 
         // lights

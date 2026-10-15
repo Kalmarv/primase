@@ -445,6 +445,7 @@ pub fn read(dir: &Path, w: &mut World) -> Result<ReadReport> {
         files: Files { dir },
         rep: &mut rep,
         w,
+        surface_names: Vec::new(),
     };
     r.read(&root)?;
     Ok(rep)
@@ -454,6 +455,8 @@ struct Reader<'a> {
     files: Files<'a>,
     rep: &'a mut ReadReport,
     w: &'a mut World,
+    /// The scene's surfaces by index (its list, or the standard ones).
+    surface_names: Vec<String>,
 }
 
 impl Reader<'_> {
@@ -519,6 +522,7 @@ impl Reader<'_> {
                 list.len()
             }
         };
+        self.surface_names = crate::collision::scene_surfaces(surfaces.as_deref());
         scene.surfaces = surfaces;
 
         let v_textures = top.take("textures", self.rep);
@@ -958,7 +962,7 @@ impl Reader<'_> {
                 Some((mut sref, paths)) => {
                     let soup = read_soups(&mut sref.table, &paths, n_surfaces)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
-                    self.w.insert(p, soup);
+                    crate::collision::insert_soup(self.w, p, soup, &self.surface_names);
                     Some(sref)
                 }
                 None => None,
@@ -1185,7 +1189,7 @@ impl Reader<'_> {
             let (mut sref, paths) = self.soup_ref(e, &what, true)?;
             let soup = read_soups(&mut sref.table, &paths, n_surfaces)?;
             let ent = self.w.spawn();
-            self.w.insert(ent, soup);
+            crate::collision::insert_soup(self.w, ent, soup, &self.surface_names);
             self.w.insert(ent, SkateCollision(sref));
         }
         Ok(())

@@ -14,7 +14,7 @@ use primase_hash::skate_fnv_string;
 use primase_skate_scene::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkatePlacement, SkatePrototype, SkateScene,
-    SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
+    SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
 };
 
 use crate::material::{MatLib, MaterialSpec, VClass};
@@ -581,7 +581,9 @@ impl Scene {
                 }
                 None => (None, None),
             };
-            let collision = match (world.get::<SkateSoup>(e), &p.collision) {
+            let soup = primase_skate_scene::soup(world, e, Some(sc))
+                .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
+            let collision = match (soup.as_ref(), &p.collision) {
                 (Some(s), Some(_)) => Some((
                     s.positions.iter().flatten().copied().collect(),
                     s.triangles.iter().flatten().copied().collect(),
@@ -634,9 +636,10 @@ impl Scene {
         }
         let mut soups = Vec::new();
         for (e, c) in world.iter::<SkateCollision>() {
-            let s = world
-                .get::<SkateSoup>(e)
+            let s = primase_skate_scene::soup(world, e, Some(sc))
+                .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| Error::Scene(format!("collision {e:?} has no soup")))?;
+            let s = &s;
             soups.push(SoupDef {
                 file: c
                     .0

@@ -5,6 +5,7 @@
 //! [`primase_core::World`] (see [`components`] for the mapping); [`write`] writes a world back as a folder. An unchanged
 //! world writes the same tables byte for byte, the same manifest as parsed values, and the referenced files copied.
 
+pub mod collision;
 pub mod components;
 pub mod lower;
 pub mod read;
@@ -13,6 +14,7 @@ pub mod write;
 
 use std::path::PathBuf;
 
+pub use collision::{SkateRock, scene_surfaces, soup};
 pub use components::*;
 pub use lower::{LowerSkatePbr, lower_material};
 pub use read::{ReadReport, read};

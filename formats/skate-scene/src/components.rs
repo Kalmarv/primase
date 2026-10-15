@@ -7,9 +7,9 @@
 //! |---|---|
 //! | `textures.<key>` | [`SkateTexture`], `core.texture_file`, `core.name` (`name`), `core.source` |
 //! | `materials.<key>` | [`SkateMaterial`] (texture references are entities), `core.name` (`label`), `core.source` |
-//! | `prototypes[i]` | [`SkatePrototype`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, [`SkateSoup`] (its collision) |
+//! | `prototypes[i]` | [`SkatePrototype`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, `core.collision` and [`crate::SkateRock`] (its collision) |
 //! | `PLAC` record | `core.transform`, `core.instance`, `core.tile` (flag 1), [`SkatePlacement`], `core.source` (`placement_sources`) |
-//! | `collision[i]` | [`SkateCollision`], [`SkateSoup`] |
+//! | `collision[i]` | [`SkateCollision`], `core.collision` and [`crate::SkateRock`] (soups' surfaces named in `core.surfaces`) |
 //! | `LGHT` record | [`SkateLight`], `core.source` (`light_sources`) |
 //! | `CURV` curve | [`SkateGrindCurve`] |
 //! | `water[i]` | [`SkateWater`] |
@@ -315,7 +315,9 @@ pub struct SkatePlacement {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SkateCollision(pub SoupRef);
 
-/// A triangle soup in scene space (world soups) or the prototype's local space (prototype collision).
+/// A triangle soup in scene space (world soups) or the prototype's local space (prototype collision), with v1's
+/// surface bytes. The reader puts soups in the world as `core.collision`; the writers still accept this on an entity
+/// without one, for worlds that build it directly, until they move to `core.collision`.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SkateSoup {
     pub positions: Vec<[f32; 3]>,

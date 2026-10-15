@@ -499,7 +499,7 @@ fn chunked_tables_keep_their_chunks() {
         ],
     );
     // the merged soup indexes the second chunk's vertices rebased
-    let soups: Vec<_> = w.iter::<scene::SkateSoup>().collect();
+    let soups: Vec<_> = w.iter::<primase_core::Collision>().collect();
     let merged = soups.iter().find(|(_, s)| s.triangles.len() == 4).unwrap().1;
     assert_eq!(merged.triangles[2], [4, 5, 6]);
 }
@@ -1010,4 +1010,70 @@ fn lowering_to_pbr() {
     let _ = Wrap::Clamp;
     // lower and keep
     assert_eq!(w.iter::<SkateMaterial>().count(), 3);
+}
+
+#[test]
+fn soups_become_core_collision() {
+    use primase_core::{Collision, Surfaces};
+    let (w, _) = read(&fixture("collision_core"));
+    // the scene's surfaces are named in the world's table; bit 7 is skate.rock
+    let names: Vec<&str> = w
+        .resource::<Surfaces>()
+        .unwrap()
+        .0
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, ["default", "concrete", "asphalt", "packed:524384"]);
+    let soups: Vec<_> = w.iter::<Collision>().collect();
+    assert!(!soups.is_empty());
+    for (e, c) in soups.iter().filter(|(_, c)| !c.triangles.is_empty()) {
+        // fixture soups: surface byte 1, then rock | 2
+        assert_eq!(c.surfaces[..2], [1, 2], "{e:?}");
+        let rock = w.get::<scene::SkateRock>(*e).unwrap();
+        assert_eq!(rock.0[..2], [false, true]);
+    }
+    assert_eq!(w.verify_components(), Vec::new());
+}
+
+#[test]
+fn collision_placed_by_an_entity_is_a_world_soup() {
+    use primase_core::{Collision, Surfaces};
+    let (mut w, _) = read(&fixture("collision_self"));
+    let before = w.iter::<scene::SkateCollision>().count();
+    let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt");
+    let e = w.spawn();
+    let mut c = Collision::default();
+    c.extend(
+        &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
+        &[[0, 1, 2]],
+        asphalt,
+        |p| p,
+    );
+    w.insert(e, c);
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [10.0, 2.0, -3.0];
+    w.insert(e, t);
+    let out = tmp("collision_self_out");
+    scene::write(&w, &out).unwrap();
+    let m = manifest(&out);
+    let soups = m["collision"].as_array().unwrap();
+    assert_eq!(soups.len(), before + 1);
+    // a reference with nothing but its file is written as the file name
+    let file = soups[before].as_str().or(soups[before]["file"].as_str()).unwrap();
+    assert_eq!(file, format!("collision/world_{before}.bin"));
+    let t = tables::read_soup(&std::fs::read(out.join(file)).unwrap(), 4).unwrap();
+    assert_eq!(
+        t.positions[1],
+        [11.0, 2.0, -3.0],
+        "in scene space through the transform"
+    );
+    assert_eq!(t.surfaces, [2], "asphalt is the scene's surface 2");
+    // a surface the scene has no entry for is refused
+    let lava = w.resource_mut::<Surfaces>().unwrap().index("lava");
+    w.get_mut::<Collision>(e).unwrap().surfaces[0] = lava;
+    let err = scene::write(&w, &tmp("collision_self_bad"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("'lava' is not one of the scene's surfaces"), "{err}");
 }
