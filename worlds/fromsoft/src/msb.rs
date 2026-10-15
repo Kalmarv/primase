@@ -1,0 +1,320 @@
+//! Sekiro map models, part placements and map-local offsets.
+//!
+//! Part coordinates are already in the common world frame. The MapOffset event
+//! instead places map-local resources (for example collision); never apply it a
+//! second time to parts. Euler angles are degrees, applied X, then Z, then Y.
+use crate::{Result, bytes::View, invalid};
+use primase_core::{
+    components::Transform,
+    frame::{Axis, SourceFrame},
+};
+
+const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
+const SECTIONS: [&str; 8] = [
+    "MODEL_PARAM_ST",
+    "EVENT_PARAM_ST",
+    "POINT_PARAM_ST",
+    "ROUTE_PARAM_ST",
+    "LAYER_PARAM_ST",
+    "PARTS_PARAM_ST",
+    "MAPSTUDIO_PARTS_POSE_ST",
+    "MAPSTUDIO_BONE_NAME_STRING",
+];
+
+#[derive(Clone, Debug)]
+pub struct Model {
+    pub name: String,
+    pub kind: u32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartKind {
+    MapPiece,
+    Object,
+    Enemy,
+    Player,
+    Collision,
+    DummyObject,
+    DummyEnemy,
+    ConnectCollision,
+}
+impl PartKind {
+    fn read(n: u32) -> Result<Self> {
+        Ok(match n {
+            0 => Self::MapPiece,
+            1 => Self::Object,
+            2 => Self::Enemy,
+            4 => Self::Player,
+            5 => Self::Collision,
+            9 => Self::DummyObject,
+            10 => Self::DummyEnemy,
+            11 => Self::ConnectCollision,
+            _ => return Err(invalid("MSB", 0, "unknown part kind")),
+        })
+    }
+}
+#[derive(Clone, Debug)]
+pub struct Part {
+    /// Original file order, stable even when names repeat.
+    pub index: usize,
+    pub name: String,
+    pub kind: PartKind,
+    pub model: Option<usize>,
+    pub position: [f32; 3],
+    pub rotation_degrees: [f32; 3],
+    pub scale: [f32; 3],
+}
+#[derive(Clone, Debug)]
+pub struct MapOffset {
+    pub name: String,
+    pub position: [f32; 3],
+    pub degrees: f32,
+}
+/// Record envelopes are validated; unrelated gameplay payloads remain opaque.
+#[derive(Clone, Debug)]
+pub struct Section {
+    pub name: String,
+    pub version: u32,
+    pub records: Vec<Vec<u8>>,
+}
+#[derive(Clone, Debug)]
+pub struct MapLayout {
+    pub models: Vec<Model>,
+    pub parts: Vec<Part>,
+    pub map_offsets: Vec<MapOffset>,
+    pub sections: Vec<Section>,
+}
+fn text(v: &View<'_>, mut o: usize) -> Result<String> {
+    let start = o;
+    let mut units = Vec::new();
+    loop {
+        let x = v.u16(o)?;
+        o += 2;
+        if x == 0 {
+            break;
+        }
+        units.push(x);
+    }
+    String::from_utf16(&units).map_err(|e| invalid(v.format, start, e))
+}
+fn f32_at(v: &View<'_>, o: usize) -> Result<f32> {
+    let f = f32::from_bits(v.u32(o)?);
+    if !f.is_finite() {
+        return Err(invalid(v.format, o, "non-finite value"));
+    }
+    Ok(f)
+}
+fn vector(v: &View<'_>, o: usize) -> Result<[f32; 3]> {
+    Ok([f32_at(v, o)?, f32_at(v, o + 4)?, f32_at(v, o + 8)?])
+}
+fn pointer(v: &View<'_>, o: usize, min: usize) -> Result<usize> {
+    let p = v.size(o)?;
+    if p < min {
+        return Err(invalid(v.format, o, "pointer into record header"));
+    }
+    v.slice(p, 1)?;
+    Ok(p)
+}
+
+impl MapLayout {
+    /// Parse section envelopes and the fields used by placement import. Other
+    /// gameplay records are retained, without claiming to validate their schemas.
+    pub fn read(data: &[u8]) -> Result<Self> {
+        let v = View {
+            data,
+            format: "MSB",
+            be: false,
+        };
+        v.expect(0, b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff")?;
+        let mut next = 16;
+        let mut sections = Vec::new();
+        for (section_index, &name) in SECTIONS.iter().enumerate() {
+            let start = next;
+            let version = v.u32(start)?;
+            let n = v.u32(start + 4)? as usize;
+            if n == 0 {
+                return Err(invalid(v.format, start + 4, "section has no next pointer"));
+            }
+            let bytes = n
+                .checked_mul(8)
+                .ok_or_else(|| invalid(v.format, start, "section size overflow"))?;
+            v.slice(start + 16, bytes)?;
+            next = v.size(start + 16 + (n - 1) * 8)?;
+            let end = if next == 0 { data.len() } else { next };
+            if (section_index == 7) != (next == 0) || end <= start || end > data.len() {
+                return Err(invalid(v.format, start, "invalid section chain"));
+            }
+            let header_end = start + 16 + bytes;
+            if header_end > end {
+                return Err(invalid(v.format, start, "section table overlaps next section"));
+            }
+            let section = View {
+                data: v.slice(0, end)?,
+                format: v.format,
+                be: false,
+            };
+            let name_offset = v.size(start + 8)?;
+            if name_offset < header_end || text(&section, name_offset)? != name {
+                return Err(invalid(v.format, start + 8, "section name mismatch"));
+            }
+            let mut offsets = Vec::new();
+            for i in 0..n - 1 {
+                let p = v.size(start + 16 + i * 8)?;
+                if p < header_end || p >= end || offsets.last().is_some_and(|&last| last >= p) {
+                    return Err(invalid(v.format, start + 16 + i * 8, "invalid entry offset"));
+                }
+                offsets.push(p);
+            }
+            offsets.push(end);
+            let records = offsets.windows(2).map(|r| data[r[0]..r[1]].to_vec()).collect();
+            sections.push(Section {
+                name: name.to_owned(),
+                version,
+                records,
+            });
+        }
+        for &i in &[4, 6, 7] {
+            if !sections[i].records.is_empty() {
+                return Err(invalid("MSB", 0, "nonempty unsupported section"));
+            }
+        }
+        let mut models = Vec::new();
+        for data in &sections[0].records {
+            let r = View {
+                data,
+                format: "MSB model",
+                be: false,
+            };
+            r.slice(0, 40)?;
+            let name = text(&r, pointer(&r, 0, 40)?)?;
+            text(&r, pointer(&r, 16, 40)?)?;
+            let type_offset = r.size(32)?;
+            if type_offset != 0 {
+                r.slice(type_offset, 1)?;
+            }
+            let kind = r.u32(8)?;
+            if !matches!(kind, 0 | 1 | 2 | 4 | 5) {
+                return Err(invalid(r.format, 8, "model kind"));
+            }
+            models.push(Model { name, kind });
+        }
+        let mut parts = Vec::new();
+        for (index, data) in sections[5].records.iter().enumerate() {
+            let r = View {
+                data,
+                format: "MSB part",
+                be: false,
+            };
+            r.slice(0, 160)?;
+            let name = text(&r, pointer(&r, 0, 160)?)?;
+            text(&r, pointer(&r, 24, 160)?)?;
+            let kind = PartKind::read(r.u32(8)?)?;
+            r.expect(20, &[0; 4])?;
+            r.expect(68, &[255; 8])?;
+            r.expect(76, &[0; 4])?;
+            r.expect(136, &[0; 24])?;
+            let model = r.u32(16)?;
+            let model = if model == u32::MAX {
+                None
+            } else if (model as usize) < models.len() {
+                Some(model as usize)
+            } else {
+                return Err(invalid(r.format, 16, "model index"));
+            };
+            for field in [80, 88, 96, 104, 112, 120, 128] {
+                let p = r.size(field)?;
+                if p == 0 {
+                    if matches!(field, 96 | 104) {
+                        return Err(invalid(r.format, field, "missing part payload"));
+                    }
+                } else {
+                    pointer(&r, field, 160)?;
+                }
+            }
+            parts.push(Part {
+                index,
+                name,
+                kind,
+                model,
+                position: vector(&r, 32)?,
+                rotation_degrees: vector(&r, 44)?,
+                scale: vector(&r, 56)?,
+            });
+        }
+        let mut map_offsets = Vec::new();
+        for data in &sections[1].records {
+            let r = View {
+                data,
+                format: "MSB event",
+                be: false,
+            };
+            r.slice(0, 40)?;
+            if r.u32(12)? == 9 {
+                let name = text(&r, pointer(&r, 0, 40)?)?;
+                let base = pointer(&r, 24, 40)?;
+                r.slice(base, 16)?;
+                let p = pointer(&r, 32, 40)?;
+                map_offsets.push(MapOffset {
+                    name,
+                    position: vector(&r, p)?,
+                    degrees: f32_at(&r, p + 12)?,
+                });
+            }
+        }
+        Ok(Self {
+            models,
+            parts,
+            map_offsets,
+            sections,
+        })
+    }
+}
+impl Part {
+    /// Scale, X-Z-Y Euler rotation, translation in the source frame, then the
+    /// core's handedness conversion. Trigonometry/matrix products use f64 and
+    /// round once to each stored f32 basis component; translations remain exact.
+    pub fn transform(&self) -> Result<Transform> {
+        if !self
+            .position
+            .iter()
+            .chain(&self.rotation_degrees)
+            .chain(&self.scale)
+            .all(|x| x.is_finite())
+        {
+            return Err(invalid("MSB transform", self.index, "non-finite input"));
+        }
+        let [x, y, z] = self.rotation_degrees.map(|a| f64::from(a).to_radians());
+        let (sx, cx) = x.sin_cos();
+        let (sy, cy) = y.sin_cos();
+        let (sz, cz) = z.sin_cos();
+        // Columns of Ry * Rz * Rx, each multiplied by its local-axis scale.
+        let basis = [
+            [cy * cz, sz, -sy * cz],
+            [sy * sx - cy * sz * cx, cz * cx, cy * sx + sy * sz * cx],
+            [cy * sz * sx + sy * cx, -cz * sx, cy * cx - sy * sz * sx],
+        ];
+        let mut transform = Transform { cols: [[0.; 3]; 4] };
+        for (i, col) in basis.into_iter().enumerate() {
+            transform.cols[i] = col.map(|x| (x * f64::from(self.scale[i])) as f32);
+        }
+        transform.cols[3] = self.position;
+        if !transform.cols.iter().flatten().all(|x| x.is_finite()) {
+            return Err(invalid("MSB transform", self.index, "basis overflow"));
+        }
+        Ok(FRAME.transform(&transform))
+    }
+}
+impl MapOffset {
+    /// Map-local data to the common world frame, never compounded onto parts.
+    pub fn transform(&self) -> Result<Transform> {
+        Part {
+            index: 0,
+            name: String::new(),
+            kind: PartKind::MapPiece,
+            model: None,
+            position: self.position,
+            rotation_degrees: [0., self.degrees, 0.],
+            scale: [1.; 3],
+        }
+        .transform()
+    }
+}

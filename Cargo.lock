@@ -599,6 +599,7 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-hash",
+ "primase-skate-scene",
  "primase-texcodec",
  "serde_json",
  "sha2",

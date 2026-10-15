@@ -87,3 +87,31 @@ D3D pixels must match bcdec exactly. C# and Pillow are independent value oracles
 each channel may differ by at most one level. The gate reports exact/within/failed
 texture counts and channel-error histograms per format and oracle. It does not
 select alternate production arithmetic to reproduce an oracle's convention.
+
+## MSB placements
+
+`msb::MapLayout::read(bytes)` reads Sekiro's section chain, models, part names,
+model references, stored transforms and MapOffset events. Unrelated gameplay
+records remain opaque; their envelopes, rather than their schemas, are checked.
+Names remain as stored, with part indices distinguishing repeated names.
+
+Parts already occupy the common world frame. Their local scale is followed by
+Euler rotations X, Z, Y, then translation. `Part::transform` uses ordinary f64
+trigonometry, rounds basis components to f32, and applies the core frame's Z
+reflection for handedness. MapOffset places map-local resources separately;
+it must not be added to part placements a second time.
+
+`PRIMASE_FROMSOFT_MSB_ORACLE` supplies `maps.jsonl` from an independent reader.
+Each record has `path`, decoded-file `sha256`, an ordered `models` name array,
+`parts` and `offsets`. Parts contain `name`, `kind`, nullable model name,
+`position`, `rotation` in degrees, `scale` and `transform`. Offsets contain
+`name`, `position`, `degrees` and `transform`. Transforms are 12 f32 values,
+four columns of three components, in the right-handed output frame.
+Stored values and model references must match exactly. Derived bases allow
+absolute error 1e-6 after division by max(1, largest absolute local scale);
+translations remain exact. Gates count exact and tolerance matches separately.
+
+`PRIMASE_FROMSOFT_SCENE` supplies a reference skate-scene folder. Its source
+labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
+references, exact translations and bases under the same stated tolerance.
+Both gates also require `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.

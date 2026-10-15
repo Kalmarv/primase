@@ -5,6 +5,7 @@ pub mod binder;
 mod bytes;
 pub mod dcx;
 mod keys;
+pub mod msb;
 pub use archive::{Archive, NameDictionary};
 pub use binder::{Binder, BinderFile};
 #[derive(Debug, thiserror::Error)]
