@@ -7,6 +7,7 @@ pub mod collision;
 pub mod dcx;
 pub mod flver;
 mod keys;
+pub mod layer_bake;
 pub mod materials;
 pub mod msb;
 pub mod mtd;
