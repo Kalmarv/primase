@@ -19,12 +19,13 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, Transform, Wo
 use crate::Result;
 use crate::components::{
     UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityMaterial, UnityMesh, UnityObject, UnityRenderer,
-    UnityTexEnv, UnityTexture,
+    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
 };
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
-use crate::scene::{Matrix, Renderer, Scene, Skipped};
+use crate::scene::{IDENTITY, Matrix, Renderer, Scene, Skipped};
+use crate::terrain::{TerrainData, TerrainLayerData};
 use crate::texture::UnityTexture as UnityTextureData;
 use crate::value::Value;
 
@@ -74,6 +75,7 @@ pub struct LevelReport {
     pub textures: usize,
     /// Renderers left out (procedural geometry).
     pub left_out: usize,
+    pub terrains: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
     pub textures_not_decoded: BTreeMap<String, u64>,
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
@@ -93,6 +95,7 @@ struct Builder<'a> {
     player: &'a Player,
     textures: BTreeMap<ObjRef, Entity>,
     materials: BTreeMap<ObjRef, Entity>,
+    layers: BTreeMap<ObjRef, Entity>,
     shaders: BTreeMap<ObjRef, String>,
     report: LevelReport,
 }
@@ -182,6 +185,44 @@ impl Builder<'_> {
         Ok(e)
     }
 
+    /// A texture a terrain names: `None` (counted) when it is not a Texture2D.
+    fn texture_ref(&mut self, w: &mut World, r: &Option<ObjRef>) -> Result<Option<Entity>> {
+        match r {
+            Some(t) if self.player.class_name(t) == Some("Texture2D") => Ok(Some(self.texture(w, t)?)),
+            Some(_) => {
+                self.note("terrain textures that are not a Texture2D", 1);
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn layer(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
+        if let Some(&e) = self.layers.get(r) {
+            return Ok(e);
+        }
+        let l = TerrainLayerData::read(self.player, r)?;
+        let layer = UnityTerrainLayer {
+            layer: UnityObject::from(r),
+            diffuse: self.texture_ref(w, &l.diffuse)?,
+            normal: self.texture_ref(w, &l.normal)?,
+            mask: self.texture_ref(w, &l.mask)?,
+            tile_size: l.tile_size,
+            tile_offset: l.tile_offset,
+            specular: l.specular,
+            metallic: l.metallic,
+            smoothness: l.smoothness,
+            normal_scale: l.normal_scale,
+            diffuse_remap: l.diffuse_remap,
+            mask_remap: l.mask_remap,
+        };
+        let e = w.spawn();
+        w.insert(e, Name(l.name));
+        w.insert(e, layer);
+        self.layers.insert(r.clone(), e);
+        Ok(e)
+    }
+
     fn shader(&mut self, r: &ObjRef) -> Result<String> {
         if let Some(n) = self.shaders.get(r) {
             return Ok(n.clone());
@@ -245,6 +286,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         player,
         textures: BTreeMap::new(),
         materials: BTreeMap::new(),
+        layers: BTreeMap::new(),
         shaders: BTreeMap::new(),
         report: LevelReport {
             skipped,
@@ -389,6 +431,84 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         if overrides.iter().any(|o| !o.is_empty()) {
             w.insert(p.entity, MaterialVariants(overrides));
         }
+    }
+    for t in scene.terrains(player)? {
+        let td = TerrainData::read(player, &t.data)?;
+        let mut layers = Vec::with_capacity(td.layers.len());
+        for l in &td.layers {
+            layers.push(l.as_ref().map(|l| b.layer(w, l)).transpose()?);
+        }
+        let mut alphamaps = Vec::with_capacity(td.alphamaps.len());
+        for a in &td.alphamaps {
+            alphamaps.push(b.texture_ref(w, a)?);
+        }
+        let material = t.material.as_ref().map(|m| b.material(w, m)).transpose()?;
+        let collider = match &t.collider {
+            Some(c) => Some(UnityTerrainCollider {
+                collider: UnityObject::from(&c.collider),
+                enabled: c.enabled,
+                other_data: c.data.as_ref().filter(|d| **d != t.data).map(UnityObject::from),
+                physic_material: match &c.material {
+                    Some(m) => player
+                        .decode(m)?
+                        .get("m_Name")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    None => None,
+                },
+                tree_colliders: c.tree_colliders,
+            }),
+            None => None,
+        };
+        // Unity places a terrain by its position only
+        let mut at = IDENTITY;
+        for (i, row) in at.iter_mut().enumerate().take(3) {
+            row[3] = t.world[i][3];
+        }
+        let linear_identity = (0..3).all(|i| (0..3).all(|j| t.world[i][j] == IDENTITY[i][j]));
+        b.note(
+            "terrain rotations or scales ignored (Unity places terrains by position)",
+            u64::from(!linear_identity),
+        );
+        let e = w.spawn();
+        w.insert(e, Name(t.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&at)));
+        w.insert(
+            e,
+            UnityTerrain {
+                terrain: UnityObject::from(&t.terrain),
+                data: UnityObject::from(&t.data),
+                resolution: td.resolution,
+                scale: td.scale,
+                heights: td.heights,
+                holes: td.holes,
+                layers,
+                alphamaps,
+                alphamap_resolution: td.alphamap_resolution,
+                material,
+                draw_heightmap: t.draw_heightmap,
+                draw_trees: t.draw_trees,
+                collider,
+                tree_prototypes: td
+                    .tree_prototypes
+                    .iter()
+                    .map(|p| p.as_ref().map(UnityObject::from))
+                    .collect(),
+                trees: td
+                    .trees
+                    .iter()
+                    .map(|i| UnityTree {
+                        position: i.position,
+                        width_scale: i.width_scale,
+                        height_scale: i.height_scale,
+                        rotation: i.rotation,
+                        color: i.color,
+                        prototype: i.prototype,
+                    })
+                    .collect(),
+            },
+        );
+        b.report.terrains += 1;
     }
     b.report.renderers = renderers.len();
     b.report.prototypes = prototypes.len();

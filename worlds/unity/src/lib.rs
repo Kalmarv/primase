@@ -15,10 +15,12 @@
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
 //! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
+//! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
 
 pub mod components;
 pub mod level;
 pub mod lower;
+pub mod lower_terrain;
 pub mod material;
 pub mod mesh;
 pub mod player;

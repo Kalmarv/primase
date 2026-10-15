@@ -202,3 +202,107 @@ impl Component for UnityLeftOut {
         primase_core::json::to_value(self).map(Some)
     }
 }
+
+/// A terrain layer: its textures (entities) and how the terrain shader uses them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityTerrainLayer {
+    pub layer: UnityObject,
+    pub diffuse: Option<Entity>,
+    pub normal: Option<Entity>,
+    pub mask: Option<Entity>,
+    pub tile_size: [f32; 2],
+    pub tile_offset: [f32; 2],
+    pub specular: [f32; 4],
+    pub metallic: f32,
+    pub smoothness: f32,
+    pub normal_scale: f32,
+    /// Min and max, RGBA.
+    pub diffuse_remap: [[f32; 4]; 2],
+    pub mask_remap: [[f32; 4]; 2],
+}
+
+impl Component for UnityTerrainLayer {
+    const NAME: &'static str = "unity.terrain_layer";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
+/// A terrain's collider as Unity stores it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityTerrainCollider {
+    pub collider: UnityObject,
+    pub enabled: bool,
+    /// Its TerrainData when it is not the drawn one.
+    pub other_data: Option<UnityObject>,
+    pub physic_material: Option<String>,
+    pub tree_colliders: bool,
+}
+
+/// A tree a terrain places (see [`crate::terrain::TreeInstance`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityTree {
+    pub position: [f32; 3],
+    pub width_scale: f32,
+    pub height_scale: f32,
+    pub rotation: f32,
+    pub color: u32,
+    pub prototype: usize,
+}
+
+/// A terrain as Unity stores it, on the entity that places it: its heightmap (row z, column x, 0..=32766 for 0..1 of
+/// `scale.y`), holes (one byte per cell, 0 a hole), splat layers and alphamaps (texture entities, rows top first),
+/// material, collider and trees (their prototypes' prefabs).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityTerrain {
+    pub terrain: UnityObject,
+    pub data: UnityObject,
+    pub resolution: u32,
+    pub scale: [f32; 3],
+    #[serde(skip)]
+    pub heights: Vec<i16>,
+    #[serde(skip)]
+    pub holes: Option<Vec<u8>>,
+    pub layers: Vec<Option<Entity>>,
+    pub alphamaps: Vec<Option<Entity>>,
+    pub alphamap_resolution: u32,
+    pub material: Option<Entity>,
+    pub draw_heightmap: bool,
+    pub draw_trees: bool,
+    pub collider: Option<UnityTerrainCollider>,
+    pub tree_prototypes: Vec<Option<UnityObject>>,
+    #[serde(skip)]
+    pub trees: Vec<UnityTree>,
+}
+
+impl Component for UnityTerrain {
+    const NAME: &'static str = "unity.terrain";
+    /// The fields, with counts in place of the heights, holes and trees.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        let mut v = primase_core::json::to_value(self)?;
+        if let serde_json::Value::Object(o) = &mut v {
+            o.insert("heights".into(), serde_json::json!(self.heights.len()));
+            o.insert(
+                "holes".into(),
+                serde_json::json!(
+                    self.holes
+                        .as_ref()
+                        .map_or(0, |h| h.iter().filter(|&&x| x == 0).count())
+                ),
+            );
+            o.insert("trees".into(), serde_json::json!(self.trees.len()));
+        }
+        Ok(Some(v))
+    }
+
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        let n = self.resolution as usize;
+        if self.heights.len() != n * n {
+            return Err(format!("{} heights for resolution {n}", self.heights.len()));
+        }
+        if self.holes.as_ref().is_some_and(|h| h.len() != (n - 1) * (n - 1)) {
+            return Err("holes are not one per cell".into());
+        }
+        Ok(())
+    }
+}
