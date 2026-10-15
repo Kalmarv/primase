@@ -8,6 +8,8 @@ use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use crate::json::JsonError;
+
 /// An entity: a plain id. Ids are never reused within one world, so a stale id finds nothing rather than another
 /// entity's components.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -45,11 +47,12 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     /// Schema version of the component's content. Bump it when the meaning or layout of a field changes.
     const VERSION: u32 = 1;
 
-    /// The component as JSON, for glTF extras, the debug text form and golden tests; `None` for components that are
-    /// not shown (bulk data, handles). Components that can be shown derive `serde::Serialize` and override this
-    /// with `serde_json::to_value(self).ok()`.
-    fn to_json(&self) -> Option<serde_json::Value> {
-        None
+    /// The component as JSON, for glTF extras, the debug text form and golden tests; `Ok(None)` for components
+    /// that are not shown (bulk data, handles). The view must never lose a value: components that can be shown
+    /// derive `serde::Serialize` and return `crate::json::to_value(self).map(Some)`, which refuses non-finite
+    /// floats instead of writing them as `null`.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(None)
     }
 
     /// The component's own invariants on entity `e` (indices in range, entity references alive, stream lengths
@@ -64,6 +67,30 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
 pub trait Resource: Any + Clone + fmt::Debug + Send + Sync {
     const NAME: &'static str;
     const VERSION: u32 = 1;
+
+    /// As [`Component::to_json`].
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(None)
+    }
+}
+
+/// One component (or resource) as JSON, with the schema version it is written with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentJson<'w> {
+    pub name: &'w str,
+    pub version: u32,
+    /// `None`: no JSON view (opaque bytes, typed components that are not shown).
+    pub value: Option<serde_json::Value>,
+}
+
+/// A component whose JSON view would lose a value.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{component}{}: {message}", entity.map(|e| format!(" on {e:?}")).unwrap_or_default())]
+pub struct ComponentJsonError {
+    pub component: String,
+    /// `None` for a resource.
+    pub entity: Option<Entity>,
+    pub message: String,
 }
 
 /// The content of a component this build does not know: carried through reading and writing untouched.
@@ -143,8 +170,9 @@ trait AnyColumn: Any + Send + Sync {
     fn len(&self) -> usize;
     fn contains(&self, e: Entity) -> bool;
     fn remove_entity(&mut self, e: Entity);
-    /// `None` when the entity has no such component; `Some(None)` when it has one that is not shown as JSON.
-    fn json(&self, e: Entity) -> Option<Option<serde_json::Value>>;
+    fn version(&self) -> u32;
+    /// `None` when the entity has no such component; else its JSON view.
+    fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>>;
     /// Every value's `Component::verify`, as (entity, message) for those that fail, in entity order.
     fn verify(&self, w: &World) -> Vec<(Entity, String)>;
     fn entities(&self) -> Vec<Entity>;
@@ -166,7 +194,10 @@ impl<T: Component> AnyColumn for Column<T> {
     fn remove_entity(&mut self, e: Entity) {
         self.values.remove(&e);
     }
-    fn json(&self, e: Entity) -> Option<Option<serde_json::Value>> {
+    fn version(&self) -> u32 {
+        T::VERSION
+    }
+    fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>> {
         self.values.get(&e).map(Component::to_json)
     }
     fn verify(&self, w: &World) -> Vec<(Entity, String)> {
@@ -190,12 +221,24 @@ impl<T: Component> AnyColumn for Column<T> {
 }
 
 trait AnyResource: Any + Send + Sync {
+    fn name(&self) -> &'static str;
+    fn version(&self) -> u32;
+    fn json(&self) -> Result<Option<serde_json::Value>, JsonError>;
     fn clone_box(&self) -> Box<dyn AnyResource>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: Resource> AnyResource for T {
+    fn name(&self) -> &'static str {
+        T::NAME
+    }
+    fn version(&self) -> u32 {
+        T::VERSION
+    }
+    fn json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        self.to_json()
+    }
     fn clone_box(&self) -> Box<dyn AnyResource> {
         Box::new(self.clone())
     }
@@ -445,23 +488,59 @@ impl World {
     /// Every component of an entity as JSON, sorted by name: typed ones through [`Component::to_json`], opaque JSON
     /// ones as they are. Components without a JSON view (opaque bytes, typed ones that are not shown) are listed with
     /// `None`, so callers can count them.
-    pub fn components_json(&self, e: Entity) -> Vec<(&str, Option<serde_json::Value>)> {
-        let mut out: Vec<(&str, Option<serde_json::Value>)> = self
-            .columns
-            .values()
-            .filter_map(|c| Some((c.name(), c.json(e)?)))
-            .collect();
-        for (name, col) in &self.opaque {
-            if let Some(o) = col.get(&e) {
-                let v = match &o.data {
-                    OpaqueData::Json(v) => Some(v.clone()),
-                    OpaqueData::Bytes(_) => None,
-                };
-                out.push((name.as_str(), v));
+    ///
+    /// Fails, naming the component and the entity, when a view would lose a value (a non-finite float).
+    pub fn components_json(&self, e: Entity) -> Result<Vec<ComponentJson<'_>>, ComponentJsonError> {
+        let mut out = Vec::new();
+        for c in self.columns.values() {
+            if let Some(v) = c.json(e) {
+                out.push(ComponentJson {
+                    name: c.name(),
+                    version: c.version(),
+                    value: v.map_err(|err| ComponentJsonError {
+                        component: c.name().to_owned(),
+                        entity: Some(e),
+                        message: err.0,
+                    })?,
+                });
             }
         }
-        out.sort_by(|a, b| a.0.cmp(b.0));
-        out
+        for (name, col) in &self.opaque {
+            if let Some(o) = col.get(&e) {
+                out.push(ComponentJson {
+                    name: name.as_str(),
+                    version: o.version,
+                    value: opaque_json(o),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(b.name));
+        Ok(out)
+    }
+
+    /// Every resource (typed and opaque) as JSON, sorted by name; as [`World::components_json`].
+    pub fn resources_json(&self) -> Result<Vec<ComponentJson<'_>>, ComponentJsonError> {
+        let mut out = Vec::new();
+        for r in self.resources.values() {
+            out.push(ComponentJson {
+                name: r.name(),
+                version: r.version(),
+                value: r.json().map_err(|err| ComponentJsonError {
+                    component: r.name().to_owned(),
+                    entity: None,
+                    message: err.0,
+                })?,
+            });
+        }
+        for (name, o) in &self.opaque_resources {
+            out.push(ComponentJson {
+                name: name.as_str(),
+                version: o.version,
+                value: opaque_json(o),
+            });
+        }
+        out.sort_by(|a, b| a.name.cmp(b.name));
+        Ok(out)
     }
 
     // ---- opaque components -------------------------------------------------------------------------------------
@@ -522,6 +601,13 @@ impl World {
 
     pub fn opaque_resources(&self) -> impl Iterator<Item = (&str, &Opaque)> {
         self.opaque_resources.iter().map(|(n, v)| (n.as_str(), v))
+    }
+}
+
+fn opaque_json(o: &Opaque) -> Option<serde_json::Value> {
+    match &o.data {
+        OpaqueData::Json(v) => Some(v.clone()),
+        OpaqueData::Bytes(_) => None,
     }
 }
 
@@ -642,8 +728,9 @@ mod tests {
     }
     impl Component for Shown {
         const NAME: &'static str = "test.shown";
-        fn to_json(&self) -> Option<serde_json::Value> {
-            serde_json::to_value(self).ok()
+        const VERSION: u32 = 2;
+        fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+            crate::json::to_value(self).map(Some)
         }
     }
 
@@ -670,16 +757,60 @@ mod tests {
                 data: OpaqueData::Json(serde_json::json!({"k": 1})),
             },
         );
+        let got: Vec<(&str, u32, Option<serde_json::Value>)> = w
+            .components_json(e)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.name, c.version, c.value))
+            .collect();
         assert_eq!(
-            w.components_json(e),
+            got,
             [
-                ("game.bytes", None),
-                ("game.json", Some(serde_json::json!({"k": 1}))),
-                ("test.a", None),
-                ("test.shown", Some(serde_json::json!({"x": 3, "of": 0}))),
+                ("game.bytes", 1, None),
+                ("game.json", 1, Some(serde_json::json!({"k": 1}))),
+                ("test.a", 1, None),
+                ("test.shown", 2, Some(serde_json::json!({"x": 3, "of": 0}))),
             ]
         );
-        assert!(w.components_json(e0).is_empty());
+        assert!(w.components_json(e0).unwrap().is_empty());
+    }
+
+    #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+    struct F(f32);
+    impl Component for F {
+        const NAME: &'static str = "test.f";
+        fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+            crate::json::to_value(self).map(Some)
+        }
+    }
+    impl Resource for F {
+        const NAME: &'static str = "test.res";
+        const VERSION: u32 = 4;
+        fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+            crate::json::to_value(self).map(Some)
+        }
+    }
+
+    #[test]
+    fn a_json_view_that_would_lose_a_value_is_an_error() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, F(f32::NAN));
+        assert_eq!(
+            w.components_json(e).unwrap_err().to_string(),
+            "test.f on e0: NaN at the value: JSON has no non-finite numbers"
+        );
+        w.insert_resource(F(0.5));
+        let r = w.resources_json().unwrap();
+        assert_eq!(
+            (r[0].name, r[0].version, r[0].value.clone()),
+            ("test.res", 4, Some(serde_json::json!(0.5)))
+        );
+        w.insert_resource(F(f32::INFINITY));
+        assert_eq!(
+            w.resources_json().unwrap_err().to_string(),
+            "test.res: inf at the value: JSON has no non-finite numbers"
+        );
     }
 
     #[test]

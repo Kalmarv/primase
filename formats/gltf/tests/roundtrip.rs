@@ -35,7 +35,7 @@ fn arr<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 fn node_by_source<'a>(doc: &'a Value, source: &str) -> Option<&'a Value> {
     arr(doc, "nodes")
         .iter()
-        .find(|n| n["extras"]["core.source"] == source)
+        .find(|n| n["extras"]["primase"]["core.source"]["value"] == source)
 }
 
 fn f32s(v: &Value) -> Vec<f32> {
@@ -345,12 +345,16 @@ fn round_trip_materials_textures_and_extras() {
         (sampler["wrapS"].as_u64(), sampler["wrapT"].as_u64()),
         (Some(33071), Some(33648))
     );
-    assert_eq!(nt["extras"]["core.source"], "tex:normal");
+    assert_eq!(
+        nt["extras"]["primase"]["core.source"],
+        json!({"version": 1, "value": "tex:normal"})
+    );
     assert_eq!(f32s(&stone["emissiveFactor"]), [0.1, 0.0, 0.0]);
     assert_eq!(stone["doubleSided"], true);
     assert_eq!(
         stone["extras"],
-        json!({"skate.material": {"class": "opaque", "base": "stone_d", "tint": [200, 40, 40]}})
+        json!({"primase": {"skate.material": {"version": 1,
+            "value": {"class": "opaque", "base": "stone_d", "tint": [200, 40, 40]}}}})
     );
 
     let fence = by_name("fence");
@@ -393,13 +397,17 @@ fn round_trip_materials_textures_and_extras() {
     let regular = node_by_source(doc, "plac:0").unwrap();
     assert_eq!(
         regular["extras"],
-        json!({"core.source": "plac:0", "core.tile": {"col": 3, "row": -1}})
+        json!({"primase": {"core.source": {"version": 1, "value": "plac:0"},
+            "core.tile": {"version": 1, "value": {"col": 3, "row": -1}}}})
     );
     let mesh = &arr(doc, "meshes")[regular["mesh"].as_u64().unwrap() as usize];
-    assert_eq!(mesh["extras"], json!({"core.source": "msb:c1100/rich"}));
+    assert_eq!(
+        mesh["extras"],
+        json!({"primase": {"core.source": {"version": 1, "value": "msb:c1100/rich"}}})
+    );
     assert_eq!(
         doc["scenes"][0]["extras"],
-        json!({"skate.scene": {"name": "test_scene", "region": [-10, -10, 10, 10]}})
+        json!({"primase": {"skate.scene": {"version": 1, "value": {"name": "test_scene", "region": [-10, -10, 10, 10]}}}})
     );
     assert_eq!(doc["scenes"][0]["name"], "test");
 }
@@ -425,7 +433,9 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|i| &arr(doc, "nodes")[i.as_u64().unwrap() as usize]["extras"]["core.source"])
+        .map(
+            |i| &arr(doc, "nodes")[i.as_u64().unwrap() as usize]["extras"]["primase"]["core.source"]["value"],
+        )
         .collect();
     assert_eq!(rich_children, ["plac:0", "plac:1", "plac:2", "plac:3", "plac:5"]);
     assert_eq!(report.group_nodes, 4);
@@ -679,4 +689,19 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
     );
     primase_image::normalize_normals(&mut b.world).unwrap();
     assert!(written(&b).1.textures_skipped.is_empty());
+}
+
+/// A component whose JSON view would lose a value (a NaN written as null) is an error naming it, never a quiet null.
+#[test]
+fn extras_never_lose_a_value() {
+    let mut b = build(&scratch("nan_extras"));
+    b.world.insert(
+        b.regular,
+        primase_core::Bounds {
+            min: [0.0; 3],
+            max: [1.0, f32::NAN, 1.0],
+        },
+    );
+    let err = write(&b.world, &options(&b)).unwrap_err().to_string();
+    assert!(err.contains("core.bounds") && err.contains("NaN"), "{err}");
 }

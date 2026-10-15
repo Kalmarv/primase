@@ -8,6 +8,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::json::JsonError;
 use crate::world::{Component, Entity};
 
 /// How UVs outside 0-1 sample a texture along one axis.
@@ -86,8 +87,8 @@ pub struct PbrMaterial {
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 

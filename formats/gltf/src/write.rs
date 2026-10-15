@@ -22,10 +22,11 @@
 //!   Normal maps must already be green-up with stored Z; use the explicit normalization pass first.
 //!   Unloaded DDS files are skipped and counted; load them with the texture-loading pass.
 //! - **Extras**: every component with a JSON form (`core.source`, dialect and opaque JSON components) that the glTF
-//!   itself does not express goes into the extras of the object made from its entity, keyed by component name:
-//!   placement -> node, prototype -> mesh, material -> material, texture -> texture; opaque world resources -> the
-//!   scene. Blender imports node, mesh, material and scene extras as custom properties. Components with no JSON form
-//!   are counted per name in the report, never dropped silently.
+//!   itself does not express goes into the extras of the object made from its entity, as
+//!   `extras.primase["<component name>"] = {"version": n, "value": ...}`: placement -> node, prototype -> mesh,
+//!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
+//!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
+//!   dropped silently; a component whose view would lose a value (a non-finite float) is an error.
 //!
 //! The output is a function of the world: every list is built in entity order or first-use order over entities in
 //! order, so the same world gives the same bytes (`tests::output_is_deterministic`).
@@ -36,8 +37,8 @@ use std::path::{Path, PathBuf};
 
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, Wrap};
 use primase_core::{
-    Component, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream,
-    Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
+    Component, ComponentJson, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic,
+    Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -303,19 +304,12 @@ impl Writer<'_> {
             scene.insert("name".into(), Value::String(name.clone()));
         }
         scene.insert("nodes".into(), json!(roots));
-        let resources: Map<String, Value> = self
-            .world
-            .opaque_resources()
-            .filter_map(|(n, o)| match &o.data {
-                primase_core::OpaqueData::Json(v) => Some((n.to_owned(), v.clone())),
-                primase_core::OpaqueData::Bytes(_) => {
-                    *self.report.extras_unencoded.entry(n.to_owned()).or_default() += 1;
-                    None
-                }
-            })
-            .collect();
-        if !resources.is_empty() {
-            scene.insert("extras".into(), Value::Object(resources));
+        let resources = self.world.resources_json().map_err(|e| Error::Invalid {
+            item: format!("resource {}", e.component),
+            detail: e.message,
+        })?;
+        if let Some(extras) = self.primase_extras(resources, &[]) {
+            scene.insert("extras".into(), extras);
         }
 
         let mut root = Map::new();
@@ -463,7 +457,7 @@ impl Writer<'_> {
                 }
             }
         }
-        if let Some(extras) = self.extras(place.entity, CONSUMED_PLACEMENT) {
+        if let Some(extras) = self.extras(place.entity, CONSUMED_PLACEMENT)? {
             node.insert("extras".into(), extras);
         }
         self.report.placements += 1;
@@ -638,7 +632,7 @@ impl Writer<'_> {
         let mut m = Map::new();
         m.insert("name".into(), Value::String(name));
         m.insert("primitives".into(), Value::Array(prims));
-        if let Some(extras) = self.extras(prototype, CONSUMED_PROTOTYPE) {
+        if let Some(extras) = self.extras(prototype, CONSUMED_PROTOTYPE)? {
             m.insert("extras".into(), extras);
         }
         self.meshes.push(Value::Object(m));
@@ -910,7 +904,7 @@ impl Writer<'_> {
         if pbr.double_sided {
             m.insert("doubleSided".into(), json!(true));
         }
-        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL) {
+        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
             m.insert("extras".into(), extras);
         }
         self.materials.push(Value::Object(m));
@@ -967,7 +961,7 @@ impl Writer<'_> {
         }
         t.insert("source".into(), json!(image));
         t.insert("name".into(), Value::String(self.name_of(r.texture, "texture")));
-        if let Some(extras) = self.extras(r.texture, CONSUMED_TEXTURE) {
+        if let Some(extras) = self.extras(r.texture, CONSUMED_TEXTURE)? {
             t.insert("extras".into(), extras);
         }
         self.textures.push(Value::Object(t));
@@ -1057,22 +1051,31 @@ impl Writer<'_> {
         Ok(Some(index))
     }
 
-    /// The extras of an entity: its components with a JSON form, minus what the glTF object already expresses.
-    /// Components without one are counted in the report.
-    fn extras(&mut self, e: Entity, consumed: &[&str]) -> Option<Value> {
+    /// The extras of an entity: its components with a JSON form, minus what the glTF object already expresses, as
+    /// `{"primase": {"<component name>": {"version": n, "value": ...}}}`. Components without one are counted in
+    /// the report; a view that would lose a value (a non-finite float) is an error.
+    fn extras(&mut self, e: Entity, consumed: &[&str]) -> Result<Option<Value>> {
+        let shown = self.world.components_json(e).map_err(|err| Error::World {
+            entity: e,
+            detail: err.to_string(),
+        })?;
+        Ok(self.primase_extras(shown, consumed))
+    }
+
+    fn primase_extras(&mut self, shown: Vec<ComponentJson<'_>>, consumed: &[&str]) -> Option<Value> {
         let mut map = Map::new();
-        for (name, value) in self.world.components_json(e) {
-            if consumed.contains(&name) {
+        for c in shown {
+            if consumed.contains(&c.name) {
                 continue;
             }
-            match value {
+            match c.value {
                 Some(v) => {
-                    map.insert(name.to_owned(), v);
+                    map.insert(c.name.to_owned(), json!({"version": c.version, "value": v}));
                 }
-                None => *self.report.extras_unencoded.entry(name.to_owned()).or_default() += 1,
+                None => *self.report.extras_unencoded.entry(c.name.to_owned()).or_default() += 1,
             }
         }
-        (!map.is_empty()).then_some(Value::Object(map))
+        (!map.is_empty()).then(|| json!({ "primase": map }))
     }
 }
 

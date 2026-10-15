@@ -378,7 +378,19 @@ fn the_world_holds_what_the_manifest_says() {
     assert_eq!(groups, ["", "interior", "interior"]);
     // components show as JSON
     let shown = w.components_json(protos[0].0);
-    assert!(shown.iter().any(|(n, v)| *n == "skate.prototype" && v.is_some()));
+    let shown = shown.unwrap();
+    assert!(
+        shown
+            .iter()
+            .any(|c| c.name == "skate.prototype" && c.value.is_some())
+    );
+    // the scene resource has a JSON view too
+    assert!(
+        w.resources_json()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "skate.scene" && c.value.is_some())
+    );
 }
 
 #[test]

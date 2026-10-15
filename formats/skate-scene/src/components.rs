@@ -21,7 +21,7 @@
 //! Keys this crate does not model (`extras`, `extensions`, anything unknown) are kept per object in `other`, in
 //! their order. A string `source` becomes `core.source`; any other `source` value stays in `other`.
 
-use primase_core::{Component, Entity, NormalGreen, NormalZ, Resource, World};
+use primase_core::{Component, Entity, JsonError, NormalGreen, NormalZ, Resource, World};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -212,6 +212,9 @@ pub struct SkateScene {
 
 impl Resource for SkateScene {
     const NAME: &'static str = "skate.scene";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
 }
 
 /// A texture entry (its file is `core.texture_file`, its `name` `core.name`).
@@ -417,8 +420,8 @@ macro_rules! shown {
     ($($t:ty = $n:literal),+ $(,)?) => {$(
         impl Component for $t {
             const NAME: &'static str = $n;
-            fn to_json(&self) -> Option<Value> {
-                serde_json::to_value(self).ok()
+            fn to_json(&self) -> Result<Option<Value>, JsonError> {
+                primase_core::json::to_value(self).map(Some)
             }
         }
     )+};
@@ -439,11 +442,11 @@ shown!(
 impl Component for SkateSoup {
     const NAME: &'static str = "skate.soup";
     /// Counts, not the triangles.
-    fn to_json(&self) -> Option<Value> {
-        Some(serde_json::json!({
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
             "vertices": self.positions.len(),
             "triangles": self.triangles.len(),
-        }))
+        })))
     }
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         if self.triangles.len() != self.surfaces.len() {

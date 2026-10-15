@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::json::JsonError;
 use crate::texformat::TexFormat;
 use crate::world::{Component, Entity};
 
@@ -27,8 +28,8 @@ use crate::world::{Component, Entity};
 pub struct Name(pub String);
 impl Component for Name {
     const NAME: &'static str = "core.name";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -38,8 +39,8 @@ impl Component for Name {
 pub struct Source(pub String);
 impl Component for Source {
     const NAME: &'static str = "core.source";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -52,8 +53,11 @@ pub struct Transform {
 }
 impl Component for Transform {
     const NAME: &'static str = "core.transform";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        finite(self.cols.iter().flatten().copied(), "transform")
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -100,6 +104,14 @@ impl Transform {
     }
 }
 
+/// The position of the first non-finite value, as an error.
+fn finite(values: impl Iterator<Item = f32>, what: &str) -> Result<(), String> {
+    match values.enumerate().find(|(_, x)| !x.is_finite()) {
+        Some((i, x)) => Err(format!("{what}: value {i} is {x}, not finite")),
+        None => Ok(()),
+    }
+}
+
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -122,8 +134,8 @@ pub struct Instance {
 }
 impl Component for Instance {
     const NAME: &'static str = "core.instance";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -208,8 +220,23 @@ pub struct Mesh {
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
+    /// Float streams finite (glTF and every writer we have refuse NaN and infinity).
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        for (i, p) in self.primitives.iter().enumerate() {
+            for (sem, st) in &p.streams {
+                let what = format!("primitive {i} {sem:?}");
+                match st {
+                    Stream::F32x2(v) => finite(v.iter().flatten().copied(), &what)?,
+                    Stream::F32x3(v) => finite(v.iter().flatten().copied(), &what)?,
+                    Stream::F32x4(v) => finite(v.iter().flatten().copied(), &what)?,
+                    Stream::U8x4(_) | Stream::U16x4(_) => {}
+                }
+            }
+        }
+        Ok(())
+    }
     /// A summary, not the vertex data: per primitive its topology, vertex and index counts, streams and material.
-    fn to_json(&self) -> Option<Value> {
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
         let prims: Vec<Value> = self
             .primitives
             .iter()
@@ -223,7 +250,7 @@ impl Component for Mesh {
                 })
             })
             .collect();
-        Some(json!({ "primitives": prims }))
+        Ok(Some(json!({ "primitives": prims })))
     }
 }
 
@@ -284,8 +311,8 @@ pub struct Texture {
 impl Component for Texture {
     const NAME: &'static str = "core.texture";
     /// A summary, not the pixels: size, format, level count, colour space, role, normal convention.
-    fn to_json(&self) -> Option<Value> {
-        Some(json!({
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(json!({
             "width": self.width,
             "height": self.height,
             "format": format!("{:?}", self.format),
@@ -293,7 +320,7 @@ impl Component for Texture {
             "color_space": self.color_space,
             "role": self.role,
             "normal": self.normal,
-        }))
+        })))
     }
 }
 
@@ -305,8 +332,8 @@ pub struct TextureFile {
 }
 impl Component for TextureFile {
     const NAME: &'static str = "core.texture_file";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -324,8 +351,8 @@ pub struct MeshFile {
 }
 impl Component for MeshFile {
     const NAME: &'static str = "core.mesh_file";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -335,8 +362,8 @@ impl Component for MeshFile {
 pub struct MaterialVariants(pub Vec<BTreeMap<u32, Entity>>);
 impl Component for MaterialVariants {
     const NAME: &'static str = "core.material_variants";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -348,8 +375,11 @@ pub struct Bounds {
 }
 impl Component for Bounds {
     const NAME: &'static str = "core.bounds";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        finite(self.min.iter().chain(&self.max).copied(), "bounds")
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -361,8 +391,8 @@ pub struct Tile {
 }
 impl Component for Tile {
     const NAME: &'static str = "core.tile";
-    fn to_json(&self) -> Option<Value> {
-        serde_json::to_value(self).ok()
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
     }
 }
 
@@ -403,7 +433,12 @@ mod tests {
                 }],
             },
         );
-        let got = w.components_json(p);
+        let got: Vec<(&str, Option<Value>)> = w
+            .components_json(p)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.name, c.value))
+            .collect();
         let names: Vec<&str> = got.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             names,
@@ -427,6 +462,62 @@ mod tests {
             Some(json!({"path": "prototypes/a.glb", "mesh": 1, "materials": [0, null]}))
         );
         assert_eq!(got[3].1, Some(json!("a")));
+    }
+
+    #[test]
+    fn the_verifier_refuses_non_finite_geometry() {
+        let mut w = crate::World::new();
+        let e = w.spawn();
+        w.insert(e, Transform::IDENTITY);
+        w.insert(
+            e,
+            Bounds {
+                min: [0.0; 3],
+                max: [1.0, f32::INFINITY, 1.0],
+            },
+        );
+        let mut m = Transform::IDENTITY;
+        m.cols[3][2] = f32::NAN;
+        let e2 = w.spawn();
+        w.insert(e2, m);
+        w.insert(
+            e2,
+            Mesh {
+                primitives: vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams: BTreeMap::from([(
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0.0, f32::NEG_INFINITY]]),
+                    )]),
+                    indices: None,
+                    material: None,
+                }],
+            },
+        );
+        let got: Vec<(&str, Entity, String)> = w.verify_components();
+        assert_eq!(
+            got,
+            [
+                ("core.bounds", e, "bounds: value 4 is inf, not finite".to_owned()),
+                (
+                    "core.mesh",
+                    e2,
+                    "primitive 0 TexCoord(0): value 1 is -inf, not finite".to_owned()
+                ),
+                (
+                    "core.transform",
+                    e2,
+                    "transform: value 11 is NaN, not finite".to_owned()
+                ),
+            ]
+        );
+        // and the JSON view refuses to show the NaN rather than writing null
+        assert!(
+            w.components_json(e2)
+                .unwrap_err()
+                .to_string()
+                .contains("core.transform on e1")
+        );
     }
 
     #[test]

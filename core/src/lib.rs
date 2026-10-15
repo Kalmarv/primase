@@ -5,11 +5,16 @@
 pub mod components;
 pub mod frame;
 pub mod gate;
+pub mod json;
 pub mod pass;
 pub mod pbr;
 pub mod texformat;
 pub mod world;
 
 pub use components::*;
+pub use json::JsonError;
 pub use texformat::TexFormat;
-pub use world::{Column, ColumnMut, Component, Entity, Opaque, OpaqueData, Resource, World};
+pub use world::{
+    Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Opaque, OpaqueData, Resource,
+    World,
+};
