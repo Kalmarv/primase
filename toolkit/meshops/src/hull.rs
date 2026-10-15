@@ -28,11 +28,23 @@ impl Face {
     }
 }
 
+/// The grid [`convex_hull`] snaps `points` to: f32's spacing at their largest coordinate magnitude, the power of two
+/// 2^(floor(log2 max |x|) - 23), and at least 2^-149, the smallest subnormal. Grid coordinates are then within 2^24 in
+/// magnitude and every grid point is an f32. `None` when every coordinate is zero.
+pub fn hull_step(points: &[[f32; 3]]) -> Option<f64> {
+    let largest = points
+        .iter()
+        .flatten()
+        .fold(0f64, |m, &x| m.max(f64::from(x).abs()));
+    (largest > 0.0).then(|| 2f64.powi((largest.log2().floor() as i32 - 23).max(-149)))
+}
+
 /// The convex hull of `points`: its vertices and outward, counter-clockwise triangles over them.
 ///
-/// The points are snapped to the f32 grid at the set's largest coordinate magnitude (a power-of-two step, so every
-/// grid point is an f32 exactly, each point moved by at most half a step) and every orientation is decided exactly on
-/// it: the hull is exactly convex in the coordinates it returns, which are the snapped points. Quickhull: an initial tetrahedron from extreme points; each face
+/// The points are snapped to the grid of step [`hull_step`], on which every point is an f32 exactly: each coordinate
+/// moves by at most half a step, a point by at most sqrt(3) / 2 steps. Every orientation is decided exactly on the
+/// grid (in i128), so the result is the exact convex hull of the snapped points, in the coordinates it returns; a given
+/// point may lie outside it by up to its own snapping. Quickhull: an initial tetrahedron from extreme points; each face
 /// holds the points outside it; the farthest point outside a face is added next, its visible region grown from that
 /// face across neighbours, replaced by a fan from the region's horizon, and the region's points handed to the new faces.
 /// Points on a face's plane are not outside it, so coplanar points do not split faces. Refuses fewer than four points,
@@ -52,15 +64,9 @@ pub fn convex_hull(points: &[[f32; 3]]) -> Result<Mesh> {
         }
     }
     let flat = || Error("points with no volume have no hull".into());
-    let largest = points
-        .iter()
-        .flatten()
-        .fold(0f64, |m, &x| m.max(f64::from(x).abs()));
-    if largest == 0.0 {
+    let Some(step) = hull_step(points) else {
         return Err(flat());
-    }
-    // f32's step at the largest magnitude: grid coordinates within 2^24, every grid point an f32
-    let step = 2f64.powi(largest.log2().floor() as i32 - 23);
+    };
     let g: Vec<G> = points
         .iter()
         .map(|q| q.map(|x| (f64::from(x) / step).round() as i64))

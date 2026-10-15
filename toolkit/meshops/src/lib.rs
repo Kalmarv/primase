@@ -5,7 +5,7 @@ mod hull;
 mod primitive;
 mod texcoords;
 pub mod vector;
-pub use hull::convex_hull;
+pub use hull::{convex_hull, hull_step};
 pub use primitive::{CompactedPrimitive, compact_primitive};
 use std::collections::BTreeMap;
 pub use texcoords::{BakeTextureTransforms, bake_texture_transforms};

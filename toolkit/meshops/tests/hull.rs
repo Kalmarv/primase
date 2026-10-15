@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use primase_meshops::{Mesh, convex_hull};
+use primase_meshops::{Mesh, convex_hull, hull_step};
 
 fn noise(n: usize, seed: u64) -> Vec<f64> {
     let mut s = seed;
@@ -140,4 +140,73 @@ fn many_points_along_its_edges() {
     let h = convex_hull(&pts).unwrap();
     assert!(closed(&h));
     assert!(contains(&h, &pts, 1e-5));
+}
+
+/// The hull of `points`: every returned coordinate on the grid (an f32 multiple of the step), every returned vertex a
+/// snapped point, every snapped point on or inside every face (decided exactly on the grid), closed and oriented.
+fn exact_on_grid(points: &[[f32; 3]]) {
+    let step = hull_step(points).unwrap();
+    let snap = |x: f32| (f64::from(x) / step).round() as i64;
+    let grid: Vec<[i64; 3]> = points.iter().map(|q| q.map(snap)).collect();
+    let h = convex_hull(points).unwrap();
+    assert!(closed(&h));
+    let hv: Vec<[i64; 3]> = h
+        .positions
+        .iter()
+        .map(|q| {
+            q.map(|x| {
+                let k = f64::from(x) / step;
+                assert_eq!(k, k.round(), "{x} not on the grid of step {step:e}");
+                assert!(k.abs() <= f64::from(1u32 << 24));
+                k as i64
+            })
+        })
+        .collect();
+    for v in &hv {
+        assert!(grid.contains(v), "{v:?} is not a snapped point");
+    }
+    let orient = |a: [i64; 3], b: [i64; 3], c: [i64; 3], d: [i64; 3]| {
+        let u = [0, 1, 2].map(|k| i128::from(b[k] - a[k]));
+        let v = [0, 1, 2].map(|k| i128::from(c[k] - a[k]));
+        let w = [0, 1, 2].map(|k| i128::from(d[k] - a[k]));
+        u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+            + u[2] * (v[0] * w[1] - v[1] * w[0])
+    };
+    for t in h.indices.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(|i| hv[i as usize]);
+        assert!(
+            grid.iter().all(|&d| orient(a, b, c, d) <= 0),
+            "a snapped point outside face {t:?}"
+        );
+    }
+}
+
+#[test]
+fn grids_at_the_edges_of_f32() {
+    let cube = |s: f32, o: [f32; 3]| -> Vec<[f32; 3]> {
+        let mut v: Vec<[f32; 3]> = (0..8)
+            .map(|i| [0, 1, 2].map(|k| o[k] + if i & (1 << k) != 0 { s } else { -s }))
+            .collect();
+        let r = noise(90, 17);
+        v.extend(
+            r.as_chunks::<3>()
+                .0
+                .iter()
+                .map(|q| [0, 1, 2].map(|k| o[k] + ((q[k] * 2.0 - 1.0) * f64::from(s)) as f32)),
+        );
+        v
+    };
+    // the largest magnitude exactly a power of two, and just below one
+    exact_on_grid(&cube(4.0, [0.0; 3]));
+    exact_on_grid(&cube(4.0 - 4.0 * f32::EPSILON / 2.0, [0.0; 3]));
+    // near the largest f32
+    exact_on_grid(&cube(f32::MAX / 4.0, [f32::MAX / 2.0, 0.0, 0.0]));
+    // subnormal: the step clamps to the smallest subnormal
+    let tiny: Vec<[f32; 3]> = (0..8)
+        .map(|i| [0, 1, 2].map(|k| f32::from_bits(if i & (1 << k) != 0 { 40 + k as u32 } else { 3 })))
+        .collect();
+    assert_eq!(hull_step(&tiny), Some(2f64.powi(-149)));
+    exact_on_grid(&tiny);
+    // a small set far from the origin: a coarse grid, mixed magnitudes
+    exact_on_grid(&cube(3.0, [1.0e6, -2.5e5, 37.0]));
 }
