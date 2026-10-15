@@ -1,8 +1,10 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
 mod primitive;
+mod texcoords;
 pub mod vector;
 pub use primitive::{CompactedPrimitive, compact_primitive};
 use std::collections::BTreeMap;
+pub use texcoords::{BakeTextureTransforms, bake_texture_transforms};
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mesh: {0}")]
 pub struct Error(pub String);
