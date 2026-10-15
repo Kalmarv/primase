@@ -18,13 +18,14 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, Transform, Wo
 
 use crate::Result;
 use crate::components::{
-    UnityBehaviour, UnityBehaviours, UnityLeftOut, UnityLight, UnityMaterial, UnityMesh, UnityObject,
-    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
-    UnityTree, UnityTreeInstance,
+    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCollider, UnityColliderShape, UnityLeftOut,
+    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderer, UnityTerrain,
+    UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree, UnityTreeInstance,
 };
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
+use crate::scene::{ColliderComponent, ColliderShape};
 use crate::scene::{IDENTITY, Matrix, Renderer, Scene, Skipped};
 use crate::terrain::{TerrainData, TerrainLayerData};
 use crate::texture::UnityTexture as UnityTextureData;
@@ -54,6 +55,26 @@ fn unity_renderer(r: &Renderer) -> UnityRenderer {
     }
 }
 
+/// A terrain tree's matrix: T(terrain position + position x size) Ry(rotation) S(width, height, width).
+fn tree_matrix(
+    t: &crate::scene::TerrainComponent,
+    tree: &crate::terrain::TreeInstance,
+    size: [f64; 3],
+) -> Matrix {
+    let (s, c) = f64::from(tree.rotation).sin_cos();
+    let (wd, ht) = (f64::from(tree.width_scale), f64::from(tree.height_scale));
+    let mut m = IDENTITY;
+    for k in 0..3 {
+        m[k][3] = t.world[k][3] + f64::from(tree.position[k]) * size[k];
+    }
+    m[0][0] = c * wd;
+    m[0][2] = s * wd;
+    m[1][1] = ht;
+    m[2][0] = -s * wd;
+    m[2][2] = c * wd;
+    m
+}
+
 /// A Unity world matrix as a transform in Unity's frame (each entry rounded once to f32).
 pub fn transform_of(m: &Matrix) -> Transform {
     let mut cols = [[0.0f32; 3]; 4];
@@ -80,6 +101,12 @@ pub struct LevelReport {
     pub lights: usize,
     /// Lights whose GameObject is inactive or that are disabled (not read).
     pub lights_off: u64,
+    /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
+    /// moved by physics).
+    pub colliders: usize,
+    pub colliders_not_colliding: BTreeMap<&'static str, u64>,
+    /// Colliders placed by terrain trees.
+    pub tree_colliders: usize,
     /// Renderers placed by terrain trees (their prefab's drawn renderers, per tree).
     pub tree_renderers: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
@@ -102,6 +129,8 @@ struct Builder<'a> {
     textures: BTreeMap<ObjRef, Entity>,
     materials: BTreeMap<ObjRef, Entity>,
     layers: BTreeMap<ObjRef, Entity>,
+    collider_meshes: BTreeMap<ObjRef, std::sync::Arc<ColliderMesh>>,
+    physic_materials: BTreeMap<ObjRef, UnityPhysicMaterial>,
     shaders: BTreeMap<ObjRef, String>,
     report: LevelReport,
 }
@@ -267,23 +296,171 @@ impl Builder<'_> {
                 self.note("trees whose prototype has no prefab", 1);
                 continue;
             };
-            let (s, c) = f64::from(tree.rotation).sin_cos();
-            let (wd, ht) = (f64::from(tree.width_scale), f64::from(tree.height_scale));
-            let mut m = IDENTITY;
-            for k in 0..3 {
-                m[k][3] = t.world[k][3] + f64::from(tree.position[k]) * size[k];
-            }
-            m[0][0] = c * wd;
-            m[0][2] = s * wd;
-            m[1][1] = ht;
-            m[2][0] = -s * wd;
-            m[2][2] = c * wd;
+            let m = tree_matrix(t, tree, size);
             for r in rs {
                 let mut r = r.clone();
                 // `<terrain>/tree<i>:<prefab>/<renderer's path in the prefab, its root included>`
                 r.path = format!("{name}/tree{i}:{prefab_path}/{}", r.path);
                 r.world = crate::scene::mul(&m, &r.world);
                 out.push((i, r));
+            }
+        }
+        Ok(out)
+    }
+
+    fn physic_material(&mut self, r: &ObjRef) -> Result<UnityPhysicMaterial> {
+        if let Some(p) = self.physic_materials.get(r) {
+            return Ok(p.clone());
+        }
+        let v = self.player.decode(r)?;
+        let f = |k: &str| v.get(k).and_then(Value::as_f32).unwrap_or(0.0);
+        let i = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let p = UnityPhysicMaterial {
+            name: v.get("m_Name").and_then(Value::as_str).unwrap_or("").to_owned(),
+            dynamic_friction: f("m_DynamicFriction"),
+            static_friction: f("m_StaticFriction"),
+            bounciness: f("m_Bounciness"),
+            friction_combine: i("m_FrictionCombine"),
+            bounce_combine: i("m_BounceCombine"),
+        };
+        self.physic_materials.insert(r.clone(), p.clone());
+        Ok(p)
+    }
+
+    /// A mesh collider's source geometry: every triangle submesh of the mesh, as stored.
+    fn collider_mesh(&mut self, r: &ObjRef) -> Result<std::sync::Arc<ColliderMesh>> {
+        if let Some(m) = self.collider_meshes.get(r) {
+            return Ok(m.clone());
+        }
+        let data = UnityMeshData::read(self.player, r)?;
+        let mut m = ColliderMesh::default();
+        if let Some(c) = &data.channels[0] {
+            m.positions = (0..data.vertex_count)
+                .map(|i| {
+                    let v = c.vertex(i);
+                    [v[0], v[1], v[2]]
+                })
+                .collect();
+        }
+        for s in &data.submeshes {
+            if s.topology != 0 {
+                self.note("mesh collider submeshes that are not triangles", 1);
+                continue;
+            }
+            let first = (s.first_byte / data.index_size) as usize;
+            let idx = data
+                .indices
+                .get(first..first + s.index_count as usize)
+                .ok_or_else(|| crate::invalid(format!("{}: collider indices past the buffer", data.name)))?;
+            m.triangles.extend(
+                idx.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|t| t.map(|i| i + s.base_vertex)),
+            );
+        }
+        let m = std::sync::Arc::new(m);
+        self.collider_meshes.insert(r.clone(), m.clone());
+        Ok(m)
+    }
+
+    /// A collider as the world's dialect.
+    fn collider(&mut self, c: &ColliderComponent) -> Result<UnityCollider> {
+        let f3 = |v: [f64; 3]| v.map(|x| x as f32);
+        let shape = match &c.shape {
+            ColliderShape::Box { center, size } => UnityColliderShape::Box {
+                center: f3(*center),
+                size: f3(*size),
+            },
+            ColliderShape::Sphere { center, radius } => UnityColliderShape::Sphere {
+                center: f3(*center),
+                radius: *radius as f32,
+            },
+            ColliderShape::Capsule {
+                center,
+                radius,
+                height,
+                direction,
+            } => UnityColliderShape::Capsule {
+                center: f3(*center),
+                radius: *radius as f32,
+                height: *height as f32,
+                direction: *direction,
+            },
+            ColliderShape::Mesh { mesh, convex } => UnityColliderShape::Mesh {
+                mesh: mesh.as_ref().map(UnityObject::from),
+                convex: *convex,
+                geometry: mesh.as_ref().map(|m| self.collider_mesh(m)).transpose()?,
+            },
+        };
+        let physic_material = c
+            .physic_material
+            .as_ref()
+            .map(|m| self.physic_material(m))
+            .transpose()?;
+        let why = if !c.active {
+            Some("inactive or disabled")
+        } else if c.trigger {
+            Some("trigger")
+        } else if c.rigidbody == Some(false) {
+            Some("moved by physics (a non-kinematic Rigidbody)")
+        } else {
+            None
+        };
+        match why {
+            Some(w) => *self.report.colliders_not_colliding.entry(w).or_default() += 1,
+            None => self.report.colliders += 1,
+        }
+        Ok(UnityCollider {
+            collider: UnityObject::from(&c.collider),
+            layer: c.layer,
+            shape,
+            active: c.active,
+            trigger: c.trigger,
+            physic_material,
+            rigidbody: c.rigidbody,
+        })
+    }
+
+    /// The colliders terrain `t` places with its trees, as [`Self::trees`] places their renderers: per tree, its
+    /// prefab's colliders (every one, flagged) at the tree's matrix times their matrix relative to the prefab root.
+    fn tree_colliders(
+        &mut self,
+        t: &crate::scene::TerrainComponent,
+        td: &TerrainData,
+        prefabs: &mut BTreeMap<String, Scene>,
+    ) -> Result<Vec<(usize, ColliderComponent)>> {
+        let mut per_prototype = Vec::with_capacity(td.tree_prototypes.len());
+        for p in &td.tree_prototypes {
+            let Some(p) = p else {
+                per_prototype.push(None);
+                continue;
+            };
+            if !prefabs.contains_key(&p.file) {
+                prefabs.insert(p.file.clone(), Scene::read(self.player, &p.file)?);
+            }
+            let prefab = &prefabs[&p.file];
+            let root = prefab.transform_of(p.path_id).ok_or_else(|| {
+                crate::invalid(format!("tree prefab {}/{}: no transform", p.file, p.path_id))
+            })?;
+            per_prototype.push(Some((
+                prefab.path(root),
+                prefab.colliders_under(self.player, Some(p.path_id))?,
+            )));
+        }
+        let size = td.size();
+        let name = t.path.rsplit('/').next().unwrap_or(&t.path);
+        let mut out = Vec::new();
+        for (i, tree) in td.trees.iter().enumerate() {
+            let Some(Some((prefab_path, cs))) = per_prototype.get(tree.prototype) else {
+                continue;
+            };
+            let m = tree_matrix(t, tree, size);
+            for c in cs {
+                let mut c = c.clone();
+                c.path = format!("{name}/tree{i}:{prefab_path}/{}", c.path);
+                c.world = crate::scene::mul(&m, &c.world);
+                out.push((i, c));
             }
         }
         Ok(out)
@@ -353,6 +530,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         textures: BTreeMap::new(),
         materials: BTreeMap::new(),
         layers: BTreeMap::new(),
+        collider_meshes: BTreeMap::new(),
+        physic_materials: BTreeMap::new(),
         shaders: BTreeMap::new(),
         report: LevelReport {
             skipped,
@@ -361,6 +540,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     };
     // terrains, and the renderers of their trees
     let mut trees: Vec<((Entity, usize), Renderer)> = Vec::new();
+    let mut tree_colliders: Vec<((Entity, usize), ColliderComponent)> = Vec::new();
     let mut prefabs: BTreeMap<String, Scene> = BTreeMap::new();
     for t in scene.terrains(player)? {
         let td = TerrainData::read(player, &t.data)?;
@@ -370,6 +550,13 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 b.trees(&t, &td, &mut prefabs)?
                     .into_iter()
                     .map(|(i, r)| ((e, i), r)),
+            );
+        }
+        if t.collider.as_ref().is_some_and(|c| c.enabled && c.tree_colliders) {
+            tree_colliders.extend(
+                b.tree_colliders(&t, &td, &mut prefabs)?
+                    .into_iter()
+                    .map(|(i, c)| ((e, i), c)),
             );
         }
         let mut layers = Vec::with_capacity(td.layers.len());
@@ -592,6 +779,29 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         if overrides.iter().any(|o| !o.is_empty()) {
             w.insert(p.entity, MaterialVariants(overrides));
         }
+    }
+    // colliders: the scene's, then the terrain trees'
+    for c in scene.colliders_under(player, None)? {
+        let u = b.collider(&c)?;
+        let e = w.spawn();
+        w.insert(e, Name(c.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&c.world)));
+        w.insert(e, u);
+    }
+    for ((terrain, tree), c) in &tree_colliders {
+        let u = b.collider(c)?;
+        let e = w.spawn();
+        w.insert(e, Name(c.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&c.world)));
+        w.insert(e, u);
+        w.insert(
+            e,
+            UnityTreeInstance {
+                terrain: *terrain,
+                tree: *tree,
+            },
+        );
+        b.report.tree_colliders += 1;
     }
     let (lights, off) = scene.lights(player)?;
     for l in &lights {

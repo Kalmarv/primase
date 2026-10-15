@@ -81,6 +81,13 @@ fn vec2(v: &Value, k: &str) -> Result<[f64; 2]> {
 }
 
 /// A flag stored as a bool or as an integer (`m_IsActive` and `m_Enabled` are `UInt8` in some layouts).
+fn flag_value(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        x => x.as_i64().is_some_and(|i| i != 0),
+    }
+}
+
 fn flag(v: &Value, k: &str) -> Result<bool> {
     match v.get(k) {
         Some(Value::Bool(b)) => Ok(*b),
@@ -483,6 +490,112 @@ impl Scene {
         Ok((out, skipped))
     }
 
+    /// The Rigidbody on Transform `tp`'s GameObject or its nearest ancestor's: `Some(kinematic)`.
+    fn rigidbody(&self, player: &Player, tp: i64) -> Result<Option<bool>> {
+        let r = |pid: i64| ObjRef {
+            file: self.file.clone(),
+            path_id: pid,
+        };
+        let mut t = tp;
+        for _ in 0..=self.nodes.len() {
+            let Some(n) = self.nodes.get(&t) else {
+                return Ok(None);
+            };
+            if let Some(g) = self.game_objects.get(&n.game_object)
+                && let Some(&rb) = g
+                    .components
+                    .iter()
+                    .find(|&&c| player.class_name(&r(c)) == Some("Rigidbody"))
+            {
+                return Ok(Some(flag(&player.decode(&r(rb))?, "m_IsKinematic")?));
+            }
+            if n.father == 0 {
+                return Ok(None);
+            }
+            t = n.father;
+        }
+        Ok(None)
+    }
+
+    /// Every Box, Sphere, Capsule and Mesh collider of the GameObject `root` and its descendants (a prefab's, matrices
+    /// relative to `root`), or of the whole file with `None`, in the order of the object table: those that do not
+    /// collide (inactive, disabled, triggers) included, flagged.
+    pub fn colliders_under(&self, player: &Player, root: Option<i64>) -> Result<Vec<ColliderComponent>> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let root_tp = match root {
+            Some(go) => Some(
+                self.transform_of(go)
+                    .ok_or_else(|| invalid(format!("GameObject {go} has no transform")))?,
+            ),
+            None => None,
+        };
+        let v3 = |v: &Value, k: &str| -> Result<[f64; 3]> { vec3(v, k) };
+        let mut out = Vec::new();
+        for o in &f.objects {
+            let class = player.class_name(&r(o.path_id)).unwrap_or("");
+            if !matches!(
+                class,
+                "BoxCollider" | "SphereCollider" | "CapsuleCollider" | "MeshCollider"
+            ) {
+                continue;
+            }
+            let c = player.decode(&r(o.path_id))?;
+            let go = path_id(&c, "m_GameObject")?;
+            let Some(tp) = self.transform_of(go) else { continue };
+            let world = match root_tp {
+                Some(root) => match self.relative_to(tp, root) {
+                    Some(m) => m,
+                    None => continue,
+                },
+                None => self.world_of(tp)?,
+            };
+            let fl = |k: &str| -> Result<f64> { num(&c, k) };
+            let shape = match class {
+                "BoxCollider" => ColliderShape::Box {
+                    center: v3(&c, "m_Center")?,
+                    size: v3(&c, "m_Size")?,
+                },
+                "SphereCollider" => ColliderShape::Sphere {
+                    center: v3(&c, "m_Center")?,
+                    radius: fl("m_Radius")?,
+                },
+                "CapsuleCollider" => ColliderShape::Capsule {
+                    center: v3(&c, "m_Center")?,
+                    radius: fl("m_Radius")?,
+                    height: fl("m_Height")?,
+                    direction: c.get("m_Direction").and_then(Value::as_i64).unwrap_or(1) as usize,
+                },
+                _ => ColliderShape::Mesh {
+                    mesh: match c.get("m_Mesh") {
+                        Some(p) => player.resolve(file, p)?,
+                        None => None,
+                    },
+                    convex: flag(&c, "m_Convex")?,
+                },
+            };
+            out.push(ColliderComponent {
+                collider: r(o.path_id),
+                path: self.path(tp),
+                layer: self.game_objects.get(&go).map_or(0, |g| g.layer),
+                world,
+                shape,
+                active: self.active(tp) && flag(&c, "m_Enabled")?,
+                trigger: c.get("m_IsTrigger").is_some_and(flag_value),
+                physic_material: match c.get("m_Material") {
+                    Some(p) => player.resolve(file, p)?,
+                    None => None,
+                },
+                rigidbody: self.rigidbody(player, tp)?,
+            });
+        }
+        Ok(out)
+    }
+
     /// The lights that shine (GameObject active, Light enabled), in the order of the scene's object table, and how
     /// many do not.
     pub fn lights(&self, player: &Player) -> Result<(Vec<LightComponent>, u64)> {
@@ -610,6 +723,45 @@ impl Scene {
         }
         Ok(out)
     }
+}
+
+/// A collider's shape as stored, in its GameObject's space (Unity's frame).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColliderShape {
+    Box {
+        center: [f64; 3],
+        size: [f64; 3],
+    },
+    Sphere {
+        center: [f64; 3],
+        radius: f64,
+    },
+    /// `direction`: the axis its height runs along (0 x, 1 y, 2 z); `height` includes the caps.
+    Capsule {
+        center: [f64; 3],
+        radius: f64,
+        height: f64,
+        direction: usize,
+    },
+    Mesh {
+        mesh: Option<ObjRef>,
+        convex: bool,
+    },
+}
+
+/// A collider as stored: its shape, whether it collides at all (GameObject active, collider enabled, not a trigger),
+/// its physic material, and the Rigidbody on it or its nearest ancestor (`Some(true)`: kinematic).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColliderComponent {
+    pub collider: ObjRef,
+    pub path: String,
+    pub layer: u32,
+    pub world: Matrix,
+    pub shape: ColliderShape,
+    pub active: bool,
+    pub trigger: bool,
+    pub physic_material: Option<ObjRef>,
+    pub rigidbody: Option<bool>,
 }
 
 /// A light as stored: Unity's LightType (0 spot, 1 directional, 2 point, 3 rectangle, 4 disc), colour as stored

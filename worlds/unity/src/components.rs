@@ -357,3 +357,75 @@ impl Component for UnityLight {
         primase_core::json::to_value(self).map(Some)
     }
 }
+
+/// A mesh collider's source geometry as stored (Unity's frame): every submesh's triangles, base vertex applied.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ColliderMesh {
+    pub positions: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// A collider's shape as Unity stores it, in its GameObject's space (Unity's frame, metres before scale).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum UnityColliderShape {
+    Box {
+        center: [f32; 3],
+        size: [f32; 3],
+    },
+    Sphere {
+        center: [f32; 3],
+        radius: f32,
+    },
+    /// `direction`: the axis the height runs along (0 x, 1 y, 2 z); the height includes the caps.
+    Capsule {
+        center: [f32; 3],
+        radius: f32,
+        height: f32,
+        direction: usize,
+    },
+    Mesh {
+        mesh: Option<UnityObject>,
+        convex: bool,
+        #[serde(skip)]
+        geometry: Option<std::sync::Arc<ColliderMesh>>,
+    },
+}
+
+/// A PhysicMaterial: name, frictions, bounciness and their combine modes.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityPhysicMaterial {
+    pub name: String,
+    pub dynamic_friction: f32,
+    pub static_friction: f32,
+    pub bounciness: f32,
+    pub friction_combine: i64,
+    pub bounce_combine: i64,
+}
+
+/// A collider as Unity stores it, on an entity placed by its Transform: its shape, whether it collides (`active`:
+/// GameObject active and collider enabled; `trigger`s detect, they do not collide), its physic material and the
+/// Rigidbody on it or an ancestor (`Some(true)`: kinematic, it moves only when scripted).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityCollider {
+    pub collider: UnityObject,
+    pub layer: u32,
+    pub shape: UnityColliderShape,
+    pub active: bool,
+    pub trigger: bool,
+    pub physic_material: Option<UnityPhysicMaterial>,
+    pub rigidbody: Option<bool>,
+}
+
+impl UnityCollider {
+    /// Whether it is collision geometry: active, not a trigger, and not moved by physics (no Rigidbody, or kinematic).
+    pub fn collides(&self) -> bool {
+        self.active && !self.trigger && self.rigidbody != Some(false)
+    }
+}
+
+impl Component for UnityCollider {
+    const NAME: &'static str = "unity.collider";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
