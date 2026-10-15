@@ -433,4 +433,85 @@ impl Scene {
         }
         Ok((out, skipped))
     }
+
+    /// The drawn terrains (GameObject active, Terrain enabled), in the order of the scene's object table.
+    pub fn terrains(&self, player: &Player) -> Result<Vec<TerrainComponent>> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
+        let mut out = Vec::new();
+        for o in f.objects.iter().filter(|o| class(o.path_id) == "Terrain") {
+            let t = player.decode(&r(o.path_id))?;
+            let go = path_id(&t, "m_GameObject")?;
+            let Some(tp) = self.transform_of(go) else { continue };
+            if !self.active(tp) || !flag(&t, "m_Enabled")? {
+                continue;
+            }
+            let pptr = |v: &Value, k: &str| -> Result<Option<ObjRef>> {
+                match v.get(k) {
+                    Some(p) => player.resolve(file, p),
+                    None => Ok(None),
+                }
+            };
+            let Some(data) = pptr(&t, "m_TerrainData")? else {
+                continue;
+            };
+            let collider = match self.game_objects[&go]
+                .components
+                .iter()
+                .find(|&&c| class(c) == "TerrainCollider")
+            {
+                Some(&c) => {
+                    let tc = player.decode(&r(c))?;
+                    Some(TerrainColliderComponent {
+                        collider: r(c),
+                        enabled: flag(&tc, "m_Enabled")?,
+                        data: pptr(&tc, "m_TerrainData")?,
+                        material: pptr(&tc, "m_Material")?,
+                        tree_colliders: flag(&tc, "m_EnableTreeColliders")?,
+                    })
+                }
+                None => None,
+            };
+            out.push(TerrainComponent {
+                terrain: r(o.path_id),
+                path: self.path(tp),
+                world: self.world_of(tp)?,
+                data,
+                material: pptr(&t, "m_MaterialTemplate")?,
+                draw_heightmap: flag(&t, "m_DrawHeightmap")?,
+                draw_trees: flag(&t, "m_DrawTreesAndFoliage")?,
+                collider,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// A terrain's collider: its own TerrainData (which may differ from the drawn one), physic material, tree colliders.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainColliderComponent {
+    pub collider: ObjRef,
+    pub enabled: bool,
+    pub data: Option<ObjRef>,
+    pub material: Option<ObjRef>,
+    pub tree_colliders: bool,
+}
+
+/// A drawn terrain: its GameObject's path and world matrix (a terrain is placed by its position only), its data,
+/// material and collider.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainComponent {
+    pub terrain: ObjRef,
+    pub path: String,
+    pub world: Matrix,
+    pub data: ObjRef,
+    pub material: Option<ObjRef>,
+    pub draw_heightmap: bool,
+    pub draw_trees: bool,
+    pub collider: Option<TerrainColliderComponent>,
 }

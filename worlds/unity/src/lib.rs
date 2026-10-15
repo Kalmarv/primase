@@ -13,6 +13,7 @@
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
+//! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
 
 pub mod components;
@@ -24,6 +25,7 @@ pub mod player;
 pub mod resource;
 pub mod scene;
 pub mod serialized;
+pub mod terrain;
 pub mod texture;
 pub mod tpk;
 pub mod typetree;
