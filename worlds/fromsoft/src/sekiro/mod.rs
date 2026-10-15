@@ -400,10 +400,7 @@ pub fn read_area(
             },
         );
         world.insert(e, transform);
-        world.insert(
-            e,
-            Source(format!("{}:{name}", key.split_once('/').expect("key").0)),
-        );
+        world.insert(e, Source(format!("{area}:{name}")));
         world.insert(e, SkatePlacement::default());
         report.placements += 1;
     }

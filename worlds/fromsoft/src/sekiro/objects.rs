@@ -127,7 +127,7 @@ pub fn assemble(
             *report.bodies_by_motion.entry(body.motion_type).or_default() += 1;
             if body.motion_type == 2 {
                 let source = world.get::<Source>(e).map(|s| s.0.as_str()).unwrap_or("");
-                let source = source.strip_prefix("obj:").unwrap_or(source);
+                let source = source.split_once(':').map_or(source, |(_, part)| part);
                 report
                     .keyframed_left_out
                     .push(format!("{area}:{source} {model} {}", body.name));
