@@ -1,5 +1,7 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
+mod primitive;
 pub mod vector;
+pub use primitive::{CompactedPrimitive, compact_primitive};
 use std::collections::BTreeMap;
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mesh: {0}")]
