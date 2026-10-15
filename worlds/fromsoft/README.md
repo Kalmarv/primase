@@ -51,3 +51,37 @@ only when both readers reject at the same parsing boundary with equivalent
 errors. Unexpected acceptance, a missing reference entry, or a different error
 fails the differential gate. Reports distinguish decoded entries from agreed
 rejections; agreement does not make a corrupt stock entry readable.
+
+## Texture packages and split binders
+
+`Binder::read_split(header, payload, decoder)` shares the binder file-table,
+name, hash-table, decompression and coverage checks with the single-file reader.
+It checks the BHF4 and BDF4 halves independently.
+
+`tpf::Package::read(bytes)` parses PC TPF containers, retaining each texture's
+DDS, name, format, dimensional kind, mip count, flags and optional metadata words.
+Section padding must be zero; PC producers use both name-end-relative and
+first-payload-relative data sizes. Unknown platforms and compressed PC texture
+records return errors. UTF-16 and ASCII-compatible legacy names are supported.
+`tpf::Texture::image()` imports 2D DDS through `primase-dds`, preserving encoded
+mips and colour-space tags. Cube/volume payloads are retained by the container
+reader but explicitly rejected by this 2D import. Bindings assign semantic roles
+and normal conventions; package parsing does not infer them from a name.
+
+The TPF corpus gate extends the archive oracle directory with
+`tpf/packages.jsonl`: one object per discovered package, with `id` (shard/hex
+hash, followed by `/b<index>` or `/s<index>` for single/split binder children),
+`area`, package size/SHA256, platform/flags/encoding, and a `textures` array.
+Each texture records name/format/kind/mipmaps/flags, DDS size/SHA256 and, for area
+2D images, width/height and decoded RGBA SHA256. Area DDS inputs reside at
+`tpf/area-dds/<uppercase-sha256>.dds`; none belong in the repository.
+
+The pixel gate additionally requires `PRIMASE_FROMSOFT_DDS_ORACLE`, an explicitly
+trusted .NET assembly launched with `dotnet`. For each DDS path on stdin it
+writes a binary response to stdout: status byte (0 success), little-endian u64
+length, and that many RGBA8 bytes (UTF-8 error text for nonzero status). Diagnostics
+must go to stderr. It uses the independent C# decoder with BC1 punch-through
+alpha enabled; BC4 grayscale presentation is normalized to red-only by the gate.
+Pillow 11 is queried through the shared texture-codec test oracle. Exact checks
+use each decoder's own arithmetic convention; cross-convention channel-error
+histograms are reported separately, without weakening the exact gates.

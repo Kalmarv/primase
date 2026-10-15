@@ -597,7 +597,10 @@ dependencies = [
  "num-bigint",
  "primase-compress",
  "primase-core",
+ "primase-dds",
  "primase-hash",
+ "primase-texcodec",
+ "serde_json",
  "sha2",
  "thiserror",
 ]

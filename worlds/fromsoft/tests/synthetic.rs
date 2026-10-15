@@ -281,3 +281,117 @@ fn arbitrary_single_byte_mutations_never_panic() {
         }
     }
 }
+
+#[test]
+fn split_binder_shares_file_table_and_checks_both_files() {
+    let mut header = binder();
+    let body = header.split_off(96);
+    header[..4].copy_from_slice(b"BHF4");
+    u64le(&mut header, 40, 0);
+    u32le(&mut header, 80, 48);
+    let mut payload = vec![0; 48];
+    payload[..4].copy_from_slice(b"BDF4");
+    payload[10] = 1;
+    u64le(&mut payload, 16, 48);
+    payload.extend(body);
+    let result = Binder::read_split(&header, &payload, &decoder()).expect("split binder");
+    assert_eq!(result.files[0].bytes, b"twenty payload bytes");
+    assert_eq!(result.files[0].name.as_deref(), Some("a"));
+    for n in 0..payload.len() {
+        assert!(Binder::read_split(&header, &payload[..n], &decoder()).is_err());
+    }
+    u32le(&mut header, 80, 47);
+    assert!(Binder::read_split(&header, &payload, &decoder()).is_err());
+}
+fn tpf() -> Vec<u8> {
+    let mut b = vec![0; 48];
+    b[..4].copy_from_slice(b"TPF\0");
+    u32le(&mut b, 4, 8);
+    u32le(&mut b, 8, 1);
+    b[13] = 3;
+    b[14] = 1;
+    u32le(&mut b, 16, 40);
+    u32le(&mut b, 20, 8);
+    b[26] = 1;
+    u32le(&mut b, 28, 36);
+    b[36] = b'a';
+    b[40..44].copy_from_slice(b"DDS ");
+    b
+}
+#[test]
+fn tpf_pc_records_and_strict_bounds() {
+    use primase_fromsoft::tpf::{Package, TextureKind};
+    let b = tpf();
+    let p = Package::read(&b).expect("package");
+    assert_eq!(p.textures[0].name, "a");
+    assert_eq!(p.textures[0].kind, TextureKind::Image2D);
+    assert_eq!(p.textures[0].dds, &b[40..]);
+    for n in 0..b.len() {
+        assert!(Package::read(&b[..n]).is_err());
+    }
+    for offset in [0, 4, 8, 12, 13, 14, 15, 16, 20, 25, 27, 28, 32, 40] {
+        let mut bad = b.clone();
+        bad[offset] = 255;
+        assert!(Package::read(&bad).is_err(), "{offset}");
+    }
+    let mut cube = b.clone();
+    cube[25] = 1;
+    assert_eq!(
+        Package::read(&cube).expect("cube retained").textures[0].kind,
+        TextureKind::Cube
+    );
+}
+#[test]
+fn tpf_retains_extra_metadata_words() {
+    use primase_fromsoft::tpf::Package;
+    let mut b = tpf();
+    b.splice(36..36, [0; 12]);
+    u32le(&mut b, 16, 52);
+    u32le(&mut b, 28, 48);
+    u32le(&mut b, 32, 1);
+    u32le(&mut b, 36, 7);
+    u32le(&mut b, 40, 4);
+    u32le(&mut b, 44, 0x7fc00000);
+    let p = Package::read(&b).expect("extra");
+    let extra = p.textures[0].extra.as_ref().expect("present");
+    assert_eq!(extra.id, 7);
+    assert_eq!(extra.words, vec![0x7fc00000]);
+}
+#[test]
+fn tpf_zero_alignment_has_two_data_size_conventions() {
+    use primase_fromsoft::tpf::Package;
+    let mut b = tpf();
+    b.splice(40..40, [0; 272]);
+    u32le(&mut b, 16, 312);
+    assert!(Package::read(&b).is_ok());
+    u32le(&mut b, 4, 280);
+    assert!(Package::read(&b).is_ok());
+    b[50] = 1;
+    assert!(Package::read(&b).is_err());
+}
+#[test]
+fn tpf_import_uses_shared_dds_metadata() {
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture as Image};
+    use primase_fromsoft::tpf::{Texture, TextureKind};
+    let image = Image {
+        width: 4,
+        height: 4,
+        format: TexFormat::Bc1,
+        levels: vec![vec![0; 8]],
+        color_space: ColorSpace::Srgb,
+        role: TexRole::Other,
+        normal: None,
+    };
+    let mut record = Texture {
+        name: "synthetic".into(),
+        format: 0,
+        kind: TextureKind::Image2D,
+        mipmaps: 1,
+        flags: 0,
+        extra: None,
+        dds: primase_dds::write_dx10(&image).expect("DDS"),
+    };
+    assert_eq!(record.image().expect("image"), image);
+    record.kind = TextureKind::Cube;
+    assert!(record.image().is_err());
+}

@@ -21,12 +21,20 @@ pub struct Binder {
 }
 impl Binder {
     pub fn read(data: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
+        Self::read_inner(data, None, decoder)
+    }
+    /// Read a BHF4 index and its matching BDF4 payload file.
+    pub fn read_split(header: &[u8], payload: &[u8], decoder: &Decoder<'_>) -> Result<Self> {
+        Self::read_inner(header, Some(payload), decoder)
+    }
+    fn read_inner(data: &[u8], payload: Option<&[u8]>, decoder: &Decoder<'_>) -> Result<Self> {
+        let split = payload.is_some();
         let mut v = View {
             data,
-            format: "BND4",
+            format: if split { "BHF4" } else { "BND4" },
             be: false,
         };
-        v.expect(0, b"BND4")?;
+        v.expect(0, if split { b"BHF4" } else { b"BND4" })?;
         v.boolean(4)?;
         v.boolean(5)?;
         v.expect(6, &[0, 0, 0])?;
@@ -42,7 +50,34 @@ impl Binder {
             .try_into()
             .map_err(|_| invalid("BND4", 24, "version"))?;
         let record = v.size(32)?;
-        let headerend = v.size(40)?;
+        let headerend = if split {
+            v.expect(40, &[0; 8])?;
+            data.len()
+        } else {
+            v.size(40)?
+        };
+        let pv = View {
+            data: payload.unwrap_or(data),
+            format: if split { "BDF4" } else { "BND4" },
+            be: v.be,
+        };
+        let mut payload_spans = Vec::new();
+        if split {
+            pv.expect(0, b"BDF4")?;
+            pv.boolean(4)?;
+            pv.boolean(5)?;
+            pv.expect(6, &[0; 3])?;
+            if pv.boolean(9)? != v.be {
+                return Err(invalid("BDF4", 9, "endian mismatch"));
+            }
+            pv.boolean(10)?;
+            pv.expect(11, &[0; 5])?;
+            if ![48, 64].contains(&pv.u64(16)?) {
+                return Err(invalid("BDF4", 16, "header size"));
+            }
+            pv.expect(32, &[0; 16])?;
+            payload_spans.push((0, 48));
+        }
         v.slice(0, headerend)?;
         let unicode = v.boolean(48)?;
         let raw = v.u8(49)?;
@@ -68,7 +103,7 @@ impl Binder {
             return Err(invalid("BND4", 32, "record size mismatch"));
         }
         let ext = v.u8(50)?;
-        if ![0, 1, 4, 128].contains(&ext) {
+        if ![0, 1, 4, 128].contains(&ext) || (split && ![0, 4].contains(&ext)) {
             return Err(invalid("BND4", 50, "extended flag"));
         }
         v.expect(51, &[0; 5])?;
@@ -150,12 +185,16 @@ impl Binder {
                 id = Some(v.u32(q)? as i32);
                 v.expect(q + 4, &[0; 4])?;
             }
-            let bytes = v.slice(off, size)?;
-            if off < headerend {
+            let bytes = pv.slice(off, size)?;
+            if off < if split { 48 } else { headerend } {
                 return Err(invalid("BND4", off, "file overlaps header"));
             }
             if size > 0 {
-                spans.push((off, size));
+                if split {
+                    payload_spans.push((off, size));
+                } else {
+                    spans.push((off, size));
+                }
             }
             let bytes = if flags & 1 != 0 {
                 let want = decoded.ok_or_else(|| invalid("BND4", p, "compressed file lacks output size"))?;
@@ -223,13 +262,16 @@ impl Binder {
                 return Err(invalid("BND4", hashptr, "hash count mismatch"));
             }
             spans.push((hashes, total * 8));
-            if hashes + total * 8 != headerend {
+            if !split && hashes + total * 8 != headerend {
                 return Err(invalid("BND4", 40, "header end mismatch"));
             }
         } else if hashptr != 0 {
             return Err(invalid("BND4", 56, "unexpected hash table"));
         }
         coverage(&v, spans, data.len(), 15)?;
+        if split {
+            coverage(&pv, payload_spans, pv.data.len(), 15)?;
+        }
         Ok(Self {
             version,
             format,

@@ -88,6 +88,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_CAS_SAMPLES` | directory of indexed individual `.casblock` frames |
 | `PRIMASE_SEKIRO_DIR` | install folder containing Data1 through Data5 BHD/BDT pairs |
 | `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
+| `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | reference archive outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 
