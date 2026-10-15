@@ -2,7 +2,7 @@
 mod geometry;
 mod vertex;
 use crate::{Result, bytes::View, invalid};
-pub use geometry::{MaterialGeometry, Part};
+pub use geometry::{MaterialGeometry, Part, tangent_to_scene};
 pub use vertex::Vertex;
 
 #[derive(Clone, Debug)]

@@ -1,6 +1,7 @@
 //! Sekiro area assembly. Geometry is unbaked; collision, lights and ledges are
 //! separate future readers. Texture normal conventions are explicit policy.
 mod assets;
+pub mod normals;
 mod textures;
 use crate::{
     Archive, Binder, Result,
@@ -29,8 +30,6 @@ pub struct Options {
     pub region: Option<[f32; 4]>,
     pub region_margin: f32,
     pub include_far: bool,
-    /// Explicit source interpretation, not inferred from texture curl.
-    pub normal_green: NormalGreen,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -38,7 +37,6 @@ impl Default for Options {
             region: None,
             region_margin: 30.,
             include_far: false,
-            normal_green: NormalGreen::Down,
         }
     }
 }
@@ -52,6 +50,8 @@ pub struct Report {
     pub skipped_far: usize,
     pub skipped_empty: usize,
     pub skipped_outside: usize,
+    pub normal_basis_assumptions: BTreeMap<String, usize>,
+    pub shader_parts: BTreeMap<String, usize>,
 }
 struct Prototype {
     mesh: Mesh,
@@ -272,6 +272,13 @@ pub fn read_area(
     let mut roles = BTreeSet::new();
     for key in &used {
         for m in &prototypes[key].materials {
+            *report.shader_parts.entry(m.shader.clone()).or_default() += 1;
+            if !normals::consumer_basis(&m.shader)? {
+                *report
+                    .normal_basis_assumptions
+                    .entry(m.shader.clone())
+                    .or_default() += 1;
+            }
             for (name, normal) in [(&m.albedo, false), (&m.normal, true)] {
                 if let Some(name) = name
                     && catalog.entries.contains_key(name)
@@ -294,9 +301,12 @@ pub fn read_area(
             ColorSpace::Srgb
         };
         texture.normal = normal.then_some(NormalConvention {
-            green: options.normal_green,
+            green: NormalGreen::Up,
             z: NormalZ::Rebuild,
         });
+        if normal {
+            normals::swap_normal_axes(&mut texture)?;
+        }
         let key = if normal {
             format!("{name}@normal")
         } else {
@@ -315,14 +325,15 @@ pub fn read_area(
                 source_format: None,
                 source_size: None,
                 linear: Some(normal),
-                green: normal.then_some(options.normal_green),
-                z: normal.then_some(NormalZ::Rebuild),
+                green: normal.then_some(NormalGreen::Up),
+                z: normal.then_some(NormalZ::Stored),
                 other: Default::default(),
             },
         );
         texture_entities.insert((name, normal), e);
         report.textures += 1;
     }
+    primase_image::normalize_normals(&mut world).map_err(|e| invalid("Sekiro normal conversion", 0, e))?;
     let mut proto_entities = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
     for key in used {

@@ -215,7 +215,10 @@ margin. Far map pieces are excluded by default. Missing model IDs are reported.
 `sekiro::prepare_scene_assets` writes prototype GLBs and PNG images through
 the toolkit into an empty asset directory, attaching file components required
 by `primase_skate_scene::write`. The scene output directory is separate.
-Normal green direction is an explicit import policy, not inferred from curl.
+Normal maps use the consumer's stored tangent frame, not a curl-based green
+direction: R/G are swapped, positive Z is rebuilt by the shared image pass,
+and the result uses glTF green-up. Tangent xyz is reflected with geometry and
+w is negated for the handedness change.
 Layered materials retain bindings for a later bake; collision/Havok, ledges,
 lights and shader baking are not yet imported.
 
@@ -236,3 +239,32 @@ source labels and region. Material deduplication retains full source bindings,
 so material counts can exceed the reference's preview-only identities. Texture
 pixel parity with the reference's normal-processing heuristic is not asserted;
 source decoding is covered separately by the texture gates.
+
+## Consumer normal-map frame
+
+Representative G-buffer pixel shaders for 20 available scene shader families
+read R/G as `2*v-1`, reconstruct positive `sqrt(1-min(dot(xy,xy),1))`, and
+use red along `normalize(cross(N,T)*w)` and green along `normalize(T)`.
+Blue carries other material data, not normal Z. The implementation preserves
+stored tangent xyz/w through compaction, swaps decoded texture R/G once per
+normal-role asset, and negates w for the scene frame's reflection. The shared
+image pass rebuilds Z. Curl/integrability verdicts describe authoring patterns;
+they never select a per-texture sign exception.
+
+`sekiro::normals::consumer_basis` lists the inspected families. Three legacy
+families (`GXFlver_Col`, `GXFlver_ColDif`, `GXFlver_ColDifSpcBumpIbl`) are absent
+from the installed shader bundle and use the same mapping as a named assumption,
+counted per emitted part in `Report::normal_basis_assumptions`. Unclassified
+families are errors. Water's static texture uses this basis, but its runtime
+normal buffer remains an unsupported dynamic effect. Layer blending also remains
+part of the later shader bake; this conversion only preserves the chosen static
+texture contribution. Downstream consumers must preserve the emitted tangent
+stream rather than regenerate a different UV-derived frame.
+
+`PRIMASE_FROMSOFT_NORMAL_FRAMES` supplies `frames.jsonl` with independently sampled
+unit source normal `n`, tangent `t`, handedness `w`, and a model `key`. Two off-axis
+normal probes per frame compare the transformed consumer formula with our glTF
+basis at absolute component tolerance 1e-6. `PRIMASE_FROMSOFT_NORMAL_CURL` supplies
+a JSON array of independently measured `name` and `verdict` values; the gate
+reports all classifications and names every OpenGL verdict as a measurement,
+not a conversion exception. These gates require no installed archive reads.

@@ -112,10 +112,7 @@ impl Model {
                 _ => unreachable!(),
             };
             for t in &mut tangents {
-                let direction = FRAME.direction([t[0], t[1], t[2]]);
-                let direction: [f32; 3] = Vec3::from(direction).normalize().into();
-                // The handedness changes under the frame's Z reflection.
-                *t = [direction[0], direction[1], direction[2], -t[3]];
+                *t = tangent_to_scene(*t);
             }
             let mut mesh = Mesh {
                 positions,
@@ -184,4 +181,11 @@ impl Model {
         }
         Ok(parts)
     }
+}
+
+/// Normalize the stored tangent and reflect its handedness with the scene frame.
+/// Unlike a UV-derived frame this retains the basis used by the game shaders.
+pub fn tangent_to_scene(t: [f32; 4]) -> [f32; 4] {
+    let direction: [f32; 3] = Vec3::from(FRAME.direction([t[0], t[1], t[2]])).normalize().into();
+    [direction[0], direction[1], direction[2], -t[3]]
 }

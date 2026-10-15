@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 [dependencies]
+primase-texcodec.workspace = true
 primase-image.workspace = true
 primase-gltf.workspace = true
 serde.workspace = true
@@ -24,7 +25,6 @@ thiserror.workspace = true
 aes.workspace = true
 num-bigint.workspace = true
 [dev-dependencies]
-primase-texcodec.workspace = true
 sha2.workspace = true
 [lints]
 workspace = true

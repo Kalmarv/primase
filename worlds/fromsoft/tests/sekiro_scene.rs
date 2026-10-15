@@ -92,6 +92,7 @@ fn installed_area_scene() -> Result<()> {
         .map(|(e, p)| (p.id.as_str(), e))
         .collect();
     let mut parts = 0;
+    let mut tangent_parts = 0;
     let mut uv_scaled = 0;
     let mut normal_exact = 0;
     let mut maximum_normal_error = 0.0f32;
@@ -108,6 +109,14 @@ fn installed_area_scene() -> Result<()> {
         for (i, (a, b)) in a.primitives.iter().zip(&b.primitives).enumerate() {
             use primase_core::{Semantic, Stream};
             assert_eq!(a.indices, b.indices, "{id}/{i} topology");
+            if let Some(tangents) = original.primitives[i].streams.get(&Semantic::Tangent) {
+                assert_eq!(
+                    a.streams.get(&Semantic::Tangent),
+                    Some(tangents),
+                    "{id}/{i} stored tangent preservation"
+                );
+                tangent_parts += 1;
+            }
             assert_eq!(
                 a.streams[&Semantic::Position],
                 b.streams[&Semantic::Position],
@@ -167,6 +176,10 @@ fn installed_area_scene() -> Result<()> {
         "written prototypes {}, parts {parts}, UV tiling parts {uv_scaled}, normals exact {normal_exact}, within 1e-6 {}, maximum {maximum_normal_error}",
         actual_protos.len(),
         parts - normal_exact
+    );
+    println!(
+        "written tangent streams preserved on {tangent_parts} parts; shader basis assumptions {:?}",
+        report.normal_basis_assumptions
     );
     let placements =
         primase_skate_scene::tables::read_placements(&std::fs::read(folder.join("tables/placements.bin"))?)?;
