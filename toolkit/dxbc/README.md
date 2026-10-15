@@ -73,6 +73,11 @@ controls explain the differences:
 No residual `mad` contraction, `sqrt`, `log` or `exp` difference was observed
 in these controls. That does not establish equality for other inputs. The
 controls are diagnostic variants, not replacements for the unchanged oracle.
+The four-epsilon allowance accounts for the oracle's rounded text literals and
+its lower-precision reciprocal-square-root intermediate, not an error allowance
+needed to reproduce them in this interpreter. We retain the original binary
+constants and the more accurate f64 reciprocal-square-root calculation; the
+unchanged oracle remains the gate.
 `execute_traced` exposes read-only post-instruction registers and initialization
 masks so future pixel differences can be attributed rather than hidden by a bound.
 
