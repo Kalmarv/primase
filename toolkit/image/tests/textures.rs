@@ -46,6 +46,28 @@ fn normalization_all_levels_provenance_and_idempotence() {
     assert!(w.has::<TextureFile>(e));
 }
 #[test]
+fn normalization_moves_x_from_alpha() {
+    let mut w = World::new();
+    let e = w.spawn();
+    let mut t = texture();
+    // DXT5nm: X in alpha, red and blue unused
+    t.levels = vec![[255, 64, 0, 200].repeat(4), vec![255, 128, 0, 128]];
+    t.normal = Some(NormalConvention {
+        green: NormalGreen::Up,
+        z: NormalZ::Rebuild,
+        x: NormalX::Alpha,
+    });
+    w.insert(e, t);
+    let log = normalize_normals(&mut w).unwrap();
+    assert_eq!(log.counts.get("x moved from alpha to red"), Some(&1));
+    let t = w.get::<Texture>(e).unwrap();
+    assert_eq!(t.normal, Some(NormalConvention::GLTF));
+    // x = 200/127.5 - 1, y = 64/127.5 - 1: z = sqrt(1 - x^2 - y^2) = 0.6547.., encoded 211
+    assert_eq!(&t.levels[0][..4], &[200, 64, 211, 200]);
+    assert_eq!(t.levels[1], vec![128, 128, 255, 128]);
+}
+
+#[test]
 fn normalization_errors_before_any_mutation() {
     let mut w = World::new();
     let a = w.spawn();

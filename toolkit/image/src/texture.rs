@@ -144,8 +144,8 @@ pub fn texture_level_png(t: &Texture, level: usize) -> Result<Vec<u8>> {
         samples: Samples::U8(rgba),
     })
 }
-/// Explicitly convert normal maps to green-up with stored positive-hemisphere Z.
-/// Green flips as 255-G; Z=sqrt(max(0,1-x*x-y*y)), x/y=2*byte/255-1,
+/// Explicitly convert normal maps to glTF's convention: X in red, green up, stored
+/// positive-hemisphere Z. X kept in alpha moves to red (alpha unchanged); green flips as 255-G; Z=sqrt(max(0,1-x*x-y*y)), x/y=2*byte/255-1,
 /// encoded with nearest rounding. Every stored mip is decoded to RGBA8; alpha
 /// and colour-space metadata stay unchanged. Already-conforming textures remain
 /// byte-identical and keep file provenance. Missing normal metadata is an error.
@@ -156,13 +156,7 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         let convention = t
             .normal
             .ok_or_else(|| Error::Invalid(format!("normal texture {e:?} has no convention")))?;
-        if convention
-            == (NormalConvention {
-                green: NormalGreen::Up,
-                z: NormalZ::Stored,
-                x: NormalX::Red,
-            })
-        {
+        if convention == NormalConvention::GLTF {
             continue;
         }
         let mut levels = Vec::new();
@@ -170,6 +164,9 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
             let (w, h) = level_dimensions(t, i)?;
             let mut rgba = Decoder::default().decode_rgba8(t.format, w, h, &t.levels[i])?;
             for p in rgba.as_chunks_mut::<4>().0 {
+                if convention.x == NormalX::Alpha {
+                    p[0] = p[3];
+                }
                 if convention.green == NormalGreen::Down {
                     p[1] = 255 - p[1];
                 }
@@ -187,13 +184,12 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         let mut converted = t.clone();
         converted.format = TexFormat::Rgba8Unorm;
         converted.levels = levels;
-        converted.normal = Some(NormalConvention {
-            green: NormalGreen::Up,
-            z: NormalZ::Stored,
-            x: NormalX::Red,
-        });
+        converted.normal = Some(NormalConvention::GLTF);
         changes.push((e, converted));
         log.count("normal textures converted", 1);
+        if convention.x == NormalX::Alpha {
+            log.count("x moved from alpha to red", 1);
+        }
         if convention.green == NormalGreen::Down {
             log.count("green flipped", 1);
         }
