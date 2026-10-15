@@ -362,6 +362,107 @@ impl Component for Texture {
     }
 }
 
+/// Collision geometry: a triangle soup in the entity's own space, each triangle made of a surface.
+///
+/// Placed like a [`Mesh`]: on a prototype, by its [`Instance`]s; on an entity with a [`Transform`] that is not a
+/// prototype, by that transform. A prototype may collide without drawing (no mesh) and draw without colliding. A
+/// triangle's front is counter-clockwise (the world's convention, as a mesh's); soups need not be closed or connected.
+/// `surfaces` holds one index per triangle into the world's [`Surfaces`]. What a collider was (a box, a capsule, a
+/// heightfield) stays in the reader's dialect; this is the shape a consumer collides with.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Collision {
+    pub positions: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub surfaces: Vec<u16>,
+}
+
+impl Collision {
+    /// Append another soup, its positions mapped by `f`, every triangle made of `surface`.
+    pub fn extend(
+        &mut self,
+        positions: &[[f32; 3]],
+        triangles: &[[u32; 3]],
+        surface: u16,
+        f: impl Fn([f32; 3]) -> [f32; 3],
+    ) {
+        let base = self.positions.len() as u32;
+        self.positions.extend(positions.iter().map(|&p| f(p)));
+        self.triangles
+            .extend(triangles.iter().map(|t| t.map(|i| i + base)));
+        self.surfaces
+            .extend(std::iter::repeat_n(surface, triangles.len()));
+    }
+}
+
+impl Component for Collision {
+    const NAME: &'static str = "core.collision";
+    /// One surface per triangle, indices in range, positions finite, surfaces known to the world's [`Surfaces`].
+    fn verify(&self, _e: Entity, w: &crate::World) -> Result<(), String> {
+        if self.surfaces.len() != self.triangles.len() {
+            return Err(format!(
+                "{} surfaces for {} triangles",
+                self.surfaces.len(),
+                self.triangles.len()
+            ));
+        }
+        let n = self.positions.len() as u32;
+        if let Some(t) = self.triangles.iter().find(|t| t.iter().any(|&i| i >= n)) {
+            return Err(format!("triangle {t:?} past the {n} positions"));
+        }
+        finite(self.positions.iter().flatten().copied(), "collision positions")?;
+        let known = w.resource::<Surfaces>().map_or(0, |s| s.0.len());
+        if let Some(&s) = self.surfaces.iter().find(|&&s| usize::from(s) >= known) {
+            return Err(format!("surface {s} past the world's {known} surfaces"));
+        }
+        Ok(())
+    }
+    /// A summary: counts, and triangles per surface index.
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        let mut per: BTreeMap<u16, u64> = BTreeMap::new();
+        for &s in &self.surfaces {
+            *per.entry(s).or_default() += 1;
+        }
+        Ok(Some(json!({
+            "positions": self.positions.len(),
+            "triangles": self.triangles.len(),
+            "surfaces": per,
+        })))
+    }
+}
+
+/// A collision surface: what a triangle is made of, by name (a game's physic material, "Snow", "Ice"). Writers map the
+/// names onto their target's surfaces; a game's properties for it (friction, sound) stay in its dialect.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Surface {
+    pub name: String,
+}
+
+/// The world's collision surfaces, indexed by [`Collision::surfaces`].
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize)]
+pub struct Surfaces(pub Vec<Surface>);
+
+impl Surfaces {
+    /// The index of the surface named `name`, added when new.
+    pub fn index(&mut self, name: &str) -> u16 {
+        match self.0.iter().position(|s| s.name == name) {
+            Some(i) => i as u16,
+            None => {
+                self.0.push(Surface {
+                    name: name.to_owned(),
+                });
+                (self.0.len() - 1) as u16
+            }
+        }
+    }
+}
+
+impl crate::world::Resource for Surfaces {
+    const NAME: &'static str = "core.surfaces";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+}
+
 /// A texture whose data is still in a file (PNG or DDS); a pass loads it into a [`Texture`]. Lets readers describe
 /// thousands of textures without holding their pixels.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -588,5 +689,39 @@ mod tests {
         let value = crate::json::to_value(&convention).expect("normal convention");
         assert_eq!(value["basis"], "BitangentTangent");
         assert_eq!(Texture::VERSION, 3);
+    }
+
+    #[test]
+    fn collision_soups_and_their_surfaces() {
+        let mut w = crate::World::new();
+        let mut surfaces = Surfaces::default();
+        let (snow, ice) = (surfaces.index("Snow"), surfaces.index("Ice"));
+        assert_eq!((snow, ice, surfaces.index("Snow")), (0, 1, 0));
+        w.insert_resource(surfaces);
+        let mut c = Collision::default();
+        let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]];
+        c.extend(&tri, &[[0, 1, 2]], snow, |p| p);
+        c.extend(&tri, &[[0, 1, 2]], ice, |p| [p[0] + 2.0, p[1], p[2]]);
+        assert_eq!(c.triangles, [[0, 1, 2], [3, 4, 5]]);
+        assert_eq!(c.surfaces, [0, 1]);
+        assert_eq!(c.positions[3], [2.0, 0.0, 0.0]);
+        let e = w.spawn();
+        assert_eq!(c.verify(e, &w), Ok(()));
+        let mut bad = c.clone();
+        bad.surfaces.pop();
+        assert!(bad.verify(e, &w).is_err(), "a surface per triangle");
+        let mut bad = c.clone();
+        bad.triangles[1][2] = 6;
+        assert!(bad.verify(e, &w).is_err(), "indices in range");
+        let mut bad = c.clone();
+        bad.surfaces[0] = 2;
+        assert!(bad.verify(e, &w).is_err(), "surfaces the world knows");
+        let mut bad = c.clone();
+        bad.positions[0][1] = f32::NAN;
+        assert!(bad.verify(e, &w).is_err(), "finite positions");
+        assert_eq!(
+            c.to_json().unwrap().unwrap(),
+            json!({"positions": 6, "triangles": 2, "surfaces": {"0": 1, "1": 1}})
+        );
     }
 }

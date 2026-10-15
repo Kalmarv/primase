@@ -57,6 +57,7 @@ despawning passes use it. One component of a name per entity (a list is one comp
 | `SourceFrame` (resource, provenance) | the frame the reader converted from (`core::frame`); the world itself is always metres, right-handed, +Y up, -Z north |
 | `Transform` | affine 3x4 (sheared/mirrored allowed, flagged by tolerance) |
 | `Mesh` / `MeshFile`, `Instance`, `MaterialVariants` | shared geometry (vertex streams by semantic, primitives in draw order) or the file it is still in; placements instance it, picking per-variant materials |
+| `Collision`, `Surfaces` (resource) | collision geometry placed like a mesh: a triangle soup in the entity's space, one surface per triangle, surfaces named in the world's table (game properties stay in dialects) |
 | `Texture` | pixels or encoded blocks + `TexFormat`, colour space, role, normal convention (X in red/alpha, green up/down, Z stored/rebuilt) |
 | `Name`, `Source` | display name; provenance key (archetype, MSB part, asset path) for debugging and review links |
 | `Bounds`, `Tile` | for streaming and chunked processing |
