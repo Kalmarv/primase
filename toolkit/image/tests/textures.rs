@@ -106,3 +106,17 @@ fn load_png_dds_preserves_levels_and_files() {
     std::fs::remove_file(dir.join("t.png")).unwrap();
     std::fs::remove_dir(dir).unwrap();
 }
+
+#[test]
+fn rgb_png_has_no_alpha_channel() {
+    let rgb = vec![1, 2, 3, 254, 0, 127];
+    let bytes = primase_image::write_png_rgb(2, 1, &rgb).unwrap();
+    assert_eq!(bytes[25], 2);
+    assert_eq!(bytes[24], 8);
+    assert_eq!(
+        primase_image::read_png(&bytes).unwrap().image.samples,
+        primase_image::Samples::U8(vec![1, 2, 3, 255, 254, 0, 127, 255])
+    );
+    assert_eq!(bytes, primase_image::write_png_rgb(2, 1, &rgb).unwrap());
+    assert!(primase_image::write_png_rgb(2, 1, &rgb[..5]).is_err());
+}

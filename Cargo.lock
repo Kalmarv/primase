@@ -632,6 +632,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-meshops"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "primase-skate-scene"
 version = "0.1.0"
 dependencies = [
@@ -651,6 +658,14 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-vertex"
+version = "0.1.0"
+dependencies = [
+ "half",
  "thiserror",
 ]
 

@@ -336,3 +336,25 @@ pub fn pick_level(width: u32, height: u32, levels: usize, cap: u32) -> Result<(u
     }
     Ok((i, w, h))
 }
+
+/// Deterministic 8-bit RGB PNG (colour type 2), without an alpha channel or
+/// implicit colour transfer. Input is row-major RGB and must exactly fit dimensions.
+pub fn write_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
+    let expected = sample_count(width, height)? / 4 * 3;
+    if rgb.len() != expected {
+        return Err(Error::Invalid(format!(
+            "expected {expected} RGB samples, got {}",
+            rgb.len()
+        )));
+    }
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(rgb)?;
+        writer.finish()?;
+    }
+    Ok(out)
+}

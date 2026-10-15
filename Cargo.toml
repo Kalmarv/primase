@@ -5,6 +5,8 @@ members = [
     "toolkit/texcodec",
     "toolkit/dds",
     "toolkit/image",
+    "toolkit/vertex",
+    "toolkit/meshops",
     "toolkit/compress",
     "toolkit/hash",
     "formats/skate-scene",
@@ -35,6 +37,8 @@ primase-core = { path = "core" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
+primase-vertex = { path = "toolkit/vertex" }
+primase-meshops = { path = "toolkit/meshops" }
 primase-compress = { path = "toolkit/compress" }
 primase-hash = { path = "toolkit/hash" }
 primase-skate-scene = { path = "formats/skate-scene" }

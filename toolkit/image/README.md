@@ -46,3 +46,6 @@ and stored positive-hemisphere Z across every mip. Green uses `255-G`; reconstru
 Z uses `sqrt(max(0,1-x*x-y*y))` and nearest byte rounding. Changed textures become
 RGBA8 and lose their file component; unchanged textures retain it. Missing normal
 metadata fails before mutation. The pass log records reconstruction and decoding.
+`write_png_rgb(width, height, rgb)` emits 8-bit RGB (PNG colour type 2) for
+textures without alpha. Its input must contain exactly width*height*3 samples;
+`write_png` continues to preserve RGBA8/16 input. Neither applies colour transfer.
