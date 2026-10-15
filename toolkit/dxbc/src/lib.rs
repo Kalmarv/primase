@@ -3,8 +3,10 @@
 mod evaluate;
 mod opcodes;
 mod program;
+mod reflection;
 pub use evaluate::{Execution, RegisterValue, Sample, Sampler, Trace};
 pub use program::{Instruction, Operand, Program, Register, Selection};
+pub use reflection::{Buffer, Member, Reflection, Resource, Semantic, Type, Variable};
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXBC at word {word}: {detail}")]

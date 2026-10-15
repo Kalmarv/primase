@@ -100,3 +100,22 @@ returning `[0.25, 0.5, 0.75, 1]`; it tests execution, not a real sampling policy
 Written outputs compare exactly or within four f32 epsilon times
 `max(1, abs(reference))`; NaN pairs are counted separately. An unset directory
 skips the real-binary gate. The committed analytical tests require no data.
+
+`Reflection::parse` reads SM5.0 pixel-program RDEF, ISGN and OSGN chunks.
+It retains resource slots, buffer sizes/default bytes, variable and nested
+member offsets, scalar/class/array metadata and input/output semantics.
+It does not flatten arrays, infer their use or assign material parameters.
+Record sizes, byte ranges, string lengths, recursion and total type count are
+bounded; cyclic types and variables outside their buffer are refused. Stripped
+reflection is an explicit error for this API, not an invented binding layout.
+The binary record layout is also cross-checked against the independent
+[RenderDoc DXBC container definitions](https://github.com/baldurk/renderdoc/blob/v1.x/renderdoc/driver/shaders/dxbc/dxbc_container.cpp).
+
+The optional `.ppo.reflection.json` oracle contains `inputs` (semantic plus
+index to register), `textures` and `buffers` (name to slot), and `layout`
+(buffer name to member name to `{offset, count, type}`). The test checks each
+named binding and member offset/array count exactly; nested member offsets
+refer to the first enclosing array element. The production reflection retains
+the full hierarchy. An optional `.ppo.trace.json` array contains post-instruction
+`temps` and `outputs` as flat raw u32 arrays; the value gate reports the first
+divergent initialized component and its instruction for diagnosis.
