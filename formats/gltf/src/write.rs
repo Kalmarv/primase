@@ -983,16 +983,13 @@ impl Writer<'_> {
         };
         let (bytes, image_name) = if let Some(texture) = self.world.get::<Texture>(e) {
             if texture.role == primase_core::TexRole::Normal
-                && texture.normal
-                    != Some(primase_core::NormalConvention {
-                        green: primase_core::NormalGreen::Up,
-                        z: primase_core::NormalZ::Stored,
-                    })
+                && texture.normal != Some(primase_core::NormalConvention::GLTF)
             {
                 return Err(Error::World {
                     entity: e,
-                    detail: "normal texture requires green-up and stored Z; run normalize-normals first"
-                        .into(),
+                    detail:
+                        "normal texture requires X in red, green up and stored Z; run normalize-normals first"
+                            .into(),
                 });
             }
             let bytes = primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {

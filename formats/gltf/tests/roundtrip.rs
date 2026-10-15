@@ -646,7 +646,7 @@ fn khronos_validator_accepts_output() {
 #[test]
 fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
     use primase_core::{
-        ColorSpace, NormalConvention, NormalGreen, NormalZ, TexFormat, TexRole, Texture, TextureFile,
+        ColorSpace, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture, TextureFile,
     };
     let mut b = build(&scratch("memory-textures"));
     let pixels = vec![128, 64, 0, 255];
@@ -680,6 +680,7 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
     n.normal = Some(NormalConvention {
         green: NormalGreen::Down,
         z: NormalZ::Rebuild,
+        x: NormalX::Red,
     });
     assert!(
         write(&b.world, &options(&b))

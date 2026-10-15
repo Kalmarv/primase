@@ -3,7 +3,9 @@
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, TextureRef, Wrap as PbrWrap};
-use primase_core::{ColorSpace, Entity, NormalConvention, NormalGreen, NormalZ, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, Entity, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture, World,
+};
 
 use crate::components::{AlphaMode, MaterialClass, SkateMaterial, SkateTexture, Wrap};
 
@@ -55,6 +57,7 @@ impl Pass for LowerSkatePbr {
                 let normal = (role == TexRole::Normal).then(|| NormalConvention {
                     green: st.and_then(|s| s.green).unwrap_or(NormalGreen::Up),
                     z: st.and_then(|s| s.z).unwrap_or(NormalZ::Stored),
+                    x: NormalX::Red,
                 });
                 roles.push((
                     t,

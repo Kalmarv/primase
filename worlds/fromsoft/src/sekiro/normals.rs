@@ -4,7 +4,7 @@
 //! Therefore glTF with the stored tangent uses swapped R/G, green-up, and
 //! reflected tangent handedness. This is not a texture-authorship curl rule.
 use crate::{Result, invalid};
-use primase_core::{NormalConvention, NormalGreen, NormalZ, TexFormat, Texture};
+use primase_core::{NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, Texture};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Whether this family's static normal basis was observed in installed shaders.
@@ -63,6 +63,7 @@ pub fn swap_normal_axes(texture: &mut Texture) -> Result<()> {
     texture.normal = Some(NormalConvention {
         green: NormalGreen::Up,
         z: NormalZ::Rebuild,
+        x: NormalX::Red,
     });
     Ok(())
 }

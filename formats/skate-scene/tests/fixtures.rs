@@ -6,7 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use primase_core::gate::compare_json;
-use primase_core::{Instance, Source, Transform, World};
+use primase_core::{
+    ColorSpace, Instance, NormalConvention, NormalGreen, NormalX, NormalZ, Source, TexFormat, TexRole,
+    Texture, Transform, World,
+};
 use primase_skate_scene::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
 use primase_skate_scene::{self as scene, SkateLight, SkatePrototype, SkateScene};
 use serde_json::{Value, json};
@@ -414,6 +417,33 @@ fn edits_are_written() {
     assert_eq!(m.get("light_sources"), Some(&json!(["l0", "new_light"])));
     let (le2, _) = w2.iter::<SkateLight>().next().unwrap();
     assert_eq!(w2.get::<SkateLight>(le2).unwrap().group, "street");
+}
+
+#[test]
+fn normal_maps_with_x_in_alpha_are_refused() {
+    let (mut w, _) = read(&fixture("alpha_x_src"));
+    let (te, _) = w.iter::<primase_skate_scene::SkateTexture>().next().unwrap();
+    w.insert(
+        te,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 128, 255, 200]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Normal,
+            normal: Some(NormalConvention {
+                green: NormalGreen::Up,
+                z: NormalZ::Rebuild,
+                x: NormalX::Alpha,
+            }),
+        },
+    );
+    let e = scene::write(&w, &tmp("alpha_x_out")).unwrap_err().to_string();
+    assert!(
+        e.contains("X outside red") && e.contains("normalize-normals"),
+        "{e}"
+    );
 }
 
 #[test]

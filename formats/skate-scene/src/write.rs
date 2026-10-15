@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
-    Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Source, TextureFile,
-    Tile, Transform, World,
+    Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ, Source, Texture,
+    TextureFile, Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -437,6 +437,16 @@ impl Writer<'_> {
             let src = w
                 .get::<TextureFile>(e)
                 .ok_or_else(|| bad(format!("texture '{}' has no core.texture_file", t.key)))?;
+            // v1 says a normal map's green and Z convention, not where its X is
+            if w.get::<Texture>(e)
+                .and_then(|x| x.normal)
+                .is_some_and(|n| n.x != NormalX::Red)
+            {
+                return Err(bad(format!(
+                    "texture '{}': a normal map with X outside red has no scene-interchange v1 form; run                      normalize-normals first",
+                    t.key
+                )));
+            }
             let file = self.copy(&t.file, &src.path)?;
             let mut o = ObjB::default();
             o.put("file", text(&file.path));

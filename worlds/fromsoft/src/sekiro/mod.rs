@@ -14,8 +14,8 @@ use crate::{
 };
 pub use assets::prepare_scene_assets;
 use primase_core::{
-    ColorSpace, Instance, Mesh, Name, NormalConvention, NormalGreen, NormalZ, Primitive, Semantic, Source,
-    Stream, TexRole, Topology, Transform, World,
+    ColorSpace, Instance, Mesh, Name, NormalConvention, NormalGreen, NormalX, NormalZ, Primitive, Semantic,
+    Source, Stream, TexRole, Topology, Transform, World,
 };
 use primase_skate_scene::{
     FileRef, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
@@ -305,6 +305,7 @@ pub fn read_area(
         texture.normal = normal.then_some(NormalConvention {
             green: NormalGreen::Up,
             z: NormalZ::Rebuild,
+            x: NormalX::Red,
         });
         if normal {
             normals::swap_normal_axes(&mut texture)?;

@@ -1,8 +1,8 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
-    ColorSpace, Entity, NormalConvention, NormalGreen, NormalZ, TexFormat, TexRole, Texture, TextureFile,
-    World,
+    ColorSpace, Entity, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
+    TextureFile, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 use std::{
@@ -160,6 +160,7 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
             == (NormalConvention {
                 green: NormalGreen::Up,
                 z: NormalZ::Stored,
+                x: NormalX::Red,
             })
         {
             continue;
@@ -189,6 +190,7 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         converted.normal = Some(NormalConvention {
             green: NormalGreen::Up,
             z: NormalZ::Stored,
+            x: NormalX::Red,
         });
         changes.push((e, converted));
         log.count("normal textures converted", 1);

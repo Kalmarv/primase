@@ -91,7 +91,9 @@ fn curl_verdicts_are_named_measurements() -> Result<()> {
 
 #[test]
 fn axis_conversion_preserves_encoded_values_and_mips() {
-    use primase_core::{ColorSpace, NormalConvention, NormalGreen, NormalZ, TexFormat, TexRole, Texture};
+    use primase_core::{
+        ColorSpace, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
+    };
     let mut t = Texture {
         width: 2,
         height: 1,
@@ -110,7 +112,8 @@ fn axis_conversion_preserves_encoded_values_and_mips() {
         t.normal,
         Some(NormalConvention {
             green: NormalGreen::Up,
-            z: NormalZ::Rebuild
+            z: NormalZ::Rebuild,
+            x: NormalX::Red,
         })
     );
 }

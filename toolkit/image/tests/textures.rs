@@ -12,6 +12,7 @@ fn texture() -> Texture {
         normal: Some(NormalConvention {
             green: NormalGreen::Down,
             z: NormalZ::Rebuild,
+            x: NormalX::Red,
         }),
     }
 }

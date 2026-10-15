@@ -290,10 +290,31 @@ pub enum NormalZ {
     Rebuild,
 }
 
+/// Which channel holds a normal map's X.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize)]
+pub enum NormalX {
+    /// Red is X.
+    #[default]
+    Red,
+    /// Alpha is X, green Y (DXT5nm, "BC3n"); red and blue are unused.
+    Alpha,
+}
+
+/// How a normal map's channels encode its tangent-space normal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct NormalConvention {
     pub green: NormalGreen,
     pub z: NormalZ,
+    pub x: NormalX,
+}
+
+impl NormalConvention {
+    /// glTF's: X in red, green up, Z stored.
+    pub const GLTF: NormalConvention = NormalConvention {
+        green: NormalGreen::Up,
+        z: NormalZ::Stored,
+        x: NormalX::Red,
+    };
 }
 
 /// Pixels or encoded blocks in memory.
@@ -311,6 +332,8 @@ pub struct Texture {
 }
 impl Component for Texture {
     const NAME: &'static str = "core.texture";
+    /// 2: the normal convention gained `x`.
+    const VERSION: u32 = 2;
     /// A summary, not the pixels: size, format, level count, colour space, role, normal convention.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(json!({
