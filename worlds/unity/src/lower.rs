@@ -12,10 +12,14 @@
 //! - **any other shader** (not modelled, counted by name): the base colour only, from Unity's usual property
 //!   names ([`other_base`]).
 //!
-//! Colour properties are gamma-encoded as stored and become linear; a texture's tiling becomes the slot's
-//! [`UvTransform`] (origin moved to top-left), its wrap mode the slot's wrap. Slots whose texture has no pixels (not
-//! decoded) are left out and counted. Re-encoded maps are new texture entities, RGBA8, every level: metallic-roughness
-//! and occlusion as above, and colour textures Unity samples as linear encoded as sRGB.
+//! Colour properties are gamma-encoded as stored and become linear. The base map's tiling becomes every slot's
+//! [`UvTransform`] (origin moved to top-left): URP Lit's vertex pass computes one coordinate,
+//! `TRANSFORM_TEX(texcoord, _BaseMap)` (`LitForwardPass.hlsl`), and its surface input samples the base, metallic,
+//! normal, occlusion and emission maps with it (`InitializeStandardLitSurfaceData`, `LitInput.hlsl`), so the other
+//! properties' own tiling is never read. Detail maps are the one place a second transform applies (`_DetailAlbedoMap`'s
+//! on top of the base's); they are not represented, and counted. A texture's wrap mode becomes its slot's wrap. Slots
+//! whose texture has no pixels (not decoded) are left out and counted. Re-encoded maps are new texture entities, RGBA8,
+//! every level: metallic-roughness and occlusion as above, and colour textures Unity samples as linear encoded as sRGB.
 
 use std::collections::BTreeMap;
 
@@ -98,8 +102,15 @@ struct Lowering {
 }
 
 impl Lowering {
-    /// The slot for a material's texture property: `None` (counted) when its texture has no pixels.
-    fn slot(&mut self, w: &mut World, env: &UnityTexEnv, role: TexRole) -> Option<TextureRef> {
+    /// The slot for a material's texture property, sampled through `tiling` (the material's, see the module
+    /// documentation): `None` (counted) when its texture has no pixels.
+    fn slot(
+        &mut self,
+        w: &mut World,
+        env: &UnityTexEnv,
+        tiling: Option<UvTransform>,
+        role: TexRole,
+    ) -> Option<TextureRef> {
         let e = env.texture?;
         if !w.has::<Texture>(e) {
             self.log.count("slots left out: texture not decoded", 1);
@@ -115,8 +126,6 @@ impl Lowering {
             }
             _ => Wrap::Repeat,
         });
-        let transform = (env.scale != [1.0; 2] || env.offset != [0.0; 2])
-            .then(|| UvTransform::from_bottom_left(env.scale, env.offset));
         let t = w.get_mut::<Texture>(e)?;
         match role {
             TexRole::Normal if t.role != TexRole::Normal => {
@@ -140,26 +149,37 @@ impl Lowering {
             texture: e,
             texcoord: 0,
             wrap,
-            transform,
+            transform: tiling,
         })
     }
 
     /// A colour slot: the property's texture, or its sRGB re-encoding when Unity samples it as linear.
-    fn color(&mut self, w: &mut World, env: &UnityTexEnv) -> Result<Option<TextureRef>> {
+    fn color(
+        &mut self,
+        w: &mut World,
+        env: &UnityTexEnv,
+        tiling: Option<UvTransform>,
+    ) -> Result<Option<TextureRef>> {
         let linear = env
             .texture
             .and_then(|e| w.get::<Texture>(e))
             .is_some_and(|t| t.color_space == ColorSpace::Linear);
         if linear {
-            self.derived(w, env, Derived::Srgb)
+            self.derived(w, env, tiling, Derived::Srgb)
         } else {
-            Ok(self.slot(w, env, TexRole::Color))
+            Ok(self.slot(w, env, tiling, TexRole::Color))
         }
     }
 
     /// A slot whose texture is `kind` re-encoded from the property's texture.
-    fn derived(&mut self, w: &mut World, env: &UnityTexEnv, kind: Derived) -> Result<Option<TextureRef>> {
-        let Some(mut r) = self.slot(w, env, TexRole::Other) else {
+    fn derived(
+        &mut self,
+        w: &mut World,
+        env: &UnityTexEnv,
+        tiling: Option<UvTransform>,
+        kind: Derived,
+    ) -> Result<Option<TextureRef>> {
+        let Some(mut r) = self.slot(w, env, tiling, TexRole::Other) else {
             return Ok(None);
         };
         let source = r.texture;
@@ -263,8 +283,15 @@ impl Lowering {
             Family::Other => other_base(m),
         };
         p.base_color = linear(color.and_then(|c| m.color(c)).unwrap_or([1.0; 4]));
+        // the base property's tiling, read whether or not it has a texture
+        let tiling = m
+            .textures
+            .iter()
+            .find(|env| env.name == tex)
+            .filter(|env| env.scale != [1.0; 2] || env.offset != [0.0; 2])
+            .map(|env| UvTransform::from_bottom_left(env.scale, env.offset));
         if let Some(env) = m.texture(tex) {
-            p.base_color_texture = self.color(w, env)?;
+            p.base_color_texture = self.color(w, env, tiling)?;
         }
         let clip = f("_AlphaClip", 0.0) == 1.0 || m.keyword("_ALPHATEST_ON");
         let blend = f("_Surface", 0.0) == 1.0;
@@ -296,7 +323,7 @@ impl Lowering {
             _ => {}
         }
         match fam {
-            Family::Lit => self.lit(w, m, &mut p)?,
+            Family::Lit => self.lit(w, m, tiling, &mut p)?,
             Family::Unlit => self.log.approximate("unlit materials drawn lit", 1),
             Family::SpeedTree => self
                 .log
@@ -312,7 +339,13 @@ impl Lowering {
         Ok(p)
     }
 
-    fn lit(&mut self, w: &mut World, m: &UnityMaterial, p: &mut PbrMaterial) -> Result<()> {
+    fn lit(
+        &mut self,
+        w: &mut World,
+        m: &UnityMaterial,
+        tiling: Option<UvTransform>,
+        p: &mut PbrMaterial,
+    ) -> Result<()> {
         let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
         let smoothness = f("_Smoothness", 0.5);
         if f("_WorkflowMode", 1.0) == 0.0 {
@@ -329,7 +362,7 @@ impl Lowering {
                         .approximate("smoothness in the base map's alpha: from _Smoothness only", 1);
                     p.metallic_roughness_texture = None;
                 } else if let Some(r) =
-                    self.derived(w, env, Derived::MetallicRoughness(smoothness.to_bits()))?
+                    self.derived(w, env, tiling, Derived::MetallicRoughness(smoothness.to_bits()))?
                 {
                     p.metallic_roughness_texture = Some(r);
                     p.metallic = 1.0;
@@ -340,13 +373,13 @@ impl Lowering {
         if m.keyword("_OCCLUSIONMAP")
             && let Some(env) = m.texture("_OcclusionMap")
         {
-            p.occlusion_texture = self.derived(w, env, Derived::Occlusion)?;
+            p.occlusion_texture = self.derived(w, env, tiling, Derived::Occlusion)?;
             p.occlusion_strength = f("_OcclusionStrength", 1.0);
         }
         if m.keyword("_NORMALMAP")
             && let Some(env) = m.texture("_BumpMap")
         {
-            p.normal_texture = self.slot(w, env, TexRole::Normal);
+            p.normal_texture = self.slot(w, env, tiling, TexRole::Normal);
             p.normal_scale = f("_BumpScale", 1.0);
         }
         if m.keyword("_EMISSION") {
@@ -356,7 +389,7 @@ impl Lowering {
             }
             p.emissive = [c[0].min(1.0), c[1].min(1.0), c[2].min(1.0)];
             if let Some(env) = m.texture("_EmissionMap") {
-                p.emissive_texture = self.color(w, env)?;
+                p.emissive_texture = self.color(w, env, tiling)?;
             }
         }
         for (k, what) in [

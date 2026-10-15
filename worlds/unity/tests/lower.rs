@@ -18,7 +18,7 @@ use std::path::Path;
 use primase_core::Texture;
 use primase_core::World;
 use primase_core::gate::real_data;
-use primase_core::pbr::{AlphaMode, PbrMaterial};
+use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_image::{Samples, linear_to_srgb, read_png};
 use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
@@ -262,4 +262,51 @@ fn lowering_matches_the_port() {
             assert!(i.max <= 1, "{f}: base colour differs by {}", i.max);
         }
     }
+}
+
+/// URP Lit samples every map through `_BaseMap`'s tiling (one `TRANSFORM_TEX` in its vertex pass), so each lowered
+/// slot carries that transform whatever its own property's tiling says. Counts the slots whose own tiling differs
+/// (the case a per-property reading gets wrong).
+#[test]
+fn lit_slots_sample_through_the_base_maps_tiling() {
+    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+        return;
+    };
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut w = World::new();
+    read_level(&player, "level1", &mut w).unwrap();
+    lower_unity_pbr(&mut w).unwrap();
+    let tiling = |m: &UnityMaterial, name: &str| {
+        m.textures
+            .iter()
+            .find(|t| t.name == name)
+            .map_or(([1.0; 2], [0.0; 2]), |t| (t.scale, t.offset))
+    };
+    let (mut slots, mut own_differs) = (0, 0);
+    for (e, m) in w.iter::<UnityMaterial>() {
+        if m.shader.as_deref() != Some("Universal Render Pipeline/Lit") {
+            continue;
+        }
+        let p: &PbrMaterial = w.get(e).unwrap();
+        let base = tiling(m, "_BaseMap");
+        let want = (base != ([1.0; 2], [0.0; 2])).then(|| UvTransform::from_bottom_left(base.0, base.1));
+        for (property, slot) in [
+            ("_BaseMap", p.base_color_texture),
+            ("_MetallicGlossMap", p.metallic_roughness_texture),
+            ("_BumpMap", p.normal_texture),
+            ("_OcclusionMap", p.occlusion_texture),
+            ("_EmissionMap", p.emissive_texture),
+        ] {
+            let Some(r) = slot else { continue };
+            slots += 1;
+            own_differs += u64::from(tiling(m, property) != base);
+            assert_eq!(r.transform, want, "{property} of {:?}", m.material);
+        }
+    }
+    println!("URP Lit slots: {slots}, through the base map's tiling; {own_differs} whose own tiling differs");
+    assert!(slots > 0);
 }
