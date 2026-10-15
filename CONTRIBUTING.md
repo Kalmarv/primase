@@ -119,6 +119,7 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_UNITY_DATA` | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
 | `PRIMASE_UNITY_TPK` | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
 | `PRIMASE_UNITY_ORACLE` | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |
+| `PRIMASE_UNITY_SCAN` | optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`) |
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |

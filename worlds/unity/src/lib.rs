@@ -7,8 +7,15 @@
 //!   from its files. The caller supplies the package; none is bundled.
 //! - [`typetree`]: decoding an object's bytes by its class's type tree into a [`value::Value`] tree.
 //! - [`resource`]: streamed resources (`.resS`), the bulk data that objects point at.
+//! - [`player`]: a player's data folder: its files, pointers resolved across them.
+//! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
+//! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
 
+pub mod components;
+pub mod level;
+pub mod player;
 pub mod resource;
+pub mod scene;
 pub mod serialized;
 pub mod tpk;
 pub mod typetree;

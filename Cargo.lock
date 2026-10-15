@@ -759,6 +759,7 @@ version = "0.1.0"
 dependencies = [
  "lz4_flex",
  "primase-core",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",

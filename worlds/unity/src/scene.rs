@@ -1,0 +1,433 @@
+//! A scene's hierarchy: GameObjects, their Transforms (local TRS composed to world matrices in Unity's frame),
+//! whether each is active in the hierarchy, and the mesh renderers that are drawn.
+//!
+//! The rules, from the scene's own data: a renderer is drawn when its GameObject is active in the hierarchy and the
+//! renderer is enabled; of a LODGroup only the LOD 0 renderers are drawn; a static-batched renderer draws a slice of
+//! a combined mesh whose vertices are already in world space (its matrix is the identity). A RectTransform's local
+//! x and y come from its anchors (the stored position can be stale): the parent rect's minimum plus its size times
+//! the anchors interpolated at the pivot, plus the anchored position.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::player::{ObjRef, Player};
+use crate::value::{Array, Value};
+use crate::{Result, invalid};
+
+/// A 4x4 matrix, rows of columns (`m[row][col]`), column vectors: Unity's `Matrix4x4` layout, in f64.
+pub type Matrix = [[f64; 4]; 4];
+
+pub const IDENTITY: Matrix = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+pub fn mul(a: &Matrix, b: &Matrix) -> Matrix {
+    let mut m = [[0.0; 4]; 4];
+    for (i, row) in m.iter_mut().enumerate() {
+        for (j, x) in row.iter_mut().enumerate() {
+            *x = (0..4).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    m
+}
+
+/// Unity's `Matrix4x4.TRS`: translation, rotation (the quaternion as stored), scale.
+pub fn trs(p: [f64; 3], q: [f64; 4], s: [f64; 3]) -> Matrix {
+    let [x, y, z, w] = q;
+    let r = [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ];
+    let mut m = IDENTITY;
+    for i in 0..3 {
+        for j in 0..3 {
+            m[i][j] = r[i][j] * s[j];
+        }
+        m[i][3] = p[i];
+    }
+    m
+}
+
+fn num(v: &Value, k: &str) -> Result<f64> {
+    v.get(k)
+        .and_then(Value::as_f32)
+        .map(f64::from)
+        .ok_or_else(|| invalid(format!("no float {k}")))
+}
+
+fn vec3(v: &Value, k: &str) -> Result<[f64; 3]> {
+    let x = v.get(k).ok_or_else(|| invalid(format!("no {k}")))?;
+    Ok([num(x, "x")?, num(x, "y")?, num(x, "z")?])
+}
+
+fn vec2(v: &Value, k: &str) -> Result<[f64; 2]> {
+    let x = v.get(k).ok_or_else(|| invalid(format!("no {k}")))?;
+    Ok([num(x, "x")?, num(x, "y")?])
+}
+
+/// A flag stored as a bool or as an integer (`m_IsActive` and `m_Enabled` are `UInt8` in some layouts).
+fn flag(v: &Value, k: &str) -> Result<bool> {
+    match v.get(k) {
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(x) => x
+            .as_i64()
+            .map(|i| i != 0)
+            .ok_or_else(|| invalid(format!("{k} is not a flag"))),
+        None => Err(invalid(format!("no {k}"))),
+    }
+}
+
+fn path_id(v: &Value, k: &str) -> Result<i64> {
+    v.at(&[k, "m_PathID"])
+        .and_then(Value::as_i64)
+        .ok_or_else(|| invalid(format!("no {k}.m_PathID")))
+}
+
+fn values<'a>(v: &'a Value, k: &str) -> Result<&'a [Value]> {
+    match v.get(k) {
+        Some(Value::Array(Array::Values(items))) => Ok(items),
+        Some(Value::Array(a)) if a.is_empty() => Ok(&[]),
+        _ => Err(invalid(format!("no list {k}"))),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GameObject {
+    pub name: String,
+    pub active: bool,
+    pub layer: u32,
+    /// Its components' path ids, in order.
+    pub components: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct Node {
+    game_object: i64,
+    father: i64,
+    local: Matrix,
+}
+
+/// A mesh renderer that is drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Renderer {
+    pub renderer: ObjRef,
+    /// The GameObject path, names from the root joined by `/`.
+    pub path: String,
+    pub layer: u32,
+    pub mesh: ObjRef,
+    pub materials: Vec<Option<ObjRef>>,
+    /// World matrix in Unity's frame (the identity for a static-batched renderer).
+    pub world: Matrix,
+    /// A static-batched renderer's slice of its combined mesh: first submesh, count.
+    pub submeshes: Option<(u32, u32)>,
+    pub cast_shadows: i64,
+}
+
+/// What the scene reading skipped, by reason.
+pub type Skipped = std::collections::BTreeMap<&'static str, u64>;
+
+#[derive(Debug)]
+pub struct Scene {
+    pub file: String,
+    pub game_objects: HashMap<i64, GameObject>,
+    nodes: HashMap<i64, Node>,
+    /// GameObject -> its Transform.
+    transform_of: HashMap<i64, i64>,
+    world: std::sync::Mutex<HashMap<i64, Matrix>>,
+}
+
+impl Scene {
+    /// The hierarchy of the scene file `file` (`level1`).
+    pub fn read(player: &Player, file: &str) -> Result<Scene> {
+        let f = player.file(file)?;
+        let r = |file: &str, pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let name_of =
+            |o: &crate::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
+        let mut nodes = HashMap::new();
+        let mut rects: HashMap<i64, Value> = HashMap::new();
+        let mut game_objects = HashMap::new();
+        for o in &f.objects {
+            match name_of(o) {
+                "Transform" | "RectTransform" => {
+                    let t = player.decode(&r(file, o.path_id))?;
+                    let p = vec3(&t, "m_LocalPosition")?;
+                    let q = t
+                        .get("m_LocalRotation")
+                        .ok_or_else(|| invalid("no m_LocalRotation"))?;
+                    let q = [num(q, "x")?, num(q, "y")?, num(q, "z")?, num(q, "w")?];
+                    let s = vec3(&t, "m_LocalScale")?;
+                    nodes.insert(
+                        o.path_id,
+                        Node {
+                            game_object: path_id(&t, "m_GameObject")?,
+                            father: path_id(&t, "m_Father")?,
+                            local: trs(p, q, s),
+                        },
+                    );
+                    if name_of(o) == "RectTransform" {
+                        rects.insert(o.path_id, t);
+                    }
+                }
+                "GameObject" => {
+                    let g = player.decode(&r(file, o.path_id))?;
+                    let components = values(&g, "m_Component")?
+                        .iter()
+                        .map(|c| path_id(c, "component"))
+                        .collect::<Result<Vec<_>>>()?;
+                    game_objects.insert(
+                        o.path_id,
+                        GameObject {
+                            name: g.get("m_Name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                            active: flag(&g, "m_IsActive")?,
+                            layer: g.get("m_Layer").and_then(Value::as_i64).unwrap_or(0) as u32,
+                            components,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        // RectTransforms: local x, y from the anchors
+        let mut sizes: HashMap<i64, ([f64; 2], [f64; 2])> = HashMap::new();
+        fn rect_size(
+            tp: i64,
+            rects: &HashMap<i64, Value>,
+            nodes: &HashMap<i64, Node>,
+            sizes: &mut HashMap<i64, ([f64; 2], [f64; 2])>,
+            depth: u32,
+        ) -> Result<([f64; 2], [f64; 2])> {
+            if let Some(s) = sizes.get(&tp) {
+                return Ok(*s);
+            }
+            let Some(t) = rects.get(&tp) else {
+                return Ok(([0.0; 2], [0.0; 2]));
+            };
+            if depth > 4096 {
+                return Err(invalid("RectTransform parents loop"));
+            }
+            let (sd, amin, amax, piv) = (
+                vec2(t, "m_SizeDelta")?,
+                vec2(t, "m_AnchorMin")?,
+                vec2(t, "m_AnchorMax")?,
+                vec2(t, "m_Pivot")?,
+            );
+            let fa = nodes.get(&tp).map_or(0, |n| n.father);
+            let (ps, _) = if fa != 0 {
+                rect_size(fa, rects, nodes, sizes, depth + 1)?
+            } else {
+                ([0.0; 2], [0.0; 2])
+            };
+            let s = (
+                [
+                    ps[0] * (amax[0] - amin[0]) + sd[0],
+                    ps[1] * (amax[1] - amin[1]) + sd[1],
+                ],
+                piv,
+            );
+            sizes.insert(tp, s);
+            Ok(s)
+        }
+        let rect_ids: Vec<i64> = rects.keys().copied().collect();
+        for tp in rect_ids {
+            let t = &rects[&tp];
+            let fa = nodes[&tp].father;
+            let (ps, ppiv) = if fa != 0 {
+                rect_size(fa, &rects, &nodes, &mut sizes, 0)?
+            } else {
+                ([0.0; 2], [0.0; 2])
+            };
+            let (amin, amax, piv, ap) = (
+                vec2(t, "m_AnchorMin")?,
+                vec2(t, "m_AnchorMax")?,
+                vec2(t, "m_Pivot")?,
+                vec2(t, "m_AnchoredPosition")?,
+            );
+            let n = nodes.get_mut(&tp).expect("a rect is a node");
+            for k in 0..2 {
+                n.local[k][3] = -ppiv[k] * ps[k] + ps[k] * (amin[k] + (amax[k] - amin[k]) * piv[k]) + ap[k];
+            }
+        }
+        let transform_of = nodes.iter().map(|(&tp, n)| (n.game_object, tp)).collect();
+        Ok(Scene {
+            file: file.to_owned(),
+            game_objects,
+            nodes,
+            transform_of,
+            world: std::sync::Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// A Transform's world matrix (Unity frame).
+    pub fn world_of(&self, tp: i64) -> Result<Matrix> {
+        let mut chain = Vec::new();
+        let mut t = tp;
+        let base = loop {
+            if let Some(m) = self.world.lock().expect("world cache").get(&t) {
+                break *m;
+            }
+            let Some(n) = self.nodes.get(&t) else {
+                break IDENTITY;
+            };
+            chain.push(t);
+            if chain.len() > self.nodes.len() {
+                return Err(invalid(format!("transform {tp}: parents loop")));
+            }
+            if n.father == 0 {
+                break IDENTITY;
+            }
+            t = n.father;
+        };
+        let mut m = base;
+        let mut cache = self.world.lock().expect("world cache");
+        for &t in chain.iter().rev() {
+            m = mul(&m, &self.nodes[&t].local);
+            cache.insert(t, m);
+        }
+        Ok(m)
+    }
+
+    /// Whether a Transform's GameObject and all its ancestors' are active.
+    pub fn active(&self, tp: i64) -> bool {
+        let mut t = tp;
+        for _ in 0..=self.nodes.len() {
+            let Some(n) = self.nodes.get(&t) else { return true };
+            if !self.game_objects.get(&n.game_object).is_some_and(|g| g.active) {
+                return false;
+            }
+            if n.father == 0 {
+                return true;
+            }
+            t = n.father;
+        }
+        false
+    }
+
+    /// The GameObject path of a Transform, names from the root joined by `/`.
+    pub fn path(&self, tp: i64) -> String {
+        let mut parts = Vec::new();
+        let mut t = tp;
+        while let Some(n) = self.nodes.get(&t) {
+            parts.push(
+                self.game_objects
+                    .get(&n.game_object)
+                    .map_or("", |g| g.name.as_str()),
+            );
+            if n.father == 0 || parts.len() > self.nodes.len() {
+                break;
+            }
+            t = n.father;
+        }
+        parts.reverse();
+        parts.join("/")
+    }
+
+    pub fn transform_of(&self, game_object: i64) -> Option<i64> {
+        self.transform_of.get(&game_object).copied()
+    }
+
+    /// The drawn mesh renderers, in the order of the scene's object table, and what was skipped.
+    pub fn renderers(&self, player: &Player) -> Result<(Vec<Renderer>, Skipped)> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
+        // LOD 1+ renderers (not also in some LOD 0)
+        let (mut keep, mut lod_rest) = (HashSet::new(), HashSet::new());
+        for o in f.objects.iter().filter(|o| class(o.path_id) == "LODGroup") {
+            let g = player.decode(&r(o.path_id))?;
+            for (i, lod) in values(&g, "m_LODs")?.iter().enumerate() {
+                for x in values(lod, "renderers")? {
+                    let pid = path_id(x, "renderer")?;
+                    if pid != 0 {
+                        if i == 0 {
+                            keep.insert(pid);
+                        } else {
+                            lod_rest.insert(pid);
+                        }
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        let mut skipped = Skipped::new();
+        for o in f.objects.iter().filter(|o| class(o.path_id) == "MeshRenderer") {
+            let mr = player.decode(&r(o.path_id))?;
+            let go = path_id(&mr, "m_GameObject")?;
+            let Some(tp) = self.transform_of(go) else {
+                *skipped.entry("no transform").or_default() += 1;
+                continue;
+            };
+            if !self.active(tp) || !flag(&mr, "m_Enabled")? {
+                *skipped.entry("inactive or disabled").or_default() += 1;
+                continue;
+            }
+            if lod_rest.contains(&o.path_id) && !keep.contains(&o.path_id) {
+                *skipped.entry("LOD 1+").or_default() += 1;
+                continue;
+            }
+            let g = &self.game_objects[&go];
+            let Some(&mf) = g.components.iter().find(|&&c| class(c) == "MeshFilter") else {
+                *skipped.entry("no MeshFilter").or_default() += 1;
+                continue;
+            };
+            let filter = player.decode(&r(mf))?;
+            let mesh_ptr = filter
+                .get("m_Mesh")
+                .ok_or_else(|| invalid("MeshFilter without m_Mesh"))?;
+            let Some(mesh) = player.resolve(file, mesh_ptr)? else {
+                *skipped.entry("null mesh").or_default() += 1;
+                continue;
+            };
+            let materials = values(&mr, "m_Materials")?
+                .iter()
+                .map(|m| player.resolve(file, m))
+                .collect::<Result<Vec<_>>>()?;
+            let sb = mr.get("m_StaticBatchInfo");
+            let first = sb
+                .and_then(|s| s.get("firstSubMesh"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let count = sb
+                .and_then(|s| s.get("subMeshCount"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let submeshes = (count > 0).then_some((first as u32, count as u32));
+            out.push(Renderer {
+                renderer: r(o.path_id),
+                path: self.path(tp),
+                layer: g.layer,
+                mesh,
+                materials,
+                world: if submeshes.is_some() {
+                    IDENTITY
+                } else {
+                    self.world_of(tp)?
+                },
+                submeshes,
+                cast_shadows: mr.get("m_CastShadows").and_then(Value::as_i64).unwrap_or(1),
+            });
+        }
+        Ok((out, skipped))
+    }
+}
