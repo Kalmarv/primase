@@ -722,6 +722,12 @@ impl Writer<'_> {
                 for p in &mut soup.positions {
                     *p = t.apply(*p);
                 }
+                // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
+                if t.determinant() < 0.0 {
+                    for tri in &mut soup.triangles {
+                        tri.swap(1, 2);
+                    }
+                }
             }
             let r = SoupRef {
                 table: TableRef::single(&format!("collision/world_{}.bin", soups.len())),

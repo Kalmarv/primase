@@ -1077,3 +1077,38 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
         .to_string();
     assert!(err.contains("'lava' is not one of the scene's surfaces"), "{err}");
 }
+
+#[test]
+fn mirrored_collision_keeps_its_fronts() {
+    use primase_core::{Collision, Surfaces};
+    let (mut w, _) = read(&fixture("collision_mirror"));
+    let before = w.iter::<scene::SkateCollision>().count();
+    let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete");
+    // a triangle facing up (+y), placed through a mirror in x
+    let e = w.spawn();
+    let mut c = Collision::default();
+    c.extend(
+        &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
+        &[[0, 1, 2]],
+        concrete,
+        |p| p,
+    );
+    w.insert(e, c);
+    let mut t = Transform::IDENTITY;
+    t.cols[0] = [-1.0, 0.0, 0.0];
+    w.insert(e, t);
+    let out = tmp("collision_mirror_out");
+    scene::write(&w, &out).unwrap();
+    let m = manifest(&out);
+    let entry = &m["collision"][before];
+    let file = entry.as_str().or(entry["file"].as_str()).unwrap();
+    let s = tables::read_soup(&std::fs::read(out.join(file)).unwrap(), 4).unwrap();
+    let [a, b, c] = s.triangles[0].map(|i| s.positions[i as usize]);
+    let (u, v) = (
+        [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+        [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+    );
+    let ny = u[2] * v[0] - u[0] * v[2];
+    assert!(ny > 0.0, "the front still faces up after the mirror: {ny}");
+    assert_eq!(s.positions[1], [-1.0, 0.0, 0.0]);
+}

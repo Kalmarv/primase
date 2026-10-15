@@ -15,7 +15,8 @@ struct Soup {
 }
 
 /// The world's `core.collision` as collision items in world space: a prototype's once per instance through the
-/// placement's transform, any other entity's through its own (or none). Surfaces are the world's indices, named.
+/// placement's transform, any other entity's through its own (or none), triangles flipped under a mirroring transform
+/// so fronts stay counter-clockwise. Surfaces are the world's indices, named.
 pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
     let names: Vec<String> = world
         .resource::<Surfaces>()
@@ -52,11 +53,17 @@ pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
         };
         for (at, t) in by {
             let positions: Vec<[f32; 3]> = c.positions.iter().map(|&p| t.apply(p)).collect();
+            // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
+            let triangles: Vec<[u32; 3]> = if t.determinant() < 0.0 {
+                c.triangles.iter().map(|&[a, b, d]| [a, d, b]).collect()
+            } else {
+                c.triangles.clone()
+            };
             items.push(ViewerItem {
                 name: name(at),
                 kind: "collision".into(),
                 anchor: positions[c.triangles[0][0] as usize].map(f64::from),
-                data: json!({"positions": positions, "triangles": c.triangles, "surfaces": c.surfaces, "names": names}),
+                data: json!({"positions": positions, "triangles": triangles, "surfaces": c.surfaces, "names": names}),
             });
         }
     }

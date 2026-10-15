@@ -651,3 +651,121 @@ fn world_collision_is_placed_and_named() {
     firsts.sort_by(|a, b| a.0.total_cmp(&b.0));
     assert_eq!(firsts, [(0.0, 1.0, ice), (2.0, 0.0, snow), (5.0, 1.0, ice)]);
 }
+
+/// The first triangle's normal (counter-clockwise front) and surface of each collision mesh in the set.
+#[allow(clippy::unwrap_used)]
+fn collision_fronts(set: &primase_web::TileSet) -> Vec<([f32; 3], u16)> {
+    let mut out = Vec::new();
+    for tile in &set.index.tiles {
+        let Some(c) = &tile.collision else { continue };
+        let chunks = primase_gltf::glb::parse(&set.collision_files[&c.file]).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+        let bin = chunks.bin.unwrap();
+        let view = |a: &serde_json::Value| {
+            let v = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+            v["byteOffset"].as_u64().unwrap() as usize
+        };
+        for m in doc["meshes"].as_array().unwrap() {
+            let prim = &m["primitives"][0];
+            let pos = view(&doc["accessors"][prim["attributes"]["POSITION"].as_u64().unwrap() as usize]);
+            let idx = view(&doc["accessors"][prim["indices"].as_u64().unwrap() as usize]);
+            let ext = &prim["extras"]["primase.collision_surfaces"];
+            let sur = view(&doc["accessors"][ext["accessor"].as_u64().unwrap() as usize]);
+            let u32_at = |o: usize| u32::from_le_bytes(bin[o..o + 4].try_into().unwrap());
+            let p = |i: u32| -> [f32; 3] {
+                let o = pos + 12 * i as usize;
+                std::array::from_fn(|k| f32::from_le_bytes(bin[o + 4 * k..o + 4 * k + 4].try_into().unwrap()))
+            };
+            let [a, b, c] = [0, 1, 2].map(|k| p(u32_at(idx + 4 * k)));
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            out.push((n, u16::from_le_bytes([bin[sur], bin[sur + 1]])));
+        }
+    }
+    out
+}
+
+#[test]
+fn mirrored_collision_keeps_its_fronts_and_wide_surfaces() {
+    use primase_core::{Collision, Surfaces};
+    let mut w = World::new();
+    let mut surfaces = Surfaces::default();
+    for i in 0..300 {
+        surfaces.index(&format!("s{i}"));
+    }
+    let wide = surfaces.index("s299");
+    w.insert_resource(surfaces);
+    // a triangle facing up (+y, counter-clockwise from above)
+    let p = w.spawn();
+    let mut c = Collision::default();
+    c.extend(
+        &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
+        &[[0, 1, 2]],
+        wide,
+        |q| q,
+    );
+    w.insert(p, c);
+    for mirror in [false, true] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: p,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        if mirror {
+            t.cols[0] = [-1.0, 0.0, 0.0];
+        }
+        t.cols[3] = [if mirror { 5.0 } else { 0.0 }, 0.0, 0.0];
+        w.insert(e, t);
+    }
+    let fronts = collision_fronts(&write(&w, &plain()).unwrap());
+    assert_eq!(fronts.len(), 2);
+    for (n, s) in fronts {
+        assert!(n[1] > 0.0, "the front faces up, mirrored or not: {n:?}");
+        assert_eq!(s, 299, "a surface above 255 survives");
+    }
+}
+
+#[test]
+fn invalid_collision_records_are_refused() {
+    let item = |data: serde_json::Value| Options {
+        viewer_items: vec![primase_web::ViewerItem {
+            name: "c".into(),
+            kind: "collision".into(),
+            anchor: [0.0; 3],
+            data,
+        }],
+        ..plain()
+    };
+    let tri = serde_json::json!([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]]);
+    for (what, data) in [
+        (
+            "surface past the names",
+            serde_json::json!({"positions": tri, "triangles": [[0, 1, 2]], "surfaces": [3], "names": ["a"]}),
+        ),
+        (
+            "a surface per triangle",
+            serde_json::json!({"positions": tri, "triangles": [[0, 1, 2]], "surfaces": []}),
+        ),
+        (
+            "index past the positions",
+            serde_json::json!({"positions": tri, "triangles": [[0, 1, 9]], "surfaces": [0]}),
+        ),
+        (
+            "surface out of u16",
+            serde_json::json!({"positions": tri, "triangles": [[0, 1, 2]], "surfaces": [70000]}),
+        ),
+    ] {
+        assert!(write(&World::new(), &item(data)).is_err(), "{what}");
+    }
+}
