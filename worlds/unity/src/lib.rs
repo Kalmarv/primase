@@ -16,10 +16,12 @@
 //! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
+//! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 
 pub mod components;
 pub mod level;
 pub mod lower;
+pub mod lower_collision;
 pub mod lower_terrain;
 pub mod material;
 pub mod mesh;
