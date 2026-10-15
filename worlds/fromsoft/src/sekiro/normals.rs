@@ -64,6 +64,7 @@ pub fn swap_normal_axes(texture: &mut Texture) -> Result<()> {
         green: NormalGreen::Up,
         z: NormalZ::Rebuild,
         x: NormalX::Red,
+        basis: primase_core::NormalBasis::TangentBitangent,
     });
     Ok(())
 }

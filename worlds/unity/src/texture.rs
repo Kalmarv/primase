@@ -130,6 +130,7 @@ impl UnityTexture {
             green: NormalGreen::Up,
             z: NormalZ::Rebuild,
             x,
+            basis: primase_core::NormalBasis::TangentBitangent,
         })
     }
 

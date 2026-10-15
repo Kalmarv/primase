@@ -114,6 +114,7 @@ fn axis_conversion_preserves_encoded_values_and_mips() {
             green: NormalGreen::Up,
             z: NormalZ::Rebuild,
             x: NormalX::Red,
+            basis: primase_core::NormalBasis::TangentBitangent,
         })
     );
 }

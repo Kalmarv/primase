@@ -436,6 +436,7 @@ fn normal_maps_with_x_in_alpha_are_refused() {
                 green: NormalGreen::Up,
                 z: NormalZ::Rebuild,
                 x: NormalX::Alpha,
+                basis: primase_core::NormalBasis::TangentBitangent,
             }),
         },
     );

@@ -58,6 +58,7 @@ impl Pass for LowerSkatePbr {
                     green: st.and_then(|s| s.green).unwrap_or(NormalGreen::Up),
                     z: st.and_then(|s| s.z).unwrap_or(NormalZ::Stored),
                     x: NormalX::Red,
+                    basis: primase_core::NormalBasis::TangentBitangent,
                 });
                 roles.push((
                     t,

@@ -688,6 +688,7 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         green: NormalGreen::Down,
         z: NormalZ::Rebuild,
         x: NormalX::Red,
+        basis: primase_core::NormalBasis::TangentBitangent,
     });
     assert!(
         write(&b.world, &options(&b))

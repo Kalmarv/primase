@@ -13,6 +13,7 @@ fn texture() -> Texture {
             green: NormalGreen::Down,
             z: NormalZ::Rebuild,
             x: NormalX::Red,
+            basis: primase_core::NormalBasis::TangentBitangent,
         }),
     }
 }
@@ -56,6 +57,7 @@ fn normalization_moves_x_from_alpha() {
         green: NormalGreen::Up,
         z: NormalZ::Rebuild,
         x: NormalX::Alpha,
+        basis: primase_core::NormalBasis::TangentBitangent,
     });
     w.insert(e, t);
     let log = normalize_normals(&mut w).unwrap();

@@ -306,6 +306,7 @@ pub fn read_area(
             green: NormalGreen::Up,
             z: NormalZ::Rebuild,
             x: NormalX::Red,
+            basis: primase_core::NormalBasis::TangentBitangent,
         });
         if normal {
             normals::swap_normal_axes(&mut texture)?;

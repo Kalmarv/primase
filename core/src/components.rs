@@ -300,12 +300,25 @@ pub enum NormalX {
     Alpha,
 }
 
+/// Ordering of the two tangent-plane coordinates, relative to a supplied
+/// tangent T and its bitangent B = cross(N,T)*w. This describes the source
+/// frame, not how a consumer regenerates a frame from texture coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize)]
+pub enum NormalBasis {
+    /// Red/X follows T; green follows B.
+    #[default]
+    TangentBitangent,
+    /// Red/X follows B; green follows T.
+    BitangentTangent,
+}
+
 /// How a normal map's channels encode its tangent-space normal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct NormalConvention {
     pub green: NormalGreen,
     pub z: NormalZ,
     pub x: NormalX,
+    pub basis: NormalBasis,
 }
 
 impl NormalConvention {
@@ -314,6 +327,7 @@ impl NormalConvention {
         green: NormalGreen::Up,
         z: NormalZ::Stored,
         x: NormalX::Red,
+        basis: NormalBasis::TangentBitangent,
     };
 }
 
@@ -332,8 +346,8 @@ pub struct Texture {
 }
 impl Component for Texture {
     const NAME: &'static str = "core.texture";
-    /// 2: the normal convention gained `x`.
-    const VERSION: u32 = 2;
+    /// 3: the normal convention gained tangent/bitangent basis ordering.
+    const VERSION: u32 = 3;
     /// A summary, not the pixels: size, format, level count, colour space, role, normal convention.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(json!({
@@ -563,5 +577,16 @@ mod tests {
             t([[1., 0., 0.], [0., 1., 0.], [0., 0., 0.], [0.; 3]]).classify(),
             TransformKind::Degenerate
         );
+    }
+    #[test]
+    fn normal_basis_has_explicit_json_and_default() {
+        assert_eq!(NormalBasis::default(), NormalConvention::GLTF.basis);
+        let convention = NormalConvention {
+            basis: NormalBasis::BitangentTangent,
+            ..NormalConvention::GLTF
+        };
+        let value = crate::json::to_value(&convention).expect("normal convention");
+        assert_eq!(value["basis"], "BitangentTangent");
+        assert_eq!(Texture::VERSION, 3);
     }
 }
