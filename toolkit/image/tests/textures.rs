@@ -175,3 +175,27 @@ fn normalization_swaps_source_basis_after_channel_and_sign_decode() {
     assert!(normalize_normals(&mut world).unwrap().counts.is_empty());
     assert_eq!(world.get::<Texture>(e).unwrap().levels, levels);
 }
+
+#[test]
+fn rebuild_projects_outside_disk_on_every_mip_without_changing_alpha() {
+    let mut t = texture();
+    t.normal.as_mut().unwrap().green = NormalGreen::Up;
+    t.levels = vec![
+        vec![255, 255, 7, 11, 0, 0, 9, 22, 128, 128, 3, 33, 255, 128, 4, 44],
+        vec![0, 255, 2, 55],
+    ];
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, t);
+    let log = normalize_normals(&mut world).unwrap();
+    let t = world.get::<Texture>(e).unwrap();
+    assert_eq!(
+        t.levels[0],
+        [
+            218, 218, 128, 11, 37, 37, 128, 22, 128, 128, 255, 33, 255, 128, 128, 44
+        ]
+    );
+    assert_eq!(t.levels[1], [37, 218, 128, 55]);
+    assert_eq!(log.counts["normal pixels projected onto unit disk"], 4);
+    assert!(normalize_normals(&mut world).unwrap().counts.is_empty());
+}

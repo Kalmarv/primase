@@ -179,7 +179,19 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
                 if convention.z == NormalZ::Rebuild {
                     let x = p[0] as f64 / 127.5 - 1.;
                     let y = p[1] as f64 / 127.5 - 1.;
-                    let z = (1. - x * x - y * y).max(0.).sqrt();
+                    let radius_squared = x * x + y * y;
+                    // Reconstruct a unit vector even for quantized XY outside
+                    // the disk. Projection preserves its direction, sets Z=0,
+                    // and leaves unrelated alpha data untouched.
+                    let z = if radius_squared > 1. {
+                        let radius = radius_squared.sqrt();
+                        p[0] = ((x / radius * 0.5 + 0.5) * 255.).round() as u8;
+                        p[1] = ((y / radius * 0.5 + 0.5) * 255.).round() as u8;
+                        log.count("normal pixels projected onto unit disk", 1);
+                        0.
+                    } else {
+                        (1. - radius_squared).sqrt()
+                    };
                     p[2] = ((z * 0.5 + 0.5) * 255.).round() as u8;
                 }
             }

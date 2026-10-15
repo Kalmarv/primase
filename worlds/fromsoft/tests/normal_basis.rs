@@ -93,7 +93,8 @@ fn curl_verdicts_are_named_measurements() -> Result<()> {
 fn source_bytes_wait_for_consumer_selection() {
     use primase_core::{ColorSpace, NormalConvention, TexFormat, TexRole, Texture, World};
     use primase_fromsoft::sekiro::normals::{self, Consumer};
-    let source = vec![vec![10, 20, 30, 40, 50, 60, 70, 80], vec![90, 100, 110, 120]];
+    // In-disk XY isolates consumer axis/sign selection from radial projection.
+    let source = vec![vec![100, 120, 30, 40, 150, 160, 70, 80], vec![90, 100, 110, 120]];
     let t = Texture {
         width: 2,
         height: 1,
@@ -140,6 +141,36 @@ fn source_bytes_wait_for_consumer_selection() {
             .counts
             .is_empty()
     );
+}
+#[test]
+fn consumer_selection_projects_outside_disk_without_mutating_source() {
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
+    use primase_fromsoft::sekiro::normals::{self, Consumer};
+    let source = Texture {
+        width: 1,
+        height: 1,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![vec![10, 20, 30, 40]],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Normal,
+        normal: Some(normals::SOURCE),
+    };
+    // Source XY = (-235, -215)/255, outside the disk. Normalize by
+    // sqrt(235^2 + 215^2), set Z=0 (encoded 128), then encode XY.
+    // Skate flips green: (33,214); glTF swaps the source axes: (41,33).
+    for (consumer, expected) in [
+        (Consumer::Skate, vec![33, 214, 128, 40]),
+        (Consumer::Gltf, vec![41, 33, 128, 40]),
+    ] {
+        let mut world = World::default();
+        let e = world.spawn();
+        world.insert(e, source.clone());
+        assert_eq!(world.get::<Texture>(e).unwrap().levels, source.levels);
+        let log = normals::lower(&mut world, consumer).unwrap();
+        assert_eq!(log.counts["normal pixels projected onto unit disk"], 1);
+        assert_eq!(world.get::<Texture>(e).unwrap().levels, vec![expected]);
+        assert_eq!(source.levels, vec![vec![10, 20, 30, 40]]);
+    }
 }
 #[test]
 fn uv_frame_classes_remain_measurements() -> Result<()> {
