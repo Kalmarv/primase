@@ -33,6 +33,23 @@ another world crate; what two of them share belongs lower.
 Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's world crate, or for
 `skate.*` (until `worlds/reskate` exists) `formats/skate-scene`. `pbr.*` lives in core.
 
+### Where code goes
+
+1. **Three layers.** `core` is tiny and slow to change: the world, core components, frames, the pass manager,
+   gates. The **toolkit** is many small, independent crates where most reuse lands: codecs, containers, vertex
+   layouts, mesh operations, hashes. Game and format crates sit on top. "Should this be shared?" usually means a
+   toolkit crate, not core.
+2. **Share mechanisms; games supply data.** Prefer one mechanism driven by per-game tables over per-game code: one
+   vertex decoder driven by layout descriptors (each game maps its layout format onto them), one `TexFormat` that
+   games map their format ids onto, one index + entries + decompression container walker with per-game headers and
+   hash functions.
+3. **Move it down at the second copy; refine its interface at the third.** No abstraction is designed ahead of two
+   real users.
+4. **Watch for the opposite failure.** Shared code that grows game flags or `if game == ...` branches is two things
+   under one name: split it, or push it back down into the game crates.
+5. **Measure it.** For each new game reader, record its game-specific line count against its toolkit calls. A large
+   game-specific share points at a missing toolkit piece.
+
 ## API conventions
 
 - **Components**: plain data structs implementing `primase_core::Component` with a namespaced, stable `NAME`
