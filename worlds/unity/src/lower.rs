@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    ColorSpace, Entity, Name, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
-    World,
+    ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
+    TexRole, Texture, World,
 };
 use primase_image::{linear_to_srgb, srgb_to_linear};
 use primase_texcodec::{Decoder, TexDecoder};
@@ -127,6 +127,7 @@ impl Lowering {
                     green: NormalGreen::Up,
                     z: NormalZ::Rebuild,
                     x: NormalX::Red,
+                    basis: NormalBasis::TangentBitangent,
                 });
                 self.log.count("textures made normal maps by their slot", 1);
             }
