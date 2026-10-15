@@ -4,6 +4,7 @@ pub mod bhd;
 pub mod binder;
 mod bytes;
 pub mod dcx;
+pub mod flver;
 mod keys;
 pub mod msb;
 pub use archive::{Archive, NameDictionary};

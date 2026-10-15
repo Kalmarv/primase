@@ -88,6 +88,51 @@ each channel may differ by at most one level. The gate reports exact/within/fail
 texture counts and channel-error histograms per format and oracle. It does not
 select alternate production arithmetic to reproduce an oracle's convention.
 
+## FLVER geometry
+
+`flver::Model::read(bytes)` retains meshes in file coordinates, face-set flags,
+vertex layouts, material texture bindings and repeated vertex attributes. Byte4C
+UVs retain both their signed-short interpretation and their original four bytes
+with the destination UV slot, so layer weights do not lose their provenance.
+The supported container is little-endian Unicode FLVER2, versions `0x20013`,
+`0x20014`, `0x20016` and `0x2001a`. Other variants return errors.
+
+`Model::geometry(materials)` selects the first LOD0 face set per mesh, compacts
+vertices in first-use order, converts through the core frame, normalizes stored
+normals, and chooses winding from the summed geometric/stored-normal agreement.
+Caller-supplied material decisions control mesh exclusion and main-layer UV
+scale. It retains vertices referenced by faces that later fail the area check.
+It does not bake layered materials or split parts into baked weight levels.
+
+The archive oracle directory adds `flver/models.jsonl`, identified with the same
+binder paths as the TPF census. Each record contains the input SHA256, version,
+layout declarations and meshes. Each mesh records its material, vertex count,
+vertex digest, layout indices and face sets (flags, strip/culling booleans,
+index digest and triangulated digest). Vertex digest input is little-endian:
+position f32x3, normal f32x3, normal W i32, UV count u32 and f32x3 values,
+tangent count u32 and f32x4 values, colour count u32 and RGBA f32x4 values,
+repeated for every vertex. Indices are u32. Digests are uppercase SHA256.
+
+`PRIMASE_FROMSOFT_MODEL_ORACLE` supplies independently exported, pre-bake area
+geometry. Its `models.jsonl` records model key (`area/model` or `obj/model`),
+missing-model status, per-material exclusion and UV scale, and ordered parts.
+Each part names its binary file and SHA256. A binary part starts with u32 vertex
+and index counts, followed by positions f32x3, normals f32x3, UVs f32x2, and u32
+indices, all little-endian. Generate these directly from the reference model
+builder before any layered-material bake. Baked scene comparisons must report
+part splitting, UV rescaling and material replacement as separate differences.
+
+Packed normal/tangent bytes follow the consumer shader operation:
+`(v - 127) * f32::from_bits(0x3c010204)`. G-buffer shader signatures and
+instructions in four families (Multiple, MultipleGround, MetallicValue,
+Character_AMSN) establish integer inputs and reciprocal multiplication; no
+captured input-layout object is claimed. The independent reader divides by
+127 instead. The census uniquely recovers each encoded byte from our exact
+consumer value before projecting it to that reader's convention for hashing,
+and counts the resulting differences (at most one ULP). Stored positions,
+indices and other attributes remain exact. Area normal/UV comparisons allow
+four ULP and report component histograms separately from exact topology.
+
 ## MSB placements
 
 `msb::MapLayout::read(bytes)` reads Sekiro's section chain, models, part names,
