@@ -43,9 +43,9 @@ use primase_core::{
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::json::f32s_value;
 use crate::read::bounds;
 use crate::{Error, Result, glb};
+use primase_core::json::f32s_value;
 
 #[cfg(not(target_endian = "little"))]
 compile_error!("the writer casts vertex data to bytes and assumes little-endian");

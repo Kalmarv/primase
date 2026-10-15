@@ -1,26 +1,8 @@
-//! JSON helpers: exact f32 numbers for the writer, checked field access for the strict reader.
+//! JSON helpers: checked field access for the strict reader.
 
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 
 use crate::{Error, Result};
-
-/// An f32 as a JSON number in its shortest round-trip form (`0.1`, `-0.0`, `1e-30`). JSON text written this way
-/// reads back as the same f32 through an f64 parse (a decimal of at most 9 significant digits is exact in f64, and
-/// its nearest f32 is the original; `tests::f32_text_round_trips` checks it). Panics on a non-finite value: callers
-/// check finiteness first, since JSON has no NaN or infinity.
-pub fn f32_value(x: f32) -> Value {
-    assert!(x.is_finite(), "non-finite {x} reached JSON");
-    // `{:?}` keeps the sign of zero and the decimal point, so the number stays a float in serde_json.
-    Value::Number(
-        format!("{x:?}")
-            .parse::<Number>()
-            .expect("Debug of a finite f32 is a JSON number"),
-    )
-}
-
-pub fn f32s_value(xs: &[f32]) -> Value {
-    Value::Array(xs.iter().map(|&x| f32_value(x)).collect())
-}
 
 /// A JSON object being read, with the path used in errors (`meshes[3].primitives[0]`).
 #[derive(Clone, Copy, Debug)]
@@ -121,51 +103,5 @@ pub fn invalid(item: &str, detail: &str) -> Error {
     Error::Invalid {
         item: item.to_owned(),
         detail: detail.to_owned(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The writer's number form reads back bit-exact through serde_json's f64 parse (what our reader and most glTF
-    /// readers do), over every exponent and a spread of mantissas, plus the edge values.
-    #[test]
-    fn f32_text_round_trips() {
-        let mut checked = 0u64;
-        let mut x: u32 = 0x9E37_79B9;
-        let mut check = |bits: u32| {
-            let f = f32::from_bits(bits);
-            if !f.is_finite() {
-                return;
-            }
-            let text = serde_json::to_string(&f32_value(f)).unwrap();
-            let back: Value = serde_json::from_str(&text).unwrap();
-            let g = back.as_f64().unwrap() as f32;
-            assert_eq!(g.to_bits(), bits, "{f:?} -> {text} -> {g:?}");
-            checked += 1;
-        };
-        for bits in [
-            0,
-            0x8000_0000,
-            1,
-            0x8000_0001,
-            0x007F_FFFF,
-            0x0080_0000,
-            0x7F7F_FFFF,
-            0xFF7F_FFFF,
-        ] {
-            check(bits);
-        }
-        for _ in 0..2_000_000 {
-            // xorshift32: every exponent, sign and mantissa pattern is reached.
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            check(x);
-        }
-        assert!(checked > 1_990_000);
-        assert_eq!(serde_json::to_string(&f32_value(-0.0)).unwrap(), "-0.0");
-        assert_eq!(serde_json::to_string(&f32_value(0.1)).unwrap(), "0.1");
     }
 }

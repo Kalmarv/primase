@@ -27,6 +27,45 @@ pub fn to_value<T: Serialize + ?Sized>(v: &T) -> Result<Value, JsonError> {
     serde_json::to_value(v).map_err(|e| JsonError(e.to_string()))
 }
 
+/// JSON text of a value (two-space indented when `pretty`, with a final newline), serialized directly, so f32 fields
+/// are written as their own shortest digits. A non-finite float is an error naming where it is (serde_json would
+/// write `null`).
+pub fn to_vec<T: Serialize + ?Sized>(v: &T, pretty: bool) -> Result<Vec<u8>, JsonError> {
+    v.serialize(&mut Check { path: Vec::new() })?;
+    let mut out = if pretty {
+        serde_json::to_vec_pretty(v)
+    } else {
+        serde_json::to_vec(v)
+    }
+    .map_err(|e| JsonError(e.to_string()))?;
+    if pretty {
+        out.push(b'\n');
+    }
+    Ok(out)
+}
+
+/// An f32 as a JSON number that reads back as the same f32: its shortest round-trip digits, held as the f64
+/// nearest them, which serde_json writes with those same digits (`0.1`, not the widened `0.10000000149011612`).
+/// Panics on a non-finite value: JSON has no NaN or infinity, so callers check first.
+pub fn f32_value(x: f32) -> Value {
+    assert!(x.is_finite(), "non-finite {x} reached JSON");
+    Value::from(
+        x.to_string()
+            .parse::<f64>()
+            .expect("the Display of a finite f32 is a decimal"),
+    )
+}
+
+pub fn f32s_value(xs: &[f32]) -> Value {
+    Value::Array(xs.iter().map(|&x| f32_value(x)).collect())
+}
+
+/// An f64 as a JSON number. Panics on a non-finite value (which `Value::from` would turn into `null`).
+pub fn f64_value(x: f64) -> Value {
+    assert!(x.is_finite(), "non-finite {x} reached JSON");
+    Value::from(x)
+}
+
 /// Walks a value, failing at the first non-finite float.
 struct Check {
     path: Vec<String>,
@@ -386,6 +425,73 @@ mod tests {
         cols: [[f32; 3]; 2],
         m: BTreeMap<u32, Vec<f64>>,
         o: Option<f32>,
+    }
+
+    /// The writer's number form reads back bit-exact through serde_json's f64 parse (what our reader and most glTF
+    /// readers do), over every exponent and a spread of mantissas, plus the edge values.
+    #[test]
+    fn f32_text_round_trips() {
+        let mut checked = 0u64;
+        let mut x: u32 = 0x9E37_79B9;
+        let mut check = |bits: u32| {
+            let f = f32::from_bits(bits);
+            if !f.is_finite() {
+                return;
+            }
+            let text = serde_json::to_string(&f32_value(f)).unwrap();
+            let back: Value = serde_json::from_str(&text).unwrap();
+            let g = back.as_f64().unwrap() as f32;
+            assert_eq!(g.to_bits(), bits, "{f:?} -> {text} -> {g:?}");
+            checked += 1;
+        };
+        for bits in [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x007F_FFFF,
+            0x0080_0000,
+            0x7F7F_FFFF,
+            0xFF7F_FFFF,
+        ] {
+            check(bits);
+        }
+        for _ in 0..2_000_000 {
+            // xorshift32: every exponent, sign and mantissa pattern is reached.
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            check(x);
+        }
+        assert!(checked > 1_990_000);
+        assert_eq!(serde_json::to_string(&f32_value(-0.0)).unwrap(), "-0.0");
+        assert_eq!(serde_json::to_string(&f32_value(0.1)).unwrap(), "0.1");
+    }
+
+    /// Direct JSON text keeps f32 fields' own digits and refuses a non-finite value.
+    #[test]
+    fn json_text_is_exact_and_finite() {
+        #[derive(Serialize)]
+        struct R {
+            x: f32,
+            v: [f32; 2],
+            d: f64,
+        }
+        let r = R {
+            x: 0.1,
+            v: [-0.0, 1e-30],
+            d: 0.1,
+        };
+        assert_eq!(
+            String::from_utf8(to_vec(&r, false).unwrap()).unwrap(),
+            r#"{"x":0.1,"v":[-0.0,1e-30],"d":0.1}"#
+        );
+        assert!(to_vec(&r, true).unwrap().ends_with(b"}\n"));
+        let bad = R { x: f32::NAN, ..r };
+        assert_eq!(
+            to_vec(&bad, false).unwrap_err().0,
+            "NaN at x: JSON has no non-finite numbers"
+        );
     }
 
     #[test]
