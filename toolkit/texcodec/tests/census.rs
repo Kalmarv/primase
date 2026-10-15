@@ -4,7 +4,7 @@ use primase_core::{
     TexFormat,
     gate::{GateReport, Tolerance, real_data},
 };
-use primase_texcodec::{BcArithmetic, Bcdec, Decoder, TexDecoder};
+use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Read, Write},
@@ -43,11 +43,10 @@ fn scene_dds_decoders() {
         let mut input = python.stdin.take().expect("stdin");
         let mut output = BufReader::new(python.stdout.take().expect("stdout"));
         let mut bc = GateReport::new(format!("{var} own vs bcdec"), Tolerance::Exact);
-        let mut pillow = GateReport::new(
-            format!("{var} own Pillow arithmetic vs Pillow 11"),
-            Tolerance::Exact,
-        );
+        let mut pillow = GateReport::new(format!("{var} D3D vs Pillow 11"), Tolerance::Abs(1.));
         let mut counts = BTreeMap::new();
+        let mut formats = BTreeMap::<String, GateReport>::new();
+        let mut format_histograms = BTreeMap::<String, [u64; 256]>::new();
         let mut histogram = [0u64; 256];
         let path_count = paths.len();
         let mut contents = std::collections::BTreeSet::<[u8; 32]>::new();
@@ -82,14 +81,18 @@ fn scene_dds_decoders() {
                     px[2] = 0;
                 }
             }
-            let ours = Decoder {
-                arithmetic: BcArithmetic::Pillow,
-            }
-            .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
-            .expect("Pillow mode");
-            pillow.compare_bytes(p.display().to_string(), &ours, &expected);
+            pillow.compare_bytes(p.display().to_string(), &own, &expected);
+            let label = format!("{:?}", t.format);
+            formats
+                .entry(label.clone())
+                .or_insert_with(|| {
+                    GateReport::new(format!("{var} {label} D3D vs Pillow"), Tolerance::Abs(1.))
+                })
+                .compare_bytes(p.display().to_string(), &own, &expected);
+            let format_histogram = format_histograms.entry(label).or_insert([0; 256]);
             for (a, b) in own.iter().zip(&expected) {
                 histogram[a.abs_diff(*b) as usize] += 1;
+                format_histogram[a.abs_diff(*b) as usize] += 1;
             }
         }
         println!(
@@ -109,5 +112,16 @@ fn scene_dds_decoders() {
         );
         bc.assert_passed();
         pillow.assert_passed();
+        for (name, gate) in formats {
+            println!(
+                "{gate}; channel histogram={:?}",
+                format_histograms[&name]
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| **n > 0)
+                    .collect::<Vec<_>>()
+            );
+            gate.assert_passed();
+        }
     }
 }

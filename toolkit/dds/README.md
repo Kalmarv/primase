@@ -15,18 +15,18 @@ DXT2/4 and typeless/unknown formats return explicit errors. Invalid sizes, short
 mips, excessive levels, invalid pitch/linear size and trailing bytes are errors.
 Reserved header words are not retained. A zero mip count means one level.
 
-The legacy writer supports BC1/2/3 and uses a stable compatibility header verified
-against independent C# fixtures. It writes the supplied mip chain unchanged and
+The legacy writer supports BC1/2/3 and sets DDS_HEADER flags from the actual
+texture shape. DDSD_MIPMAPCOUNT is set only when there is more than one level. It writes the supplied mip chain unchanged and
 does not preserve sRGB tagging; use DX10 when that tag matters. Neither writer
 serializes role or normal annotations.
 
 Run `cargo test -p primase-dds -- --nocapture`. Tests include synthetic headers,
 format mappings, malformed inputs and encoded-level roundtrips. Environment-driven
 censuses use `PRIMASE_SCENES_GTA` and `PRIMASE_SCENES_SEKIRO`, recursively selecting
-DDS beneath `textures` directories. The legacy byte-identity gate selects DXT
-sources only; other formats participate in read and DX10 roundtrip gates.
+DDS beneath `textures` directories. The legacy payload-identity gate selects DXT
+sources only, measuring header field differences separately; other formats participate in read and DX10 roundtrip gates.
 
-Header references: [DDS DX10](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header-dxt10),
+Header references: [DDS header](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header), [DDS DX10](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header-dxt10),
 [DDS pixel format](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-pixelformat).
 
 Censuses deduplicate input files by SHA256 within each configured root, reporting

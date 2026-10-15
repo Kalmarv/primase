@@ -12,10 +12,6 @@ fn segments(r: f32) -> usize {
         16
     }
 }
-// SharpDX vector division divides components; Normalize multiplies by a reciprocal.
-fn divide(v: V, d: f32) -> V {
-    v.map(|x| x / d)
-}
 fn basis(axis: V) -> (V, V) {
     let helper = if axis[2].abs() < 0.9 {
         [0., 0., 1.]
@@ -127,9 +123,9 @@ fn axial(a: V, b: V, r: f32) -> Result<(V, V, V, f32, usize)> {
     finite(&b)?;
     finite(&[r])?;
     let d = sub(b, a);
-    let len = dot(d, d).sqrt();
+    let len = vector::Vec3::from(d).length();
     finite(&[len])?;
-    let axis = if len > 1e-6 { divide(d, len) } else { [0., 0., 1.] };
+    let axis = if len > 1e-6 { unit(d) } else { [0., 0., 1.] };
     let (u, v) = basis(axis);
     Ok((axis, u, v, r.abs(), segments(r.abs())))
 }

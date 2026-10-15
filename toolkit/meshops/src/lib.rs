@@ -1,4 +1,5 @@
-//! Reference mesh operations use f32 intermediates and preserve triangle order.
+//! Deterministic mesh operations with explicit float precision and stable topology.
+pub mod vector;
 use std::collections::BTreeMap;
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mesh: {0}")]
@@ -6,27 +7,22 @@ pub struct Error(pub String);
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) type V = [f32; 3];
 pub(crate) fn add(a: V, b: V) -> V {
-    std::array::from_fn(|i| a[i] + b[i])
+    (vector::Vec3::from(a) + vector::Vec3::from(b)).into()
 }
 pub(crate) fn sub(a: V, b: V) -> V {
-    std::array::from_fn(|i| a[i] - b[i])
+    (vector::Vec3::from(a) - vector::Vec3::from(b)).into()
 }
 pub(crate) fn mul(a: V, s: f32) -> V {
-    a.map(|x| x * s)
+    (vector::Vec3::from(a) * s).into()
 }
 pub(crate) fn dot(a: V, b: V) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    vector::Vec3::from(a).dot(b.into())
 }
 pub(crate) fn cross(a: V, b: V) -> V {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
+    vector::Vec3::from(a).cross(b.into()).into()
 }
 pub(crate) fn unit(v: V) -> V {
-    let len = (dot(v, v) as f64).sqrt() as f32;
-    if len.abs() < 1e-6 { v } else { mul(v, 1. / len) }
+    vector::Vec3::from(v).normalize().into()
 }
 pub(crate) fn finite(v: &[f32]) -> Result<()> {
     if v.iter().all(|x| x.is_finite()) {
@@ -161,8 +157,8 @@ pub fn uv_tiles(uv: [[f32; 2]; 3]) -> Result<f32> {
 }
 pub const MAX_UV_TILES: f32 = 256.;
 /// Duplicate each face's three vertices. Use normalize(cross(b-a,c-a)) when its
-/// squared length exceeds 1e-20; otherwise use +Z. SharpDX normalization leaves
-/// vectors with length<1e-6 unchanged; otherwise multiply by 1/length.
+/// squared length exceeds 1e-20; otherwise use +Z. Normalization uses the shared
+/// f64 norm followed by component division and f32 rounding.
 /// Preserve UVs; replace normals.
 pub fn flat_normals(mesh: &Mesh) -> Result<Mesh> {
     mesh.validate()?;
@@ -183,8 +179,8 @@ pub fn flat_normals(mesh: &Mesh) -> Result<Mesh> {
     }
     Ok(out)
 }
-/// Transform using column basis and translation, matching the reference writer's
-/// f32 classification. Orthogonal normal axes divide by max(length²,1e-12);
+/// Transform using column basis and translation. Classification uses f32 dot
+/// products and the shared length. Orthogonal normal axes divide by max(length²,1e-12);
 /// sheared axes use cofactors times determinant sign. Normalize above length 1e-8,
 /// otherwise +Z. Mirrored bases reverse triangle corners 1/2. Degenerate bases fail.
 pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
@@ -194,7 +190,7 @@ pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
     }
     finite(&translation)?;
     let [ex, ey, ez] = basis;
-    let lengths = basis.map(|v| dot(v, v).sqrt());
+    let lengths = basis.map(|v| vector::Vec3::from(v).length());
     let det = dot(cross(ex, ey), ez);
     finite(&[lengths[0], lengths[1], lengths[2], det])?;
     if lengths.iter().any(|&l| l < 1e-6) || det.abs() <= 1e-6 * lengths[0] * lengths[1] * lengths[2] {
@@ -226,12 +222,8 @@ pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
             add(mul(normals[0], n[0]), mul(normals[1], n[1])),
             mul(normals[2], n[2]),
         );
-        let len = dot(v, v).sqrt();
-        *n = if len > 1e-8 {
-            v.map(|x| x / len)
-        } else {
-            [0., 0., 1.]
-        };
+        let len = vector::Vec3::from(v).length();
+        *n = if len > 1e-8 { unit(v) } else { [0., 0., 1.] };
         finite(n)?;
     }
     if det < 0. {
@@ -244,8 +236,7 @@ pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
 
 /// Split every edge longer than max at shared midpoints. Traverse triangles and
 /// children in the reference order; interpolate positions/UVs by (a+b)*0.5 and
-/// normalize summed normals above squared length 1e-12 (otherwise retain a's),
-/// multiplying by reciprocal length as SharpDX does.
+/// normalize summed normals above squared length 1e-12 (otherwise retain a's).
 /// A caller-provided split limit bounds growth; failure leaves the input untouched.
 pub fn split_long(mesh: &Mesh, max: f32, split_limit: usize) -> Result<(Mesh, usize)> {
     mesh.validate()?;
@@ -340,45 +331,3 @@ pub fn split_long(mesh: &Mesh, max: f32, split_limit: usize) -> Result<(Mesh, us
 }
 mod primitives;
 pub use primitives::{box_mesh, capsule, cylinder, disc, sphere};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn independent_sharpdx_vector_bits() {
-        let bytes = include_bytes!("../tests/fixtures/vectors.bin");
-        let mut words = bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b));
-        let count = words.next().unwrap();
-        for case in 0..count {
-            let a = std::array::from_fn(|_| f32::from_bits(words.next().unwrap()));
-            let b = std::array::from_fn(|_| f32::from_bits(words.next().unwrap()));
-            let t = f32::from_bits(words.next().unwrap());
-            let len2 = dot(a, a);
-            let len = (len2 as f64).sqrt() as f32;
-            let n = unit(a);
-            let divided = if t != 0. { a.map(|v| v / t) } else { a };
-            let actual = [
-                len,
-                len2,
-                n[0],
-                n[1],
-                n[2],
-                divided[0],
-                divided[1],
-                divided[2],
-                dot(a, b),
-                cross(a, b)[0],
-                cross(a, b)[1],
-                cross(a, b)[2],
-            ];
-            for (channel, v) in actual.into_iter().enumerate() {
-                assert_eq!(
-                    v.to_bits(),
-                    words.next().unwrap(),
-                    "case {case} channel {channel}"
-                );
-            }
-        }
-        assert!(words.next().is_none());
-    }
-}

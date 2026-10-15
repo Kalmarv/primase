@@ -1,4 +1,4 @@
-use crate::{BcArithmetic, Error, Result};
+use crate::{Error, Result};
 use primase_core::TexFormat;
 fn word(b: &[u8]) -> u16 {
     u16::from_le_bytes([b[0], b[1]])
@@ -8,23 +8,14 @@ fn indices(b: &[u8]) -> u64 {
         .enumerate()
         .fold(0, |v, (i, &b)| v | ((b as u64) << (8 * i)))
 }
-fn expand(v: u32, bits: u32, mode: BcArithmetic) -> u32 {
-    match mode {
-        BcArithmetic::Pillow => (v << (8 - bits)) | (v >> (2 * bits - 8)),
-        BcArithmetic::CodeWalker => {
-            let n = v * 255 + (1 << (bits - 1));
-            (n / (1 << bits) + n) / (1 << bits)
-        }
-        BcArithmetic::Bcdec => {
-            if bits == 5 {
-                (v * 527 + 23) >> 6
-            } else {
-                (v * 259 + 33) >> 6
-            }
-        }
+fn expand(v: u32, bits: u32) -> u32 {
+    if bits == 5 {
+        (v * 527 + 23) >> 6
+    } else {
+        (v * 259 + 33) >> 6
     }
 }
-fn palette(b: &[u8], opaque: bool, mode: BcArithmetic) -> [[u8; 4]; 4] {
+fn palette(b: &[u8], opaque: bool) -> [[u8; 4]; 4] {
     let c0 = word(b);
     let c1 = word(&b[2..]);
     let a = [(c0 >> 11) as u32, ((c0 >> 5) & 63) as u32, (c0 & 31) as u32];
@@ -33,14 +24,11 @@ fn palette(b: &[u8], opaque: bool, mode: BcArithmetic) -> [[u8; 4]; 4] {
     let mut p = [[0, 0, 0, 255]; 4];
     for c in 0..3 {
         let bits = if c == 1 { 6 } else { 5 };
-        let x = expand(a[c], bits, mode);
-        let y = expand(z[c], bits, mode);
+        let x = expand(a[c], bits);
+        let y = expand(z[c], bits);
         p[0][c] = x as u8;
         p[1][c] = y as u8;
-        if mode != BcArithmetic::Bcdec {
-            p[2][c] = if four { (2 * x + y) / 3 } else { (x + y) / 2 } as u8;
-            p[3][c] = if four { (x + 2 * y) / 3 } else { 0 } as u8;
-        } else if four {
+        if four {
             let interp = |v| {
                 if bits == 5 {
                     (v * 351 + 61) >> 7
@@ -108,7 +96,7 @@ pub(crate) fn snorm(b: &[u8]) -> [f32; 16] {
     let bits = indices(&b[2..8]);
     std::array::from_fn(|i| p[((bits >> (i * 3)) & 7) as usize] as f32)
 }
-pub(crate) fn decode(f: TexFormat, b: &[u8], mode: BcArithmetic, oracle: bool) -> Result<[u8; 64]> {
+pub(crate) fn decode(f: TexFormat, b: &[u8], oracle: bool) -> Result<[u8; 64]> {
     use TexFormat::*;
     let mut out = [0; 64];
     for p in out.as_chunks_mut::<4>().0 {
@@ -137,13 +125,9 @@ pub(crate) fn decode(f: TexFormat, b: &[u8], mode: BcArithmetic, oracle: bool) -
     match f {
         Bc1 | Bc2 | Bc3 => {
             let offset = if f == Bc1 { 0 } else { 8 };
-            let p = palette(&b[offset..], f != Bc1, mode);
+            let p = palette(&b[offset..], f != Bc1);
             let bits = indices(&b[offset + 4..offset + 8]);
-            let alpha = if f == Bc3 {
-                unorm(b, false, u32::from(mode == BcArithmetic::Bcdec))
-            } else {
-                [0; 16]
-            };
+            let alpha = if f == Bc3 { unorm(b, false, 1) } else { [0; 16] };
             for i in 0..16 {
                 out[i * 4..i * 4 + 4].copy_from_slice(&p[((bits >> (i * 2)) & 3) as usize]);
                 if f == Bc2 {
@@ -156,7 +140,7 @@ pub(crate) fn decode(f: TexFormat, b: &[u8], mode: BcArithmetic, oracle: bool) -
         }
         Bc4Unorm | Bc5Unorm => {
             for c in 0..if f == Bc4Unorm { 1 } else { 2 } {
-                let v = unorm(&b[c * 8..], mode == BcArithmetic::Bcdec, 0);
+                let v = unorm(&b[c * 8..], true, 0);
                 for i in 0..16 {
                     out[i * 4 + c] = v[i];
                 }

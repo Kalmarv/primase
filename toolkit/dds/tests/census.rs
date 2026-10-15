@@ -1,6 +1,4 @@
-//! Real scene census: every .dds beneath a textures directory, once per distinct content. GTA DXT1/3/5 files must re-emit byte-identically under the C#
-//! writer header contract. Uncompressed files are counted separately, and all
-//! sources must preserve all stored levels through DX10.
+//! Distinct-content DDS census: payloads exact, semantic roundtrips exact, header differences measured.
 #![allow(clippy::unwrap_used)]
 use primase_core::gate::{GateReport, Tolerance, real_data};
 use primase_dds::{read, write_dx10, write_legacy};
@@ -34,7 +32,8 @@ fn census(var: &str, legacy_oracle: bool) {
     let mut counts = BTreeMap::<String, usize>::new();
     let mut read_gate = GateReport::new(format!("{var} read"), Tolerance::Exact);
     let mut roundtrip = GateReport::new(format!("{var} stored levels"), Tolerance::Exact);
-    let mut oracle = GateReport::new(format!("{var} C# byte identity"), Tolerance::Exact);
+    let mut oracle = GateReport::new(format!("{var} legacy payload identity"), Tolerance::Exact);
+    let mut header_differences = BTreeMap::<usize, u64>::new();
     let path_count = files.len();
     let mut contents = std::collections::BTreeSet::<[u8; 32]>::new();
     for path in files {
@@ -57,7 +56,17 @@ fn census(var: &str, legacy_oracle: bool) {
                 }
                 if legacy_oracle && matches!(&bytes[84..88], b"DXT1" | b"DXT3" | b"DXT5") {
                     match write_legacy(&t) {
-                        Ok(b) => oracle.compare_bytes(&key, &b, &bytes),
+                        Ok(b) => {
+                            assert_eq!(read(&b).unwrap(), t);
+                            oracle.compare_bytes(&key, &b[128..], &bytes[128..]);
+                            for offset in (4..128).step_by(4) {
+                                if b[offset..offset + 4] != bytes[offset..offset + 4] {
+                                    *header_differences.entry(offset).or_default() += 1;
+                                }
+                            }
+                            let flags = u32::from_le_bytes(b[8..12].try_into().unwrap());
+                            assert_eq!(flags, 0x81007 | if t.levels.len() > 1 { 0x20000 } else { 0 });
+                        }
                         Err(e) => oracle.fail(&key, e.to_string()),
                     }
                 } else if legacy_oracle {
@@ -75,7 +84,9 @@ fn census(var: &str, legacy_oracle: bool) {
         contents.len()
     );
     if legacy_oracle {
-        eprintln!("{oracle}\noutside legacy DXT writer scope: {outside_legacy}");
+        eprintln!(
+            "{oracle}\nheader field differences by byte offset={header_differences:?}\noutside legacy DXT writer scope: {outside_legacy}"
+        );
         oracle.assert_passed();
     }
     read_gate.assert_passed();

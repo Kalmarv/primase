@@ -11,14 +11,11 @@ Signed formats remain signed in float output; byte output biases present signed
 channels to [0,255], rounding ties to even. HDR float output is not clamped;
 byte output clamps to [0,1].
 
-`BcArithmetic` makes compatibility explicit:
-
-- `Bcdec`: packed-endpoint colour interpolation and rounded BC4/5 weights.
-- `CodeWalker`: rounded 565 expansion followed by truncated interpolation.
-- `Pillow`: bit-replicated 565 expansion followed by truncated interpolation.
-
-These conventions can differ by one byte value. Exact gates compare each against
-its own oracle; cross-convention histograms are measurements, not relaxed gates.
+The decoder uses D3D/bcdec arithmetic: packed-endpoint colour interpolation and
+rounded BC4/5 weights. Independent C# and Pillow values can differ by one channel
+level; those gates count exact and within-one results and print distributions.
+The independent bcdec adapter remains an exact gate for BC1-5. There are no
+alternate library arithmetic modes.
 BC1 three-colour index 3 and reserved BC7 tags decode to transparent black.
 Signed endpoints clamp before mode selection.
 

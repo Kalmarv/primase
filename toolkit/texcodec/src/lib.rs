@@ -20,18 +20,6 @@ pub enum Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The entire BC1-5 arithmetic convention, including palette interpolation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BcArithmetic {
-    /// bcdec: interpolation in packed colour space, rounded BC4/5.
-    Bcdec,
-    /// C# BlockDecode: rounded 565 expansion then truncated interpolation;
-    /// BC4/5 use truncated integer interpolation.
-    CodeWalker,
-    /// Pillow 11: bit-replicated 565 endpoints and truncated interpolation.
-    Pillow,
-}
-
 pub trait TexDecoder {
     fn decode_rgba8(&self, format: TexFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>>;
     /// Signed formats remain signed; HDR values are not clamped.
@@ -39,16 +27,9 @@ pub trait TexDecoder {
 }
 
 /// Independent Rust BC1-5 implementation; BC6H/BC7 use the checked bcdec adapter.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Decoder {
-    pub arithmetic: BcArithmetic,
-}
-impl Default for Decoder {
-    fn default() -> Self {
-        Self {
-            arithmetic: BcArithmetic::Bcdec,
-        }
-    }
+    _private: (),
 }
 /// Adapter to bcdec_rs 0.2.0, useful as an independent gate oracle for BC1-5.
 #[derive(Debug, Clone, Copy, Default)]
@@ -100,17 +81,10 @@ fn to_byte(v: f32) -> u8 {
     (v.clamp(0., 1.) * 255.).round_ties_even() as u8
 }
 
-fn decode8(
-    arithmetic: BcArithmetic,
-    oracle: bool,
-    f: TexFormat,
-    w: u32,
-    h: u32,
-    data: &[u8],
-) -> Result<Vec<u8>> {
+fn decode8(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Vec<u8>> {
     let n = validate(f, w, h, data)?;
     if !f.is_block_compressed() || signed(f) || matches!(f, TexFormat::Bc6hUfloat | TexFormat::Bc6hSfloat) {
-        let floats = decode_float(arithmetic, oracle, f, w, h, data)?;
+        let floats = decode_float(oracle, f, w, h, data)?;
         return Ok(floats
             .iter()
             .enumerate()
@@ -127,12 +101,7 @@ fn decode8(
     for by in 0..h.div_ceil(4) {
         for bx in 0..w.div_ceil(4) {
             let offset = (by as usize * w.div_ceil(4) as usize + bx as usize) * f.block_bytes() as usize;
-            let block = blocks::decode(
-                f,
-                &data[offset..offset + f.block_bytes() as usize],
-                arithmetic,
-                oracle,
-            )?;
+            let block = blocks::decode(f, &data[offset..offset + f.block_bytes() as usize], oracle)?;
             for y in 0..4 {
                 for x in 0..4 {
                     if bx * 4 + x < w && by * 4 + y < h {
@@ -146,14 +115,7 @@ fn decode8(
     }
     Ok(out)
 }
-fn decode_float(
-    arithmetic: BcArithmetic,
-    oracle: bool,
-    f: TexFormat,
-    w: u32,
-    h: u32,
-    data: &[u8],
-) -> Result<Vec<f32>> {
+fn decode_float(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Vec<f32>> {
     let n = validate(f, w, h, data)?;
     if !f.is_block_compressed() {
         return pixels::decode(f, data, n);
@@ -162,7 +124,7 @@ fn decode_float(
         f,
         TexFormat::Bc4Snorm | TexFormat::Bc5Snorm | TexFormat::Bc6hUfloat | TexFormat::Bc6hSfloat
     ) {
-        return Ok(decode8(arithmetic, oracle, f, w, h, data)?
+        return Ok(decode8(oracle, f, w, h, data)?
             .iter()
             .map(|&v| v as f32 / 255.)
             .collect());
@@ -213,17 +175,17 @@ fn decode_float(
 }
 impl TexDecoder for Decoder {
     fn decode_rgba8(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<u8>> {
-        decode8(self.arithmetic, false, f, w, h, d)
+        decode8(false, f, w, h, d)
     }
     fn decode_rgba32f(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<f32>> {
-        decode_float(self.arithmetic, false, f, w, h, d)
+        decode_float(false, f, w, h, d)
     }
 }
 impl TexDecoder for Bcdec {
     fn decode_rgba8(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<u8>> {
-        decode8(BcArithmetic::Bcdec, true, f, w, h, d)
+        decode8(true, f, w, h, d)
     }
     fn decode_rgba32f(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<f32>> {
-        decode_float(BcArithmetic::Bcdec, true, f, w, h, d)
+        decode_float(true, f, w, h, d)
     }
 }

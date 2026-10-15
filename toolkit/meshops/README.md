@@ -2,7 +2,7 @@
 
 `Mesh` stores positions, optional normals/UVs, and triangle-list indices.
 Operations validate indices, attribute lengths and finite values before use.
-Outputs preserve reference traversal order and f32 arithmetic; they do not
+Outputs preserve deterministic traversal order; they do not
 implicitly change coordinate frames. Each function documents its exact rule.
 
 - `compact`: first-use vertex remapping, all attributes retained.
@@ -21,12 +21,22 @@ implicitly change coordinate frames. Each function documents its exact rule.
   Sphere/cylinder/capsule axes and fallback normals use the caller's coordinates;
   poles and degenerate-axis fallback are +Z. No implicit Y-up conversion.
 
-Synthetic C# oracle gates cover primitive topology and vertex bits, transforms,
-flat normals, subdivision, welding and UV-repeat arithmetic. The primitive
-oracle uses its original vector arithmetic library (reciprocal multiplication
-for normalization, component division for vector/scalar division). All mesh
-operations use that same library in their reference oracle.
-`cargo test -p primase-meshops` runs these gates and invalid-input checks.
+`vector::Vec3` is the shared vector type, with array conversions and ordinary
+arithmetic operators. Add/subtract/multiply/divide, dot and cross use f32.
+Length and normalization use a f64 norm; normalized components round once to
+f32. Every finite nonzero vector normalizes, including tiny values; zero returns
+zero. `normalize_or` selects the caller's fallback for zero/nonfinite input.
+There are no runtime-specific arithmetic modes or small-vector passthroughs.
+Geometric degeneracy thresholds remain explicit in each mesh operation.
+
+Independent C# fixtures are value oracles. Stored attributes and topology remain
+exact. Derived coordinates use a bound of four f32 epsilon units at the working
+scale: max(1, abs(reference)) normally, or centre/endpoint magnitude plus radius
+for tessellation (where cancellation can leave a tiny result). Gates count exact
+and within-bound values and report maximum absolute differences. Tiny vectors
+that the old oracle left unchanged are named deviations, checked instead against
+our unit-length contract. `cargo test -p primase-meshops -- --nocapture` reports
+these gates and invalid-input checks.
 
 ## Optional real-data cases
 
@@ -48,7 +58,7 @@ operation count (five), and records of operation ID plus expected mesh:
 | 3 | Millimetre weld with XY origin (0,0) |
 | 4 | First-use vertex compaction |
 
-Every output channel and index compares by its bits. The test reports source
+Stored channels and indices compare by bits; derived channels use the stated bound. The test reports source
 meshes, vertices, triangles and operation comparisons. Corpus selection and
 coverage belong in the external run report; this test makes no full-census claim.
 
@@ -70,4 +80,4 @@ scalar counts. No private source code or external assets are included.
 `vectors.bin` is an independent SharpDX vector-arithmetic fixture: u32 count,
 then 19 u32 float bit patterns per record (a[3], b[3], t, followed by length,
 length squared, normalized a[3], a/t[3] or a when t=0, dot(a,b), cross(a,b)[3]).
-The gate checks all 400 records exactly against the internal arithmetic helpers.
+The gate checks all 400 records against the shared vector operations with the stated bound.

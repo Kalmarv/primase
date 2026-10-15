@@ -251,11 +251,7 @@ fn header(t: &Texture, dx10: bool) -> Result<Vec<u8>> {
     put(
         &mut b,
         8,
-        if !dx10 {
-            0xa1007
-        } else {
-            0x1007 | if compressed { 0x80000 } else { 8 } | if t.levels.len() > 1 { 0x20000 } else { 0 }
-        },
+        0x1007 | if compressed { 0x80000 } else { 8 } | if t.levels.len() > 1 { 0x20000 } else { 0 },
     );
     put(&mut b, 12, t.height);
     put(&mut b, 16, t.width);
@@ -275,7 +271,7 @@ fn header(t: &Texture, dx10: bool) -> Result<Vec<u8>> {
     put(&mut b, 108, if t.levels.len() > 1 { 0x401008 } else { 0x1000 });
     Ok(b)
 }
-/// Write BC1/2/3 with the compatibility header verified by the C# golden fixtures.
+/// Write BC1/2/3 with DDS_HEADER flags describing the supplied levels.
 /// Legacy DDS cannot encode colour space; the caller explicitly chooses this loss
 /// by using this function. Mips are written as supplied (no trimming/generation).
 pub fn write_legacy(t: &Texture) -> Result<Vec<u8>> {

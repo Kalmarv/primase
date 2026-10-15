@@ -2,7 +2,7 @@ use primase_core::{
     TexFormat,
     gate::{GateReport, Tolerance},
 };
-use primase_texcodec::{BcArithmetic, Bcdec, Decoder, TexDecoder};
+use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 /// Independent bcdec_rs 0.2.0 oracle; every random block includes all selector values
 /// statistically, with endpoint orders and equality exercised explicitly below.
 #[test]
@@ -16,9 +16,6 @@ fn seeded_bc1_to_bc5() {
         TexFormat::Bc5Unorm,
     ] {
         let mut gate = GateReport::new(format!("{f:?} vs bcdec"), Tolerance::Exact);
-        let mut hist = [0u64; 256];
-        let mut differing = 0;
-        let mut modes = std::collections::BTreeMap::<String, [u64; 3]>::new();
         for i in 0..10000 {
             let mut b = vec![0; f.block_bytes() as usize];
             for v in &mut b {
@@ -30,60 +27,14 @@ fn seeded_bc1_to_bc5() {
             let ours = Decoder::default().decode_rgba8(f, 4, 4, &b).expect("ours");
             let reference = Bcdec.decode_rgba8(f, 4, 4, &b).expect("oracle");
             gate.compare_bytes(i.to_string(), &ours, &reference);
-            let cw = Decoder {
-                arithmetic: BcArithmetic::CodeWalker,
-            }
-            .decode_rgba8(f, 4, 4, &b)
-            .expect("cw");
-            let alpha_mode = |offset: usize| if b[offset] > b[offset + 1] { 8 } else { 6 };
-            let mode = match f {
-                TexFormat::Bc1 => format!(
-                    "{}color",
-                    if u16::from_le_bytes([b[0], b[1]]) > u16::from_le_bytes([b[2], b[3]]) {
-                        4
-                    } else {
-                        3
-                    }
-                ),
-                TexFormat::Bc2 => "4color".into(),
-                TexFormat::Bc3 => format!("4color/alpha{}", alpha_mode(0)),
-                TexFormat::Bc4Unorm => format!("red{}", alpha_mode(0)),
-                _ => format!("red{}/green{}", alpha_mode(0), alpha_mode(8)),
-            };
-            let stats = modes.entry(mode).or_default();
-            stats[0] += 1;
-            stats[1] += u64::from(cw != reference);
-            stats[2] += cw.iter().zip(&reference).filter(|(a, b)| a != b).count() as u64;
-            if cw != reference {
-                differing += 1;
-            }
-            for (a, b) in cw.iter().zip(&reference) {
-                hist[a.abs_diff(*b) as usize] += 1;
-            }
         }
-        println!(
-            "{gate}; CodeWalker differing blocks={differing}; channel abs-diff histogram={:?}",
-            hist.iter()
-                .enumerate()
-                .filter(|(_, n)| **n > 0)
-                .collect::<Vec<_>>()
-        );
-        println!("{f:?} modes [blocks, differing blocks, differing channels]: {modes:?}");
+        println!("{gate}");
         gate.assert_passed();
     }
 }
 #[test]
 fn punch_through_and_four_color() {
-    for decoder in [
-        &Decoder::default() as &dyn TexDecoder,
-        &Decoder {
-            arithmetic: BcArithmetic::CodeWalker,
-        },
-        &Decoder {
-            arithmetic: BcArithmetic::Pillow,
-        },
-        &Bcdec,
-    ] {
+    for decoder in [&Decoder::default() as &dyn TexDecoder, &Bcdec] {
         for (a, b, alpha) in [(0u16, 65535u16, 0), (42, 42, 0), (65535, 0, 255)] {
             let mut block = [255; 8];
             block[..2].copy_from_slice(&a.to_le_bytes());
@@ -148,10 +99,8 @@ fn invalid_inputs_and_edge_blocks() {
 /// Independent reference C# decoder, generated synthetic fixtures.
 #[test]
 fn csharp_fixtures() {
-    let decoder = Decoder {
-        arithmetic: BcArithmetic::CodeWalker,
-    };
-    let mut gate = GateReport::new("C# BlockDecode", Tolerance::Exact);
+    let decoder = Decoder::default();
+    let mut gate = GateReport::new("D3D vs C# BlockDecode", Tolerance::Abs(1.));
     for (name, f) in [
         ("bc1", TexFormat::Bc1),
         ("bc2", TexFormat::Bc2),
@@ -190,33 +139,23 @@ fn pillow_measurement() {
                 p[2] = 0;
             }
         }
-        for arithmetic in [
-            BcArithmetic::Bcdec,
-            BcArithmetic::CodeWalker,
-            BcArithmetic::Pillow,
-        ] {
-            let got = Decoder { arithmetic }
-                .decode_rgba8(f, 32, 32, &input)
-                .expect("decode");
-            if arithmetic == BcArithmetic::Pillow {
-                let mut gate = GateReport::new(format!("Pillow {f:?}"), Tolerance::Exact);
-                gate.compare_bytes(name, &got, &expected);
-                println!("{gate}");
-                gate.assert_passed();
-            }
-            let mut histogram = [0u64; 256];
-            for (a, b) in got.iter().zip(&expected) {
-                histogram[a.abs_diff(*b) as usize] += 1;
-            }
-            println!(
-                "Pillow {f:?} {arithmetic:?}: {:?}",
-                histogram
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, n)| **n > 0)
-                    .collect::<Vec<_>>()
-            );
+        let got = Decoder::default()
+            .decode_rgba8(f, 32, 32, &input)
+            .expect("decode");
+        let mut gate = GateReport::new(format!("D3D vs Pillow {f:?}"), Tolerance::Abs(1.));
+        gate.compare_bytes(name, &got, &expected);
+        let mut hist = [0u64; 256];
+        for (a, b) in got.iter().zip(&expected) {
+            hist[a.abs_diff(*b) as usize] += 1;
         }
+        println!(
+            "{gate}; histogram={:?}",
+            hist.iter()
+                .enumerate()
+                .filter(|(_, n)| **n > 0)
+                .collect::<Vec<_>>()
+        );
+        gate.assert_passed();
     }
 }
 #[test]
