@@ -335,6 +335,13 @@ fn round_trip_materials_textures_and_extras() {
         (normal["texCoord"].as_u64(), normal["scale"].as_f64()),
         (Some(1), Some(0.5))
     );
+    // the slot's transform as KHR_texture_transform (rotation 0 left out), declared used
+    assert_eq!(
+        normal["extensions"]["KHR_texture_transform"],
+        json!({"offset": [0.25, -0.5], "scale": [2.0, 4.0]})
+    );
+    assert_eq!(doc["extensionsUsed"], json!(["KHR_texture_transform"]));
+    assert!(pmr["baseColorTexture"].get("extensions").is_none());
     assert_eq!(
         image_bytes(normal),
         std::fs::read(b.dir.join("textures/normal.png")).unwrap()

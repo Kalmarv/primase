@@ -42,7 +42,7 @@ assert.deepEqual(contentBounds([{triangles:1,min:[10,20,30],max:[20,30,40]},{tri
 const proof = JSON.parse(await fs.readFile(path.join(root, 'proof.json')));
 await MeshoptDecoder.ready;
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-let streams=0, meshes=0, triangles=0, instances=0, maxBoundError=0;
+let streams=0, meshes=0, triangles=0, instances=0, maxBoundError=0, transformedSlots=0;
 for (const tile of index.tiles) {
   if(tile.collision){
     const payload=await fs.readFile(path.join(root,tile.collision.file));
@@ -80,6 +80,27 @@ for (const tile of index.tiles) {
     streams++;
   }
   const result=await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.length),'');
+  // KHR_texture_transform: the loaded texture of every transformed slot carries the slot's offset, scale, rotation.
+  const slots=[['map',m=>m.pbrMetallicRoughness?.baseColorTexture],['metalnessMap',m=>m.pbrMetallicRoughness?.metallicRoughnessTexture],
+    ['normalMap',m=>m.normalTexture],['aoMap',m=>m.occlusionTexture],['emissiveMap',m=>m.emissiveTexture]];
+  const checkedMaterials=new Set();
+  result.scene.traverse(o=>{
+    if(!o.isMesh)return;
+    for(const material of (Array.isArray(o.material)?o.material:[o.material])){
+      const index=result.parser.associations.get(material)?.materials;
+      if(index===undefined||checkedMaterials.has(material))continue;
+      checkedMaterials.add(material);
+      for(const [slot,info] of slots){
+        const t=info(doc.materials[index])?.extensions?.KHR_texture_transform;
+        if(!t)continue;
+        const map=material[slot];
+        assert.ok(map,`${tile.file} material ${index} ${slot} not loaded`);
+        assert.deepEqual([map.offset.x,map.offset.y,map.repeat.x,map.repeat.y,map.rotation],
+          [...(t.offset??[0,0]),...(t.scale??[1,1]),t.rotation??0],`${tile.file} material ${index} ${slot} transform`);
+        transformedSlots++;
+      }
+    }
+  });
   let tileMeshes=0,tileTriangles=0,tileInstances=0;
   result.scene.traverse(o=>{
     if (o.isMesh) {
@@ -128,4 +149,4 @@ for (const tile of index.tiles) {
   meshes+=tileMeshes;triangles+=tileTriangles;instances+=tileInstances;
   result.scene.traverse(o=>{o.geometry?.dispose(); for(const m of (Array.isArray(o.material)?o.material:[o.material])) if(m){for(const v of Object.values(m))if(v?.isTexture)v.dispose();m.dispose();}});
 }
-console.log(JSON.stringify({tiles:index.tiles.length,meshes,mesh_instances:instances,triangles,streams,exact:streams,failed:0,max_bounds_error:maxBoundError}));
+console.log(JSON.stringify({tiles:index.tiles.length,meshes,mesh_instances:instances,triangles,streams,exact:streams,failed:0,max_bounds_error:maxBoundError,transformed_texture_slots:transformedSlots}));

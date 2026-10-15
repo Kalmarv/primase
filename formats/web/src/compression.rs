@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use crate::{Error, Result, require_extension as extension};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -48,16 +48,6 @@ fn floats(doc: &Value, bin: &[u8], index: usize) -> Vec<f32> {
         .iter()
         .map(|v| f32::from_le_bytes(*v))
         .collect()
-}
-fn extension(doc: &mut Value, name: &str) {
-    for key in ["extensionsUsed", "extensionsRequired"] {
-        if !doc[key].is_array() {
-            doc[key] = json!([]);
-        }
-        if !doc[key].as_array().expect("array").iter().any(|v| v == name) {
-            doc[key].as_array_mut().expect("array").push(json!(name));
-        }
-    }
 }
 fn encode<const N: usize>(bytes: &[u8]) -> Result<Vec<u8>>
 where

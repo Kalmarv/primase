@@ -474,3 +474,88 @@ fn compressed_plain_nodes_omit_absent_matrix() {
     assert!(doc["nodes"][0].get("matrix").is_none_or(|m| m.is_array()));
     assert!(doc["nodes"][0]["scale"].is_array() || doc["nodes"][0]["matrix"].is_array());
 }
+
+#[test]
+fn texture_transforms_survive_instancing_and_compression() {
+    use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    let mut w = World::new();
+    let tex = w.spawn();
+    w.insert(
+        tex,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![200, 100, 50, 255]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let mat = w.spawn();
+    w.insert(
+        mat,
+        PbrMaterial {
+            base_color_texture: Some(TextureRef {
+                transform: Some(UvTransform {
+                    offset: [0.5, 0.25],
+                    scale: [2.0, 2.0],
+                    rotation: 0.0,
+                }),
+                ..TextureRef::new(tex)
+            }),
+            ..PbrMaterial::default()
+        },
+    );
+    let p = w.spawn();
+    let mut m = mesh();
+    m.primitives[0].material = Some(mat);
+    m.primitives[0].streams.insert(
+        Semantic::TexCoord(0),
+        Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+    );
+    w.insert(p, m);
+    for x in [0., 1., 2.] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: p,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3][0] = x;
+        w.insert(e, t);
+    }
+    let set = write(&w, &Options::default()).unwrap();
+    assert_eq!(set.index.tiles[0].instanced_placements, 3);
+    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    let used: Vec<&str> = doc["extensionsUsed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for e in [
+        "KHR_texture_transform",
+        "EXT_mesh_gpu_instancing",
+        "EXT_meshopt_compression",
+    ] {
+        assert!(used.contains(&e), "{e} not in {used:?}");
+    }
+    assert!(
+        !doc["extensionsRequired"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "KHR_texture_transform"),
+        "a transform is optional"
+    );
+    assert_eq!(
+        doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"]["KHR_texture_transform"],
+        serde_json::json!({"offset": [0.5, 0.25], "scale": [2.0, 2.0]})
+    );
+}

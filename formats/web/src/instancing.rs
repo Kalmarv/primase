@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use crate::{Error, Result, require_extension};
 use primase_core::{Transform, TransformKind};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -196,8 +196,7 @@ pub(super) fn apply(
             );
         }
         doc["nodes"] = json!(kept);
-        doc["extensionsUsed"] = json!([EXT]);
-        doc["extensionsRequired"] = json!([EXT]);
+        require_extension(&mut doc, EXT);
     } else {
         doc["nodes"] = json!(nodes);
     }

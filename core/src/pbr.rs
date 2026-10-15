@@ -21,8 +21,55 @@ pub enum Wrap {
     Mirror,
 }
 
+/// A transform of the texture coordinates a slot samples with, exactly glTF's `KHR_texture_transform` (in the world's
+/// texture convention: origin top-left, v down): `uv' = offset + R(rotation) * (scale * uv)`, `R(a)` taking (u, v) to
+/// (u cos a - v sin a, u sin a + v cos a). No reader sets a rotation yet.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct UvTransform {
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+    /// Radians.
+    pub rotation: f32,
+}
+
+impl UvTransform {
+    /// No change: offset 0, scale 1, rotation 0.
+    pub const IDENTITY: UvTransform = UvTransform {
+        offset: [0.0; 2],
+        scale: [1.0; 2],
+        rotation: 0.0,
+    };
+
+    /// The transform applied to one coordinate pair, in f32.
+    pub fn apply(&self, [u, v]: [f32; 2]) -> [f32; 2] {
+        let (u, v) = (u * self.scale[0], v * self.scale[1]);
+        let (u, v) = if self.rotation == 0.0 {
+            (u, v)
+        } else {
+            let (s, c) = self.rotation.sin_cos();
+            (u * c - v * s, u * s + v * c)
+        };
+        [u + self.offset[0], v + self.offset[1]]
+    }
+
+    /// A tiling and offset given with the texture origin bottom-left (`uv * scale + offset`, v up: Unity's
+    /// `_MainTex_ST`), for a reader that stores v as 1 - v and flips the texture's rows.
+    ///
+    /// The source samples its texture at v_s = v * scale_v + offset_v. In the world both the coordinate and the image
+    /// are flipped, so a world coordinate w = 1 - v must sample at 1 - v_s = 1 - (1 - w) * scale_v - offset_v =
+    /// w * scale_v + (1 - scale_v - offset_v): the scale is the same and the offset along v is 1 - scale_v - offset_v.
+    /// u is unchanged.
+    pub fn from_bottom_left(scale: [f32; 2], offset: [f32; 2]) -> UvTransform {
+        UvTransform {
+            offset: [offset[0], 1.0 - scale[1] - offset[1]],
+            scale,
+            rotation: 0.0,
+        }
+    }
+}
+
 /// A texture used by a material slot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct TextureRef {
     /// The texture entity (`core.texture` or `core.texture_file`).
     pub texture: Entity,
@@ -30,15 +77,18 @@ pub struct TextureRef {
     pub texcoord: u8,
     /// Wrap along u, then v.
     pub wrap: [Wrap; 2],
+    /// Applied to the coordinates before sampling; `None` is the identity.
+    pub transform: Option<UvTransform>,
 }
 
 impl TextureRef {
-    /// Sampling `TexCoord(0)` with repeat wrapping.
+    /// Sampling `TexCoord(0)` with repeat wrapping, untransformed.
     pub fn new(texture: Entity) -> Self {
         TextureRef {
             texture,
             texcoord: 0,
             wrap: [Wrap::Repeat; 2],
+            transform: None,
         }
     }
 }
@@ -125,5 +175,37 @@ impl PbrMaterial {
         ]
         .into_iter()
         .flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UvTransform;
+
+    #[test]
+    fn bottom_left_tiling_samples_the_same_texels() {
+        // a source coordinate and its tiling, all dyadic so every step is exact
+        let (scale, offset) = ([2.0f32, 0.5], [0.25f32, 0.125]);
+        let t = UvTransform::from_bottom_left(scale, offset);
+        assert_eq!(t.offset, [0.25, 0.375]);
+        for (u, v) in [(0.0f32, 0.0f32), (0.5, 0.25), (0.75, 1.0)] {
+            // the source samples its image at (u, v) * scale + offset; the world's image is flipped, so that texel is
+            // at 1 - v_s in the world
+            let source = [u * scale[0] + offset[0], v * scale[1] + offset[1]];
+            let world = t.apply([u, 1.0 - v]);
+            assert_eq!(world, [source[0], 1.0 - source[1]], "({u}, {v})");
+        }
+    }
+
+    #[test]
+    fn rotation_is_counter_clockwise_after_the_scale() {
+        let t = UvTransform {
+            offset: [0.0, 1.0],
+            scale: [0.5, 0.5],
+            rotation: std::f32::consts::FRAC_PI_2,
+        };
+        let [u, v] = t.apply([1.0, 0.0]);
+        assert!(u.abs() < 1e-7 && (v - 1.5).abs() < 1e-7, "{u} {v}");
+        assert_eq!(UvTransform::IDENTITY.apply([0.3, 0.7]), [0.3, 0.7]);
     }
 }

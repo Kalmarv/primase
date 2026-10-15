@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, Wrap};
+use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic,
     Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
@@ -168,6 +168,8 @@ pub fn fallback_material() -> PbrMaterial {
 }
 
 /// Components the glTF expresses itself, per kind of object; everything else with a JSON form goes to extras.
+/// The extension a texture slot's [`UvTransform`] is written as.
+const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME];
 const CONSUMED_PROTOTYPE: &[&str] = &[Name::NAME, Mesh::NAME, MaterialVariants::NAME, MeshFile::NAME];
 const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME];
@@ -195,6 +197,7 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         image_of_entity: BTreeMap::new(),
         image_by_hash: BTreeMap::new(),
         sampler_index: BTreeMap::new(),
+        texture_transform_used: false,
     };
     let json = w.document()?;
     let text = serde_json::to_vec(&json)?;
@@ -259,6 +262,8 @@ struct Writer<'w> {
     image_of_entity: BTreeMap<Entity, Option<usize>>,
     image_by_hash: BTreeMap<[u8; 32], usize>,
     sampler_index: BTreeMap<[Wrap; 2], usize>,
+    /// A written texture slot has a transform (`KHR_texture_transform` is used).
+    texture_transform_used: bool,
 }
 
 impl Writer<'_> {
@@ -317,6 +322,9 @@ impl Writer<'_> {
             "asset".into(),
             json!({"version": "2.0", "generator": concat!("primase-gltf ", env!("CARGO_PKG_VERSION"))}),
         );
+        if self.texture_transform_used {
+            root.insert("extensionsUsed".into(), json!([TEXTURE_TRANSFORM]));
+        }
         root.insert("scene".into(), json!(0));
         root.insert("scenes".into(), json!([Value::Object(scene)]));
         root.insert("nodes".into(), Value::Array(nodes));
@@ -924,8 +932,8 @@ impl Writer<'_> {
         Ok(f32s_value(xs))
     }
 
-    /// `{"index", "texCoord"}` for a texture slot, or `None` when its texture was skipped; adds the slot's
-    /// texture coordinate set to `sets`.
+    /// `{"index", "texCoord"}` (and its transform as `KHR_texture_transform`) for a texture slot, or `None` when its
+    /// texture was skipped; adds the slot's texture coordinate set to `sets`.
     fn texture_info(&mut self, r: Option<TextureRef>, sets: &mut BTreeSet<u8>) -> Result<Option<Value>> {
         let Some(r) = r else { return Ok(None) };
         let Some(index) = self.texture(r)? else {
@@ -937,6 +945,26 @@ impl Writer<'_> {
         t.insert("index".into(), json!(index));
         if r.texcoord != 0 {
             t.insert("texCoord".into(), json!(r.texcoord));
+        }
+        if let Some(x) = r.transform.filter(|x| *x != UvTransform::IDENTITY) {
+            let mut k = Map::new();
+            if x.offset != [0.0; 2] {
+                k.insert("offset".into(), self.factors(r.texture, &x.offset)?);
+            }
+            if x.rotation != 0.0 {
+                k.insert(
+                    "rotation".into(),
+                    self.factors(r.texture, &[x.rotation])?[0].take(),
+                );
+            }
+            if x.scale != [1.0; 2] {
+                k.insert("scale".into(), self.factors(r.texture, &x.scale)?);
+            }
+            t.insert(
+                "extensions".into(),
+                json!({ TEXTURE_TRANSFORM: Value::Object(k) }),
+            );
+            self.texture_transform_used = true;
         }
         Ok(Some(Value::Object(t)))
     }

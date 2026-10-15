@@ -133,6 +133,7 @@ pub fn lower_material(m: &SkateMaterial, w: &World, log: &mut PassLog) -> PbrMat
             texture: t,
             texcoord: 0,
             wrap: [wrap; 2],
+            transform: None,
         }),
         None => {
             let c = m.base_color.unwrap_or([128, 128, 128, 255]);

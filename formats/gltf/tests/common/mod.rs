@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, Wrap};
+use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     Entity, Instance, MaterialVariants, Mesh, Name, Opaque, OpaqueData, Primitive, Semantic, Source, Stream,
     TextureFile, Tile, Topology, Transform, World,
@@ -211,6 +211,11 @@ pub fn build(dir: &Path) -> Built {
                 texture: tex_normal,
                 texcoord: 1,
                 wrap: [Wrap::Clamp, Wrap::Mirror],
+                transform: Some(UvTransform {
+                    offset: [0.25, -0.5],
+                    scale: [2.0, 4.0],
+                    rotation: 0.0,
+                }),
             }),
             normal_scale: 0.5,
             emissive: [0.1, 0.0, 0.0],

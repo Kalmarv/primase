@@ -108,6 +108,19 @@ struct Placement {
     transform: Transform,
     mesh: Option<Mesh>,
 }
+/// Add `name` to a glTF document's `extensionsUsed` and `extensionsRequired`, keeping the extensions already there.
+pub(crate) fn require_extension(doc: &mut serde_json::Value, name: &str) {
+    for key in ["extensionsUsed", "extensionsRequired"] {
+        if !doc[key].is_array() {
+            doc[key] = serde_json::json!([]);
+        }
+        let list = doc[key].as_array_mut().expect("array");
+        if !list.iter().any(|v| v == name) {
+            list.push(serde_json::json!(name));
+        }
+    }
+}
+
 fn point(t: Transform, p: [f32; 3]) -> [f64; 3] {
     std::array::from_fn(|k| {
         t.cols[3][k] as f64
