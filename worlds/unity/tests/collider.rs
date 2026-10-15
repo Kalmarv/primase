@@ -346,6 +346,51 @@ fn collision_matches_the_colliders() {
                     problems.push("a triangle faces inward".into());
                 }
             }
+            UnityColliderShape::Mesh {
+                geometry,
+                convex: true,
+                ..
+            } => {
+                // every source vertex inside the hull, the hull's vertices among them, triangles outward
+                let g = geometry.as_ref().unwrap();
+                let source: Vec<[f64; 3]> = g
+                    .positions
+                    .iter()
+                    .map(|s| to_world([0, 1, 2].map(|k| f64::from(s[k]))))
+                    .collect();
+                let n = world.len() as f64;
+                let mid = [0, 1, 2].map(|k| world.iter().map(|p| p[k]).sum::<f64>() / n);
+                if !outward(&|_| mid) {
+                    problems.push("a hull triangle faces inward".into());
+                }
+                for tri in &col.triangles {
+                    let [a, b, cc] = tri.map(|i| world[i as usize]);
+                    let (u, v) = (sub(b, a), sub(cc, a));
+                    let nn = [
+                        u[1] * v[2] - u[2] * v[1],
+                        u[2] * v[0] - u[0] * v[2],
+                        u[0] * v[1] - u[1] * v[0],
+                    ];
+                    let l = len(nn);
+                    if l == 0.0 {
+                        continue;
+                    }
+                    let out = source
+                        .iter()
+                        .map(|q| dot(sub(*q, a), nn) / l)
+                        .fold(f64::MIN, f64::max);
+                    if out > 1e-6 * magnitude.max(1.0) + bound {
+                        problems.push(format!("a source vertex {out:e} outside the hull"));
+                        break;
+                    }
+                }
+                if !world
+                    .iter()
+                    .all(|p| source.iter().any(|q| len(sub(*p, *q)) <= bound))
+                {
+                    problems.push("a hull vertex not among the source's".into());
+                }
+            }
             UnityColliderShape::Mesh { geometry, .. } => {
                 let g = geometry.as_ref().unwrap();
                 if col.triangles.len() != g.triangles.len() || col.positions.len() != g.positions.len() {

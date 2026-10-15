@@ -7,14 +7,14 @@
 //! - a sphere's radius scales by the largest absolute axis scale, a capsule's height by its axis's scale and its
 //!   radius by the largest of the other two; both are built in world space (tessellated by `primase_meshops`, counted)
 //!   and mapped back through the inverse of the entity's matrix;
-//! - a mesh collider is its source mesh's triangles; a convex one collides with the hull, not yet built: its source
-//!   mesh stands in (counted);
+//! - a mesh collider is its source mesh's triangles; a convex one is the convex hull of their vertices (exact; PhysX
+//!   cooks at most 255 polygons, larger hulls are counted);
 //! - a terrain collides with its heightfield (its collider's own heights when they differ from the drawn ones are not
 //!   read: counted), every cell split along one diagonal as the drawn terrain.
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, Transform, World};
-use primase_meshops::{box_mesh, capsule, sphere};
+use primase_meshops::{box_mesh, capsule, convex_hull, sphere};
 
 use crate::components::{UnityCollider, UnityColliderShape, UnityTerrain};
 use crate::level::UNITY;
@@ -152,7 +152,27 @@ fn soup(c: &UnityCollider, t: &Transform, log: &mut PassLog) -> Result<Option<So
                 return Ok(None);
             };
             if *convex {
-                log.approximate("convex mesh colliders as their source mesh (hull pending)", 1);
+                // PhysX collides with the hull of the triangles' vertices
+                let used: std::collections::BTreeSet<u32> = g.triangles.iter().flatten().copied().collect();
+                let points: Vec<[f32; 3]> = used
+                    .iter()
+                    .map(|&i| UNITY.point(g.positions[i as usize]))
+                    .collect();
+                let h = match convex_hull(&points) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        log.count(&format!("convex mesh colliders without a hull ({})", e.0), 1);
+                        return Ok(None);
+                    }
+                };
+                log.count("convex mesh colliders", 1);
+                if h.indices.len() / 3 > 255 {
+                    log.approximate(
+                        "convex hulls over 255 triangles (PhysX cooks at most 255 polygons)",
+                        1,
+                    );
+                }
+                return Ok(Some((h.positions, triangles(&h.indices))));
             }
             log.count("mesh colliders", 1);
             (
@@ -229,7 +249,7 @@ impl Pass for LowerUnityCollision {
         &["core.collision"]
     }
     fn approximates(&self) -> &'static str {
-        "spheres and capsules tessellated; convex mesh colliders as their source mesh; one diagonal per terrain cell"
+        "spheres and capsules tessellated; one diagonal per terrain cell"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = lower_unity_collision(w).map_err(|e| e.to_string())?;
