@@ -685,6 +685,18 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
     let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
     n.role = TexRole::Normal;
     n.normal = Some(NormalConvention {
+        basis: primase_core::NormalBasis::BitangentTangent,
+        ..NormalConvention::GLTF
+    });
+    assert!(
+        write(&b.world, &options(&b))
+            .unwrap_err()
+            .to_string()
+            .contains("tangent/bitangent basis")
+    );
+    let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
+    n.role = TexRole::Normal;
+    n.normal = Some(NormalConvention {
         green: NormalGreen::Down,
         z: NormalZ::Rebuild,
         x: NormalX::Red,

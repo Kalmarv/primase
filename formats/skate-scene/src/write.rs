@@ -437,13 +437,12 @@ impl Writer<'_> {
             let src = w
                 .get::<TextureFile>(e)
                 .ok_or_else(|| bad(format!("texture '{}' has no core.texture_file", t.key)))?;
-            // v1 says a normal map's green and Z convention, not where its X is
-            if w.get::<Texture>(e)
-                .and_then(|x| x.normal)
-                .is_some_and(|n| n.x != NormalX::Red)
-            {
+            // v1 cannot express a different X channel or tangent-plane basis.
+            if w.get::<Texture>(e).and_then(|x| x.normal).is_some_and(|n| {
+                n.x != NormalX::Red || n.basis != primase_core::NormalBasis::TangentBitangent
+            }) {
                 return Err(bad(format!(
-                    "texture '{}': a normal map with X outside red has no scene-interchange v1 form; run                      normalize-normals first",
+                    "texture '{}': a normal map with X outside red or a non-tangent/bitangent basis has no scene-interchange v1 form; run normalize-normals first",
                     t.key
                 )));
             }

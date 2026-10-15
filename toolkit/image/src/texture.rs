@@ -1,8 +1,8 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
-    ColorSpace, Entity, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
-    TextureFile, World,
+    ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
+    Texture, TextureFile, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 use std::{
@@ -146,7 +146,10 @@ pub fn texture_level_png(t: &Texture, level: usize) -> Result<Vec<u8>> {
 }
 /// Explicitly convert normal maps to glTF's convention: X in red, green up, stored
 /// positive-hemisphere Z. X kept in alpha moves to red (alpha unchanged); green flips as 255-G; Z=sqrt(max(0,1-x*x-y*y)), x/y=2*byte/255-1,
-/// encoded with nearest rounding. Every stored mip is decoded to RGBA8; alpha
+/// encoded with nearest rounding. Bitangent/tangent source coordinates swap
+/// after source-channel extraction and sign decoding. Mesh tangents must describe
+/// the same frame; this pass does not regenerate tangents from UV coordinates.
+/// Every stored mip is decoded to RGBA8; alpha
 /// and colour-space metadata stay unchanged. Already-conforming textures remain
 /// byte-identical and keep file provenance. Missing normal metadata is an error.
 pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
@@ -170,6 +173,9 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
                 if convention.green == NormalGreen::Down {
                     p[1] = 255 - p[1];
                 }
+                if convention.basis == NormalBasis::BitangentTangent {
+                    p.swap(0, 1);
+                }
                 if convention.z == NormalZ::Rebuild {
                     let x = p[0] as f64 / 127.5 - 1.;
                     let y = p[1] as f64 / 127.5 - 1.;
@@ -187,6 +193,9 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         converted.normal = Some(NormalConvention::GLTF);
         changes.push((e, converted));
         log.count("normal textures converted", 1);
+        if convention.basis == NormalBasis::BitangentTangent {
+            log.count("normal tangent-plane axes swapped", 1);
+        }
         if convention.x == NormalX::Alpha {
             log.count("x moved from alpha to red", 1);
         }

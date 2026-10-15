@@ -145,3 +145,33 @@ fn rgb_png_has_no_alpha_channel() {
     assert_eq!(bytes, primase_image::write_png_rgb(2, 1, &rgb).unwrap());
     assert!(primase_image::write_png_rgb(2, 1, &rgb[..5]).is_err());
 }
+#[test]
+fn normalization_swaps_source_basis_after_channel_and_sign_decode() {
+    let mut world = World::new();
+    let e = world.spawn();
+    let mut t = texture();
+    t.levels = vec![[255, 64, 0, 200].repeat(4), vec![255, 128, 0, 128]];
+    t.normal = Some(NormalConvention {
+        green: NormalGreen::Down,
+        z: NormalZ::Rebuild,
+        x: NormalX::Alpha,
+        basis: NormalBasis::BitangentTangent,
+    });
+    world.insert(e, t);
+    world.insert(
+        e,
+        TextureFile {
+            path: "source.dds".into(),
+        },
+    );
+    let log = normalize_normals(&mut world).unwrap();
+    assert_eq!(log.counts.get("normal tangent-plane axes swapped"), Some(&1));
+    let t = world.get::<Texture>(e).unwrap();
+    assert_eq!(&t.levels[0][..4], &[191, 200, 211, 200]);
+    assert_eq!(&t.levels[1], &[127, 128, 255, 128]);
+    assert_eq!(t.normal, Some(NormalConvention::GLTF));
+    assert!(!world.has::<TextureFile>(e));
+    let levels = t.levels.clone();
+    assert!(normalize_normals(&mut world).unwrap().counts.is_empty());
+    assert_eq!(world.get::<Texture>(e).unwrap().levels, levels);
+}

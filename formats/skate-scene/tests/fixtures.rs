@@ -445,6 +445,17 @@ fn normal_maps_with_x_in_alpha_are_refused() {
         e.contains("X outside red") && e.contains("normalize-normals"),
         "{e}"
     );
+    w.get_mut::<Texture>(te).unwrap().normal = Some(NormalConvention {
+        basis: primase_core::NormalBasis::BitangentTangent,
+        ..NormalConvention::GLTF
+    });
+    let e = scene::write(&w, &tmp("bitangent_first_out"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("non-tangent/bitangent basis") && e.contains("normalize-normals"),
+        "{e}"
+    );
 }
 
 #[test]

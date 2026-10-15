@@ -1016,7 +1016,7 @@ impl Writer<'_> {
                 return Err(Error::World {
                     entity: e,
                     detail:
-                        "normal texture requires X in red, green up and stored Z; run normalize-normals first"
+                        "normal texture requires tangent/bitangent basis, X in red, green up and stored Z; run normalize-normals first"
                             .into(),
                 });
             }
