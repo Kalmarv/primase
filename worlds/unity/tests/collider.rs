@@ -20,6 +20,46 @@ use primase_unity::level::{UNITY, read_level};
 use primase_unity::player::Player;
 use serde_json::{Value as Json, json};
 
+/// The farthest a displacement of at most half of `step` per coordinate can move through the linear map `m` (rows):
+/// each output coordinate by at most step / 2 times its row's absolute sum, so in length by step / 2 times the norm of
+/// those sums. Exact for the box, sheared or not (a largest column norm is not: it holds for orthogonal columns only).
+fn snapping(m: &[[f64; 3]; 3], step: f64) -> f64 {
+    step / 2.0
+        * m.iter()
+            .map(|r| r.iter().map(|x| x.abs()).sum::<f64>().powi(2))
+            .sum::<f64>()
+            .sqrt()
+}
+
+#[test]
+fn snapping_holds_under_shear() {
+    // a sheared matrix: the corners of the step box move farther than sqrt(3) / 2 step times the largest column
+    let m = [[1.0, 0.9, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let step = 1.0;
+    let column = (0..3)
+        .map(|j| (0..3).map(|i| m[i][j] * m[i][j]).sum::<f64>().sqrt())
+        .fold(0.0, f64::max);
+    let mut farthest = 0f64;
+    for corner in 0..8 {
+        let d: [f64; 3] = std::array::from_fn(|k| if corner & (1 << k) != 0 { 0.5 } else { -0.5 });
+        let moved: f64 = m
+            .iter()
+            .map(|r| (r[0] * d[0] + r[1] * d[1] + r[2] * d[2]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        farthest = farthest.max(moved);
+    }
+    assert!(
+        farthest > 3f64.sqrt() / 2.0 * step * column,
+        "the column bound falls short"
+    );
+    assert!(farthest <= snapping(&m, step) + 1e-12);
+    assert!(
+        (farthest - snapping(&m, step)).abs() < 1e-12,
+        "the box bound is reached at a corner"
+    );
+}
+
 fn xyz(v: [f32; 3]) -> Json {
     json!({"x": f64::from(v[0]), "y": f64::from(v[1]), "z": f64::from(v[2])})
 }
@@ -352,8 +392,8 @@ fn collision_matches_the_colliders() {
                 ..
             } => {
                 // every source vertex inside the hull, the hull's vertices among them, triangles outward; allowed:
-                // the hull's snapping (sqrt(3) / 2 of its grid step, in the collider's space, scaled to the world by the
-                // matrix's largest column) on top of the world transform's rounding
+                // the hull's snapping (half a grid step per coordinate in the collider's space, through the matrix:
+                // `snapping`) on top of the world transform's rounding
                 let g = geometry.as_ref().unwrap();
                 let used: std::collections::BTreeSet<u32> = g.triangles.iter().flatten().copied().collect();
                 let input: Vec<[f32; 3]> = used
@@ -361,7 +401,9 @@ fn collision_matches_the_colliders() {
                     .map(|&i| UNITY.point(g.positions[i as usize]))
                     .collect();
                 let step = primase_meshops::hull_step(&input).unwrap();
-                let snap = 3f64.sqrt() / 2.0 * step * (0..3).map(col_len).fold(0.0, f64::max);
+                let linear: [[f64; 3]; 3] =
+                    std::array::from_fn(|i| std::array::from_fn(|j| f64::from(unity.cols[j][i])));
+                let snap = snapping(&linear, step);
                 let source: Vec<[f64; 3]> = g
                     .positions
                     .iter()
