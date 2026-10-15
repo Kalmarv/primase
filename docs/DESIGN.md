@@ -179,6 +179,9 @@ un-lowered material data kept in `extras.primase` next to the baked PBR), and th
 **After v1:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'
 real material setups (layered materials, shading recipes, spec/normal workflows) rebuilt as Blender node trees by a
 Blender-side importer reading our glTF plus a materials extension.
+Also after v1: a **native skate. level writer** that writes the game's own level data directly instead of going
+through ReSkate Studio: first test fixtures, deterministic identities and a round-trip harness, then replacing one
+mesh in a small test level and loading it in game.
 
 Order of work: M0 core + scene-interchange read/write; M1 glTF; M2 the toolkit pieces with their gates (texcodec, dds,
 image, compress, hash, vertex, meshops); M3 the ReSkate writer; M4+ world readers one at a time, each
