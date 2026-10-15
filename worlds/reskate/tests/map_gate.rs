@@ -37,6 +37,9 @@
 //! budget's base colour factors, the grind length; to 2 decimals in pieces.json, our own log), our unrounded f32 may
 //! differ from its number by the rounding (plus one f32 step), counted and named per rounding.
 //!
+//! The reference's JSON is read as Studio reads it: its negative zeros, written as the integer `-0`, are 0 (counted);
+//! we write every zero unsigned.
+//!
 //! Not compared: `stats.json` `totals.seconds` (run time), and our own values that depend on our encoders: the PNG
 //! compressor and the GLB JSON text (`textures_index.json` `bytes` of `.png` entries, `stats.json`
 //! `totals.texture_file_bytes` and `totals.mesh_file_bytes`).
@@ -785,6 +788,21 @@ fn fold_rounded(file: &str, theirs: &Value, ours: &mut Value, path: &str, r: &mu
     }
 }
 
+/// The reference as Studio reads it: the reference writes a negative zero as the integer `-0`, which Studio's JSON
+/// reader takes as 0 (serde_json, unlike it, as -0.0), so every negative zero of the reference becomes 0, counted. We
+/// write every zero unsigned.
+fn unsign_reference(v: &mut Value, count: &mut u64) {
+    match v {
+        Value::Number(n) if n.as_f64().is_some_and(|x| x == 0.0 && x.is_sign_negative()) => {
+            *v = Value::from(0.0);
+            *count += 1;
+        }
+        Value::Array(items) => items.iter_mut().for_each(|x| unsign_reference(x, count)),
+        Value::Object(m) => m.values_mut().for_each(|x| unsign_reference(x, count)),
+        _ => {}
+    }
+}
+
 /// The numbers the JSON comparisons saw, summed.
 #[derive(Default)]
 struct Numbers {
@@ -850,6 +868,7 @@ fn rust_writer_matches_the_reference() {
     let mut dds_flag: Vec<String> = Vec::new();
     let mut numbers = Numbers::default();
     let mut rounded = Rounded::default();
+    let mut zero_signs = 0u64;
     let mut normals = Normals::default();
     let mut positions = Positions::default();
     let mut sections = GateReport::new(
@@ -945,8 +964,9 @@ fn rust_writer_matches_the_reference() {
                 }
             } else if rel.ends_with(".glb") {
                 match (glb_parts(&a), glb_parts(&b)) {
-                    (Ok((ja, ba)), Ok((mut jb, bb))) => {
+                    (Ok((mut ja, ba)), Ok((mut jb, bb))) => {
                         renames.apply(&mut jb);
+                        unsign_reference(&mut ja, &mut zero_signs);
                         let c = compare_json(&ja, &jb, 0);
                         numbers.add(&c);
                         if c.equal() && ba == bb {
@@ -1009,7 +1029,8 @@ fn rust_writer_matches_the_reference() {
                     (Err(e), _) | (_, Err(e)) => glbs.fail(&item, e),
                 }
             } else if rel.ends_with(".json") {
-                let ja = prepared(rel, serde_json::from_slice(&a).unwrap(), None);
+                let mut ja = prepared(rel, serde_json::from_slice(&a).unwrap(), None);
+                unsign_reference(&mut ja, &mut zero_signs);
                 let mut jb = prepared(rel, serde_json::from_slice(&b).unwrap(), Some(&renames));
                 fold_rounded(rel, &ja, &mut jb, "$", &mut rounded);
                 let c = compare_json(&ja, &jb, 0);
@@ -1116,6 +1137,9 @@ fn rust_writer_matches_the_reference() {
         positions.unlifted_moved,
         positions.max_lifted_abs,
         positions.max_ratio
+    );
+    println!(
+        "reference writes negative zero as -0, which Studio reads as 0 (we write 0): {zero_signs} reference numbers read so (JSON files and GLB JSON)"
     );
     for (name, n) in &rounded.count {
         println!(
