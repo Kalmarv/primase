@@ -141,6 +141,9 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_FROMSOFT_OBJECT_ORACLE` | independently decoded main-HKX body fixtures for reference bd77fcb; worlds/fromsoft/tests/object_collision.rs |
 | `PRIMASE_FROMSOFT_OBJECT_SCENE` | reference scene folder with scene.json, export_report.json and collision/objects.bin from corrected convex decoding; worlds/fromsoft/tests/object_scene.rs |
 | `PRIMASE_FROMSOFT_OUTPUT` | fresh output folder for written scene and object-collision gates; worlds/fromsoft/README.md |
+| `PRIMASE_FROMSOFT_EXTRAS_ORACLE` | independent stored EDGE/BTL records and loose fixtures; worlds/fromsoft/tests/extras_census.rs |
+| `PRIMASE_FROMSOFT_EXTRAS_SCENE` | reference scene folder with lights/grind tables and markers; worlds/fromsoft/tests/extras_scene.rs |
+| `PRIMASE_FROMSOFT_EXTRAS_OUTPUT` | fresh extras scene output folder; worlds/fromsoft/tests/extras_scene.rs |
 | `PRIMASE_FROMSOFT_NAMES` | caller-provided UTF-8 Sekiro path dictionary |
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |

@@ -215,12 +215,21 @@ margin. Far map pieces are excluded by default. Missing model IDs are reported.
 `sekiro::prepare_scene_assets` writes prototype GLBs and PNG images through
 the toolkit into an empty asset directory, attaching file components required
 by `primase_skate_scene::write`. The scene output directory is separate.
-Normal maps use the consumer's stored tangent frame, not a curl-based green
-direction: R/G are swapped, positive Z is rebuilt by the shared image pass,
-and the result uses glTF green-up. Tangent xyz is reflected with geometry and
-w is negated for the handedness change.
-Layered materials retain bindings for a later bake; collision/Havok, ledges,
-lights and shader baking are not yet imported.
+Normal maps retain the source convention until explicit consumer lowering:
+glTF uses the stored tangents and swapped R/G; the skate path uses the
+UV-derived frame, keeps R unswapped and inverts G. Both rebuild positive Z.
+Raw map/object collision, ledges, lights and travel/spawn markers are assembled.
+Layered shader baking, roof smoothing and opened-up surfaces remain separate passes.
+
+Extras use named lowering policies. Ledges join endpoints within one centimetre
+in Euclidean distance, retain chains at least one metre long, and select wood
+or concrete from nearby game-map collision. The reference's quantized joining
+leaves two additional near-closed castle curves open; retained points and all
+326 surface assignments match. Lights use exact sRGB conversion; the intensity
+multiplier of 100 and local +Z spot axis remain unverified conversion policies.
+The castle comparison counts 70 channels differing from power-2.2 conversion
+(maximum 0.008515), with 34 lights, 326 curves and 11 markers. Marker positions
+are exact; yaw is compared within 0.0051 degrees of the rounded reference.
 
 The installed-area integration gate uses `PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6`,
 `PRIMASE_FROMSOFT_SCENE`, `PRIMASE_SCENE_SKATE` (independent validator executable
@@ -301,3 +310,25 @@ The whole-install collision census includes map h/l/f binders and all HKX member
 of object binders, counting nonphysics animation/cloth variants separately.
 Named character/ragdoll binders are counted but outside this reader's scope.
 Container parsing does not imply geometry support for every observed shape.
+
+## Rigid FLVER lowering
+
+`fromsoft-apply-rigid-skinning` requires and consumes `fromsoft.flver`, and
+provides `fromsoft.rigid_model`. Raw FLVER parsing and raw geometry remain
+available unchanged. Area assembly lowers before constructing render geometry
+and selecting an object's dominant render-area collision material.
+
+Static meshes use the implicit unit-weight binding in NORMAL.w. The pass applies
+the bone hierarchy's scale, X/Z/Y rotation and translation to positions, the
+inverse transpose to normals, and the linear transform to tangents. Reflections
+reverse tangent handedness and face winding. Invalid hierarchies and singular
+transforms are errors. Requested non-unit or multiple rigid influences are
+refused and counted; no partial world mutation occurs on failure.
+
+Dynamic meshes already store model-space bind-pose geometry and are animated at
+runtime. They remain unchanged, counted separately, and are not submitted to
+rigid lowering. This is a static bind-pose output, not an animation evaluator.
+The full-castle gate covers 749 placed prototypes, with 8,660,257 stored vertices;
+positions agree within 0.2 mm and inverse-transpose normal components within
+2e-5 scaled by max(1, magnitude). Placed collision is compared bidirectionally
+within 0.2 mm with surface IDs enforced, independent of convex triangulation.

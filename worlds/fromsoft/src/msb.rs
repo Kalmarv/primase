@@ -326,3 +326,38 @@ impl MapOffset {
         .transform()
     }
 }
+/// Checkpoint/warp spawn region stored in the common world frame. Its facing
+/// convention and human-readable labels are lowering policy.
+#[derive(Clone, Debug)]
+pub struct SpawnPoint {
+    pub name: String,
+    pub position: [f32; 3],
+    pub rotation_degrees: [f32; 3],
+}
+impl MapLayout {
+    pub fn spawn_points(&self) -> Result<Vec<SpawnPoint>> {
+        let section = self
+            .sections
+            .iter()
+            .find(|s| s.name == "POINT_PARAM_ST")
+            .ok_or_else(|| invalid("MSB", 0, "missing region section"))?;
+        let mut points = Vec::new();
+        for data in &section.records {
+            let v = View {
+                data,
+                format: "MSB region",
+                be: false,
+            };
+            if v.u32(8)? != 8 {
+                continue;
+            }
+            v.slice(0, 96)?;
+            points.push(SpawnPoint {
+                name: text(&v, pointer(&v, 0, 96)?)?,
+                position: vector(&v, 20)?,
+                rotation_degrees: vector(&v, 32)?,
+            });
+        }
+        Ok(points)
+    }
+}

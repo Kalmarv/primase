@@ -38,5 +38,7 @@ pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString
         detail: detail.to_string(),
     }
 }
+pub mod btl;
+pub mod edge;
 pub mod rigid;
 pub mod tpf;

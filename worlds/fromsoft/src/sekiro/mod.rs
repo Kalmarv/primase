@@ -1,6 +1,9 @@
-//! Sekiro area assembly: geometry and raw map/object collision.
+//! Sekiro area assembly: geometry, raw collision, ledges, lights and markers.
 mod assets;
 pub mod collision;
+pub mod extras;
+pub mod ledges;
+pub mod lights;
 pub mod normals;
 pub mod objects;
 mod textures;
@@ -44,6 +47,7 @@ impl Default for Options {
 #[derive(Default, Debug)]
 pub struct Report {
     pub rigid_skinning: primase_core::pass::PassLog,
+    pub extras: extras::Report,
     pub collision: collision::Report,
     pub object_collision: objects::Report,
     pub prototypes: usize,
@@ -405,14 +409,17 @@ pub fn read_area(
         report.placements += 1;
     }
     report.collision = collision::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
+    report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
     world.insert_resource(SkateScene {
         name: format!("sekiro_{area}"),
         generator: Some("primase".into()),
         region: options.region,
         placements: Some(TableRef::single("tables/placements.bin")),
+        lights: Some(TableRef::single("tables/lights.bin")),
+        grind_curves: Some(TableRef::single("tables/grind.bin")),
         warnings: Some(vec![
-            "Unbaked geometry and raw collision; extras, roof smoothing and opened-up surfaces are not imported.".into(),
+            "Unbaked geometry and raw collision; roof smoothing and opened-up surfaces are not imported. Lights use the named sRGB/intensity/spot-axis conversion policy.".into(),
         ]),
         ..Default::default()
     });
