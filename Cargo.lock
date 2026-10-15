@@ -829,6 +829,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dds",
+ "primase-dxbc",
  "primase-gltf",
  "primase-hash",
  "primase-havok",

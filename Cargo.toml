@@ -51,6 +51,7 @@ primase-meshops = { path = "toolkit/meshops" }
 primase-compress = { path = "toolkit/compress" }
 primase-hash = { path = "toolkit/hash" }
 primase-havok = { path = "toolkit/havok" }
+primase-dxbc = { path = "toolkit/dxbc" }
 primase-skate-scene = { path = "formats/skate-scene" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }

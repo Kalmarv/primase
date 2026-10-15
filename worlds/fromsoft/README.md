@@ -361,3 +361,32 @@ Cases with `assemble: true` also run full area assembly, compare its retained
 records and verify no matching material is attached to render geometry. This
 allows inventories without choosing a normal basis for unrelated shaders. Exported part indices must be mapped
 back to original FLVER mesh indices when layer splitting changes them.
+
+### Bounded layered-material pilot
+
+`layer_bake` binds the reflected SM5 resources for the Multiple material families.
+It is a static preview policy: identity world transform, upward normal, stored
++X tangent, overhead camera, white instance colour, constant layer weights and
+one UV set. It does not claim those constants or its base-mip bilinear wrap
+sampler reproduce runtime derivatives or sampler descriptors. Albedo RGB is
+linearized before filtering; alpha and data channels remain linear. Missing
+bindings, zero-initialized buffer words, and frozen policies are counted.
+Normal output inverts the binary G-buffer bias and retains the source tangent
+basis; consumer lowering remains separate. The main albedo supplies alpha.
+
+The optional `PRIMASE_FROMSOFT_LAYER_PILOT` fixture directory contains:
+
+- `cases.json`: array of `{id, model, mtd, shader, switch}`.
+- `<id>.mtd` and `<id>.ppo`: original material and pixel-shader bytes.
+- `<id>.json`: `bindings` entries `{kind,path,scale:[u,v]}` and `images`
+  keyed by texture stem, each `{width,height,file,dds}`. `file` is RGBA8
+  decoded by the independent value oracle; `dds` is the original texture.
+- `reference.json`: array `{id,cap,variant,size,period:[u,v]}` with optional
+  timing metadata. Variants are identity, mixed weights/tint, and all weights
+  one with detail zero (defined in `tests/layer_pilot.rs`).
+- `<id>-<cap>-<variant>-{albedo,normal}.rgba`: independent bake output.
+
+The pilot reports max/p99 per channel, time, decoded image bytes, and executed
+instructions/samples per pixel. It compares identical decoded inputs separately
+from D3D-decoded inputs. Its initial one-level output bound is a hypothesis;
+an over-bound result requires diagnosis before any whole-area bake.
