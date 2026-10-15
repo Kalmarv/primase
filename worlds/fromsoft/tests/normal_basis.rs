@@ -90,31 +90,86 @@ fn curl_verdicts_are_named_measurements() -> Result<()> {
 }
 
 #[test]
-fn axis_conversion_preserves_encoded_values_and_mips() {
-    use primase_core::{
-        ColorSpace, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
-    };
-    let mut t = Texture {
+fn source_bytes_wait_for_consumer_selection() {
+    use primase_core::{ColorSpace, NormalConvention, TexFormat, TexRole, Texture, World};
+    use primase_fromsoft::sekiro::normals::{self, Consumer};
+    let source = vec![vec![10, 20, 30, 40, 50, 60, 70, 80], vec![90, 100, 110, 120]];
+    let t = Texture {
         width: 2,
         height: 1,
         format: TexFormat::Rgba8Unorm,
-        levels: vec![vec![10, 20, 30, 40, 50, 60, 70, 80], vec![90, 100, 110, 120]],
+        levels: source.clone(),
         color_space: ColorSpace::Linear,
         role: TexRole::Normal,
-        normal: None,
+        normal: Some(normals::SOURCE),
     };
-    primase_fromsoft::sekiro::normals::swap_normal_axes(&mut t).unwrap();
-    assert_eq!(
-        t.levels,
-        [vec![20, 10, 30, 40, 60, 50, 70, 80], vec![100, 90, 110, 120]]
+    let mut world = World::default();
+    let e = world.spawn();
+    world.insert(e, t);
+    let mut skate = World::default();
+    let se = skate.spawn();
+    skate.insert(se, world.get::<Texture>(e).unwrap().clone());
+    normals::lower(&mut skate, Consumer::Skate).unwrap();
+    let st = skate.get::<Texture>(se).unwrap();
+    for (got, raw) in st.levels.iter().zip(&source) {
+        for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
+            assert_eq!([g[0], g[1], g[3]], [r[0], 255 - r[1], r[3]]);
+        }
+    }
+    assert_eq!(st.normal, Some(NormalConvention::GLTF));
+    assert!(
+        normals::lower(&mut skate, Consumer::Skate)
+            .unwrap()
+            .counts
+            .is_empty()
     );
-    assert_eq!(
-        t.normal,
-        Some(NormalConvention {
-            green: NormalGreen::Up,
-            z: NormalZ::Rebuild,
-            x: NormalX::Red,
-            basis: primase_core::NormalBasis::TangentBitangent,
-        })
+    assert_eq!(world.get::<Texture>(e).unwrap().levels, source);
+    assert_eq!(world.get::<Texture>(e).unwrap().normal, Some(normals::SOURCE));
+    let log = normals::lower(&mut world, Consumer::Gltf).unwrap();
+    assert_eq!(log.counts["normal tangent-plane axes swapped"], 1);
+    let t = world.get::<Texture>(e).unwrap();
+    assert_eq!(t.normal, Some(NormalConvention::GLTF));
+    for (got, raw) in t.levels.iter().zip(&source) {
+        for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
+            assert_eq!([g[0], g[1], g[3]], [r[1], r[0], r[3]]);
+        }
+    }
+    assert!(
+        normals::lower(&mut world, Consumer::Gltf)
+            .unwrap()
+            .counts
+            .is_empty()
     );
+}
+#[test]
+fn uv_frame_classes_remain_measurements() -> Result<()> {
+    let Some(path) = real_data("PRIMASE_FROMSOFT_UV_FRAME_CENSUS") else {
+        return Ok(());
+    };
+    let input = std::fs::read_to_string(path)?;
+    let mut textures = 0;
+    let mut total = 0f64;
+    let mut area = std::collections::BTreeMap::<String, f64>::new();
+    for line in input.lines().skip(1).filter(|s| !s.is_empty()) {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 5);
+        let weight: f64 = fields[1].parse()?;
+        assert!(weight.is_finite() && weight >= 0.);
+        total += weight;
+        textures += 1;
+        for class in fields[4].split(", ") {
+            let (name, fraction) = class.rsplit_once(' ').ok_or("class fraction")?;
+            let fraction: f64 = fraction.parse()?;
+            assert!((0. ..=1.).contains(&fraction));
+            *area.entry(name.to_owned()).or_default() += weight * fraction;
+        }
+    }
+    assert!(textures > 0 && total > 0.);
+    println!(
+        "UV-frame census {textures} textures, area {total} m2; rounded source fractions, not per-texture conversion rules"
+    );
+    for (class, weight) in area {
+        println!("UV-frame {class}: {} percent area", weight / total * 100.);
+    }
+    Ok(())
 }

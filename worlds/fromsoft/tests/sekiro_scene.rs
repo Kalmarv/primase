@@ -50,6 +50,7 @@ fn installed_area_scene() -> Result<()> {
         &mut world,
     )?;
     println!("area {report:?}");
+    sekiro::normals::lower(&mut world, sekiro::normals::Consumer::Skate)?;
     sekiro::prepare_scene_assets(&mut world, &output.join("assets"))?;
     let folder = output.join("scene");
     primase_skate_scene::write(&world, &folder)?;

@@ -245,11 +245,23 @@ source decoding is covered separately by the texture gates.
 Representative G-buffer pixel shaders for 20 available scene shader families
 read R/G as `2*v-1`, reconstruct positive `sqrt(1-min(dot(xy,xy),1))`, and
 use red along `normalize(cross(N,T)*w)` and green along `normalize(T)`.
-Blue carries other material data, not normal Z. The implementation preserves
-stored tangent xyz/w through compaction, swaps decoded texture R/G once per
-normal-role asset, and negates w for the scene frame's reflection. The shared
-image pass rebuilds Z. Curl/integrability verdicts describe authoring patterns;
-they never select a per-texture sign exception.
+Blue carries other material data, not normal Z. The reader preserves texture
+bytes and declares `BitangentTangent`, green positive along the stored tangent,
+and Z to rebuild. Stored tangent xyz/w survives compaction. The LH-to-RH frame
+conversion reflects xyz and negates w exactly once, in the geometry reader.
+
+Call `sekiro::normals::lower(world, Consumer::Gltf)` for consumers that honor
+supplied tangents: the shared image pass swaps R/G and rebuilds Z, preserving
+alpha and all mips. It does not flip w again. Curl/integrability verdicts describe
+authoring patterns; they never select a per-texture sign exception.
+
+`Consumer::Skate` keeps the source R/G order, flips green and rebuilds Z.
+A consumer test found green inverted relative to Studio's UV-derived frame;
+Studio ignores supplied tangents. This rule applies to every texture with no
+curl-based exceptions. The stored frame is replaced by the UV-derived frame as
+a counted approximation: measured sheared/other regions do not become exact
+merely by choosing a green sign. Both lowerings preserve alpha and all mips,
+update scene normal declarations and discard stale file provenance.
 
 `sekiro::normals::consumer_basis` lists the inspected families. Three legacy
 families (`GXFlver_Col`, `GXFlver_ColDif`, `GXFlver_ColDifSpcBumpIbl`) are absent

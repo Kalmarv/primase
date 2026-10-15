@@ -14,8 +14,8 @@ use crate::{
 };
 pub use assets::prepare_scene_assets;
 use primase_core::{
-    ColorSpace, Instance, Mesh, Name, NormalConvention, NormalGreen, NormalX, NormalZ, Primitive, Semantic,
-    Source, Stream, TexRole, Topology, Transform, World,
+    ColorSpace, Instance, Mesh, Name, NormalGreen, NormalZ, Primitive, Semantic, Source, Stream, TexRole,
+    Topology, Transform, World,
 };
 use primase_skate_scene::{
     FileRef, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
@@ -302,15 +302,7 @@ pub fn read_area(
         } else {
             ColorSpace::Srgb
         };
-        texture.normal = normal.then_some(NormalConvention {
-            green: NormalGreen::Up,
-            z: NormalZ::Rebuild,
-            x: NormalX::Red,
-            basis: primase_core::NormalBasis::TangentBitangent,
-        });
-        if normal {
-            normals::swap_normal_axes(&mut texture)?;
-        }
+        texture.normal = normal.then_some(normals::SOURCE);
         let key = if normal {
             format!("{name}@normal")
         } else {
@@ -330,14 +322,13 @@ pub fn read_area(
                 source_size: None,
                 linear: Some(normal),
                 green: normal.then_some(NormalGreen::Up),
-                z: normal.then_some(NormalZ::Stored),
+                z: normal.then_some(NormalZ::Rebuild),
                 other: Default::default(),
             },
         );
         texture_entities.insert((name, normal), e);
         report.textures += 1;
     }
-    primase_image::normalize_normals(&mut world).map_err(|e| invalid("Sekiro normal conversion", 0, e))?;
     let mut proto_entities = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
     for key in used {

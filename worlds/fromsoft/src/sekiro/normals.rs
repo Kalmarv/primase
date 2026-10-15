@@ -4,8 +4,7 @@
 //! Therefore glTF with the stored tangent uses swapped R/G, green-up, and
 //! reflected tangent handedness. This is not a texture-authorship curl rule.
 use crate::{Result, invalid};
-use primase_core::{NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, Texture};
-use primase_texcodec::{Decoder, TexDecoder};
+use primase_core::{NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture, World};
 
 /// Whether this family's static normal basis was observed in installed shaders.
 /// The three legacy names are an explicit assumption: their shader bundles are
@@ -43,28 +42,80 @@ pub fn consumer_basis(shader: &str) -> Result<bool> {
         }
     })
 }
-/// Swap the two encoded tangent-plane coordinates once, preserving every mip.
-/// Z remains explicitly marked for reconstruction by the shared image pass.
-pub fn swap_normal_axes(texture: &mut Texture) -> Result<()> {
-    let mut levels = Vec::with_capacity(texture.levels.len());
-    for (i, data) in texture.levels.iter().enumerate() {
-        let w = texture.width.checked_shr(i as u32).unwrap_or(0).max(1);
-        let h = texture.height.checked_shr(i as u32).unwrap_or(0).max(1);
-        let mut rgba = Decoder::default()
-            .decode_rgba8(texture.format, w, h, data)
-            .map_err(|e| invalid("Sekiro normal map", 0, e))?;
-        for p in rgba.as_chunks_mut::<4>().0 {
-            p.swap(0, 1);
+/// Source coordinates relative to the stored tangent carried by the reader.
+/// Green is positive along that tangent; this does not claim a UV-frame sign.
+pub const SOURCE: NormalConvention = NormalConvention {
+    green: NormalGreen::Up,
+    z: NormalZ::Rebuild,
+    x: NormalX::Red,
+    basis: NormalBasis::BitangentTangent,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Consumer {
+    /// Uses the supplied TANGENT stream.
+    Gltf,
+    /// Regenerates a tangent frame from UVs; green is inverted relative to it.
+    Skate,
+}
+
+/// Lower only after selecting the consumer. Source texture bytes remain intact
+/// until this call. The shared image pass owns channel conversion and Z rebuild.
+/// The reader already reflected tangent xyz and w in `tangent_to_scene`; flipping
+/// w again here would undo that LH-to-RH frame conversion.
+///
+/// Consumer test: green is inverted relative to the UV-derived frame. Skate
+/// keeps R/G unswapped, flips green and rebuilds Z for every source normal map.
+/// The measured frame census has sheared/other regions, so replacing the stored
+/// frame with the consumer's UV frame is a counted approximation, not a claim
+/// that those frames agree everywhere. No texture-specific curl exceptions.
+pub fn lower(world: &mut World, consumer: Consumer) -> Result<primase_core::pass::PassLog> {
+    let mut prepared = World::default();
+    let mut entities = Vec::new();
+    for (e, texture) in world.iter::<Texture>().filter(|(_, t)| t.role == TexRole::Normal) {
+        if texture.normal == Some(NormalConvention::GLTF) {
+            continue;
         }
-        levels.push(rgba);
+        if texture.normal != Some(SOURCE) {
+            return Err(invalid(
+                "Sekiro normal lowering",
+                0,
+                "unexpected source normal convention",
+            ));
+        }
+        let mut texture = texture.clone();
+        if consumer == Consumer::Skate {
+            texture.normal = Some(NormalConvention {
+                green: NormalGreen::Down,
+                basis: NormalBasis::TangentBitangent,
+                ..SOURCE
+            });
+        }
+        let temporary = prepared.spawn();
+        prepared.insert(temporary, texture);
+        entities.push((e, temporary));
     }
-    texture.format = TexFormat::Rgba8Unorm;
-    texture.levels = levels;
-    texture.normal = Some(NormalConvention {
-        green: NormalGreen::Up,
-        z: NormalZ::Rebuild,
-        x: NormalX::Red,
-        basis: primase_core::NormalBasis::TangentBitangent,
-    });
-    Ok(())
+    let mut log = primase_image::normalize_normals(&mut prepared)
+        .map_err(|e| invalid("Sekiro normal lowering", 0, e))?;
+    if consumer == Consumer::Skate {
+        log.approximate(
+            "stored frame replaced by consumer UV-derived frame",
+            entities.len() as u64,
+        );
+    }
+    for (e, temporary) in entities {
+        world.insert(
+            e,
+            prepared
+                .get::<Texture>(temporary)
+                .expect("prepared texture")
+                .clone(),
+        );
+        world.remove::<primase_core::TextureFile>(e);
+        if let Some(scene) = world.get_mut::<primase_skate_scene::SkateTexture>(e) {
+            scene.green = Some(NormalGreen::Up);
+            scene.z = Some(NormalZ::Stored);
+        }
+    }
+    Ok(log)
 }
