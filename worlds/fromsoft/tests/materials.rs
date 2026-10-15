@@ -83,7 +83,8 @@ fn foliage_cutoff_and_writer_fallback() {
     assert_eq!(m.surface, "default");
     let output = m.skate_material("synthetic".into(), |_, _| None);
     assert_eq!(output.base_color, Some([128, 128, 128, 255]));
-    assert_eq!(output.cutoff, Some(f64::from(128f32 / 255.)));
+    assert_eq!(output.cutoff, Some(0.5019608));
+    assert_eq!((output.cutoff.unwrap() as f32).to_bits(), m.cutoff.to_bits());
     assert!(m.layered.is_none());
 }
 

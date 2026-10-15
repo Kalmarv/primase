@@ -294,7 +294,7 @@ impl Material {
             }),
             tint: None,
             alpha: None,
-            cutoff: masked.then_some(f64::from(self.cutoff)),
+            cutoff: masked.then_some(primase_core::json::f32_decimal(self.cutoff)),
             two_sided: (self.two_sided != masked).then_some(self.two_sided),
             domain: None,
             metallic: None,

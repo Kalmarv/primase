@@ -48,12 +48,18 @@ pub fn to_vec<T: Serialize + ?Sized>(v: &T, pretty: bool) -> Result<Vec<u8>, Jso
 /// nearest them, which serde_json writes with those same digits (`0.1`, not the widened `0.10000000149011612`).
 /// Panics on a non-finite value: JSON has no NaN or infinity, so callers check first.
 pub fn f32_value(x: f32) -> Value {
+    Value::from(f32_decimal(x))
+}
+
+/// A finite f32's shortest round-trip decimal, represented as f64 for JSON fields
+/// whose schema stores f64. This avoids exposing the binary widening digits while
+/// preserving the original f32 bits when the emitted number is read back.
+/// Panics on non-finite input, like [`f32_value`].
+pub fn f32_decimal(x: f32) -> f64 {
     assert!(x.is_finite(), "non-finite {x} reached JSON");
-    Value::from(
-        x.to_string()
-            .parse::<f64>()
-            .expect("the Display of a finite f32 is a decimal"),
-    )
+    x.to_string()
+        .parse::<f64>()
+        .expect("the Display of a finite f32 is a decimal")
 }
 
 pub fn f32s_value(xs: &[f32]) -> Value {

@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use primase_core::json::f32_decimal;
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, Wrap as PbrWrap};
 use primase_core::{
@@ -79,12 +80,6 @@ fn key(name: &str, taken: &mut BTreeSet<String>) -> String {
         k = format!("{base}_{n}");
     }
     k
-}
-
-/// An f32 as the f64 of its shortest decimal (0.4, not 0.4000000059604645): what a manifest should say, and the same
-/// f32 again when read back.
-fn decimal(x: f32) -> f64 {
-    x.to_string().parse().unwrap_or(f64::from(x))
 }
 
 fn wrap(w: PbrWrap) -> Wrap {
@@ -191,7 +186,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     for (e, m) in materials {
         let (class, alpha, cutoff) = match m.alpha_mode {
             PbrAlpha::Opaque => (MaterialClass::Opaque, AlphaMode::Opaque, None),
-            PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(decimal(cutoff))),
+            PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(f32_decimal(cutoff))),
             PbrAlpha::Blend => (MaterialClass::Alpha, AlphaMode::Blend, None),
         };
         let rgb = [m.base_color[0], m.base_color[1], m.base_color[2]];
@@ -231,8 +226,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 cutoff,
                 two_sided: Some(m.double_sided),
                 domain: None,
-                metallic: Some(decimal(m.metallic)),
-                roughness: Some(decimal(m.roughness)),
+                metallic: Some(f32_decimal(m.metallic)),
+                roughness: Some(f32_decimal(m.roughness)),
                 wrap: w.map(|w| wrap(w[0])),
                 ocean: None,
                 cast_shadows: None,

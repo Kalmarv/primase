@@ -527,6 +527,7 @@ fn manifests_need_only_plain_json() {
         Tolerance::Exact,
     );
     let mut numbers = 0u64;
+    let mut shortened = 0u64;
     for dir in &folders {
         let path = dir.join("scene.json");
         let item = path.display().to_string();
@@ -541,6 +542,17 @@ fn manifests_need_only_plain_json() {
             .filter(|t| {
                 let direct: f32 = t.parse().expect("a JSON number");
                 let via = t.parse::<f64>().expect("a JSON number") as f32;
+                if direct.is_finite() {
+                    let decimal = primase_core::json::f32_decimal(direct);
+                    let text = serde_json::to_string(&decimal).expect("finite number");
+                    let parsed: serde_json::Value = serde_json::from_str(&text).expect("JSON number");
+                    assert_eq!(
+                        (parsed.as_f64().unwrap() as f32).to_bits(),
+                        direct.to_bits(),
+                        "{t} -> {text}"
+                    );
+                    shortened += u64::from(decimal != f64::from(direct));
+                }
                 direct.to_bits() != via.to_bits()
             })
             .collect();
@@ -557,6 +569,6 @@ fn manifests_need_only_plain_json() {
             );
         }
     }
-    println!("{gate}\n{numbers} numbers");
+    println!("{gate}\n{numbers} numbers; {shortened} differ from widened f64, all retain f32 bits");
     gate.assert_passed();
 }
