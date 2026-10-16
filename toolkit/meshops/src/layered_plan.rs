@@ -87,9 +87,9 @@ impl LayeredPbrPlan {
 /// This is a read-only census; use lower_layered_pbr to apply changes atomically with metadata validation.
 /// The first unused texture-coordinate set is selected world-wide. A subset world may choose
 /// a different free set, although both preserve the same layer-before-texture UV semantics.
-/// Run this lowering once on the whole world before partitioning when prototypes are shared
-/// across output cells. Independently lowering cell subsets can assign different UV sets to
-/// the same source prototype; this API does not coordinate those assignments.
+/// Lower once before partitioning when consumers require identical UV set indices across
+/// partitions. Independent world.subset() copies may choose different sets while preserving
+/// the referenced UV values and transforms; each output must carry its own texture references.
 pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<LayeredPbrPlan> {
     // Validate and prepare all changes before mutating the destination.
     let mut replacements = BTreeMap::<(Entity, usize), PbrMaterial>::new();
@@ -238,10 +238,13 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
 /// Plan, validate dialect metadata against the unchanged world, then apply generic changes.
 /// The callback cannot mutate the world; it may prepare metadata for the caller to publish
 /// after success. Any planning/validation error leaves both world and pass log unchanged.
-/// As with plan_layered_pbr, lower the whole world before partitioning shared prototypes.
+/// As with plan_layered_pbr, plan the whole world when partitions must agree on UV set indices.
 /// Per-pixel layered writers should retain core.layered instead of using this approximation.
 /// Replaced hosts and their dependencies are pruned only if unreachable from every entity
 /// outside that original dependency closure; shared resources and unrelated entities survive.
+/// This trusts Component::references(): dialect entity references must be declared there.
+/// Independent world.subset() copies are safe. Do not lower a split_off() part and absorb it
+/// back into its parent: references from the detached remainder are invisible to pruning.
 pub fn lower_layered_pbr(
     world: &mut World,
     policy: SelectionPolicy,
