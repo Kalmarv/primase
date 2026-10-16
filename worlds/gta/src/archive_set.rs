@@ -6,14 +6,18 @@
 //! groups except `GROUP_ON_DEMAND` (loaded by scripts, not by the world): change sets enable and disable data files
 //! and, per map, invalidate archives (which also unmounts the archives overlaying them) and enable others. Change
 //! sets conditioned on another level than gta5's (`$level=`, see [`LEVEL`]) and items for other platforms are
-//! skipped. Title-update mounts
-//! (`update:/dlc_patch/<pack>/`) replace a pack's files; subpacks (`dlc1.rpf`, ...) hold what the pack's own archive
-//! does not.
+//! skipped. Title-update mounts (`update:/dlc_patch/<pack>/`) replace a pack's files; subpacks (`dlc1.rpf`, ...)
+//! hold what the pack's own archive does not.
 //!
 //! Map data (ymap, ybn, ynv) is looked up in the map archives (the base images' archives and the archives packs
-//! mount, keyed by their mounted path, later replacing earlier); everything else in every mounted archive in mount
-//! order. A later copy of a name replaces an earlier one.
-use std::collections::BTreeMap;
+//! mount, keyed by their mounted path, later replacing earlier); everything else in every mounted archive. Archives
+//! whose data file is an overlay (`<overlay value="true"/>`) replace files of the same name whenever they are
+//! mounted; among plain archives, and among overlays, a later mount replaces an earlier one. The overlay rule is
+//! read from the data, not from the game's code: patch packs ship fixed copies of other packs' files in overlay
+//! archives while mounting before those packs (patchday21ng, order 21, and the vehicles of mpchristmas2018), and
+//! overlay archives exist at paths no other archive has (`levels/patchday26ng/vehiclemods/...`), so the flag is
+//! about names, not about one archive overlaying another.
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -163,6 +167,8 @@ pub struct ArchiveSet {
     pub map_archives: IndexMap<String, usize>,
     /// Every mounted archive, in mount order (an archive mounted twice counts at its last mount).
     pub mounted: Vec<usize>,
+    /// The mounted archives whose data file is an overlay (`<overlay value="true"/>`).
+    pub overlay: BTreeSet<usize>,
     /// Live files by extension (`ymap`, `ydr`, ...) and the joaat of the lowercase name without extension.
     pub tables: BTreeMap<String, BTreeMap<u32, FileRef>>,
 }
@@ -343,6 +349,8 @@ impl ArchiveSet {
         let packs: Vec<Pack> = packs.into_iter().map(|(_, _, _, p)| p).collect();
 
         let mut overlays: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        // whether each archive was last mounted as an overlay
+        let mut overlay: BTreeMap<usize, bool> = BTreeMap::new();
         for pack in &packs {
             if let Some(i) = install.archive(&pack.archive) {
                 mounted.push(i);
@@ -375,11 +383,13 @@ impl ArchiveSet {
             let mount_file = |map: &mut IndexMap<String, usize>,
                               mounted: &mut Vec<usize>,
                               overlays: &mut BTreeMap<String, Vec<String>>,
+                              overlay: &mut BTreeMap<usize, bool>,
                               name: &str| {
                 if let Some(i) = physical(name) {
                     map.shift_remove(name);
                     map.insert(name.to_string(), i);
                     mounted.push(i);
+                    overlay.insert(i, data_file(name).is_some_and(|d| d.overlay));
                     let o = overlaid(name);
                     if o != name {
                         overlays.entry(o).or_default().push(name.to_string());
@@ -388,7 +398,13 @@ impl ArchiveSet {
             };
             for d in &pack.content.data_files {
                 if d.file_type == "RPF_FILE" && !d.disabled {
-                    mount_file(&mut map, &mut mounted, &mut overlays, &platform_path(&d.filename));
+                    mount_file(
+                        &mut map,
+                        &mut mounted,
+                        &mut overlays,
+                        &mut overlay,
+                        &platform_path(&d.filename),
+                    );
                 }
             }
             for (group, sets) in &pack.setup.groups {
@@ -416,7 +432,7 @@ impl ArchiveSet {
                     for f in &cs.files_to_enable {
                         let f = platform_path(f);
                         if data_file(&f).is_some_and(|d| d.file_type == "RPF_FILE") {
-                            mount_file(&mut map, &mut mounted, &mut overlays, &f);
+                            mount_file(&mut map, &mut mounted, &mut overlays, &mut overlay, &f);
                         }
                     }
                     for f in &cs.files_to_disable {
@@ -434,7 +450,13 @@ impl ArchiveSet {
                             map.shift_remove(&f);
                         }
                         for f in &mc.files_to_enable {
-                            mount_file(&mut map, &mut mounted, &mut overlays, &platform_path(f));
+                            mount_file(
+                                &mut map,
+                                &mut mounted,
+                                &mut overlays,
+                                &mut overlay,
+                                &platform_path(f),
+                            );
                         }
                     }
                 }
@@ -471,17 +493,23 @@ impl ArchiveSet {
                 );
             }
         };
-        for &ai in map.values() {
-            add(&mut tables, ai, true);
-        }
-        for &ai in &mounted {
-            add(&mut tables, ai, false);
+        let overlay: BTreeSet<usize> = overlay.into_iter().filter(|&(_, o)| o).map(|(i, _)| i).collect();
+        // overlay archives replace files of the same name whenever they are mounted: plain archives first, then
+        // overlays, each in mount order
+        for overlays_pass in [false, true] {
+            for &ai in map.values().filter(|ai| overlay.contains(ai) == overlays_pass) {
+                add(&mut tables, ai, true);
+            }
+            for &ai in mounted.iter().filter(|ai| overlay.contains(ai) == overlays_pass) {
+                add(&mut tables, ai, false);
+            }
         }
         Ok(ArchiveSet {
             install,
             packs,
             map_archives: map,
             mounted,
+            overlay,
             tables,
         })
     }

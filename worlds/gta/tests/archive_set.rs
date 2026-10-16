@@ -8,8 +8,8 @@
 //! - `title-update patch`: our copy comes from `update.rpf\dlc_patch\`, which that reader applies to map data only;
 //! - `not mounted`: that reader's copy is in an archive the game does not mount (on-demand packs, archives no change
 //!   set enables), as it looks names up over every archive;
-//! - `mount order`: both copies are mounted; that reader takes the last in file-system order, the game the last in
-//!   mount order.
+//! - `mount order`: both copies are mounted and ours ranks later (overlay archives over plain ones, then mount
+//!   order); that reader ignores overlay flags and takes the last copy in file-system order.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,10 +29,11 @@ fn live_files_against_the_oracle() {
     let keys = Keys::from_dir(&key_dir).expect("key material");
     let set = ArchiveSet::build(Install::open(&dir, &keys).expect("install"), &keys).expect("archive set");
     println!(
-        "{} packs, {} map archives, {} mounted archives",
+        "{} packs, {} map archives, {} mounted archives ({} overlays)",
         set.packs.len(),
         set.map_archives.len(),
-        set.mounted.len()
+        set.mounted.len(),
+        set.overlay.len()
     );
     let oracle: BTreeMap<String, BTreeMap<String, String>> =
         serde_json::from_str(&std::fs::read_to_string(active).expect("oracle")).expect("oracle json");
@@ -47,7 +48,18 @@ fn live_files_against_the_oracle() {
             .file(path)
             .is_some_and(|f| mounted.contains(&f.archive))
     };
-    let class = |ours: Option<&str>, theirs: Option<&str>| -> &'static str {
+    // how the live tables rank copies: overlay archives over plain ones, then mount order (map data in the map
+    // archives' order)
+    let rank = |kind: &str, path: &str| -> Option<(bool, usize)> {
+        let archive = set.install.file(path)?.archive;
+        let pos = if ["ymap", "ybn", "ynv"].contains(&kind) {
+            set.map_archives.values().position(|&a| a == archive)
+        } else {
+            set.mounted.iter().position(|&a| a == archive)
+        }?;
+        Some((set.overlay.contains(&archive), pos))
+    };
+    let class = |kind: &str, ours: Option<&str>, theirs: Option<&str>| -> &'static str {
         if ours.is_some_and(|p| p.contains("\\patchday27ng\\"))
             || theirs.is_some_and(|p| p.contains("\\patchday27ng\\"))
         {
@@ -56,7 +68,9 @@ fn live_files_against_the_oracle() {
             "title-update patch"
         } else if theirs.is_some_and(|p| !is_mounted(p)) {
             "not mounted"
-        } else if ours.is_some() && theirs.is_some() {
+        } else if let (Some(q), Some(p)) = (ours, theirs)
+            && rank(kind, q) > rank(kind, p)
+        {
             "mount order"
         } else {
             "unexplained"
@@ -72,7 +86,7 @@ fn live_files_against_the_oracle() {
             match ours.get(&h).map(|f| set.path(*f)) {
                 Some(q) if q == p => same += 1,
                 q => classes
-                    .entry(class(q, Some(p)))
+                    .entry(class(kind, q, Some(p)))
                     .or_default()
                     .push(format!("{} | oracle {p}", q.unwrap_or("-"))),
             }
@@ -81,7 +95,7 @@ fn live_files_against_the_oracle() {
             if !o.contains_key(&h.to_string()) {
                 let q = set.path(*f);
                 classes
-                    .entry(class(Some(q), None))
+                    .entry(class(kind, Some(q), None))
                     .or_default()
                     .push(format!("{q} | oracle -"));
             }
