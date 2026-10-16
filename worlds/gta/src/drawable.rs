@@ -160,6 +160,8 @@ pub struct Param {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shader {
     pub name: u32,
+    /// Legacy's preset (`.sps`) name hash; Enhanced stores 0x6d657461 here for every shader (census), so a shader's
+    /// class comes from its effect name and render bucket.
     pub preset: u32,
     pub render_bucket: u8,
     pub bucket_mask: u32,

@@ -1,8 +1,10 @@
-//! Census of drawables and texture dictionaries: every ydr and ytd of an install (every copy, in every archive) read
-//! by `Drawable::read_resource` and `TextureDictionary::read_resource`, the drawables' embedded dictionaries
-//! included. Resources in another version's layout (Legacy's ydr 165, older tools' 154, ytd 2 and 13) are counted
-//! by version, not read. Failures are counted by message; resource versions, vertex formats per semantic, texture
-//! formats and null dictionary entries are counted.
+//! Census of drawables and texture dictionaries: every ydr, yft, ydd and ytd of an install (every copy, in every
+//! archive) read by `Drawable::read_resource`, `Fragment::read_resource`, `DrawableDictionary::read_resource` and
+//! `TextureDictionary::read_resource`, the drawables' embedded dictionaries included. Resources in another version's
+//! layout (Legacy's ydr 165, older tools' 154, ytd 2 and 13) are counted by version, not read. Failures are counted by
+//! message; resource versions, vertex formats per semantic, texture formats, null dictionary entries and shaders by
+//! preset word are counted, and every effect name and texture and constant buffer parameter name must resolve
+//! (`shader_names`).
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_FILTER` limits the archives to paths containing that
 //! text.
@@ -10,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_gta::drawable::Drawable;
+use primase_gta::drawable::{Drawable, DrawableDictionary, Fragment};
 use primase_gta::texture::TextureDictionary;
 use primase_gta::{EntryKind, Install, Keys};
 use primase_testdata::real_data;
@@ -26,6 +28,8 @@ struct Tally {
     null_textures: u64,
     /// Effect and texture parameter name hashes no name in `shader_names` gives.
     unnamed: BTreeMap<String, u64>,
+    /// Shaders by their preset word.
+    presets: BTreeMap<u32, u64>,
     other_layout: BTreeMap<(String, u32), u64>,
     failures: BTreeMap<String, (u64, Vec<String>)>,
 }
@@ -56,7 +60,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                     let mut f: Option<File> = None;
                     for (ei, e) in a.entries.iter().enumerate() {
                         let ext = e.path.rsplit_once('.').map_or("", |x| x.1);
-                        if !matches!(e.kind, EntryKind::Resource { .. }) || !["ydr", "ytd"].contains(&ext) {
+                        if !matches!(e.kind, EntryKind::Resource { .. })
+                            || !["ydr", "yft", "ydd", "ytd"].contains(&ext)
+                        {
                             continue;
                         }
                         let file = f.get_or_insert_with(|| File::open(&a.file).expect("open archive"));
@@ -66,18 +72,31 @@ fn every_drawable_and_texture_dictionary_reads() {
                         let result = res.and_then(|r| {
                             *local.versions.entry((ext.to_string(), r.version)).or_default() += 1;
                             // resources in another version's layout (Legacy's, older tools') are counted, not read
-                            let want = if ext == "ydr" {
-                                primase_gta::drawable::VERSION
-                            } else {
-                                primase_gta::texture::VERSION
+                            let want = match ext {
+                                "ydr" | "ydd" => primase_gta::drawable::VERSION,
+                                "yft" => primase_gta::drawable::FRAGMENT_VERSION,
+                                _ => primase_gta::texture::VERSION,
                             };
                             if r.version != want {
                                 other_layout = Some(r.version);
                                 return Ok(());
                             }
-                            let dict = if ext == "ydr" {
-                                let d = Drawable::read_resource(&r)?;
+                            let drawables: Vec<Drawable> = match ext {
+                                "ydr" => vec![Drawable::read_resource(&r)?],
+                                "yft" => {
+                                    let f = Fragment::read_resource(&r)?;
+                                    f.drawable
+                                        .into_iter()
+                                        .chain(f.extra.into_iter().map(|(_, d)| d))
+                                        .collect()
+                                }
+                                "ydd" => DrawableDictionary::read_resource(&r)?.drawables,
+                                _ => Vec::new(),
+                            };
+                            let mut dicts: Vec<TextureDictionary> = Vec::new();
+                            for d in drawables {
                                 for sh in &d.shaders {
+                                    *local.presets.entry(sh.preset).or_default() += 1;
                                     if primase_gta::shader_names::effect(sh.name).is_none() {
                                         *local
                                             .unnamed
@@ -85,12 +104,19 @@ fn every_drawable_and_texture_dictionary_reads() {
                                             .or_default() += 1;
                                     }
                                     for p in &sh.params {
-                                        if p.info & 3 == 0
-                                            && primase_gta::shader_names::texture_param(p.name).is_none()
-                                        {
+                                        let named = match p.info & 3 {
+                                            0 => primase_gta::shader_names::texture_param(p.name).is_some(),
+                                            3 => primase_gta::shader_names::constant_param(p.name).is_some(),
+                                            _ => true,
+                                        };
+                                        if !named {
                                             *local
                                                 .unnamed
-                                                .entry(format!("texture parameter {:#010x}", p.name))
+                                                .entry(format!(
+                                                    "parameter kind {} {:#010x}",
+                                                    p.info & 3,
+                                                    p.name
+                                                ))
                                                 .or_default() += 1;
                                         }
                                     }
@@ -104,11 +130,12 @@ fn every_drawable_and_texture_dictionary_reads() {
                                             .or_default() += 1;
                                     }
                                 }
-                                d.textures
-                            } else {
-                                Some(TextureDictionary::read_resource(&r)?)
-                            };
-                            for t in dict.iter().flat_map(|d| &d.textures) {
+                                dicts.extend(d.textures);
+                            }
+                            if ext == "ytd" {
+                                dicts.push(TextureDictionary::read_resource(&r)?);
+                            }
+                            for t in dicts.iter().flat_map(|d| &d.textures) {
                                 match t {
                                     Some(t) => {
                                         local.textures += 1;
@@ -126,6 +153,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                         t.null_textures += local.null_textures;
                         for (k, v) in local.unnamed {
                             *t.unnamed.entry(k).or_default() += v;
+                        }
+                        for (k, v) in local.presets {
+                            *t.presets.entry(k).or_default() += v;
                         }
                         if let Some(v) = other_layout {
                             *t.other_layout.entry((ext.to_string(), v)).or_default() += 1;
@@ -164,6 +194,7 @@ fn every_drawable_and_texture_dictionary_reads() {
     );
     println!("not read, another version's layout: {:?}", t.other_layout);
     println!("unnamed shader names: {:?}", t.unnamed);
+    println!("shaders by preset word: {:x?}", t.presets);
     println!("vertex formats (semantic, code): {:?}", t.vertex_formats);
     println!("texture formats (code): {:?}", t.texture_formats);
     for (msg, (n, paths)) in &t.failures {
