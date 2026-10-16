@@ -5,6 +5,7 @@ pub mod binder;
 mod bytes;
 pub mod collision;
 pub mod dcx;
+pub mod emevd;
 pub mod flver;
 mod keys;
 pub mod layer_bake;

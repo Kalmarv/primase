@@ -162,6 +162,19 @@ independent reader. Its `entities.jsonl` has one record per map file: `path` and
 `entity_id` and `entity_group_ids` (8 integers). The gate (`tests/msb_entities.rs`) requires the same part count and
 names and exact values.
 
+## Event scripts
+
+`emevd::Script::read` reads a decompressed `.emevd` in Sekiro's layout (64-bit little-endian, version 0xCD): events,
+their instructions (bank, id, argument bytes as stored, layer), parameter substitutions (which bytes of an event's
+arguments fill which bytes of an instruction's), linked-file offsets and the string table. Every byte is accounted
+for (tables, each instruction's arguments, strings; at most 15 zero bytes of alignment between them); a field
+outside its known values, an overlap or an instruction or parameter no event owns is an error. Nothing is
+interpreted. `PRIMASE_FROMSOFT_STATE_ORACLE`'s `emevd.jsonl` has one record per script: `path`, `sha256` (of the
+decompressed file), `format`, `events` (each `id`, `rest`, `instructions` with `bank`, `id`, `args` as lowercase hex
+and `layer` or null, `parameters` with `instruction`, `target`, `source`, `bytes`, `unk`), `linked_files` and
+`strings` (hex). `tests/emevd_census.rs` reads every script the archive holds (the common scripts and every map
+block, probed by path), requires the oracle to list the same set, and compares every value exactly.
+
 `PRIMASE_FROMSOFT_SCENE` supplies a reference skate-scene folder. Its source
 labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
 references, exact translations and bases under the same stated tolerance.
