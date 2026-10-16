@@ -18,6 +18,7 @@ mod rbf;
 pub mod region;
 pub mod resource;
 pub mod rpf;
+pub mod select;
 pub mod sga;
 pub mod texture;
 mod xml;

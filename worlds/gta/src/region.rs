@@ -76,6 +76,8 @@ pub struct RegionReport {
 /// One live map's entities near the region.
 struct MapRead {
     path: String,
+    /// The live LOD parent map's path, when it has one.
+    parent: Option<String>,
     entities: Vec<(u32, EntityDef)>,
 }
 
@@ -104,6 +106,14 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
         if !entities.is_empty() {
             out.push(MapRead {
                 path: set.path(f).to_string(),
+                parent: (map.parent != 0)
+                    .then(|| {
+                        set.tables
+                            .get("ymap")
+                            .and_then(|t| t.get(&map.parent))
+                            .map(|&p| set.path(p).to_string())
+                    })
+                    .flatten(),
                 entities,
             });
         }
@@ -179,6 +189,7 @@ struct Placed {
     ymap: String,
     index: u32,
     child: Option<u32>,
+    lod_parent: Option<(String, u32)>,
     def: EntityDef,
     transform: Transform,
     story: bool,
@@ -222,17 +233,35 @@ pub fn read_region(
     region: &Region,
 ) -> Result<(World, RegionReport)> {
     let mut report = RegionReport::default();
-    // (map path, entity index) -> (entity, in story, in online)
-    let mut placed: BTreeMap<(String, u32), (EntityDef, bool, bool)> = BTreeMap::new();
+    // by (map path, entity index): the entity, its LOD parent, the states it is live in
+    let mut placed: BTreeMap<(String, u32), Placed> = BTreeMap::new();
     for (set, is_story) in std::iter::once((story, true)).chain(online.map(|s| (s, false))) {
         for m in region_maps(set, keys, region)? {
             report.maps += 1;
             for (i, e) in m.entities {
-                let entry = placed.entry((m.path.clone(), i)).or_insert((e, false, false));
+                // the LOD parent: by index in this map, or in the parent map when flags bit 3 says so
+                let lod_parent = u32::try_from(e.parent_index).ok().and_then(|pi| {
+                    let map = if e.flags & 8 != 0 {
+                        m.parent.clone()?
+                    } else {
+                        m.path.clone()
+                    };
+                    Some((map, pi))
+                });
+                let entry = placed.entry((m.path.clone(), i)).or_insert_with(|| Placed {
+                    ymap: m.path.clone(),
+                    index: i,
+                    child: None,
+                    lod_parent,
+                    transform: entity_transform(&e),
+                    def: e,
+                    story: false,
+                    online: false,
+                });
                 if is_story {
-                    entry.1 = true;
+                    entry.story = true;
                 } else {
-                    entry.2 = true;
+                    entry.online = true;
                 }
             }
         }
@@ -258,16 +287,10 @@ pub fn read_region(
     });
     // every entity, and the entities placed in interiors
     let mut all: Vec<Placed> = Vec::new();
-    for ((ymap, index), (e, in_story, in_online)) in &placed {
-        all.push(Placed {
-            ymap: ymap.clone(),
-            index: *index,
-            child: None,
-            def: e.clone(),
-            transform: entity_transform(e),
-            story: *in_story,
-            online: *in_online,
-        });
+    for p in placed.into_values() {
+        let (e, ymap, index, in_story, in_online) =
+            (p.def.clone(), p.ymap.clone(), p.index, p.story, p.online);
+        all.push(p);
         if e.kind != EntityKind::Interior {
             continue;
         }
@@ -286,12 +309,13 @@ pub fn read_region(
             let t = compose(&frame, &entity_transform(ce));
             all.push(Placed {
                 ymap: ymap.clone(),
-                index: *index,
+                index,
                 child: Some(ci as u32),
+                lod_parent: None,
                 def: ce.clone(),
                 transform: t,
-                story: *in_story,
-                online: *in_online,
+                story: in_story,
+                online: in_online,
             });
         }
     }
@@ -300,6 +324,7 @@ pub fn read_region(
         ymap,
         index,
         child,
+        lod_parent,
         def: e,
         transform,
         story: in_story,
@@ -336,11 +361,11 @@ pub fn read_region(
         );
         match child {
             None => {
-                w.insert(p, GtaEntity::new(ymap, *index, None, e));
+                w.insert(p, GtaEntity::new(ymap, *index, None, lod_parent.clone(), e));
                 w.insert(p, Source(format!("{ymap}#{index}")));
             }
             Some(c) => {
-                w.insert(p, GtaEntity::new(ymap, *c, Some(*index), e));
+                w.insert(p, GtaEntity::new(ymap, *c, Some(*index), None, e));
                 w.insert(p, Source(format!("{ymap}#{index}/{c}")));
                 report.interior_entities += 1;
             }

@@ -24,6 +24,8 @@ pub struct GtaEntity {
     pub index: u32,
     /// An interior instance (`CMloInstanceDef`), or an entity placed inside one: the interior instance's map index.
     pub interior: Option<u32>,
+    /// The LOD parent entity (its map and index), from `parent_index` and, with flags bit 3, the map's LOD parent map.
+    pub lod_parent: Option<(String, u32)>,
     pub archetype: u32,
     pub flags: u32,
     pub guid: u32,
@@ -39,10 +41,17 @@ pub struct GtaEntity {
 }
 
 impl GtaEntity {
-    pub fn new(ymap: &str, index: u32, interior: Option<u32>, e: &EntityDef) -> GtaEntity {
+    pub fn new(
+        ymap: &str,
+        index: u32,
+        interior: Option<u32>,
+        lod_parent: Option<(String, u32)>,
+        e: &EntityDef,
+    ) -> GtaEntity {
         GtaEntity {
             ymap: ymap.to_string(),
             index,
+            lod_parent,
             interior: interior.or(match e.kind {
                 EntityKind::Interior => Some(index),
                 EntityKind::Entity => None,

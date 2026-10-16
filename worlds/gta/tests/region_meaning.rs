@@ -3,9 +3,10 @@
 //! Oracle (`PRIMASE_GTA_SCENE`): a skate-scene folder whose manifest's `region` is `[x0, y0, x1, y1]` in GTA metres,
 //! exported from the same install with GTA Online's map; read with `primase-skate-scene`. Placements are matched by
 //! archetype (the joaat of the scene prototype's name) and position (1 cm); a match compares orientation and scale (1e-5 per transform column component),
-//! tint (the instance variant) and priority (flag bits 8-11 against `priorityLevel`). Placements of ours the scene
-//! leaves out are counted by LOD level and by whether the pivot is inside the region (the exporter's selection is
-//! not a pass yet); scene placements without a match fail the gate.
+//! tint (the instance variant) and priority (flag bits 8-11 against `priorityLevel`). Before matching, ours go
+//! through `gta-select-region` with that exporter's settings (hour 12, minimum size 0.5 m). Scene placements without
+//! a match fail the gate, and so do placements of ours outside interiors the scene leaves out; entities of interiors
+//! are counted (which interiors that exporter placed came from its own interior table, not a pass here).
 //!
 //! Geometry: the matched placements' drawables are attached ([`attach_assets`]) and, per GTA geometry (the scene's
 //! parts carry their source model and geometry; a geometry the exporter split into several parts is gathered), the
@@ -23,6 +24,7 @@ use primase_core::{Instance, Name, Transform, World};
 use primase_gta::assets::attach_assets;
 use primase_gta::components::{GtaArchetype, GtaDrawable, GtaEntity};
 use primase_gta::region::{Region, States, archive_sets, read_region};
+use primase_gta::select::SelectRegion;
 use primase_gta::{Install, Keys};
 use primase_skate_scene::{SkatePlacement, SkatePrototype};
 
@@ -58,8 +60,19 @@ fn region_placements_against_the_scene() {
     let keys = Keys::from_dir(&key_dir).expect("key material");
     let install = Install::open(&dir, &keys).expect("install");
     let (story, online) = archive_sets(&install, &keys, States::All).expect("archive sets");
-    let (ours, report) = read_region(&story, online.as_ref(), &keys, &region).expect("region");
+    let (mut ours, report) = read_region(&story, online.as_ref(), &keys, &region).expect("region");
     println!("{report:?}");
+    // the earlier exporter's region rules, as a pass
+    let select = SelectRegion {
+        min: region.min,
+        max: region.max,
+        hour: 12,
+        max_priority: 3,
+        min_size: 0.5,
+    };
+    let mut log = primase_core::pass::PassLog::default();
+    primase_core::pass::Pass::run(&select, &mut ours, &mut log).expect("select");
+    println!("select: {:?}", log.counts);
 
     let mut theirs = World::new();
     primase_skate_scene::read(std::path::Path::new(&scene), &mut theirs).expect("scene");
@@ -130,7 +143,12 @@ fn region_placements_against_the_scene() {
             p[0] >= region.min[0] && p[0] < region.max[0] && -p[2] >= region.min[1] && -p[2] < region.max[1];
         *left
             .entry(format!(
-                "lod {} {}",
+                "{}lod {} {}",
+                if ge.interior.is_some() {
+                    "interior entity, "
+                } else {
+                    ""
+                },
                 ge.lod_level,
                 if inside { "inside" } else { "outside" }
             ))
@@ -143,6 +161,14 @@ fn region_placements_against_the_scene() {
         unmatched.len()
     );
     println!("ours only: {left:?}");
+    let mut by_map: BTreeMap<&str, usize> = BTreeMap::new();
+    for e in index.values().flatten().filter(|e| !matched.contains(*e)) {
+        let ge = ours.get::<GtaEntity>(*e).expect("entity");
+        if ge.interior.is_none() {
+            *by_map.entry(ge.ymap.as_str()).or_default() += 1;
+        }
+    }
+    println!("ours only outside interiors, by map: {by_map:?}");
     for u in unmatched.iter().take(15) {
         println!("    scene only: {u}");
     }
@@ -306,6 +332,10 @@ fn region_placements_against_the_scene() {
         println!("    differing: {x}");
     }
     assert!(!geo.contains_key("geometries differing"), "geometries differ");
+    assert!(
+        by_map.is_empty(),
+        "placements of ours outside interiors the scene leaves out"
+    );
     assert!(unmatched.is_empty() && diffs.is_empty());
 }
 
