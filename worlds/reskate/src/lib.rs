@@ -7,6 +7,7 @@ pub mod build;
 pub mod collision;
 pub mod glb;
 pub mod grind;
+pub mod hash;
 pub mod layered;
 pub mod map;
 pub mod material;

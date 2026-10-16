@@ -78,21 +78,6 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
         (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
     })
 }
-/// Extend skate-writer FNV64 state by UTF-16 units followed by the unit 0xFF.
-/// Initial state is 0xcbf29ce484222325. This is NOT FNV over UTF-8 bytes.
-pub fn skate_fnv_string(state: u64, s: &str) -> u64 {
-    s.encode_utf16()
-        .map(u64::from)
-        .chain([255])
-        .fold(state, |h, c| (h ^ c).wrapping_mul(0x100000001b3))
-}
-/// Extend skate-writer FNV64 state with eight little-endian bytes of a u64.
-pub fn skate_fnv_u64(state: u64, value: u64) -> u64 {
-    value
-        .to_le_bytes()
-        .iter()
-        .fold(state, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3))
-}
 /// Extend skate-writer Hash64 state by one word: Murmur3 constants, rotl31 for
 /// the word and rotl27 for the state, then state*5+0x52DCE729 (wrapping u64).
 /// Default initial state is 0x9E3779B97F4A7C15; finalize with [`content_finish`].
@@ -151,10 +136,6 @@ mod tests {
         assert_eq!(frostbite_toc(b"levels/test", 0x811c9dc5), 0xb97702);
         assert_eq!(forza_string("NormalTiling"), 0xd7f0e387);
         assert_eq!(forza_string("A😀é"), 0x6f4eaf8e);
-        assert_eq!(
-            skate_fnv_u64(skate_fnv_string(0xcbf29ce484222325, "A😀é"), 0x12345678),
-            0xd8cb5178e4163d1d
-        );
         assert_eq!(
             content_finish(content_word(
                 content_string(0x9e3779b97f4a7c15, "A😀é"),

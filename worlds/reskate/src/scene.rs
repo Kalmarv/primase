@@ -6,11 +6,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::hash::skate_fnv_string;
 use primase_core::{
     Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
     TextureFile, Tile, Transform, World,
 };
-use primase_hash::skate_fnv_string;
 use primase_skate_scene::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkatePlacement, SkatePrototype, SkateScene,
