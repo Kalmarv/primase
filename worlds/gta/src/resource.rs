@@ -46,6 +46,17 @@ impl PageFlags {
             .sum()
     }
 
+    /// The size of the smallest page present (the last one laid out); 0 without pages.
+    pub fn last_page_size(self) -> u64 {
+        let base = self.base_size();
+        self.page_counts()
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, c)| **c > 0)
+            .map_or(0, |(i, _)| base << (8 - i))
+    }
+
     /// The four high bits: half of the resource version.
     pub fn version_bits(self) -> u32 {
         self.0 >> 28
@@ -61,6 +72,9 @@ pub struct Resource {
     pub graphics: PageFlags,
     /// System pages then graphics pages, exactly `system.size() + graphics.size()` bytes.
     pub data: Vec<u8>,
+    /// Bytes at the end of the last page the body did not reach, zero-filled (the game allocates whole pages and
+    /// inflates into them, so a body may end inside its last page). 0 for almost every resource.
+    pub zero_filled: u64,
 }
 
 impl Resource {
@@ -87,17 +101,34 @@ pub fn header(stored: &[u8]) -> Result<(u32, PageFlags, PageFlags)> {
     Ok((w(1), PageFlags(w(2)), PageFlags(w(3))))
 }
 
-/// Inflate a resource body (already decrypted) laid out by `system` and `graphics`; it must inflate to exactly the
-/// size the page flags give and be consumed to its end.
+/// Inflate a resource body (already decrypted) laid out by `system` and `graphics`. The body must be one complete
+/// DEFLATE stream consumed to its end that fills the pages exactly, or ends inside the last page (the rest of that
+/// page is zero-filled and counted in `zero_filled`); anything else is an error.
 pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Resource> {
     let size = system.size() + graphics.size();
     let size = usize::try_from(size).map_err(|_| invalid("RSC7", 0, "page size overflows"))?;
-    let data = Deflate.decompress(body, size)?;
+    let last = if graphics.size() > 0 {
+        graphics.last_page_size()
+    } else {
+        system.last_page_size()
+    };
+    let (data, zero_filled) = match Deflate.decompress(body, size) {
+        Ok(d) => (d, 0),
+        Err(primase_compress::Error::Size { expected, actual })
+            if actual < expected && ((expected - actual) as u64) < last =>
+        {
+            let mut d = Deflate.decompress(body, actual)?;
+            d.resize(expected, 0);
+            (d, (expected - actual) as u64)
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok(Resource {
         version: system.version_bits() << 4 | graphics.version_bits(),
         system,
         graphics,
         data,
+        zero_filled,
     })
 }
 

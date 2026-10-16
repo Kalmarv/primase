@@ -224,6 +224,27 @@ fn reads_tree_binaries_resources_and_nested_archives() {
 }
 
 #[test]
+fn a_body_may_end_inside_its_last_page_only() {
+    // system: one 0x2000 page; graphics: two 0x2000 pages (base shift 4, pages of the smallest size twice is not
+    // expressible, so: one page of base << 1 and one of base << 0)
+    let sys = PageFlags(4 | 1 << 27);
+    let gfx = PageFlags(4 | 1 << 26 | 1 << 27);
+    let full = (sys.size() + gfx.size()) as usize;
+    let last = gfx.last_page_size() as usize;
+    assert_eq!(last, 0x2000);
+    let body = |n: usize| Deflate.compress(&vec![7u8; n]).expect("deflate");
+    // ends 100 bytes into the last page: accepted, the rest zero-filled
+    let r = primase_gta::resource::inflate(&body(full - last + 100), sys, gfx).expect("short last page");
+    assert_eq!(r.data.len(), full);
+    assert_eq!(r.zero_filled as usize, last - 100);
+    assert!(r.data[full - last + 100..].iter().all(|&b| b == 0));
+    // ends before the last page: refused
+    assert!(primase_gta::resource::inflate(&body(full - last - 1), sys, gfx).is_err());
+    // longer than the pages: refused
+    assert!(primase_gta::resource::inflate(&body(full + 1), sys, gfx).is_err());
+}
+
+#[test]
 fn rejects_broken_tables() {
     let keys = Keys::none();
     let mut bytes = write_rpf(vec![Item::Stored("a.txt", b"x".to_vec())]);

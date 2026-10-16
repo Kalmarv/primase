@@ -93,6 +93,8 @@ struct Tally {
     resources: u64,
     bytes: u64,
     failures: BTreeMap<String, Vec<String>>,
+    /// Resources whose body ends inside their last page (zero-filled): accepted, named, counted.
+    short_last_page: Vec<String>,
 }
 
 impl Tally {
@@ -150,7 +152,13 @@ fn walk(a: &Archive, f: &mut File, keys: &Keys, oracle: &BTreeMap<String, Oracle
             EntryKind::Resource { .. } => {
                 t.resources += 1;
                 match a.resource(f, i, keys) {
-                    Ok(r) => t.bytes += r.data.len() as u64,
+                    Ok(r) => {
+                        t.bytes += r.data.len() as u64;
+                        if r.zero_filled > 0 {
+                            t.short_last_page
+                                .push(format!("{} ({} bytes)", e.path, r.zero_filled));
+                        }
+                    }
                     Err(err) => t.fail("resource", format!("{}: {err}", e.path)),
                 }
             }
@@ -213,6 +221,7 @@ fn every_archive_reads_and_every_entry_decodes() {
         t.binaries += x.binaries;
         t.resources += x.resources;
         t.bytes += x.bytes;
+        t.short_last_page.extend(x.short_last_page);
         for (k, mut v) in x.failures {
             t.failures.entry(k).or_default().append(&mut v);
         }
@@ -230,6 +239,12 @@ fn every_archive_reads_and_every_entry_decodes() {
         t.binaries,
         t.resources,
         t.bytes as f64 / (1u64 << 30) as f64
+    );
+    t.short_last_page.sort();
+    println!(
+        "  resources ending inside their last page (zero-filled): {} {:?}",
+        t.short_last_page.len(),
+        t.short_last_page
     );
     for (k, v) in &mut t.failures {
         v.sort();
