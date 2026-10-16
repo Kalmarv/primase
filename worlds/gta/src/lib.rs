@@ -4,6 +4,7 @@
 //! published digests before using it.
 pub mod archive_set;
 pub mod drawable;
+pub mod gtxd;
 mod key_hashes;
 pub mod keys;
 mod le;
@@ -11,6 +12,7 @@ pub mod map;
 pub mod meta;
 pub mod mount;
 pub mod ng;
+mod rbf;
 pub mod resource;
 pub mod rpf;
 pub mod sga;

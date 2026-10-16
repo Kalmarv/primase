@@ -176,6 +176,8 @@ pub struct ArchiveSet {
     pub overlay: BTreeSet<usize>,
     /// Live files by extension (`ymap`, `ydr`, ...) and the joaat of the lowercase name without extension.
     pub tables: BTreeMap<String, BTreeMap<u32, FileRef>>,
+    /// The packs' enabled data files other than archives, in the order enabled.
+    pub data_files: Vec<DataFileRef>,
 }
 
 impl std::fmt::Debug for ArchiveSet {
@@ -244,6 +246,27 @@ fn physical(install: &Install, pack: &Pack, patch: Option<&str>, path: &str) -> 
         .find_map(|r| install.archive(&format!("{r}\\{rel}")))
 }
 
+/// A pack's enabled data file other than an archive (`GTXD_PARENTING_DATA`, metadata files, ...).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataFileRef {
+    pub file_type: String,
+    /// The mounted path (`dlcmpheist:/common/data/gtxd.meta`).
+    pub path: String,
+    /// The file, when it exists in the pack's title-update patch folder, archive or subpacks.
+    pub file: Option<FileRef>,
+}
+
+/// The file of a pack's mounted path: its title-update patch folder, its own archive, then its subpacks.
+fn physical_file(install: &Install, pack: &Pack, patch: Option<&str>, path: &str) -> Option<FileRef> {
+    let device = pack.setup.device_name.to_lowercase();
+    let rel = path.strip_prefix(&format!("{device}:/"))?.replace('/', "\\");
+    patch
+        .into_iter()
+        .chain(std::iter::once(pack.archive.as_str()))
+        .chain(pack.subpacks.iter().map(String::as_str))
+        .find_map(|r| install.file(&format!("{r}\\{rel}")))
+}
+
 /// The mount state while packs are applied.
 struct Mounts {
     /// Map archives by mounted path, in mount order.
@@ -254,9 +277,25 @@ struct Mounts {
     overlays: BTreeMap<String, Vec<String>>,
     /// Whether each archive was last mounted as an overlay.
     overlay: BTreeMap<usize, bool>,
+    /// Enabled data files other than archives, by mounted path, in the order enabled.
+    data: IndexMap<String, DataFileRef>,
 }
 
 impl Mounts {
+    fn enable_data(&mut self, install: &Install, pack: &Pack, patch: Option<&str>, d: &mount::DataFile) {
+        let path = platform_path(&d.filename);
+        let file = physical_file(install, pack, patch, &path);
+        self.data.shift_remove(&path);
+        self.data.insert(
+            path.clone(),
+            DataFileRef {
+                file_type: d.file_type.clone(),
+                path,
+                file,
+            },
+        );
+    }
+
     fn mount(&mut self, name: &str, archive: Option<usize>, overlay: bool) {
         let Some(i) = archive else { return };
         self.map.shift_remove(name);
@@ -304,12 +343,18 @@ impl Mounts {
                 }
                 for f in &cs.files_to_enable {
                     let f = platform_path(f);
-                    if let Some(d) = data_file(&f).filter(|d| d.file_type == "RPF_FILE") {
-                        self.mount(&f, physical(install, pack, patch, &f), d.overlay);
+                    match data_file(&f) {
+                        Some(d) if d.file_type == "RPF_FILE" => {
+                            self.mount(&f, physical(install, pack, patch, &f), d.overlay)
+                        }
+                        Some(d) => self.enable_data(install, pack, patch, d),
+                        None => {}
                     }
                 }
                 for f in &cs.files_to_disable {
-                    self.map.shift_remove(&platform_path(f));
+                    let f = platform_path(f);
+                    self.map.shift_remove(&f);
+                    self.data.shift_remove(&f);
                 }
                 for mc in &cs.map_changes {
                     for f in &mc.files_to_invalidate {
@@ -324,8 +369,14 @@ impl Mounts {
                     }
                     for f in &mc.files_to_enable {
                         let f = platform_path(f);
-                        let overlay = data_file(&f).is_some_and(|d| d.overlay);
-                        self.mount(&f, physical(install, pack, patch, &f), overlay);
+                        match data_file(&f) {
+                            Some(d) if d.file_type != "RPF_FILE" => self.enable_data(install, pack, patch, d),
+                            d => self.mount(
+                                &f,
+                                physical(install, pack, patch, &f),
+                                d.is_some_and(|d| d.overlay),
+                            ),
+                        }
                     }
                 }
             }
@@ -467,6 +518,7 @@ impl ArchiveSet {
             mounted,
             overlays: BTreeMap::new(),
             overlay: BTreeMap::new(),
+            data: IndexMap::new(),
         };
         // startup: each pack mounts its archives and enabled data files and runs its startup change-set groups
         for pack in &packs {
@@ -476,14 +528,16 @@ impl ArchiveSet {
                 }
             }
             let patch = patch_for(&pack.setup.device_name);
-            for d in &pack.content.data_files {
-                if d.file_type == "RPF_FILE" && !d.disabled {
+            for d in pack.content.data_files.iter().filter(|d| !d.disabled) {
+                if d.file_type == "RPF_FILE" {
                     let name = platform_path(&d.filename);
                     m.mount(
                         &name,
                         physical(&install, pack, patch.as_deref(), &name),
                         d.overlay,
                     );
+                } else {
+                    m.enable_data(&install, pack, patch.as_deref(), d);
                 }
             }
             m.run_groups(&install, pack, patch.as_deref(), |g| {
@@ -503,6 +557,7 @@ impl ArchiveSet {
             map,
             mounted,
             overlay,
+            data,
             ..
         } = m;
         // an archive mounted more than once counts at its last mount
@@ -554,6 +609,7 @@ impl ArchiveSet {
             mounted,
             overlay,
             tables,
+            data_files: data.into_values().collect(),
         })
     }
 
