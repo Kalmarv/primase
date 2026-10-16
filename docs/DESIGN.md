@@ -63,6 +63,7 @@ a list).
 | `Light` | a punctual light as glTF's `KHR_lights_punctual` defines it: point, spot (cones) or directional, linear colour, intensity in candela (lux for directional), optional range; placed by its transform, shining along its local -Z |
 | `Collision`, `Surfaces` (resource) | collision geometry placed like a mesh: a triangle soup in the entity's space, one surface per triangle, surfaces named in the world's table (game properties stay in dialects) |
 | `Texture` | pixels or encoded blocks + `TexFormat`, colour space, role, normal convention (X in red/alpha, green up/down, Z stored/rebuilt) |
+| `LayeredMaterial` (`core.layered`) | one to four ordinary material references (null contributes black), per-layer UV selection and transform, and vertex-channel weights mapped after interpolation without renormalisation; blended normals are renormalised |
 | `Name`, `Source` | display name; provenance key (archetype, MSB part, asset path) for debugging and review links |
 | `Bounds`, `Tile` | for streaming and chunked processing |
 | `StateAxis`, `Condition`, `StateOverride`, `StateAssignment` (resource) | world state (`core::state`): variables a level can be in (event flags, door states, IPL groups, active flags), when a placed entity exists (OR of ANDs over axis values) and what changes with the state (transform, material variant, prototype); `resolve-state` picks one state (option, else the resource, else defaults) for writers that cannot toggle, and leaves a world without state untouched |

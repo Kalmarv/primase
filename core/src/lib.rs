@@ -6,6 +6,7 @@ pub mod components;
 pub mod frame;
 pub mod gate;
 pub mod json;
+pub mod layered;
 pub mod pass;
 pub mod pbr;
 pub mod state;
@@ -14,6 +15,7 @@ pub mod world;
 
 pub use components::*;
 pub use json::JsonError;
+pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
 pub use world::{
     Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Opaque, OpaqueData, Resource,
