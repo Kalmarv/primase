@@ -25,8 +25,30 @@ fn source() -> flver::Material {
         name: "synthetic".into(),
         mtd: "wood.mtd".into(),
         textures: vec![],
+        gx: vec![],
     }
 }
+#[test]
+fn raw_gx_payload_is_retained_in_material_dedup_identity() {
+    let mut src = source();
+    src.gx.push(flver::GxItem {
+        id: *b"GXMD",
+        version: 123,
+        data: vec![1, 2, 3, 4],
+    });
+    let first = materials::resolve(&src, Some(&definition()), |_| true);
+    assert_eq!(first.gx, src.gx);
+    src.gx[0].data[3] = 5;
+    let second = materials::resolve(&src, Some(&definition()), |_| true);
+    // Area assembly keys its dedup map with this serialized source material.
+    let identity = |m: &materials::Material| primase_core::json::to_value(m).unwrap().to_string();
+    assert_ne!(identity(&first), identity(&second));
+    assert_eq!(
+        identity(&second),
+        identity(&materials::resolve(&src, Some(&definition()), |_| true))
+    );
+}
+
 #[test]
 fn overrides_fixed_slots_and_preserves_all_layers() {
     let mut src = source();

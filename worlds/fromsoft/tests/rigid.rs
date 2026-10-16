@@ -14,6 +14,7 @@ fn model() -> Model {
             name: "test".into(),
             mtd: String::new(),
             textures: vec![],
+            gx: vec![],
         }],
         bones: vec![Bone {
             translation: [1., 2., 3.],

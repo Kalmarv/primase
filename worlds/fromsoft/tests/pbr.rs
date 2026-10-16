@@ -34,6 +34,7 @@ fn source(shader: &str) -> materials::Material {
     let src = flver::Material {
         name: "fixture".into(),
         mtd: "fixture.mtd".into(),
+        gx: vec![],
         textures: slots
             .iter()
             .map(|(kind, name)| flver::Texture {

@@ -40,6 +40,8 @@ pub struct Material {
     /// Original definition, including non-layered shader parameters. Absence is
     /// explicit; runtime shader constants must not be guessed from slot names.
     pub definition: Option<MaterialDefinition>,
+    /// Raw, uninterpreted source GX records, included in material identity.
+    pub gx: Vec<flver::GxItem>,
     pub shader: String,
     pub class: String,
     pub skip: Option<String>,
@@ -58,7 +60,7 @@ pub struct Material {
 }
 impl Component for Material {
     const NAME: &'static str = "fromsoft.material";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -128,6 +130,7 @@ pub fn resolve(
     let mut m = Material {
         mtd: leaf_stem(&source.mtd),
         definition: definition.cloned(),
+        gx: source.gx.clone(),
         shader: definition.map_or(String::new(), |d| leaf_stem(&d.shader)),
         class: "opaque".into(),
         skip: None,

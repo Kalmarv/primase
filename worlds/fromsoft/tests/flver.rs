@@ -59,6 +59,32 @@ fn fixture() -> Vec<u8> {
     b
 }
 #[test]
+fn gx_records_retain_uninterpreted_payload_and_exclude_terminator() {
+    let mut bytes = fixture();
+    bytes.splice(448..448, [0; 48]);
+    put(&mut bytes, 12, 496);
+    put(&mut bytes, 148, 416);
+    bytes[416..420].copy_from_slice(b"GXMD");
+    put(&mut bytes, 420, 123);
+    put(&mut bytes, 424, 28);
+    for (i, value) in [1, 237, 1, 0.5f32.to_bits()].into_iter().enumerate() {
+        put(&mut bytes, 428 + i * 4, value);
+    }
+    put(&mut bytes, 444, 0x7fff_ffff);
+    put(&mut bytes, 448, 100);
+    put(&mut bytes, 452, 12);
+    let model = Model::read(&bytes).unwrap();
+    let gx = &model.materials[0].gx;
+    assert_eq!(gx.len(), 1);
+    assert_eq!(gx[0].id, *b"GXMD");
+    assert_eq!(gx[0].version, 123);
+    assert_eq!(gx[0].data, bytes[428..444]);
+    assert_eq!(model.meshes[0].vertices[1].position, [1., 0., 0.]);
+    put(&mut bytes, 424, 1000);
+    assert!(Model::read(&bytes).is_err());
+}
+
+#[test]
 fn packed_attributes_keep_layer_bytes() {
     let m = Model::read(&fixture()).unwrap();
     let v = &m.meshes[0].vertices[0];

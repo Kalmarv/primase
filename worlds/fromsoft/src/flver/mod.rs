@@ -19,11 +19,20 @@ pub struct Texture {
     pub kind: String,
     pub scale: [f32; 2],
 }
+/// Raw, uninterpreted material extension record; payload bytes retain source order.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct GxItem {
+    pub id: [u8; 4],
+    pub version: u32,
+    pub data: Vec<u8>,
+}
 #[derive(Clone, Debug)]
 pub struct Material {
     pub name: String,
     pub mtd: String,
     pub textures: Vec<Texture>,
+    /// Raw, uninterpreted GX records in source order, excluding the terminator.
+    pub gx: Vec<GxItem>,
 }
 #[derive(Clone, Debug)]
 pub struct FaceSet {
@@ -280,6 +289,7 @@ impl Model {
                 );
             }
             let mut gx = count(&v, o + 20)?;
+            let mut gx_items = Vec::new();
             if gx != 0 {
                 loop {
                     let id = meta.u32(gx)?;
@@ -294,6 +304,11 @@ impl Model {
                         }
                         break;
                     }
+                    gx_items.push(GxItem {
+                        id: meta.slice(gx, 4)?.try_into().expect("four-byte checked slice"),
+                        version: meta.u32(gx + 4)?,
+                        data: meta.slice(gx + 12, len - 12)?.to_vec(),
+                    });
                     gx += len;
                 }
             }
@@ -301,6 +316,7 @@ impl Model {
                 name: string(&meta, count(&v, o)?)?,
                 mtd: string(&meta, count(&v, o + 4)?)?,
                 textures: bound,
+                gx: gx_items,
             });
         }
         if textures.iter().any(Option::is_some) {
