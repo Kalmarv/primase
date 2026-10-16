@@ -1,5 +1,7 @@
 //! Export a scene folder as web tiles and a plain comparison set, one cell at a time: each cell's closure of the
 //! scene is loaded, lowered and written, then dropped, so memory holds one cell and the index.
+// a path of its own, so a test can include this driver as a module (formats/web/tests/scene_to_tiles.rs)
+#[path = "support/mod.rs"]
 mod support;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, Instance, MeshFile, Name, Transform, World};
@@ -139,8 +141,14 @@ fn prepare(
     Ok(w)
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run(std::env::args().skip(1)).map(|_| ())
+}
+
+/// The conversion of [`USAGE`]'s arguments, printing what it did; the tile set's index (the plain set's is written
+/// beside it). Refuses a set that lost a scene light.
+pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index, Box<dyn std::error::Error>> {
     let (mut paths, mut ktx2, mut caps, mut budget) = (Vec::new(), false, Vec::new(), None);
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ktx2" => ktx2 = true,
@@ -180,8 +188,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect::<Result<_, _>>()?;
         }
     }
-    let mut world = World::new();
-    primase_skate_scene::read(folder, &mut world)?;
     options.split_by_tile = world
         .iter::<SkatePlacement>()
         .filter_map(|(e, p)| p.split_by_tile.then_some(e))
@@ -286,6 +292,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         indexes.push(index);
     }
     support::write_entries(&proof.into_values().collect::<Vec<_>>(), output)?;
+    // every light the scene has (all lowered above, or the lowering failed) is written into its cell's tile
+    let lights = world.iter::<primase_skate_scene::SkateLight>().count() as u64;
+    for (index, out) in indexes.iter().zip([output, plain_output.as_path()]) {
+        let written = index.tiles.iter().map(|t| t.lights).sum::<u64>();
+        if written != lights {
+            return Err(format!(
+                "{}: {written} lights written of the scene's {lights}",
+                out.display()
+            )
+            .into());
+        }
+    }
     let index = &indexes[0];
     println!(
         "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={} plain_bytes={}",
@@ -298,7 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bytes[0],
         bytes[1]
     );
-    Ok(())
+    Ok(indexes.swap_remove(0))
 }
 
 /// `<prefix>=<colour>,<normal>,<mask>`, e.g. `bake_=256,256,128`.
