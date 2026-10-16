@@ -366,9 +366,13 @@ fn scene_folders_round_trip() {
         return;
     }
     let validator = real_data("PRIMASE_SCENE_SKATE");
-    let filter = std::env::var("PRIMASE_SCENE_FILTER").unwrap_or_default();
-    let allow_live = std::env::var("PRIMASE_ALLOW_LIVE").is_ok_and(|v| v == "1");
-    let out_root = std::env::var_os("PRIMASE_OUT")
+    let filter = primase_core::gate::real_data_value("PRIMASE_SCENE_FILTER")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_default();
+    let allow_live = primase_core::gate::real_data_value("PRIMASE_ALLOW_LIVE")
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|v| v == "1");
+    let out_root = primase_core::gate::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("skate-scene-gate");

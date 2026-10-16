@@ -21,7 +21,7 @@ fn placed_object_soup() -> Result<()> {
     let Some(availability) = real_data("PRIMASE_FROMSOFT_MATERIAL_ORACLE") else {
         return Ok(());
     };
-    let Some(output) = std::env::var_os("PRIMASE_FROMSOFT_OUTPUT") else {
+    let Some(output) = primase_core::gate::real_data_value("PRIMASE_FROMSOFT_OUTPUT") else {
         return Ok(());
     };
     // SAFETY: an explicitly supplied trusted native decoder.

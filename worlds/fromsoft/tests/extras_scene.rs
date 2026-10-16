@@ -124,7 +124,7 @@ fn castle_extras_scene() -> Result<()> {
         grind_curves: Some(TableRef::single("tables/grind.bin")),
         ..Default::default()
     });
-    if let Some(output) = std::env::var_os("PRIMASE_FROMSOFT_EXTRAS_OUTPUT") {
+    if let Some(output) = primase_core::gate::real_data_value("PRIMASE_FROMSOFT_EXTRAS_OUTPUT") {
         primase_skate_scene::write(&world, std::path::Path::new(&output))?;
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(std::path::Path::new(&output).join("scene.json"))?)?;

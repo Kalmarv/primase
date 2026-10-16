@@ -5,7 +5,8 @@
 //! workspace has one; every reader has a census over a game's real data. See CONTRIBUTING.md "Gates".
 
 use std::fmt;
-use std::path::PathBuf;
+mod data;
+pub use data::{DataConfigError, real_data, real_data_value, try_real_data_value};
 
 /// How far two outputs may differ and still pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,23 +235,6 @@ fn compare_value(a: &serde_json::Value, b: &serde_json::Value, path: &str, ulps:
         _ if a == b => {}
         (Value::String(x), Value::String(y)) => differ(c, path, format!("{x:?} vs {y:?}")),
         _ => differ(c, path, format!("{} vs {}", kind(a), kind(b))),
-    }
-}
-
-/// Real-data location from an environment variable, for tests that read the user's installs or work folders.
-/// Absent or missing on disk: prints a skip line and returns `None`, so the test passes as skipped. The variables
-/// are listed in CONTRIBUTING.md "Real data".
-pub fn real_data(var: &str) -> Option<PathBuf> {
-    match std::env::var_os(var).map(PathBuf::from) {
-        Some(p) if p.exists() => Some(p),
-        Some(p) => {
-            eprintln!("SKIPPED: {var}={} does not exist", p.display());
-            None
-        }
-        None => {
-            eprintln!("SKIPPED: {var} not set");
-            None
-        }
     }
 }
 

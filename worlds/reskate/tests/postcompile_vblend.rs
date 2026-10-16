@@ -201,7 +201,7 @@ fn vblend_gate() -> R {
             )
         })
         .collect();
-    let root = std::env::var_os("PRIMASE_OUT")
+    let root = primase_core::gate::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("reskate-vblend");

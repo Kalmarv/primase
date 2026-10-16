@@ -1,0 +1,10 @@
+# Copy to an ignored primase-data.toml, then set PRIMASE_DATA to its absolute path.
+# These are placeholders only. Keep private files outside the repository or under
+# the ignored primase-data.toml / primase-data.*.toml names; never commit real paths.
+# A partial map is expected. All values, including flags, must be quoted strings.
+PRIMASE_SEKIRO_DIR = 'D:/placeholder/games/Sekiro'
+PRIMASE_UNITY_DATA = 'D:/placeholder/games/Example/Example_Data'
+PRIMASE_UNITY_TPK = 'D:/placeholder/fixtures/typetrees.tpk'
+PRIMASE_OUT = 'D:/placeholder/output'
+PRIMASE_SCENE_FILTER = 'example-scene'
+PRIMASE_ALLOW_LIVE = '0'

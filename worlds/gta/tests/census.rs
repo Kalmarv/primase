@@ -172,7 +172,8 @@ fn every_archive_reads_and_every_entry_decodes() {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");
-    let filter = std::env::var("PRIMASE_GTA_FILTER")
+    let filter = primase_core::gate::real_data_value("PRIMASE_GTA_FILTER")
+        .and_then(|value| value.into_string().ok())
         .unwrap_or_default()
         .to_lowercase();
     let mut oracle = BTreeMap::new();

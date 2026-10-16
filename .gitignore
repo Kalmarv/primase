@@ -16,3 +16,8 @@ logs/
 *.ps1
 .env*
 .cargo/config.toml
+
+# Private corpus locations and gate settings (use primase-data.example.toml as a template)
+primase-data.toml
+primase-data.*.toml
+!primase-data.example.toml

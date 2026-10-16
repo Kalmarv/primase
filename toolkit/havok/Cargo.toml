@@ -12,5 +12,8 @@ publish.workspace = true
 thiserror.workspace = true
 primase-vertex.workspace = true
 
+[dev-dependencies]
+primase-core.workspace = true
+
 [lints]
 workspace = true

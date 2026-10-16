@@ -998,11 +998,13 @@ fn rust_writer_matches_the_reference() {
         return;
     };
     let caps = real_data("PRIMASE_RESKATE_CAPS").map(|p| p.to_string_lossy().into_owned());
-    let out_root = std::env::var_os("PRIMASE_OUT")
+    let out_root = primase_core::gate::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("reskate-gate");
-    let filter = std::env::var("PRIMASE_SCENE_FILTER").unwrap_or_default();
+    let filter = primase_core::gate::real_data_value("PRIMASE_SCENE_FILTER")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_default();
     let mut areas: Vec<String> = std::fs::read_dir(&reference)
         .unwrap()
         .flatten()
@@ -1379,7 +1381,7 @@ fn real_normal_writer_images() {
     let (Some(reference), Some(scenes), Some(output)) = (
         real_data("PRIMASE_RESKATE_NORMAL_REF"),
         real_data("PRIMASE_RESKATE_NORMAL_SCENES"),
-        std::env::var_os("PRIMASE_OUT").map(PathBuf::from),
+        primase_core::gate::real_data_value("PRIMASE_OUT").map(PathBuf::from),
     ) else {
         return;
     };

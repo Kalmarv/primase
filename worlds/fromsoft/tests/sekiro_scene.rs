@@ -24,7 +24,9 @@ fn installed_area_scene() -> Result<()> {
     let Some(reference) = real_data("PRIMASE_FROMSOFT_SCENE") else {
         return Ok(());
     };
-    let Some(output) = std::env::var_os("PRIMASE_FROMSOFT_OUTPUT").map(std::path::PathBuf::from) else {
+    let Some(output) =
+        primase_core::gate::real_data_value("PRIMASE_FROMSOFT_OUTPUT").map(std::path::PathBuf::from)
+    else {
         eprintln!("SKIPPED: PRIMASE_FROMSOFT_OUTPUT not set");
         return Ok(());
     };
