@@ -44,6 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = Path::new(&paths[1]);
     let mut world = World::new();
     primase_skate_scene::read(folder, &mut world)?;
+    // lights are planned from the whole scene, like viewer records, not loaded per cell
+    primase_skate_scene::LowerSkateLights.run(&mut world, &mut PassLog::default())?;
     let mut options = Options {
         base_dir: folder.into(),
         ..Default::default()
@@ -141,12 +143,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     support::write_entries(&proof.into_values().collect::<Vec<_>>(), output)?;
     let index = &indexes[0];
     println!(
-        "tiles={} triangles={} placements={} instanced={} viewer_items={} bytes={} plain_bytes={}",
+        "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={} plain_bytes={}",
         index.tiles.len(),
         index.tiles.iter().map(|t| t.triangles).sum::<u64>(),
         index.tiles.iter().map(|t| t.placements).sum::<u64>(),
         index.tiles.iter().map(|t| t.instanced_placements).sum::<u64>(),
         options.viewer_items.len(),
+        index.tiles.iter().map(|t| t.lights).sum::<u64>(),
         bytes[0],
         bytes[1]
     );

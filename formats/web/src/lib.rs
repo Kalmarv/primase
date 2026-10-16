@@ -89,7 +89,13 @@ pub struct TileInfo {
     pub placements: u64,
     pub instanced_placements: u64,
     pub viewer_items: u64,
+    /// Scene lights in this tile (format 1.1; omitted when 0).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lights: u64,
     pub bytes: u64,
+}
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -233,11 +239,19 @@ struct Placement {
     transform: Transform,
     triangles: Option<Vec<(usize, Vec<u32>)>>,
 }
-/// A planned cell: its placements and the indices of its viewer records.
+/// A planned cell: its placements and the indices of its viewer records and lights.
 #[derive(Clone, Debug, Default)]
 struct Cell {
     placements: Vec<Placement>,
     items: Vec<usize>,
+    lights: Vec<usize>,
+}
+/// A scene light as planned: its name, the light and its world transform.
+#[derive(Clone, Debug)]
+struct PlannedLight {
+    name: String,
+    light: primase_core::Light,
+    transform: Transform,
 }
 /// One written tile: its index entry, its GLB and its collision sidecar, for the caller to keep or store.
 #[derive(Clone, Debug)]
@@ -263,7 +277,8 @@ impl WrittenTile {
     }
 }
 /// What goes in which tile, decided before any tile is written: placements by pivot (or, for
-/// [`Options::split_by_tile`], by transformed triangle centre), viewer records and the world's collision by anchor.
+/// [`Options::split_by_tile`], by transformed triangle centre), viewer records and the world's collision by anchor,
+/// the world's `core.light`s by position (taken now, like viewer records: they are not in any cell's closure).
 ///
 /// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`], as a
 /// [`World::subset`], with its meshes and textures loaded and lowered to PBR, then [`TilePlan::write_cell`]; then
@@ -273,6 +288,7 @@ impl WrittenTile {
 pub struct TilePlan {
     options: Options,
     items: Vec<ViewerItem>,
+    lights: Vec<PlannedLight>,
     placements: BTreeSet<Entity>,
     cells: BTreeMap<(i32, i32), Cell>,
     unsplit: Vec<Placement>,
@@ -344,6 +360,7 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
             ..options.clone()
         },
         items: options.viewer_items.clone(),
+        lights: Vec::new(),
         placements: placements.keys().copied().collect(),
         cells: BTreeMap::new(),
         unsplit: Vec::new(),
@@ -380,6 +397,18 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         }
         let key = coordinate(item.anchor, options.tile_size)?;
         plan.cells.entry(key).or_default().items.push(i);
+    }
+    for (e, light) in world.iter::<primase_core::Light>() {
+        let transform = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+        let key = coordinate(transform.cols[3].map(f64::from), options.tile_size)?;
+        plan.cells.entry(key).or_default().lights.push(plan.lights.len());
+        plan.lights.push(PlannedLight {
+            name: world
+                .get::<Name>(e)
+                .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
+            light: light.clone(),
+            transform,
+        });
     }
     Ok(plan)
 }
@@ -621,6 +650,7 @@ impl TilePlan {
                     placements: content.placements.len() as u64,
                     instanced_placements,
                     viewer_items: 0,
+                    lights: 0,
                     bytes: bytes.len() as u64,
                 })
                 .map(|info| (info, bytes)))
@@ -642,23 +672,25 @@ impl TilePlan {
                 w.insert(e, t);
             }
         }
-        let Some(mut tile) = self.attach_items((col, row), render?, &content.items)? else {
+        let Some(mut tile) = self.attach_items((col, row), render?, &content.items, &content.lights)? else {
             return Ok(None);
         };
         tile.info.file = asset_name("tile", col, row, &tile.bytes);
         self.tiles.push(tile.info.clone());
         Ok(Some(tile))
     }
-    /// The tile with viewer records `items` added as identity nodes (and their collision as a sidecar): a
-    /// metadata-only tile without `render`; `None` when there is neither.
+    /// The tile with viewer records `items` added as identity nodes (and their collision as a sidecar) and `lights`
+    /// as `KHR_lights_punctual` nodes carrying their world transforms: a metadata-only tile without `render`; `None`
+    /// when there is nothing.
     fn attach_items(
         &self,
         (col, row): (i32, i32),
         render: Option<(TileInfo, Vec<u8>)>,
         items: &[usize],
+        lights: &[usize],
     ) -> Result<Option<WrittenTile>> {
         use serde_json::{Value, json};
-        if items.is_empty() {
+        if items.is_empty() && lights.is_empty() {
             return Ok(render.map(|(info, bytes)| WrittenTile {
                 info,
                 bytes,
@@ -724,6 +756,43 @@ impl TilePlan {
                 .expect("roots")
                 .push(json!(index));
         }
+        if !lights.is_empty() {
+            const LIGHTS: &str = "KHR_lights_punctual";
+            let mut objects = Vec::new();
+            for &i in lights {
+                let PlannedLight {
+                    name,
+                    light,
+                    transform,
+                } = &self.lights[i];
+                let mut object = primase_gltf::write::punctual_light(light).map_err(Error::Invalid)?;
+                object["name"] = json!(name);
+                let c = transform.cols;
+                let matrix = [
+                    c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1],
+                    c[2][2], 0.0, c[3][0], c[3][1], c[3][2], 1.0,
+                ];
+                let index = doc["nodes"].as_array().expect("nodes").len();
+                doc["nodes"].as_array_mut().expect("nodes").push(json!({
+                    "name": name,
+                    "matrix": primase_core::json::f32s_value(&matrix),
+                    "extensions": {LIGHTS: {"light": objects.len()}},
+                }));
+                doc["scenes"][0]["nodes"]
+                    .as_array_mut()
+                    .expect("roots")
+                    .push(json!(index));
+                objects.push(object);
+                for k in 0..3 {
+                    min[k] = min[k].min(f64::from(c[3][k]));
+                    max[k] = max[k].max(f64::from(c[3][k]));
+                }
+            }
+            doc["extensions"][LIGHTS] = json!({"lights": objects});
+            let mut used = doc["extensionsUsed"].as_array().cloned().unwrap_or_default();
+            used.push(json!(LIGHTS));
+            doc["extensionsUsed"] = Value::Array(used);
+        }
         let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?;
         let descriptor = collision.as_ref().map(|(file, b)| CollisionFile {
             file: file.clone(),
@@ -739,6 +808,7 @@ impl TilePlan {
                 TileInfo {
                     collision: descriptor,
                     viewer_items: items.len() as u64,
+                    lights: lights.len() as u64,
                     bytes: bytes.len() as u64,
                     ..info
                 }
@@ -755,6 +825,7 @@ impl TilePlan {
                 placements: 0,
                 instanced_placements: 0,
                 viewer_items: items.len() as u64,
+                lights: lights.len() as u64,
                 bytes: bytes.len() as u64,
             },
         };
@@ -774,7 +845,12 @@ impl TilePlan {
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row));
         Ok(Index {
-            format_version: "1.0",
+            // 1.1 adds the optional scene lights; a tile set without them stays 1.0
+            format_version: if tiles.iter().any(|t| t.lights > 0) {
+                "1.1"
+            } else {
+                "1.0"
+            },
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: self.options.tile_size,

@@ -769,3 +769,93 @@ fn invalid_collision_records_are_refused() {
         assert!(write(&World::new(), &item(data)).is_err(), "{what}");
     }
 }
+#[test]
+fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
+    use primase_core::{Light, LightKind};
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(proto, mesh());
+    let placement = w.spawn();
+    w.insert(
+        placement,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    w.insert(placement, Transform::IDENTITY);
+    assert_eq!(write(&w, &plain()).unwrap().index.format_version, "1.0");
+    for (x, kind) in [
+        (5.0f32, LightKind::Point),
+        (
+            450.0,
+            LightKind::Spot {
+                inner_cone: 0.2,
+                outer_cone: 0.4,
+            },
+        ),
+    ] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Light {
+                kind,
+                color: [1.0, 0.5, 0.25],
+                intensity: 7.0,
+                range: Some(12.0),
+            },
+        );
+        w.insert(
+            e,
+            Transform {
+                cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [x, 3.0, 0.0]],
+            },
+        );
+    }
+    let set = write(&w, &plain()).unwrap();
+    assert_eq!(set.index.format_version, "1.1");
+    let tiles: Vec<_> = set
+        .index
+        .tiles
+        .iter()
+        .map(|t| (t.col, t.row, t.lights, t.triangles > 0))
+        .collect();
+    assert_eq!(tiles, [(0, 0, 1, true), (2, 0, 1, false)]);
+    let index = serde_json::to_value(&set.index).unwrap();
+    assert_eq!(index["tiles"][1]["content"], "metadata_only");
+    for (tile, kind) in set.index.tiles.iter().zip(["point", "spot"]) {
+        let bytes = &set.files[&tile.file];
+        let doc: serde_json::Value =
+            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        assert!(
+            doc["extensionsUsed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u == "KHR_lights_punctual")
+        );
+        assert!(
+            doc.get("extensionsRequired").is_none_or(|r| !r
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u == "KHR_lights_punctual"))
+        );
+        let lights = doc["extensions"]["KHR_lights_punctual"]["lights"]
+            .as_array()
+            .unwrap();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0]["type"], kind);
+        assert_eq!(lights[0]["intensity"], 7.0);
+        assert_eq!(lights[0]["range"], 12.0);
+        let node = doc["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n.get("extensions").is_some())
+            .unwrap();
+        assert_eq!(node["extensions"]["KHR_lights_punctual"]["light"], 0);
+        assert_eq!(node["matrix"][13], 3.0);
+        assert!(tile.min[1] <= 3.0 && tile.max[1] >= 3.0);
+    }
+}

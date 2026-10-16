@@ -966,38 +966,15 @@ impl Writer<'_> {
         Ok((i, sets))
     }
 
-    /// A light as `KHR_lights_punctual` writes it (defaults left out: white, intensity 1, no range).
+    /// A light as `KHR_lights_punctual` writes it, named.
     fn light(&self, e: Entity, l: &Light) -> Result<Value> {
         let mut o = Map::new();
         o.insert("name".into(), Value::String(self.name_of(e, "light")));
-        let kind = match l.kind {
-            LightKind::Point => "point",
-            LightKind::Directional => "directional",
-            LightKind::Spot {
-                inner_cone,
-                outer_cone,
-            } => {
-                let cones = self.factors(e, &[inner_cone, outer_cone])?;
-                o.insert(
-                    "spot".into(),
-                    json!({"innerConeAngle": cones[0], "outerConeAngle": cones[1]}),
-                );
-                "spot"
-            }
+        let Value::Object(fields) = punctual_light(l).map_err(|detail| Error::World { entity: e, detail })?
+        else {
+            unreachable!("punctual_light returns an object")
         };
-        o.insert("type".into(), json!(kind));
-        if l.color != [1.0; 3] {
-            o.insert("color".into(), self.factors(e, &l.color)?);
-        }
-        if l.intensity != 1.0 {
-            o.insert("intensity".into(), self.factors(e, &[l.intensity])?[0].clone());
-        }
-        // a directional light has no range in KHR_lights_punctual
-        if let Some(r) = l.range
-            && l.kind != LightKind::Directional
-        {
-            o.insert("range".into(), self.factors(e, &[r])?[0].clone());
-        }
+        o.extend(fields);
         Ok(Value::Object(o))
     }
 
@@ -1275,4 +1252,45 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+}
+
+/// A light's `KHR_lights_punctual` object without its name (defaults left out: white, intensity 1, no range; a
+/// directional light has no range). An error for a non-finite value.
+pub fn punctual_light(l: &Light) -> std::result::Result<Value, String> {
+    let finite = |xs: &[f32]| {
+        if xs.iter().any(|x| !x.is_finite()) {
+            Err(format!("non-finite material factor {xs:?}"))
+        } else {
+            Ok(f32s_value(xs))
+        }
+    };
+    let mut o = Map::new();
+    let kind = match l.kind {
+        LightKind::Point => "point",
+        LightKind::Directional => "directional",
+        LightKind::Spot {
+            inner_cone,
+            outer_cone,
+        } => {
+            let cones = finite(&[inner_cone, outer_cone])?;
+            o.insert(
+                "spot".into(),
+                json!({"innerConeAngle": cones[0], "outerConeAngle": cones[1]}),
+            );
+            "spot"
+        }
+    };
+    o.insert("type".into(), json!(kind));
+    if l.color != [1.0; 3] {
+        o.insert("color".into(), finite(&l.color)?);
+    }
+    if l.intensity != 1.0 {
+        o.insert("intensity".into(), finite(&[l.intensity])?[0].clone());
+    }
+    if let Some(r) = l.range
+        && l.kind != LightKind::Directional
+    {
+        o.insert("range".into(), finite(&[r])?[0].clone());
+    }
+    Ok(Value::Object(o))
 }

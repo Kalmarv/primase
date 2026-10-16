@@ -45,6 +45,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `instanced_placements` | Placements represented by GPU instancing |
 | `viewer_items` | Number of viewer records in this tile |
 | `collision` (optional) | Object `{file, bytes, records}` for a collision GLB |
+| `lights` (optional, 1.1) | Scene lights in this tile's GLB; omitted when 0 |
 
 `collision.records` counts collision meshes, not triangles. Each record's index
 accessor gives its triangle count. Bounds of geometry tiles cover render
@@ -131,6 +132,20 @@ Unknown record kinds can be ignored or shown as labelled markers. Other
 consumer must not require any particular source dialect. `web.instances`
 preserves per-instance diagnostic identity where present. Viewer records never
 change glTF geometry or material semantics.
+
+## Scene lights (1.1)
+
+A tile set whose scene has lights declares `format_version: "1.1"`; one without
+lights stays `"1.0"`. Each light is a glTF node with `KHR_lights_punctual`
+(listed in `extensionsUsed`, never `extensionsRequired`) in the tile whose cell
+contains the light's position, like a viewer record's anchor; a cell with lights
+but no render geometry gets a metadata-only GLB. The node's `matrix` is the
+light's world transform: position in the last column, a spot shining along its
+local -Z. Light values follow `KHR_lights_punctual`: linear RGB `color`,
+`intensity` in candela for point and spot lights, optional `range` (absent:
+unlimited), spot cone angles in radians from the axis. Bounds include light
+positions. Lights are illumination sources only; consumers may render a subset
+(for example the nearest few) and must ignore them without breaking geometry.
 
 ## Synthetic conformance fixture
 
