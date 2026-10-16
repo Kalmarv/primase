@@ -155,6 +155,17 @@ pub struct ArchetypeDef {
     pub time_flags: Option<u32>,
     /// The number of extensions, kept in the META tree.
     pub extensions: usize,
+    /// For the interior kind: its flags, the entities placed in it (in the interior's space; the entity sets, which
+    /// scripts switch, stay in the META tree) and how many entity sets it has.
+    pub interior: Option<Interior>,
+}
+
+/// An interior archetype's own entities.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Interior {
+    pub mlo_flags: u32,
+    pub entities: Vec<EntityDef>,
+    pub entity_sets: usize,
 }
 
 impl ArchetypeDef {
@@ -186,6 +197,18 @@ impl ArchetypeDef {
                 _ => None,
             },
             extensions: s.array("extensions")?.len(),
+            interior: match kind {
+                ArchetypeKind::Interior => Some(Interior {
+                    mlo_flags: s.u32("mloFlags")?,
+                    entities: s
+                        .pointed("entities")?
+                        .into_iter()
+                        .map(EntityDef::from_struct)
+                        .collect::<Result<_>>()?,
+                    entity_sets: s.array("entitySets")?.len(),
+                }),
+                _ => None,
+            },
         })
     }
 }
