@@ -292,3 +292,273 @@ fn what_skate_cannot_take_is_refused() {
     scene::raise_skate(&mut w, &options()).unwrap();
     assert!(scene::raise_skate(&mut w, &options()).is_err());
 }
+
+fn masked_world() -> (World, primase_core::Entity, primase_core::Entity) {
+    let mut w = world();
+    let material = w.iter::<PbrMaterial>().next().unwrap().0;
+    let image = w.spawn();
+    let mut pixels = texture(TexRole::Mask);
+    pixels.levels = vec![[64, 128, 255, 17].repeat(4), vec![200, 31, 80, 99]];
+    w.insert(image, pixels);
+    let m = w.get_mut::<PbrMaterial>(material).unwrap();
+    m.metallic = 1.0;
+    m.roughness = 1.0;
+    m.metallic_roughness_texture = Some(TextureRef::new(image));
+    m.occlusion_texture = Some(TextureRef::new(image));
+    (w, material, image)
+}
+
+#[test]
+fn packed_masks_preserve_channels_mips_and_material_bindings() {
+    let (mut w, m, source) = masked_world();
+    let original = w.get::<PbrMaterial>(m).unwrap().clone();
+    let source_pixels = w.get::<Texture>(source).unwrap().levels.clone();
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let raised = w.get::<SkateMaterial>(m).unwrap();
+    assert_eq!((raised.metallic, raised.roughness), (None, None));
+    let mask = raised.mask.unwrap();
+    let pixels = w.get::<Texture>(mask).unwrap();
+    // Literal oracle, independent of the mapper and inverse converter.
+    assert_eq!(
+        pixels.levels,
+        [[255, 127, 64, 255].repeat(4), vec![80, 224, 200, 255]]
+    );
+    assert_eq!(pixels.color_space, ColorSpace::Linear);
+    assert_eq!(pixels.role, TexRole::Mask);
+    assert_eq!(
+        scene::msk_to_orm(pixels).unwrap().levels,
+        [[64, 128, 255, 255].repeat(4), vec![200, 31, 80, 255]]
+    );
+    assert_eq!(w.get::<PbrMaterial>(m), Some(&original));
+    assert_eq!(w.get::<Texture>(source).unwrap().levels, source_pixels);
+    assert_eq!(log.counts["derived MSK textures"], 1);
+    assert_eq!(log.counts["PBR materials raised with an MSK binding"], 1);
+    assert!(
+        !log.approximations
+            .contains_key("PBR mask factors quantized to UNORM8")
+    );
+    let assets = tmp("mask-assets");
+    scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    let out = tmp("mask-scene");
+    scene::write(&w, &out).unwrap();
+    let mut read = World::new();
+    scene::read(&out, &mut read).unwrap();
+    let material = read
+        .iter::<SkateMaterial>()
+        .find(|(_, x)| x.key == "rock")
+        .unwrap()
+        .1;
+    let target = read.get::<SkateTexture>(material.mask.unwrap()).unwrap();
+    assert!(out.join(&target.file.path).is_file());
+    assert_eq!((material.metallic, material.roughness), (None, None));
+}
+
+#[test]
+fn mask_factors_and_explicit_occlusion_have_literal_results() {
+    for (mr, ao, factors, expected) in [
+        (true, true, [0.5, 0.5, 0.5], [128, 191, 160, 255]),
+        (true, false, [0.0, 1.0, 1.0], [0, 127, 255, 255]),
+        (false, true, [0.0, 0.0, 0.0], [0, 255, 255, 255]),
+        (false, true, [1.0, 1.0, 1.0], [255, 0, 64, 255]),
+    ] {
+        let (mut w, material, _) = masked_world();
+        let m = w.get_mut::<PbrMaterial>(material).unwrap();
+        if !mr {
+            m.metallic_roughness_texture = None;
+        }
+        if !ao {
+            m.occlusion_texture = None;
+        }
+        [m.metallic, m.roughness, m.occlusion_strength] = factors;
+        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
+        assert_eq!(w.get::<Texture>(mask).unwrap().levels[0], expected.repeat(4));
+        assert_eq!(
+            log.approximations
+                .get("PBR mask factors quantized to UNORM8")
+                .copied()
+                .unwrap_or(0),
+            u64::from(factors == [0.5; 3])
+        );
+    }
+}
+
+#[test]
+fn mask_cache_separates_factors_and_counts_materials_in_variants() {
+    let (mut w, first, _) = masked_world();
+    let shared = w.spawn();
+    let material = w.get::<PbrMaterial>(first).unwrap().clone();
+    w.insert(shared, material.clone());
+    let zero = w.spawn();
+    w.insert(
+        zero,
+        PbrMaterial {
+            metallic: 0.0,
+            ..material
+        },
+    );
+    let prototype = w.iter::<Mesh>().next().unwrap().0;
+    w.insert(
+        prototype,
+        primase_core::MaterialVariants(vec![BTreeMap::from([(0, shared), (1, zero)])]),
+    );
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(log.counts["PBR materials raised with an MSK binding"], 3);
+    assert_eq!(log.counts["derived MSK textures"], 2);
+    let mask = |e| w.get::<SkateMaterial>(e).unwrap().mask.unwrap();
+    assert_eq!(mask(first), mask(shared));
+    assert_ne!(mask(first), mask(zero));
+    assert_eq!(w.get::<Texture>(mask(zero)).unwrap().levels[0][0], 0);
+}
+
+fn rejected_unchanged(mut w: World) {
+    let mut before = w.clone();
+    assert!(scene::raise_skate(&mut w, &options()).is_err());
+    assert_eq!(
+        w.entities().collect::<Vec<_>>(),
+        before.entities().collect::<Vec<_>>()
+    );
+    assert_eq!(w.resources_json(), before.resources_json());
+    for e in w.entities() {
+        assert_eq!(w.components_json(e), before.components_json(e));
+        if let Some(t) = w.get::<Texture>(e) {
+            assert_eq!(t.levels, before.get::<Texture>(e).unwrap().levels);
+        }
+    }
+    assert_eq!(w.spawn(), before.spawn());
+}
+
+#[test]
+fn unsupported_masks_refuse_without_partial_surface_or_entity_changes() {
+    for case in 0..11 {
+        let (mut w, material, source) = masked_world();
+        match case {
+            0 => w.get_mut::<Texture>(source).unwrap().levels[1]
+                .pop()
+                .map(|_| ())
+                .unwrap(),
+            1 => w.get_mut::<Texture>(source).unwrap().levels.clear(),
+            2 => w.get_mut::<Texture>(source).unwrap().color_space = ColorSpace::Srgb,
+            3 => w.get_mut::<PbrMaterial>(material).unwrap().metallic = f32::NAN,
+            4 => w.get_mut::<PbrMaterial>(material).unwrap().roughness = 2.0,
+            5 => w.get_mut::<PbrMaterial>(material).unwrap().normal_scale = 0.5,
+            6 => {
+                w.get_mut::<PbrMaterial>(material)
+                    .unwrap()
+                    .occlusion_texture
+                    .as_mut()
+                    .unwrap()
+                    .texcoord = 1
+            }
+            7 => {
+                w.get_mut::<PbrMaterial>(material)
+                    .unwrap()
+                    .metallic_roughness_texture
+                    .as_mut()
+                    .unwrap()
+                    .wrap = [primase_core::pbr::Wrap::Clamp; 2]
+            }
+            8 => {
+                let other = w.spawn();
+                w.insert(other, texture(TexRole::Mask));
+                w.get_mut::<PbrMaterial>(material).unwrap().occlusion_texture = Some(TextureRef::new(other));
+            }
+            9 => {
+                w.despawn(source);
+            }
+            10 => w.get_mut::<PbrMaterial>(material).unwrap().emissive_strength = f32::INFINITY,
+            _ => unreachable!(),
+        }
+        rejected_unchanged(w);
+    }
+}
+
+#[test]
+fn emission_losses_are_per_material_and_do_not_claim_radiance_transport() {
+    let (mut w, first, source) = masked_world();
+    let m = w.get_mut::<PbrMaterial>(first).unwrap();
+    m.emissive = [0.25, 0.5, 1.0];
+    m.emissive_strength = 10.0;
+    m.emissive_texture = Some(TextureRef::new(source));
+    let other = w.iter::<PbrMaterial>().find(|(e, _)| *e != first).unwrap().0;
+    w.get_mut::<PbrMaterial>(other).unwrap().emissive_texture = Some(TextureRef::new(source));
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(
+        log.approximations["PBR emission texture binding not representable in skate-scene"],
+        2
+    );
+    assert_eq!(
+        log.approximations["PBR emissive radiance not representable in skate-scene"],
+        1
+    );
+    assert_eq!(w.get::<SkateMaterial>(first).unwrap().emissive, None);
+    assert_eq!(w.get::<PbrMaterial>(first).unwrap().emissive_strength, 10.0);
+}
+
+#[test]
+fn unbound_normal_scale_is_inert_and_scalar_materials_stay_scalar() {
+    let mut w = world();
+    let m = w
+        .iter::<PbrMaterial>()
+        .find(|(_, m)| m.normal_texture.is_none())
+        .unwrap()
+        .0;
+    w.get_mut::<PbrMaterial>(m).unwrap().normal_scale = 0.5;
+    scene::raise_skate(&mut w, &options()).unwrap();
+    let raised = w.get::<SkateMaterial>(m).unwrap();
+    assert_eq!(
+        (raised.mask, raised.metallic, raised.roughness),
+        (None, Some(0.0), Some(1.0))
+    );
+}
+
+#[test]
+fn explicit_raise_uses_pbr_and_counts_shared_quantization_per_material() {
+    let (mut w, first, source) = masked_world();
+    w.get_mut::<PbrMaterial>(first).unwrap().metallic = 0.5;
+    let second = w.iter::<PbrMaterial>().find(|(e, _)| *e != first).unwrap().0;
+    let pbr = w.get::<PbrMaterial>(first).unwrap().clone();
+    w.insert(second, pbr.clone());
+    // A retained dialect value is provenance, not the authority at this explicit conversion boundary.
+    w.insert(
+        first,
+        SkateMaterial {
+            key: "conflicting".into(),
+            class: MaterialClass::Glass,
+            base: None,
+            normal: None,
+            mask: Some(source),
+            base_color: Some([0; 4]),
+            tint: None,
+            alpha: None,
+            cutoff: None,
+            two_sided: None,
+            domain: None,
+            metallic: Some(1.0),
+            roughness: Some(0.0),
+            wrap: None,
+            ocean: None,
+            cast_shadows: None,
+            emissive: Some(true),
+            vertex_alpha: None,
+            other: Default::default(),
+        },
+    );
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(log.approximations["PBR mask factors quantized to UNORM8"], 2);
+    assert_eq!(log.counts["derived MSK textures"], 1);
+    let a = w.get::<SkateMaterial>(first).unwrap();
+    let b = w.get::<SkateMaterial>(second).unwrap();
+    assert_eq!(a.mask, b.mask);
+    assert_ne!(a.mask, Some(source));
+    assert_eq!(a.class, MaterialClass::Cutout);
+    assert_eq!(
+        (a.base, a.normal),
+        (
+            pbr.base_color_texture.map(|r| r.texture),
+            pbr.normal_texture.map(|r| r.texture)
+        )
+    );
+    assert_eq!((a.metallic, a.roughness, a.emissive), (None, None, None));
+    assert_eq!(w.get::<PbrMaterial>(first), Some(&pbr));
+}

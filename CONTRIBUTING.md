@@ -208,8 +208,14 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_FROMSOFT_UV_FRAME_CENSUS` | independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions |
 | `PRIMASE_CODEC_CORPUS` | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 | `PRIMASE_DXBC_SHADERS` | shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md |
+| `PRIMASE_SKATE_MASK_ORACLE` | PNGs and independent mask pixel hashes in `cases.json`; schema below |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
+
+`PRIMASE_SKATE_MASK_ORACLE` supplies `cases.json` for the target mask census. Its `cases` array contains
+`source` (PNG path relative to the fixture root, or absolute), `source_sha256`, `metallic`, `roughness`,
+`occlusion` (explicit packed R binding), `strength`, `width`, `height` and `mask_sha256` (independently decoded
+and mapped row-major RGBA8 base pixels). Source images and independent expected values stay outside the repository.
 
 ## Dependencies
 

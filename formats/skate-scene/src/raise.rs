@@ -8,6 +8,13 @@
 //!   the base texture, normal map, the base colour factor as `base_color` without a texture or as `tint` with one
 //!   (sRGB bytes; a factor's alpha with a texture is not kept, counted), cutoff, sidedness, metallic, roughness and
 //!   the base texture's wrap; texture transforms must already be baked;
+//! - packed metallic-roughness and explicit occlusion bindings become linear Studio masks, with factors folded
+//!   into the pixels and no conflicting target scalars. All decoded mips are retained. The initial supported
+//!   packing uses one image, UV0 and one shared wrap across base/normal/mask; other sampling is refused.
+//!   Occlusion is never inferred from an unbound channel. Fractional mask-byte quantization is counted per
+//!   material, independently of derived texture counts;
+//! - emission texture bindings and nonzero emissive radiance have no established target representation and
+//!   are named, counted losses in the returned log (per material, overlapping categories). Source PBR is retained;
 //! - every instanced `core.mesh`: a `skate.prototype` (`prototypes/<id>.glb`, a part per primitive); every placement
 //!   a default `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces by the map the caller gives
@@ -34,6 +41,9 @@ use crate::components::{
     SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef, Wrap,
 };
 use crate::{Error, Result};
+
+#[path = "raise_materials.rs"]
+mod materials;
 
 /// What [`raise_skate`] needs from the caller.
 #[derive(Clone, Debug, Default)]
@@ -85,14 +95,16 @@ fn wrap(w: PbrWrap) -> Wrap {
 }
 
 /// Raise `world` into the skate dialect (see the module documentation).
+/// Refused input leaves the world unchanged. Callers must retain the returned conversion/loss report;
+/// successful conversion does not imply that every PBR feature is represented by the target.
 pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog> {
     let bad = |m: String| Error::Scene(format!("raise-skate: {m}"));
     if world.resource::<SkateScene>().is_some() {
         return Err(bad("the world is already a skate scene".into()));
     }
-    let mut log = PassLog::default();
     // surfaces onto skate's
-    if let Some(mut surfaces) = world.remove_resource::<Surfaces>() {
+    let mut surfaces = world.resource::<Surfaces>().cloned();
+    if let Some(surfaces) = surfaces.as_mut() {
         let mut unmapped = Vec::new();
         for s in &mut surfaces.0 {
             match options.surfaces.get(&s.name) {
@@ -103,13 +115,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             }
         }
         if !unmapped.is_empty() {
-            log.count("surfaces not mapped onto skate surfaces", unmapped.len() as u64);
             return Err(bad(format!(
                 "surfaces with no skate surface: {}",
                 unmapped.join(", ")
             )));
         }
-        world.insert_resource(surfaces);
     }
     let name = |w: &World, e: Entity, kind: &str| {
         w.get::<Name>(e)
@@ -131,6 +141,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         .filter(|(e, _)| drawn.contains(e))
         .map(|(e, m)| (e, m.clone()))
         .collect();
+    let plan = materials::prepare(world, &materials)?;
+    let mut log = plan.log;
     log.count(
         "materials no placed primitive is drawn with, not raised",
         (world.iter::<PbrMaterial>().count() - materials.len()) as u64,
@@ -138,15 +150,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     let mut used: BTreeSet<Entity> = BTreeSet::new();
     for (_, m) in &materials {
         for r in [m.base_color_texture, m.normal_texture].into_iter().flatten() {
-            if r.transform.is_some() {
-                return Err(bad(
-                    "a texture slot still has a transform: bake it first (bake-texture-transforms)".into(),
-                ));
-            }
             used.insert(r.texture);
         }
     }
     let mut taken = BTreeSet::new();
+    let mut textures = Vec::new();
     for &t in &used {
         let tex = world
             .get::<Texture>(t)
@@ -172,7 +180,40 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             z: normal.then_some(NormalZ::Stored),
             other: Other::new(),
         };
+        textures.push((t, skate));
+    }
+    // Everything that can refuse the input is prepared before the first mutation.
+    if let Some(surfaces) = surfaces {
+        world.insert_resource(surfaces);
+    }
+    for (t, skate) in textures {
         world.insert(t, skate);
+        log.count("textures", 1);
+    }
+    let mut mask_entities = Vec::new();
+    for (index, pixels) in plan.masks.into_iter().enumerate() {
+        let t = world.spawn();
+        let k = key(&format!("mask_{index}"), &mut taken);
+        world.insert(t, Name(k.clone()));
+        world.insert(t, pixels);
+        world.insert(
+            t,
+            SkateTexture {
+                key: k.clone(),
+                file: FileRef {
+                    path: format!("textures/{k}.png"),
+                    sha256: None,
+                },
+                stem: None,
+                source_format: None,
+                source_size: None,
+                linear: Some(true),
+                green: None,
+                z: None,
+                other: Other::new(),
+            },
+        );
+        mask_entities.push(t);
         log.count("textures", 1);
     }
     // materials
@@ -201,7 +242,12 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 (None, (rgb != [1.0; 3]).then(|| rgb.map(byte)))
             }
         };
-        let w = m.base_color_texture.map(|r| r.wrap);
+        let mask = plan.bindings.get(&e).map(|&i| mask_entities[i]);
+        let w = plan
+            .wraps
+            .get(&e)
+            .map(|&w| [w; 2])
+            .or_else(|| m.base_color_texture.map(|r| r.wrap));
         if w.is_some_and(|w| w[0] != w[1]) {
             log.approximate("base textures wrapping otherwise along u and v: u's kept", 1);
         }
@@ -213,15 +259,15 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 class,
                 base: m.base_color_texture.map(|r| r.texture),
                 normal: m.normal_texture.map(|r| r.texture),
-                mask: None,
+                mask,
                 base_color,
                 tint,
                 alpha: Some(alpha),
                 cutoff,
                 two_sided: Some(m.double_sided),
                 domain: None,
-                metallic: Some(f32_decimal(m.metallic)),
-                roughness: Some(f32_decimal(m.roughness)),
+                metallic: mask.is_none().then(|| f32_decimal(m.metallic)),
+                roughness: mask.is_none().then(|| f32_decimal(m.roughness)),
                 wrap: w.map(|w| wrap(w[0])),
                 ocean: None,
                 cast_shadows: m.cast_shadows,
