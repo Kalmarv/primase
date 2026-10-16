@@ -34,6 +34,19 @@ pub fn joaat(bytes: &[u8]) -> u32 {
     h ^= h >> 11;
     h.wrapping_add(h << 15)
 }
+/// Jenkins one-at-a-time over bytes as given (no case folding), wrapping u32 at every step: the hash of the
+/// structure and field names in RAGE's META descriptions (`CMapData`, `archetypeName`).
+pub fn joaat_exact(bytes: &[u8]) -> u32 {
+    let mut h = 0u32;
+    for &b in bytes {
+        h = h.wrapping_add(u32::from(b));
+        h = h.wrapping_add(h << 10);
+        h ^= h >> 6;
+    }
+    h = h.wrapping_add(h << 3);
+    h ^= h >> 11;
+    h.wrapping_add(h << 15)
+}
 /// Frostbite TOC FNV-1: multiply by 0x01000193, xor sign-extended i8,
 /// wrapping u32; reduce modulo 0x01000193 once at the end. Default seed 0x811C9DC5.
 pub fn frostbite_toc(bytes: &[u8], seed: u32) -> u32 {
@@ -153,6 +166,10 @@ mod tests {
         assert_eq!(fnv1a_64(b"hello"), 0xa430d84680aabd0b);
         assert_eq!(joaat(b"adder"), 0xb779a091);
         assert_eq!(joaat(b"ADDER"), 0xb779a091);
+        assert_eq!(joaat_exact(b"adder"), 0xb779a091);
+        // a structure name as GTA V's META descriptions store it
+        assert_eq!(joaat_exact(b"CMapData"), 0xd3593fa6);
+        assert_ne!(joaat_exact(b"CMapData"), joaat(b"CMapData"));
     }
 }
 
