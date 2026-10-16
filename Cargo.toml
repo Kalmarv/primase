@@ -18,6 +18,7 @@ members = [
     "worlds/fromsoft",
     "worlds/reskate",
     "worlds/unity",
+    "worlds/gta",
 ]
 
 [workspace.package]
@@ -57,6 +58,7 @@ primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }
 primase-unity = { path = "worlds/unity" }
+primase-gta = { path = "worlds/gta" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
@@ -65,6 +67,7 @@ indexmap = { version = "=2.14.2", default-features = false, features = ["std"] }
 bytemuck = { version = "=1.25.2", default-features = false, features = ["derive"] }
 half = { version = "=2.7.1", default-features = false }
 sha2 = { version = "=0.11.1", default-features = false }
+sha1 = { version = "=0.11.0", default-features = false }
 
 png = { version = "=0.18.1", default-features = false }
 bcdec_rs = { version = "=0.2.0", default-features = false }

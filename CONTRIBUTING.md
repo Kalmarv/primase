@@ -111,6 +111,10 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | variable | what |
 |---|---|
 | `PRIMASE_SCENES_GTA` | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) |
+| `PRIMASE_GTA_DIR` | a GTA V install folder (Enhanced or Legacy; the folder holding the executable and the `.rpf` archives) |
+| `PRIMASE_GTA_KEYS` | a folder of the user's own GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); checked against published digests, never committed |
+| `PRIMASE_GTA_LISTING` | optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`) |
+| `PRIMASE_GTA_FILTER` | optional: only archives whose path contains this text |
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
 | `PRIMASE_RESKATE_NORMAL_REF` | Reference map folders containing normal PNGs; `worlds/reskate/tests/map_gate.rs::real_normal_writer_images`. |
