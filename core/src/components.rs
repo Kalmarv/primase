@@ -2,7 +2,7 @@
 //! target-specific is a dialect component owned by its crate (`fromsoft.*`, `gta.*`, `skate.*`, `pbr.*`).
 //!
 //! Entity roles (by convention, not enforced by the store):
-//! - a **prototype** has a [`Mesh`] in its own local space (plus [`Name`], [`Source`], [`Bounds`]);
+//! - a **prototype** has a [`Mesh`] in its own local space (plus [`Name`], [`Source`]);
 //! - a **placement** has a [`Transform`] and an [`Instance`] pointing at its prototype;
 //! - a **material** has the material components of some dialect (`pbr.material`, `skate.material`, ...);
 //!   a [`Primitive`] refers to it by entity;
@@ -592,22 +592,6 @@ impl Component for MaterialVariants {
     }
 }
 
-/// Axis-aligned box in the entity's own space (local for prototypes, world for soups and placements).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct Bounds {
-    pub min: [f32; 3],
-    pub max: [f32; 3],
-}
-impl Component for Bounds {
-    const NAME: &'static str = "core.bounds";
-    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
-        finite(self.min.iter().chain(&self.max).copied(), "bounds")
-    }
-    fn to_json(&self) -> Result<Option<Value>, JsonError> {
-        crate::json::to_value(self).map(Some)
-    }
-}
-
 /// A streaming or processing tile, `(col, row)` in the ground frame of whoever tiled it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Tile {
@@ -714,13 +698,6 @@ mod tests {
         let mut w = crate::World::new();
         let e = w.spawn();
         w.insert(e, Transform::IDENTITY);
-        w.insert(
-            e,
-            Bounds {
-                min: [0.0; 3],
-                max: [1.0, f32::INFINITY, 1.0],
-            },
-        );
         let mut m = Transform::IDENTITY;
         m.cols[3][2] = f32::NAN;
         let e2 = w.spawn();
@@ -743,7 +720,6 @@ mod tests {
         assert_eq!(
             got,
             [
-                ("core.bounds", e, "bounds: value 4 is inf, not finite".to_owned()),
                 (
                     "core.mesh",
                     e2,

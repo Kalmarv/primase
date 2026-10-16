@@ -738,14 +738,17 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
 /// A component whose JSON view would lose a value (a NaN written as null) is an error naming it, never a quiet null.
 #[test]
 fn extras_never_lose_a_value() {
+    /// A component whose JSON form is one float.
+    #[derive(Clone, Debug)]
+    struct Sample(f32);
+    impl primase_core::Component for Sample {
+        const NAME: &'static str = "test.sample";
+        fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+            primase_core::json::to_value(&self.0).map(Some)
+        }
+    }
     let mut b = build(&scratch("nan_extras"));
-    b.world.insert(
-        b.regular,
-        primase_core::Bounds {
-            min: [0.0; 3],
-            max: [1.0, f32::NAN, 1.0],
-        },
-    );
+    b.world.insert(b.regular, Sample(f32::NAN));
     let err = write(&b.world, &options(&b)).unwrap_err().to_string();
-    assert!(err.contains("core.bounds") && err.contains("NaN"), "{err}");
+    assert!(err.contains("test.sample") && err.contains("NaN"), "{err}");
 }
