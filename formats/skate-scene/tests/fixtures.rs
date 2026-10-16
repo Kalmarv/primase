@@ -306,6 +306,38 @@ fn manifest(dir: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(dir.join("scene.json")).unwrap()).unwrap()
 }
 
+#[test]
+fn layered_materials_round_trip_and_follow_edits() {
+    let mut input: Value = serde_json::from_str(MANIFEST).unwrap();
+    input["materials"]["ground"] = json!({"class":"layered", "layers":[
+        {"material":"wall", "uv_transform":{"scale":[2,3]}, "extra":true},
+        null, {"material":"trim_red","uv":0}, {"material":"glass"}],
+        "weights":{"attribute":"COLOR_1","mapping":"rgb_product_4","extra":7}});
+    let dir = fixture_with("layered", &input.to_string(), |_| {});
+    let (mut w, _) = read(&dir);
+    let (entity, material) = w.iter::<primase_core::LayeredMaterial>().next().unwrap();
+    assert_eq!(material.layers.len(), 4);
+    assert!(material.layers[1].is_none());
+    let out = tmp("layered_out");
+    scene::write(&w, &out).unwrap();
+    assert_eq!(manifest(&out)["materials"], input["materials"]);
+    w.get_mut::<primase_core::LayeredMaterial>(entity).unwrap().layers[0]
+        .as_mut()
+        .unwrap()
+        .texcoord = Some(2);
+    let out = tmp("layered_edited");
+    scene::write(&w, &out).unwrap();
+    assert_eq!(manifest(&out)["materials"]["ground"]["layers"][0]["uv"], 2);
+    for (name, replacement) in [
+        ("unknown", json!({"material":"absent"})),
+        ("recursive", json!({"material":"ground"})),
+    ] {
+        input["materials"]["ground"]["layers"][0] = replacement;
+        let dir = fixture_with(&format!("layered_{name}"), &input.to_string(), |_| {});
+        assert!(read_err(&dir).contains("material"));
+    }
+}
+
 fn same_tree(a: &Path, b: &Path, rels: &[&str]) {
     for r in rels {
         assert_eq!(

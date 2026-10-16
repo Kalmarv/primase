@@ -746,6 +746,7 @@ impl Reader<'_> {
     ) -> Result<BTreeMap<String, Entity>> {
         let mut out = BTreeMap::new();
         let mut roles: BTreeMap<String, &'static str> = BTreeMap::new();
+        let mut layered = Vec::new();
         if let Some(v) = v {
             let Value::Object(kv) = v else {
                 return Err(bad("materials: not an object"));
@@ -810,6 +811,17 @@ impl Reader<'_> {
                 };
                 let source = source_string(&mut o, rep);
                 let m = self.w.spawn();
+                if class == MaterialClass::Layered {
+                    let layers = o
+                        .take("layers", rep)
+                        .cloned()
+                        .ok_or_else(|| bad(format!("{what}: missing layers")))?;
+                    let weights = o
+                        .take("weights", rep)
+                        .cloned()
+                        .ok_or_else(|| bad(format!("{what}: missing weights")))?;
+                    layered.push((m, layers, weights));
+                }
                 if let Some(l) = label {
                     self.w.insert(m, Name(l));
                 }
@@ -841,6 +853,12 @@ impl Reader<'_> {
                 );
                 out.insert(key.clone(), m);
             }
+        }
+        for (entity, layers, weights) in layered {
+            crate::layered::read(self.w, entity, layers, weights, &out)?;
+        }
+        for (entity, material) in self.w.iter::<primase_core::LayeredMaterial>() {
+            primase_core::Component::verify(material, entity, self.w).map_err(bad)?;
         }
         for (key, _) in textures.iter().filter(|(k, _)| !roles.contains_key(*k)) {
             self.rep.warnings.push(format!("texture '{key}' is not used"));
@@ -935,6 +953,11 @@ impl Reader<'_> {
                             let me = materials
                                 .get(mk)
                                 .ok_or_else(|| bad(format!("{what}: material '{mk}' unknown")))?;
+                            if self.w.has::<primase_core::LayeredMaterial>(*me) {
+                                return Err(bad(format!(
+                                    "{what}: layered material '{mk}' is not allowed as a variant"
+                                )));
+                            }
                             vmap.insert(vi, *me);
                         }
                         true

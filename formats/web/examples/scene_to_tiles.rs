@@ -22,6 +22,7 @@ fn prepare(
     if render {
         primase_image::load_textures(&mut w, folder)?;
         primase_skate_scene::LowerSkatePbr.run(&mut w, &mut PassLog::default())?;
+        primase_skate_scene::LowerLayeredPbr.run(&mut w, &mut PassLog::default())?;
         primase_image::normalize_normals(&mut w)?;
     }
     Ok(w)

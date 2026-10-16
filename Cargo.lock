@@ -930,6 +930,7 @@ dependencies = [
  "primase-core",
  "primase-gltf",
  "primase-image",
+ "primase-meshops",
  "serde",
  "serde_json",
  "sha2",

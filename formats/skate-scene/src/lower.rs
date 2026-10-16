@@ -15,6 +15,12 @@ use crate::components::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, Ska
 
 /// Register this crate's passes.
 pub fn register(reg: &mut PassRegistry) {
+    reg.register("lower-layered-pbr", |o: &Options| {
+        if let Some(k) = o.keys().next() {
+            return Err(format!("unknown option {k}"));
+        }
+        Ok(Box::new(crate::LowerLayeredPbr))
+    });
     reg.register("lower-skate-pbr", |o: &Options| {
         if let Some(k) = o.keys().next() {
             return Err(format!("unknown option {k}"));
@@ -122,6 +128,7 @@ impl Pass for LowerSkatePbr {
         }
         let lowered: Vec<(Entity, PbrMaterial)> = w
             .iter::<SkateMaterial>()
+            .filter(|(_, m)| m.class != MaterialClass::Layered)
             .map(|(e, m)| {
                 (
                     e,

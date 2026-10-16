@@ -61,6 +61,8 @@ str_enum!(
         Glass = "glass",
         Water = "water",
         Terrain = "terrain",
+        /// Vertex-channel blend of ordinary materials, carried by core.layered.
+        Layered = "layered",
         /// Foliage cards.
         Leaves = "leaves",
         /// Trunks, branches.

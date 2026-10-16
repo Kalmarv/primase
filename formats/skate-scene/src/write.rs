@@ -518,6 +518,16 @@ impl Writer<'_> {
             o.opt("label", w.get::<Name>(e), |n| text(&n.0));
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&m.other);
+            if m.class == MaterialClass::Layered {
+                let (layers, weights) = crate::layered::write(w, e)?;
+                o.put("layers", layers);
+                o.put("weights", weights);
+            } else if w.has::<primase_core::LayeredMaterial>(e) {
+                return Err(bad(format!(
+                    "material '{}': core.layered requires class layered",
+                    m.key
+                )));
+            }
             if materials.0.iter().any(|(k, _)| k.eq_ignore_ascii_case(&m.key)) {
                 return Err(bad(format!("material key '{}' twice (up to case)", m.key)));
             }
@@ -599,6 +609,11 @@ impl Writer<'_> {
                 if part.variants_key || vm.is_some_and(|m| !m.is_empty()) {
                     let mut vo = ObjB::default();
                     for (k, m) in vm.into_iter().flatten() {
+                        if w.has::<primase_core::LayeredMaterial>(*m) {
+                            return Err(bad(format!(
+                                "{what}: layered material is not allowed as a variant"
+                            )));
+                        }
                         vo.put(&k.to_string(), mkey(*m, &what)?);
                     }
                     po.put("variants", vo.done());

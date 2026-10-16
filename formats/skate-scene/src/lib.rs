@@ -8,6 +8,9 @@
 pub mod assets;
 pub mod collision;
 pub mod components;
+mod layered;
+mod layered_lower;
+pub use layered_lower::LowerLayeredPbr;
 pub mod lower;
 pub mod raise;
 pub mod read;
