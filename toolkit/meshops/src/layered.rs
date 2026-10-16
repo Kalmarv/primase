@@ -1,12 +1,18 @@
 //! Strongest-layer approximation used by the scene-interchange skate writer.
 //! Sum corner weights per triangle, omitting (1-r) for rgb_product_4 selection.
 //! Ties choose the first slot. This is not per-pixel blending or contour cutting.
+//! Omitting darkening is a deliberate selection policy even when red differs
+//! across corners: it can choose a different slot from the full summed weights.
+//! A per-pixel renderer must still retain (1-r) in the actual blend.
 use crate::{Error, Result};
 use primase_core::{LayeredMaterial, Primitive, Semantic, Stream, Topology, WeightMapping};
 
 /// Split a triangle primitive into nonempty slots in slot order, preserving the
 /// source vertex order and all streams. A null slot still wins normally; the
 /// caller supplies its black material. Missing/invalid weight streams fail.
+/// Each selected slot keeps a full copy of the vertex streams (up to four
+/// copies); a consumer may compact afterward. If source normals are absent,
+/// normals use only the selected slot's faces, so boundaries can show seams.
 pub fn strongest_layer_parts(p: &Primitive, material: &LayeredMaterial) -> Result<Vec<(usize, Primitive)>> {
     if p.topology != Topology::Triangles || !(1..=4).contains(&material.layers.len()) {
         return Err(Error("strongest layer requires triangles and 1-4 slots".into()));

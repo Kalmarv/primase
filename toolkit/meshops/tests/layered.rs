@@ -2,6 +2,40 @@ use primase_core::{LayerWeights, LayeredMaterial, Primitive, Semantic, Stream, T
 use std::collections::BTreeMap;
 
 #[test]
+fn varying_red_intentionally_changes_the_triangle_choice() {
+    let channels = vec![[1., 0., 0., 1.], [1., 0., 0., 1.], [0., 1., 1., 1.]];
+    let material = LayeredMaterial {
+        layers: vec![None; 4],
+        weights: LayerWeights {
+            attribute: Semantic::Color(1),
+            mapping: WeightMapping::RgbProduct4,
+        },
+    };
+    let full_sum = channels.iter().fold([0.; 4], |sum, &v| {
+        let w = material.weights.mapping.evaluate(v);
+        std::array::from_fn(|i| sum[i] + w[i])
+    });
+    assert_eq!(full_sum, [0., 0., 0., 1.]);
+    let primitive = Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([
+            (
+                Semantic::Position,
+                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+            ),
+            (Semantic::Color(1), Stream::F32x4(channels)),
+        ]),
+        indices: None,
+        material: None,
+    };
+    // The two dark corners still vote for slot zero in this approximation.
+    assert_eq!(
+        primase_meshops::strongest_layer_parts(&primitive, &material).unwrap()[0].0,
+        0
+    );
+}
+
+#[test]
 fn triangle_selection_omits_darkening_preserves_streams_and_counts_null_slots() {
     let mut p = Primitive {
         topology: Topology::Triangles,
