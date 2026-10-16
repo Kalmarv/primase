@@ -10,10 +10,10 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_core::gate::real_data;
 use primase_gta::drawable::Drawable;
 use primase_gta::texture::TextureDictionary;
 use primase_gta::{EntryKind, Install, Keys};
+use primase_testdata::real_data;
 
 #[derive(Default)]
 struct Tally {

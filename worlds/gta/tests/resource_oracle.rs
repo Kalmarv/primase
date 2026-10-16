@@ -15,10 +15,10 @@
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::fs::File;
 
-use primase_core::gate::real_data;
 use primase_gta::drawable::{Drawable, Geometry, Model, ParamValue};
 use primase_gta::texture::{Texture, TextureDictionary};
 use primase_gta::{Install, Keys, Resource};
+use primase_testdata::real_data;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
