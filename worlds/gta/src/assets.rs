@@ -402,8 +402,10 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
                 bounding_sphere: (d.bounding_centre, d.bounding_radius),
                 lod_dist: d.lod_dist,
                 render_masks: d.render_masks,
-                models: std::array::from_fn(|i| {
-                    d.lods[i].iter().map(|m| m.geometries.len() as u32).collect()
+                sources: std::array::from_fn(|i| {
+                    (d.lods[i].iter().enumerate())
+                        .flat_map(|(m, model)| (0..model.geometries.len() as u32).map(move |g| [m as u32, g]))
+                        .collect()
                 }),
                 lods: [lod(1)?, lod(2)?, lod(3)?],
             },

@@ -150,7 +150,8 @@ pub enum GtaParam {
     Other(u8),
 }
 
-/// A drawable's shader: effect name hash, preset, render bucket, bucket mask, parameters by stored name hash.
+/// A drawable's shader: effect name hash, preset word (the same for every shader in Enhanced), render bucket, bucket
+/// mask, parameters by stored name hash.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaShader {
     pub drawable: String,
@@ -185,10 +186,21 @@ pub struct GtaDrawable {
     pub bounding_sphere: ([f32; 3], f32),
     pub lod_dist: [f32; 4],
     pub render_masks: [u32; 4],
-    /// Per LOD (high, medium, low, very low), each model's geometry count: the meshes hold the models' geometries
-    /// in order, one primitive each.
-    pub models: [Vec<u32>; 4],
+    /// Per LOD (high, medium, low, very low), each primitive's GTA model and geometry (the index within its model),
+    /// in the order of that LOD's mesh (the high LOD's is the entity's `core.mesh`). The reader makes a primitive per
+    /// geometry, in order; passes that drop or split primitives keep this in step.
+    pub sources: [Vec<[u32; 2]>; 4],
     pub lods: [Option<Mesh>; 3],
+}
+
+impl GtaDrawable {
+    /// The meshes of the LODs below the high one, each with its primitives' sources.
+    pub fn coarser_mut(&mut self) -> impl Iterator<Item = (&mut Mesh, &mut Vec<[u32; 2]>)> {
+        self.lods
+            .iter_mut()
+            .zip(self.sources[1..].iter_mut())
+            .filter_map(|(m, s)| m.as_mut().map(|m| (m, s)))
+    }
 }
 
 impl Component for GtaDrawable {
@@ -200,9 +212,24 @@ impl Component for GtaDrawable {
             "bounding_sphere": self.bounding_sphere,
             "lod_dist": self.lod_dist,
             "render_masks": self.render_masks,
-            "models": self.models,
+            "sources": self.sources,
             "lods": self.lods.iter().map(|m| m.as_ref().map(|m| m.primitives.len())).collect::<Vec<_>>(),
         })))
+    }
+    /// Every LOD's sources in step with its mesh.
+    fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
+        let high = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
+        let counts = std::iter::once(high).chain(
+            self.lods
+                .iter()
+                .map(|m| m.as_ref().map_or(0, |m| m.primitives.len())),
+        );
+        for (lod, (n, s)) in counts.zip(&self.sources).enumerate() {
+            if n != s.len() {
+                return Err(format!("LOD {lod}: {n} primitives, {} sources", s.len()));
+            }
+        }
+        Ok(())
     }
     fn references(&self, out: &mut Vec<Entity>) {
         for m in self.lods.iter().flatten() {

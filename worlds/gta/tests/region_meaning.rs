@@ -278,8 +278,11 @@ fn region_placements_against_the_scene() {
         }
         *geo.entry("prototypes compared").or_default() += 1;
         for ((model, g), parts) in groups {
-            let first: u64 = d.models[0][..model as usize].iter().map(|&n| u64::from(n)).sum();
-            let ours_t = tris(ours_mesh, &[(first + g) as usize]);
+            let at = d.sources[0]
+                .iter()
+                .position(|s| s == &[model as u32, g as u32])
+                .expect("our primitive of the scene part's geometry");
+            let ours_t = tris(ours_mesh, &[at]);
             let theirs_t = tris(their_mesh, &parts);
             *geo.entry("geometries compared").or_default() += 1;
             let missing: usize = theirs_t
@@ -297,7 +300,7 @@ fn region_placements_against_the_scene() {
                 *geo.entry("our triangles the scene leaves out").or_default() += dropped;
                 // vertex attributes: each scene vertex has one of ours at its position with its UV0, normal and
                 // (where the scene carries COLOR_0) colour alpha
-                let op = &ours_mesh.primitives[(first + g) as usize];
+                let op = &ours_mesh.primitives[at];
                 let key = |p: [f32; 3]| p.map(|v| (f64::from(v) * 1e4).round() as i64);
                 let mut at: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
                 for (i, p) in op.positions().expect("positions").iter().enumerate() {
@@ -377,7 +380,7 @@ fn region_placements_against_the_scene() {
             let lifted = shader.contains("decal") && {
                 let grid = |c: [f64; 3]| c.map(|v| (v / 0.005).floor() as i64);
                 let mut cells: BTreeMap<[i64; 3], Vec<[[f64; 3]; 3]>> = BTreeMap::new();
-                let op = &ours_mesh.primitives[(first + g) as usize];
+                let op = &ours_mesh.primitives[at];
                 let pos = op.positions().expect("positions");
                 // per vertex, the sum of its triangles' (unnormalised) face normals, normalised: the drawn face
                 let idx = op.indices.as_ref().expect("indices");
