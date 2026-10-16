@@ -1,0 +1,362 @@
+//! A region of the map into the world: every entity of the live maps whose pivot lies within the region plus a reach,
+//! as a placement of its archetype's prototype, in the world frame.
+//!
+//! - Map state: the story-mode map is read; with [`States::All`] GTA Online's too, and an entity that is live in one
+//!   only carries a `core.condition` on the global axis `gta.map` {story, online} (default story, the game's start
+//!   state). Entities are the same in both when their map file is.
+//! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
+//! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
+//!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
+//! - Which entities a scene finally draws (LOD stand-ins, priority, size) is for passes; the reader keeps them all.
+//!   An interior instance's own entities are placed by its rotation and position; its entity sets (which scripts
+//!   switch) are not read yet (counted).
+use std::collections::BTreeMap;
+use std::fs::File;
+
+use primase_core::frame::SourceFrame;
+use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
+use primase_core::{Instance, Name, Source, Transform, World};
+
+use crate::archive_set::{ArchiveSet, FileRef, Install, MapState};
+use crate::components::{GtaArchetype, GtaEntity};
+use crate::keys::Keys;
+use crate::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
+use crate::meta::Meta;
+use crate::{Result, invalid};
+
+/// GTA V's frame: x east, y north, z up, metres.
+pub const GTA: SourceFrame = SourceFrame::ENU;
+
+/// Which map states to read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum States {
+    /// The story-mode map only (no state components).
+    None,
+    /// Story mode and GTA Online, with conditions on the `gta.map` axis.
+    All,
+}
+
+/// A region of the map in GTA's ground coordinates (metres east, north).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Region {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    /// How far outside the region an entity's pivot may lie and still be read (large pieces reach in).
+    pub reach: f32,
+}
+
+impl Region {
+    fn holds_pivot(&self, p: [f32; 3]) -> bool {
+        (0..2).all(|i| p[i] >= self.min[i] - self.reach && p[i] < self.max[i] + self.reach)
+    }
+
+    fn touches(&self, box_min: [f32; 3], box_max: [f32; 3]) -> bool {
+        (0..2).all(|i| box_min[i] <= self.max[i] + self.reach && box_max[i] >= self.min[i] - self.reach)
+    }
+}
+
+/// What reading counted.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RegionReport {
+    pub maps: usize,
+    pub placements: usize,
+    pub prototypes: usize,
+    /// Placements by condition: `both`, `story`, `online`.
+    pub by_state: BTreeMap<&'static str, usize>,
+    /// Archetype names defined by more than one live map types file.
+    pub duplicate_archetypes: usize,
+    /// Entities whose archetype no live map types file defines.
+    pub missing_archetypes: usize,
+    /// Interior instances read, the entities placed in them, and their entity sets (not read yet).
+    pub interiors: usize,
+    pub interior_entities: usize,
+    pub interior_entity_sets: usize,
+}
+
+/// One live map's entities near the region.
+struct MapRead {
+    path: String,
+    entities: Vec<(u32, EntityDef)>,
+}
+
+fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::meta::Struct> {
+    let a = &set.install.archives[f.archive];
+    let r = a.resource(&mut File::open(&a.file)?, f.entry, keys)?;
+    Meta::read(&r)?.root()
+}
+
+/// The live maps' entities whose pivot lies within the region and its reach.
+fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<MapRead>> {
+    let mut out = Vec::new();
+    for &f in set.tables.get("ymap").into_iter().flat_map(|t| t.values()) {
+        let map = MapData::from_root(&decode(set, keys, f)?)?;
+        let [lo, hi] = map.entities_extents;
+        if map.entities.is_empty() || !region.touches(lo, hi) {
+            continue;
+        }
+        let entities: Vec<(u32, EntityDef)> = map
+            .entities
+            .into_iter()
+            .enumerate()
+            .filter(|(_, e)| region.holds_pivot(e.position))
+            .map(|(i, e)| (i as u32, e))
+            .collect();
+        if !entities.is_empty() {
+            out.push(MapRead {
+                path: set.path(f).to_string(),
+                entities,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Every archetype of the live map types files, by name hash: the file and the definition (the first, when a name is
+/// defined twice), and how many names were.
+/// Archetypes by name hash: the map types file defining them and the definition.
+type ArchetypeTable = BTreeMap<u32, (String, ArchetypeDef)>;
+
+fn archetypes(set: &ArchiveSet, keys: &Keys) -> Result<(ArchetypeTable, usize)> {
+    let mut out = ArchetypeTable::new();
+    let mut duplicates = 0;
+    for &f in set.tables.get("ytyp").into_iter().flat_map(|t| t.values()) {
+        let types = MapTypes::from_root(&decode(set, keys, f)?)?;
+        for a in types.archetypes {
+            match out.entry(a.name) {
+                std::collections::btree_map::Entry::Occupied(_) => duplicates += 1,
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert((set.path(f).to_string(), a));
+                }
+            }
+        }
+    }
+    Ok((out, duplicates))
+}
+
+/// An entity's transform in GTA's frame: rotation by its (inverted, unless an interior instance) quaternion, scale,
+/// translation.
+pub fn entity_transform(e: &EntityDef) -> Transform {
+    let [x, y, z, w] = e.rotation.map(f64::from);
+    let n = x * x + y * y + z * z + w * w;
+    // CEntityDef stores the inverse orientation for entities; an identity or zero quaternion is the identity
+    let (x, y, z, w) = if n == 0.0 {
+        (0.0, 0.0, 0.0, 1.0)
+    } else if e.kind == EntityKind::Interior {
+        (x / n.sqrt(), y / n.sqrt(), z / n.sqrt(), w / n.sqrt())
+    } else {
+        let s = n.sqrt();
+        (-x / s, -y / s, -z / s, w / s)
+    };
+    let r = [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + w * z),
+            2.0 * (x * z - w * y),
+        ],
+        [
+            2.0 * (x * y - w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + w * x),
+        ],
+        [
+            2.0 * (x * z + w * y),
+            2.0 * (y * z - w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ];
+    let s = [f64::from(e.scale_xy), f64::from(e.scale_xy), f64::from(e.scale_z)];
+    let mut cols = [[0f32; 3]; 4];
+    for (c, col) in cols.iter_mut().take(3).enumerate() {
+        *col = r[c].map(|v| (v * s[c]) as f32);
+    }
+    cols[3] = e.position;
+    Transform { cols }
+}
+
+/// An entity to place: its map, its index there (for an interior's entity, the instance's index and its own),
+/// its definition, its transform in GTA's frame, and the map states it is live in.
+struct Placed {
+    ymap: String,
+    index: u32,
+    child: Option<u32>,
+    def: EntityDef,
+    transform: Transform,
+    story: bool,
+    online: bool,
+}
+
+/// `a` then `b`: `a * b`, in f64, rounded once.
+fn compose(a: &Transform, b: &Transform) -> Transform {
+    let lin = |m: &Transform, v: [f32; 3]| -> [f64; 3] {
+        std::array::from_fn(|i| (0..3).map(|j| f64::from(m.cols[j][i]) * f64::from(v[j])).sum())
+    };
+    let mut cols = [[0f32; 3]; 4];
+    for (c, col) in cols.iter_mut().take(3).enumerate() {
+        *col = lin(a, b.cols[c]).map(|v| v as f32);
+    }
+    let t = lin(a, b.cols[3]);
+    cols[3] = std::array::from_fn(|i| (t[i] + f64::from(a.cols[3][i])) as f32);
+    Transform { cols }
+}
+
+/// Reads the region into a new world (placements and their prototypes; no geometry yet).
+pub fn read_region(
+    install: &Install,
+    keys: &Keys,
+    region: &Region,
+    states: States,
+) -> Result<(World, RegionReport)> {
+    let story = ArchiveSet::build(install.clone(), keys, MapState::Story)?;
+    let online = match states {
+        States::All => Some(ArchiveSet::build(install.clone(), keys, MapState::Online)?),
+        States::None => None,
+    };
+    let mut report = RegionReport::default();
+    // (map path, entity index) -> (entity, in story, in online)
+    let mut placed: BTreeMap<(String, u32), (EntityDef, bool, bool)> = BTreeMap::new();
+    for (set, is_story) in std::iter::once((&story, true)).chain(online.iter().map(|s| (s, false))) {
+        for m in region_maps(set, keys, region)? {
+            report.maps += 1;
+            for (i, e) in m.entities {
+                let entry = placed.entry((m.path.clone(), i)).or_insert((e, false, false));
+                if is_story {
+                    entry.1 = true;
+                } else {
+                    entry.2 = true;
+                }
+            }
+        }
+    }
+    let (types, duplicates) = archetypes(online.as_ref().unwrap_or(&story), keys)?;
+    report.duplicate_archetypes = duplicates;
+
+    let mut w = World::new();
+    let axis = online.as_ref().map(|_| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            StateAxis {
+                key: "gta.map".into(),
+                domain: Domain::Enum(vec!["story".into(), "online".into()]),
+                default: 0,
+                scope: Scope::Global,
+                class: "map".into(),
+                source: "the packs' GROUP_MAP change sets, run on entering GTA Online".into(),
+            },
+        );
+        e
+    });
+    // every entity, and the entities placed in interiors
+    let mut all: Vec<Placed> = Vec::new();
+    for ((ymap, index), (e, in_story, in_online)) in &placed {
+        all.push(Placed {
+            ymap: ymap.clone(),
+            index: *index,
+            child: None,
+            def: e.clone(),
+            transform: entity_transform(e),
+            story: *in_story,
+            online: *in_online,
+        });
+        if e.kind != EntityKind::Interior {
+            continue;
+        }
+        report.interiors += 1;
+        let Some(interior) = types.get(&e.archetype).and_then(|(_, a)| a.interior.as_ref()) else {
+            continue;
+        };
+        report.interior_entity_sets += interior.entity_sets;
+        // the instance's rotation and position, without its scale
+        let frame = entity_transform(&EntityDef {
+            scale_xy: 1.0,
+            scale_z: 1.0,
+            ..e.clone()
+        });
+        for (ci, ce) in interior.entities.iter().enumerate() {
+            let t = compose(&frame, &entity_transform(ce));
+            all.push(Placed {
+                ymap: ymap.clone(),
+                index: *index,
+                child: Some(ci as u32),
+                def: ce.clone(),
+                transform: t,
+                story: *in_story,
+                online: *in_online,
+            });
+        }
+    }
+    let mut prototypes = BTreeMap::new();
+    for Placed {
+        ymap,
+        index,
+        child,
+        def: e,
+        transform,
+        story: in_story,
+        online: in_online,
+    } in &all
+    {
+        let Some((ytyp, a)) = types.get(&e.archetype) else {
+            report.missing_archetypes += 1;
+            continue;
+        };
+        let proto = *prototypes.entry(e.archetype).or_insert_with(|| {
+            let p = w.spawn();
+            w.insert(p, GtaArchetype::new(ytyp, a));
+            w.insert(p, Source(ytyp.clone()));
+            let name = story
+                .tables
+                .get("ydr")
+                .and_then(|t| t.get(&a.asset_name))
+                .map(|&f| story.path(f))
+                .and_then(|path| path.rsplit('\\').next())
+                .and_then(|n| n.strip_suffix(".ydr"))
+                .map_or_else(|| format!("{:#010x}", a.name), str::to_string);
+            w.insert(p, Name(name));
+            p
+        });
+        let p = w.spawn();
+        w.insert(p, GTA.transform(transform));
+        w.insert(
+            p,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        match child {
+            None => {
+                w.insert(p, GtaEntity::new(ymap, *index, None, e));
+                w.insert(p, Source(format!("{ymap}#{index}")));
+            }
+            Some(c) => {
+                w.insert(p, GtaEntity::new(ymap, *c, Some(*index), e));
+                w.insert(p, Source(format!("{ymap}#{index}/{c}")));
+                report.interior_entities += 1;
+            }
+        }
+        let state = match (in_story, in_online) {
+            (true, true) => "both",
+            (true, false) => "story",
+            (false, true) => "online",
+            (false, false) => unreachable!(),
+        };
+        *report.by_state.entry(state).or_default() += 1;
+        if let (Some(axis), false) = (axis, state == "both") {
+            let value = if state == "story" { 0 } else { 1 };
+            w.insert(
+                p,
+                Condition(vec![Clause(vec![Literal {
+                    axis,
+                    values: 1u64 << value,
+                }])]),
+            );
+        }
+        report.placements += 1;
+    }
+    report.prototypes = prototypes.len();
+    if report.placements == 0 && !all.is_empty() {
+        return Err(invalid("region", 0, "no entity had an archetype"));
+    }
+    Ok((w, report))
+}

@@ -42,6 +42,7 @@ pub struct FileRef {
 
 /// Every archive of an install (top-level files and the archives inside them, depth first in path order) and a
 /// path index over every file entry.
+#[derive(Clone)]
 pub struct Install {
     pub dir: PathBuf,
     pub archives: Vec<Archive>,

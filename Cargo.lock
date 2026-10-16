@@ -886,6 +886,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-hash",
+ "primase-skate-scene",
  "primase-testdata",
  "quick-xml",
  "serde",

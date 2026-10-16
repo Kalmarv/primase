@@ -1,6 +1,6 @@
 [package]
 name = "primase-gta"
-description = "GTA V read from an install: RPF7 archives and RSC7 resources"
+description = "GTA V read from an install into the world"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,10 +16,11 @@ thiserror.workspace = true
 aes.workspace = true
 sha1.workspace = true
 quick-xml.workspace = true
-[dev-dependencies]
-primase-testdata.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+[dev-dependencies]
+primase-skate-scene.workspace = true
+primase-testdata.workspace = true
 sha2.workspace = true
 [lints]
 workspace = true

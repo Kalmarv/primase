@@ -1,0 +1,194 @@
+//! The `gta.*` dialect: what GTA V's data says about an entity that the core components do not. Values are as
+//! stored (flags, enums and hashes raw); the passes give them meaning.
+//!
+//! | entity | components |
+//! |---|---|
+//! | placement | `core.transform`, `core.instance`, [`GtaEntity`], `core.condition` when it exists in one map state only |
+//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` (the drawable's high LOD), `core.bounds`, [`GtaDrawable`] |
+//! | material | [`GtaShader`] (one per drawable and shader) |
+//! | texture | `core.texture`, `core.name`, `core.source` |
+
+use primase_core::{Component, Entity, JsonError, Mesh};
+use serde::Serialize;
+
+use crate::map::{ArchetypeDef, EntityDef, EntityKind};
+
+fn to_json<T: Serialize>(v: &T) -> Result<Option<serde_json::Value>, JsonError> {
+    primase_core::json::to_value(v).map(Some)
+}
+
+/// A placed entity as its map stores it, and which map: its path, its index among the map's entities.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaEntity {
+    pub ymap: String,
+    pub index: u32,
+    /// An interior instance (`CMloInstanceDef`), or an entity placed inside one: the interior instance's map index.
+    pub interior: Option<u32>,
+    pub archetype: u32,
+    pub flags: u32,
+    pub guid: u32,
+    pub parent_index: i32,
+    pub lod_dist: f32,
+    pub child_lod_dist: f32,
+    pub lod_level: i32,
+    pub num_children: u32,
+    pub priority_level: i32,
+    pub ambient_occlusion_multiplier: i32,
+    pub artificial_ambient_occlusion: i32,
+    pub tint_value: u32,
+}
+
+impl GtaEntity {
+    pub fn new(ymap: &str, index: u32, interior: Option<u32>, e: &EntityDef) -> GtaEntity {
+        GtaEntity {
+            ymap: ymap.to_string(),
+            index,
+            interior: interior.or(match e.kind {
+                EntityKind::Interior => Some(index),
+                EntityKind::Entity => None,
+            }),
+            archetype: e.archetype,
+            flags: e.flags,
+            guid: e.guid,
+            parent_index: e.parent_index,
+            lod_dist: e.lod_dist,
+            child_lod_dist: e.child_lod_dist,
+            lod_level: e.lod_level,
+            num_children: e.num_children,
+            priority_level: e.priority_level,
+            ambient_occlusion_multiplier: e.ambient_occlusion_multiplier,
+            artificial_ambient_occlusion: e.artificial_ambient_occlusion,
+            tint_value: e.tint_value,
+        }
+    }
+}
+
+impl Component for GtaEntity {
+    const NAME: &'static str = "gta.entity";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// An archetype as its map types file stores it, and which file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaArchetype {
+    pub ytyp: String,
+    pub name: u32,
+    pub kind: &'static str,
+    pub flags: u32,
+    pub special_attribute: u32,
+    pub lod_dist: f32,
+    pub hd_texture_dist: f32,
+    pub bb_min: [f32; 3],
+    pub bb_max: [f32; 3],
+    pub bs_centre: [f32; 3],
+    pub bs_radius: f32,
+    pub texture_dictionary: u32,
+    pub drawable_dictionary: u32,
+    pub physics_dictionary: u32,
+    pub clip_dictionary: u32,
+    pub asset_type: i32,
+    pub asset_name: u32,
+    pub time_flags: Option<u32>,
+}
+
+impl GtaArchetype {
+    pub fn new(ytyp: &str, a: &ArchetypeDef) -> GtaArchetype {
+        GtaArchetype {
+            ytyp: ytyp.to_string(),
+            name: a.name,
+            kind: match a.kind {
+                crate::map::ArchetypeKind::Base => "base",
+                crate::map::ArchetypeKind::Time => "time",
+                crate::map::ArchetypeKind::Interior => "interior",
+            },
+            flags: a.flags,
+            special_attribute: a.special_attribute,
+            lod_dist: a.lod_dist,
+            hd_texture_dist: a.hd_texture_dist,
+            bb_min: a.bb_min,
+            bb_max: a.bb_max,
+            bs_centre: a.bs_centre,
+            bs_radius: a.bs_radius,
+            texture_dictionary: a.texture_dictionary,
+            drawable_dictionary: a.drawable_dictionary,
+            physics_dictionary: a.physics_dictionary,
+            clip_dictionary: a.clip_dictionary,
+            asset_type: a.asset_type,
+            asset_name: a.asset_name,
+            time_flags: a.time_flags,
+        }
+    }
+}
+
+impl Component for GtaArchetype {
+    const NAME: &'static str = "gta.archetype";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// A shader parameter's value; textures as the entity the lookup found (`None`: not found or none bound).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum GtaParam {
+    Texture {
+        name: Option<String>,
+        texture: Option<Entity>,
+    },
+    Floats(Vec<f32>),
+    Sampler(u8),
+    Other(u8),
+}
+
+/// A drawable's shader: effect name hash, preset, render bucket, bucket mask, parameters by stored name hash.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaShader {
+    pub drawable: String,
+    pub index: u32,
+    pub name: u32,
+    pub preset: u32,
+    pub render_bucket: u8,
+    pub bucket_mask: u32,
+    pub params: Vec<(u32, GtaParam)>,
+}
+
+impl Component for GtaShader {
+    const NAME: &'static str = "gta.shader";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.params.iter().filter_map(|(_, p)| match p {
+            GtaParam::Texture { texture, .. } => *texture,
+            _ => None,
+        }));
+    }
+}
+
+/// What a drawable says beyond its high LOD mesh: its file, LOD distances and render masks, and its coarser LODs
+/// (medium, low, very low) as stored, until core has a representation for alternative LOD meshes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GtaDrawable {
+    pub path: String,
+    pub lod_dist: [f32; 4],
+    pub render_masks: [u32; 4],
+    pub lods: [Option<Mesh>; 3],
+}
+
+impl Component for GtaDrawable {
+    const NAME: &'static str = "gta.drawable";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "path": self.path,
+            "lod_dist": self.lod_dist,
+            "render_masks": self.render_masks,
+            "lods": self.lods.iter().map(|m| m.as_ref().map(|m| m.primitives.len())).collect::<Vec<_>>(),
+        })))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        for m in self.lods.iter().flatten() {
+            out.extend(m.primitives.iter().filter_map(|p| p.material));
+        }
+    }
+}
