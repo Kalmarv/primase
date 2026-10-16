@@ -103,8 +103,11 @@ impl Component for StateAxis {
         crate::json::to_value(self).map(Some)
     }
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
-        if self.key.is_empty() {
-            return Err("empty key".into());
+        if self.key.is_empty() || self.key.contains([':', ';']) {
+            return Err(format!(
+                "key {:?} is empty or holds ':' or ';' (the assign syntax)",
+                self.key
+            ));
         }
         let n = self.domain.len();
         if !(1..=64).contains(&n) {
@@ -112,8 +115,11 @@ impl Component for StateAxis {
         }
         if let Domain::Enum(names) = &self.domain {
             for (i, a) in names.iter().enumerate() {
-                if a.is_empty() || names[..i].contains(a) {
-                    return Err(format!("{}: value name {a:?} empty or repeated", self.key));
+                if a.is_empty() || a.contains([':', ';']) || names[..i].contains(a) {
+                    return Err(format!(
+                        "{}: value name {a:?} empty, repeated or holding ':' or ';'",
+                        self.key
+                    ));
                 }
             }
         }
@@ -274,9 +280,12 @@ impl Resource for StateAssignment {
 }
 
 /// `resolve-state{assign=key:value;key:value}`: one concrete world. Each axis takes its `assign` value, else the
-/// [`StateAssignment`] resource's, else its default (values by name or index; an unknown key is an error). Placed
+/// [`StateAssignment`] resource's, else its default (values by name or index). An `assign` key without an axis is an
+/// error (a caller's typo); resource keys without an axis are counted and ignored (a save knows every flag). Placed
 /// entities whose condition does not hold are despawned, then each remaining entity's first matching override applies.
-/// Every axis, condition, override and the assignment resource are removed.
+/// Every axis, condition, override and the assignment resource are removed. A despawned entity that something else
+/// still references (a self-placed mesh used as another instance's prototype) leaves that reference dangling, and the
+/// verifier after the pass fails on it.
 #[derive(Clone, Debug, Default)]
 pub struct ResolveState {
     /// key -> value text, as given.
@@ -333,11 +342,13 @@ impl Pass for ResolveState {
             return Err("two axes share a key".into());
         }
         let mut values: BTreeMap<Entity, u32> = axes.iter().map(|(e, a)| (*e, a.default)).collect();
+        // a save holds every flag the game knows, a world has axes for a few: keys without an axis are counted
         let resource = w.remove_resource::<StateAssignment>().unwrap_or_default();
         for (k, &v) in &resource.0 {
-            let &(e, a) = by_key
-                .get(k.as_str())
-                .ok_or_else(|| format!("state assignment names {k}, which no axis has"))?;
+            let Some(&(e, a)) = by_key.get(k.as_str()) else {
+                log.count("assignment keys without an axis", 1);
+                continue;
+            };
             if v as usize >= a.domain.len() {
                 return Err(format!(
                     "state assignment {k}={v} is outside its {} values",
@@ -355,6 +366,29 @@ impl Pass for ResolveState {
                 .parse(text)
                 .ok_or_else(|| format!("assign {k}:{text} is not one of its values"))?;
             values.insert(e, v);
+        }
+        // run() may see an unverified world: every literal must name an axis
+        for (e, mut axes_named) in w
+            .iter::<Condition>()
+            .map(|(e, c)| (e, c.0.clone()))
+            .chain(
+                w.iter::<StateOverride>()
+                    .map(|(e, o)| (e, o.0.iter().map(|(c, _)| c.clone()).collect())),
+            )
+            .map(|(e, clauses)| {
+                (
+                    e,
+                    clauses
+                        .iter()
+                        .flat_map(|c| c.0.iter().map(|l| l.axis))
+                        .collect::<Vec<_>>(),
+                )
+            })
+        {
+            axes_named.retain(|a| !values.contains_key(a));
+            if let Some(a) = axes_named.first() {
+                return Err(format!("{e:?}: a literal names {a:?}, which is not an axis"));
+            }
         }
         let axis_of: BTreeMap<Entity, &StateAxis> = axes.iter().map(|(e, a)| (*e, a)).collect();
         let label = |e: &Entity| {
@@ -555,6 +589,57 @@ mod tests {
     }
 
     #[test]
+    fn a_save_with_unrelated_flags_is_fine() {
+        let mut c = castle();
+        c.w.insert_resource(StateAssignment(BTreeMap::from([
+            ("fromsoft.flag.8302".to_owned(), 1),
+            ("fromsoft.flag.11110100".to_owned(), 1),
+            ("fromsoft.flag.6000".to_owned(), 0),
+        ])));
+        let log = run(&mut c.w, "");
+        assert_eq!(names(&c.w), ["m003412_3902"]);
+        assert_eq!(log.counts["assignment keys without an axis"], 2);
+    }
+
+    #[test]
+    fn run_on_an_unverified_world_errs_instead_of_panicking() {
+        let mut w = World::new();
+        let proto = w.spawn();
+        let not_axis = w.spawn();
+        let e = placement(&mut w, proto, "p");
+        w.insert(
+            e,
+            Condition(vec![Clause(vec![Literal {
+                axis: not_axis,
+                values: 1,
+            }])]),
+        );
+        let err = resolve_state(&Options::new())
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(err.contains("not an axis"), "{err}");
+        let mut w = World::new();
+        let e = placement(&mut w, proto, "p");
+        w.insert(
+            e,
+            StateOverride(vec![(
+                Clause(vec![Literal {
+                    axis: not_axis,
+                    values: 1,
+                }]),
+                Override::Variant(1),
+            )]),
+        );
+        assert!(
+            resolve_state(&Options::new())
+                .unwrap()
+                .run(&mut w, &mut PassLog::default())
+                .is_err()
+        );
+    }
+
+    #[test]
     fn unknown_keys_and_values_are_errors() {
         for bad in [
             "fromsoft.flag.9999:on",
@@ -572,7 +657,11 @@ mod tests {
             );
         }
         let mut c = castle();
-        c.w.insert_resource(StateAssignment(BTreeMap::from([("nope".to_owned(), 1)])));
+        // a resource value outside the axis's domain is an error (only unknown resource keys are tolerated)
+        c.w.insert_resource(StateAssignment(BTreeMap::from([(
+            "fromsoft.flag.8302".to_owned(),
+            2,
+        )])));
         assert!(
             resolve_state(&Options::new())
                 .unwrap()
@@ -700,6 +789,24 @@ mod tests {
                 w,
                 StateAxis {
                     domain: Domain::Enum(vec!["a".into(), "a".into()]),
+                    ..good.clone()
+                },
+            );
+        });
+        failing(&|w| {
+            with_axis(
+                w,
+                StateAxis {
+                    domain: Domain::Enum(vec!["a:b".into()]),
+                    ..good.clone()
+                },
+            );
+        });
+        failing(&|w| {
+            with_axis(
+                w,
+                StateAxis {
+                    key: "k;x".into(),
                     ..good.clone()
                 },
             );
