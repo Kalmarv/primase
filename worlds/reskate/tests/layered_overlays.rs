@@ -59,7 +59,7 @@ fn floats(json: &Value, bin: &[u8], accessor: usize) -> Vec<f32> {
 
 #[test]
 fn layered_scenes_build_with_vertex_blend_overlays() {
-    let Some(root) = primase_core::gate::real_data("PRIMASE_SCENES_GTA") else {
+    let Some(root) = primase_testdata::real_data("PRIMASE_SCENES_GTA") else {
         return;
     };
     let out_root = std::env::var_os("PRIMASE_OUT")
