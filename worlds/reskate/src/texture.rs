@@ -479,21 +479,11 @@ pub fn mip_for(width: u32, height: u32, levels: u32, cap: u32) -> (u32, u32, u32
 }
 
 fn to_lin(i: u8) -> f32 {
-    let c = f32::from(i) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    primase_image::srgb_to_linear_f32(f32::from(i) / 255.0)
 }
 
 fn from_lin(v: f32) -> u8 {
-    let v = if v <= 0.0031308 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    };
-    ((v * 255.0 + 0.5) as i32).clamp(0, 255) as u8
+    primase_image::linear_to_srgb8_f32(v)
 }
 
 fn png_bytes(w: u32, h: u32, rgba: &[u8], alpha: bool) -> Vec<u8> {

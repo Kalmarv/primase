@@ -1494,10 +1494,8 @@ impl MapWriter {
                     let v = c as f32 / 255.0;
                     if !m.srgb {
                         v
-                    } else if v <= 0.04045 {
-                        v / 12.92
                     } else {
-                        ((v + 0.055) / 1.055).powf(2.4)
+                        primase_image::srgb_to_linear_f32(v)
                     }
                 };
                 m2.base_factor = Some([

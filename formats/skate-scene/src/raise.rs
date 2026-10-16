@@ -51,13 +51,7 @@ pub fn studio_watts(candela: f32) -> f32 {
 }
 
 fn byte(linear: f32) -> u8 {
-    let c = f64::from(linear).clamp(0.0, 1.0);
-    let s = if c <= 0.003_130_8 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0).round() as u8
+    primase_image::linear_to_srgb8(f64::from(linear))
 }
 
 /// A manifest key from a name: `[A-Za-z0-9_-]` kept, other characters `_`, unique by a number suffix.

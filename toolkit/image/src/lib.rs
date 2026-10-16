@@ -248,21 +248,39 @@ pub fn write_png(image: &Image) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-/// IEC sRGB encoded value -> linear light, f64, exact piecewise curve (no clamp).
-pub fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+// One curve definition, evaluated at the precision explicitly requested by the caller.
+macro_rules! srgb_transfer {
+    ($decode:ident, $encode:ident, $float:ty) => {
+        /// IEC sRGB encoded value to linear light, with no clamping.
+        pub fn $decode(c: $float) -> $float {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        /// Linear light to IEC sRGB encoded value, with no clamping.
+        pub fn $encode(c: $float) -> $float {
+            if c <= 0.0031308 {
+                12.92 * c
+            } else {
+                1.055 * c.powf(1. / 2.4) - 0.055
+            }
+        }
+    };
 }
-/// Linear light -> IEC sRGB encoded value, f64 (no clamp).
-pub fn linear_to_srgb(c: f64) -> f64 {
-    if c <= 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1. / 2.4) - 0.055
-    }
+srgb_transfer!(srgb_to_linear, linear_to_srgb, f64);
+srgb_transfer!(srgb_to_linear_f32, linear_to_srgb_f32, f32);
+
+/// Encode linear light with f64 arithmetic, clamping before transfer and rounding to nearest byte.
+pub fn linear_to_srgb8(c: f64) -> u8 {
+    (linear_to_srgb(c.clamp(0., 1.)) * 255.).round() as u8
+}
+
+/// Encode linear light with f32 arithmetic and half-up byte quantization.
+/// Clamping follows transfer and the saturating float-to-integer conversion.
+pub fn linear_to_srgb8_f32(c: f32) -> u8 {
+    ((linear_to_srgb_f32(c) * 255. + 0.5) as i32).clamp(0, 255) as u8
 }
 
 /// Next mip. Each target pixel covers [x*w/w', (x+1)*w/w'), so the final
