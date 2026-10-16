@@ -493,8 +493,7 @@ impl TilePlan {
                             .flat_map(|&t| all[3 * t as usize..3 * t as usize + 3].iter().copied())
                             .collect();
                         let mut sub = primase_meshops::subset_primitive(prim, &idx)
-                            .map_err(|e| Error::Invalid(e.to_string()))?
-                            .primitive;
+                            .map_err(|e| Error::Invalid(e.to_string()))?;
                         sub.material = variants
                             .and_then(|v| v.0[*part].get(&p.variant).copied())
                             .or(prim.material);
