@@ -338,6 +338,92 @@ fn layered_materials_round_trip_and_follow_edits() {
     }
 }
 
+#[test]
+fn layered_cell_closure_keeps_textures_and_mask_lowering() {
+    use primase_core::pass::{Pass, PassLog};
+    use primase_core::{
+        Layer, LayerWeights, LayeredMaterial, Mesh, Primitive, Semantic, Stream, Topology, WeightMapping,
+    };
+    let dir = fixture("layered_cell");
+    let (mut world, _) = read(&dir);
+    let ordinary = world
+        .iter::<scene::SkateMaterial>()
+        .find(|(_, m)| m.key == "wall")
+        .unwrap()
+        .0;
+    let base = world.get::<scene::SkateMaterial>(ordinary).unwrap().base.unwrap();
+    let mask = world.spawn();
+    world.insert(
+        mask,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![11, 22, 33, 44]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Mask,
+            normal: None,
+        },
+    );
+    world.get_mut::<scene::SkateMaterial>(ordinary).unwrap().mask = Some(mask);
+    let layered = world.spawn();
+    world.insert(
+        layered,
+        LayeredMaterial {
+            layers: vec![Some(Layer {
+                material: ordinary,
+                texcoord: None,
+                transform: None,
+            })],
+            weights: LayerWeights {
+                attribute: Semantic::Color(1),
+                mapping: WeightMapping::Identity,
+            },
+        },
+    );
+    let prototype = world.spawn();
+    world.insert(
+        prototype,
+        Mesh {
+            primitives: vec![Primitive {
+                topology: Topology::Triangles,
+                indices: Some(vec![0, 1, 2]),
+                material: Some(layered),
+                streams: std::collections::BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+                    ),
+                    (Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3])),
+                    (Semantic::Color(1), Stream::F32x4(vec![[1., 0., 0., 0.]; 3])),
+                ]),
+            }],
+        },
+    );
+    let closure = world.closure([prototype]);
+    for entity in [layered, ordinary, base, mask] {
+        assert!(closure.contains(&entity));
+    }
+    let mut cell = world.subset(&closure);
+    primase_gltf::load_mesh_files(&mut cell, &dir).unwrap();
+    primase_image::load_textures(&mut cell, &dir).unwrap();
+    scene::LowerSkatePbr
+        .run(&mut cell, &mut PassLog::default())
+        .unwrap();
+    scene::LowerLayeredPbr
+        .run(&mut cell, &mut PassLog::default())
+        .unwrap();
+    primase_image::normalize_normals(&mut cell).unwrap();
+    let material = cell.get::<Mesh>(prototype).unwrap().primitives[0]
+        .material
+        .unwrap();
+    let pbr = cell.get::<primase_core::pbr::PbrMaterial>(material).unwrap();
+    assert_eq!(pbr.base_color_texture.unwrap().texture, base);
+    let orm = pbr.metallic_roughness_texture.unwrap().texture;
+    assert_eq!(pbr.occlusion_texture.unwrap().texture, orm);
+    assert_eq!(cell.get::<Texture>(orm).unwrap().levels[0], [33, 233, 11, 255]);
+}
+
 fn same_tree(a: &Path, b: &Path, rels: &[&str]) {
     for r in rels {
         assert_eq!(
