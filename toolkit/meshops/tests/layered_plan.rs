@@ -174,3 +174,20 @@ fn metadata_validation_failure_does_not_mutate_world_or_log() {
     assert_eq!(format!("{world:?}"), before);
     assert!(log.counts.is_empty());
 }
+
+#[test]
+fn empty_split_still_prunes_the_replaced_host() {
+    let (mut world, entity) = fixture();
+    let host = world.get::<Mesh>(entity).unwrap().primitives[0].material.unwrap();
+    world.get_mut::<Mesh>(entity).unwrap().primitives[0].indices = Some(vec![]);
+    primase_meshops::lower_layered_pbr(
+        &mut world,
+        SelectionPolicy::CoreWeights,
+        &mut PassLog::default(),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert!(!world.entities().any(|e| e == host));
+    assert!(world.get::<Mesh>(entity).unwrap().primitives.is_empty());
+    assert_eq!(world.closure([entity]).len(), world.entity_count());
+}

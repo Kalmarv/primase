@@ -3,7 +3,7 @@ use crate::{Error, Result, SelectionPolicy};
 use primase_core::pass::PassLog;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Primitive, World};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 type MaterialKey = (Entity, usize);
 type PlannedPart = (usize, Option<MaterialKey>, Primitive, BTreeMap<u32, Entity>);
@@ -27,6 +27,7 @@ pub struct LayeredPbrPlan {
     replacements: BTreeMap<MaterialKey, PbrMaterial>,
     plans: Vec<(Entity, Vec<PlannedPart>)>,
     sources: Vec<LayeredMeshSource>,
+    cleanup_candidates: BTreeSet<Entity>,
 }
 impl LayeredPbrPlan {
     pub fn sources(&self) -> &[LayeredMeshSource] {
@@ -74,6 +75,10 @@ impl LayeredPbrPlan {
                 world.insert(entity, MaterialVariants(variants));
             }
         }
+        let retained = world.closure(world.entities().filter(|e| !self.cleanup_candidates.contains(e)));
+        for entity in self.cleanup_candidates.difference(&retained) {
+            world.despawn(*entity);
+        }
     }
 }
 
@@ -89,6 +94,7 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
     // Validate and prepare all changes before mutating the destination.
     let mut replacements = BTreeMap::<(Entity, usize), PbrMaterial>::new();
     let mut plans = Vec::new();
+    let mut replaced_hosts = BTreeSet::new();
     let transformed_uv = (0..=u8::MAX).find(|&i| {
         world.iter::<Mesh>().all(|(_, m)| {
             m.primitives
@@ -140,6 +146,8 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
                     "strongest-layer lowering refuses variants on a layered part".into(),
                 ));
             }
+            // Even an empty split replaces its source host.
+            replaced_hosts.insert(material);
             let split = crate::strongest_layer_parts(primitive, layered, policy)?;
             for (slot, mut part) in split {
                 let layer = layered.layers[slot].as_ref();
@@ -223,6 +231,7 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
         replacements,
         plans,
         sources,
+        cleanup_candidates: world.closure(replaced_hosts),
     })
 }
 
@@ -231,6 +240,8 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
 /// after success. Any planning/validation error leaves both world and pass log unchanged.
 /// As with plan_layered_pbr, lower the whole world before partitioning shared prototypes.
 /// Per-pixel layered writers should retain core.layered instead of using this approximation.
+/// Replaced hosts and their dependencies are pruned only if unreachable from every entity
+/// outside that original dependency closure; shared resources and unrelated entities survive.
 pub fn lower_layered_pbr(
     world: &mut World,
     policy: SelectionPolicy,

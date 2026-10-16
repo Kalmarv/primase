@@ -37,6 +37,13 @@ fn installed_layered_scene() {
     primase_skate_scene::LowerSkatePbr
         .run(&mut world, &mut PassLog::default())
         .unwrap();
+    // Exercise the exact-closure contract of a prepared cell.
+    let roots: Vec<_> = world.iter::<Mesh>().map(|(entity, _)| entity).collect();
+    let mut cell = world.subset(&world.closure(roots.iter().copied()));
+    primase_skate_scene::LowerLayeredPbr
+        .run(&mut cell, &mut PassLog::default())
+        .unwrap();
+    assert_eq!(cell.closure(roots).len(), cell.entity_count());
     let mut log = PassLog::default();
     primase_skate_scene::LowerLayeredPbr
         .run(&mut world, &mut log)
@@ -216,4 +223,95 @@ fn invalid_skate_metadata_refuses_all_changes() {
     );
     assert_eq!(format!("{world:?}"), before);
     assert!(log.counts.is_empty());
+}
+
+#[test]
+fn lowering_prunes_only_unreachable_replaced_dependencies() {
+    for shared in [false, true] {
+        let mut world = World::default();
+        let selected_texture = world.spawn();
+        let unused_texture = world.spawn();
+        let selected = world.spawn();
+        let unused = world.spawn();
+        for (entity, texture) in [(selected, selected_texture), (unused, unused_texture)] {
+            world.insert(
+                entity,
+                PbrMaterial {
+                    base_color_texture: Some(TextureRef::new(texture)),
+                    ..Default::default()
+                },
+            );
+        }
+        let host = world.spawn();
+        world.insert(
+            host,
+            LayeredMaterial {
+                layers: [selected, unused]
+                    .into_iter()
+                    .map(|material| {
+                        Some(Layer {
+                            material,
+                            texcoord: None,
+                            transform: None,
+                        })
+                    })
+                    .collect(),
+                weights: LayerWeights {
+                    attribute: Semantic::Color(1),
+                    mapping: WeightMapping::Identity,
+                },
+            },
+        );
+        let primitive = Primitive {
+            topology: Topology::Triangles,
+            material: Some(host),
+            indices: Some(vec![0, 1, 2]),
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+                ),
+                (Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3])),
+                (Semantic::Color(1), Stream::F32x4(vec![[1., 0., 0., 0.]; 3])),
+            ]),
+        };
+        let mesh = world.spawn();
+        world.insert(
+            mesh,
+            Mesh {
+                primitives: vec![primitive.clone()],
+            },
+        );
+        let unrelated = world.spawn();
+        let mut roots = vec![mesh, unrelated];
+        if shared {
+            let other = world.spawn();
+            world.insert(
+                other,
+                Mesh {
+                    primitives: vec![Primitive {
+                        material: Some(unused),
+                        ..primitive
+                    }],
+                },
+            );
+            roots.push(other);
+        }
+        assert_eq!(world.closure(roots.iter().copied()).len(), world.entity_count());
+        primase_skate_scene::LowerLayeredPbr
+            .run(&mut world, &mut PassLog::default())
+            .unwrap();
+        let alive: std::collections::BTreeSet<_> = world.entities().collect();
+        assert!(!alive.contains(&host));
+        assert!(!alive.contains(&selected));
+        assert!(alive.contains(&selected_texture));
+        assert_eq!(alive.contains(&unused), shared);
+        assert_eq!(alive.contains(&unused_texture), shared);
+        assert!(alive.contains(&unrelated));
+        assert_eq!(
+            world.closure(roots),
+            alive,
+            "lowering must retain the exact root closure"
+        );
+    }
 }
