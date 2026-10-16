@@ -46,6 +46,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `viewer_items` | Number of viewer records in this tile |
 | `collision` (optional) | Object `{file, bytes, records}` for a collision GLB |
 | `lights` (optional, 1.1) | Scene lights in this tile's GLB; omitted when 0 |
+| `layered_materials` (optional, 1.2) | Layered materials in this tile's GLB; omitted when 0 |
 
 `collision.records` counts collision meshes, not triangles. Each record's index
 accessor gives its triangle count. Bounds of geometry tiles cover render
@@ -147,6 +148,36 @@ local -Z. Light values follow `KHR_lights_punctual`: linear RGB `color`,
 unlimited), spot cone angles in radians from the axis. Bounds include light
 positions. Lights are illumination sources only; consumers may render a subset
 (for example the nearest few) and must ignore them without breaking geometry.
+
+## Layered materials (1.2)
+
+A tile set with layered materials declares `format_version: "1.2"` (without lights or layered materials it stays
+`"1.0"`, with only lights `"1.1"`). A layered material blends up to four ordinary materials per pixel from an
+interpolated vertex channel. It is a glTF material carrying the vendor extension `PRIMASE_layered_material`, listed in
+`extensionsUsed` and never in `extensionsRequired`:
+
+```json
+"extensions": {"PRIMASE_layered_material": {
+  "weights": {"attribute": "COLOR_1", "mapping": "rgb_product_4"},
+  "layers": [null, {"material": 12, "texCoord": 1, "transform": {"offset": [0, 0], "rotation": 0.5, "scale": [4, 4]}},
+             {"material": 14}, {"material": 15}]}}
+```
+
+- `weights.attribute` names a primitive attribute, `COLOR_n`, VEC3 or VEC4 (float or normalised unsigned; VEC3 has an
+  implied fourth channel of one). `mapping` is `identity` (the channels weight the slots in order) or `rgb_product_4`
+  (four slots: (1-r)(1-g)(1-b), (1-r)(1-g)b, (1-r)g(1-b), (1-r)gb: the weights sum to 1-r, red darkens, r = 1 is black).
+- `layers` has one to four entries, in slot order; `null` is a black slot (its weight is not redistributed). A layer's
+  `material` indexes this file's `materials`: an ordinary material (never itself layered) whose base colour, normal,
+  metallic-roughness and occlusion textures and factors are the layer's. `texCoord` selects the UV set for all of the
+  layer's textures (absent: TEXCOORD_0), and `transform` is `KHR_texture_transform` semantics (offset, rotation in
+  radians, scale) applied to those UVs before sampling; layers may differ in both, so their tangent frames differ.
+- Per pixel: interpolate the channels, evaluate the mapping, colour = sum(weight[i] * layer[i]) with the weights not
+  clamped or renormalised, normals blended with the same weights after each is taken into the common frame, then
+  normalised (an all-zero sum has no direction; the consumer states its fallback).
+- The host material (the one primitives reference) is a verbatim copy of the first non-null layer's material, so a
+  consumer that ignores the extension renders that layer. A primitive drawn with a layered material but lacking the
+  weight attribute renders as the host.
+- Layer materials are written once, like any material; their images are shared with every other user.
 
 ## Synthetic conformance fixture
 

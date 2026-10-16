@@ -91,6 +91,9 @@ pub struct TileInfo {
     /// Scene lights in this tile (format 1.1; omitted when 0).
     #[serde(skip_serializing_if = "is_zero")]
     pub lights: u64,
+    /// `core.layered` materials in this tile's GLB, written with `PRIMASE_layered_material` (format 1.2; omitted when 0).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub layered_materials: u64,
     pub bytes: u64,
 }
 fn is_zero(n: &u64) -> bool {
@@ -617,6 +620,7 @@ impl TilePlan {
                     instanced_placements,
                     viewer_items: 0,
                     lights: 0,
+                    layered_materials: report.layered_materials,
                     bytes: bytes.len() as u64,
                 })
                 .map(|info| (info, bytes)))
@@ -792,6 +796,7 @@ impl TilePlan {
                 instanced_placements: 0,
                 viewer_items: items.len() as u64,
                 lights: lights.len() as u64,
+                layered_materials: 0,
                 bytes: bytes.len() as u64,
             },
         };
@@ -811,8 +816,10 @@ impl TilePlan {
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row));
         Ok(Index {
-            // 1.1 adds the optional scene lights; a tile set without them stays 1.0
-            format_version: if tiles.iter().any(|t| t.lights > 0) {
+            // 1.1 adds the optional scene lights, 1.2 the optional layered materials; a tile set with neither is 1.0
+            format_version: if tiles.iter().any(|t| t.layered_materials > 0) {
+                "1.2"
+            } else if tiles.iter().any(|t| t.lights > 0) {
                 "1.1"
             } else {
                 "1.0"

@@ -17,6 +17,12 @@
 //! - **Materials** come from `pbr.material` ([`PbrMaterial`]); a material entity without one is written as
 //!   [`fallback_material`] (light grey, dielectric, rough) and counted. A primitive with no material has none in
 //!   glTF (the reader's default material) and is counted.
+//! - **Layered materials** (`core.layered`) become one glTF material with the `PRIMASE_layered_material` extension:
+//!   the weight attribute (`COLOR_n`), the mapping and up to four layers, each an index of an ordinary material in
+//!   the same file (the layer materials are written like any other; their images are shared) with the layer's UV
+//!   set and transform. The host material is a verbatim copy of the first non-null layer's material (name and extras
+//!   aside), so a reader that ignores the extension shows one plausible layer. The extension is only in
+//!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted.
 //! - **Textures**: a `core.texture_file` PNG is embedded as-is (bytes checked to be PNG, identical files embedded
 //!   once). In-memory textures take priority and embed their largest level as deterministic RGBA8 PNG.
 //!   Normal maps must already be green-up with stored Z; use the explicit normalization pass first.
@@ -40,6 +46,7 @@ use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
     Primitive, Semantic, Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
+use primase_core::{LayeredMaterial, WeightMapping};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -101,6 +108,10 @@ pub struct WriteReport {
     /// Material entities without `pbr.material`, written as [`fallback_material`].
     pub materials_fallback: u64,
     pub primitives_without_material: u64,
+    /// `core.layered` materials written with `PRIMASE_layered_material`.
+    pub layered_materials: u64,
+    /// Primitives drawn with a layered material but lacking its weight attribute (they render as the host).
+    pub primitives_layered_without_weights: u64,
     /// Primitives given zero texture coordinates for a set their material samples but they lack.
     pub primitives_texcoords_zero_filled: u64,
     /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
@@ -144,10 +155,12 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(
             f,
-            "materials fallback {}, primitives without material {}, primitives with zero-filled texcoords {}, \
-             texture slots dropped {}",
+            "materials fallback {}, primitives without material {}, layered materials {} (primitives without \
+             weights {}), primitives with zero-filled texcoords {}, texture slots dropped {}",
             self.materials_fallback,
             self.primitives_without_material,
+            self.layered_materials,
+            self.primitives_layered_without_weights,
             self.primitives_texcoords_zero_filled,
             self.texture_slots_dropped
         )?;
@@ -178,7 +191,8 @@ const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
 const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME];
 const CONSUMED_PROTOTYPE: &[&str] = &[Name::NAME, Mesh::NAME, MaterialVariants::NAME, MeshFile::NAME];
-const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME];
+const LAYERED: &str = "PRIMASE_layered_material";
+const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME, LayeredMaterial::NAME];
 const CONSUMED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
 
 /// Write the world as GLB bytes.
@@ -205,6 +219,7 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         sampler_index: BTreeMap::new(),
         texture_transform_used: false,
         emissive_strength_used: false,
+        layered_weights: BTreeMap::new(),
     };
     let json = w.document()?;
     let text = serde_json::to_vec(&json)?;
@@ -273,6 +288,8 @@ struct Writer<'w> {
     texture_transform_used: bool,
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
     emissive_strength_used: bool,
+    /// Layered material entity -> the glTF attribute carrying its weights.
+    layered_weights: BTreeMap<Entity, String>,
 }
 
 impl Writer<'_> {
@@ -368,6 +385,9 @@ impl Writer<'_> {
         }
         if self.emissive_strength_used {
             used.push(EMISSIVE_STRENGTH);
+        }
+        if !self.layered_weights.is_empty() {
+            used.push(LAYERED);
         }
         if !lights.is_empty() {
             used.push(LIGHTS);
@@ -664,6 +684,13 @@ impl Writer<'_> {
                         }
                     }
                     self.report.primitives_texcoords_zero_filled += u64::from(filled);
+                    if self
+                        .layered_weights
+                        .get(m)
+                        .is_some_and(|attribute| !attrs.contains_key(attribute))
+                    {
+                        self.report.primitives_layered_without_weights += 1;
+                    }
                     Some(index)
                 }
                 None => {
@@ -892,6 +919,9 @@ impl Writer<'_> {
         if let Some(m) = self.material_index.get(&e) {
             return Ok(m.clone());
         }
+        if let Some(layered) = self.world.get::<LayeredMaterial>(e) {
+            return self.layered_material(e, &layered.clone());
+        }
         let mut sets = BTreeSet::new();
         let pbr = match self.world.get::<PbrMaterial>(e) {
             Some(m) => m.clone(),
@@ -1018,19 +1048,7 @@ impl Writer<'_> {
             t.insert("texCoord".into(), json!(r.texcoord));
         }
         if let Some(x) = r.transform.filter(|x| *x != UvTransform::IDENTITY) {
-            let mut k = Map::new();
-            if x.offset != [0.0; 2] {
-                k.insert("offset".into(), self.factors(r.texture, &x.offset)?);
-            }
-            if x.rotation != 0.0 {
-                k.insert(
-                    "rotation".into(),
-                    self.factors(r.texture, &[x.rotation])?[0].take(),
-                );
-            }
-            if x.scale != [1.0; 2] {
-                k.insert("scale".into(), self.factors(r.texture, &x.scale)?);
-            }
+            let k = self.uv_transform(r.texture, x)?;
             t.insert(
                 "extensions".into(),
                 json!({ TEXTURE_TRANSFORM: Value::Object(k) }),
@@ -1038,6 +1056,96 @@ impl Writer<'_> {
             self.texture_transform_used = true;
         }
         Ok(Some(Value::Object(t)))
+    }
+
+    /// A UV transform as `KHR_texture_transform` fields (defaults left out).
+    fn uv_transform(&self, e: Entity, x: UvTransform) -> Result<Map<String, Value>> {
+        let mut k = Map::new();
+        if x.offset != [0.0; 2] {
+            k.insert("offset".into(), self.factors(e, &x.offset)?);
+        }
+        if x.rotation != 0.0 {
+            k.insert("rotation".into(), self.factors(e, &[x.rotation])?[0].clone());
+        }
+        if x.scale != [1.0; 2] {
+            k.insert("scale".into(), self.factors(e, &x.scale)?);
+        }
+        Ok(k)
+    }
+
+    /// A `core.layered` material: its layers' materials first, then the host (a copy of the first non-null layer's
+    /// material) carrying `PRIMASE_layered_material`. The sets are every set a layer's textures or the layer's own
+    /// `texcoord` selects.
+    fn layered_material(&mut self, e: Entity, layered: &LayeredMaterial) -> Result<(usize, BTreeSet<u8>)> {
+        let attribute = match layered.weights.attribute {
+            Semantic::Color(n) => format!("COLOR_{n}"),
+            other => {
+                return Err(Error::World {
+                    entity: e,
+                    detail: format!("layer weights must be a COLOR_n stream, not {other:?}"),
+                });
+            }
+        };
+        let mut sets = BTreeSet::new();
+        let mut layers = Vec::with_capacity(layered.layers.len());
+        let mut first = None;
+        for layer in &layered.layers {
+            let Some(layer) = layer else {
+                layers.push(Value::Null);
+                continue;
+            };
+            let (index, layer_sets) = self.material(layer.material)?;
+            first.get_or_insert(index);
+            sets.extend(layer_sets);
+            sets.insert(layer.texcoord.unwrap_or(0));
+            let mut o = Map::new();
+            o.insert("material".into(), json!(index));
+            if let Some(n) = layer.texcoord {
+                o.insert("texCoord".into(), json!(n));
+            }
+            if let Some(x) = layer.transform.filter(|x| *x != UvTransform::IDENTITY) {
+                o.insert(
+                    "transform".into(),
+                    Value::Object(self.uv_transform(layer.material, x)?),
+                );
+            }
+            layers.push(Value::Object(o));
+        }
+        let mapping = match layered.weights.mapping {
+            WeightMapping::Identity => "identity",
+            WeightMapping::RgbProduct4 => "rgb_product_4",
+        };
+        let mut host = match first {
+            Some(i) => match &self.materials[i] {
+                Value::Object(m) => m.clone(),
+                _ => unreachable!("materials are objects"),
+            },
+            // every slot null: the blend is black everywhere
+            None => {
+                let mut m = Map::new();
+                m.insert(
+                    "pbrMetallicRoughness".into(),
+                    json!({"baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0}),
+                );
+                m
+            }
+        };
+        host.insert("name".into(), Value::String(self.name_of(e, "material")));
+        host.remove("extras");
+        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
+            host.insert("extras".into(), extras);
+        }
+        host.insert(
+            "extensions".into(),
+            json!({ LAYERED: {"weights": {"attribute": attribute, "mapping": mapping}, "layers": layers} }),
+        );
+        self.materials.push(Value::Object(host));
+        self.report.materials += 1;
+        self.report.layered_materials += 1;
+        let i = self.materials.len() - 1;
+        self.material_index.insert(e, (i, sets.clone()));
+        self.layered_weights.insert(e, attribute);
+        Ok((i, sets))
     }
 
     fn texture(&mut self, r: TextureRef) -> Result<Option<usize>> {

@@ -905,3 +905,109 @@ fn emissive_strength_survives_compression_and_instancing() {
             .any(|e| e == "KHR_materials_emissive_strength")
     );
 }
+#[test]
+fn layered_materials_survive_tiling_compression_and_bump_the_minor_version() {
+    use primase_core::pbr::PbrMaterial;
+    use primase_core::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
+    for compress in [false, true] {
+        let mut w = World::new();
+        let layer = |w: &mut World, r: f32| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                PbrMaterial {
+                    base_color: [r, 0.5, 0.25, 1.0],
+                    ..PbrMaterial::default()
+                },
+            );
+            Some(Layer {
+                material: e,
+                texcoord: None,
+                transform: None,
+            })
+        };
+        let layers = vec![layer(&mut w, 0.1), layer(&mut w, 0.2), None, layer(&mut w, 0.4)];
+        let host = w.spawn();
+        w.insert(
+            host,
+            LayeredMaterial {
+                layers,
+                weights: LayerWeights {
+                    attribute: Semantic::Color(1),
+                    mapping: WeightMapping::RgbProduct4,
+                },
+            },
+        );
+        let proto = w.spawn();
+        let mut m = mesh();
+        m.primitives[0].material = Some(host);
+        m.primitives[0].streams.insert(
+            Semantic::Color(1),
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
+        );
+        w.insert(proto, m);
+        let place = w.spawn();
+        w.insert(
+            place,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(place, Transform::IDENTITY);
+        let options = Options {
+            compress,
+            ..Options::default()
+        };
+        let set = write(&w, &options).unwrap();
+        assert_eq!(set.index.format_version, "1.2");
+        assert_eq!(set.index.tiles[0].layered_materials, 1);
+        let index = serde_json::to_value(&set.index).unwrap();
+        assert_eq!(index["tiles"][0]["layered_materials"], 1);
+        let bytes = &set.files[&set.index.tiles[0].file];
+        let doc: serde_json::Value =
+            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        assert!(
+            doc["extensionsUsed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == "PRIMASE_layered_material")
+        );
+        assert!(
+            !doc["extensionsRequired"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|e| e == "PRIMASE_layered_material"))
+        );
+        let hosts: Vec<_> = doc["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["extensions"].get("PRIMASE_layered_material").is_some())
+            .collect();
+        assert_eq!(hosts.len(), 1);
+        let ext = &hosts[0]["extensions"]["PRIMASE_layered_material"];
+        assert_eq!(ext["weights"]["attribute"], "COLOR_1");
+        assert!(ext["layers"][2].is_null());
+        assert_eq!(ext["layers"].as_array().unwrap().len(), 4);
+        let prim = &doc["meshes"][0]["primitives"][0];
+        assert!(
+            prim["attributes"].get("COLOR_1").is_some(),
+            "weights kept (compress={compress})"
+        );
+        // a tile set without layered materials or lights stays 1.0
+        let mut plain = World::new();
+        let proto = plain.spawn();
+        plain.insert(proto, mesh());
+        let place = plain.spawn();
+        plain.insert(
+            place,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        plain.insert(place, Transform::IDENTITY);
+        assert_eq!(write(&plain, &options).unwrap().index.format_version, "1.0");
+    }
+}

@@ -1,0 +1,219 @@
+//! `core.layered` written as `PRIMASE_layered_material`: layer indices, mapping, per-layer UV set and transform (with
+//! rotation), null slots, the host copy of the first non-null layer, extensionsUsed, counts and determinism.
+
+#![allow(clippy::unwrap_used)]
+
+use std::collections::BTreeMap;
+
+use primase_core::pbr::{PbrMaterial, UvTransform};
+use primase_core::{
+    Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream, Topology,
+    Transform, WeightMapping, World,
+};
+use primase_gltf::{WriteOptions, write};
+use serde_json::Value;
+
+fn document(bytes: &[u8]) -> Value {
+    let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    serde_json::from_slice(&bytes[20..20 + n]).unwrap()
+}
+
+fn world(weights: Option<Semantic>, mapping: WeightMapping, layers: usize) -> (World, primase_core::Entity) {
+    let mut w = World::new();
+    let slot = |name: &str, colour: f32, w: &mut World| {
+        let e = w.spawn();
+        w.insert(e, Name(name.into()));
+        w.insert(
+            e,
+            PbrMaterial {
+                base_color: [colour, 0.5, 0.25, 1.0],
+                roughness: 0.3,
+                ..PbrMaterial::default()
+            },
+        );
+        e
+    };
+    let a = slot("rock", 0.1, &mut w);
+    let b = slot("grass", 0.2, &mut w);
+    let c = slot("sand", 0.3, &mut w);
+    let d = slot("snow", 0.4, &mut w);
+    let materials = [a, b, c, d];
+    let host = w.spawn();
+    w.insert(host, Name("terrain".into()));
+    let mut stack = vec![
+        None,
+        Some(Layer {
+            material: b,
+            texcoord: Some(1),
+            transform: Some(UvTransform {
+                offset: [0.25, 0.5],
+                rotation: 0.75,
+                scale: [4.0, 8.0],
+            }),
+        }),
+        Some(Layer {
+            material: c,
+            texcoord: None,
+            transform: Some(UvTransform::IDENTITY),
+        }),
+        Some(Layer {
+            material: d,
+            texcoord: Some(0),
+            transform: None,
+        }),
+    ];
+    stack.truncate(layers);
+    let _ = materials;
+    w.insert(
+        host,
+        LayeredMaterial {
+            layers: stack,
+            weights: LayerWeights {
+                attribute: weights.unwrap_or(Semantic::Color(1)),
+                mapping,
+            },
+        },
+    );
+    let mut streams = BTreeMap::from([(
+        Semantic::Position,
+        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+    )]);
+    if weights != Some(Semantic::Color(9)) {
+        streams.insert(
+            Semantic::Color(1),
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
+        );
+    }
+    let proto = w.spawn();
+    w.insert(
+        proto,
+        Mesh {
+            primitives: vec![Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(vec![0, 1, 2]),
+                material: Some(host),
+            }],
+        },
+    );
+    let place = w.spawn();
+    w.insert(
+        place,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    w.insert(place, Transform::IDENTITY);
+    (w, host)
+}
+
+fn material<'a>(doc: &'a Value, name: &str) -> &'a Value {
+    doc["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == name)
+        .unwrap()
+}
+
+#[test]
+fn layered_material_is_an_extension_over_ordinary_layer_materials() {
+    let (w, _) = world(None, WeightMapping::RgbProduct4, 4);
+    let (bytes, report) = write(&w, &WriteOptions::default()).unwrap();
+    let doc = document(&bytes);
+    assert_eq!(
+        doc["extensionsUsed"],
+        serde_json::json!(["PRIMASE_layered_material"])
+    );
+    assert!(doc.get("extensionsRequired").is_none());
+    assert_eq!(
+        (
+            report.layered_materials,
+            report.primitives_layered_without_weights
+        ),
+        (1, 0)
+    );
+    // the three layers' ordinary materials (the null slot's `rock` is unreferenced, so not written) + the host
+    assert_eq!(doc["materials"].as_array().unwrap().len(), 4);
+    let host = material(&doc, "terrain");
+    let ext = &host["extensions"]["PRIMASE_layered_material"];
+    assert_eq!(ext["weights"]["attribute"], "COLOR_1");
+    assert_eq!(ext["weights"]["mapping"], "rgb_product_4");
+    let layers = ext["layers"].as_array().unwrap();
+    assert_eq!(layers.len(), 4);
+    assert!(
+        layers[0].is_null(),
+        "a null slot stays null and keeps its position"
+    );
+    let index = |name: &str| {
+        doc["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|m| m["name"] == name)
+            .unwrap()
+    };
+    assert_eq!(layers[1]["material"], index("grass"));
+    assert_eq!(layers[1]["texCoord"], 1);
+    let transform = &layers[1]["transform"];
+    assert_eq!(transform["offset"], serde_json::json!([0.25, 0.5]));
+    assert_eq!(transform["rotation"], 0.75);
+    assert_eq!(transform["scale"], serde_json::json!([4.0, 8.0]));
+    // None texcoord and an identity transform write nothing; an explicit zero is kept
+    assert_eq!(layers[2], serde_json::json!({"material": index("sand")}));
+    assert_eq!(
+        layers[3],
+        serde_json::json!({"material": index("snow"), "texCoord": 0})
+    );
+    // the host is a copy of the first non-null layer (grass): same factors, its own name, no layer extras
+    let grass = material(&doc, "grass");
+    assert_eq!(host["pbrMetallicRoughness"], grass["pbrMetallicRoughness"]);
+    // the primitive uses the host
+    let prim = &doc["meshes"][0]["primitives"][0];
+    assert_eq!(prim["material"], index("terrain"));
+    assert!(prim["attributes"].get("COLOR_1").is_some());
+    // TEXCOORD_1 is selected by a layer, so the primitive gets the set it lacks (zero filled)
+    assert!(prim["attributes"].get("TEXCOORD_1").is_some());
+    // deterministic
+    assert_eq!(bytes, write(&w, &WriteOptions::default()).unwrap().0);
+}
+
+#[test]
+fn identity_mapping_needs_no_fourth_slot_and_all_null_hosts_are_black() {
+    let (w, _) = world(None, WeightMapping::Identity, 2);
+    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
+    assert_eq!(ext["weights"]["mapping"], "identity");
+    assert_eq!(ext["layers"].as_array().unwrap().len(), 2);
+
+    let (mut w, host) = world(None, WeightMapping::Identity, 1);
+    w.insert(
+        host,
+        LayeredMaterial {
+            layers: vec![None],
+            weights: LayerWeights {
+                attribute: Semantic::Color(1),
+                mapping: WeightMapping::Identity,
+            },
+        },
+    );
+    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let m = material(&doc, "terrain");
+    assert_eq!(
+        m["pbrMetallicRoughness"]["baseColorFactor"],
+        serde_json::json!([0.0, 0.0, 0.0, 1.0])
+    );
+    assert!(m["extensions"]["PRIMASE_layered_material"]["layers"][0].is_null());
+}
+
+#[test]
+fn missing_weights_are_counted_and_other_semantics_refused() {
+    let (w, _) = world(Some(Semantic::Color(9)), WeightMapping::RgbProduct4, 4);
+    let (_, report) = write(&w, &WriteOptions::default()).unwrap();
+    assert_eq!(report.primitives_layered_without_weights, 1);
+
+    let (w, _) = world(Some(Semantic::Normal), WeightMapping::Identity, 2);
+    let error = write(&w, &WriteOptions::default()).unwrap_err().to_string();
+    assert!(error.contains("COLOR_n"), "{error}");
+}
