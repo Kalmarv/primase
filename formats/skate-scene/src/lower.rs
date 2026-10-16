@@ -68,7 +68,8 @@ impl Pass for LowerSkatePbr {
     }
     fn approximates(&self) -> &'static str {
         "Studio MSK masks not loaded as RGBA8 or with inconsistent mip sizes left out; a material's scalar metallic and roughness ignored where its \
-         MSK is bound; wrap clip written as clamp; normal maps still files in a non-glTF convention left out"
+         MSK is bound; wrap clip written as clamp; normal maps still files in a non-glTF convention left out; vertex-alpha \
+         cutout materials blended without their cutoff"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut roles: Vec<(Entity, TexRole, ColorSpace, Option<NormalConvention>)> = Vec::new();
@@ -236,7 +237,7 @@ fn srgb_to_linear(c: u8) -> f32 {
 }
 
 /// One material, with skate-scene v1's defaults: alpha `mask` for cutout/leaves, `blend` for
-/// decal/glass/water/alpha; cutoff 0.5 (leaves 0.33); two-sided for cutout/leaves; metallic 0; roughness 0.85
+/// decal/glass/water/alpha, and `blend` for any `vertex_alpha` material (its parts fade by COLOR_0's alpha); cutoff 0.5 (leaves 0.33); two-sided for cutout/leaves; metallic 0; roughness 0.85
 /// (glass/water 0.15). `base` -> base colour texture; without it `base_color` (sRGB bytes, default 128 grey) -> the
 /// factor; `tint` (sRGB bytes, multiplied in linear light) -> the factor, which glTF multiplies into the texture in
 /// linear light too; `normal` -> normal texture, unless it is still only a file in a convention other than glTF's
@@ -247,11 +248,20 @@ fn srgb_to_linear(c: u8) -> f32 {
 pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &mut PassLog) -> PbrMaterial {
     use MaterialClass as C;
     log.count("materials", 1);
-    let alpha = m.alpha.unwrap_or(match m.class {
+    let mut alpha = m.alpha.unwrap_or(match m.class {
         C::Cutout | C::Leaves => AlphaMode::Mask,
         C::Decal | C::Glass | C::Water | C::Alpha => AlphaMode::Blend,
         _ => AlphaMode::Opaque,
     });
+    // glTF multiplies COLOR_0's alpha into the base colour's; only blending shows the fade.
+    if m.vertex_alpha == Some(true) && alpha != AlphaMode::Blend {
+        if alpha == AlphaMode::Mask {
+            log.approximate("vertex-alpha cutout materials blended, cutoff dropped", 1);
+        } else {
+            log.count("vertex-alpha materials blended", 1);
+        }
+        alpha = AlphaMode::Blend;
+    }
     let cutoff = m.cutoff.unwrap_or(if m.class == C::Leaves { 0.33 } else { 0.5 }) as f32;
     let wrap = match m.wrap.unwrap_or(Wrap::Repeat) {
         Wrap::Repeat => PbrWrap::Repeat,

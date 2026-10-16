@@ -175,8 +175,8 @@ const MANIFEST: &str = r#"{
     "wall_n": {"file": "textures/wall_n.png", "green": "down", "z": "rebuild", "source": "tex:wall_n"}
   },
   "materials": {
-    "wall": {"class": "opaque", "base": "wall_d", "normal": "wall_n", "cutoff": 0.5, "roughness": 0.6, "label": "Wall"},
-    "trim_red": {"class": "cutout", "base_color": [200, 40, 40, 255], "alpha": "mask", "two_sided": true},
+    "wall": {"class": "opaque", "base": "wall_d", "normal": "wall_n", "cutoff": 0.5, "roughness": 0.6, "label": "Wall", "vertex_alpha": true},
+    "trim_red": {"class": "cutout", "base_color": [200, 40, 40, 255], "alpha": "mask", "two_sided": true, "vertex_alpha": false},
     "glass": {"class": "glass", "metallic": 0.1, "wrap": "extend", "source": "mat:glass", "unknown_key": [1, 2]}
   },
   "prototypes": [
@@ -1104,7 +1104,12 @@ fn lowering_to_pbr() {
     );
     assert_eq!(
         (wall.metallic, wall.roughness, wall.alpha_mode),
-        (0.0, 0.6, AlphaMode::Opaque)
+        (0.0, 0.6, AlphaMode::Blend),
+        "vertex_alpha: blended so COLOR_0's alpha fades it"
+    );
+    assert_eq!(
+        report.steps[0].log.counts.get("vertex-alpha materials blended"),
+        Some(&1)
     );
     let t = w.get::<Texture>(wall_n).unwrap();
     assert_eq!((t.role, t.color_space), (TexRole::Normal, ColorSpace::Linear));
@@ -1119,8 +1124,23 @@ fn lowering_to_pbr() {
     assert!(
         (trim.base_color[0] - 0.577_580_3).abs() < 1e-6 && (trim.base_color[1] - 0.021_219_01).abs() < 1e-6
     );
-    assert_eq!(trim.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+    assert_eq!(
+        trim.alpha_mode,
+        AlphaMode::Mask { cutoff: 0.5 },
+        "vertex_alpha false"
+    );
     assert!(trim.double_sided, "cutout is two-sided by default");
+    // a vertex-alpha cutout is blended too, its cutoff counted as dropped
+    let mut faded = w.get::<SkateMaterial>(key(&w, "trim_red")).unwrap().clone();
+    faded.vertex_alpha = Some(true);
+    let mut log = primase_core::pass::PassLog::default();
+    let lowered = primase_skate_scene::lower_material(&faded, None, &w, &mut log);
+    assert_eq!(lowered.alpha_mode, AlphaMode::Blend);
+    assert_eq!(
+        log.approximations
+            .get("vertex-alpha cutout materials blended, cutoff dropped"),
+        Some(&1)
+    );
 
     let glass = w.get::<PbrMaterial>(key(&w, "glass")).unwrap();
     assert_eq!((glass.roughness, glass.alpha_mode), (0.15, AlphaMode::Blend));

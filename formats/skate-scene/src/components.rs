@@ -257,6 +257,8 @@ pub struct SkateMaterial {
     pub ocean: Option<bool>,
     pub cast_shadows: Option<bool>,
     pub emissive: Option<bool>,
+    /// Parts fade by their COLOR_0 alpha: drawn blended even when `alpha` says otherwise.
+    pub vertex_alpha: Option<bool>,
     pub other: Other,
 }
 

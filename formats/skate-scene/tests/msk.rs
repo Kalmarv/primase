@@ -82,6 +82,7 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
                 ocean: None,
                 cast_shadows: None,
                 emissive: None,
+                vertex_alpha: None,
                 other: Other::new(),
             },
         );

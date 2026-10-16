@@ -216,6 +216,7 @@ fn black(key: String, class: primase_skate_scene::MaterialClass) -> primase_skat
         ocean: None,
         cast_shadows: None,
         emissive: None,
+        vertex_alpha: None,
         other: Default::default(),
     }
 }

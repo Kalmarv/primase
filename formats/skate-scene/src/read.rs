@@ -802,6 +802,7 @@ impl Reader<'_> {
                 let metallic = o.f64_in("metallic", 0.0, 1.0, rep)?;
                 let two_sided = o.bool("two_sided", rep)?;
                 let emissive = o.bool("emissive", rep)?;
+                let vertex_alpha = o.bool("vertex_alpha", rep)?;
                 let ocean = o.bool("ocean", rep)?;
                 let cast_shadows = o.bool("cast_shadows", rep)?;
                 let label = match o.take("label", rep) {
@@ -848,6 +849,7 @@ impl Reader<'_> {
                         ocean,
                         cast_shadows,
                         emissive,
+                        vertex_alpha,
                         other: o.other()?,
                     },
                 );

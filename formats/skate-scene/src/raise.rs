@@ -226,6 +226,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 ocean: None,
                 cast_shadows: None,
                 emissive: None,
+                vertex_alpha: None,
                 other: Other::new(),
             },
         );

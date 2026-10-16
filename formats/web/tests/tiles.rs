@@ -906,6 +906,81 @@ fn emissive_strength_survives_compression_and_instancing() {
     );
 }
 #[test]
+fn vertex_colours_survive_compression_and_instancing() {
+    use primase_core::pbr::{AlphaMode, PbrMaterial};
+    // GTA's decal parts: white, the fade in alpha (normalised u8)
+    let colours = vec![[255, 255, 255, 0], [255, 255, 255, 11], [255, 255, 255, 50]];
+    for compress in [false, true] {
+        let mut w = World::new();
+        let mat = w.spawn();
+        w.insert(
+            mat,
+            PbrMaterial {
+                alpha_mode: AlphaMode::Blend,
+                ..PbrMaterial::default()
+            },
+        );
+        let proto = w.spawn();
+        let mut m = mesh();
+        m.primitives[0].material = Some(mat);
+        m.primitives[0]
+            .streams
+            .insert(Semantic::Color(0), Stream::U8x4(colours.clone()));
+        w.insert(proto, m);
+        for x in [0.0f32, 2.0] {
+            let e = w.spawn();
+            w.insert(
+                e,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            let mut t = Transform::IDENTITY;
+            t.cols[3][0] = x;
+            w.insert(e, t);
+        }
+        let options = Options {
+            compress,
+            ..Options::default()
+        };
+        let set = write(&w, &options).unwrap();
+        assert_eq!(set.index.tiles[0].instanced_placements, 2);
+        let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+        let prim = &doc["meshes"][0]["primitives"][0];
+        let a = &doc["accessors"][prim["attributes"]["COLOR_0"].as_u64().unwrap() as usize];
+        assert_eq!(
+            (&a["componentType"], &a["type"], &a["normalized"], &a["count"]),
+            (&5121.into(), &"VEC4".into(), &true.into(), &3.into()),
+            "compress={compress}"
+        );
+        let view = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+        let bin = chunks.bin.unwrap();
+        let decoded: Vec<[u8; 4]> = match view["extensions"].get("EXT_meshopt_compression") {
+            Some(ext) => {
+                let start = ext["byteOffset"].as_u64().unwrap() as usize;
+                let end = start + ext["byteLength"].as_u64().unwrap() as usize;
+                meshopt::decode_vertex_buffer::<[u8; 4]>(&bin[start..end], 3).unwrap()
+            }
+            None => {
+                let start = view["byteOffset"].as_u64().unwrap_or(0) as usize
+                    + a["byteOffset"].as_u64().unwrap_or(0) as usize;
+                bin[start..start + 12].as_chunks::<4>().0.to_vec()
+            }
+        };
+        assert_eq!(
+            view["extensions"].get("EXT_meshopt_compression").is_some(),
+            compress
+        );
+        assert_eq!(decoded, colours, "COLOR_0 exact (compress={compress})");
+        assert_eq!(
+            doc["materials"][prim["material"].as_u64().unwrap() as usize]["alphaMode"],
+            "BLEND"
+        );
+    }
+}
+#[test]
 fn layered_materials_survive_tiling_and_compression() {
     use primase_core::pbr::PbrMaterial;
     use primase_core::{Layer, LayerWeights, LayeredMaterial, WeightMapping};

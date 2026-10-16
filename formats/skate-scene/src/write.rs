@@ -515,6 +515,7 @@ impl Writer<'_> {
             o.opt("ocean", m.ocean, Value::Bool);
             o.opt("cast_shadows", m.cast_shadows, Value::Bool);
             o.opt("emissive", m.emissive, Value::Bool);
+            o.opt("vertex_alpha", m.vertex_alpha, Value::Bool);
             o.opt("label", w.get::<Name>(e), |n| text(&n.0));
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&m.other);

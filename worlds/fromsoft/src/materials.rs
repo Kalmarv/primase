@@ -313,6 +313,7 @@ impl Material {
             ocean: None,
             cast_shadows: None,
             emissive: self.is_emissive.then_some(true),
+            vertex_alpha: None,
             other: Default::default(),
         }
     }
