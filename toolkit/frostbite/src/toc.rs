@@ -4,7 +4,7 @@
 
 use primase_hash::frostbite_toc;
 
-use crate::postcompile::{Rd, Result, align, bad, latin1};
+use crate::{Rd, Result, align, bad, latin1};
 
 pub const ENVELOPE: usize = 0x22C;
 pub const MAGIC: [u8; 4] = [0x00, 0xd1, 0xce, 0x01];

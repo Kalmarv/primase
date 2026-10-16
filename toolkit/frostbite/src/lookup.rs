@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::postcompile::{Rd, Result, bad, capacity};
+use crate::{Rd, Result, bad, capacity};
 
 pub const PROGRAM_LOOKUP: u32 = 0xE2E6_955B;
 pub const TEXTURE_LOOKUP: u32 = 0x2D25_4A89;

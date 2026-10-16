@@ -2,8 +2,8 @@
 //! bundle manifest. A node is a type tag (bit 7: unnamed), a name, then a container (1 list, 2 object: varint size,
 //! children, optional terminator), a sized blob (7 string, 19 blob) or a fixed-size value.
 
-use crate::postcompile::fb::toc::{ENVELOPE, MAGIC};
-use crate::postcompile::{Rd, Result, bad, latin1};
+use crate::toc::{ENVELOPE, MAGIC};
+use crate::{Rd, Result, bad, latin1};
 
 const W: &str = "native db";
 

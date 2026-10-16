@@ -845,6 +845,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-frostbite"
+version = "0.1.0"
+dependencies = [
+ "primase-compress",
+ "primase-hash",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-gltf"
 version = "0.1.0"
 dependencies = [
@@ -913,6 +922,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dds",
+ "primase-frostbite",
  "primase-gltf",
  "primase-hash",
  "primase-image",

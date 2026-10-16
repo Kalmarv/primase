@@ -10,9 +10,9 @@ use primase_compress::Decompressor;
 use primase_compress::cas::Cas;
 use primase_compress::oodle::Oodle;
 
-use crate::postcompile::fb::bundle::{self, FileRef, Manifest};
-use crate::postcompile::fb::{db, toc::Loc};
-use crate::postcompile::{Error, Result};
+use crate::bundle::{self, FileRef, Manifest};
+use crate::{Error, Result};
+use crate::{db, toc::Loc};
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
     move |source| Error::Io {

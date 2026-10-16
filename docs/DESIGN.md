@@ -128,6 +128,7 @@ core/         world, core components, TexFormat, frame conversions, pass manager
 toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG, sRGB, mips), compress (lz4,
               deflate/zlib, Frostbite CAS blocks, Oodle via the game's own DLL), container (TOC and archive helpers,
               version gates), hash, vertex (layouts, quantisation, strips), havok, meshops (weld, split, meshopt),
+              frostbite (skate.'s containers: TOC, bundles, native DB, CAS archives, shader depots and lookups),
               validate (identity rules)
 worlds/       one crate per game or engine: reskate (Frostbite CAS/TOC/EBX, map writer and reader), fromsoft, gta,
               forza, unity, insomniac, ...

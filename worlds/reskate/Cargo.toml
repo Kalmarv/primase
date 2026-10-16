@@ -14,6 +14,7 @@ primase-skate-scene.workspace = true
 primase-gltf.workspace = true
 primase-hash.workspace = true
 primase-compress.workspace = true
+primase-frostbite.workspace = true
 sha1.workspace = true
 half.workspace = true
 primase-image.workspace = true

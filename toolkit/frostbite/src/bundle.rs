@@ -1,8 +1,8 @@
 //! A bundle: its region in the TOC (the file table: where each of its files lives) and its binary manifest (the
 //! first file: names, SHA-1s and sizes of the bundle's EBX, resources and chunks, plus the chunk metadata DB).
 
-use crate::postcompile::fb::toc::Loc;
-use crate::postcompile::{Rd, Result, bad, capacity, latin1};
+use crate::toc::Loc;
+use crate::{Rd, Result, bad, capacity, latin1};
 
 const R: &str = "bundle region";
 const M: &str = "bundle manifest";

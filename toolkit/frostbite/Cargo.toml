@@ -1,0 +1,17 @@
+[package]
+name = "primase-frostbite"
+description = "Frostbite containers: superbundle TOCs, bundle regions and manifests, the native DB, data folders, shader block depots and shader lookup tables"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-hash.workspace = true
+primase-compress.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
