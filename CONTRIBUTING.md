@@ -123,6 +123,9 @@ from paths in environment variables and are **skipped** (pass, printing `SKIPPED
 | `PRIMASE_RESKATE_REF` | a folder of map folders written by the reference C# map writer, one per area (each holding a `map.json`) |
 | `PRIMASE_RESKATE_SCENES` | the skate-scene folders those maps were built from, one per area, named like the map folders |
 | `PRIMASE_RESKATE_CAPS` | optional: the per-texture size caps file the reference build used (`--tex-caps`) |
+| `PRIMASE_RESKATE_PATCH` | a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs` |
+| `PRIMASE_RESKATE_FB_ORACLE` | an independent reader's summary of that Patch (JSON; schema in `worlds/reskate/tests/postcompile_fb.rs`) |
+| `PRIMASE_SKATE_DATA` | the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only |
 | `PRIMASE_UNITY_DATA` | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
 | `PRIMASE_UNITY_TPK` | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
 | `PRIMASE_UNITY_ORACLE` | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |

@@ -13,6 +13,7 @@ primase-core.workspace = true
 primase-skate-scene.workspace = true
 primase-gltf.workspace = true
 primase-hash.workspace = true
+primase-compress.workspace = true
 primase-image.workspace = true
 primase-texcodec.workspace = true
 primase-dds.workspace = true

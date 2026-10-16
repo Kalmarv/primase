@@ -12,6 +12,7 @@ pub mod material;
 pub mod model;
 pub mod overlay;
 pub mod pausemap;
+pub mod postcompile;
 pub mod records;
 pub mod scene;
 pub mod texture;
