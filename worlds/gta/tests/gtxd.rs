@@ -8,9 +8,9 @@
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::gate::real_data;
 use primase_gta::gtxd::TextureParents;
 use primase_gta::{ArchiveSet, Install, Keys, MapState};
+use primase_testdata::real_data;
 
 #[derive(serde::Deserialize)]
 struct Oracle {

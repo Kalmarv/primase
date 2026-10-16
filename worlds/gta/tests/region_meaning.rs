@@ -25,9 +25,9 @@ fn key(t: &Transform) -> [i64; 3] {
 #[test]
 fn region_placements_against_the_scene() {
     let (Some(dir), Some(key_dir), Some(scene)) = (
-        primase_core::gate::real_data("PRIMASE_GTA_DIR"),
-        primase_core::gate::real_data("PRIMASE_GTA_KEYS"),
-        primase_core::gate::real_data("PRIMASE_GTA_SCENE"),
+        primase_testdata::real_data("PRIMASE_GTA_DIR"),
+        primase_testdata::real_data("PRIMASE_GTA_KEYS"),
+        primase_testdata::real_data("PRIMASE_GTA_SCENE"),
     ) else {
         return;
     };
