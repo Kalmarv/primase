@@ -1,10 +1,13 @@
 //! The live-file tables of an install against an independent reader's tables of the same install.
 //!
 //! Oracle (`PRIMASE_GTA_ACTIVE`): JSON `{kind: {name hash (decimal): path}}` for the kinds ymap, ytyp, ydr, ydd,
-//! yft, ytd, ybn, paths as in the census listing. That reader follows its own rules where they differ from the
+//! yft, ytd, ybn, paths as in the census listing. That reader applies the multiplayer packs' map changes, so the
+//! comparison is with GTA Online's map ([`MapState::Online`]). It follows its own rules where they differ from the
 //! game's mount data (`archive_set`). Every difference is put in one of these named classes and counted; anything
 //! else fails the gate:
-//! - `skipped pack`: our copy is in `patchday27ng`, a pack that reader leaves out on purpose;
+//! - `skipped pack`: our copy is in `patchday27ng`, a pack that reader leaves out on purpose (its source calls this
+//!   a hack against the map breaking: run pack by pack, that pack's story overlays and the multiplayer maps would
+//!   both be live);
 //! - `title-update patch`: our copy comes from `update.rpf\dlc_patch\`, which that reader applies to map data only;
 //! - `not mounted`: that reader's copy is in an archive the game does not mount (on-demand packs, archives no change
 //!   set enables), as it looks names up over every archive;
@@ -15,6 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::gate::real_data;
+use primase_gta::archive_set::MapState;
 use primase_gta::{ArchiveSet, Install, Keys};
 
 #[test]
@@ -27,7 +31,12 @@ fn live_files_against_the_oracle() {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");
-    let set = ArchiveSet::build(Install::open(&dir, &keys).expect("install"), &keys).expect("archive set");
+    let set = ArchiveSet::build(
+        Install::open(&dir, &keys).expect("install"),
+        &keys,
+        MapState::Online,
+    )
+    .expect("archive set");
     println!(
         "{} packs, {} map archives, {} mounted archives ({} overlays)",
         set.packs.len(),

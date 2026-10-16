@@ -13,7 +13,7 @@ pub mod resource;
 pub mod rpf;
 mod xml;
 
-pub use archive_set::{ArchiveSet, FileRef, Install};
+pub use archive_set::{ArchiveSet, FileRef, Install, MapState};
 pub use keys::Keys;
 pub use resource::{PageFlags, Resource};
 pub use rpf::{Archive, Encryption, Entry, EntryKind};

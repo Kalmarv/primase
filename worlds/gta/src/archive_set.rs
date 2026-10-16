@@ -2,12 +2,17 @@
 //!
 //! The rules follow the game's mount data (`mount`): the base images (`x64*.rpf`, `common.rpf`) and the title
 //! update (`update\update.rpf`) first; then the packs of the pack list in setup order (`order`, then `minorOrder`,
-//! then list position). A pack mounts its enabled `RPF_FILE` data files and runs every change set of its change-set
-//! groups except `GROUP_ON_DEMAND` (loaded by scripts, not by the world): change sets enable and disable data files
-//! and, per map, invalidate archives (which also unmounts the archives overlaying them) and enable others. Change
-//! sets conditioned on another level than gta5's (`$level=`, see [`LEVEL`]) and items for other platforms are
-//! skipped. Title-update mounts (`update:/dlc_patch/<pack>/`) replace a pack's files; subpacks (`dlc1.rpf`, ...)
-//! hold what the pack's own archive does not.
+//! then list position). A pack mounts its enabled `RPF_FILE` data files and runs the change sets of its startup
+//! groups (all but `GROUP_ON_DEMAND`, loaded by scripts, and `GROUP_MAP`): change sets enable and disable data
+//! files and, per map, invalidate archives (which also unmounts the archives overlaying them) and enable others.
+//! For GTA Online's map ([`MapState::Online`]) every pack's `GROUP_MAP` change sets then run in pack order, on top of
+//! the started world, as the game runs them on entering Online; the story-mode map ([`MapState::Story`]) leaves them
+//! out. Run pack by pack instead, the multiplayer packs' map changes (mpheist: invalidate story's
+//! `downtown_01_metadata.rpf`, enable `hei_` maps) would come before the later story patches (patchday27ng's overlay
+//! of the same archive) and both maps would be live at once. Change sets conditioned on another level than gta5's
+//! (`$level=`, see [`LEVEL`]) and items for other platforms are skipped. Title-update mounts
+//! (`update:/dlc_patch/<pack>/`) replace a pack's files; subpacks (`dlc1.rpf`, ...) hold what the pack's own archive
+//! does not.
 //!
 //! Map data (ymap, ybn, ynv) is looked up in the map archives (the base images' archives and the archives packs
 //! mount, keyed by their mounted path, later replacing earlier); everything else in every mounted archive. Archives
@@ -219,8 +224,117 @@ const MAP_KINDS: [&str; 3] = ["ymap", "ybn", "ynv"];
 /// another level are skipped.
 pub const LEVEL: &str = "MO_JIM_L11";
 
+/// Which map the world is: story mode's, or GTA Online's (story mode's plus the packs' `GROUP_MAP` change sets,
+/// which the game runs on entering Online, after every pack's startup groups; every such change set that changes
+/// anything belongs to a multiplayer pack).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapState {
+    Story,
+    Online,
+}
+
+/// The archive of a pack's mounted path: its title-update patch folder, its own archive, then its subpacks.
+fn physical(install: &Install, pack: &Pack, patch: Option<&str>, path: &str) -> Option<usize> {
+    let device = pack.setup.device_name.to_lowercase();
+    let rel = path.strip_prefix(&format!("{device}:/"))?.replace('/', "\\");
+    patch
+        .into_iter()
+        .chain(std::iter::once(pack.archive.as_str()))
+        .chain(pack.subpacks.iter().map(String::as_str))
+        .find_map(|r| install.archive(&format!("{r}\\{rel}")))
+}
+
+/// The mount state while packs are applied.
+struct Mounts {
+    /// Map archives by mounted path, in mount order.
+    map: IndexMap<String, usize>,
+    /// Every mount, in order (an archive may appear more than once).
+    mounted: Vec<usize>,
+    /// Base path -> the mounted paths overlaying it (removed with it when it is invalidated).
+    overlays: BTreeMap<String, Vec<String>>,
+    /// Whether each archive was last mounted as an overlay.
+    overlay: BTreeMap<usize, bool>,
+}
+
+impl Mounts {
+    fn mount(&mut self, name: &str, archive: Option<usize>, overlay: bool) {
+        let Some(i) = archive else { return };
+        self.map.shift_remove(name);
+        self.map.insert(name.to_string(), i);
+        self.mounted.push(i);
+        self.overlay.insert(i, overlay);
+        let o = overlaid(name);
+        if o != name {
+            self.overlays.entry(o).or_default().push(name.to_string());
+        }
+    }
+
+    /// Runs a pack's change sets of the groups `groups` accepts, in group order.
+    fn run_groups(
+        &mut self,
+        install: &Install,
+        pack: &Pack,
+        patch: Option<&str>,
+        groups: impl Fn(&str) -> bool,
+    ) {
+        let data_file = |name: &str| {
+            pack.content
+                .data_files
+                .iter()
+                .find(|d| platform_path(&d.filename) == name)
+        };
+        for (group, sets) in &pack.setup.groups {
+            if !groups(group) {
+                continue;
+            }
+            // a name may be defined more than once, each copy for its own level: run the ones for this level
+            let named = sets.iter().flat_map(|name| {
+                pack.content
+                    .change_sets
+                    .iter()
+                    .filter(move |c| c.name.eq_ignore_ascii_case(name))
+            });
+            for cs in named {
+                if cs
+                    .level
+                    .as_deref()
+                    .is_some_and(|l| !l.eq_ignore_ascii_case(LEVEL))
+                {
+                    continue;
+                }
+                for f in &cs.files_to_enable {
+                    let f = platform_path(f);
+                    if let Some(d) = data_file(&f).filter(|d| d.file_type == "RPF_FILE") {
+                        self.mount(&f, physical(install, pack, patch, &f), d.overlay);
+                    }
+                }
+                for f in &cs.files_to_disable {
+                    self.map.shift_remove(&platform_path(f));
+                }
+                for mc in &cs.map_changes {
+                    for f in &mc.files_to_invalidate {
+                        let f = platform_path(f);
+                        if !f.ends_with(".rpf") {
+                            continue;
+                        }
+                        for o in self.overlays.remove(&f).unwrap_or_default() {
+                            self.map.shift_remove(&o);
+                        }
+                        self.map.shift_remove(&f);
+                    }
+                    for f in &mc.files_to_enable {
+                        let f = platform_path(f);
+                        let overlay = data_file(&f).is_some_and(|d| d.overlay);
+                        self.mount(&f, physical(install, pack, patch, &f), overlay);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl ArchiveSet {
-    pub fn build(install: Install, keys: &Keys) -> Result<Self> {
+    pub fn build(install: Install, keys: &Keys, state: MapState) -> Result<Self> {
         let read = |path: &str| -> Result<Vec<u8>> {
             install
                 .read(path, keys)?
@@ -348,120 +462,49 @@ impl ArchiveSet {
         packs.sort_by_key(|(o, m, p, _)| (*o, *m, *p));
         let packs: Vec<Pack> = packs.into_iter().map(|(_, _, _, p)| p).collect();
 
-        let mut overlays: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        // whether each archive was last mounted as an overlay
-        let mut overlay: BTreeMap<usize, bool> = BTreeMap::new();
+        let mut m = Mounts {
+            map,
+            mounted,
+            overlays: BTreeMap::new(),
+            overlay: BTreeMap::new(),
+        };
+        // startup: each pack mounts its archives and enabled data files and runs its startup change-set groups
         for pack in &packs {
-            if let Some(i) = install.archive(&pack.archive) {
-                mounted.push(i);
-            }
-            for s in &pack.subpacks {
-                if let Some(i) = install.archive(s) {
-                    mounted.push(i);
+            for a in std::iter::once(&pack.archive).chain(&pack.subpacks) {
+                if let Some(i) = install.archive(a) {
+                    m.mounted.push(i);
                 }
             }
-            let device = pack.setup.device_name.to_lowercase();
             let patch = patch_for(&pack.setup.device_name);
-            // a mounted path of this pack -> the archive: its title-update patch, its own archive, then its subpacks
-            let physical = |path: &str| -> Option<usize> {
-                let rest = path.strip_prefix(&format!("{device}:/"))?;
-                let rel = rest.replace('/', "\\");
-                let mut roots = Vec::new();
-                if let Some(p) = &patch {
-                    roots.push(p.clone());
-                }
-                roots.push(pack.archive.clone());
-                roots.extend(pack.subpacks.iter().cloned());
-                roots.iter().find_map(|r| install.archive(&format!("{r}\\{rel}")))
-            };
-            let data_file = |name: &str| {
-                pack.content
-                    .data_files
-                    .iter()
-                    .find(|d| platform_path(&d.filename) == name)
-            };
-            let mount_file = |map: &mut IndexMap<String, usize>,
-                              mounted: &mut Vec<usize>,
-                              overlays: &mut BTreeMap<String, Vec<String>>,
-                              overlay: &mut BTreeMap<usize, bool>,
-                              name: &str| {
-                if let Some(i) = physical(name) {
-                    map.shift_remove(name);
-                    map.insert(name.to_string(), i);
-                    mounted.push(i);
-                    overlay.insert(i, data_file(name).is_some_and(|d| d.overlay));
-                    let o = overlaid(name);
-                    if o != name {
-                        overlays.entry(o).or_default().push(name.to_string());
-                    }
-                }
-            };
             for d in &pack.content.data_files {
                 if d.file_type == "RPF_FILE" && !d.disabled {
-                    mount_file(
-                        &mut map,
-                        &mut mounted,
-                        &mut overlays,
-                        &mut overlay,
-                        &platform_path(&d.filename),
+                    let name = platform_path(&d.filename);
+                    m.mount(
+                        &name,
+                        physical(&install, pack, patch.as_deref(), &name),
+                        d.overlay,
                     );
                 }
             }
-            for (group, sets) in &pack.setup.groups {
-                if group.eq_ignore_ascii_case("GROUP_ON_DEMAND") {
-                    continue;
-                }
-                // a name may be defined more than once, each copy for its own level: run the ones for this level
-                let named: Vec<&mount::ChangeSet> = sets
-                    .iter()
-                    .flat_map(|name| {
-                        pack.content
-                            .change_sets
-                            .iter()
-                            .filter(move |c| c.name.eq_ignore_ascii_case(name))
-                    })
-                    .collect();
-                for cs in named {
-                    if cs
-                        .level
-                        .as_deref()
-                        .is_some_and(|l| !l.eq_ignore_ascii_case(LEVEL))
-                    {
-                        continue;
-                    }
-                    for f in &cs.files_to_enable {
-                        let f = platform_path(f);
-                        if data_file(&f).is_some_and(|d| d.file_type == "RPF_FILE") {
-                            mount_file(&mut map, &mut mounted, &mut overlays, &mut overlay, &f);
-                        }
-                    }
-                    for f in &cs.files_to_disable {
-                        map.shift_remove(&platform_path(f));
-                    }
-                    for mc in &cs.map_changes {
-                        for f in &mc.files_to_invalidate {
-                            let f = platform_path(f);
-                            if !f.ends_with(".rpf") {
-                                continue;
-                            }
-                            for o in overlays.remove(&f).unwrap_or_default() {
-                                map.shift_remove(&o);
-                            }
-                            map.shift_remove(&f);
-                        }
-                        for f in &mc.files_to_enable {
-                            mount_file(
-                                &mut map,
-                                &mut mounted,
-                                &mut overlays,
-                                &mut overlay,
-                                &platform_path(f),
-                            );
-                        }
-                    }
-                }
+            m.run_groups(&install, pack, patch.as_deref(), |g| {
+                !g.eq_ignore_ascii_case("GROUP_ON_DEMAND") && !g.eq_ignore_ascii_case("GROUP_MAP")
+            });
+        }
+        // GTA Online's map: the packs' map groups, on top of the started world
+        if state == MapState::Online {
+            for pack in &packs {
+                let patch = patch_for(&pack.setup.device_name);
+                m.run_groups(&install, pack, patch.as_deref(), |g| {
+                    g.eq_ignore_ascii_case("GROUP_MAP")
+                });
             }
         }
+        let Mounts {
+            map,
+            mounted,
+            overlay,
+            ..
+        } = m;
         // an archive mounted more than once counts at its last mount
         let mut last = BTreeMap::new();
         for (pos, &i) in mounted.iter().enumerate() {
