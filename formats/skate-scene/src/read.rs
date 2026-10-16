@@ -985,7 +985,8 @@ impl Reader<'_> {
                 Some((mut sref, paths)) => {
                     let soup = read_soups(&mut sref.table, &paths, n_surfaces)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
-                    crate::collision::insert_soup(self.w, p, soup, &self.surface_names);
+                    crate::collision::insert_soup(self.w, p, soup, &self.surface_names)
+                        .map_err(|e| bad(format!("{what} collision: {e}")))?;
                     Some(sref)
                 }
                 None => None,
@@ -1212,7 +1213,8 @@ impl Reader<'_> {
             let (mut sref, paths) = self.soup_ref(e, &what, true)?;
             let soup = read_soups(&mut sref.table, &paths, n_surfaces)?;
             let ent = self.w.spawn();
-            crate::collision::insert_soup(self.w, ent, soup, &self.surface_names);
+            crate::collision::insert_soup(self.w, ent, soup, &self.surface_names)
+                .map_err(|e| bad(format!("{what}: {e}")))?;
             self.w.insert(ent, SkateCollision(sref));
         }
         Ok(())

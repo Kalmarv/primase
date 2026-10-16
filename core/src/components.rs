@@ -514,18 +514,25 @@ pub struct Surface {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize)]
 pub struct Surfaces(pub Vec<Surface>);
 
+/// A surface index cannot be represented by collision's u16 surface IDs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("surface index {index} exceeds u16")]
+pub struct SurfaceIndexError {
+    pub index: usize,
+}
+
 impl Surfaces {
     /// The index of the surface named `name`, added when new.
-    pub fn index(&mut self, name: &str) -> u16 {
-        match self.0.iter().position(|s| s.name == name) {
-            Some(i) => i as u16,
-            None => {
-                self.0.push(Surface {
-                    name: name.to_owned(),
-                });
-                (self.0.len() - 1) as u16
-            }
+    /// An unrepresentable index is an error and leaves the table unchanged.
+    pub fn index(&mut self, name: &str) -> Result<u16, SurfaceIndexError> {
+        let index = self.0.iter().position(|s| s.name == name).unwrap_or(self.0.len());
+        let id = u16::try_from(index).map_err(|_| SurfaceIndexError { index })?;
+        if index == self.0.len() {
+            self.0.push(Surface {
+                name: name.to_owned(),
+            });
         }
+        Ok(id)
     }
 }
 
@@ -620,6 +627,26 @@ mod tests {
 
     fn t(cols: [[f32; 3]; 4]) -> Transform {
         Transform { cols }
+    }
+
+    #[test]
+    fn surface_indices_check_the_u16_boundary_without_mutating_on_error() {
+        let mut surfaces = Surfaces((0..u16::MAX).map(|i| Surface { name: i.to_string() }).collect());
+        assert_eq!(surfaces.index("last"), Ok(u16::MAX));
+        assert_eq!(surfaces.index("0"), Ok(0));
+        assert_eq!(surfaces.index("last"), Ok(u16::MAX));
+        let before = surfaces.clone();
+        assert_eq!(
+            surfaces.index("overflow"),
+            Err(SurfaceIndexError { index: 65536 })
+        );
+        assert_eq!(surfaces, before);
+        // The public vector can also contain an existing out-of-range entry.
+        surfaces.0.push(Surface {
+            name: "outside".into(),
+        });
+        assert_eq!(surfaces.index("outside"), Err(SurfaceIndexError { index: 65536 }));
+        assert_eq!(surfaces.index("0"), Ok(0));
     }
 
     #[test]
@@ -774,8 +801,8 @@ mod tests {
     fn collision_soups_and_their_surfaces() {
         let mut w = crate::World::new();
         let mut surfaces = Surfaces::default();
-        let (snow, ice) = (surfaces.index("Snow"), surfaces.index("Ice"));
-        assert_eq!((snow, ice, surfaces.index("Snow")), (0, 1, 0));
+        let (snow, ice) = (surfaces.index("Snow").unwrap(), surfaces.index("Ice").unwrap());
+        assert_eq!((snow, ice, surfaces.index("Snow").unwrap()), (0, 1, 0));
         w.insert_resource(surfaces);
         let mut c = Collision::default();
         let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]];

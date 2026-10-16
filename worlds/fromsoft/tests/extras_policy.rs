@@ -112,7 +112,7 @@ fn ledges_chain_closed_and_open_segments_and_use_only_supplied_map_surfaces() {
     use primase_core::{Collision, Surfaces};
     use primase_fromsoft::sekiro::ledges::{GameSurfaceIndex, chain};
     let mut surfaces = Surfaces::default();
-    let wood = surfaces.index("wood");
+    let wood = surfaces.index("wood").unwrap();
     let map = Collision {
         positions: vec![[-5., 0., -5.], [5., 0., -5.], [0., 0., 5.]],
         triangles: vec![[0, 1, 2]],

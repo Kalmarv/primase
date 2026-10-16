@@ -1159,7 +1159,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_self"));
     let before = w.iter::<scene::SkateCollision>().count();
-    let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt");
+    let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt").unwrap();
     let e = w.spawn();
     let mut c = Collision::default();
     c.extend(
@@ -1188,7 +1188,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     );
     assert_eq!(t.surfaces, [2], "asphalt is the scene's surface 2");
     // a surface the scene has no entry for is refused
-    let lava = w.resource_mut::<Surfaces>().unwrap().index("lava");
+    let lava = w.resource_mut::<Surfaces>().unwrap().index("lava").unwrap();
     w.get_mut::<Collision>(e).unwrap().surfaces[0] = lava;
     let err = scene::write(&w, &tmp("collision_self_bad"))
         .unwrap_err()
@@ -1201,7 +1201,7 @@ fn mirrored_collision_keeps_its_fronts() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_mirror"));
     let before = w.iter::<scene::SkateCollision>().count();
-    let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete");
+    let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
     // a triangle facing up (+y), placed through a mirror in x
     let e = w.spawn();
     let mut c = Collision::default();

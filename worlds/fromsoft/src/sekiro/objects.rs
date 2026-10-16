@@ -163,7 +163,13 @@ pub fn assemble(
                     report.excluded_material_triangles += 1;
                     continue;
                 };
-                super::collision::push(soup, v, surfaces.index(surface))?;
+                super::collision::push(
+                    soup,
+                    v,
+                    surfaces
+                        .index(surface)
+                        .map_err(|e| invalid("collision surface", 0, e))?,
+                )?;
                 report.written_triangles += 1;
             }
             report.batches.push(Batch {

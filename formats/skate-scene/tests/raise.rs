@@ -110,7 +110,7 @@ fn world() -> World {
     w.insert(at, t);
     // collision made of a game's surface
     let mut surfaces = Surfaces::default();
-    let snow = surfaces.index("Snow");
+    let snow = surfaces.index("Snow").unwrap();
     w.insert_resource(surfaces);
     let ground = w.spawn();
     let mut c = Collision::default();

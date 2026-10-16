@@ -215,10 +215,22 @@ pub fn assemble(
                 continue;
             }
             if material >= 0 && [22, 36].contains(&(material % 100)) {
-                push(water, vertices, surfaces.index("default"))?;
+                push(
+                    water,
+                    vertices,
+                    surfaces
+                        .index("default")
+                        .map_err(|e| invalid("collision surface", 0, e))?,
+                )?;
                 report.water_triangles += 1;
             } else if let Some(surface) = surface(material) {
-                push(solid, vertices, surfaces.index(surface))?;
+                push(
+                    solid,
+                    vertices,
+                    surfaces
+                        .index(surface)
+                        .map_err(|e| invalid("collision surface", 0, e))?,
+                )?;
                 report.solid_triangles += 1;
             } else {
                 report.excluded_material_triangles += 1;

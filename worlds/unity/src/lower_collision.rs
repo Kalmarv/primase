@@ -187,7 +187,7 @@ fn soup(c: &UnityCollider, t: &Transform, log: &mut PassLog) -> Result<Option<So
 /// Lower every collider and terrain collider (see the module documentation).
 pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
     let mut log = PassLog::default();
-    let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
+    let mut surfaces = w.resource::<Surfaces>().cloned().unwrap_or_default();
     let colliders: Vec<(Entity, UnityCollider)> = w
         .iter::<UnityCollider>()
         .filter(|(_, c)| c.collides())
@@ -200,7 +200,9 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
         let Some((positions, tris)) = soup(&c, &t, &mut log)? else {
             continue;
         };
-        let surface = surfaces.index(c.physic_material.as_ref().map_or("default", |p| p.name.as_str()));
+        let surface = surfaces
+            .index(c.physic_material.as_ref().map_or("default", |p| p.name.as_str()))
+            .map_err(|e| invalid(e.to_string()))?;
         let mut col = Collision::default();
         col.extend(&positions, &tris, surface, |p| p);
         log.count("collision triangles", tris.len() as u64);
@@ -222,7 +224,9 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
         let prim = terrain_primitive(&t, None);
         let positions = prim.positions().unwrap_or(&[]).to_vec();
         let tris: Vec<[u32; 3]> = triangles(prim.indices.as_deref().unwrap_or(&[]));
-        let surface = surfaces.index(c.physic_material.as_deref().unwrap_or("default"));
+        let surface = surfaces
+            .index(c.physic_material.as_deref().unwrap_or("default"))
+            .map_err(|e| invalid(e.to_string()))?;
         let mut col = Collision::default();
         col.extend(&positions, &tris, surface, |p| p);
         log.count("terrain colliders", 1);

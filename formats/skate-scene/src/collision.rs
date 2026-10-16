@@ -45,9 +45,17 @@ pub fn scene_surfaces(surfaces: Option<&[String]>) -> Vec<String> {
 
 /// Put a v1 soup on entity `e` as `core.collision` (and [`SkateRock`] when any triangle is rock), its surface bytes
 /// named by `names`, the scene's surfaces. The bytes were checked against `names` when the table was read.
-pub fn insert_soup(w: &mut World, e: Entity, soup: SkateSoup, names: &[String]) {
-    let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
-    let by_scene: Vec<u16> = names.iter().map(|n| surfaces.index(n)).collect();
+pub fn insert_soup(
+    w: &mut World,
+    e: Entity,
+    soup: SkateSoup,
+    names: &[String],
+) -> Result<(), primase_core::SurfaceIndexError> {
+    let mut surfaces = w.resource::<Surfaces>().cloned().unwrap_or_default();
+    let by_scene: Vec<u16> = names
+        .iter()
+        .map(|n| surfaces.index(n))
+        .collect::<Result<_, _>>()?;
     w.insert_resource(surfaces);
     let rock: Vec<bool> = soup.surfaces.iter().map(|&b| b & 0x80 != 0).collect();
     if rock.iter().any(|&r| r) {
@@ -65,6 +73,7 @@ pub fn insert_soup(w: &mut World, e: Entity, soup: SkateSoup, names: &[String]) 
             triangles: soup.triangles,
         },
     );
+    Ok(())
 }
 
 /// Entity `e`'s collision as v1 writes it: its `core.collision` with surface bytes for the scene's surfaces (each

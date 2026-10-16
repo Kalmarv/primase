@@ -594,7 +594,7 @@ fn world_collision_is_placed_and_named() {
     use primase_core::{Collision, Surfaces};
     let mut w = World::new();
     let mut surfaces = Surfaces::default();
-    let (snow, ice) = (surfaces.index("Snow"), surfaces.index("Ice"));
+    let (snow, ice) = (surfaces.index("Snow").unwrap(), surfaces.index("Ice").unwrap());
     w.insert_resource(surfaces);
     let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]];
     // a prototype's collision, placed twice
@@ -698,9 +698,9 @@ fn mirrored_collision_keeps_its_fronts_and_wide_surfaces() {
     let mut w = World::new();
     let mut surfaces = Surfaces::default();
     for i in 0..300 {
-        surfaces.index(&format!("s{i}"));
+        surfaces.index(&format!("s{i}")).unwrap();
     }
-    let wide = surfaces.index("s299");
+    let wide = surfaces.index("s299").unwrap();
     w.insert_resource(surfaces);
     // a triangle facing up (+y, counter-clockwise from above)
     let p = w.spawn();
