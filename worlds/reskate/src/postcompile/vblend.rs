@@ -13,8 +13,11 @@
 //! Both rows draw the stock declaration `[Pos:Half4, Color0:UByte4N, TexCoord0:Half2, SubMaterial:UByte4,
 //! TangentSpace:UByte4N]`, one stream each. Studio's `[Pos:Float3, TexCoord0:Half2, TangentSpace:UByte4N]` sections
 //! of a retargeted key are rewritten into it: positions to half floats (w = 1), texture coordinates and tangent
-//! frames copied byte for byte, `Color0` and the sub-material index from the caller. Everything else of the MeshSet is
-//! kept; vertex offsets, the stride byte, the declarations and the LOD's vertex-buffer size follow the new layout.
+//! frames copied byte for byte, `Color0` and the sub-material index from the caller. A `vertex_blend` material's
+//! sections have `TexCoord0:Half4` instead, the per-vertex weight in `z` (Studio 20261012 and later; see
+//! [`crate::postcompile::vbrecord`]): the weight is handed to the caller ([`SectionInput::blend`]) and `x, y` are
+//! written as the stock `Half2`. Everything else of the MeshSet is kept; vertex offsets, the stride byte, the
+//! declarations and the LOD's vertex-buffer size follow the new layout.
 //! Material keys are kept, so Studio's per-key section fields stay consistent. A retargeted key's program row and
 //! streamable-texture-set row become the donor's (the texture-set value is a function of the program row in the
 //! stock table: 2016 rows, no exception).
@@ -57,8 +60,9 @@ pub fn decal_opacity(w: f32) -> [u8; 4] {
     [r, 0, 0, 255]
 }
 
-/// The stored layout Studio writes for the surfaces a retarget takes, and the stock layout it writes.
-fn studio_layout() -> [Element; 3] {
+/// The stored layout Studio writes for the surfaces a retarget takes (`TexCoord0` as `uv`: [`format::HALF2`], or
+/// [`format::HALF4`] for a `vertex_blend` material), and the stock layout it writes.
+pub(crate) fn studio_layout(uv: u8) -> [Element; 3] {
     [
         Element {
             usage: usage::POSITION,
@@ -68,7 +72,7 @@ fn studio_layout() -> [Element; 3] {
         },
         Element {
             usage: usage::TEXCOORD0,
-            format: format::HALF2,
+            format: uv,
             offset: 0,
             stream: 1,
         },
@@ -240,6 +244,8 @@ pub struct SectionInput<'a> {
     pub key: u64,
     pub positions: &'a [[f32; 3]],
     pub uv0: &'a [[f32; 2]],
+    /// Studio's per-vertex weight (`TexCoord0.z`) of a `vertex_blend` section; `None` for a plain surface.
+    pub blend: Option<&'a [f32]>,
 }
 
 /// Per-vertex values for a section: `Color0` and the sub-material index (usage 51).
@@ -413,11 +419,108 @@ fn signature(block: &[u8]) -> Result<Vec<(u64, u32, u16)>> {
     Ok(s)
 }
 
-struct Bundle {
-    files: Vec<FileRef>,
-    manifest: Manifest,
+/// A bundle the Patch places (its manifest in the Patch's own archives), as read.
+pub(crate) struct Bundle {
+    pub(crate) files: Vec<FileRef>,
+    pub(crate) manifest: Manifest,
     framed_manifest: bool,
     changed: bool,
+}
+
+/// Every TOC of the Patch with its bundles, `Some` for each bundle the Patch places.
+pub(crate) type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
+
+pub(crate) fn patch_bundles(src: &Source) -> Result<PatchBundles> {
+    let mut tocs = Vec::new();
+    for rel in &src.folder.tocs {
+        let t = toc::read(&read_file(&src.folder.toc_path(rel))?)?;
+        let mut bundles = Vec::with_capacity(t.bundles.len());
+        for (_, region) in &t.bundles {
+            let (files, inline) = bundle::read_region(region)?;
+            let entry = match src.manifest(&files, &inline)? {
+                Some((manifest, 1, _)) if files[0].0.patch => {
+                    let framed_manifest = !bundle::is_manifest(&src.raw(files[0])?);
+                    Some(Bundle {
+                        files,
+                        manifest,
+                        framed_manifest,
+                        changed: false,
+                    })
+                }
+                _ => None,
+            };
+            bundles.push(entry);
+        }
+        tocs.push((rel.clone(), t, bundles));
+    }
+    Ok(tocs)
+}
+
+/// LOD `li`'s geometry chunk of MeshSet `name` in bundle `b`: (its index in the manifest's chunks, its payload),
+/// checked to hold the LOD's vertex and index buffers.
+pub(crate) fn lod_geometry(
+    src: &Source,
+    b: &Bundle,
+    name: &str,
+    li: usize,
+    lod: &meshset::Lod,
+) -> Result<(usize, Vec<u8>)> {
+    let ci = b
+        .manifest
+        .chunks
+        .iter()
+        .position(|c| c.guid == lod.chunk)
+        .ok_or_else(|| bad(W, lod.at, format!("{name}: LOD {li} chunk is not in its bundle")))?;
+    let geo = src.payload(
+        b.files[b.manifest.chunk_file(ci)],
+        b.manifest.chunks[ci].lsize as usize,
+    )?;
+    let (vsize, isize) = (lod.vertex_bytes as usize, lod.index_bytes as usize);
+    if geo.len() < vsize + isize {
+        return Err(bad(
+            W,
+            lod.at,
+            format!("{name}: chunk of {} bytes for {vsize} + {isize}", geo.len()),
+        ));
+    }
+    Ok((ci, geo))
+}
+
+/// A Studio surface section's vertices: positions, texture coordinates and, for a `vertex_blend` section
+/// (`TexCoord0:Half4`), the weight in `z`. `None` when the section has neither of Studio's surface layouts.
+pub(crate) type Surface = (Vec<[f32; 3]>, Vec<[f32; 2]>, Option<Vec<f32>>);
+
+pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
+    let blend = if sec.decl.elements == studio_layout(format::HALF2) {
+        false
+    } else if sec.decl.elements == studio_layout(format::HALF4) {
+        true
+    } else {
+        return None;
+    };
+    if sec.decl != sec.draw_decl {
+        return None;
+    }
+    let n = sec.vertices as usize;
+    let stream = |j: usize| {
+        let o = sec.stream_offset(j);
+        &geo[o..o + sec.decl.strides[j] as usize * n]
+    };
+    let h = |c: &[u8], k: usize| half::f16::from_le_bytes([c[k], c[k + 1]]).to_f32();
+    let positions = stream(0)
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .map(|c| {
+            let f = |k: usize| f32::from_le_bytes([c[k], c[k + 1], c[k + 2], c[k + 3]]);
+            [f(0), f(4), f(8)]
+        })
+        .collect();
+    let width = if blend { 8 } else { 4 };
+    let uv = stream(1).chunks_exact(width);
+    let uv0 = uv.clone().map(|c| [h(c, 0), h(c, 2)]).collect();
+    let weights = blend.then(|| uv.map(|c| h(c, 4)).collect());
+    Some((positions, uv0, weights))
 }
 
 /// Rewrites Patch `patch` into `out` (which must not exist) with every request applied. `values` gives each
@@ -453,28 +556,7 @@ pub fn apply(
     };
     let mut report = Report::default();
     // ---- every patch-placed bundle of every TOC
-    let mut tocs: Vec<(String, toc::Toc, Vec<Option<Bundle>>)> = Vec::new();
-    for rel in &folder.tocs {
-        let t = toc::read(&read_file(&folder.toc_path(rel))?)?;
-        let mut bundles = Vec::with_capacity(t.bundles.len());
-        for (_, region) in &t.bundles {
-            let (files, inline) = bundle::read_region(region)?;
-            let entry = match src.manifest(&files, &inline)? {
-                Some((manifest, 1, _)) if files[0].0.patch => {
-                    let framed_manifest = !bundle::is_manifest(&src.raw(files[0])?);
-                    Some(Bundle {
-                        files,
-                        manifest,
-                        framed_manifest,
-                        changed: false,
-                    })
-                }
-                _ => None,
-            };
-            bundles.push(entry);
-        }
-        tocs.push((rel.clone(), t, bundles));
-    }
+    let mut tocs = patch_bundles(&src)?;
     // ---- blocks of the requested keys and the two-set second-set carriers
     let mut blocks: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
     let mut need: BTreeSet<u64> = wanted.keys().copied().collect();
@@ -681,28 +763,9 @@ fn rewrite_meshset(
         return Ok(None);
     }
     for (li, lod) in ms.lods.iter().enumerate() {
-        let ci = b
-            .manifest
-            .chunks
-            .iter()
-            .position(|c| c.guid == lod.chunk)
-            .ok_or_else(|| {
-                bad(
-                    W,
-                    lod.at,
-                    format!("{}: LOD {li} chunk is not in its bundle", a.name),
-                )
-            })?;
+        let (ci, geo) = lod_geometry(src, b, &a.name, li, lod)?;
         let cf = b.files[b.manifest.chunk_file(ci)];
-        let geo = src.payload(cf, b.manifest.chunks[ci].lsize as usize)?;
-        let (vsize, isize) = (lod.vertex_bytes as usize, lod.index_bytes as usize);
-        if geo.len() < vsize + isize {
-            return Err(bad(
-                W,
-                lod.at,
-                format!("{}: chunk of {} bytes for {vsize} + {isize}", a.name, geo.len()),
-            ));
-        }
+        let vsize = lod.vertex_bytes as usize;
         let mut order: Vec<usize> = (0..lod.sections.len()).collect();
         order.sort_by_key(|&s| lod.sections[s].vertex_offset);
         let mut vb: Vec<u8> = Vec::with_capacity(vsize * 2);
@@ -724,36 +787,16 @@ fn rewrite_meshset(
                     }
                 }
                 Some(r) => {
-                    if sec.decl.elements != studio_layout() || sec.decl != sec.draw_decl {
+                    let Some((positions, uv0, blend)) = surface(sec, &geo) else {
                         return Err(bad(
                             W,
                             sec.at,
                             format!(
-                                "{}: section layout {:?} is not Studio's surface layout",
+                                "{}: section layout {:?} is not one of Studio's surface layouts",
                                 a.name, sec.decl.elements
                             ),
                         ));
-                    }
-                    let positions: Vec<[f32; 3]> = streams[0]
-                        .as_chunks::<12>()
-                        .0
-                        .iter()
-                        .map(|c| {
-                            let f = |k: usize| f32::from_le_bytes([c[k], c[k + 1], c[k + 2], c[k + 3]]);
-                            [f(0), f(4), f(8)]
-                        })
-                        .collect();
-                    let uv0: Vec<[f32; 2]> = streams[1]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|c| {
-                            [
-                                half::f16::from_le_bytes([c[0], c[1]]).to_f32(),
-                                half::f16::from_le_bytes([c[2], c[3]]).to_f32(),
-                            ]
-                        })
-                        .collect();
+                    };
                     let input = SectionInput {
                         mesh: &a.name,
                         lod: li,
@@ -761,6 +804,7 @@ fn rewrite_meshset(
                         key: sec.key,
                         positions: &positions,
                         uv0: &uv0,
+                        blend: blend.as_deref(),
                     };
                     let v = values(&input)?;
                     check_values(&r.target, n, &v)?;
@@ -775,7 +819,11 @@ fn rewrite_meshset(
                     for c in &v.color0 {
                         vb.extend(c);
                     }
-                    vb.extend_from_slice(streams[1]);
+                    // TexCoord0 as the stock Half2: a vertex-blend section's Half4 loses its weight (z) and w
+                    let width = if blend.is_some() { 8 } else { 4 };
+                    for c in streams[1].chunks_exact(width) {
+                        vb.extend_from_slice(&c[..4]);
+                    }
                     for u in &v.submaterial {
                         vb.extend(u);
                     }

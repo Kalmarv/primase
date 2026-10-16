@@ -162,6 +162,9 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_RESKATE_VBLEND_SPEC` | the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`) |
 | `PRIMASE_RESKATE_VBLEND_CHECK` | optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`) |
 | `PRIMASE_RESKATE_VBLEND_REF` | optional: the same Patch blended by a reference patcher whose output was checked in game, for the checker's comparison |
+| `PRIMASE_RESKATE_BLEND_MAP` | a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs` |
+| `PRIMASE_RESKATE_BLEND_PATCH` | ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012) |
+| `PRIMASE_RESKATE_BLEND_SPEC` | optional: an independent resolution of that record against that Patch, in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output |
 | `PRIMASE_UNITY_DATA` | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
 | `PRIMASE_UNITY_TPK` | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
 | `PRIMASE_UNITY_ORACLE` | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |
