@@ -37,6 +37,9 @@ impl Component for LayeredMaterial {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Material {
     pub mtd: String,
+    /// Original definition, including non-layered shader parameters. Absence is
+    /// explicit; runtime shader constants must not be guessed from slot names.
+    pub definition: Option<MaterialDefinition>,
     pub shader: String,
     pub class: String,
     pub skip: Option<String>,
@@ -55,6 +58,7 @@ pub struct Material {
 }
 impl Component for Material {
     const NAME: &'static str = "fromsoft.material";
+    const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -123,6 +127,7 @@ pub fn resolve(
     let aref = parameter("g_AlphaRef");
     let mut m = Material {
         mtd: leaf_stem(&source.mtd),
+        definition: definition.cloned(),
         shader: definition.map_or(String::new(), |d| leaf_stem(&d.shader)),
         class: "opaque".into(),
         skip: None,

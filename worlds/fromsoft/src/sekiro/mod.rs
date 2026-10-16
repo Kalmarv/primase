@@ -6,6 +6,7 @@ pub mod ledges;
 pub mod lights;
 pub mod normals;
 pub mod objects;
+pub mod pbr;
 pub mod states;
 mod textures;
 use crate::{
