@@ -114,6 +114,17 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
             }],
         },
     );
+    let mut subset = world.subset(&world.closure([mesh]));
+    let unrelated = world.spawn();
+    let mut other = world.get::<Mesh>(mesh).unwrap().clone();
+    other.primitives[0].material = None;
+    other.primitives[0]
+        .streams
+        .insert(Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3]));
+    world.insert(unrelated, other);
+    primase_skate_scene::LowerLayeredPbr
+        .run(&mut subset, &mut PassLog::default())
+        .unwrap();
     let mut log = PassLog::default();
     primase_skate_scene::LowerLayeredPbr
         .run(&mut world, &mut log)
@@ -130,6 +141,21 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
         part.streams[&Semantic::TexCoord(output.texcoord)],
         Stream::F32x2(vec![[1.5, 2.5]; 3])
     );
+    let subset_part = &subset.get::<Mesh>(mesh).unwrap().primitives[0];
+    let subset_texture = subset
+        .get::<PbrMaterial>(subset_part.material.unwrap())
+        .unwrap()
+        .base_color_texture
+        .unwrap();
+    assert_ne!(
+        output.texcoord, subset_texture.texcoord,
+        "free set depends on the world"
+    );
+    assert_eq!(output.transform, subset_texture.transform);
+    assert_eq!(
+        part.streams[&Semantic::TexCoord(output.texcoord)],
+        subset_part.streams[&Semantic::TexCoord(subset_texture.texcoord)]
+    );
     let before = world.entities().count();
     let mut again = PassLog::default();
     primase_skate_scene::LowerLayeredPbr
@@ -137,4 +163,57 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
         .unwrap();
     assert!(again.counts.is_empty());
     assert_eq!(world.entities().count(), before);
+}
+
+#[test]
+fn invalid_skate_metadata_refuses_all_changes() {
+    let mut world = World::new();
+    let layered = world.spawn();
+    world.insert(
+        layered,
+        LayeredMaterial {
+            layers: vec![None],
+            weights: LayerWeights {
+                attribute: Semantic::Color(1),
+                mapping: WeightMapping::Identity,
+            },
+        },
+    );
+    let mesh = world.spawn();
+    world.insert(
+        mesh,
+        Mesh {
+            primitives: vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([
+                    (Semantic::Position, Stream::F32x3(vec![[0.; 3]; 3])),
+                    (Semantic::Color(1), Stream::F32x4(vec![[1., 0., 0., 0.]; 3])),
+                ]),
+                indices: None,
+                material: Some(layered),
+            }],
+        },
+    );
+    world.insert(
+        mesh,
+        primase_skate_scene::SkatePrototype {
+            id: "invalid".into(),
+            glb: None,
+            key: None,
+            foliage: None,
+            ground: None,
+            parts: vec![],
+            collision: None,
+            other: Default::default(),
+        },
+    );
+    let before = format!("{world:?}");
+    let mut log = PassLog::default();
+    assert!(
+        primase_skate_scene::LowerLayeredPbr
+            .run(&mut world, &mut log)
+            .is_err()
+    );
+    assert_eq!(format!("{world:?}"), before);
+    assert!(log.counts.is_empty());
 }

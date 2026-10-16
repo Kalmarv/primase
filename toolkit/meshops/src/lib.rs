@@ -2,7 +2,11 @@
 mod distance;
 mod layered;
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};
-pub use layered::strongest_layer_parts;
+pub use layered::{SelectionPolicy, strongest_layer_parts};
+mod layered_plan;
+pub use layered_plan::{
+    LayeredMeshSource, LayeredPartSource, LayeredPbrPlan, lower_layered_pbr, plan_layered_pbr,
+};
 mod hull;
 mod primitive;
 mod texcoords;

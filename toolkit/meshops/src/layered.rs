@@ -1,11 +1,15 @@
-//! Strongest-layer approximation used by the scene-interchange skate writer.
-//! Sum corner weights per triangle, omitting (1-r) for rgb_product_4 selection.
-//! Ties choose the first slot. This is not per-pixel blending or contour cutting.
-//! Omitting darkening is a deliberate selection policy even when red differs
-//! across corners: it can choose a different slot from the full summed weights.
-//! A per-pixel renderer must still retain (1-r) in the actual blend.
+//! Triangle selection with a caller-chosen material weight policy.
 use crate::{Error, Result};
 use primase_core::{LayeredMaterial, Primitive, Semantic, Stream, Topology, WeightMapping};
+
+/// Which weights vote for the strongest triangle layer; neither policy normalizes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionPolicy {
+    /// Sum the exact core material equation at the triangle's corners.
+    CoreWeights,
+    /// Ignore (1-r) only while choosing an RgbProduct4 slot. This is a lossy target policy.
+    OmitRgbProduct4Darkening,
+}
 
 /// Split a triangle primitive into nonempty slots in slot order, preserving the
 /// source vertex order and all streams. A null slot still wins normally; the
@@ -13,7 +17,11 @@ use primase_core::{LayeredMaterial, Primitive, Semantic, Stream, Topology, Weigh
 /// Each selected slot keeps a full copy of the vertex streams (up to four
 /// copies); a consumer may compact afterward. If source normals are absent,
 /// normals use only the selected slot's faces, so boundaries can show seams.
-pub fn strongest_layer_parts(p: &Primitive, material: &LayeredMaterial) -> Result<Vec<(usize, Primitive)>> {
+pub fn strongest_layer_parts(
+    p: &Primitive,
+    material: &LayeredMaterial,
+    policy: SelectionPolicy,
+) -> Result<Vec<(usize, Primitive)>> {
     if p.topology != Topology::Triangles || !(1..=4).contains(&material.layers.len()) {
         return Err(Error("strongest layer requires triangles and 1-4 slots".into()));
     }
@@ -51,7 +59,9 @@ pub fn strongest_layer_parts(p: &Primitive, material: &LayeredMaterial) -> Resul
         let mut sums = [0f64; 4];
         for &i in tri {
             let mut v = values[i as usize];
-            if material.weights.mapping == WeightMapping::RgbProduct4 {
+            if policy == SelectionPolicy::OmitRgbProduct4Darkening
+                && material.weights.mapping == WeightMapping::RgbProduct4
+            {
                 v[0] = 0.;
             }
             for (sum, weight) in sums.iter_mut().zip(material.weights.mapping.evaluate(v)) {

@@ -28,9 +28,25 @@ fn varying_red_intentionally_changes_the_triangle_choice() {
         indices: None,
         material: None,
     };
+    assert_eq!(
+        primase_meshops::strongest_layer_parts(
+            &primitive,
+            &material,
+            primase_meshops::SelectionPolicy::CoreWeights
+        )
+        .unwrap()[0]
+            .0,
+        3
+    );
     // The two dark corners still vote for slot zero in this approximation.
     assert_eq!(
-        primase_meshops::strongest_layer_parts(&primitive, &material).unwrap()[0].0,
+        primase_meshops::strongest_layer_parts(
+            &primitive,
+            &material,
+            primase_meshops::SelectionPolicy::OmitRgbProduct4Darkening
+        )
+        .unwrap()[0]
+            .0,
         0
     );
 }
@@ -65,7 +81,12 @@ fn triangle_selection_omits_darkening_preserves_streams_and_counts_null_slots() 
             mapping: WeightMapping::RgbProduct4,
         },
     };
-    let out = primase_meshops::strongest_layer_parts(&p, &material).unwrap();
+    let out = primase_meshops::strongest_layer_parts(
+        &p,
+        &material,
+        primase_meshops::SelectionPolicy::OmitRgbProduct4Darkening,
+    )
+    .unwrap();
     assert_eq!(out.iter().map(|x| x.0).collect::<Vec<_>>(), [0, 3]);
     assert_eq!(out[0].1.indices.as_deref(), Some([0, 1, 2].as_slice()));
     assert_eq!(out[1].1.indices.as_deref(), Some([1, 2, 3].as_slice()));
@@ -76,7 +97,14 @@ fn triangle_selection_omits_darkening_preserves_streams_and_counts_null_slots() 
         assert!(part.streams.contains_key(&Semantic::Normal));
     }
     p.streams.remove(&Semantic::Color(1));
-    assert!(primase_meshops::strongest_layer_parts(&p, &material).is_err());
+    assert!(
+        primase_meshops::strongest_layer_parts(
+            &p,
+            &material,
+            primase_meshops::SelectionPolicy::OmitRgbProduct4Darkening
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -98,13 +126,25 @@ fn identity_vec3_has_alpha_one_and_ties_choose_first() {
         },
     };
     assert_eq!(
-        primase_meshops::strongest_layer_parts(&p, &material).unwrap()[0].0,
+        primase_meshops::strongest_layer_parts(
+            &p,
+            &material,
+            primase_meshops::SelectionPolicy::OmitRgbProduct4Darkening
+        )
+        .unwrap()[0]
+            .0,
         3
     );
     p.streams
         .insert(Semantic::Color(1), Stream::U8x4(vec![[255; 4]; 3]));
     assert_eq!(
-        primase_meshops::strongest_layer_parts(&p, &material).unwrap()[0].0,
+        primase_meshops::strongest_layer_parts(
+            &p,
+            &material,
+            primase_meshops::SelectionPolicy::OmitRgbProduct4Darkening
+        )
+        .unwrap()[0]
+            .0,
         0
     );
 }
