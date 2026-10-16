@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::postcompile::{Rd, Result, bad};
+use crate::postcompile::{Rd, Result, bad, capacity};
 
 pub const PROGRAM_LOOKUP: u32 = 0xE2E6_955B;
 pub const TEXTURE_LOOKUP: u32 = 0x2D25_4A89;
@@ -31,7 +31,7 @@ pub fn read_programs(d: &[u8], meta: &[u8; 16]) -> Result<ProgramLookup> {
     let mut out = ProgramLookup {
         head: d[..start].to_vec(),
         rows: BTreeMap::new(),
-        order: Vec::with_capacity(count),
+        order: Vec::with_capacity(capacity("program lookup", count, 12, d.len() - start - 4)?),
     };
     for _ in 0..count {
         let (key, n) = (r.u64le(pos)?, r.u32le(pos + 8)? as usize);

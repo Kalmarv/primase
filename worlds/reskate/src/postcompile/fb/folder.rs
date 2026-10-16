@@ -148,6 +148,13 @@ impl Folder {
             .archive(loc)
             .ok_or_else(|| Error::Missing(format!("{}: no archive for {loc:?}", self.root.display())))?;
         let mut f = fs::File::open(path).map_err(io(path))?;
+        let len = f.metadata().map_err(io(path))?.len();
+        if u64::from(off) + u64::from(size) > len {
+            return Err(Error::Missing(format!(
+                "{}: {size} bytes at {off} lie past the end ({len} bytes)",
+                path.display()
+            )));
+        }
         f.seek(SeekFrom::Start(u64::from(off))).map_err(io(path))?;
         let mut buf = vec![0; size as usize];
         f.read_exact(&mut buf).map_err(io(path))?;

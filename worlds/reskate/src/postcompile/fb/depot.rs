@@ -4,7 +4,7 @@
 //! 16-aligned descriptors (u64 data offset, u64 block hash, u64 size); 16-aligned end; then the relocation list
 //! (u32 offsets, zero-terminated). The 16-byte resource metadata holds (size, relocation size, version, count).
 
-use crate::postcompile::{Rd, Result, bad};
+use crate::postcompile::{Rd, Result, bad, capacity};
 
 const W: &str = "shader block depot";
 pub const RTYPE: u32 = 0x7331_2045;
@@ -43,7 +43,7 @@ pub fn read(d: &[u8], meta: &[u8; 16]) -> Result<Depot> {
     let mut dep = Depot {
         head: r.u64le(0)?,
         version,
-        entries: Vec::with_capacity(count),
+        entries: Vec::with_capacity(capacity(W, count, 16, d.len().saturating_sub(0x10))?),
         blocks: Vec::new(),
     };
     let mut by_desc = std::collections::BTreeMap::new();
@@ -165,7 +165,7 @@ pub fn params(block: &[u8]) -> Result<Vec<Param>> {
     let r = Rd::new(block, "shader block");
     let n = r.u32le(0)? as usize;
     let mut pos = 4;
-    let mut out = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(capacity("shader block", n, 20, block.len().saturating_sub(4))?);
     for i in 0..n {
         let (name, ty, count, extra) = (
             r.u64le(pos)?,

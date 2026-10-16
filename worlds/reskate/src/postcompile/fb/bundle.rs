@@ -2,7 +2,7 @@
 //! first file: names, SHA-1s and sizes of the bundle's EBX, resources and chunks, plus the chunk metadata DB).
 
 use crate::postcompile::fb::toc::Loc;
-use crate::postcompile::{Rd, Result, bad, latin1};
+use crate::postcompile::{Rd, Result, bad, capacity, latin1};
 
 const R: &str = "bundle region";
 const M: &str = "bundle manifest";
@@ -34,7 +34,8 @@ pub fn read_region(r: &[u8]) -> Result<(Vec<FileRef>, Vec<u8>)> {
     } else {
         Vec::new()
     };
-    let mut files = Vec::with_capacity(total as usize);
+    // each file has a flag byte and an 8-byte offset and size
+    let mut files = Vec::with_capacity(capacity(R, total as usize, 9, r.len())?);
     let mut pos = dato as usize;
     let mut cur: Option<Loc> = None;
     for i in 0..total as usize {
@@ -211,7 +212,7 @@ pub fn read_manifest(m: &[u8]) -> Result<Manifest> {
         return Err(bad(M, 8, "asset counts do not add up"));
     }
     let mut pos = 36;
-    let mut hashes = Vec::with_capacity(total);
+    let mut hashes = Vec::with_capacity(capacity(M, total, 20, m.len() - 36)?);
     for _ in 0..total {
         hashes.push(rd.arr::<20>(pos)?);
         pos += 20;

@@ -15,7 +15,7 @@
 //!   key (u64) +0x138. A section's stored streams lie one after another from its vertex offset, each
 //!   `stride * vertex count` bytes.
 
-use crate::postcompile::{Rd, Result, bad};
+use crate::postcompile::{Rd, Result, bad, capacity};
 
 const W: &str = "meshset";
 pub const SECTION_SIZE: usize = 384;
@@ -219,7 +219,7 @@ pub fn read(d: &[u8]) -> Result<MeshSet> {
             },
             index_bytes: r.u32le(at + 0x58)?,
             vertex_bytes: r.u32le(at + 0x5c)?,
-            sections: Vec::with_capacity(count),
+            sections: Vec::with_capacity(capacity(W, count, SECTION_SIZE, d.len())?),
         };
         for s in 0..count {
             let o = first + SECTION_SIZE * s;

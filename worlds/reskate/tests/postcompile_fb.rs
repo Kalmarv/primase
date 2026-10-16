@@ -230,6 +230,58 @@ fn synthetic_program_lookup_round_trip() -> R {
     Ok(())
 }
 
+/// Counts read from a file are checked against the bytes present before anything is reserved: a huge count in a
+/// short buffer is an error, not an allocation.
+fn refused(r: Result<(), primase_reskate::postcompile::Error>) {
+    let e = r.expect_err("a corrupt count must be an error").to_string();
+    assert!(
+        e.contains("entries of at least"),
+        "refused for another reason: {e}"
+    );
+}
+
+#[test]
+fn corrupt_counts_are_errors() {
+    // bundle region: 0x7fffffff files declared in a 64-byte region
+    let mut region = vec![0u8; 64];
+    for (i, v) in [0u32, 0, 0x24, 0x7fff_ffff, 0x24, 0x24, 0x24, 0, 0x7fff_ffff]
+        .iter()
+        .enumerate()
+    {
+        region[4 * i..4 * i + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    refused(bundle::read_region(&region).map(|_| ()));
+    // manifest: total = ne = 0x7fffffff in a 40-byte manifest
+    let mut m = vec![0u8; 40];
+    m[0..4].copy_from_slice(&36u32.to_be_bytes());
+    m[4..8].copy_from_slice(&(bundle::BUNDLE_MAGIC ^ bundle::BUNDLE_SALT).to_le_bytes());
+    m[8..12].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    m[12..16].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    refused(bundle::read_manifest(&m).map(|_| ()));
+    // depot: count 0x7fffffff in 32 bytes
+    let mut meta = [0u8; 16];
+    meta[0..4].copy_from_slice(&28u32.to_le_bytes());
+    meta[4..8].copy_from_slice(&4u32.to_le_bytes());
+    meta[12..16].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    refused(depot::read(&[0u8; 32], &meta).map(|_| ()));
+    // shader block: 0x7fffffff parameters in 8 bytes
+    let mut block = 0x7fff_ffffu32.to_le_bytes().to_vec();
+    block.extend([0; 4]);
+    refused(depot::params(&block).map(|_| ()));
+    // program lookup: 0x7fffffff rows in 8 bytes after the program records
+    let d = [0xffu8, 0xff, 0xff, 0x7f, 0, 0, 0, 0];
+    let mut meta = [0u8; 16];
+    meta[8..12].copy_from_slice(&8u32.to_le_bytes());
+    refused(lookup::read_programs(&d, &meta).map(|_| ()));
+    // MeshSet: one LOD declaring 0x7fffffff sections
+    let mut ms = vec![0u8; 0x200];
+    ms[0x30..0x38].copy_from_slice(&0x80u64.to_le_bytes());
+    ms[0xb4..0xb6].copy_from_slice(&1u16.to_le_bytes());
+    ms[0x98..0x9c].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    ms[0x90 + 0x54..0x90 + 0x58].copy_from_slice(&0x21u32.to_le_bytes());
+    refused(meshset::read(&ms).map(|_| ()));
+}
+
 fn oodle() -> Option<Oodle> {
     let p = real_data("PRIMASE_OODLE9")?;
     // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.

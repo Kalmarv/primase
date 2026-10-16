@@ -110,6 +110,24 @@ pub(crate) fn latin1(s: &str, what: &'static str) -> Result<Vec<u8>> {
         .collect()
 }
 
+/// Capacity for `count` entries that each take at least `min_bytes` of the `remaining` input bytes: refused before
+/// anything is reserved when they cannot fit, so a corrupt count returns an error instead of exhausting memory.
+pub(crate) fn capacity(
+    what: &'static str,
+    count: usize,
+    min_bytes: usize,
+    remaining: usize,
+) -> Result<usize> {
+    match count.checked_mul(min_bytes) {
+        Some(n) if n <= remaining => Ok(count),
+        _ => Err(bad(
+            what,
+            0,
+            format!("{count} entries of at least {min_bytes} bytes in {remaining} bytes"),
+        )),
+    }
+}
+
 pub(crate) fn align(v: usize, a: usize) -> usize {
     v.div_ceil(a) * a
 }
