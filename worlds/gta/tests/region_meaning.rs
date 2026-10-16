@@ -2,11 +2,14 @@
 //!
 //! Oracle (`PRIMASE_GTA_SCENE`): a skate-scene folder whose manifest's `region` is `[x0, y0, x1, y1]` in GTA metres,
 //! exported from the same install with GTA Online's map; read with `primase-skate-scene`. Placements are matched by
-//! archetype (the joaat of the scene prototype's name) and position (1 cm); a match compares orientation and scale (1e-5 per transform column component),
-//! tint (the instance variant) and priority (flag bits 8-11 against `priorityLevel`). Before matching, ours go
-//! through `gta-select-region` with that exporter's settings (hour 12, minimum size 0.5 m). Scene placements without
-//! a match fail the gate, and so do placements of ours outside interiors the scene leaves out; entities of interiors
-//! are counted (which interiors that exporter placed came from its own interior table, not a pass here).
+//! archetype (the joaat of the scene prototype's name) and position (1 cm); a match compares orientation and scale
+//! (1e-5 per transform column component), tint (the instance variant) and priority (flag bits 8-11 against
+//! `priorityLevel`). Before matching, ours are resolved to GTA Online's map at the default hour (`gta.hour` 12, the
+//! hour that exporter fixed; hour 0 is checked against the time archetypes' masks: the placements that come and go must
+//! be exactly those the masks say) and go through `gta-select-region` with that exporter's minimum size (0.5 m). Scene
+//! placements without a match fail the gate, and so do placements of ours outside interiors the scene leaves out;
+//! entities of interiors are counted (which interiors that exporter placed came from its own interior table, not a
+//! pass here).
 //!
 //! Geometry: the matched placements' drawables are attached ([`attach_assets`]) and, per GTA geometry (the scene's
 //! parts carry their source model and geometry; a geometry the exporter split into several parts is gathered), the
@@ -24,7 +27,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::Mesh;
-use primase_core::state::Condition;
+use primase_core::state::{Condition, ResolveState, StateAxis};
 use primase_core::{Instance, Name, Transform, World};
 use primase_gta::assets::attach_assets;
 use primase_gta::components::{GtaArchetype, GtaDrawable, GtaEntity};
@@ -72,10 +75,55 @@ fn region_placements_against_the_scene() {
     let select = SelectRegion {
         min: region.min,
         max: region.max,
-        hour: 12,
         max_priority: 3,
         min_size: 0.5,
     };
+    // the hour axis: placements of time archetypes come and go with gta.hour as their masks say; checked at hour 0
+    // against the masks, then the world resolved at the default hour (12, as that exporter fixed it)
+    let axis_of = |w: &World, key: &str| {
+        w.iter::<StateAxis>()
+            .find(|(_, a)| a.key == key)
+            .map(|(e, _)| e)
+            .expect("axis")
+    };
+    let (map_axis, hour_axis) = (axis_of(&ours, "gta.map"), axis_of(&ours, "gta.hour"));
+    let (mut at0, mut at12) = (0usize, 0usize);
+    for (_, c) in ours.iter::<Condition>() {
+        let online = c.0[0]
+            .0
+            .iter()
+            .filter(|l| l.axis == map_axis)
+            .all(|l| l.values & 2 != 0);
+        if let Some(h) = c.0[0].0.iter().find(|l| l.axis == hour_axis)
+            && online
+        {
+            at0 += usize::from(h.values & 1 != 0);
+            at12 += usize::from(h.values & (1 << 12) != 0);
+        }
+    }
+    let resolve = |w: &mut World, assign: &[(&str, &str)]| {
+        let rs = ResolveState {
+            assign: assign
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut log = primase_core::pass::PassLog::default();
+        primase_core::pass::Pass::run(&rs, w, &mut log).expect("resolve-state");
+        w.iter::<Instance>().count()
+    };
+    let mut midnight = ours.clone();
+    let n0 = resolve(&mut midnight, &[("gta.map", "online"), ("gta.hour", "0")]);
+    let n12 = resolve(&mut ours, &[("gta.map", "online")]);
+    println!(
+        "gta.hour: {} time placements; Online placements at hour 0: {n0}, at 12: {n12}; masks show {at0} and {at12} time placements",
+        report.time_placements
+    );
+    assert_eq!(
+        n0 as i64 - n12 as i64,
+        at0 as i64 - at12 as i64,
+        "hour 0 against the masks"
+    );
     let mut log = primase_core::pass::PassLog::default();
     primase_core::pass::Pass::run(&select, &mut ours, &mut log).expect("select");
     println!("select: {:?}", log.counts);
@@ -83,15 +131,9 @@ fn region_placements_against_the_scene() {
     let mut theirs = World::new();
     primase_skate_scene::read(std::path::Path::new(&scene), &mut theirs).expect("scene");
 
-    // ours, in GTA Online's map: placements without a condition or with one allowing value 1
+    // ours, resolved to GTA Online's map at hour 12
     let mut index: BTreeMap<(u32, [i64; 3]), Vec<primase_core::Entity>> = BTreeMap::new();
     for (e, _) in ours.iter::<Instance>() {
-        if ours
-            .get::<Condition>(e)
-            .is_some_and(|c| c.0.iter().all(|cl| cl.0.iter().any(|l| l.values & 2 == 0)))
-        {
-            continue;
-        }
         let archetype = ours.get::<GtaEntity>(e).expect("entity").archetype;
         let t = ours.get::<Transform>(e).expect("transform");
         index.entry((archetype, key(t))).or_default().push(e);

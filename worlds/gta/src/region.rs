@@ -4,6 +4,8 @@
 //! - Map state: the story-mode map is read; given GTA Online's archive set too ([`archive_sets`], [`States::All`]), and an entity that is live in one
 //!   only carries a `core.condition` on the global axis `gta.map` {story, online} (default story, the game's start
 //!   state). Entities are the same in both when their map file is.
+//! - Time archetypes are shown in some hours only: their placements carry a `core.condition` on the global axis
+//!   `gta.hour` {0..23} (default 12) with the hours their timeFlags name; `resolve-state` picks the hour.
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
 //! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
@@ -67,6 +69,8 @@ pub struct RegionReport {
     pub duplicate_archetypes: usize,
     /// Entities whose archetype no live map types file defines.
     pub missing_archetypes: usize,
+    /// Placements of time archetypes (each with an hour mask on the `gta.hour` axis).
+    pub time_placements: usize,
     /// Interior instances read, the entities placed in them, and their entity sets (not read yet).
     pub interiors: usize,
     pub interior_entities: usize,
@@ -320,6 +324,7 @@ pub fn read_region(
         }
     }
     let mut prototypes = BTreeMap::new();
+    let mut hour_axis: Option<primase_core::Entity> = None;
     for Placed {
         ymap,
         index,
@@ -377,15 +382,40 @@ pub fn read_region(
             (false, false) => unreachable!(),
         };
         *report.by_state.entry(state).or_default() += 1;
+        let mut literals = Vec::new();
         if let (Some(axis), false) = (axis, state == "both") {
             let value = if state == "story" { 0 } else { 1 };
-            w.insert(
-                p,
-                Condition(vec![Clause(vec![Literal {
-                    axis,
-                    values: 1u64 << value,
-                }])]),
-            );
+            literals.push(Literal {
+                axis,
+                values: 1u64 << value,
+            });
+        }
+        // a time archetype is shown in the hours its timeFlags' low 24 bits name
+        if let Some(flags) = a.time_flags {
+            let axis = *hour_axis.get_or_insert_with(|| {
+                let e = w.spawn();
+                w.insert(
+                    e,
+                    StateAxis {
+                        key: "gta.hour".into(),
+                        domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
+                        default: 12,
+                        scope: Scope::Global,
+                        class: "time".into(),
+                        source: "time archetypes' timeFlags (CTimeArchetypeDef): the hours each is shown"
+                            .into(),
+                    },
+                );
+                e
+            });
+            literals.push(Literal {
+                axis,
+                values: u64::from(flags & 0x00FF_FFFF),
+            });
+            report.time_placements += 1;
+        }
+        if !literals.is_empty() {
+            w.insert(p, Condition(vec![Clause(literals)]));
         }
         report.placements += 1;
     }

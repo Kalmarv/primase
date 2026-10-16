@@ -10,9 +10,9 @@
 //! - a LOD stand-in some of whose children are placed is dropped (the children replace it); one without placed
 //!   children is kept ("LOD fallback") unless a real placement's pivot lies inside its box (2 m height slack); a
 //!   drawable named like a far-view mesh (`_lod`, `_slod2`) counts as a stand-in there whatever its level;
-//! - shadow proxy archetypes (flag 2048), reflection proxy entities (flag words of that export's list), time archetypes
-//!   not shown at the chosen hour, placements smaller than a minimum size and placements above a maximum priority are
-//!   dropped;
+//! - shadow proxy archetypes (flag 2048), reflection proxy entities (flag words of that export's list), placements
+//!   smaller than a minimum size and placements above a maximum priority are dropped (time archetypes are a world
+//!   state, `gta.hour`, resolved before this pass);
 //! - interior instances (no geometry of their own) are dropped; the entities placed in an interior are taken when the
 //!   instance's pivot lies in the region, else by the rules above, except their shadow and reflection helper meshes.
 //!   Which interiors that export placed at all came from its own interior table; that table is not a pass here, so
@@ -35,8 +35,6 @@ const REFLECTION_PROXY_FLAGS: [u32; 6] = [135790592, 135790593, 672661504, 53687
 pub struct SelectRegion {
     pub min: [f32; 2],
     pub max: [f32; 2],
-    /// The hour time archetypes are judged at (that export: 12).
-    pub hour: u32,
     /// Placements with a higher priority level are dropped (3: none).
     pub max_priority: i32,
     /// Placements whose bounding radius (the archetype's, times the larger of the entity's scales) is below this are
@@ -52,14 +50,13 @@ impl SelectRegion {
             })
         };
         for k in o.keys() {
-            if !["x0", "y0", "x1", "y1", "hour", "max_priority", "min_size"].contains(&k.as_str()) {
+            if !["x0", "y0", "x1", "y1", "max_priority", "min_size"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
         Ok(SelectRegion {
             min: [num("x0", 0.0)?, num("y0", 0.0)?],
             max: [num("x1", 0.0)?, num("y1", 0.0)?],
-            hour: num("hour", 12.0)? as u32,
             max_priority: num("max_priority", 3.0)? as i32,
             min_size: num("min_size", 0.0)?,
         })
@@ -130,7 +127,6 @@ impl Pass for SelectRegion {
             ("y0", self.min[1].to_string()),
             ("x1", self.max[0].to_string()),
             ("y1", self.max[1].to_string()),
-            ("hour", self.hour.to_string()),
             ("max_priority", self.max_priority.to_string()),
             ("min_size", self.min_size.to_string()),
         ]
@@ -218,12 +214,6 @@ impl Pass for SelectRegion {
                     reason = Some("shadow proxy archetype");
                 } else if REFLECTION_PROXY_FLAGS.contains(&ge.flags) && !in_interior {
                     reason = Some("reflection proxy entity");
-                } else if c
-                    .arch
-                    .time_flags
-                    .is_some_and(|f| (f >> (self.hour % 24)) & 1 == 0)
-                {
-                    reason = Some("time archetype not shown at the hour");
                 } else if c.arch.bs_radius
                     * c.t.cols[0..3]
                         .iter()
