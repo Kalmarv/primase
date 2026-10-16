@@ -29,7 +29,7 @@ fn castle_extras_scene() -> Result<()> {
     let area = "m11_01_00_00";
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), &decoder)?)?;
     let mut world = World::default();
-    sekiro::collision::assemble(&archive, &decoder, area, &layout, None, &mut world)?;
+    sekiro::collision::assemble(&archive, &decoder, area, &layout, None, None, &mut world)?;
     let report = sekiro::extras::assemble(&archive, &decoder, area, &layout, None, &mut world)?;
     println!("extras {report:?}");
     let lights = tables::read_lights(&std::fs::read(reference.join("tables/lights.bin"))?)?;

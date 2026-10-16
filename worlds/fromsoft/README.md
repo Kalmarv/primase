@@ -175,6 +175,25 @@ and `layer` or null, `parameters` with `instruction`, `target`, `source`, `bytes
 `strings` (hex). `tests/emevd_census.rs` reads every script the archive holds (the common scripts and every map
 block, probed by path), requires the oracle to list the same set, and compares every value exactly.
 
+## World states
+
+`sekiro::Options::states` (default `None`: nothing changes) set to `Event` reads the block's event script
+(`sekiro::states`). Each `2000:6` call of the part-state common functions 20004110 (map pieces), 20004112 (objects)
+or 20004114 (collisions) with exactly seven arguments and no parameter substitution is a rule: the entity (a part's
+entity ID or one of its groups) is disabled while any of its four (flag, state) pairs holds. `read_area` then makes a
+bool `core.state_axis` per flag (`fromsoft.flag.<id>`, class `event`, default off) and gives each decided placement a
+`core.condition`, the AND over its rules of "flag is not the state". World collision files and object collision
+present only in some states are written as separate soups (`collision/game_state<n>.bin`, `water_state<n>.bin`,
+`objects_state<n>.bin`), each with its condition and an identity transform, so no soup mixes them with what is
+always present. Calls that cannot be decided statically, other common functions that touch parts (m11_00: 20004115,
+20004120) and direct state instructions in story events are not interpreted: the parts they name keep their default
+presence, even when a decided rule also names them, and `Report::states` counts them. A known call whose arguments
+are not exactly seven whole words, or are filled by substitution, counts as undecidable. `PRIMASE_FROMSOFT_STATE_SCENE` is a scene of one whole block exported by
+an independent implementation with `extensions.sekiro.world_state` (`parts`: `source`, `kind`, `states` per flag
+`off`, `on` or `never`); `tests/state_membership.rs` requires the same membership for every part it lists that our
+rules decide, counts and prints the parts we leave at their default because something uninterpreted also names them,
+and fails on a part decided by only one side otherwise.
+
 `PRIMASE_FROMSOFT_SCENE` supplies a reference skate-scene folder. Its source
 labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
 references, exact translations and bases under the same stated tolerance.

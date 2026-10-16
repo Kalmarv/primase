@@ -6,6 +6,7 @@ use crate::{
     invalid,
     msb::{MapLayout, PartKind},
 };
+use primase_core::state::Condition;
 use primase_core::{
     Collision, Surfaces, Transform, World,
     frame::{Axis, SourceFrame},
@@ -16,6 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
 pub struct Report {
+    /// Soups present only in some world states (with states read).
+    pub conditioned_soups: usize,
     pub files: usize,
     pub omitted_filters: BTreeMap<u8, usize>,
     pub unselected_files: usize,
@@ -63,9 +66,34 @@ pub(super) fn push(soup: &mut Collision, vertices: [[f32; 3]; 3], surface: u16) 
     soup.surfaces.push(surface);
     Ok(())
 }
-pub(super) fn attach(world: &mut World, soup: Collision, path: &str, water: bool) {
-    if soup.triangles.is_empty() {
+/// [`attach`] for collision present only while `condition` holds: the entity carries the condition and an identity
+/// transform (state sits on placed things).
+pub(super) fn attach_when(
+    world: &mut World,
+    soup: Collision,
+    path: &str,
+    water: bool,
+    condition: &Condition,
+) {
+    let Some(e) = attach(world, soup, path, water) else {
         return;
+    };
+    world.insert(e, condition.clone());
+    world.insert(
+        e,
+        Transform {
+            cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
+        },
+    );
+}
+pub(super) fn attach(
+    world: &mut World,
+    soup: Collision,
+    path: &str,
+    water: bool,
+) -> Option<primase_core::Entity> {
+    if soup.triangles.is_empty() {
+        return None;
     }
     let entity = world.spawn();
     world.insert(entity, soup);
@@ -83,6 +111,7 @@ pub(super) fn attach(world: &mut World, soup: Collision, path: &str, water: bool
             other: Default::default(),
         }),
     );
+    Some(entity)
 }
 pub fn assemble(
     archive: &Archive,
@@ -90,10 +119,13 @@ pub fn assemble(
     area: &str,
     layout: &MapLayout,
     region: Option<[f32; 4]>,
+    mut states: Option<&mut super::states::States>,
     world: &mut World,
 ) -> Result<Report> {
     let mut report = Report::default();
     let mut selected = BTreeSet::new();
+    // with states: each file's parts' clauses; the file is present when any of its parts is
+    let mut clauses: BTreeMap<String, Vec<Option<primase_core::state::Clause>>> = BTreeMap::new();
     for part in layout.parts.iter().filter(|p| p.kind == PartKind::Collision) {
         let filter = part
             .hit_filter
@@ -110,7 +142,11 @@ pub fn assemble(
             .name
             .strip_prefix('h')
             .ok_or_else(|| invalid("collision", part.index, "unexpected collision model name"))?;
-        selected.insert(format!("h{}_{suffix}.hkx", &area[1..]));
+        let file = format!("h{}_{suffix}.hkx", &area[1..]);
+        if let Some(s) = states.as_deref_mut() {
+            clauses.entry(file.clone()).or_default().push(s.clause(part));
+        }
+        selected.insert(file);
     }
     let base = format!("/map/{area}/h{}", &area[1..]);
     let binder = Binder::read_split(
@@ -148,12 +184,24 @@ pub fn assemble(
     let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
     let mut solid = Collision::default();
     let mut water = Collision::default();
+    // soups of files present only in some states, by condition (states only)
+    let mut conditioned: BTreeMap<String, (Condition, Collision, Collision)> = BTreeMap::new();
     for file in files {
         let name = leaf(file.name.as_deref().unwrap_or(""));
         if !selected.remove(&name) {
             report.unselected_files += 1;
             continue;
         }
+        let condition = clauses.get(&name).and_then(|c| super::states::States::any(c));
+        let (solid, water) = match &condition {
+            None => (&mut solid, &mut water),
+            Some(c) => {
+                let entry = conditioned
+                    .entry(super::states::condition_key(c))
+                    .or_insert_with(|| (c.clone(), Collision::default(), Collision::default()));
+                (&mut entry.1, &mut entry.2)
+            }
+        };
         let raw = collision::read_map(&decoder.decode_if_dcx(&file.bytes)?, Some(&comp))?;
         report.files += 1;
         report.unmapped_materials += raw.unmapped;
@@ -167,10 +215,10 @@ pub fn assemble(
                 continue;
             }
             if material >= 0 && [22, 36].contains(&(material % 100)) {
-                push(&mut water, vertices, surfaces.index("default"))?;
+                push(water, vertices, surfaces.index("default"))?;
                 report.water_triangles += 1;
             } else if let Some(surface) = surface(material) {
-                push(&mut solid, vertices, surfaces.index(surface))?;
+                push(solid, vertices, surfaces.index(surface))?;
                 report.solid_triangles += 1;
             } else {
                 report.excluded_material_triangles += 1;
@@ -187,5 +235,22 @@ pub fn assemble(
     world.insert_resource(surfaces);
     attach(world, solid, "collision/game.bin", false);
     attach(world, water, "collision/water.bin", true);
+    for (n, (condition, solid, water)) in conditioned.into_values().enumerate() {
+        report.conditioned_soups += 1;
+        attach_when(
+            world,
+            solid,
+            &format!("collision/game_state{n}.bin"),
+            false,
+            &condition,
+        );
+        attach_when(
+            world,
+            water,
+            &format!("collision/water_state{n}.bin"),
+            true,
+            &condition,
+        );
+    }
     Ok(report)
 }

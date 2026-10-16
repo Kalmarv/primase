@@ -6,6 +6,7 @@ pub mod ledges;
 pub mod lights;
 pub mod normals;
 pub mod objects;
+pub mod states;
 mod textures;
 use crate::{
     Archive, Binder, Result,
@@ -35,7 +36,7 @@ struct AreaGeometry {
     catalog: textures::Catalog,
     report: Report,
     prototypes: BTreeMap<String, Prototype>,
-    selected: Vec<(String, String, Transform)>,
+    selected: Vec<(String, usize, Transform)>,
     used: BTreeSet<String>,
     blocker_cards: blockers::BlockerCards,
 }
@@ -220,7 +221,7 @@ fn select_geometry(
             continue;
         }
         used.insert(key.clone());
-        selected.push((key, p.name.clone(), transform));
+        selected.push((key, p.index, transform));
     }
     Ok(AreaGeometry {
         area,
@@ -244,6 +245,17 @@ pub struct Options {
     /// Pin the source floor in metres for a shared scene lift to 100.01 m.
     /// None emits no floor policy; geometry stays in the source world frame.
     pub floor: Option<f64>,
+    /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
+    /// block's script, as axes and conditions for `resolve-state`.
+    pub states: StateClasses,
+}
+/// The state axis classes a read produces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StateClasses {
+    #[default]
+    None,
+    /// Event flags (`fromsoft.flag.<id>`) from the block's part-state common functions.
+    Event,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -252,6 +264,7 @@ impl Default for Options {
             region_margin: 30.,
             include_far: false,
             floor: None,
+            states: StateClasses::None,
         }
     }
 }
@@ -290,6 +303,8 @@ pub struct Report {
     pub materials: usize,
     pub textures: usize,
     pub missing_models: Vec<String>,
+    /// With `states: Event`: the rules read and the parts decided or left at their default.
+    pub states: Option<states::Report>,
     pub skipped_far: usize,
     pub skipped_empty: usize,
     pub skipped_outside: usize,
@@ -400,6 +415,16 @@ pub fn read_area(
     }
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let mut world = World::default();
+    let mut states = match options.states {
+        StateClasses::None => None,
+        StateClasses::Event => {
+            let script =
+                crate::emevd::Script::read(&archive.read(&format!("/event/{area}.emevd.dcx"), decoder)?)?;
+            let mut s = states::States::read(&script);
+            s.spawn_axes(&mut world);
+            Some(s)
+        }
+    };
     report.blocker_meshes = blocker_cards.meshes();
     report.blocker_placements = blocker_cards.placements.len();
     report.blocker_triangles = blocker_cards.triangles();
@@ -494,8 +519,15 @@ pub fn read_area(
         proto_entities.insert(key, e);
         report.prototypes += 1;
     }
-    for (key, name, transform) in selected {
+    for (key, index, transform) in selected {
+        let part = &layout.parts[index];
+        let name = &part.name;
         let e = world.spawn();
+        if let Some(s) = states.as_mut()
+            && let Some(clause) = s.clause(part)
+        {
+            world.insert(e, primase_core::state::Condition(vec![clause]));
+        }
         world.insert(
             e,
             Instance {
@@ -508,7 +540,15 @@ pub fn read_area(
         world.insert(e, SkatePlacement::default());
         report.placements += 1;
     }
-    report.collision = collision::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
+    report.collision = collision::assemble(
+        &archive,
+        decoder,
+        &area,
+        &layout,
+        options.region,
+        states.as_mut(),
+        &mut world,
+    )?;
     report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
     let cards = world
@@ -540,6 +580,7 @@ pub fn read_area(
         ]),
         ..Default::default()
     });
+    report.states = states.map(|s| s.report);
     *destination = world;
     Ok(report)
 }

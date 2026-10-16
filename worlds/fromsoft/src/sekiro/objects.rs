@@ -1,6 +1,7 @@
 //! Object collision lowering: main HKX only, dynamic bodies at rest, motion 2
 //! omitted and named. Convex material is the dominant colliding render surface.
 use crate::{Archive, Binder, Result, collision, dcx::Decoder, invalid, materials::Material};
+use primase_core::state::Condition;
 use primase_core::{
     Collision, Instance, Mesh, Semantic, Source, Stream, Surfaces, Transform, World,
     frame::{Axis, SourceFrame},
@@ -11,6 +12,8 @@ use std::collections::BTreeMap;
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
 pub struct Report {
+    /// Soups of objects present only in some world states (with states read).
+    pub conditioned_soups: usize,
     pub models: usize,
     pub models_with_collision: usize,
     pub placements: usize,
@@ -85,6 +88,8 @@ pub fn assemble(
     let mut cache = BTreeMap::new();
     let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
     let mut soup = Collision::default();
+    // collision of objects present only in some world states, by the placement's condition (states read)
+    let mut conditioned: BTreeMap<String, (Condition, Collision)> = BTreeMap::new();
     for (e, instance) in world.iter::<Instance>() {
         let Some(proto) = world.get::<SkatePrototype>(instance.prototype) else {
             continue;
@@ -123,6 +128,15 @@ pub fn assemble(
         let transform = world
             .get::<Transform>(e)
             .ok_or_else(|| invalid("object collision", 0, "missing placement transform"))?;
+        let soup = match world.get::<Condition>(e) {
+            None => &mut soup,
+            Some(c) => {
+                &mut conditioned
+                    .entry(super::states::condition_key(c))
+                    .or_insert_with(|| (c.clone(), Collision::default()))
+                    .1
+            }
+        };
         for body in bodies {
             *report.bodies_by_motion.entry(body.motion_type).or_default() += 1;
             if body.motion_type == 2 {
@@ -149,7 +163,7 @@ pub fn assemble(
                     report.excluded_material_triangles += 1;
                     continue;
                 };
-                super::collision::push(&mut soup, v, surfaces.index(surface))?;
+                super::collision::push(soup, v, surfaces.index(surface))?;
                 report.written_triangles += 1;
             }
             report.batches.push(Batch {
@@ -162,5 +176,15 @@ pub fn assemble(
     }
     world.insert_resource(surfaces);
     super::collision::attach(world, soup, "collision/objects.bin", false);
+    for (n, (condition, soup)) in conditioned.into_values().enumerate() {
+        report.conditioned_soups += 1;
+        super::collision::attach_when(
+            world,
+            soup,
+            &format!("collision/objects_state{n}.bin"),
+            false,
+            &condition,
+        );
+    }
     Ok(report)
 }
