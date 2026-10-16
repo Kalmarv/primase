@@ -1,9 +1,9 @@
 //! Collision scope: every named map collision binder and every HKX in object
 //! binders, including broken states for census coverage. Character/ragdoll
 //! binders are counted as outside the map/object reader's scope.
-use primase_core::gate::real_data;
 use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
 use primase_havok::{Compendium, Tagfile};
+use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]

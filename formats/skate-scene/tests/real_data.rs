@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use primase_core::World;
-use primase_core::gate::{GateReport, Tolerance, compare_json, real_data};
+use primase_core::gate::{GateReport, Tolerance, compare_json};
 use primase_skate_scene::{self as scene};
+use primase_testdata::real_data;
 use serde_json::Value;
 
 fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {
@@ -366,13 +367,13 @@ fn scene_folders_round_trip() {
         return;
     }
     let validator = real_data("PRIMASE_SCENE_SKATE");
-    let filter = primase_core::gate::real_data_value("PRIMASE_SCENE_FILTER")
+    let filter = primase_testdata::real_data_value("PRIMASE_SCENE_FILTER")
         .and_then(|value| value.into_string().ok())
         .unwrap_or_default();
-    let allow_live = primase_core::gate::real_data_value("PRIMASE_ALLOW_LIVE")
+    let allow_live = primase_testdata::real_data_value("PRIMASE_ALLOW_LIVE")
         .and_then(|value| value.into_string().ok())
         .is_some_and(|v| v == "1");
-    let out_root = primase_core::gate::real_data_value("PRIMASE_OUT")
+    let out_root = primase_testdata::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("skate-scene-gate");

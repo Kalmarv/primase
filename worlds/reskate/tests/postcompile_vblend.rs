@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::gate::real_data;
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::fb::{MESHSET, lookup, toc};
@@ -30,6 +29,7 @@ use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{
     self, DECAL_DONOR, Donor, Request, SectionValues, TWOSET_DONOR, Target,
 };
+use primase_testdata::real_data;
 use serde_json::Value;
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -201,7 +201,7 @@ fn vblend_gate() -> R {
             )
         })
         .collect();
-    let root = primase_core::gate::real_data_value("PRIMASE_OUT")
+    let root = primase_testdata::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("reskate-vblend");

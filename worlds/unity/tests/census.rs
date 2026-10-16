@@ -9,7 +9,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::real_data;
 use primase_unity::resource::{StreamingInfo, streaming_infos};
 use primase_unity::{Error, SerializedFile, TypeTree, TypeTreePackage};
 

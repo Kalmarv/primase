@@ -1,9 +1,10 @@
 //! Scene extras compared to an independent export. Retained curve points are
 //! exact; geometric closures within 1 cm are counted against quantized joining.
 //! Derived bases are within 1e-6, yaw within 0.0051 degrees of rounded reference.
-use primase_core::{World, gate::real_data};
+use primase_core::World;
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout, sekiro};
 use primase_skate_scene::{SkateGrindCurve, SkateLight, SkateMarker, SkateScene, TableRef, tables};
+use primase_testdata::real_data;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 fn native(p: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
@@ -124,7 +125,7 @@ fn castle_extras_scene() -> Result<()> {
         grind_curves: Some(TableRef::single("tables/grind.bin")),
         ..Default::default()
     });
-    if let Some(output) = primase_core::gate::real_data_value("PRIMASE_FROMSOFT_EXTRAS_OUTPUT") {
+    if let Some(output) = primase_testdata::real_data_value("PRIMASE_FROMSOFT_EXTRAS_OUTPUT") {
         primase_skate_scene::write(&world, std::path::Path::new(&output))?;
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(std::path::Path::new(&output).join("scene.json"))?)?;

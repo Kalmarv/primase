@@ -1,10 +1,10 @@
 //! Independent MTD values, including every decoded string and stored parameter.
-use primase_core::gate::real_data;
 use primase_fromsoft::{
     Archive, Binder,
     dcx::Decoder,
     mtd::{MaterialDefinition, Value},
 };
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

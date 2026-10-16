@@ -1,7 +1,8 @@
 //! Offline normal-image differential against the committed consumer rule.
 //! Only unambiguous cached source DDS names are compared; uncovered names counted.
-use primase_core::{TexRole, Texture, World, gate::real_data};
+use primase_core::{TexRole, Texture, World};
 use primase_fromsoft::sekiro::normals::{self, Consumer};
+use primase_testdata::real_data;
 use std::collections::{BTreeMap, BTreeSet};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]

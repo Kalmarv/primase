@@ -25,6 +25,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-testdata.workspace = true
 basisu.workspace = true
 primase-image.workspace = true
 primase-skate-scene.workspace = true

@@ -4,7 +4,7 @@ use primase_meshops::*;
 mod support;
 #[test]
 fn real_mesh_reference_cases() {
-    let Some(path) = primase_core::gate::real_data_value("PRIMASE_MESH_CASES") else {
+    let Some(path) = primase_testdata::real_data_value("PRIMASE_MESH_CASES") else {
         eprintln!("SKIPPED: PRIMASE_MESH_CASES unset");
         return;
     };

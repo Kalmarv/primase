@@ -20,5 +20,6 @@ workspace = true
 
 
 [dev-dependencies]
+primase-testdata.workspace = true
 primase-dds.workspace = true
 sha2.workspace = true

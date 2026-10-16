@@ -107,7 +107,7 @@ fn leaves<'a>(name: &str, offset: u32, ty: &'a Type, out: &mut BTreeMap<String, 
 
 #[test]
 fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_core::gate::real_data_value("PRIMASE_DXBC_SHADERS") else {
+    let Some(root) = primase_testdata::real_data_value("PRIMASE_DXBC_SHADERS") else {
         eprintln!("SKIPPED: PRIMASE_DXBC_SHADERS not set");
         return Ok(());
     };

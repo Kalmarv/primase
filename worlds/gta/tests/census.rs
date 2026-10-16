@@ -13,8 +13,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use primase_core::gate::real_data;
 use primase_gta::{Archive, EntryKind, Keys};
+use primase_testdata::real_data;
 
 #[derive(serde::Deserialize)]
 struct OracleArchive {
@@ -172,7 +172,7 @@ fn every_archive_reads_and_every_entry_decodes() {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");
-    let filter = primase_core::gate::real_data_value("PRIMASE_GTA_FILTER")
+    let filter = primase_testdata::real_data_value("PRIMASE_GTA_FILTER")
         .and_then(|value| value.into_string().ok())
         .unwrap_or_default()
         .to_lowercase();

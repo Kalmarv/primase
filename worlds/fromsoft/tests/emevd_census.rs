@@ -5,8 +5,9 @@
 //! strings) must equal ours exactly, and it must list the same scripts as the census found.
 use std::collections::BTreeMap;
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, emevd::Script};
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]

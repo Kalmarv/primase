@@ -1,9 +1,10 @@
 //! Full-area object SOUP against reference collision revision bd77fcb.
 //! Stored classifications are exact. Independent convex tessellation is compared
 //! by bidirectional, material-preserving surface probes within 0.2 mm after placement.
-use primase_core::{Collision, Surfaces, World, gate::real_data};
+use primase_core::{Collision, Surfaces, World};
 use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_skate_scene::{SkateCollision, SkateScene, SkateSoup};
+use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]
@@ -21,7 +22,7 @@ fn placed_object_soup() -> Result<()> {
     let Some(availability) = real_data("PRIMASE_FROMSOFT_MATERIAL_ORACLE") else {
         return Ok(());
     };
-    let Some(output) = primase_core::gate::real_data_value("PRIMASE_FROMSOFT_OUTPUT") else {
+    let Some(output) = primase_testdata::real_data_value("PRIMASE_FROMSOFT_OUTPUT") else {
         return Ok(());
     };
     // SAFETY: an explicitly supplied trusted native decoder.

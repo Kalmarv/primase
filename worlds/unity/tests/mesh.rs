@@ -11,7 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::real_data;
 use primase_unity::TypeTreePackage;
 use primase_unity::Value;
 use primase_unity::mesh::UnityMeshData;

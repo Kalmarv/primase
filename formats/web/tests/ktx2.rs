@@ -6,7 +6,7 @@ use primase_web::ktx2::encode_rgba8;
 
 #[test]
 fn encode_in_child_process() {
-    let Some(path) = primase_core::gate::real_data_value("PRIMASE_KTX2_TEST_OUTPUT")
+    let Some(path) = primase_testdata::real_data_value("PRIMASE_KTX2_TEST_OUTPUT")
         .and_then(|value| value.into_string().ok())
     else {
         return;

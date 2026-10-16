@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 /// once after strongest-layer splitting and every resulting material is PBR.
 #[test]
 fn installed_layered_scene() {
-    let Some(root) = primase_core::gate::real_data("PRIMASE_SCENES_GTA") else {
+    let Some(root) = primase_testdata::real_data("PRIMASE_SCENES_GTA") else {
         return;
     };
     if !root.join("scene.json").is_file() {

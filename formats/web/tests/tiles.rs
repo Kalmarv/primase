@@ -143,7 +143,7 @@ fn bad_meshes_and_options_are_errors() {
 
 #[test]
 fn validator_and_index_file() {
-    let Some(validator) = primase_core::gate::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
         return;
     };
     let mut w = World::new();
@@ -267,7 +267,7 @@ fn instancing_trs_and_plain_mirrors_shears() {
             .len(),
         3
     );
-    if let Some(validator) = primase_core::gate::real_data("PRIMASE_GLTF_VALIDATOR") {
+    if let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") {
         let path = std::env::temp_dir().join(format!("primase-web-instance-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let output = std::process::Command::new(validator)
@@ -364,7 +364,7 @@ fn quantized_streams_decode_exactly_and_validate() {
             assert_eq!(v, vec![[0., 0.], [2., 0.], [0., 2.]]);
         }
     }
-    if let Some(validator) = primase_core::gate::real_data("PRIMASE_GLTF_VALIDATOR") {
+    if let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") {
         let path = std::env::temp_dir().join(format!("primase-web-compressed-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let output = std::process::Command::new(validator)

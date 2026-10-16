@@ -13,9 +13,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use primase_core::TexFormat;
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{ColorSpace, Texture};
 use primase_image::{Samples, read_png};
+use primase_testdata::real_data;
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::{ObjRef, Player};

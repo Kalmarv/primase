@@ -1,10 +1,10 @@
 //! Stored EDGE/BTL values against an independent parser. Colour transfer,
 //! energy, spot direction and ledge joining are separate lowering policies.
-use primase_core::gate::real_data;
 use primase_fromsoft::{
     btl::{Kind as LightKind, LightBank},
     edge::{Edges, Kind},
 };
+use primase_testdata::real_data;
 use serde_json::Value;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]

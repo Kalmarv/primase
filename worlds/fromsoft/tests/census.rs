@@ -1,10 +1,11 @@
 //! Private corpus paths are caller-supplied; no game data is bundled.
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{
     NameDictionary,
     archive::{Archive, public_key},
     bhd::{Header, unwrap_rsa},
 };
+use primase_testdata::real_data;
 #[test]
 fn headers() -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {

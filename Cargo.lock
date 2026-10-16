@@ -790,6 +790,7 @@ dependencies = [
  "lz4_flex",
  "oozextract",
  "primase-core",
+ "primase-testdata",
  "thiserror",
 ]
 
@@ -800,7 +801,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "toml",
 ]
 
 [[package]]
@@ -808,6 +808,7 @@ name = "primase-dds"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-testdata",
  "sha2",
  "thiserror",
 ]
@@ -816,7 +817,7 @@ dependencies = [
 name = "primase-dxbc"
 version = "0.1.0"
 dependencies = [
- "primase-core",
+ "primase-testdata",
  "serde_json",
  "thiserror",
 ]
@@ -838,6 +839,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-skate-scene",
+ "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
  "serde",
@@ -863,6 +865,7 @@ dependencies = [
  "primase-core",
  "primase-image",
  "primase-skate-scene",
+ "primase-testdata",
  "serde_json",
  "sha2",
  "thiserror",
@@ -877,6 +880,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-hash",
+ "primase-testdata",
  "quick-xml",
  "serde",
  "serde_json",
@@ -892,7 +896,7 @@ version = "0.1.0"
 name = "primase-havok"
 version = "0.1.0"
 dependencies = [
- "primase-core",
+ "primase-testdata",
  "primase-vertex",
  "thiserror",
 ]
@@ -904,6 +908,7 @@ dependencies = [
  "png",
  "primase-core",
  "primase-dds",
+ "primase-testdata",
  "primase-texcodec",
  "sha2",
  "thiserror",
@@ -914,6 +919,7 @@ name = "primase-meshops"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-testdata",
  "thiserror",
 ]
 
@@ -931,6 +937,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-skate-scene",
+ "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
  "serde",
@@ -947,10 +954,19 @@ dependencies = [
  "primase-gltf",
  "primase-image",
  "primase-meshops",
+ "primase-testdata",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "primase-testdata"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -961,6 +977,7 @@ dependencies = [
  "half",
  "primase-core",
  "primase-dds",
+ "primase-testdata",
  "sha2",
  "thiserror",
 ]
@@ -975,6 +992,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-skate-scene",
+ "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
  "serde",
@@ -1003,6 +1021,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-skate-scene",
+ "primase-testdata",
  "serde",
  "serde_json",
  "sha2",

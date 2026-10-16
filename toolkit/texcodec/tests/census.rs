@@ -2,8 +2,9 @@ use sha2::{Digest, Sha256};
 // Real DDS level-zero gates against bcdec_rs and a persistent Pillow 11 process.
 use primase_core::{
     TexFormat,
-    gate::{GateReport, Tolerance, real_data},
+    gate::{GateReport, Tolerance},
 };
+use primase_testdata::real_data;
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,

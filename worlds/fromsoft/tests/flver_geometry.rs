@@ -1,10 +1,11 @@
 //! Area FLVER geometry against the independent pre-bake C# model exporter.
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{
     Archive, Binder,
     dcx::Decoder,
     flver::{MaterialGeometry, Model},
 };
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]

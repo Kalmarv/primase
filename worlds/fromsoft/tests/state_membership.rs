@@ -4,10 +4,11 @@
 //! same membership from our rules, and every part either side decides among those it places must be decided by both.
 use std::collections::BTreeMap;
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{
     Archive, dcx::Decoder, emevd::Script, msb::MapLayout, msb::PartKind, sekiro::states::States,
 };
+use primase_testdata::real_data;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {

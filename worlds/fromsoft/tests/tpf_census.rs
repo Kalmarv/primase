@@ -1,10 +1,10 @@
 //! Whole-install PC texture-package differential against independent C# metadata.
-use primase_core::gate::real_data;
 use primase_fromsoft::{
     Archive, Binder, NameDictionary,
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

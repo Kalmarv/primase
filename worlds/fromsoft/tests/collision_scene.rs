@@ -1,8 +1,8 @@
 //! The raw reader is compared with the reference scene by triangle values, not
 //! index encoding. Roof smoothing and opened-up collision are later passes;
 //! all remaining non-roof triangles and the water table must agree exactly.
-use primase_core::gate::real_data;
 use primase_skate_scene::tables::{SoupTable, read_soup};
+use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn triangles(s: &SoupTable) -> BTreeMap<(u8, [u32; 9]), usize> {

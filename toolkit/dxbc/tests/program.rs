@@ -265,7 +265,7 @@ fn sample_callback_uses_coordinates_and_return_swizzle() {
 /// text (.asm appended). Counts executable instructions including final ret.
 #[test]
 fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_core::gate::real_data_value("PRIMASE_DXBC_SHADERS") else {
+    let Some(root) = primase_testdata::real_data_value("PRIMASE_DXBC_SHADERS") else {
         eprintln!("SKIPPED: PRIMASE_DXBC_SHADERS not set");
         return Ok(());
     };

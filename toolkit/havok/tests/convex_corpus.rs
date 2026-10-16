@@ -4,7 +4,7 @@
 use primase_havok::{ConvexCore, Tagfile};
 #[test]
 fn object_half_spaces() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_core::gate::real_data_value("PRIMASE_HAVOK_OBJECT_CORPUS") else {
+    let Some(dir) = primase_testdata::real_data_value("PRIMASE_HAVOK_OBJECT_CORPUS") else {
         eprintln!("SKIPPED: PRIMASE_HAVOK_OBJECT_CORPUS not set");
         return Ok(());
     };

@@ -2,7 +2,8 @@
 //! Python/C# container readers; bytes stay outside the repository. Codec names:
 //! lz4, deflate, zlib, zlib-unterminated. Oodle uses the DLL module's gate instead.
 use primase_compress::{Decompressor, Deflate, Lz4, Zlib, ZlibUnterminated};
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::real_data;
 #[test]
 fn corpus() -> Result<(), Box<dyn std::error::Error>> {
     let Some(path) = real_data("PRIMASE_CODEC_CORPUS") else {

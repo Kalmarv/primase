@@ -5,12 +5,12 @@
 //! bound. The original producer's decoder changes inputs, amplified to measured
 //! albedo [2,3,4,0] and normal [2,2,1,0] maxima. Those remain diagnostics, not
 //! an increased arithmetic tolerance or a reason to copy its decoding convention.
-use primase_core::gate::real_data;
 use primase_fromsoft::{
     layer_bake::{BaseMipBilinearWrap, Inputs, Prepared},
     materials::{Binding, LayeredMaterial, stem},
     mtd::MaterialDefinition,
 };
+use primase_testdata::real_data;
 use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc, time::Instant};

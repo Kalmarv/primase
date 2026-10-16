@@ -12,8 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Name, Transform, World};
+use primase_testdata::real_data;
 use primase_unity::TypeTreePackage;
 use primase_unity::components::{UnityCollider, UnityColliderShape, UnityTreeInstance};
 use primase_unity::level::{UNITY, read_level};

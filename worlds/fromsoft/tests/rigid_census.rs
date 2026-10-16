@@ -1,8 +1,9 @@
 //! Full placed-prototype set against independent rigid evaluation (bd77fcb).
 //! Position error <=0.2 mm; inverse-transpose normal error <=2e-5 relative to
 //! max(1, component magnitude), allowing f32 reference vs f64 matrix evaluation.
-use primase_core::{gate::real_data, pass::PassLog};
+use primase_core::pass::PassLog;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
+use primase_testdata::real_data;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]
 #[allow(unsafe_code)]

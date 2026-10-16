@@ -16,12 +16,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::gate::{GateReport, Tolerance, compare_json, real_data};
+use primase_core::gate::{GateReport, Tolerance, compare_json};
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::fb::toc;
 use primase_reskate::postcompile::fb::{MESHSET, db, depot, lookup};
 use primase_reskate::postcompile::meshset;
+use primase_testdata::real_data;
 use serde_json::{Value, json};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;

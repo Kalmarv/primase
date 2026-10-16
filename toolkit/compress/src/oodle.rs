@@ -169,7 +169,8 @@ impl Compressor for Oodle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::gate::{GateReport, Tolerance, real_data};
+    use primase_core::gate::{GateReport, Tolerance};
+    use primase_testdata::real_data;
     /// Installed DLL oracle versus independently implemented oozextract; tests
     /// synthetic Kraken compression for all three ABI versions when configured.
     #[test]
@@ -236,7 +237,8 @@ mod tests {
 #[cfg(test)]
 mod dcx_gate {
     use super::*;
-    use primase_core::gate::{GateReport, Tolerance, real_data};
+    use primase_core::gate::{GateReport, Tolerance};
+    use primase_testdata::real_data;
     /// Test-only container adapter following SoulsFormats DCX.DecompressDCXKRAK.
     /// Production container parsing belongs in the future FromSoft world crate.
     #[test]
@@ -383,7 +385,7 @@ mod upstream_defect {
     #[test]
     fn oozextract_055_kraken_restart_keeps_global_output_base()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let Some(path) = primase_core::gate::real_data("PRIMASE_OODLE6") else {
+        let Some(path) = primase_testdata::real_data("PRIMASE_OODLE6") else {
             return Ok(());
         };
         // SAFETY: explicitly configured trusted version-6 game library.

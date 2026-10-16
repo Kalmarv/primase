@@ -17,9 +17,9 @@
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::gate::real_data;
 use primase_gta::archive_set::MapState;
 use primase_gta::{ArchiveSet, Install, Keys};
+use primase_testdata::real_data;
 
 #[test]
 fn live_files_against_the_oracle() {

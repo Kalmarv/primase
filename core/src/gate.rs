@@ -5,8 +5,6 @@
 //! workspace has one; every reader has a census over a game's real data. See CONTRIBUTING.md "Gates".
 
 use std::fmt;
-mod data;
-pub use data::{DataConfigError, real_data, real_data_value, try_real_data_value};
 
 /// How far two outputs may differ and still pass.
 #[derive(Clone, Copy, Debug, PartialEq)]

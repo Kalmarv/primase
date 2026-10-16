@@ -13,7 +13,7 @@ thiserror.workspace = true
 primase-vertex.workspace = true
 
 [dev-dependencies]
-primase-core.workspace = true
+primase-testdata.workspace = true
 
 [lints]
 workspace = true

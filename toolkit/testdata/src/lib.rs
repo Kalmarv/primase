@@ -1,4 +1,5 @@
-//! Explicit local real-data configuration, with environment overrides.
+//! Dev-only local real-data configuration, with environment overrides.
+//! Add this crate only in dev-dependencies. It has no dependency on core.
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

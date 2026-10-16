@@ -1,7 +1,8 @@
 use sha2::{Digest, Sha256};
 // Real scene PNGs against Pillow 11, with deterministic PNG write/read roundtrips.
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_image::{Samples, read_png, write_png};
+use primase_testdata::real_data;
 use std::{
     collections::BTreeMap,
     io::{BufReader, Read, Write},

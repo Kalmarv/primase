@@ -8,9 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Mesh, Transform, World};
 use primase_gltf::{Gltf, GroupBy, WriteOptions, write};
+use primase_testdata::real_data;
 
 fn scene_folders(var: &str, prefix: &str) -> Vec<PathBuf> {
     let Some(root) = real_data(var) else {

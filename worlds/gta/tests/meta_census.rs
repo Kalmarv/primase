@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_core::gate::real_data;
 use primase_gta::map::{MapData, MapTypes};
 use primase_gta::meta::Meta;
 use primase_gta::{EntryKind, Install, Keys};
 use primase_hash::joaat_exact;
+use primase_testdata::real_data;
 
 /// The enums `map` documents, value by value, as the files' enum descriptions must name them.
 const ENUMS: [(&str, &[&str]); 3] = [

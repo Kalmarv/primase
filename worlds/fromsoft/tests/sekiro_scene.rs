@@ -1,7 +1,8 @@
 //! Installed-area integration: archive reader, World, toolkit assets, scene writer,
 //! then an independent validator. Outputs are retained for review.
-use primase_core::{World, gate::real_data};
+use primase_core::World;
 use primase_fromsoft::{dcx::Decoder, sekiro};
+use primase_testdata::real_data;
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, process::Command};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -25,7 +26,7 @@ fn installed_area_scene() -> Result<()> {
         return Ok(());
     };
     let Some(output) =
-        primase_core::gate::real_data_value("PRIMASE_FROMSOFT_OUTPUT").map(std::path::PathBuf::from)
+        primase_testdata::real_data_value("PRIMASE_FROMSOFT_OUTPUT").map(std::path::PathBuf::from)
     else {
         eprintln!("SKIPPED: PRIMASE_FROMSOFT_OUTPUT not set");
         return Ok(());

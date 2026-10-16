@@ -1,8 +1,9 @@
 //! MSB part entity IDs and entity group IDs, exact as stored, against an independent reader (SoulsFormats' MSBS):
 //! `entities.jsonl` in `PRIMASE_FROMSOFT_STATE_ORACLE` holds, per map file, every part's index, name, entity ID and
 //! eight group IDs. Every map file it lists is read; a part count, name or value that differs fails the gate.
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
+use primase_testdata::real_data;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {

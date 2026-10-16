@@ -4,8 +4,8 @@
 //! the other surface in both directions within 0.1 mm after body transforms. The independent local plane gate uses 0.01 mm.
 //! Compressed positions, motion classifications and materials remain exact.
 //! Reference names have a byte-widening defect, reversed only for comparison.
-use primase_core::gate::real_data;
 use primase_fromsoft::collision;
+use primase_testdata::real_data;
 use std::{
     fs,
     io::{Cursor, Read},

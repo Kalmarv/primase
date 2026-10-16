@@ -8,7 +8,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use primase_core::gate::{GateReport, Tolerance, compare_json, real_data};
+use primase_core::gate::{GateReport, Tolerance, compare_json};
+use primase_testdata::real_data;
 use primase_unity::{SerializedFile, TypeTreePackage};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};

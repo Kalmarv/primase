@@ -1,6 +1,7 @@
 //! Stored MSB values exact; derived rotation bases within 1e-6 per unit scale.
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]

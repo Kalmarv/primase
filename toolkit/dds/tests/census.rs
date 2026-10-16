@@ -1,7 +1,8 @@
 //! Distinct-content DDS census: payloads exact, semantic roundtrips exact, header differences measured.
 #![allow(clippy::unwrap_used)]
-use primase_core::gate::{GateReport, Tolerance, real_data};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_dds::{read, write_dx10, write_legacy};
+use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,

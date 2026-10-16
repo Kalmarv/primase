@@ -2,7 +2,6 @@
 //! Numeric-slot ties prefer an MTD-declared binding over a foreign shader-family
 //! binding. This is an explicit preview lowering choice, not confirmed game
 //! sampler-binding behavior; both bindings survive for the later shader bake.
-use primase_core::gate::real_data;
 use primase_fromsoft::{
     Archive, Binder,
     dcx::Decoder,
@@ -10,6 +9,7 @@ use primase_fromsoft::{
     materials,
     mtd::MaterialDefinition,
 };
+use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]

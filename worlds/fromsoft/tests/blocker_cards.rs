@@ -1,8 +1,9 @@
 //! Blocker-card identity gate. The oracle directory contains cases.json: an array
 //! of {name, area, region, placements, prototypes, meshes, triangles}; placements
 //! are source labels and prototypes are the corresponding prototype identities.
-use primase_core::{World, gate::real_data};
+use primase_core::World;
 use primase_fromsoft::{dcx::Decoder, sekiro};
+use primase_testdata::real_data;
 use std::collections::BTreeSet;
 #[test]
 #[allow(unsafe_code)]

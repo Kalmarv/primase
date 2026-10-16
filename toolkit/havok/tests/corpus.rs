@@ -3,7 +3,7 @@
 use primase_havok::{Compendium, Tagfile};
 #[test]
 fn tagfile_containers() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_core::gate::real_data_value("PRIMASE_HAVOK_CORPUS") else {
+    let Some(dir) = primase_testdata::real_data_value("PRIMASE_HAVOK_CORPUS") else {
         eprintln!("SKIPPED: PRIMASE_HAVOK_CORPUS not set");
         return Ok(());
     };

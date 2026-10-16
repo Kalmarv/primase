@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 
-use primase_core::gate::real_data;
 use primase_gta::archive_set::MapState;
 use primase_gta::map::MapData;
 use primase_gta::meta::Meta;
 use primase_gta::{ArchiveSet, Install, Keys};
+use primase_testdata::real_data;
 
 /// Static maps of different packs that author the same placement (ymap names, either order).
 const KNOWN: [(&str, &str); 1] = [("h4_yacht_critical_0.ymap", "hei_ch3_12_critical_0.ymap")];

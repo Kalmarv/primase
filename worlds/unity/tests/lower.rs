@@ -17,9 +17,9 @@ use std::path::Path;
 
 use primase_core::Texture;
 use primase_core::World;
-use primase_core::gate::real_data;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_image::{Samples, linear_to_srgb, read_png};
+use primase_testdata::real_data;
 use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityMaterial;

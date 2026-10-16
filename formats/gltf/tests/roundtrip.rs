@@ -641,7 +641,7 @@ fn load_mesh_files_restores_meshes() {
 /// purpose: readers generate them, and game meshes often have none).
 #[test]
 fn khronos_validator_accepts_output() {
-    let Some(validator) = primase_core::gate::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
         return;
     };
     let dir = scratch("validator");
