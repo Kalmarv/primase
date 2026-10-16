@@ -22,10 +22,46 @@ enum Role {
     Mask,
 }
 
-impl Role {
-    fn cap(self) -> u32 {
-        if self == Self::Mask { 256 } else { 512 }
+/// Largest web texture edge per role, in pixels. Each image is reduced to the
+/// largest power of two not above its own size or the cap (minimum 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TextureCaps {
+    pub colour: u32,
+    pub normal: u32,
+    pub mask: u32,
+}
+
+impl Default for TextureCaps {
+    fn default() -> Self {
+        Self {
+            colour: 512,
+            normal: 512,
+            mask: 256,
+        }
     }
+}
+
+impl TextureCaps {
+    fn get(&self, role: Role) -> u32 {
+        match role {
+            Role::Colour => self.colour,
+            Role::Normal => self.normal,
+            Role::Mask => self.mask,
+        }
+    }
+    fn check(&self) -> Result<()> {
+        for cap in [self.colour, self.normal, self.mask] {
+            if cap < 4 || !cap.is_power_of_two() {
+                return Err(invalid(format!(
+                    "texture cap {cap} must be a power of two of at least 4"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Role {
     fn byte_cap(self) -> usize {
         if self == Self::Mask { 98_304 } else { 360_448 }
     }
@@ -35,6 +71,8 @@ impl Role {
 #[derive(Default)]
 pub(super) struct TextureEncoder {
     cache: BTreeMap<CacheKey, (Vec<u8>, Value)>,
+    caps: TextureCaps,
+    caps_by_name: Vec<(String, TextureCaps)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -44,7 +82,7 @@ struct AlphaPolicy {
     blend: bool,
 }
 
-type CacheKey = ([u8; 32], Role, AlphaPolicy);
+type CacheKey = ([u8; 32], Role, AlphaPolicy, u32);
 
 fn invalid(message: impl ToString) -> Error {
     Error::Invalid(message.to_string())
@@ -125,6 +163,28 @@ fn alpha_pixels(reference: &[u8], decoded: &[u8], policy: &AlphaPolicy) -> Resul
 }
 
 impl TextureEncoder {
+    pub(super) fn new(caps: TextureCaps, caps_by_name: Vec<(String, TextureCaps)>) -> Result<Self> {
+        caps.check()?;
+        for (_, caps) in &caps_by_name {
+            caps.check()?;
+        }
+        Ok(Self {
+            cache: BTreeMap::new(),
+            caps,
+            caps_by_name,
+        })
+    }
+
+    /// The caps for an image: the first name-prefix rule that matches, else the defaults.
+    fn caps_for(&self, name: Option<&str>) -> TextureCaps {
+        name.and_then(|name| {
+            self.caps_by_name
+                .iter()
+                .find(|(prefix, _)| name.starts_with(prefix.as_str()))
+        })
+        .map_or(self.caps, |(_, caps)| *caps)
+    }
+
     pub(super) fn apply(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         let chunks = primase_gltf::glb::parse(&bytes)?;
         let mut doc: Value = serde_json::from_slice(chunks.json)?;
@@ -240,7 +300,8 @@ impl TextureEncoder {
                     .get(start..start + len)
                     .ok_or_else(|| invalid("image range"))?;
                 let digest: [u8; 32] = Sha256::digest(png).into();
-                let cache_key = (digest, role, alpha_policy);
+                let cap = self.caps_for(image["name"].as_str()).get(role);
+                let cache_key = (digest, role, alpha_policy, cap);
                 if let std::collections::btree_map::Entry::Vacant(entry) = self.cache.entry(cache_key.clone())
                 {
                     let image = primase_image::read_png(png).map_err(invalid)?.image;
@@ -250,7 +311,7 @@ impl TextureEncoder {
                     let primase_image::Samples::U8(mut rgba) = image.samples else {
                         return Err(invalid("web KTX2 requires RGBA8"));
                     };
-                    let dimension = |v: u32| (1 << v.ilog2()).clamp(4, role.cap());
+                    let dimension = |v: u32| (1 << v.ilog2()).clamp(4, cap);
                     let (w, h) = (dimension(width), dimension(height));
                     let mut near_zero = 0;
                     if width != w || height != h {
@@ -307,7 +368,7 @@ impl TextureEncoder {
                             compressed
                         }
                     };
-                    let metadata = json!({"source_dimensions":original_size,"dimensions":[width,height],"role":format!("{role:?}").to_lowercase(),"max_dimension":role.cap(),"max_bytes":if png_output { None } else { Some(role.byte_cap()) },"bytes":encoded.len(),"codec":if png_output { "PNG_RGBA8" } else { "UASTC_LDR_4x4_ZSTD" },"near_zero_cap_average_to_flat":near_zero,"alpha_quality":alpha_report});
+                    let metadata = json!({"source_dimensions":original_size,"dimensions":[width,height],"role":format!("{role:?}").to_lowercase(),"max_dimension":cap,"max_bytes":if png_output { None } else { Some(role.byte_cap()) },"bytes":encoded.len(),"codec":if png_output { "PNG_RGBA8" } else { "UASTC_LDR_4x4_ZSTD" },"near_zero_cap_average_to_flat":near_zero,"alpha_quality":alpha_report});
                     entry.insert((encoded, metadata));
                 }
                 let (encoded, metadata) = &self.cache[&cache_key];
@@ -506,6 +567,68 @@ mod tests {
             assert_eq!(pixels.len(), (read(20) * read(24) * 4) as usize);
             assert!(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         }
+    }
+
+    #[test]
+    fn name_prefix_caps_apply_only_to_matching_images() {
+        // The same pixels under two names: the cap is part of the cache identity.
+        let png = png_rgba(64, 64, &[90, 120, 200, 255].repeat(64 * 64)).unwrap();
+        let mut bin = png.clone();
+        bin.extend_from_slice(&png);
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":bin.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()},{"buffer":0,"byteOffset":png.len(),"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png","name":"bake_wall"},{"bufferView":1,"mimeType":"image/png","name":"wall"}],
+            "textures":[{"source":0},{"source":1}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},"normalTexture":{"index":0}},{"pbrMetallicRoughness":{"baseColorTexture":{"index":1}}}]});
+        let input = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &bin).unwrap();
+        let small = TextureCaps {
+            colour: 16,
+            normal: 8,
+            mask: 4,
+        };
+        let mut encoder = TextureEncoder::new(TextureCaps::default(), vec![("bake_".into(), small)]).unwrap();
+        let output = encoder.apply(input).unwrap();
+        let doc: Value = serde_json::from_slice(primase_gltf::glb::parse(&output).unwrap().json).unwrap();
+        let sizes: Vec<_> = doc["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                let t = &i["extras"]["primase.web_texture"];
+                (
+                    i["name"].as_str().unwrap().to_owned(),
+                    t["role"].as_str().unwrap().to_owned(),
+                    t["dimensions"].clone(),
+                    t["max_dimension"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sizes,
+            [
+                ("bake_wall".into(), "colour".into(), json!([16, 16]), json!(16)),
+                ("bake_wall".into(), "normal".into(), json!([8, 8]), json!(8)),
+                ("wall".into(), "colour".into(), json!([64, 64]), json!(512)),
+            ]
+        );
+        assert_eq!(encoder.cache.len(), 3);
+        assert!(
+            TextureEncoder::new(
+                TextureCaps {
+                    colour: 300,
+                    ..TextureCaps::default()
+                },
+                Vec::new()
+            )
+            .is_err()
+        );
+        assert!(
+            TextureEncoder::new(
+                TextureCaps::default(),
+                vec![("x".into(), TextureCaps { mask: 2, ..small })]
+            )
+            .is_err()
+        );
     }
 
     #[test]

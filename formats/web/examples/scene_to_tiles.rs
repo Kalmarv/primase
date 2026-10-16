@@ -5,13 +5,23 @@ use primase_core::{Name, World};
 use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
 use primase_web::{Options, ViewerItem};
 use std::path::Path;
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...]";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 && !(args.len() == 4 && args[3] == "--ktx2") {
-        return Err("usage: scene_to_tiles <scene folder> <output folder> [--ktx2]".into());
+    let (mut paths, mut ktx2, mut caps) = (Vec::new(), false, Vec::new());
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--ktx2" => ktx2 = true,
+            "--texture-cap" => caps.push(args.next().ok_or(USAGE)?),
+            _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
+            _ => paths.push(arg),
+        }
     }
-    let folder = Path::new(&args[1]);
-    let output = Path::new(&args[2]);
+    if paths.len() != 2 || (!caps.is_empty() && !ktx2) {
+        return Err(USAGE.into());
+    }
+    let folder = Path::new(&paths[0]);
+    let output = Path::new(&paths[1]);
     let mut world = World::new();
     primase_skate_scene::read(folder, &mut world)?;
     primase_gltf::load_mesh_files(&mut world, folder)?;
@@ -22,10 +32,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_dir: folder.into(),
         ..Default::default()
     };
-    if args.len() == 4 {
+    if ktx2 {
         #[cfg(feature = "ktx2")]
         {
             options.ktx2 = true;
+            options.texture_caps_by_name = caps
+                .iter()
+                .map(|rule| texture_cap(rule))
+                .collect::<Result<_, _>>()?;
         }
         #[cfg(not(feature = "ktx2"))]
         return Err("--ktx2 requires the ktx2 cargo feature".into());
@@ -94,4 +108,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         plain.files.values().map(Vec::len).sum::<usize>()
     );
     Ok(())
+}
+
+/// `<prefix>=<colour>,<normal>,<mask>`, e.g. `bake_=256,256,128`.
+#[cfg(feature = "ktx2")]
+fn texture_cap(rule: &str) -> Result<(String, primase_web::ktx2::TextureCaps), String> {
+    let bad = || format!("--texture-cap {rule}: expected <prefix>=<colour>,<normal>,<mask>");
+    let (prefix, values) = rule.split_once('=').ok_or_else(bad)?;
+    let values: Vec<u32> = values
+        .split(',')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|_| bad())?;
+    let [colour, normal, mask] = values[..] else {
+        return Err(bad());
+    };
+    Ok((
+        prefix.into(),
+        primase_web::ktx2::TextureCaps { colour, normal, mask },
+    ))
 }

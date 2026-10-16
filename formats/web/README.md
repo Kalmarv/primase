@@ -124,6 +124,12 @@ axis is lowered to a power of two, at least four pixels. Small axes are
 replicated. Source/output dimensions, role, caps and actual bytes are recorded
 in image extras. These limits describe the web target, not the source format.
 
+The per-axis caps are `Options::texture_caps` (defaults above: colour 512,
+normal 512, mask 256; powers of two, at least 4). `Options::texture_caps_by_name`
+sets tighter caps for images whose glTF name starts with a given prefix (the
+first matching rule wins), for example to bound generated texture variants. The
+`scene_to_tiles` example exposes this as `--texture-cap <prefix>=<colour>,<normal>,<mask>`.
+
 Colour filtering averages in linear light. Normal filtering uses
 `primase_image::resize_normals`: normalize source vectors, average them, then
 normalize the mean. Means shorter than sqrt(3)/255 become flat (0,0,1); image

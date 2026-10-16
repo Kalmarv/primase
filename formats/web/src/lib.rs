@@ -35,6 +35,12 @@ pub struct Options {
     /// Optional web texture lowering; PNG embedding remains the default.
     #[cfg(feature = "ktx2")]
     pub ktx2: bool,
+    /// KTX2 lowering: largest texture edge per role.
+    #[cfg(feature = "ktx2")]
+    pub texture_caps: ktx2::TextureCaps,
+    /// KTX2 lowering: caps for images whose glTF name starts with a prefix; first match wins.
+    #[cfg(feature = "ktx2")]
+    pub texture_caps_by_name: Vec<(String, ktx2::TextureCaps)>,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
@@ -49,6 +55,10 @@ impl Default for Options {
             compress: true,
             #[cfg(feature = "ktx2")]
             ktx2: false,
+            #[cfg(feature = "ktx2")]
+            texture_caps: ktx2::TextureCaps::default(),
+            #[cfg(feature = "ktx2")]
+            texture_caps_by_name: Vec::new(),
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
@@ -227,7 +237,8 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
 /// Degenerate placements are counted and omitted, as in the glTF writer.
 pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     #[cfg(feature = "ktx2")]
-    let mut texture_encoder = ktx2::TextureEncoder::default();
+    let mut texture_encoder =
+        ktx2::TextureEncoder::new(options.texture_caps, options.texture_caps_by_name.clone())?;
     if !options.tile_size.is_finite() || options.tile_size <= 0. {
         return Err(Error::Invalid("tile size must be finite and positive".into()));
     }
