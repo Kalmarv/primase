@@ -342,6 +342,7 @@ fn class(c: MaterialClass) -> VClass {
         MaterialClass::Leaves => VClass::Leaves,
         MaterialClass::Wood => VClass::Wood,
         MaterialClass::Alpha => VClass::Alpha,
+        MaterialClass::Layered => VClass::Layered,
     }
 }
 
@@ -518,6 +519,11 @@ impl Scene {
         let mut mat_keys = HashMap::new();
         let mut labels = HashMap::new();
         for (e, m) in world.iter::<SkateMaterial>() {
+            if m.class == MaterialClass::Layered {
+                return Err(crate::Error::Unsupported(
+                    "layered materials require triangle lowering before native map writing".into(),
+                ));
+            }
             materials.insert(m.key.clone(), m.clone());
             mat_keys.insert(e, m.key.clone());
             if let Some(n) = world.get::<Name>(e) {

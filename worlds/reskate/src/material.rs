@@ -18,6 +18,8 @@ pub enum VClass {
     Leaves = 6,
     Wood = 7,
     Alpha = 8,
+    /// Source blend; requires geometry lowering before native map writing.
+    Layered = 9,
 }
 
 /// A map material. `alpha` and `domain` use Studio's numbers: 1 opaque, 2 mask, 3 blend; 0 surface, 1 decal,
@@ -137,6 +139,7 @@ fn kind_name(c: VClass) -> &'static str {
         VClass::Terrain => "ter",
         VClass::Wood => "wood",
         VClass::Opaque => "m",
+        VClass::Layered => "layered",
     }
 }
 
