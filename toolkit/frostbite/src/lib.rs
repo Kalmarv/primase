@@ -64,15 +64,13 @@ impl<'a> Rd<'a> {
     }
 
     pub fn bytes(&self, at: usize, n: usize) -> Result<&'a [u8]> {
-        at.checked_add(n)
-            .and_then(|end| self.data.get(at..end))
-            .ok_or_else(|| {
-                bad(
-                    self.what,
-                    at,
-                    format!("{n} bytes past the end ({} bytes)", self.data.len()),
-                )
-            })
+        primase_bytes::View::new(self.data).slice(at, n).map_err(|_| {
+            bad(
+                self.what,
+                at,
+                format!("{n} bytes past the end ({} bytes)", self.data.len()),
+            )
+        })
     }
 
     pub fn arr<const N: usize>(&self, at: usize) -> Result<[u8; N]> {
@@ -126,8 +124,8 @@ pub fn latin1(s: &str, what: &'static str) -> Result<Vec<u8>> {
 /// Capacity for `count` entries that each take at least `min_bytes` of the `remaining` input bytes: refused before
 /// anything is reserved when they cannot fit, so a corrupt count returns an error instead of exhausting memory.
 pub fn capacity(what: &'static str, count: usize, min_bytes: usize, remaining: usize) -> Result<usize> {
-    match count.checked_mul(min_bytes) {
-        Some(n) if n <= remaining => Ok(count),
+    match primase_bytes::checked_span(0, count, min_bytes, remaining) {
+        Ok(_) => Ok(count),
         _ => Err(bad(
             what,
             0,
@@ -139,4 +137,34 @@ pub fn capacity(what: &'static str, count: usize, min_bytes: usize, remaining: u
 /// `v` rounded up to a multiple of `a`.
 pub fn align(v: usize, a: usize) -> usize {
     v.div_ceil(a) * a
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    #[test]
+    fn wrapper_retains_bounds_and_error_context() {
+        let rd = Rd::new(&[1, 2, 3, 4], "bounds fixture");
+        assert!(rd.bytes(4, 0).unwrap().is_empty());
+        assert_eq!(rd.u32be(0).unwrap(), 0x01020304);
+        for (offset, length) in [(4, 1), (5, 0), (usize::MAX, 1)] {
+            assert_eq!(
+                rd.bytes(offset, length).unwrap_err().to_string(),
+                bad(rd.what, offset, format!("{length} bytes past the end (4 bytes)")).to_string()
+            );
+        }
+        assert_eq!(capacity("table", 2, 2, 4).unwrap(), 2);
+        assert_eq!(capacity("table", usize::MAX, 0, 0).unwrap(), usize::MAX);
+        for (count, stride) in [(3, 2), (usize::MAX, 2)] {
+            assert_eq!(
+                capacity("table", count, stride, 4).unwrap_err().to_string(),
+                bad(
+                    "table",
+                    0,
+                    format!("{count} entries of at least {stride} bytes in 4 bytes")
+                )
+                .to_string()
+            );
+        }
+    }
 }

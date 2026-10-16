@@ -6,12 +6,13 @@ pub(crate) struct View<'a> {
 }
 impl<'a> View<'a> {
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
-        self.data
-            .get(
-                o..o.checked_add(n)
-                    .ok_or_else(|| invalid(self.format, o, "size overflow"))?,
-            )
-            .ok_or_else(|| invalid(self.format, o, "short input"))
+        primase_bytes::View::new(self.data).slice(o, n).map_err(|e| {
+            let detail = match e {
+                primase_bytes::BoundsError::LengthOverflow { .. } => "size overflow",
+                primase_bytes::BoundsError::OutOfBounds { .. } => "short input",
+            };
+            invalid(self.format, o, detail)
+        })
     }
     pub fn u8(&self, o: usize) -> Result<u8> {
         Ok(self.slice(o, 1)?[0])
@@ -89,4 +90,29 @@ pub(crate) fn coverage(
         return Err(invalid(v.format, pos, "unaccounted trailing bytes"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    #[test]
+    fn wrapper_retains_bounds_and_error_context() {
+        let view = View {
+            data: &[1, 2, 3, 4],
+            format: "bounds fixture",
+            be: false,
+        };
+        assert!(view.slice(4, 0).unwrap().is_empty());
+        assert_eq!(view.u32(0).unwrap(), 0x04030201);
+        for (offset, length, detail) in [
+            (4, 1, "short input"),
+            (5, 0, "short input"),
+            (usize::MAX, 1, "size overflow"),
+        ] {
+            assert_eq!(
+                view.slice(offset, length).unwrap_err().to_string(),
+                invalid(view.format, offset, detail).to_string()
+            );
+        }
+    }
 }

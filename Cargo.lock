@@ -775,6 +775,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-bytes"
+version = "0.1.0"
+
+[[package]]
 name = "primase-cli"
 version = "0.1.0"
 dependencies = [
@@ -829,6 +833,7 @@ dependencies = [
  "aes",
  "encoding_rs",
  "num-bigint",
+ "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dds",
@@ -852,6 +857,7 @@ dependencies = [
 name = "primase-frostbite"
 version = "0.1.0"
 dependencies = [
+ "primase-bytes",
  "primase-compress",
  "primase-hash",
  "thiserror",
