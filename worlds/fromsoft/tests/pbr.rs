@@ -58,6 +58,99 @@ fn payload(rgba: &[u8]) -> Vec<u8> {
     })
     .expect("valid synthetic DDS")
 }
+
+fn gx(words: &[u32]) -> flver::GxItem {
+    flver::GxItem {
+        id: *b"GXMD",
+        version: 123,
+        data: words.iter().flat_map(|v| v.to_le_bytes()).collect(),
+    }
+}
+
+#[test]
+fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
+    for shader in ["MetallicValue", "MetallicValue_MeshDecal", "Unclassified"] {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source(shader);
+        m.bindings.remove("Texture2D_2_MetallicMap");
+        // An unrelated vector precedes the scalar: IDs are not positional.
+        m.gx = vec![gx(&[2, 91, 2, 0, 0, 237, 1, 0.37f32.to_bits()])];
+        let raw = m.gx.clone();
+        world.insert(e, m);
+        let bytes = BTreeMap::from([
+            ("a".into(), payload(&[80, 90, 100, 255])),
+            ("n".into(), payload(&[128, 128, 255, 255])),
+        ]);
+        pbr::lower(&mut world, &bytes).unwrap();
+        let p = world.get::<PbrMaterial>(e).unwrap().clone();
+        assert_eq!(world.get::<materials::Material>(e).unwrap().gx, raw);
+        if shader != "Unclassified" {
+            assert_eq!(p.metallic, 0.37);
+            let t = world
+                .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
+                .unwrap();
+            assert_eq!(t.levels[0][2], 255);
+            pbr::lower(&mut world, &BTreeMap::new()).unwrap();
+            assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &p);
+        } else {
+            assert_eq!(p.metallic, PbrMaterial::default().metallic);
+        }
+    }
+}
+
+#[test]
+fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
+    let half = 0.5f32.to_bits();
+    for words in [
+        vec![],
+        vec![1, 237],
+        vec![1, 237, 1],
+        vec![2, 237, 1, half, 237, 1, half],
+        vec![1, 237, 1, f32::NAN.to_bits()],
+        vec![1, 237, 1, 1.01f32.to_bits()],
+        vec![1, 237, 1, half, 0],
+        vec![1, 237, 0, 1],
+        vec![3, 237, 1, half, 237, 0, 1, 237, 0, 0],
+    ] {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source("MetallicValue");
+        m.albedo = None;
+        m.normal = None;
+        m.gx = vec![gx(&words)];
+        world.insert(e, m);
+        assert!(pbr::lower(&mut world, &BTreeMap::new()).is_err(), "{words:?}");
+    }
+    {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source("MetallicValue");
+        m.albedo = None;
+        m.normal = None;
+        m.gx = vec![gx(&[1, 237, 1, half]); 2];
+        world.insert(e, m);
+        assert!(pbr::lower(&mut world, &BTreeMap::new()).is_err());
+    }
+    for records in [
+        vec![gx(&[2, 237, 1, half, 237, 0, 1])],
+        vec![gx(&[1, 237, 9, half])],
+    ] {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source("MetallicValue");
+        m.albedo = None;
+        m.normal = None;
+        m.gx = records.clone();
+        world.insert(e, m);
+        pbr::lower(&mut world, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            world.get::<PbrMaterial>(e).unwrap().metallic,
+            PbrMaterial::default().metallic
+        );
+        assert_eq!(world.get::<materials::Material>(e).unwrap().gx, records);
+    }
+}
 #[test]
 fn source_blue_gloss_and_red_metal_survive_as_distinct_orm_channels() {
     let mut world = World::new();

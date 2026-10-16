@@ -1,6 +1,7 @@
 //! Static source-material lowering. Unknown shader constants remain unknown and
 //! are counted; this is not a reconstruction of dynamic wetness or light banks.
 //! Source metadata stays attached. Existing baked PBR base/normal bindings win.
+mod gx;
 use crate::{
     Result, invalid,
     materials::{Binding, Material},
@@ -180,6 +181,15 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
             ));
         }
         let mut p = existing.unwrap_or_default();
+        let scalar = if !baked && p.metallic_roughness_texture.is_none() {
+            gx::metallic(&m, &mut log)?
+        } else {
+            None
+        };
+        if let Some(value) = scalar {
+            p.metallic = value;
+            log.approximate("dielectric F0 0.03 represented by glTF 0.04", 1);
+        }
         if !baked {
             if p.base_color_texture.is_none()
                 && let Some(name) = &m.albedo
@@ -241,6 +251,8 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                     let uv = [uv[0] / normal.width as f32, uv[1] / normal.height as f32];
                     let metallic = if let (Some(s), Some(mt)) = (&metal_sampler, mt) {
                         s.sample(std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]))?[0]
+                    } else if scalar.is_some() {
+                        1. // Preserve the source scalar exactly in the material factor.
                     } else {
                         p.metallic
                     };
@@ -265,7 +277,7 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 r.transform = Some(nt);
                 p.metallic_roughness_texture = Some(r);
                 p.roughness = 1.;
-                p.metallic = 1.;
+                p.metallic = if metal.is_none() { scalar.unwrap_or(1.) } else { 1. };
                 log.count("roughness textures", 1);
                 log.approximate("per-light gloss correction omitted", 1);
                 log.approximate("roughness quantized to UNORM8", 1);
@@ -273,7 +285,7 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                     log.count("metallic textures", 1);
                     log.approximate("dielectric F0 0.03 represented by glTF 0.04", 1);
                     log.approximate("metal resampled at normal base-mip texel centers", 1);
-                } else {
+                } else if scalar.is_none() {
                     log.approximate("runtime metallic constant unknown; retained target default", 1);
                 }
             } else {
