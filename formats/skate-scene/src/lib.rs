@@ -19,7 +19,7 @@ use std::path::PathBuf;
 pub use assets::prepare_scene_assets;
 pub use collision::{SkateRock, scene_surfaces, soup};
 pub use components::*;
-pub use lower::{LowerSkateLights, LowerSkatePbr, lower_light, lower_material};
+pub use lower::{LowerSkateLights, LowerSkatePbr, lower_light, lower_material, msk_to_orm};
 pub use raise::{RaiseOptions, raise_skate, studio_watts};
 pub use read::{ReadReport, read};
 pub use write::{WriteReport, write};

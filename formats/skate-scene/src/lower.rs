@@ -2,11 +2,13 @@
 //! keeping the source: the skate components stay, so a skate-scene writer still has them and a glTF writer carries
 //! the material in extras.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, TextureRef, Wrap as PbrWrap};
 use primase_core::{
-    ColorSpace, Entity, Light, LightKind, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
-    Transform, World,
+    ColorSpace, Entity, Light, LightKind, Name, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
+    TexRole, Texture, Transform, World,
 };
 
 use crate::components::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkateTexture, Wrap};
@@ -31,6 +33,17 @@ pub fn register(reg: &mut PassRegistry) {
 /// the scene says about each loaded `core.texture` its materials use: role (colour, normal, mask), colour space
 /// (`color_space`, default sRGB; normal and mask textures linear) and a normal map's convention (`green`, `z`), so a
 /// normal-conversion pass and the glTF writer see them.
+///
+/// A loaded Studio MSK mask (R metallic, G smoothness, B ambient occlusion, A opacity; linear) becomes a derived
+/// `core.texture` in glTF's packed layout, named `<mask>@orm`, linear, role mask: R occlusion = MSK B, G roughness =
+/// 255 - MSK G, B metallic = MSK R, A 255, every mip level (each output byte depends on one input byte, so the
+/// mapping commutes with the mips). It is bound as both `metallic_roughness_texture` and `occlusion_texture`, with
+/// metallic and roughness factors 1 so the mask's values pass through. Roughness is `1 - smoothness`: Skate is a
+/// Frostbite title, whose smoothness is one minus perceptual roughness (Lagarde and de Rousiers, "Moving Frostbite
+/// to Physically Based Rendering", 2014: `alpha = (1 - smoothness)^2`), and glTF's roughness is that perceptual
+/// roughness (`alpha = roughness^2`). The MSK layout is the Studio mask's as written by the ReSkate kit
+/// (`kit/docs/SCENE_INTERCHANGE.md`, materials `mask`) and confirmed in game (an MSK compiled by Studio rendered
+/// with G as gloss). The skate material keeps its MSK, so skate-scene writers are unaffected.
 #[derive(Debug, Default)]
 pub struct LowerSkatePbr;
 
@@ -48,8 +61,8 @@ impl Pass for LowerSkatePbr {
         &["core.texture"]
     }
     fn approximates(&self) -> &'static str {
-        "Studio MSK mask textures left out; wrap clip written as clamp; normal maps still files in a non-glTF \
-         convention left out"
+        "Studio MSK masks not loaded as RGBA8 left out; a material's scalar metallic and roughness ignored where its \
+         MSK is bound; wrap clip written as clamp; normal maps still files in a non-glTF convention left out"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut roles: Vec<(Entity, TexRole, ColorSpace, Option<NormalConvention>)> = Vec::new();
@@ -90,9 +103,31 @@ impl Pass for LowerSkatePbr {
                 tex.normal = normal;
             }
         }
+        let masks: BTreeSet<Entity> = w.iter::<SkateMaterial>().filter_map(|(_, m)| m.mask).collect();
+        let mut orm = BTreeMap::new();
+        for mask in masks {
+            match w.get::<Texture>(mask).map(msk_to_orm) {
+                Some(Some(texture)) => {
+                    let name = w
+                        .get::<Name>(mask)
+                        .map_or_else(|| format!("texture_{}", mask.index()), |n| n.0.clone());
+                    let e = w.spawn();
+                    w.insert(e, texture);
+                    w.insert(e, Name(format!("{name}@orm")));
+                    orm.insert(mask, e);
+                    log.count("MSK masks lowered to ORM textures", 1);
+                }
+                _ => log.approximate("Studio MSK mask not loaded as RGBA8 left out", 1),
+            }
+        }
         let lowered: Vec<(Entity, PbrMaterial)> = w
             .iter::<SkateMaterial>()
-            .map(|(e, m)| (e, lower_material(m, w, log)))
+            .map(|(e, m)| {
+                (
+                    e,
+                    lower_material(m, m.mask.and_then(|t| orm.get(&t).copied()), w, log),
+                )
+            })
             .collect();
         for (e, p) in lowered {
             w.insert(e, p);
@@ -198,8 +233,10 @@ fn srgb_to_linear(c: u8) -> f32 {
 /// factor; `tint` (sRGB bytes, multiplied in linear light) -> the factor, which glTF multiplies into the texture in
 /// linear light too; `normal` -> normal texture, unless it is still only a file in a convention other than glTF's
 /// (green up, z stored: loaded textures are converted by a normal pass); `wrap` -> the base texture's sampler.
-/// Counted in `log`: materials, masks not lowered, clip as clamp, normals left out.
-pub fn lower_material(m: &SkateMaterial, w: &World, log: &mut PassLog) -> PbrMaterial {
+/// `orm`: the material's MSK lowered to glTF's packed occlusion-roughness-metallic texture (see [`LowerSkatePbr`]),
+/// bound as metallic-roughness and occlusion with metallic and roughness factors 1; without it the scalar metallic
+/// and roughness. Counted in `log`: materials, scalars ignored for an MSK, clip as clamp, normals left out.
+pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &mut PassLog) -> PbrMaterial {
     use MaterialClass as C;
     log.count("materials", 1);
     let alpha = m.alpha.unwrap_or(match m.class {
@@ -251,15 +288,36 @@ pub fn lower_material(m: &SkateMaterial, w: &World, log: &mut PassLog) -> PbrMat
             None
         }
     });
-    if m.mask.is_some() {
-        log.approximate("Studio MSK mask texture left out", 1);
-    }
     let glassy = matches!(m.class, C::Glass | C::Water);
+    // With an ORM bound, metallicFactor and roughnessFactor are 1 so the mask's values pass through unscaled.
+    if orm.is_some() && (m.metallic.is_some() || m.roughness.is_some()) {
+        log.approximate(
+            "scalar metallic/roughness ignored where an MSK is bound (factors 1)",
+            1,
+        );
+    }
+    let orm_ref = orm.map(|t| TextureRef {
+        texture: t,
+        texcoord: 0,
+        wrap: [wrap; 2],
+        transform: None,
+    });
     PbrMaterial {
         base_color,
         base_color_texture,
-        metallic: m.metallic.unwrap_or(0.0) as f32,
-        roughness: m.roughness.unwrap_or(if glassy { 0.15 } else { 0.85 }) as f32,
+        metallic: if orm.is_some() {
+            1.0
+        } else {
+            m.metallic.unwrap_or(0.0) as f32
+        },
+        roughness: if orm.is_some() {
+            1.0
+        } else {
+            m.roughness.unwrap_or(if glassy { 0.15 } else { 0.85 }) as f32
+        },
+        metallic_roughness_texture: orm_ref,
+        occlusion_texture: orm_ref,
+        occlusion_strength: 1.0,
         normal_texture,
         alpha_mode: match alpha {
             AlphaMode::Mask => PbrAlpha::Mask { cutoff },
@@ -269,4 +327,33 @@ pub fn lower_material(m: &SkateMaterial, w: &World, log: &mut PassLog) -> PbrMat
         double_sided: m.two_sided.unwrap_or(matches!(m.class, C::Cutout | C::Leaves)),
         ..PbrMaterial::default()
     }
+}
+
+/// A Studio MSK (RGBA8: R metallic, G smoothness, B occlusion, A opacity) as glTF's packed texture: R occlusion,
+/// G roughness = 255 - smoothness, B metallic, A 255; every level. `None` unless RGBA8.
+pub fn msk_to_orm(msk: &Texture) -> Option<Texture> {
+    if msk.format != TexFormat::Rgba8Unorm || msk.levels.iter().any(|l| l.len() % 4 != 0) {
+        return None;
+    }
+    let levels = msk
+        .levels
+        .iter()
+        .map(|level| {
+            level
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[2], 255 - p[1], p[0], 255])
+                .collect()
+        })
+        .collect();
+    Some(Texture {
+        width: msk.width,
+        height: msk.height,
+        format: TexFormat::Rgba8Unorm,
+        levels,
+        color_space: ColorSpace::Linear,
+        role: TexRole::Mask,
+        normal: None,
+    })
 }
