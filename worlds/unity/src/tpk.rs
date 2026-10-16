@@ -2,6 +2,7 @@
 //! player build strips from its files. Format versions 1 and 2, type tree data, uncompressed or LZ4 (LZMA and
 //! Brotli packages are refused: re-pack them uncompressed).
 
+use primase_compress::{Decompressor, Lz4};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -85,7 +86,8 @@ impl TypeTreePackage {
         let packed = r.take(compressed)?;
         let blob: Vec<u8> = match compression {
             0 => packed.to_vec(),
-            1 => lz4_flex::block::decompress(packed, uncompressed)
+            1 => Lz4
+                .decompress(packed, uncompressed)
                 .map_err(|e| invalid(format!("TPK LZ4: {e}")))?,
             2 => {
                 return Err(Error::Unsupported(
@@ -268,5 +270,37 @@ impl TypeTreePackage {
         }
         add(self, root, 0, &mut nodes)?;
         TypeTree::new(nodes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package(compression: u8, packed: &[u8], expected: u32) -> Vec<u8> {
+        let mut bytes = MAGIC.to_le_bytes().to_vec();
+        bytes.extend([2, compression, 0, 0]);
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((packed.len() as u32).to_le_bytes());
+        bytes.extend(expected.to_le_bytes());
+        bytes.extend(packed);
+        bytes
+    }
+
+    /// Independent hand-encoded LZ4 literal-only block, against uncompressed TPK parsing.
+    #[test]
+    fn literal_lz4_package_matches_uncompressed_and_rejects_bad_sizes() {
+        // Timestamp and five empty tables for format 2.
+        let blob = [0u8; 28];
+        let mut packed = vec![0xf0, 13];
+        packed.extend(blob);
+        let raw = TypeTreePackage::parse(&package(0, &blob, 28)).unwrap();
+        let compressed = TypeTreePackage::parse(&package(1, &packed, 28)).unwrap();
+        assert_eq!(format!("{raw:?}"), format!("{compressed:?}"));
+        for expected in [0, 27, 29] {
+            assert!(TypeTreePackage::parse(&package(1, &packed, expected)).is_err());
+        }
+        assert!(TypeTreePackage::parse(&package(1, &packed[..packed.len() - 1], 28)).is_err());
+        assert!(TypeTreePackage::parse(&package(1, &[], 0)).is_err());
     }
 }

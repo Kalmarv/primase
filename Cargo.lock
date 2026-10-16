@@ -992,7 +992,7 @@ dependencies = [
 name = "primase-unity"
 version = "0.1.0"
 dependencies = [
- "lz4_flex",
+ "primase-compress",
  "primase-core",
  "primase-gltf",
  "primase-image",
