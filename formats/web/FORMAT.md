@@ -174,6 +174,13 @@ interpolated vertex channel. It is a glTF material carrying the vendor extension
 - Per pixel: interpolate the channels, evaluate the mapping, colour = sum(weight[i] * layer[i]) with the weights not
   clamped or renormalised, normals blended with the same weights after each is taken into the common frame, then
   normalised (an all-zero sum has no direction; the consumer states its fallback).
+- **Named approximation, scalar channels:** the equation above is exact for colour (and for normals once each is in
+  the common frame). For roughness, metallic and occlusion a consumer cannot reproduce a source shader it does not
+  know, so this format names one approximation: each is the weighted **average** of the layers' values,
+  `sum(weight[i] * value[i]) / sum(weight[i])` (all weights zero: the plain mean of the non-null layers), where a
+  layer's value is its metallic-roughness / occlusion texture sample times its factor. Darkening (`rgb_product_4`
+  makes the weights sum to 1 - r) is a colour effect: the average does not follow it, so a darkened pixel is not also
+  glossier. A source whose shader combines these channels differently is not reproduced by this approximation.
 - The host material (the one primitives reference) is a verbatim copy of the first non-null layer's material, so a
   consumer that ignores the extension renders that layer. A primitive drawn with a layered material but lacking the
   weight attribute renders as the host.
