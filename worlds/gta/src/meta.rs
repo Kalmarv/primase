@@ -200,18 +200,7 @@ fn err(offset: u64, detail: impl ToString) -> crate::Error {
     invalid("META", offset, detail)
 }
 
-fn u16_at(d: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([d[o], d[o + 1]])
-}
-fn u32_at(d: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
-}
-fn u64_at(d: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes(d[o..o + 8].try_into().expect("8 bytes"))
-}
-fn f32_at(d: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
-}
+use crate::le::{f32 as f32_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
 
 /// The header's fixed values (`0x10`, `0x14`).
 const HEADER_MAGIC: u32 = 0x5052_4430;

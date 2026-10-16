@@ -3,14 +3,18 @@
 //! Key material is never part of this crate: the caller supplies it ([`Keys`]) and the crate checks it against
 //! published digests before using it.
 pub mod archive_set;
+pub mod drawable;
 mod key_hashes;
 pub mod keys;
+mod le;
 pub mod map;
 pub mod meta;
 pub mod mount;
 pub mod ng;
 pub mod resource;
 pub mod rpf;
+pub mod sga;
+pub mod texture;
 mod xml;
 
 pub use archive_set::{ArchiveSet, FileRef, Install, MapState};
