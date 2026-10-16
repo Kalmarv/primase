@@ -4,7 +4,7 @@ use crate::{
     Result,
     btl::{Kind, Light},
     invalid,
-    msb::{Part, PartKind},
+    msb::euler_transform,
 };
 use primase_core::Transform;
 use primase_meshops::vector::Vec3;
@@ -34,17 +34,7 @@ impl SrgbLightPolicy {
                 "directional light is not a point or spot",
             ));
         }
-        let local = Part {
-            index: 0,
-            name: String::new(),
-            kind: PartKind::MapPiece,
-            model: None,
-            hit_filter: None,
-            position: light.position,
-            rotation_degrees: light.rotation,
-            scale: [1.; 3],
-        }
-        .transform()?;
+        let local = euler_transform(light.position, light.rotation, [1.; 3], 0)?;
         let direction = |v: [f32; 3]| -> [f32; 3] {
             let p = std::array::from_fn(|i| {
                 map.cols[0][i] * v[0] + map.cols[1][i] * v[1] + map.cols[2][i] * v[2]

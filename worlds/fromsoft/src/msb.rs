@@ -64,6 +64,11 @@ pub struct Part {
     pub position: [f32; 3],
     pub rotation_degrees: [f32; 3],
     pub scale: [f32; 3],
+    /// The part's own entity ID as stored (event scripts address it; -1 or 0: none).
+    pub entity_id: i32,
+    /// The entity groups it belongs to, as stored (unused slots -1 or 0); a script addressing a group addresses
+    /// every member.
+    pub entity_group_ids: [i32; 8],
 }
 #[derive(Clone, Debug)]
 pub struct MapOffset {
@@ -232,11 +237,23 @@ impl MapLayout {
                     pointer(&r, field, 160)?;
                 }
             }
+            // entity block: ID at +0, eight group IDs at +0x1c, then 16 zero bytes to +0x54
+            let entity = r.size(96)?;
+            r.slice(entity, 0x54)?;
+            r.expect(entity + 0x44, &[0; 16])?;
+            let i32_at = |o: usize| r.u32(o).map(|v| v as i32);
+            let entity_id = i32_at(entity)?;
+            let mut entity_group_ids = [0i32; 8];
+            for (k, g) in entity_group_ids.iter_mut().enumerate() {
+                *g = i32_at(entity + 0x1c + 4 * k)?;
+            }
             parts.push(Part {
                 index,
                 name,
                 kind,
                 model,
+                entity_id,
+                entity_group_ids,
                 hit_filter: if kind == PartKind::Collision {
                     Some(r.slice(r.size(104)?, 1)?[0])
                 } else {
@@ -276,54 +293,62 @@ impl MapLayout {
     }
 }
 impl Part {
-    /// Scale, X-Z-Y Euler rotation, translation in the source frame, then the
-    /// core's handedness conversion. Trigonometry/matrix products use f64 and
-    /// round once to each stored f32 basis component; translations remain exact.
+    /// See [`euler_transform`].
     pub fn transform(&self) -> Result<Transform> {
-        if !self
-            .position
-            .iter()
-            .chain(&self.rotation_degrees)
-            .chain(&self.scale)
-            .all(|x| x.is_finite())
-        {
-            return Err(invalid("MSB transform", self.index, "non-finite input"));
-        }
-        let [x, y, z] = self.rotation_degrees.map(|a| f64::from(a).to_radians());
-        let (sx, cx) = x.sin_cos();
-        let (sy, cy) = y.sin_cos();
-        let (sz, cz) = z.sin_cos();
-        // Columns of Ry * Rz * Rx, each multiplied by its local-axis scale.
-        let basis = [
-            [cy * cz, sz, -sy * cz],
-            [sy * sx - cy * sz * cx, cz * cx, cy * sx + sy * sz * cx],
-            [cy * sz * sx + sy * cx, -cz * sx, cy * cx - sy * sz * sx],
-        ];
-        let mut transform = Transform { cols: [[0.; 3]; 4] };
-        for (i, col) in basis.into_iter().enumerate() {
-            transform.cols[i] = col.map(|x| (x * f64::from(self.scale[i])) as f32);
-        }
-        transform.cols[3] = self.position;
-        if !transform.cols.iter().flatten().all(|x| x.is_finite()) {
-            return Err(invalid("MSB transform", self.index, "basis overflow"));
-        }
-        Ok(FRAME.transform(&transform))
+        euler_transform(self.position, self.rotation_degrees, self.scale, self.index)
     }
+
+    /// The IDs an event script can address this part by: its entity ID and its groups, the positive ones only
+    /// (stored sentinels never match).
+    pub fn entity_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        std::iter::once(self.entity_id)
+            .chain(self.entity_group_ids)
+            .filter(|&id| id > 0)
+    }
+}
+
+/// Scale, X-Z-Y Euler rotation, translation in the source frame, then the
+/// core's handedness conversion. Trigonometry/matrix products use f64 and
+/// round once to each stored f32 basis component; translations remain exact.
+/// `index` names the record in errors.
+pub fn euler_transform(
+    position: [f32; 3],
+    rotation_degrees: [f32; 3],
+    scale: [f32; 3],
+    index: usize,
+) -> Result<Transform> {
+    if !position
+        .iter()
+        .chain(&rotation_degrees)
+        .chain(&scale)
+        .all(|x| x.is_finite())
+    {
+        return Err(invalid("MSB transform", index, "non-finite input"));
+    }
+    let [x, y, z] = rotation_degrees.map(|a| f64::from(a).to_radians());
+    let (sx, cx) = x.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let (sz, cz) = z.sin_cos();
+    // Columns of Ry * Rz * Rx, each multiplied by its local-axis scale.
+    let basis = [
+        [cy * cz, sz, -sy * cz],
+        [sy * sx - cy * sz * cx, cz * cx, cy * sx + sy * sz * cx],
+        [cy * sz * sx + sy * cx, -cz * sx, cy * cx - sy * sz * sx],
+    ];
+    let mut transform = Transform { cols: [[0.; 3]; 4] };
+    for (i, col) in basis.into_iter().enumerate() {
+        transform.cols[i] = col.map(|x| (x * f64::from(scale[i])) as f32);
+    }
+    transform.cols[3] = position;
+    if !transform.cols.iter().flatten().all(|x| x.is_finite()) {
+        return Err(invalid("MSB transform", index, "basis overflow"));
+    }
+    Ok(FRAME.transform(&transform))
 }
 impl MapOffset {
     /// Map-local data to the common world frame, never compounded onto parts.
     pub fn transform(&self) -> Result<Transform> {
-        Part {
-            index: 0,
-            name: String::new(),
-            kind: PartKind::MapPiece,
-            model: None,
-            hit_filter: None,
-            position: self.position,
-            rotation_degrees: [0., self.degrees, 0.],
-            scale: [1.; 3],
-        }
-        .transform()
+        euler_transform(self.position, [0., self.degrees, 0.], [1.; 3], 0)
     }
 }
 /// Checkpoint/warp spawn region stored in the common world frame. Its facing

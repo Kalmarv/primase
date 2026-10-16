@@ -156,6 +156,12 @@ Stored values and model references must match exactly. Derived bases allow
 absolute error 1e-6 after division by max(1, largest absolute local scale);
 translations remain exact. Gates count exact and tolerance matches separately.
 
+Parts also carry their entity ID and eight entity group IDs as stored (sentinels -1 and 0 included); event scripts
+address a part by any positive one of them (`Part::entity_ids`). `PRIMASE_FROMSOFT_STATE_ORACLE` is a folder from an
+independent reader. Its `entities.jsonl` has one record per map file: `path` and `parts`, each with `index`, `name`,
+`entity_id` and `entity_group_ids` (8 integers). The gate (`tests/msb_entities.rs`) requires the same part count and
+names and exact values.
+
 `PRIMASE_FROMSOFT_SCENE` supplies a reference skate-scene folder. Its source
 labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
 references, exact translations and bases under the same stated tolerance.

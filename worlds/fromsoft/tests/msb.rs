@@ -9,6 +9,8 @@ fn part() -> Part {
         position: [0.; 3],
         rotation_degrees: [0.; 3],
         scale: [1.; 3],
+        entity_id: -1,
+        entity_group_ids: [-1; 8],
     }
 }
 fn close(a: [[f32; 3]; 4], b: [[f32; 3]; 4]) {
@@ -59,6 +61,10 @@ fn put64(data: &mut [u8], offset: usize, value: usize) {
     data[offset..offset + 8].copy_from_slice(&(value as u64).to_le_bytes());
 }
 fn empty_map() -> Vec<u8> {
+    map_with_parts(&[])
+}
+/// A map whose parts section holds these part records (every other section empty).
+fn map_with_parts(parts: &[Vec<u8>]) -> Vec<u8> {
     let mut data = b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff".to_vec();
     let names = [
         "MODEL_PARAM_ST",
@@ -71,17 +77,88 @@ fn empty_map() -> Vec<u8> {
         "MAPSTUDIO_BONE_NAME_STRING",
     ];
     for (i, name) in names.into_iter().enumerate() {
+        let records: &[Vec<u8>] = if i == 5 { parts } else { &[] };
         let start = data.len();
-        data.resize(start + 24, 0);
+        let table = 16 + 8 * (records.len() + 1);
+        data.resize(start + table, 0);
         data[start..start + 4].copy_from_slice(&35u32.to_le_bytes());
-        data[start + 4..start + 8].copy_from_slice(&1u32.to_le_bytes());
-        put64(&mut data, start + 8, start + 24);
+        data[start + 4..start + 8].copy_from_slice(&((records.len() + 1) as u32).to_le_bytes());
+        put64(&mut data, start + 8, start + table);
         data.extend(name.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
         data.resize(data.len().next_multiple_of(8), 0);
+        for (k, r) in records.iter().enumerate() {
+            let at = data.len();
+            put64(&mut data, start + 16 + 8 * k, at);
+            data.extend_from_slice(r);
+        }
         let next = if i == 7 { 0 } else { data.len() };
-        put64(&mut data, start + 16, next);
+        put64(&mut data, start + table - 8, next);
     }
     data
+}
+/// One map-piece part record (no model): header, name, sib path, the entity block, one byte of type data.
+fn part_record(entity_id: i32, groups: [i32; 8], tail: [u8; 16]) -> Vec<u8> {
+    let mut r = vec![0u8; 160];
+    let text = |r: &mut Vec<u8>, field: usize, s: &str| {
+        let at = r.len();
+        put64(r, field, at);
+        r.extend(s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        r.resize(r.len().next_multiple_of(8), 0);
+    };
+    text(&mut r, 0, "m000000_0000");
+    text(&mut r, 24, "sib");
+    r[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+    r[56..68].copy_from_slice(&[1f32.to_le_bytes(); 3].concat());
+    r[68..76].fill(255);
+    let entity = r.len();
+    put64(&mut r, 96, entity);
+    r.resize(entity + 0x54, 0);
+    r[entity..entity + 4].copy_from_slice(&entity_id.to_le_bytes());
+    for (k, g) in groups.iter().enumerate() {
+        r[entity + 0x1c + 4 * k..entity + 0x20 + 4 * k].copy_from_slice(&g.to_le_bytes());
+    }
+    r[entity + 0x44..entity + 0x54].copy_from_slice(&tail);
+    let type_data = r.len();
+    put64(&mut r, 104, type_data);
+    r.resize(r.len() + 8, 0);
+    r
+}
+#[test]
+fn entity_ids_and_groups_as_stored() {
+    let groups = [1117201, -1, 0, 1116201, -1, -1, -1, -1];
+    let map =
+        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(-1, groups, [0; 16])])).unwrap();
+    let p = &map.parts[0];
+    assert_eq!(
+        (p.entity_id, p.entity_group_ids),
+        (-1, groups),
+        "sentinels kept as stored"
+    );
+    assert_eq!(
+        p.entity_ids().collect::<Vec<_>>(),
+        [1117201, 1116201],
+        "only positive IDs address the part"
+    );
+    let map =
+        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(1110432, [-1; 8], [0; 16])]))
+            .unwrap();
+    assert_eq!(map.parts[0].entity_ids().collect::<Vec<_>>(), [1110432]);
+}
+#[test]
+fn entity_block_tail_must_be_zero() {
+    let mut tail = [0u8; 16];
+    tail[15] = 1;
+    assert!(
+        primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[part_record(-1, [-1; 8], tail)])).is_err()
+    );
+}
+#[test]
+fn truncated_entity_block_is_an_error() {
+    let mut r = part_record(5, [-1; 8], [0; 16]);
+    // point the entity block 8 bytes before the record's end
+    let end = r.len() - 8;
+    put64(&mut r, 96, end);
+    assert!(primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[r])).is_err());
 }
 #[test]
 fn empty_sections_and_truncated_envelopes() {
