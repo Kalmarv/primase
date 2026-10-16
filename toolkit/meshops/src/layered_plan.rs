@@ -82,6 +82,9 @@ impl LayeredPbrPlan {
 /// This is a read-only census; use lower_layered_pbr to apply changes atomically with metadata validation.
 /// The first unused texture-coordinate set is selected world-wide. A subset world may choose
 /// a different free set, although both preserve the same layer-before-texture UV semantics.
+/// Run this lowering once on the whole world before partitioning when prototypes are shared
+/// across output cells. Independently lowering cell subsets can assign different UV sets to
+/// the same source prototype; this API does not coordinate those assignments.
 pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<LayeredPbrPlan> {
     // Validate and prepare all changes before mutating the destination.
     let mut replacements = BTreeMap::<(Entity, usize), PbrMaterial>::new();
@@ -226,6 +229,8 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
 /// Plan, validate dialect metadata against the unchanged world, then apply generic changes.
 /// The callback cannot mutate the world; it may prepare metadata for the caller to publish
 /// after success. Any planning/validation error leaves both world and pass log unchanged.
+/// As with plan_layered_pbr, lower the whole world before partitioning shared prototypes.
+/// Per-pixel layered writers should retain core.layered instead of using this approximation.
 pub fn lower_layered_pbr(
     world: &mut World,
     policy: SelectionPolicy,
