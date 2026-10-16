@@ -119,3 +119,78 @@ fn missing_source_data_is_not_a_silent_default() {
     world.insert(e, source("MetallicTex"));
     assert!(pbr::lower(&mut world, &BTreeMap::new()).is_err());
 }
+
+#[test]
+fn selected_normal_identity_controls_both_transforms() {
+    let mut world = World::new();
+    let e = world.spawn();
+    let mut m = source("MetallicTex");
+    let kind = "Texture2D_3_NormalMap";
+    let mut slot = m.definition.as_ref().unwrap().textures[1].clone();
+    slot.kind = kind.into();
+    m.definition.as_mut().unwrap().textures.push(slot);
+    m.bindings.insert(
+        kind.into(),
+        materials::Binding {
+            texture: "selected".into(),
+            scale: [2., 1.],
+            uv_number: 1,
+        },
+    );
+    m.normal = Some("selected".into());
+    world.insert(e, m);
+    let bytes = BTreeMap::from([
+        ("a".into(), payload(&[80, 90, 100, 255])),
+        (
+            "selected".into(),
+            payload(&[128, 128, 0, 255, 128, 128, 255, 255]),
+        ),
+        ("m".into(), payload(&[0, 0, 0, 255, 255, 0, 0, 255])),
+    ]);
+    pbr::lower(&mut world, &bytes).unwrap();
+    let p = world.get::<PbrMaterial>(e).unwrap();
+    let normal = p.normal_texture.unwrap();
+    let orm = p.metallic_roughness_texture.unwrap();
+    assert_eq!(normal.transform.unwrap().scale, [2., 1.]);
+    assert_eq!(orm.transform, normal.transform);
+    // Metal sampled at U=.125/.375: wrapped bilinear values are both .25.
+    assert_eq!(
+        world.get::<Texture>(orm.texture).unwrap().levels[0],
+        [255, 255, 64, 255, 255, 13, 64, 255]
+    );
+}
+
+#[test]
+fn repeated_lowering_preserves_channels_factors_and_entity_count() {
+    let mut world = World::new();
+    let e = world.spawn();
+    let mut m = source("MetallicValue");
+    m.bindings.remove("Texture2D_2_MetallicMap");
+    world.insert(e, m);
+    world.insert(
+        e,
+        PbrMaterial {
+            metallic: 0.2,
+            ..Default::default()
+        },
+    );
+    let bytes = BTreeMap::from([
+        ("a".into(), payload(&[80, 90, 100, 255])),
+        ("n".into(), payload(&[128, 128, 255, 255])),
+    ]);
+    pbr::lower(&mut world, &bytes).unwrap();
+    let expected = world.get::<PbrMaterial>(e).unwrap().clone();
+    let texture = expected.metallic_roughness_texture.unwrap().texture;
+    assert_eq!(
+        world.get::<Texture>(texture).unwrap().levels[0],
+        [255, 13, 51, 255]
+    );
+    let entities = world.entities().count();
+    pbr::lower(&mut world, &BTreeMap::new()).unwrap();
+    assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
+    assert_eq!(world.entities().count(), entities);
+    assert_eq!(
+        world.get::<Texture>(texture).unwrap().levels[0],
+        [255, 13, 51, 255]
+    );
+}

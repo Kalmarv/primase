@@ -67,6 +67,17 @@ fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
         .find_map(|t| m.bindings.get(&t.kind))
 }
 
+fn normal_binding(m: &Material) -> Option<&Binding> {
+    let name = m.normal.as_ref()?;
+    m.definition
+        .as_ref()?
+        .textures
+        .iter()
+        .filter(|t| t.kind.contains("NormalMap"))
+        .filter_map(|t| m.bindings.get(&t.kind))
+        .find(|b| &b.texture == name)
+}
+
 /// Names required by the evidenced static policies, for one batched DDS read.
 /// Layered base/normal textures must already be baked and bound by assembly.
 pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
@@ -181,7 +192,7 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 && let Some(name) = &m.normal
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
-                if let Some(b) = binding(&m, "NormalMap") {
+                if let Some(b) = normal_binding(&m) {
                     r.transform = Some(transform(&m, b)?);
                 }
                 p.normal_texture = Some(r);
@@ -196,7 +207,11 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
         if baked {
             log.approximate("layered PBR channels require shader bake outputs", 1);
         } else if simple(&m.shader) {
-            if let Some(name) = &m.normal {
+            if p.metallic_roughness_texture.is_some() {
+                // Existing channels (including this pass's output) are authoritative.
+                // Repacking would apply the already-normalized factors a second time.
+                log.count("existing ORM textures preserved", 1);
+            } else if let Some(name) = &m.normal {
                 let normal = read(payloads, name)?;
                 let rgba = pixels(&normal)?;
                 let metal = binding(&m, "MetallicMap");
@@ -210,8 +225,8 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                         false,
                     )?);
                 }
-                let normal_binding = binding(&m, "NormalMap")
-                    .ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
+                let normal_binding =
+                    normal_binding(&m).ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
                 let nt = transform(&m, normal_binding)?;
                 let mt = metal.map(|b| transform(&m, b)).transpose()?;
                 if nt.scale.contains(&0.) {
