@@ -120,3 +120,28 @@ fn malformed_streams_and_indices_fail() {
         .insert(Semantic::Tangent, Stream::F32x4(vec![[f32::NAN; 4]; 4]));
     assert!(compact_primitive(&p).is_err());
 }
+
+/// The original web tiler gathered these exact source vertices in first-use order.
+#[test]
+fn explicit_subset_preserves_the_web_gather_order_and_every_stream() {
+    let source = fixture();
+    let selected = primase_meshops::subset_primitive(&source, &[3, 1, 3, 1, 2, 3]).unwrap();
+    assert_eq!(selected.gather, [3, 1, 2]);
+    assert_eq!(selected.old_to_new, [None, Some(1), Some(2), Some(0)]);
+    assert_eq!(selected.primitive.indices, Some(vec![0, 1, 0, 1, 2, 0]));
+    let mut reference = source.clone();
+    reference.indices = Some(vec![3, 1, 3, 1, 2, 3]);
+    assert_eq!(selected, compact_primitive(&reference).unwrap());
+    assert_eq!(source, fixture(), "source is unchanged");
+    let empty = primase_meshops::subset_primitive(&source, &[]).unwrap();
+    assert!(empty.primitive.streams.values().all(|s| s.is_empty()));
+    assert_eq!(empty.primitive.indices, Some(vec![]));
+    assert!(primase_meshops::subset_primitive(&source, &[0, 1]).is_err());
+    assert!(primase_meshops::subset_primitive(&source, &[0, 1, 4]).is_err());
+    let mut unindexed = source;
+    unindexed.indices = None;
+    assert_eq!(
+        primase_meshops::subset_primitive(&unindexed, &[3, 1, 3, 1, 2, 3]).unwrap(),
+        selected
+    );
+}

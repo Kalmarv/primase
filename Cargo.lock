@@ -998,6 +998,7 @@ dependencies = [
  "primase-core",
  "primase-gltf",
  "primase-image",
+ "primase-meshops",
  "primase-skate-scene",
  "serde",
  "serde_json",

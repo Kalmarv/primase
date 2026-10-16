@@ -14,6 +14,18 @@ pub struct CompactedPrimitive {
 /// index order. Non-indexed primitives retain sequential storage and None indices.
 /// Reject invalid lengths, indices, topology counts and non-finite attributes.
 pub fn compact_primitive(source: &Primitive) -> Result<CompactedPrimitive> {
+    compact_indices(source, source.indices.as_deref())
+}
+
+/// Gather explicit source vertex indices in first-use order, preserving all streams.
+/// The selection replaces the source index list and must contain complete primitives.
+/// An empty selection produces empty streams and an explicit empty index list.
+/// Source lengths and finite attributes are validated even for unused vertices.
+pub fn subset_primitive(source: &Primitive, indices: &[u32]) -> Result<CompactedPrimitive> {
+    compact_indices(source, Some(indices))
+}
+
+fn compact_indices(source: &Primitive, selection: Option<&[u32]>) -> Result<CompactedPrimitive> {
     let n = source
         .positions()
         .ok_or_else(|| Error("missing float3 positions".into()))?
@@ -44,7 +56,7 @@ pub fn compact_primitive(source: &Primitive) -> Result<CompactedPrimitive> {
             Stream::U8x4(_) | Stream::U16x4(_) => {}
         }
     }
-    let count = source.indices.as_ref().map_or(n, Vec::len);
+    let count = selection.map_or(n, <[u32]>::len);
     let width = match source.topology {
         Topology::Triangles => 3,
         Topology::Lines => 2,
@@ -65,7 +77,7 @@ pub fn compact_primitive(source: &Primitive) -> Result<CompactedPrimitive> {
             new
         }))
     };
-    let indices = if let Some(indices) = &source.indices {
+    let indices = if let Some(indices) = selection {
         Some(indices.iter().map(|&i| remap(i)).collect::<Result<Vec<_>>>()?)
     } else {
         for i in 0..n {

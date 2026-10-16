@@ -1,7 +1,6 @@
 //! Web tile sets in the core frame (metres, +Y up). Tiles use east/north ground coordinates.
 use primase_core::{
-    Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Stream, Topology, Transform, TransformKind,
-    World,
+    Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Topology, Transform, TransformKind, World,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -166,40 +165,6 @@ fn indices(p: &Primitive) -> Vec<u32> {
     p.indices
         .clone()
         .unwrap_or_else(|| (0..p.vertex_count() as u32).collect())
-}
-fn subset(p: &Primitive, idx: &[u32]) -> Primitive {
-    let mut map = BTreeMap::new();
-    let mut vertices = Vec::new();
-    let indices = idx
-        .iter()
-        .map(|&i| {
-            *map.entry(i).or_insert_with(|| {
-                let n = vertices.len() as u32;
-                vertices.push(i as usize);
-                n
-            })
-        })
-        .collect();
-    let streams = p
-        .streams
-        .iter()
-        .map(|(sem, stream)| {
-            let stream = match stream {
-                Stream::F32x2(v) => Stream::F32x2(vertices.iter().map(|&i| v[i]).collect()),
-                Stream::F32x3(v) => Stream::F32x3(vertices.iter().map(|&i| v[i]).collect()),
-                Stream::F32x4(v) => Stream::F32x4(vertices.iter().map(|&i| v[i]).collect()),
-                Stream::U8x4(v) => Stream::U8x4(vertices.iter().map(|&i| v[i]).collect()),
-                Stream::U16x4(v) => Stream::U16x4(vertices.iter().map(|&i| v[i]).collect()),
-            };
-            (*sem, stream)
-        })
-        .collect();
-    Primitive {
-        topology: p.topology,
-        streams,
-        indices: Some(indices),
-        material: p.material,
-    }
 }
 fn validate_mesh(mesh: &Mesh) -> Result<()> {
     for p in &mesh.primitives {
@@ -527,7 +492,9 @@ impl TilePlan {
                             .iter()
                             .flat_map(|&t| all[3 * t as usize..3 * t as usize + 3].iter().copied())
                             .collect();
-                        let mut sub = subset(prim, &idx);
+                        let mut sub = primase_meshops::subset_primitive(prim, &idx)
+                            .map_err(|e| Error::Invalid(e.to_string()))?
+                            .primitive;
                         sub.material = variants
                             .and_then(|v| v.0[*part].get(&p.variant).copied())
                             .or(prim.material);
