@@ -885,6 +885,7 @@ dependencies = [
  "indexmap",
  "primase-compress",
  "primase-core",
+ "primase-dds",
  "primase-gltf",
  "primase-hash",
  "primase-skate-scene",

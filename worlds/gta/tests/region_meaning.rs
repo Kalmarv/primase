@@ -15,7 +15,9 @@
 //! normals; its `--decal-face-lift`), matched within 0.2 mm; not a pass yet. Any other difference fails the gate.
 //! On identical geometries every scene vertex must have one of ours at its position with its UV0 (1e-5), its normal
 //! (1e-4, against ours normalised: stored normals are quantised; a stored zero normal the exporter writes up, named),
-//! and, where the scene carries COLOR_0, its alpha.
+//! and, where the scene carries COLOR_0, its alpha. Textures: each scene texture's largest level must be one of our
+//! attached textures' levels and its smaller levels must follow it (that exporter passed DXT blocks through and dropped
+//! top levels to a size cap, counted).
 //! Fragments (yft) are not read yet and are counted.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
@@ -30,6 +32,7 @@ use primase_gta::region::{Region, States, archive_sets, read_region};
 use primase_gta::select::SelectRegion;
 use primase_gta::{Install, Keys};
 use primase_skate_scene::{SkatePlacement, SkatePrototype};
+use sha2::{Digest, Sha256};
 
 /// Position key: centimetres.
 fn key(t: &Transform) -> [i64; 3] {
@@ -405,6 +408,43 @@ fn region_placements_against_the_scene() {
     for x in &examples {
         println!("    differing: {x}");
     }
+    // textures: each scene texture's largest level is one of our textures' levels, and its smaller levels follow it
+    // (that exporter passed DXT blocks through and may drop top levels to a size cap)
+    let mut levels: BTreeMap<Vec<u8>, (primase_core::Entity, usize)> = BTreeMap::new();
+    for (e, t) in drawn.iter::<primase_core::Texture>() {
+        for (i, l) in t.levels.iter().enumerate() {
+            levels.entry(Sha256::digest(l).to_vec()).or_insert((e, i));
+        }
+    }
+    let mut tex: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, tf) in theirs.iter::<primase_core::TextureFile>() {
+        let bytes = std::fs::read(std::path::Path::new(&scene).join(&tf.path)).expect("scene texture");
+        let t = primase_dds::read(&bytes).expect("dds");
+        let class = match levels.get(&Sha256::digest(&t.levels[0]).to_vec()) {
+            None => "scene textures with no level of ours",
+            Some(&(e, first)) => {
+                let ours_t = drawn.get::<primase_core::Texture>(e).expect("texture");
+                let rest = t
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .all(|(i, l)| ours_t.levels.get(first + i) == Some(l));
+                match (rest, first) {
+                    (true, 0) if t.levels.len() == ours_t.levels.len() => "scene textures identical",
+                    (true, 0) => "scene textures identical, fewer smallest levels",
+                    (true, _) => "scene textures identical from a smaller level (size cap)",
+                    (false, _) => "scene textures with differing smaller levels",
+                }
+            }
+        };
+        *tex.entry(class).or_default() += 1;
+    }
+    println!("textures: {tex:?}");
+    assert!(
+        !tex.contains_key("scene textures with no level of ours")
+            && !tex.contains_key("scene textures with differing smaller levels"),
+        "textures differ"
+    );
     assert!(!geo.contains_key("geometries differing"), "geometries differ");
     assert!(
         by_map.is_empty(),
