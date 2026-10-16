@@ -8,6 +8,7 @@ pub mod gate;
 pub mod json;
 pub mod pass;
 pub mod pbr;
+pub mod state;
 pub mod texformat;
 pub mod world;
 
