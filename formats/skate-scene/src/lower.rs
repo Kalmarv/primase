@@ -67,7 +67,7 @@ impl Pass for LowerSkatePbr {
         &["core.texture"]
     }
     fn approximates(&self) -> &'static str {
-        "Studio MSK masks not loaded as RGBA8 left out; a material's scalar metallic and roughness ignored where its \
+        "Studio MSK masks not loaded as RGBA8 or with inconsistent mip sizes left out; a material's scalar metallic and roughness ignored where its \
          MSK is bound; wrap clip written as clamp; normal maps still files in a non-glTF convention left out"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
@@ -113,7 +113,7 @@ impl Pass for LowerSkatePbr {
         let mut orm = BTreeMap::new();
         for mask in masks {
             match w.get::<Texture>(mask).map(msk_to_orm) {
-                Some(Some(texture)) => {
+                Some(Ok(texture)) => {
                     let name = w
                         .get::<Name>(mask)
                         .map_or_else(|| format!("texture_{}", mask.index()), |n| n.0.clone());
@@ -123,7 +123,13 @@ impl Pass for LowerSkatePbr {
                     orm.insert(mask, e);
                     log.count("MSK masks lowered to ORM textures", 1);
                 }
-                _ => log.approximate("Studio MSK mask not loaded as RGBA8 left out", 1),
+                None | Some(Err(MskError::NotRgba8)) => {
+                    log.approximate("Studio MSK mask not loaded as RGBA8 left out", 1);
+                }
+                Some(Err(MskError::InconsistentLevels)) => {
+                    log.approximate("Studio MSK mask with inconsistent mip sizes left out", 1);
+                }
+                Some(Err(MskError::Mapping(error))) => return Err(error.to_string()),
             }
         }
         let lowered: Vec<(Entity, PbrMaterial)> = w
@@ -331,11 +337,24 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
     }
 }
 
+/// Why a Studio mask could not be mapped to packed ORM.
+#[derive(Debug, thiserror::Error)]
+pub enum MskError {
+    #[error("Studio mask is not loaded as RGBA8")]
+    NotRgba8,
+    #[error("Studio mask has inconsistent mip dimensions or sizes")]
+    InconsistentLevels,
+    /// Operational failures are errors, not approximations about the input format.
+    #[error(transparent)]
+    Mapping(primase_image::Error),
+}
+
 /// A Studio MSK (RGBA8: R metallic, G smoothness, B occlusion, A opacity) as glTF's packed texture: R occlusion,
-/// G roughness = 255 - smoothness, B metallic, A 255; every level. `None` unless RGBA8.
-pub fn msk_to_orm(msk: &Texture) -> Option<Texture> {
+/// G roughness = 255 - smoothness, B metallic, A 255; every level. Errors distinguish
+/// unsupported storage from inconsistent mip sizes; no partial output is returned.
+pub fn msk_to_orm(msk: &Texture) -> Result<Texture, MskError> {
     if msk.format != TexFormat::Rgba8Unorm {
-        return None;
+        return Err(MskError::NotRgba8);
     }
     primase_image::map_rgba8_levels(
         msk,
@@ -350,5 +369,8 @@ pub fn msk_to_orm(msk: &Texture) -> Option<Texture> {
             Ok([p[2], 255 - p[1], p[0], 255])
         },
     )
-    .ok()
+    .map_err(|error| match error {
+        primase_image::Error::Invalid(_) => MskError::InconsistentLevels,
+        error => MskError::Mapping(error),
+    })
 }

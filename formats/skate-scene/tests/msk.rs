@@ -49,7 +49,7 @@ fn every_byte_of_every_level_maps_as_specified() {
             format: TexFormat::Bc1,
             ..rgba8(4, 4, vec![vec![0; 8]])
         })
-        .is_none()
+        .is_err()
     );
 }
 
@@ -91,6 +91,9 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
     let b = material(&mut w, "b", Some(msk), None);
     let plain = material(&mut w, "plain", None, Some(0.3));
     let missing = material(&mut w, "missing", Some(unloaded), None);
+    let malformed = w.spawn();
+    w.insert(malformed, rgba8(2, 1, vec![vec![0; 8], vec![0; 3]]));
+    let bad_material = material(&mut w, "short mip", Some(malformed), None);
     let mut log = PassLog::default();
     LowerSkatePbr.run(&mut w, &mut log).unwrap();
     assert_eq!(log.counts.get("MSK masks lowered to ORM textures"), Some(&1));
@@ -126,6 +129,18 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
             .get("Studio MSK mask not loaded as RGBA8 left out"),
         Some(&1)
     );
+    assert!(
+        w.get::<PbrMaterial>(bad_material)
+            .unwrap()
+            .metallic_roughness_texture
+            .is_none()
+    );
+    assert_eq!(
+        log.approximations
+            .get("Studio MSK mask with inconsistent mip sizes left out"),
+        Some(&1)
+    );
+    assert!(LowerSkatePbr.approximates().contains("inconsistent mip sizes"));
     // Only material a sets a scalar alongside its MSK.
     assert_eq!(
         log.approximations
