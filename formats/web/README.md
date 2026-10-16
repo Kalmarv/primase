@@ -115,7 +115,12 @@ and do not create an origin tile merely because their empty bounds default to ze
 `cargo run --release -p primase-web --example scene_to_tiles -- <scene> <output>`
 loads a skate-scene folder and writes compressed tiles, a `plain/` comparison
 set, and `proof.json` with artifact and decoded-stream SHA256 hashes, preparing
-one cell at a time for both sets, so memory holds one cell's closure. This is an
+one cell at a time for both sets, so memory holds one cell's closure. It files a
+placement by triangle centre (`split_by_tile`) when its pivot does not locate its
+geometry: its world-space box, from its prototype GLB's POSITION bounds, is wider
+than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with
+a model placed at the origin with world-space vertices. A small prop across a cell
+edge keeps pivot filing and instancing. It prints the counts. This is an
 example composition; the library does not depend on a source dialect.
 
 To look at the output, use [primase-viewer](https://github.com/kalmarv/primase-viewer), an example
