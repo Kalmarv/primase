@@ -12,7 +12,7 @@ use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
     Collision, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
-    Source, Texture, TextureFile, Tile, Transform, World,
+    Priority, Source, Texture, TextureFile, Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -666,7 +666,18 @@ impl Writer<'_> {
                 .ok_or_else(|| bad(format!("placement {e:?}: no core.transform")))?;
             let sp = w.get::<SkatePlacement>(e).cloned().unwrap_or_default();
             let tile = w.get::<Tile>(e);
-            let mut fl = sp.unknown_flags;
+            let priority = w.get::<Priority>(e).map_or(0, |p| p.0);
+            if priority > 15 {
+                return Err(bad(format!(
+                    "placement {e:?}: priority {priority} exceeds the 4-bit range 0-15"
+                )));
+            }
+            if sp.unknown_flags & 0xF00 != 0 {
+                return Err(bad(format!(
+                    "placement {e:?}: priority bits must be stored in core.priority"
+                )));
+            }
+            let mut fl = sp.unknown_flags | (u32::from(priority) << 8);
             if tile.is_some() {
                 fl |= flags::TILE;
             }

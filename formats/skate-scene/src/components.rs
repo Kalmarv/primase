@@ -311,7 +311,8 @@ pub struct SkatePlacement {
     pub clip: Option<bool>,
     pub no_collision: bool,
     pub split_by_tile: bool,
-    /// Flag bits this version does not define (kept).
+    /// Flag bits this version does not define (kept). PLAC bits 8-11 belong to
+    /// `core.priority` and must not be set here.
     pub unknown_flags: u32,
 }
 

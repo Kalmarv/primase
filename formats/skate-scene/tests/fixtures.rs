@@ -537,6 +537,43 @@ fn edits_are_written() {
     assert_eq!(w2.get::<SkateLight>(le2).unwrap().group, "street");
 }
 
+/// The oracle is the PLAC byte layout: flags are the little-endian u32 at
+/// record offset 68, with priority occupying bits 8 through 11.
+#[test]
+fn placement_priority_round_trips_and_rejects_overflow() {
+    let src = fixture("priority_src");
+    let path = src.join("tables/placements.bin");
+    let mut bytes = std::fs::read(&path).unwrap();
+    for (i, priority) in [0u32, 1, 3, 15].into_iter().enumerate() {
+        let at = 16 + i * 76 + 68;
+        let old = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let unknown = (1 << 6) | (1 << 7) | (1 << 12) | (1 << 31);
+        bytes[at..at + 4].copy_from_slice(&((old & !0xF00) | unknown | (priority << 8)).to_le_bytes());
+    }
+    std::fs::write(&path, &bytes).unwrap();
+    let (mut w, _) = read(&src);
+    let priorities: Vec<_> = w.iter::<primase_core::Priority>().map(|(_, p)| p.0).collect();
+    assert_eq!(priorities, [0, 1, 3, 15]);
+    let out = tmp("priority_out");
+    scene::write(&w, &out).unwrap();
+    assert_eq!(std::fs::read(out.join("tables/placements.bin")).unwrap(), bytes);
+    let placed = w.iter::<Instance>().next().unwrap().0;
+    w.insert(placed, primase_core::Priority(16));
+    let error = scene::write(&w, &tmp("priority_overflow"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
+    w.insert(placed, primase_core::Priority(3));
+    w.get_mut::<scene::SkatePlacement>(placed).unwrap().unknown_flags |= 1 << 8;
+    let error = scene::write(&w, &tmp("priority_conflict"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("priority bits must be stored in core.priority"),
+        "{error}"
+    );
+}
+
 #[test]
 fn normal_maps_with_x_in_alpha_are_refused() {
     let (mut w, _) = read(&fixture("alpha_x_src"));

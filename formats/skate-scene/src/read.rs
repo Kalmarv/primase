@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
-    Entity, Instance, MaterialVariants, MeshFile, Name, NormalGreen, NormalZ, Source, TextureFile, Tile,
-    Transform, World,
+    Entity, Instance, MaterialVariants, MeshFile, Name, NormalGreen, NormalZ, Priority, Source, TextureFile,
+    Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -1144,7 +1144,8 @@ impl Reader<'_> {
                     self.rep
                         .tolerate("placement radius bytes without the radius flag (written 0)");
                 }
-                let mut unknown = r.flags & !63;
+                self.w.insert(e, Priority(((r.flags >> 8) & 15) as u8));
+                let mut unknown = r.flags & !(63 | 0xF00);
                 if r.flags & flags::CLIP != 0 && r.flags & flags::CLIP_GIVEN == 0 {
                     unknown |= flags::CLIP;
                 }

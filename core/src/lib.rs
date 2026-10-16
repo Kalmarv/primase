@@ -9,6 +9,8 @@ pub mod json;
 pub mod layered;
 pub mod pass;
 pub mod pbr;
+mod priority;
+pub use priority::Priority;
 pub mod state;
 pub mod texformat;
 pub mod world;

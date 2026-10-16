@@ -480,6 +480,12 @@ pub struct ScenePlacement {
 impl Scene {
     /// The scene a skate-scene reader attached to `w`, read from `dir`.
     pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
+        if let Some((entity, priority)) = world.iter::<primase_core::Priority>().find(|(_, p)| p.0 > 15) {
+            return Err(Error::Scene(format!(
+                "placement {entity:?}: priority {} exceeds the skate range 0-15",
+                priority.0
+            )));
+        }
         let sc = world
             .resource::<SkateScene>()
             .ok_or_else(|| Error::Scene("the world holds no skate scene".into()))?;
@@ -1380,6 +1386,24 @@ pub fn class_of(c: MaterialClass) -> VClass {
 mod tests {
     use super::*;
     use primase_skate_scene::{MaterialClass, SkateMaterial, SkateScene};
+
+    #[test]
+    fn out_of_range_placement_priority_is_refused() {
+        let mut world = World::new();
+        world.insert_resource(SkateScene {
+            name: "priority".into(),
+            ..Default::default()
+        });
+        let entity = world.spawn();
+        world.insert(entity, Mesh::default());
+        world.insert(entity, Transform::IDENTITY);
+        world.insert(entity, primase_core::Priority(16));
+        let error = Scene::from_world(&world, std::path::Path::new("."))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
+    }
 
     /// A layered material that no lowering pass replaced is refused, and the error names the pass to run.
     #[test]
