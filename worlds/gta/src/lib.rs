@@ -3,6 +3,7 @@
 //! Key material is never part of this crate: the caller supplies it ([`Keys`]) and the crate checks it against
 //! published digests before using it.
 pub mod archive_set;
+pub mod assets;
 pub mod components;
 pub mod drawable;
 pub mod gtxd;

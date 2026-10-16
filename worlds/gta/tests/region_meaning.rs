@@ -7,15 +7,24 @@
 //! leaves out are counted by LOD level and by whether the pivot is inside the region (the exporter's selection is
 //! not a pass yet); scene placements without a match fail the gate.
 //!
+//! Geometry: the matched placements' drawables are attached ([`attach_assets`]) and, per GTA geometry (the scene's
+//! parts carry their source model and geometry; a geometry the exporter split into several parts is gathered), the
+//! scene's triangles are compared with ours by position (0.1 mm, winding-agnostic). Named class: decal shaders'
+//! geometry the exporter lifted 12 mm along each vertex's drawn face (the normalised sum of its triangles' face
+//! normals; its `--decal-face-lift`), matched within 0.2 mm; not a pass yet. Any other difference fails the gate.
+//! Fragments (yft) are not read yet and are counted.
+//!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::BTreeMap;
 
+use primase_core::Mesh;
 use primase_core::state::Condition;
 use primase_core::{Instance, Name, Transform, World};
-use primase_gta::components::GtaEntity;
-use primase_gta::region::{Region, States, read_region};
+use primase_gta::assets::attach_assets;
+use primase_gta::components::{GtaArchetype, GtaDrawable, GtaEntity};
+use primase_gta::region::{Region, States, archive_sets, read_region};
 use primase_gta::{Install, Keys};
-use primase_skate_scene::SkatePlacement;
+use primase_skate_scene::{SkatePlacement, SkatePrototype};
 
 /// Position key: centimetres.
 fn key(t: &Transform) -> [i64; 3] {
@@ -48,7 +57,8 @@ fn region_placements_against_the_scene() {
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");
     let install = Install::open(&dir, &keys).expect("install");
-    let (ours, report) = read_region(&install, &keys, &region, States::All).expect("region");
+    let (story, online) = archive_sets(&install, &keys, States::All).expect("archive sets");
+    let (ours, report) = read_region(&story, online.as_ref(), &keys, &region).expect("region");
     println!("{report:?}");
 
     let mut theirs = World::new();
@@ -136,5 +146,186 @@ fn region_placements_against_the_scene() {
     for u in unmatched.iter().take(15) {
         println!("    scene only: {u}");
     }
+    // the matched placements' drawables and textures
+    let mut drawn = ours.subset(&ours.closure(matched.iter().copied()));
+    let assets = attach_assets(&mut drawn, online.as_ref().expect("online"), &keys).expect("assets");
+    println!("assets of the matched placements: {assets:?}");
+
+    // geometry: per GTA geometry, the scene's triangles (all parts made from it) against ours, by rounded positions
+    // and winding-agnostic
+    primase_gltf::load_mesh_files(&mut theirs, std::path::Path::new(&scene)).expect("scene meshes");
+    let mut protos: BTreeMap<u32, (&Mesh, &GtaDrawable)> = BTreeMap::new();
+    for (e, a) in drawn.iter::<GtaArchetype>() {
+        if let (Some(m), Some(d)) = (drawn.get::<Mesh>(e), drawn.get::<GtaDrawable>(e)) {
+            protos.insert(a.name, (m, d));
+        }
+    }
+    let tris = |m: &Mesh, prims: &[usize]| -> BTreeMap<[[i64; 3]; 3], usize> {
+        let mut out = BTreeMap::new();
+        for &i in prims {
+            let p = &m.primitives[i];
+            let pos = p.positions().expect("positions");
+            let idx: Vec<u32> = p
+                .indices
+                .clone()
+                .unwrap_or_else(|| (0..pos.len() as u32).collect());
+            for t in idx.as_chunks::<3>().0 {
+                let mut k =
+                    [0usize, 1, 2].map(|j| pos[t[j] as usize].map(|v| (f64::from(v) * 1e4).round() as i64));
+                k.sort();
+                *out.entry(k).or_default() += 1;
+            }
+        }
+        out
+    };
+    let mut geo: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut examples = Vec::new();
+    for (e, sp) in theirs.iter::<SkatePrototype>() {
+        let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
+        let Some(&(ours_mesh, d)) = protos.get(&primase_hash::joaat(name.to_lowercase().as_bytes())) else {
+            *geo.entry("prototypes not compared (fragment or no drawable)")
+                .or_default() += 1;
+            continue;
+        };
+        let Some(their_mesh) = theirs.get::<Mesh>(e) else {
+            *geo.entry("scene prototypes without geometry").or_default() += 1;
+            continue;
+        };
+        let mut groups: BTreeMap<(u64, u64), Vec<usize>> = BTreeMap::new();
+        for (i, part) in sp.parts.iter().enumerate() {
+            let src = part.source.as_ref().expect("part source");
+            groups
+                .entry((
+                    src["model"].as_u64().expect("model"),
+                    src["geometry"].as_u64().expect("geometry"),
+                ))
+                .or_default()
+                .push(i);
+        }
+        *geo.entry("prototypes compared").or_default() += 1;
+        for ((model, g), parts) in groups {
+            let first: u64 = d.models[0][..model as usize].iter().map(|&n| u64::from(n)).sum();
+            let ours_t = tris(ours_mesh, &[(first + g) as usize]);
+            let theirs_t = tris(their_mesh, &parts);
+            *geo.entry("geometries compared").or_default() += 1;
+            let missing: usize = theirs_t
+                .iter()
+                .map(|(k, n)| n.saturating_sub(*ours_t.get(k).unwrap_or(&0)))
+                .sum();
+            let dropped: usize = ours_t
+                .iter()
+                .map(|(k, n)| n.saturating_sub(*theirs_t.get(k).unwrap_or(&0)))
+                .sum();
+            let total = theirs_t.values().sum::<usize>();
+            *geo.entry("scene triangles").or_default() += total;
+            if missing == 0 {
+                *geo.entry("geometries identical").or_default() += 1;
+                *geo.entry("our triangles the scene leaves out").or_default() += dropped;
+                continue;
+            }
+            // the exporter's decal lift: every scene triangle of a decal shader's geometry is one of ours, as stored
+            // or with each vertex moved 12 mm along its drawn face (the normalised sum of its triangles' face normals),
+            // within 0.2 mm
+            let shader = sp.parts[parts[0]]
+                .source
+                .as_ref()
+                .and_then(|v| v["shader"].as_str())
+                .unwrap_or("?");
+            let lifted = shader.contains("decal") && {
+                let grid = |c: [f64; 3]| c.map(|v| (v / 0.005).floor() as i64);
+                let mut cells: BTreeMap<[i64; 3], Vec<[[f64; 3]; 3]>> = BTreeMap::new();
+                let op = &ours_mesh.primitives[(first + g) as usize];
+                let pos = op.positions().expect("positions");
+                // per vertex, the sum of its triangles' (unnormalised) face normals, normalised: the drawn face
+                let idx = op.indices.as_ref().expect("indices");
+                let mut faces = vec![[0f64; 3]; pos.len()];
+                for t in idx.as_chunks::<3>().0 {
+                    let v = [0, 1, 2].map(|j| pos[t[j] as usize].map(f64::from));
+                    let n = cross(sub(v[1], v[0]), sub(v[2], v[0]));
+                    for &k in t {
+                        faces[k as usize] = add(faces[k as usize], n);
+                    }
+                }
+                let faces: Vec<[f64; 3]> = faces
+                    .iter()
+                    .map(|n| {
+                        let l = dot(*n, *n).sqrt();
+                        if l > 0.0 { n.map(|x| x / l) } else { [0.0; 3] }
+                    })
+                    .collect();
+                for t in idx.as_chunks::<3>().0 {
+                    for side in [0.0, 0.012, -0.012] {
+                        let w = [0, 1, 2].map(|j| {
+                            let (p, n) = (pos[t[j] as usize].map(f64::from), faces[t[j] as usize]);
+                            add(p, n.map(|x| x * side))
+                        });
+                        cells.entry(grid(centroid(w))).or_default().push(w);
+                    }
+                }
+                let near = |a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]| {
+                    a.iter()
+                        .all(|p| b.iter().any(|q| dot(sub(*p, *q), sub(*p, *q)).sqrt() <= 2e-4))
+                };
+                parts.iter().all(|&i| {
+                    let tp = &their_mesh.primitives[i];
+                    let pos = tp.positions().expect("positions");
+                    tp.indices
+                        .as_ref()
+                        .expect("indices")
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .all(|t| {
+                            let v = [0, 1, 2].map(|j| pos[t[j] as usize].map(f64::from));
+                            let c = grid(centroid(v));
+                            (-1..=1).any(|dx| {
+                                (-1..=1).any(|dy| {
+                                    (-1..=1).any(|dz| {
+                                        cells
+                                            .get(&[c[0] + dx, c[1] + dy, c[2] + dz])
+                                            .is_some_and(|l| l.iter().any(|w| near(&v, w)))
+                                    })
+                                })
+                            })
+                        })
+                })
+            };
+            if lifted {
+                *geo.entry("decal geometries lifted 12 mm along the drawn face (the exporter's decal lift, not a pass yet)").or_default() += 1;
+            } else {
+                *geo.entry("geometries differing").or_default() += 1;
+                if examples.len() < 10 {
+                    examples.push(format!(
+                        "{name} model {model} geometry {g} ({shader}): {missing} of {total} triangles"
+                    ));
+                }
+            }
+        }
+    }
+    println!("geometry: {geo:?}");
+    for x in &examples {
+        println!("    differing: {x}");
+    }
+    assert!(!geo.contains_key("geometries differing"), "geometries differ");
     assert!(unmatched.is_empty() && diffs.is_empty());
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+fn centroid(v: [[f64; 3]; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|i| (v[0][i] + v[1][i] + v[2][i]) / 3.0)
 }

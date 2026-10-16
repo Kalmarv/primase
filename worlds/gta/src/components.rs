@@ -4,7 +4,7 @@
 //! | entity | components |
 //! |---|---|
 //! | placement | `core.transform`, `core.instance`, [`GtaEntity`], `core.condition` when it exists in one map state only |
-//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` (the drawable's high LOD), `core.bounds`, [`GtaDrawable`] |
+//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` (the drawable's high LOD), [`GtaDrawable`] |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
@@ -166,13 +166,19 @@ impl Component for GtaShader {
     }
 }
 
-/// What a drawable says beyond its high LOD mesh: its file, LOD distances and render masks, and its coarser LODs
-/// (medium, low, very low) as stored, until core has a representation for alternative LOD meshes.
+/// What a drawable says beyond its high LOD mesh: its file, its box and bounding sphere (GTA's frame, as stored), LOD
+/// distances and render masks, and its coarser LODs (medium, low, very low), until core has a representation for
+/// alternative LOD meshes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GtaDrawable {
     pub path: String,
+    pub bbox: [[f32; 3]; 2],
+    pub bounding_sphere: ([f32; 3], f32),
     pub lod_dist: [f32; 4],
     pub render_masks: [u32; 4],
+    /// Per LOD (high, medium, low, very low), each model's geometry count: the meshes hold the models' geometries
+    /// in order, one primitive each.
+    pub models: [Vec<u32>; 4],
     pub lods: [Option<Mesh>; 3],
 }
 
@@ -181,8 +187,11 @@ impl Component for GtaDrawable {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         Ok(Some(serde_json::json!({
             "path": self.path,
+            "bbox": self.bbox,
+            "bounding_sphere": self.bounding_sphere,
             "lod_dist": self.lod_dist,
             "render_masks": self.render_masks,
+            "models": self.models,
             "lods": self.lods.iter().map(|m| m.as_ref().map(|m| m.primitives.len())).collect::<Vec<_>>(),
         })))
     }

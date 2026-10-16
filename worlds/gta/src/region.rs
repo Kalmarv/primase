@@ -1,7 +1,7 @@
 //! A region of the map into the world: every entity of the live maps whose pivot lies within the region plus a reach,
 //! as a placement of its archetype's prototype, in the world frame.
 //!
-//! - Map state: the story-mode map is read; with [`States::All`] GTA Online's too, and an entity that is live in one
+//! - Map state: the story-mode map is read; given GTA Online's archive set too ([`archive_sets`], [`States::All`]), and an entity that is live in one
 //!   only carries a `core.condition` on the global axis `gta.map` {story, online} (default story, the game's start
 //!   state). Entities are the same in both when their map file is.
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
@@ -199,22 +199,32 @@ fn compose(a: &Transform, b: &Transform) -> Transform {
     Transform { cols }
 }
 
-/// Reads the region into a new world (placements and their prototypes; no geometry yet).
-pub fn read_region(
+/// The archive sets for the map states asked for: story mode's, and GTA Online's with [`States::All`].
+pub fn archive_sets(
     install: &Install,
     keys: &Keys,
-    region: &Region,
     states: States,
-) -> Result<(World, RegionReport)> {
+) -> Result<(ArchiveSet, Option<ArchiveSet>)> {
     let story = ArchiveSet::build(install.clone(), keys, MapState::Story)?;
     let online = match states {
         States::All => Some(ArchiveSet::build(install.clone(), keys, MapState::Online)?),
         States::None => None,
     };
+    Ok((story, online))
+}
+
+/// Reads the region into a new world: placements and their prototypes (geometry and textures come with
+/// [`crate::assets::attach_assets`]). `online`, when given, adds GTA Online's map and the `gta.map` conditions.
+pub fn read_region(
+    story: &ArchiveSet,
+    online: Option<&ArchiveSet>,
+    keys: &Keys,
+    region: &Region,
+) -> Result<(World, RegionReport)> {
     let mut report = RegionReport::default();
     // (map path, entity index) -> (entity, in story, in online)
     let mut placed: BTreeMap<(String, u32), (EntityDef, bool, bool)> = BTreeMap::new();
-    for (set, is_story) in std::iter::once((&story, true)).chain(online.iter().map(|s| (s, false))) {
+    for (set, is_story) in std::iter::once((story, true)).chain(online.map(|s| (s, false))) {
         for m in region_maps(set, keys, region)? {
             report.maps += 1;
             for (i, e) in m.entities {
@@ -227,11 +237,11 @@ pub fn read_region(
             }
         }
     }
-    let (types, duplicates) = archetypes(online.as_ref().unwrap_or(&story), keys)?;
+    let (types, duplicates) = archetypes(online.unwrap_or(story), keys)?;
     report.duplicate_archetypes = duplicates;
 
     let mut w = World::new();
-    let axis = online.as_ref().map(|_| {
+    let axis = online.map(|_| {
         let e = w.spawn();
         w.insert(
             e,
