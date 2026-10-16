@@ -167,20 +167,22 @@ interpolated vertex channel. It is a glTF material carrying the vendor extension
   implied fourth channel of one). `mapping` is `identity` (the channels weight the slots in order) or `rgb_product_4`
   (four slots: (1-r)(1-g)(1-b), (1-r)(1-g)b, (1-r)g(1-b), (1-r)gb: the weights sum to 1-r, red darkens, r = 1 is black).
 - `layers` has one to four entries, in slot order; `null` is a black slot (its weight is not redistributed). A layer's
-  `material` indexes this file's `materials`: an ordinary material (never itself layered) whose base colour, normal,
-  metallic-roughness and occlusion textures and factors are the layer's. `texCoord` selects the UV set for all of the
+  `material` indexes this file's `materials`: an ordinary material (never itself layered) whose base colour and normal
+  textures and factors are the layer's (its metallic-roughness and occlusion data are only used when it is the host).
+  `texCoord` selects the UV set for all of the
   layer's textures (absent: TEXCOORD_0), and `transform` is `KHR_texture_transform` semantics (offset, rotation in
   radians, scale) applied to those UVs before sampling; layers may differ in both, so their tangent frames differ.
 - Per pixel: interpolate the channels, evaluate the mapping, colour = sum(weight[i] * layer[i]) with the weights not
   clamped or renormalised, normals blended with the same weights after each is taken into the common frame, then
   normalised (an all-zero sum has no direction; the consumer states its fallback).
-- **Named approximation, scalar channels:** the equation above is exact for colour (and for normals once each is in
-  the common frame). For roughness, metallic and occlusion a consumer cannot reproduce a source shader it does not
-  know, so this format names one approximation: each is the weighted **average** of the layers' values,
-  `sum(weight[i] * value[i]) / sum(weight[i])` (all weights zero: the plain mean of the non-null layers), where a
-  layer's value is its metallic-roughness / occlusion texture sample times its factor. Darkening (`rgb_product_4`
-  makes the weights sum to 1 - r) is a colour effect: the average does not follow it, so a darkened pixel is not also
-  glossier. A source whose shader combines these channels differently is not reproduced by this approximation.
+- **Scalar channels are not layered.** The equation above is exact for colour and (once each is in the common frame)
+  for normals. Roughness, metallic and occlusion are the **host material's own** values: its factors times its
+  metallic-roughness and occlusion textures, sampled with the host's own UV sets, constant across the layers whatever
+  the weights. This follows GTA's terrain shaders (specular from per-material constants, constant metalness, per-vertex
+  occlusion). A layer's own metallic-roughness and occlusion data are not used by a layered consumer (they are what the
+  host copies from the first layer, so the first layer's values apply everywhere). A source whose shader varies a
+  scalar per layer is not reproduced: such a channel would need an explicit, versioned extension field (none exists
+  yet), not a guess by the consumer.
 - The host material (the one primitives reference) is a verbatim copy of the first non-null layer's material, so a
   consumer that ignores the extension renders that layer. A primitive drawn with a layered material but lacking the
   weight attribute renders as the host.
