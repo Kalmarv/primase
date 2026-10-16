@@ -27,11 +27,10 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
-    TexRole, Texture, World,
+    ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
+    World,
 };
 use primase_image::{linear_to_srgb, srgb_to_linear};
-use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::{UnityMaterial, UnityTexEnv, UnityTexture};
 use crate::{Result, invalid};
@@ -198,14 +197,25 @@ impl Lowering {
                 x
             }
         };
-        let mut levels = Vec::with_capacity(t.levels.len());
-        for (i, l) in t.levels.iter().enumerate() {
-            let (lw, lh) = ((t.width >> i).max(1), (t.height >> i).max(1));
-            let mut px = Decoder::default()
-                .decode_rgba8(t.format, lw, lh, l)
-                .map_err(|e| invalid(format!("re-encoding a map: {e}")))?;
-            for p in px.as_chunks_mut::<4>().0 {
-                *p = match kind {
+        let texture = primase_image::map_rgba8_levels(
+            &t,
+            0..t.levels.len(),
+            primase_image::TextureMetadata {
+                color_space: if kind == Derived::Srgb {
+                    ColorSpace::Srgb
+                } else {
+                    ColorSpace::Linear
+                },
+                role: if kind == Derived::Srgb {
+                    TexRole::Color
+                } else {
+                    TexRole::Mask
+                },
+                normal: None,
+            },
+            |texel| {
+                let p = texel.rgba;
+                Ok(match kind {
                     Derived::MetallicRoughness(bits) => {
                         let smoothness = f64::from(p[3]) / 255.0 * f64::from(f32::from_bits(bits));
                         [255, byte(1.0 - smoothness), byte(decode(p[0])), 255]
@@ -218,10 +228,10 @@ impl Lowering {
                         let e = |x: u8| byte(linear_to_srgb(f64::from(x) / 255.0));
                         [e(p[0]), e(p[1]), e(p[2]), p[3]]
                     }
-                };
-            }
-            levels.push(px);
-        }
+                })
+            },
+        )
+        .map_err(|e| invalid(format!("re-encoding a map: {e}")))?;
         let name = w.get::<Name>(source).map(|n| n.0.clone()).unwrap_or_default();
         let e = w.spawn();
         w.insert(
@@ -235,26 +245,7 @@ impl Lowering {
                 }
             )),
         );
-        w.insert(
-            e,
-            Texture {
-                width: t.width,
-                height: t.height,
-                format: TexFormat::Rgba8Unorm,
-                levels,
-                color_space: if kind == Derived::Srgb {
-                    ColorSpace::Srgb
-                } else {
-                    ColorSpace::Linear
-                },
-                role: if kind == Derived::Srgb {
-                    TexRole::Color
-                } else {
-                    TexRole::Mask
-                },
-                normal: None,
-            },
-        );
+        w.insert(e, texture);
         self.log.approximate(
             match kind {
                 Derived::MetallicRoughness(_) => {

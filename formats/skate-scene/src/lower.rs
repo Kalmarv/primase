@@ -334,28 +334,21 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
 /// A Studio MSK (RGBA8: R metallic, G smoothness, B occlusion, A opacity) as glTF's packed texture: R occlusion,
 /// G roughness = 255 - smoothness, B metallic, A 255; every level. `None` unless RGBA8.
 pub fn msk_to_orm(msk: &Texture) -> Option<Texture> {
-    if msk.format != TexFormat::Rgba8Unorm || msk.levels.iter().any(|l| l.len() % 4 != 0) {
+    if msk.format != TexFormat::Rgba8Unorm {
         return None;
     }
-    let levels = msk
-        .levels
-        .iter()
-        .map(|level| {
-            level
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|p| [p[2], 255 - p[1], p[0], 255])
-                .collect()
-        })
-        .collect();
-    Some(Texture {
-        width: msk.width,
-        height: msk.height,
-        format: TexFormat::Rgba8Unorm,
-        levels,
-        color_space: ColorSpace::Linear,
-        role: TexRole::Mask,
-        normal: None,
-    })
+    primase_image::map_rgba8_levels(
+        msk,
+        0..msk.levels.len(),
+        primase_image::TextureMetadata {
+            color_space: ColorSpace::Linear,
+            role: TexRole::Mask,
+            normal: None,
+        },
+        |texel| {
+            let p = texel.rgba;
+            Ok([p[2], 255 - p[1], p[0], 255])
+        },
+    )
+    .ok()
 }

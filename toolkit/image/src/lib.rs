@@ -1,5 +1,7 @@
 //! PNG to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
+mod channels;
+pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
 mod normals;
 mod texture;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals};
