@@ -5,6 +5,7 @@
 pub mod archive_set;
 mod key_hashes;
 pub mod keys;
+pub mod meta;
 pub mod mount;
 pub mod ng;
 pub mod resource;

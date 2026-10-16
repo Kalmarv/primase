@@ -87,6 +87,20 @@ impl Resource {
     pub fn graphics_data(&self) -> &[u8] {
         &self.data[self.system.size() as usize..]
     }
+
+    /// The `len` bytes a pointer points at (`0x5000_0000 + offset` in the system pages, `0x6000_0000 + offset` in
+    /// the graphics pages); an error when the pointer is of neither kind or the bytes run past its pages.
+    pub fn at(&self, pointer: u64, len: usize) -> Result<&[u8]> {
+        let (pages, offset) = match pointer >> 28 {
+            5 => (self.system_data(), pointer - 0x5000_0000),
+            6 => (self.graphics_data(), pointer - 0x6000_0000),
+            _ => return Err(invalid("RSC7", pointer, "not a resource pointer")),
+        };
+        usize::try_from(offset)
+            .ok()
+            .and_then(|o| pages.get(o..o.checked_add(len)?))
+            .ok_or_else(|| invalid("RSC7", pointer, format!("{len} bytes run past the pages")))
+    }
 }
 
 /// The 16-byte RSC7 header of a loose resource file: version, system flags, graphics flags.
