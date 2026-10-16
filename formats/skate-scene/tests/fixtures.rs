@@ -177,7 +177,7 @@ const MANIFEST: &str = r#"{
   "materials": {
     "wall": {"class": "opaque", "base": "wall_d", "normal": "wall_n", "cutoff": 0.5, "roughness": 0.6, "label": "Wall", "vertex_alpha": true},
     "trim_red": {"class": "cutout", "base_color": [200, 40, 40, 255], "alpha": "mask", "two_sided": true, "vertex_alpha": false},
-    "glass": {"class": "glass", "metallic": 0.1, "wrap": "extend", "source": "mat:glass", "unknown_key": [1, 2]}
+    "glass": {"class": "glass", "metallic": 0.1, "wrap": "extend", "source": "mat:glass", "unknown_key": [1, 2], "cast_shadows": false}
   },
   "prototypes": [
     {"id": "wall_01", "name": "Wall", "key": 305419896, "glb": "prototypes/wall.glb", "source": "msb:wall_01",
@@ -1144,6 +1144,8 @@ fn lowering_to_pbr() {
 
     let glass = w.get::<PbrMaterial>(key(&w, "glass")).unwrap();
     assert_eq!((glass.roughness, glass.alpha_mode), (0.15, AlphaMode::Blend));
+    assert_eq!(glass.cast_shadows, Some(false), "a stated false is kept");
+    assert_eq!(wall.cast_shadows, None, "unknown stays unknown");
     assert_eq!(glass.base_color_texture, None);
     let _ = Wrap::Clamp;
     // lower and keep

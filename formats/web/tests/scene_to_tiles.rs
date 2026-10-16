@@ -82,6 +82,7 @@ fn scene() -> PathBuf {
                     color: [1.0; 3],
                     intensity: 10.0,
                     range: Some(8.0),
+                    cast_shadows: None,
                 },
             );
             let mut t = Transform::IDENTITY;

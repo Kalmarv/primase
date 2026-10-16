@@ -33,6 +33,10 @@
 //!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
 //!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
 //!   dropped silently; a component whose view would lose a value (a non-finite float) is an error.
+//! - **Shadows**: what is known of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ..., "receive":
+//!   ...}`, each key only when known: a placement's `core.shadows` on its node (`cast` `"off"`, `"on"` or `"only"`,
+//!   a shadow proxy that is not drawn; `receive` a boolean), and a material's or light's `cast_shadows` on the
+//!   material or the light's node (`"off"` or `"on"`). A node's value overrides its materials'.
 //!
 //! The output is a function of the world: every list is built in entity order or first-use order over entities in
 //! order, so the same world gives the same bytes (`tests::output_is_deterministic`).
@@ -44,7 +48,8 @@ use std::path::{Path, PathBuf};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
-    Primitive, Semantic, Stream, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
+    Primitive, Semantic, ShadowCast, Shadows, Stream, Texture, TextureFile, Tile, Topology, Transform,
+    TransformKind, World,
 };
 use primase_core::{LayeredMaterial, WeightMapping};
 use serde_json::{Map, Value, json};
@@ -189,8 +194,17 @@ const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
-const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME];
-const CONSUMED_PROTOTYPE: &[&str] = &[Name::NAME, Mesh::NAME, MaterialVariants::NAME, MeshFile::NAME];
+const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME, Shadows::NAME];
+/// A placement's shadows are its node's, also when an entity with a mesh is placed as itself.
+const CONSUMED_PROTOTYPE: &[&str] = &[
+    Name::NAME,
+    Mesh::NAME,
+    MaterialVariants::NAME,
+    MeshFile::NAME,
+    Shadows::NAME,
+];
+/// The extras key shadows are written under (see the module docs).
+const SHADOWS: &str = "primase.shadows";
 const LAYERED: &str = "PRIMASE_layered_material";
 const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME, LayeredMaterial::NAME];
 const CONSUMED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
@@ -332,7 +346,8 @@ impl Writer<'_> {
                 node.insert("matrix".into(), f32s_value(&m));
             }
             node.insert("extensions".into(), json!({ LIGHTS: {"light": lights.len()} }));
-            if let Some(extras) = self.extras(e, CONSUMED_LIGHT)? {
+            let extras = self.extras(e, CONSUMED_LIGHT)?;
+            if let Some(extras) = with_shadows(extras, l.cast_shadows.map(cast_on), None) {
                 node.insert("extras".into(), extras);
             }
             lights.push(self.light(e, l)?);
@@ -536,7 +551,18 @@ impl Writer<'_> {
                 }
             }
         }
-        if let Some(extras) = self.extras(place.entity, CONSUMED_PLACEMENT)? {
+        let extras = self.extras(place.entity, CONSUMED_PLACEMENT)?;
+        let shadows = self
+            .world
+            .get::<Shadows>(place.entity)
+            .copied()
+            .unwrap_or_default();
+        let cast = shadows.cast.map(|c| match c {
+            ShadowCast::Off => "off",
+            ShadowCast::On => "on",
+            ShadowCast::Only => "only",
+        });
+        if let Some(extras) = with_shadows(extras, cast, shadows.receive) {
             node.insert("extras".into(), extras);
         }
         self.report.placements += 1;
@@ -1001,7 +1027,8 @@ impl Writer<'_> {
         if pbr.double_sided {
             m.insert("doubleSided".into(), json!(true));
         }
-        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
+        let extras = self.extras(e, CONSUMED_MATERIAL)?;
+        if let Some(extras) = with_shadows(extras, pbr.cast_shadows.map(cast_on), None) {
             m.insert("extras".into(), extras);
         }
         self.materials.push(Value::Object(m));
@@ -1281,6 +1308,31 @@ impl Writer<'_> {
         }
         (!map.is_empty()).then(|| json!({ "primase": map }))
     }
+}
+
+fn cast_on(cast: bool) -> &'static str {
+    if cast { "on" } else { "off" }
+}
+
+/// `extras` with `"primase.shadows"` added when anything about them is known.
+fn with_shadows(extras: Option<Value>, cast: Option<&str>, receive: Option<bool>) -> Option<Value> {
+    if cast.is_none() && receive.is_none() {
+        return extras;
+    }
+    let mut shadows = Map::new();
+    shadows.insert("version".into(), json!(1));
+    if let Some(cast) = cast {
+        shadows.insert("cast".into(), json!(cast));
+    }
+    if let Some(receive) = receive {
+        shadows.insert("receive".into(), json!(receive));
+    }
+    let mut extras = extras.unwrap_or_else(|| json!({}));
+    extras
+        .as_object_mut()
+        .expect("extras are an object")
+        .insert(SHADOWS.into(), Value::Object(shadows));
+    Some(extras)
 }
 
 fn wrap_code(w: Wrap) -> u32 {

@@ -445,6 +445,7 @@ pub fn build(dir: &Path) -> Built {
             color: [1.0, 0.5, 0.25],
             intensity: 40.0,
             range: Some(12.0),
+            cast_shadows: None,
         },
     );
     let mut t = Transform::IDENTITY;
@@ -461,6 +462,7 @@ pub fn build(dir: &Path) -> Built {
             color: [1.0; 3],
             intensity: 2.0,
             range: Some(10.0),
+            cast_shadows: None,
         },
     );
 

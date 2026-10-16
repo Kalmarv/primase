@@ -39,6 +39,7 @@ fn raise_then_lower_restores_core_lights() {
                 color: [1.0, 0.5, 0.25],
                 intensity: 12.0,
                 range: Some(20.0),
+                cast_shadows: None,
             },
             spot_transform(),
         ),
@@ -48,6 +49,7 @@ fn raise_then_lower_restores_core_lights() {
                 color: [1.0; 3],
                 intensity: 3.0,
                 range: None,
+                cast_shadows: None,
             },
             Transform {
                 cols: [
@@ -140,6 +142,7 @@ fn pass_lowers_once_and_builds_an_orthonormal_basis() {
     let light = w.get::<Light>(e).unwrap();
     assert!(close(light.intensity, 1.0));
     assert_eq!(light.range, None);
+    assert_eq!(light.cast_shadows, Some(false), "the flag is a fact either way");
     assert_eq!(
         light.kind,
         LightKind::Spot {
@@ -156,6 +159,12 @@ fn pass_lowers_once_and_builds_an_orthonormal_basis() {
     for v in &c[..3] {
         assert!(close(dot(*v, *v), 1.0));
     }
+    let (casting, _) = lower_light(&SkateLight {
+        cast_shadow: true,
+        ..w.get::<SkateLight>(e).unwrap().clone()
+    })
+    .unwrap();
+    assert_eq!(casting.cast_shadows, Some(true));
     assert!(
         lower_light(&SkateLight {
             direction: [0.0; 3],

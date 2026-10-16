@@ -159,6 +159,38 @@ impl Component for Instance {
     }
 }
 
+/// How a placed entity takes part in shadows as a caster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub enum ShadowCast {
+    Off,
+    On,
+    /// Casts a shadow but is not drawn (a shadow proxy).
+    Only,
+}
+
+/// The shadows of a placed entity (a placement, or an entity drawing its own mesh). `None` is unknown (the renderer's
+/// default); a stated `Off` or `false` is a fact and is kept. `cast` overrides the `cast_shadows` of the materials it
+/// draws with. Renderer settings (map sizes, bias, cascades) are not facts of the scene and stay out of core.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+pub struct Shadows {
+    pub cast: Option<ShadowCast>,
+    pub receive: Option<bool>,
+}
+impl Component for Shadows {
+    const NAME: &'static str = "core.shadows";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    /// On something drawn: a placement or an entity with its own mesh.
+    fn verify(&self, e: Entity, w: &crate::World) -> Result<(), String> {
+        if w.has::<Instance>(e) || w.has::<Mesh>(e) {
+            Ok(())
+        } else {
+            Err("shadows on an entity that draws nothing (no core.instance or core.mesh)".into())
+        }
+    }
+}
+
 /// A vertex attribute's meaning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Semantic {
@@ -404,10 +436,14 @@ pub struct Light {
     pub color: [f32; 3],
     pub intensity: f32,
     pub range: Option<f32>,
+    /// Casts shadows; `None`: unknown (the renderer's default).
+    pub cast_shadows: Option<bool>,
 }
 
 impl Component for Light {
     const NAME: &'static str = "core.light";
+    /// 2: `cast_shadows`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -808,6 +844,37 @@ mod tests {
     }
 
     #[test]
+    fn shadows_belong_to_drawn_entities_and_keep_stated_values() {
+        let mut w = crate::World::new();
+        let bare = w.spawn();
+        let proto = w.spawn();
+        w.insert(proto, Mesh::default());
+        let place = w.spawn();
+        w.insert(
+            place,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let s = Shadows {
+            cast: Some(ShadowCast::Off),
+            receive: Some(false),
+        };
+        assert_eq!(s.verify(place, &w), Ok(()));
+        assert_eq!(s.verify(proto, &w), Ok(()), "an entity drawing its own mesh");
+        assert!(s.verify(bare, &w).is_err());
+        assert_eq!(
+            s.to_json().unwrap(),
+            Some(serde_json::json!({"cast": "Off", "receive": false})),
+            "stated off and false are kept"
+        );
+        assert_eq!(
+            Shadows::default().to_json().unwrap(),
+            Some(serde_json::json!({"cast": null, "receive": null}))
+        );
+    }
+    #[test]
     fn lights_keep_to_khr_lights_punctual() {
         let mut w = crate::World::new();
         let e = w.spawn();
@@ -819,6 +886,7 @@ mod tests {
             color: [1.0, 0.5, 0.25],
             intensity: 10.0,
             range: Some(5.0),
+            cast_shadows: None,
         };
         assert_eq!(spot(0.2, 0.6).verify(e, &w), Ok(()));
         assert!(spot(0.7, 0.6).verify(e, &w).is_err(), "inner past outer");

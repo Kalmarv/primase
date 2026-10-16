@@ -23,7 +23,8 @@ relative `uri`. The index lists the image files (`images`) and each tile the fil
 it uses (`images`). Geometry, materials (layered ones included), collision sidecars, scene lights and
 viewer records are unchanged: decoding a 2.0 tile with its image files gives what the 1.x tile
 held. A 1.x consumer must reject 2.0 (an unknown major), and a 2.0 consumer
-resolves image URIs; nothing else changes for it.
+resolves image URIs; nothing else changes for it. 2.0 also adds optional shadow extras (see
+[Shadows](#shadows)), which a consumer may ignore.
 
 Older unversioned indexes with `version: 1` are the legacy 1.0 layout. Readers
 may accept that one legacy case explicitly. New writers always emit
@@ -197,6 +198,21 @@ local -Z. Light values follow `KHR_lights_punctual`: linear RGB `color`,
 unlimited), spot cone angles in radians from the axis. Bounds include light
 positions. Lights are illumination sources only; consumers may render a subset
 (for example the nearest few) and must ignore them without breaking geometry.
+
+## Shadows
+
+What the source states about shadows is carried as glTF extras, `extras["primase.shadows"]`, an object with
+`"version": 1` and these keys, each present only when known (absent: unknown, use the renderer's default; a stated
+`"off"` or `false` is a fact):
+
+- on a placement's node: `cast`, `"off"`, `"on"` or `"only"` (casts a shadow but is not drawn: a shadow proxy), and
+  `receive`, a boolean;
+- on a material: `cast`, `"off"` or `"on"`, for the surfaces drawn with it;
+- on a scene light's node: `cast`, `"off"` or `"on"`.
+
+A node's value overrides its materials'. An instanced node (`EXT_mesh_gpu_instancing`) only groups placements with the
+same shadow extras, and carries them itself. Shadow map sizes, bias and cascades are renderer settings, not scene
+data, and are not carried.
 
 ## Layered materials
 

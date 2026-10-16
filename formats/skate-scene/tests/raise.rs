@@ -133,6 +133,7 @@ fn world() -> World {
             color: [1.0, 0.5, 0.25],
             intensity: 10.0,
             range: Some(8.0),
+            cast_shadows: None,
         },
     );
     let mut t = Transform::IDENTITY;
@@ -149,6 +150,7 @@ fn world() -> World {
             color: [1.0; 3],
             intensity: 3.0,
             range: None,
+            cast_shadows: None,
         },
     );
     w

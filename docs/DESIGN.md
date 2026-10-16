@@ -60,7 +60,8 @@ a list).
 | `SourceFrame` (resource, provenance) | the frame the reader converted from (`core::frame`); the world itself is always metres, right-handed, +Y up, -Z north |
 | `Transform` | affine 3x4 (sheared/mirrored allowed, flagged by tolerance) |
 | `Mesh` / `MeshFile`, `Instance`, `MaterialVariants` | shared geometry (vertex streams by semantic, primitives in draw order) or the file it is still in; placements instance it, picking per-variant materials |
-| `Light` | a punctual light as glTF's `KHR_lights_punctual` defines it: point, spot (cones) or directional, linear colour, intensity in candela (lux for directional), optional range; placed by its transform, shining along its local -Z |
+| `Light` | a punctual light as glTF's `KHR_lights_punctual` defines it: point, spot (cones) or directional, linear colour, intensity in candela (lux for directional), optional range, whether it casts shadows; placed by its transform, shining along its local -Z |
+| `Shadows` (`core.shadows`) | a placed entity's shadows: cast off, on or only (a shadow proxy, not drawn) and receive, each unknown when absent; cast overrides its materials' `cast_shadows` |
 | `Collision`, `Surfaces` (resource) | collision geometry placed like a mesh: a triangle soup in the entity's space, one surface per triangle, surfaces named in the world's table (game properties stay in dialects) |
 | `Texture` | pixels or encoded blocks + `TexFormat`, colour space, role, normal convention (X in red/alpha, green up/down, Z stored/rebuilt) |
 | `LayeredMaterial` (`core.layered`) | one to four ordinary material references (null contributes black), per-layer UV selection and transform, and vertex-channel weights mapped after interpolation without renormalisation; blended normals are renormalised |

@@ -1,5 +1,7 @@
 //! A Unity scene into the world: one entity per drawn mesh renderer (its world [`Transform`], an [`Instance`] of a
-//! prototype, its GameObject path as [`Name`], the `unity.*` details), Unity's frame converted. A prototype is a
+//! prototype, its GameObject path as [`Name`], its [`Shadows`], the `unity.*` details), Unity's frame converted. The
+//! renderer's shadow casting mode is the cast (off, on, shadows only as only; two-sided as on, counted) and
+//! `m_ReceiveShadows` the receive. A prototype is a
 //! mesh, or the slice of a combined mesh a static-batched renderer draws, with its geometry as a [`Mesh`]; one entity
 //! per material (`unity.material`) and per texture it uses (`unity.texture`, and `core.texture` when decoded).
 //!
@@ -15,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::frame::{Axis, SourceFrame};
-use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, Transform, World};
+use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Transform, World};
 
 use crate::Result;
 use crate::components::{
@@ -53,6 +55,7 @@ fn unity_renderer(r: &Renderer) -> UnityRenderer {
             .collect(),
         submeshes: r.submeshes,
         cast_shadows: r.cast_shadows,
+        receive_shadows: r.receive_shadows,
     }
 }
 
@@ -768,6 +771,26 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         );
         w.insert(e, Name(r.path.clone()));
         w.insert(e, unity_renderer(r));
+        let cast = match r.cast_shadows {
+            0 => Some(ShadowCast::Off),
+            1 => Some(ShadowCast::On),
+            2 => {
+                b.note("two-sided shadow casting written as casting", 1);
+                Some(ShadowCast::On)
+            }
+            3 => Some(ShadowCast::Only),
+            _ => {
+                b.note("renderers with an unknown shadow casting mode, cast unknown", 1);
+                None
+            }
+        };
+        w.insert(
+            e,
+            Shadows {
+                cast,
+                receive: r.receive_shadows,
+            },
+        );
         if let Some((terrain, tree)) = tree {
             w.insert(e, UnityTreeInstance { terrain, tree });
         }

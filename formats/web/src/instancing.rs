@@ -109,8 +109,12 @@ fn accessor(
     accessors.push(json!({"bufferView":view,"componentType":5126,"count":count,"type":if components==3{"VEC3"}else{"VEC4"}}));
     index
 }
+/// The glTF writer's shadow extras key.
+const SHADOWS: &str = "primase.shadows";
+
 /// Consume the private placement key emitted by the tile writer and instance only
-/// positive, non-sheared TRS groups sharing the same resolved glTF mesh.
+/// positive, non-sheared TRS groups sharing the same resolved glTF mesh and the same
+/// `primase.shadows` (an instanced node has one shadow setting, kept on it).
 pub(super) fn apply(
     bytes: Vec<u8>,
     transforms: &BTreeMap<u32, Transform>,
@@ -125,7 +129,7 @@ pub(super) fn apply(
         .as_array()
         .ok_or_else(|| Error::Invalid("writer returned no nodes".into()))?
         .clone();
-    let mut groups = BTreeMap::<u64, Vec<(usize, u32, Trs)>>::new();
+    let mut groups = BTreeMap::<(u64, String), Vec<(usize, u32, Trs)>>::new();
     for (i, node) in nodes.iter_mut().enumerate() {
         let marker = node["extras"]["primase"]["web.placement_key"]["value"]
             .as_u64()
@@ -137,7 +141,11 @@ pub(super) fn apply(
             let mesh = node["mesh"]
                 .as_u64()
                 .ok_or_else(|| Error::Invalid("mesh node lacks mesh index".into()))?;
-            groups.entry(mesh).or_default().push((i, marker, trs));
+            let shadows = node["extras"]
+                .get(SHADOWS)
+                .map(Value::to_string)
+                .unwrap_or_default();
+            groups.entry((mesh, shadows)).or_default().push((i, marker, trs));
         }
     }
     let mut removed = BTreeSet::new();
@@ -155,6 +163,7 @@ pub(super) fn apply(
         let rotation = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.rotation), n, 4);
         let scale = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.scale), n, 3);
         let instances:Vec<_>=group.iter().map(|(i,key,_)|json!({"entity":key,"name":nodes[*i].get("name"),"extras":nodes[*i].get("extras")})).collect();
+        let shadows = nodes[first]["extras"].get(SHADOWS).cloned();
         let node = nodes[first].as_object_mut().expect("writer node");
         for key in ["matrix", "translation", "rotation", "scale"] {
             node.remove(key);
@@ -163,10 +172,11 @@ pub(super) fn apply(
             "extensions".into(),
             json!({EXT:{"attributes":{"TRANSLATION":translation,"ROTATION":rotation,"SCALE":scale}}}),
         );
-        node.insert(
-            "extras".into(),
-            json!({"primase":{"web.instances":{"version":1,"value":instances}}}),
-        );
+        let mut extras = json!({"primase":{"web.instances":{"version":1,"value":instances}}});
+        if let Some(shadows) = shadows {
+            extras[SHADOWS] = shadows;
+        }
+        node.insert("extras".into(), extras);
         for &(i, _, _) in &group[1..] {
             removed.insert(i);
         }

@@ -29,7 +29,8 @@ impl Component for UnityObject {
 }
 
 /// A drawn mesh renderer: its GameObject's layer, its materials (`None`: a missing material), the slice of a
-/// static-batched combined mesh it draws (first submesh, count), and its shadow casting mode.
+/// static-batched combined mesh it draws (first submesh, count), its shadow casting mode and whether it receives
+/// shadows (as stored; the placement's `core.shadows` holds what they mean).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityRenderer {
     pub renderer: UnityObject,
@@ -37,6 +38,7 @@ pub struct UnityRenderer {
     pub materials: Vec<Option<UnityObject>>,
     pub submeshes: Option<(u32, u32)>,
     pub cast_shadows: i64,
+    pub receive_shadows: Option<bool>,
 }
 
 impl Component for UnityRenderer {

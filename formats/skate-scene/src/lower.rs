@@ -171,7 +171,7 @@ impl Pass for LowerSkateLights {
         &["core.light", "core.transform"]
     }
     fn approximates(&self) -> &'static str {
-        "light energy as candela (Studio watts / 4 pi^2); time of day, radius, shadows, priority and group not lowered"
+        "light energy as candela (Studio watts / 4 pi^2); time of day, radius, priority and group not lowered"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let lights: Vec<(Entity, SkateLight)> = w
@@ -206,6 +206,7 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
         color: l.color,
         intensity,
         range: (l.range > 0.0).then_some(l.range),
+        cast_shadows: Some(l.cast_shadow),
     };
     let unit = |v: [f32; 3]| {
         let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -343,6 +344,7 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
             AlphaMode::Opaque => PbrAlpha::Opaque,
         },
         double_sided: m.two_sided.unwrap_or(matches!(m.class, C::Cutout | C::Leaves)),
+        cast_shadows: m.cast_shadows,
         ..PbrMaterial::default()
     }
 }

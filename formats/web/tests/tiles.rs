@@ -803,6 +803,7 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
                 color: [1.0, 0.5, 0.25],
                 intensity: 7.0,
                 range: Some(12.0),
+                cast_shadows: None,
             },
         );
         w.insert(
@@ -904,6 +905,75 @@ fn emissive_strength_survives_compression_and_instancing() {
             .iter()
             .any(|e| e == "KHR_materials_emissive_strength")
     );
+}
+#[test]
+fn shadows_split_instance_groups_and_stay_on_their_nodes() {
+    use primase_core::{ShadowCast, Shadows};
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(proto, mesh());
+    let proxy = Shadows {
+        cast: Some(ShadowCast::Only),
+        receive: Some(false),
+    };
+    for (x, shadows) in [
+        (0.0f32, Some(proxy)),
+        (2.0, None),
+        (4.0, Some(proxy)),
+        (6.0, None),
+    ] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3][0] = x;
+        w.insert(e, t);
+        if let Some(s) = shadows {
+            w.insert(e, s);
+        }
+    }
+    let set = write(&w, &Options::default()).unwrap();
+    assert_eq!(set.index.tiles[0].instanced_placements, 4);
+    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    let instanced: Vec<_> = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["extensions"].get("EXT_mesh_gpu_instancing").is_some())
+        .collect();
+    assert_eq!(instanced.len(), 2, "one instanced node per shadow setting");
+    let mut seen: Vec<_> = instanced
+        .iter()
+        .map(|n| n["extras"].get("primase.shadows").cloned())
+        .collect();
+    seen.sort_by_key(|v| v.is_some());
+    assert_eq!(
+        seen,
+        vec![
+            None,
+            Some(serde_json::json!({"version": 1, "cast": "only", "receive": false}))
+        ]
+    );
+    let uninstanced = Options {
+        gpu_instancing: false,
+        ..plain()
+    };
+    let plain = write(&w, &uninstanced).unwrap();
+    let chunks = primase_gltf::glb::parse(&plain.files[&plain.index.tiles[0].file]).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    let with: usize = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["extras"].get("primase.shadows").is_some())
+        .count();
+    assert_eq!(with, 2, "uninstanced: on each placement's node");
 }
 #[test]
 fn vertex_colours_survive_compression_and_instancing() {

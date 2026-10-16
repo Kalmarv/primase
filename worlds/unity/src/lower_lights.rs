@@ -10,6 +10,7 @@
 //! - range: URP's range, where its attenuation reaches zero; a directional light has none;
 //! - a spot's cone: URP's spot angles are full cone angles in degrees, so `outer = spot_angle / 2` and
 //!   `inner = inner_spot_angle / 2`, in radians (outer clamped to pi / 2, inner to outer);
+//! - shadows: `m_Shadows.m_Type` none (0) does not cast, hard (1) and soft (2) do; softness is a renderer setting;
 //! - direction: a Unity light shines along its local +Z, which the frame conversion makes the world's local -Z, as
 //!   `core.light` wants: the transform is used as it is.
 //!
@@ -54,6 +55,14 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
                 color: [0, 1, 2].map(|k| srgb_to_linear(f64::from(l.color[k])) as f32),
                 intensity: l.intensity.max(0.0),
                 range,
+                cast_shadows: match l.shadows {
+                    0 => Some(false),
+                    1 | 2 => Some(true),
+                    _ => {
+                        log.count("lights with an unknown shadow type, cast unknown", 1);
+                        None
+                    }
+                },
             },
         );
         log.count(

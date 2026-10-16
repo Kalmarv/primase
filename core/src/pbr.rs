@@ -137,12 +137,15 @@ pub struct PbrMaterial {
     pub alpha_mode: AlphaMode,
     /// Back faces drawn too (and lit with the flipped normal).
     pub double_sided: bool,
+    /// Surfaces drawn with it cast shadows; `None`: unknown (the renderer's default). A placement's
+    /// [`crate::Shadows`] `cast` overrides it.
+    pub cast_shadows: Option<bool>,
 }
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
-    /// 2: `emissive_strength`.
-    const VERSION: u32 = 2;
+    /// 2: `emissive_strength`; 3: `cast_shadows`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -178,6 +181,7 @@ impl Default for PbrMaterial {
             emissive_strength: 1.0,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
+            cast_shadows: None,
         }
     }
 }

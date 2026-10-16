@@ -144,7 +144,10 @@ pub struct Renderer {
     pub world: Matrix,
     /// A static-batched renderer's slice of its combined mesh: first submesh, count.
     pub submeshes: Option<(u32, u32)>,
+    /// `m_CastShadows`: 0 off, 1 on, 2 two-sided, 3 shadows only (1 when absent, Unity's default).
     pub cast_shadows: i64,
+    /// `m_ReceiveShadows`, when stored.
+    pub receive_shadows: Option<bool>,
 }
 
 /// What the scene reading skipped, by reason.
@@ -485,6 +488,7 @@ impl Scene {
                 },
                 submeshes,
                 cast_shadows: mr.get("m_CastShadows").and_then(Value::as_i64).unwrap_or(1),
+                receive_shadows: mr.get("m_ReceiveShadows").and_then(Value::as_i64).map(|v| v != 0),
             });
         }
         Ok((out, skipped))
