@@ -352,8 +352,8 @@ fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
         }
     }
     for p in &s.protos {
-        if let Some(glb) = &p.glb {
-            for (i, prim) in scene::read_glb(glb, p.mesh)?.iter().enumerate() {
+        if let Some(prims) = p.prims()? {
+            for (i, prim) in prims.iter().enumerate() {
                 if prim.nrm.is_none() {
                     out.push(format!(
                         "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
@@ -370,7 +370,7 @@ fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
     for (p, placed) in s.protos.iter().zip(placed) {
         if !placed {
             out.push(format!("prototype '{}' is not placed", p.id));
-        } else if p.glb.is_none() {
+        } else if p.glb.is_none() && p.prims.is_none() {
             out.push(format!(
                 "prototype '{}' has no geometry; its placements draw nothing",
                 p.id

@@ -162,6 +162,13 @@ Versions are pinned and default features off.
   such as `bevy_ecs`.
 - **Our own, deliberately:** the glTF writer, sRGB and mip filters, every game format.
 
+**The ReSkate writer's geometry input** is `core.mesh`: what readers loaded and passes lowered (the layered-overlay
+lowering among them) is what it writes. Re-reading a prototype's GLB from `core.mesh_file`, when the prototype has no
+`core.mesh`, is the legacy path, kept because the writer loads geometry lazily, one placement band at a time: an M3
+area holds 22-82 MB of GLB, but one tile of a whole GTA city 1.1-1.7 GB (six tiles: 38,051 GLBs, 8.6 GB), more
+than a whole-scene load should hold. That laziness is to move behind the `core.mesh` interface (a loader filling
+`core.mesh` per band) rather than stay a second input. The two paths are gated to write byte-identical maps.
+
 **The web writer** is the glTF writer plus a web lowering: KTX2 (Basis Universal) textures, meshopt-compressed and
 quantised vertices (`EXT_meshopt_compression`), prototypes and placements as `EXT_mesh_gpu_instancing` (three.js
 `InstancedMesh`), baked PBR as `MeshStandardMaterial`, one GLB per 200 m tile with a distance-based tile loader,

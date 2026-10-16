@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use primase_core::{
-    Instance, MaterialVariants, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream, TextureFile,
-    Tile, Transform, World,
+    Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
+    TextureFile, Tile, Transform, World,
 };
 use primase_hash::skate_fnv_string;
 use primase_skate_scene::{
@@ -113,7 +113,10 @@ pub struct PartDef {
 pub struct ProtoDef {
     pub index: usize,
     pub id: String,
+    /// The legacy input: the prototype's GLB file, read when its geometry is needed and it has no `core.mesh`.
     pub glb: Option<PathBuf>,
+    /// The prototype's `core.mesh` primitives, the writer's input: they take precedence over `glb`.
+    pub prims: Option<Vec<GlbPrim>>,
     pub name: String,
     pub col_mode: CollisionMode,
     pub mesh: u32,
@@ -122,7 +125,8 @@ pub struct ProtoDef {
     pub ground: bool,
     pub collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)>,
     pub parts: Vec<PartDef>,
-    /// Local box (glTF space) from the GLB's POSITION accessors; `None`: no geometry.
+    /// Local box (glTF space): the `core.mesh` positions, else the GLB's POSITION accessors;
+    /// `None`: no geometry.
     pub min: Option<[f32; 3]>,
     pub max: Option<[f32; 3]>,
 }
@@ -521,7 +525,8 @@ impl Scene {
         for (e, m) in world.iter::<SkateMaterial>() {
             if m.class == MaterialClass::Layered {
                 return Err(crate::Error::Unsupported(
-                    "layered materials require triangle lowering before native map writing".into(),
+                    "layered materials require a lowering pass before native map writing (lower-layered-reskate)"
+                        .into(),
                 ));
             }
             materials.insert(m.key.clone(), m.clone());
@@ -537,6 +542,9 @@ impl Scene {
         for (i, (e, p)) in world.iter::<SkatePrototype>().enumerate() {
             proto_index.insert(e, i);
             let mf = world.get::<MeshFile>(e);
+            // core.mesh is the writer's input; a prototype with only core.mesh_file is still read from its file (the
+            // legacy path), and one with both uses core.mesh (what the passes produced).
+            let mesh = world.get::<Mesh>(e);
             let variants = world.get::<MaterialVariants>(e);
             let parts: Vec<PartDef> = p
                 .parts
@@ -556,9 +564,11 @@ impl Scene {
                         _ => {}
                     }
                     PartDef {
-                        material: mf
-                            .and_then(|m| m.materials.get(pi).copied().flatten())
-                            .and_then(mkey),
+                        material: match mesh {
+                            Some(m) => m.primitives.get(pi).and_then(|p| p.material),
+                            None => mf.and_then(|m| m.materials.get(pi).copied().flatten()),
+                        }
+                        .and_then(mkey),
                         variants: (part.variants_key
                             || variants.is_some_and(|v| v.0.get(pi).is_some_and(|m| !m.is_empty())))
                         .then(|| {
@@ -574,8 +584,9 @@ impl Scene {
                     }
                 })
                 .collect();
-            let (min, max) = match mf {
-                Some(mf) => {
+            let (min, max) = match (mesh, mf) {
+                (Some(m), _) => mesh_bounds(m).map_or((None, None), |(a, b)| (Some(a), Some(b))),
+                (None, Some(mf)) => {
                     let bytes = std::fs::read(&mf.path).map_err(|source| Error::Io {
                         path: mf.path.clone(),
                         source,
@@ -585,7 +596,7 @@ impl Scene {
                     let (a, b) = proto_bounds(&g, mf.mesh as usize)?;
                     (Some(a), Some(b))
                 }
-                None => (None, None),
+                (None, None) => (None, None),
             };
             let soup = primase_skate_scene::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
@@ -604,6 +615,7 @@ impl Scene {
                 index: i,
                 id: p.id.clone(),
                 glb: mf.map(|m| m.path.clone()),
+                prims: mesh.map(|m| m.primitives.iter().map(glb_prim).collect()),
                 name: world.get::<Name>(e).map_or_else(|| p.id.clone(), |n| n.0.clone()),
                 col_mode: mode_of(p.collision.as_ref().and_then(|c| c.mode)),
                 mesh: mf.map_or(0, |m| m.mesh),
@@ -835,7 +847,7 @@ impl Scene {
 
 /// The prototype's primitives as the reference reads them: positions, normals (None: absent), uv (None: absent),
 /// indices (absent: sequential, whole triangles).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GlbPrim {
     pub pos: Vec<f32>,
     pub nrm: Option<Vec<f32>>,
@@ -853,27 +865,56 @@ pub fn read_glb(path: &std::path::Path, mesh: u32) -> Result<Vec<GlbPrim>> {
     let m = g
         .read_mesh(mesh as usize)
         .map_err(|e| Error::Scene(format!("{}: {e}", path.display())))?;
-    Ok(m.primitives
+    Ok(m.primitives.iter().map(|p| glb_prim(&p.primitive)).collect())
+}
+
+/// The writer's view of a primitive (positions, normals, first texture coordinates, triangle indices); the GLB file
+/// path and the `core.mesh` path both go through it.
+pub fn glb_prim(pr: &primase_core::Primitive) -> GlbPrim {
+    let pos: Vec<f32> = pr.positions().unwrap_or(&[]).iter().flatten().copied().collect();
+    let nv = pos.len() / 3;
+    let nrm = match pr.streams.get(&Semantic::Normal) {
+        Some(Stream::F32x3(v)) => Some(v.iter().flatten().copied().collect()),
+        _ => None,
+    };
+    let uv = match pr.streams.get(&Semantic::TexCoord(0)) {
+        Some(Stream::F32x2(v)) => Some(v.iter().flatten().copied().collect()),
+        _ => None,
+    };
+    let idx = pr
+        .indices
+        .clone()
+        .unwrap_or_else(|| (0..(nv - nv % 3) as u32).collect());
+    GlbPrim { pos, nrm, uv, idx }
+}
+
+/// The box of a mesh's positions; `None` when it has none.
+fn mesh_bounds(m: &Mesh) -> Option<([f32; 3], [f32; 3])> {
+    let mut it = m
+        .primitives
         .iter()
-        .map(|p| {
-            let pr = &p.primitive;
-            let pos: Vec<f32> = pr.positions().unwrap_or(&[]).iter().flatten().copied().collect();
-            let nv = pos.len() / 3;
-            let nrm = match pr.streams.get(&Semantic::Normal) {
-                Some(Stream::F32x3(v)) => Some(v.iter().flatten().copied().collect()),
-                _ => None,
-            };
-            let uv = match pr.streams.get(&Semantic::TexCoord(0)) {
-                Some(Stream::F32x2(v)) => Some(v.iter().flatten().copied().collect()),
-                _ => None,
-            };
-            let idx = pr
-                .indices
-                .clone()
-                .unwrap_or_else(|| (0..(nv - nv % 3) as u32).collect());
-            GlbPrim { pos, nrm, uv, idx }
+        .flat_map(|p| p.positions().unwrap_or(&[]).iter())
+        .peekable();
+    it.peek()?;
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for v in it {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    Some((lo, hi))
+}
+
+impl ProtoDef {
+    /// The prototype's primitives: its `core.mesh`, else its GLB file read now (legacy); `None`: no geometry.
+    pub fn prims(&self) -> Result<Option<std::borrow::Cow<'_, [GlbPrim]>>> {
+        Ok(match (&self.prims, &self.glb) {
+            (Some(p), _) => Some(std::borrow::Cow::Borrowed(p.as_slice())),
+            (None, Some(glb)) => Some(std::borrow::Cow::Owned(read_glb(glb, self.mesh)?)),
+            (None, None) => None,
         })
-        .collect())
+    }
 }
 
 /// Materials of the scene made on first use (the reference's Materializer).
@@ -1100,8 +1141,7 @@ pub fn build_mesh(
     tex: &mut TexLib,
     counters: &mut MeshCounters,
 ) -> Result<Option<SrcMesh>> {
-    let Some(glb) = &p.glb else { return Ok(None) };
-    let prims = read_glb(glb, p.mesh)?;
+    let Some(prims) = p.prims()? else { return Ok(None) };
     let has_variants = p.parts.iter().any(|x| x.variants.is_some());
     let mut mesh = SrcMesh {
         hash: p.key,
@@ -1291,4 +1331,49 @@ pub fn material_of(
 /// Hand out the kinds' name.
 pub fn class_of(c: MaterialClass) -> VClass {
     class(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_skate_scene::{MaterialClass, SkateMaterial, SkateScene};
+
+    /// A layered material that no lowering pass replaced is refused, and the error names the pass to run.
+    #[test]
+    fn unlowered_layered_material_is_refused_naming_the_pass() {
+        let mut w = World::new();
+        w.insert_resource(SkateScene {
+            name: "t".into(),
+            ..SkateScene::default()
+        });
+        let e = w.spawn();
+        w.insert(
+            e,
+            SkateMaterial {
+                key: "layered".into(),
+                class: MaterialClass::Layered,
+                base: None,
+                normal: None,
+                mask: None,
+                base_color: None,
+                tint: None,
+                alpha: None,
+                cutoff: None,
+                two_sided: None,
+                domain: None,
+                metallic: None,
+                roughness: None,
+                wrap: None,
+                ocean: None,
+                cast_shadows: None,
+                emissive: None,
+                other: Default::default(),
+            },
+        );
+        let err = Scene::from_world(&w, std::path::Path::new("."))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("lower-layered-reskate"), "{err}");
+    }
 }

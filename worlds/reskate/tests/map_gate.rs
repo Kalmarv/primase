@@ -900,6 +900,95 @@ impl Numbers {
     }
 }
 
+/// The writer's two inputs agree: every M3 scene built from its prototypes' `core.mesh` (each GLB loaded into the
+/// world first) writes byte-identical files to the same scene built from the GLB files (the legacy path).
+#[test]
+fn core_mesh_input_matches_the_file_input() {
+    let (Some(reference), Some(scenes)) = (
+        real_data("PRIMASE_RESKATE_REF"),
+        real_data("PRIMASE_RESKATE_SCENES"),
+    ) else {
+        return;
+    };
+    let caps = real_data("PRIMASE_RESKATE_CAPS").map(|p| p.to_string_lossy().into_owned());
+    let root = std::env::var_os("PRIMASE_OUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("reskate-mesh-input");
+    let filter = std::env::var("PRIMASE_SCENE_FILTER").unwrap_or_default();
+    let mut areas: Vec<String> = std::fs::read_dir(&reference)
+        .unwrap()
+        .flatten()
+        .filter(|e| scenes.join(e.file_name()).join("scene.json").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|a| a.contains(&filter))
+        .collect();
+    areas.sort();
+    assert!(!areas.is_empty(), "no scene");
+    let mut report = GateReport::new(
+        "core.mesh input vs GLB file input: files byte-identical",
+        Tolerance::Exact,
+    );
+    for area in &areas {
+        let scene = scenes.join(area);
+        let build = |from_mesh: bool| -> PathBuf {
+            let out_root = root.join(if from_mesh { "mesh" } else { "file" });
+            let o = BuildOptions {
+                out_root: out_root.clone(),
+                tex_cap: 256,
+                tex_caps: caps.clone(),
+                water_ocean: true,
+                lights_max_per_cell: 256,
+                piece_log: reference.join(area).join("pieces.json").is_file(),
+                ..BuildOptions::default()
+            };
+            let out = out_root.join(area);
+            if out.exists() {
+                std::fs::remove_dir_all(&out).unwrap();
+            }
+            let mut w = World::new();
+            primase_skate_scene::read(&scene, &mut w).unwrap();
+            if from_mesh {
+                let r = primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
+                println!(
+                    "{area}: {} meshes, {} primitives loaded into core.mesh",
+                    r.meshes, r.primitives
+                );
+            }
+            primase_reskate::build(&w, &scene, &o).unwrap();
+            out
+        };
+        let (a, b) = (build(false), build(true));
+        let (fa, fb) = (files(&a), files(&b));
+        let names_a: Vec<&String> = fa.keys().collect();
+        let names_b: Vec<&String> = fb.keys().collect();
+        if names_a != names_b {
+            report.fail(area.clone(), "different file sets");
+            continue;
+        }
+        for (rel, pa) in &fa {
+            let (x, y) = (std::fs::read(pa).unwrap(), std::fs::read(&fb[rel]).unwrap());
+            if rel == "stats.json" {
+                // the build's run time is the one value two builds of the same input do not share
+                let strip = |b: &[u8]| {
+                    let mut v: Value = serde_json::from_slice(b).unwrap();
+                    v["totals"].as_object_mut().map(|t| t.remove("seconds"));
+                    serde_json::to_vec(&v).unwrap()
+                };
+                report.compare_bytes(
+                    format!("{area}/{rel} (without totals.seconds)"),
+                    &strip(&x),
+                    &strip(&y),
+                );
+            } else {
+                report.compare_bytes(format!("{area}/{rel}"), &x, &y);
+            }
+        }
+    }
+    println!("{report}");
+    report.assert_passed();
+}
+
 #[test]
 fn rust_writer_matches_the_reference() {
     let (Some(reference), Some(scenes)) = (
