@@ -41,6 +41,7 @@ fn part(name: &str, kind: PartKind, entity_id: i32, groups: &[i32]) -> Part {
         scale: [1.; 3],
         entity_id,
         entity_group_ids: g,
+        shadows: Default::default(),
     }
 }
 

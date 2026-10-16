@@ -11,6 +11,7 @@ fn part() -> Part {
         scale: [1.; 3],
         entity_id: -1,
         entity_group_ids: [-1; 8],
+        shadows: Default::default(),
     }
 }
 fn close(a: [[f32; 3]; 4], b: [[f32; 3]; 4]) {
@@ -123,6 +124,37 @@ fn part_record(entity_id: i32, groups: [i32; 8], tail: [u8; 16]) -> Vec<u8> {
     r.resize(r.len() + 8, 0);
     r
 }
+#[test]
+fn shadow_flags_retain_false_renderer_bytes_and_contradictions() {
+    use primase_fromsoft::msb::{MapLayout, ShadowFlags};
+    let mut record = part_record(5, [-1; 8], [0; 16]);
+    let entity = u64::from_le_bytes(record[96..104].try_into().unwrap()) as usize;
+    for (offset, value) in [(0x0a, 1), (0x0c, 0), (0x0d, 2), (0x0e, 255), (0x11, 1), (0x12, 1)] {
+        record[entity + offset] = value;
+    }
+    let map = MapLayout::read(&map_with_parts(&[record.clone()])).unwrap();
+    let expected = ShadowFlags {
+        cast: false,
+        receive: true,
+        only: true,
+        point_light_cast: true,
+        static_cast: 2,
+        cascade3_cast: 255,
+    };
+    assert_eq!(map.parts[0].shadows, expected);
+    // Contradiction is preserved, not silently normalized into an enum.
+    assert!(map.parts[0].shadows.only && !map.parts[0].shadows.cast);
+    let json = primase_core::json::to_value(&expected).unwrap();
+    assert_eq!(json["cast"], false);
+    assert_eq!(json["static_cast"], 2);
+    assert_eq!(json["cascade3_cast"], 255);
+    for offset in [0x0a, 0x0c, 0x11, 0x12] {
+        let mut bad = record.clone();
+        bad[entity + offset] = 2;
+        assert!(MapLayout::read(&map_with_parts(&[bad])).is_err());
+    }
+}
+
 #[test]
 fn entity_ids_and_groups_as_stored() {
     let groups = [1117201, -1, 0, 1116201, -1, -1, -1, -1];

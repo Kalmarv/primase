@@ -195,6 +195,7 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MODEL_ORACLE` | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_MSB_ORACLE` | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
+| `PRIMASE_FROMSOFT_SHADOW_ORACLE` | original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs` |
 | `PRIMASE_FROMSOFT_STATE_ORACLE` | independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md |
 | `PRIMASE_FROMSOFT_STATE_SCENE` | a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs |
 | `PRIMASE_FROMSOFT_BLOCKER_ORACLE` | blocker-card reference cases.json; schema in worlds/fromsoft/README.md |

@@ -69,6 +69,32 @@ pub struct Part {
     /// The entity groups it belongs to, as stored (unused slots -1 or 0); a script addressing a group addresses
     /// every member.
     pub entity_group_ids: [i32; 8],
+    /// Source shadow controls, independent of material and placement state.
+    pub shadows: ShadowFlags,
+}
+/// Raw MSBS entity-block shadow controls. Renderer-specific bytes are retained
+/// uninterpreted. `only && !cast` is contradictory: retain and count it rather
+/// than guessing a consumer's shadow mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ShadowFlags {
+    /// Boolean byte at entity-block offset 0x0c; explicit false is retained.
+    pub cast: bool,
+    /// Boolean byte at entity-block offset 0x11; explicit false is retained.
+    pub receive: bool,
+    /// Boolean byte at entity-block offset 0x12, retained independently of `cast`.
+    pub only: bool,
+    /// Boolean byte at entity-block offset 0x0a for point-light shadow casting.
+    pub point_light_cast: bool,
+    /// Uninterpreted byte at entity-block offset 0x0d; all byte values are retained.
+    pub static_cast: u8,
+    /// Uninterpreted byte at entity-block offset 0x0e; all byte values are retained.
+    pub cascade3_cast: u8,
+}
+impl primase_core::Component for ShadowFlags {
+    const NAME: &'static str = "fromsoft.shadow_flags";
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct MapOffset {
@@ -254,6 +280,14 @@ impl MapLayout {
                 model,
                 entity_id,
                 entity_group_ids,
+                shadows: ShadowFlags {
+                    cast: r.boolean(entity + 0x0c)?,
+                    receive: r.boolean(entity + 0x11)?,
+                    only: r.boolean(entity + 0x12)?,
+                    point_light_cast: r.boolean(entity + 0x0a)?,
+                    static_cast: r.u8(entity + 0x0d)?,
+                    cascade3_cast: r.u8(entity + 0x0e)?,
+                },
                 hit_filter: if kind == PartKind::Collision {
                     Some(r.slice(r.size(104)?, 1)?[0])
                 } else {
