@@ -145,6 +145,7 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_GTA_KEYS` | a folder of the user's own GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); checked against published digests, never committed |
 | `PRIMASE_GTA_LISTING` | optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`) |
 | `PRIMASE_GTA_ACTIVE` | optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`) |
+| `PRIMASE_GTA_RESOURCES` | optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`) |
 | `PRIMASE_GTA_FILTER` | optional: only archives whose path contains this text |
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
