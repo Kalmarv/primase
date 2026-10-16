@@ -909,6 +909,7 @@ dependencies = [
 name = "primase-reskate"
 version = "0.1.0"
 dependencies = [
+ "half",
  "primase-compress",
  "primase-core",
  "primase-dds",
@@ -921,6 +922,7 @@ dependencies = [
  "primase-vertex",
  "serde",
  "serde_json",
+ "sha1",
  "thiserror",
 ]
 

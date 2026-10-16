@@ -1,5 +1,6 @@
 //! Steps that run after ReSkate Studio's compile, on the native Patch folder it writes: the Frostbite containers
-//! they read and write (`fb`) and the MeshSet resource (`meshset`).
+//! they read and write (`fb`), the MeshSet resource (`meshset`) and per-vertex blending onto stock material rows
+//! (`vblend`).
 //!
 //! Every reader is strict (it walks to the exact end of what it reads and rejects anything it does not know) and
 //! every writer is the counterpart of the reader: an unmodified Patch read and written again is byte-identical.
@@ -8,6 +9,7 @@
 
 pub mod fb;
 pub mod meshset;
+pub mod vblend;
 
 /// Errors of the post-compile readers and writers: what broke and where.
 #[derive(Debug, thiserror::Error)]
