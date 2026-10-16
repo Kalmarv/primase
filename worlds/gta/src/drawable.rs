@@ -213,14 +213,11 @@ impl Drawable {
                 *lod = read_models(r, p)?;
             }
         }
-        let (shaders, textures) = read_shader_group(r, le::u64(d, 0x10))?;
-        for g in lods.iter().flatten().flat_map(|m| &m.geometries) {
-            if usize::from(g.shader) >= shaders.len() {
-                return Err(err(
-                    pointer,
-                    format!("geometry shader {} of {}", g.shader, shaders.len()),
-                ));
-            }
+        let group = le::u64(d, 0x10);
+        let (shaders, textures) = read_shader_group(r, group)?;
+        // a drawable without a shader group (a fragment's extra drawables) uses its owner's shaders
+        if group != 0 {
+            check_shaders(pointer, &lods, shaders.len())?;
         }
         Ok(Drawable {
             bounding_centre: le::vec3(d, 0x20),
@@ -244,6 +241,19 @@ impl Drawable {
             textures,
             skeleton: le::u64(d, 0x18) != 0,
         })
+    }
+}
+
+/// Every geometry's shader index is below `shaders`.
+fn check_shaders(at: u64, lods: &[Vec<Model>; 4], shaders: usize) -> Result<()> {
+    match lods
+        .iter()
+        .flatten()
+        .flat_map(|m| &m.geometries)
+        .find(|g| usize::from(g.shader) >= shaders)
+    {
+        Some(g) => Err(err(at, format!("geometry shader {} of {shaders}", g.shader))),
+        None => Ok(()),
     }
 }
 
@@ -497,4 +507,149 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
         bucket_mask: le::u32(s, 0x3C),
         params,
     })
+}
+
+/// The resource version of Enhanced's fragments (yft).
+pub const FRAGMENT_VERSION: u32 = 171;
+
+/// A fragment (yft): its name, main drawable (the one the world draws), its extra drawables (by name; those without a
+/// shader group use the main drawable's shaders) and its cloth drawable. Physics, glass and bones are not read yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fragment {
+    pub name: String,
+    pub drawable: Option<Drawable>,
+    pub extra: Vec<(String, Drawable)>,
+    pub cloth: Option<Drawable>,
+    /// The bones' pose, by bone index: three rows `[x, y, z, translation]` (`world = row . (p, 1)`).
+    pub pose: Vec<[[f32; 4]; 3]>,
+}
+
+impl Fragment {
+    /// A yft's fragment, after checking the resource is in Enhanced's layout. Layout: resource file header (16),
+    /// bounding sphere 0x20, main drawable 0x30, extra drawables 0x38 with their names 0x40 and count 0x48, name
+    /// 0x58, bone pose 0xA8 (32-byte header with the count at 0x10, then 48 bytes per bone), cloth drawable 0xF8.
+    pub fn read_resource(r: &Resource) -> Result<Fragment> {
+        if r.version != FRAGMENT_VERSION {
+            return Err(err(
+                0,
+                format!(
+                    "resource version {}, Enhanced's yft layout is {FRAGMENT_VERSION}",
+                    r.version
+                ),
+            ));
+        }
+        let h = r.at(0x5000_0000, 0x130)?;
+        let opt = |p: u64| -> Result<Option<Drawable>> {
+            match p {
+                0 => Ok(None),
+                p => Drawable::read(r, p).map(Some),
+            }
+        };
+        let n = le::u32(h, 0x48) as usize;
+        let mut extra = Vec::with_capacity(n);
+        if n > 0 {
+            let ptrs = r.at(le::u64(h, 0x38), 8 * n)?;
+            let names = r.at(le::u64(h, 0x40), 8 * n)?;
+            for i in 0..n {
+                let name = match le::u64(names, 8 * i) {
+                    0 => String::new(),
+                    p => crate::texture::c_string(r, p)?,
+                };
+                if let Some(d) = opt(le::u64(ptrs, 8 * i))? {
+                    extra.push((name, d));
+                }
+            }
+        }
+        // extra and cloth drawables without their own shaders use the main drawable's
+        let owner = le::u64(h, 0x30);
+        let main_shaders = opt(owner)?.map_or(0, |d| d.shaders.len());
+        for (_, d) in &extra {
+            if d.shaders.is_empty() {
+                check_shaders(owner, &d.lods, main_shaders)?;
+            }
+        }
+        let pose = match le::u64(h, 0xA8) {
+            0 => Vec::new(),
+            p => {
+                let n = usize::from(r.at(p, 0x20)?[0x10]);
+                let rows = r.at(p + 0x20, 48 * n)?;
+                (0..n)
+                    .map(|i| [0, 1, 2].map(|j| le::vec4(rows, 48 * i + 16 * j)))
+                    .collect()
+            }
+        };
+        Ok(Fragment {
+            pose,
+            name: match le::u64(h, 0x58) {
+                0 => String::new(),
+                p => crate::texture::c_string(r, p)?,
+            },
+            drawable: opt(le::u64(h, 0x30))?,
+            extra,
+            cloth: opt(le::u64(h, 0xF8))?,
+        })
+    }
+}
+
+/// A drawable dictionary (ydd): drawables sorted by name hash.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawableDictionary {
+    /// Name hashes as stored (the joaat of the lowercase name), parallel to `drawables`.
+    pub hashes: Vec<u32>,
+    pub drawables: Vec<Drawable>,
+}
+
+impl DrawableDictionary {
+    /// A ydd's dictionary, after checking the resource is in Enhanced's layout (159, as drawables). Layout: resource
+    /// file header (16), hash list 0x20, drawable pointer list 0x30.
+    pub fn read_resource(r: &Resource) -> Result<DrawableDictionary> {
+        if r.version != VERSION {
+            return Err(err(
+                0,
+                format!(
+                    "resource version {}, Enhanced's ydd layout is {VERSION}",
+                    r.version
+                ),
+            ));
+        }
+        let d = r.at(0x5000_0000, 0x40)?;
+        let hash_list = pointer_list_u32(r, &d[0x20..0x30])?;
+        let ptrs = pointer_list(r, 0x5000_0030)?;
+        if hash_list.len() != ptrs.len() {
+            return Err(err(
+                0,
+                format!("{} name hashes for {} drawables", hash_list.len(), ptrs.len()),
+            ));
+        }
+        if hash_list.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(err(0, "name hashes not strictly ascending"));
+        }
+        let drawables = ptrs
+            .into_iter()
+            .map(|p| Drawable::read(r, p))
+            .collect::<Result<_>>()?;
+        Ok(DrawableDictionary {
+            hashes: hash_list,
+            drawables,
+        })
+    }
+
+    /// The drawable of this name hash.
+    pub fn get(&self, hash: u32) -> Option<&Drawable> {
+        self.hashes.binary_search(&hash).ok().map(|i| &self.drawables[i])
+    }
+}
+
+/// A simple list of u32 (pointer, count, capacity) given its 16 header bytes.
+fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
+    let (count, cap) = (le::u16(h, 8), le::u16(h, 10));
+    if cap < count {
+        return Err(err(0, format!("list count {count} over capacity {cap}")));
+    }
+    let n = usize::from(count);
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let d = r.at(le::u64(h, 0), 4 * n)?;
+    Ok((0..n).map(|i| le::u32(d, 4 * i)).collect())
 }

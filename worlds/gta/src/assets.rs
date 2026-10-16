@@ -1,9 +1,11 @@
 //! Prototypes' drawables and textures into the world, for the prototypes placements still use.
 //!
-//! - A prototype whose archetype is a drawable (asset type 2) gets `core.mesh` from the live ydr's high LOD: every
-//!   model's geometries in order, one primitive each, streams as stored (frame converted), 16-bit indices widened;
+//! - A prototype whose archetype is a drawable (asset type 2: the live ydr), a fragment (1: the live yft's main
+//!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
+//!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
+//!   converted), 16-bit indices widened;
 //!   [`GtaDrawable`] with the drawable's box and sphere as stored and the coarser LODs as meshes (until core has a
-//!   representation for alternative LOD meshes). Drawable dictionaries and fragments are counted, not read yet.
+//!   representation for alternative LOD meshes).
 //! - A material per (drawable, shader) with [`GtaShader`]: every parameter by stored name, textures resolved the way
 //!   the game looks them up: the drawable's own dictionary, then the archetype's texture dictionary, then that
 //!   dictionary's parents ([`TextureParents`]), then the resident detail dictionary ([`RESIDENT`]).
@@ -19,7 +21,7 @@ use primase_core::{
 
 use crate::archive_set::ArchiveSet;
 use crate::components::{GtaArchetype, GtaDrawable, GtaParam, GtaShader};
-use crate::drawable::{Drawable, Geometry, Model, ParamValue};
+use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue};
 use crate::gtxd::TextureParents;
 use crate::keys::Keys;
 use crate::le;
@@ -41,9 +43,12 @@ pub struct AssetReport {
     pub textures: usize,
     /// Texture parameters naming a texture none of the dictionaries in the lookup holds, by texture name.
     pub textures_not_found: BTreeMap<String, usize>,
-    /// Prototypes whose archetype is a drawable dictionary entry or a fragment (not read yet), or names no file.
-    pub dictionary_pending: usize,
-    pub fragment_pending: usize,
+    /// Of `drawables`, those that are a fragment's main drawable and a drawable dictionary's entry.
+    pub fragments: usize,
+    pub dictionary_entries: usize,
+    /// High-LOD models placed by their bone's pose (a fragment's models).
+    pub posed_models: usize,
+    /// Prototypes whose archetype names no live file or entry.
     pub asset_missing: usize,
 }
 
@@ -55,21 +60,48 @@ struct Ctx<'a> {
     dicts: BTreeMap<u32, Option<(String, TextureDictionary)>>,
     /// Texture entities by (dictionary key, texture name hash).
     textures: BTreeMap<(String, u32), Entity>,
+    /// Drawable dictionaries read, by name hash.
+    ydds: BTreeMap<u32, DrawableDictionary>,
     report: AssetReport,
 }
 
-fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream)> {
+/// A model's transform in GTA's frame: rows `[x, y, z, translation]`.
+type Pose = [[f32; 4]; 3];
+
+fn transform(t: Option<&Pose>, v: [f32; 3], w: f64) -> [f32; 3] {
+    match t {
+        None => v,
+        Some(r) => r.map(|row| {
+            (f64::from(row[0]) * f64::from(v[0])
+                + f64::from(row[1]) * f64::from(v[1])
+                + f64::from(row[2]) * f64::from(v[2])
+                + f64::from(row[3]) * w) as f32
+        }),
+    }
+}
+
+fn stream(g: &Geometry, e: crate::drawable::Element, t: Option<&Pose>) -> Result<(Semantic, Stream)> {
     let bytes = g.element_bytes(e);
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(|c| le::vec3(c, 0)).collect() };
     let fmt = e.format.0;
     Ok(match (e.slot, fmt) {
         (0, 0x06) => (
             Semantic::Position,
-            Stream::F32x3(f3(&bytes).into_iter().map(|p| GTA.point(p)).collect()),
+            Stream::F32x3(
+                f3(&bytes)
+                    .into_iter()
+                    .map(|p| GTA.point(transform(t, p, 1.0)))
+                    .collect(),
+            ),
         ),
         (4, 0x06) => (
             Semantic::Normal,
-            Stream::F32x3(f3(&bytes).into_iter().map(|n| GTA.direction(n)).collect()),
+            Stream::F32x3(
+                f3(&bytes)
+                    .into_iter()
+                    .map(|n| GTA.direction(transform(t, n, 0.0)))
+                    .collect(),
+            ),
         ),
         (8, 0x02) => (
             Semantic::Tangent,
@@ -79,9 +111,9 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
                     .0
                     .iter()
                     .map(|c| {
-                        let t = le::vec4(c, 0);
-                        let d = GTA.direction([t[0], t[1], t[2]]);
-                        [d[0], d[1], d[2], t[3]]
+                        let v = le::vec4(c, 0);
+                        let d = GTA.direction(transform(t, [v[0], v[1], v[2]], 0.0));
+                        [d[0], d[1], d[2], v[3]]
                     })
                     .collect(),
             ),
@@ -114,21 +146,42 @@ fn u8x4(b: &[u8]) -> Vec<[u8; 4]> {
     b.as_chunks::<4>().0.to_vec()
 }
 
+/// Each model's transform: its bone's pose (a fragment's), none for skinned models (bound to bone weights) or without a
+/// pose. As the game draws a fragment at rest; only for drawables with a skeleton.
+fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose>> {
+    models
+        .iter()
+        .map(|m| {
+            let (bone, skinned) = (
+                (m.skeleton_binding >> 24) & 0xFF,
+                (m.skeleton_binding >> 8) & 0xFF != 0,
+            );
+            if !d.skeleton || skinned {
+                None
+            } else {
+                pose.get(bone as usize).copied()
+            }
+        })
+        .collect()
+}
+
 /// A model list as a mesh, each geometry a primitive with its shader's material.
-fn mesh(models: &[Model], materials: &[Entity]) -> Result<Mesh> {
+fn mesh(models: &[Model], materials: &[Entity], poses: &[Option<Pose>]) -> Result<Mesh> {
     let mut primitives = Vec::new();
-    for g in models.iter().flat_map(|m| &m.geometries) {
-        let mut streams = BTreeMap::new();
-        for &e in &g.elements {
-            let (sem, s) = stream(g, e)?;
-            streams.insert(sem, s);
+    for (m, pose) in models.iter().zip(poses) {
+        for g in &m.geometries {
+            let mut streams = BTreeMap::new();
+            for &e in &g.elements {
+                let (sem, s) = stream(g, e, pose.as_ref())?;
+                streams.insert(sem, s);
+            }
+            primitives.push(Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(g.indices.iter().map(|&i| u32::from(i)).collect()),
+                material: materials.get(usize::from(g.shader)).copied(),
+            });
         }
-        primitives.push(Primitive {
-            topology: Topology::Triangles,
-            streams,
-            indices: Some(g.indices.iter().map(|&i| u32::from(i)).collect()),
-            material: materials.get(usize::from(g.shader)).copied(),
-        });
     }
     Ok(Mesh { primitives })
 }
@@ -241,6 +294,7 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
         parents: TextureParents::read(set, keys)?,
         dicts: BTreeMap::new(),
         textures: BTreeMap::new(),
+        ydds: BTreeMap::new(),
         report: AssetReport::default(),
     };
     let used: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
@@ -248,24 +302,51 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
         let Some(a) = w.get::<GtaArchetype>(proto).cloned() else {
             continue;
         };
-        match a.asset_type {
-            2 => {}
-            3 => {
-                ctx.report.dictionary_pending += 1;
-                continue;
+        let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
+        let mut pose: Vec<Pose> = Vec::new();
+        let (path, d) = match a.asset_type {
+            // a drawable
+            2 => {
+                let Some(f) = live("ydr", a.asset_name) else {
+                    ctx.report.asset_missing += 1;
+                    continue;
+                };
+                (set.path(f).to_string(), Drawable::read_resource(&ctx.decode(f)?)?)
             }
+            // a fragment: its main drawable
             1 => {
-                ctx.report.fragment_pending += 1;
-                continue;
+                let Some(f) = live("yft", a.asset_name) else {
+                    ctx.report.asset_missing += 1;
+                    continue;
+                };
+                let frag = Fragment::read_resource(&ctx.decode(f)?)?;
+                let Some(d) = frag.drawable else {
+                    ctx.report.asset_missing += 1;
+                    continue;
+                };
+                pose = frag.pose;
+                ctx.report.fragments += 1;
+                (set.path(f).to_string(), d)
+            }
+            // an entry of a drawable dictionary
+            3 => {
+                let Some(f) = live("ydd", a.drawable_dictionary) else {
+                    ctx.report.asset_missing += 1;
+                    continue;
+                };
+                if !ctx.ydds.contains_key(&a.drawable_dictionary) {
+                    let dict = DrawableDictionary::read_resource(&ctx.decode(f)?)?;
+                    ctx.ydds.insert(a.drawable_dictionary, dict);
+                }
+                let Some(d) = ctx.ydds[&a.drawable_dictionary].get(a.asset_name).cloned() else {
+                    ctx.report.asset_missing += 1;
+                    continue;
+                };
+                ctx.report.dictionary_entries += 1;
+                (format!("{}#{:#010x}", set.path(f), a.asset_name), d)
             }
             _ => continue,
-        }
-        let Some(f) = set.tables.get("ydr").and_then(|t| t.get(&a.asset_name)).copied() else {
-            ctx.report.asset_missing += 1;
-            continue;
         };
-        let path = set.path(f).to_string();
-        let d = Drawable::read_resource(&ctx.decode(f)?)?;
         let mut materials = Vec::with_capacity(d.shaders.len());
         for (i, s) in d.shaders.iter().enumerate() {
             let mut params = Vec::with_capacity(s.params.len());
@@ -301,14 +382,16 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
             materials.push(m);
             ctx.report.materials += 1;
         }
-        let high = mesh(&d.lods[0], &materials)?;
+        let poses: [Vec<Option<Pose>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
+        ctx.report.posed_models += poses[0].iter().filter(|p| p.is_some()).count();
+        let high = mesh(&d.lods[0], &materials, &poses[0])?;
         ctx.report.geometries += high.primitives.len();
         w.insert(proto, high);
         let lod = |i: usize| -> Result<Option<Mesh>> {
             if d.lods[i].is_empty() {
                 Ok(None)
             } else {
-                mesh(&d.lods[i], &materials).map(Some)
+                mesh(&d.lods[i], &materials, &poses[i]).map(Some)
             }
         };
         w.insert(

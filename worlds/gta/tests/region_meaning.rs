@@ -183,8 +183,7 @@ fn region_placements_against_the_scene() {
     for (e, sp) in theirs.iter::<SkatePrototype>() {
         let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
         let Some(&(ours_mesh, d)) = protos.get(&primase_hash::joaat(name.to_lowercase().as_bytes())) else {
-            *geo.entry("prototypes not compared (fragment or no drawable)")
-                .or_default() += 1;
+            *geo.entry("prototypes not compared (no drawable)").or_default() += 1;
             continue;
         };
         let Some(their_mesh) = theirs.get::<Mesh>(e) else {
