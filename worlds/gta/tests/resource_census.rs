@@ -1,6 +1,8 @@
 //! Census of drawables and texture dictionaries: every ydr and ytd of an install (every copy, in every archive) read
-//! by `Drawable::read` and `TextureDictionary::read`, the drawables' embedded dictionaries included. Failures are
-//! counted by message; resource versions, vertex formats per semantic and texture formats are counted.
+//! by `Drawable::read_resource` and `TextureDictionary::read_resource`, the drawables' embedded dictionaries
+//! included. Resources in another version's layout (Legacy's ydr 165, older tools' 154, ytd 2 and 13) are counted
+//! by version, not read. Failures are counted by message; resource versions, vertex formats per semantic, texture
+//! formats and null dictionary entries are counted.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_FILTER` limits the archives to paths containing that
 //! text.
@@ -21,6 +23,8 @@ struct Tally {
     texture_formats: BTreeMap<u8, u64>,
     geometries: u64,
     textures: u64,
+    null_textures: u64,
+    other_layout: BTreeMap<(String, u32), u64>,
     failures: BTreeMap<String, (u64, Vec<String>)>,
 }
 
@@ -56,10 +60,21 @@ fn every_drawable_and_texture_dictionary_reads() {
                         let file = f.get_or_insert_with(|| File::open(&a.file).expect("open archive"));
                         let res = a.resource(file, ei, &keys);
                         let mut local = Tally::default();
+                        let mut other_layout = None;
                         let result = res.and_then(|r| {
                             *local.versions.entry((ext.to_string(), r.version)).or_default() += 1;
+                            // resources in another version's layout (Legacy's, older tools') are counted, not read
+                            let want = if ext == "ydr" {
+                                primase_gta::drawable::VERSION
+                            } else {
+                                primase_gta::texture::VERSION
+                            };
+                            if r.version != want {
+                                other_layout = Some(r.version);
+                                return Ok(());
+                            }
                             let dict = if ext == "ydr" {
-                                let d = Drawable::read(&r, 0x5000_0000)?;
+                                let d = Drawable::read_resource(&r)?;
                                 for g in d.lods.iter().flatten().flat_map(|m| &m.geometries) {
                                     local.geometries += 1;
                                     for e in &g.elements {
@@ -71,11 +86,16 @@ fn every_drawable_and_texture_dictionary_reads() {
                                 }
                                 d.textures
                             } else {
-                                Some(TextureDictionary::read(&r, 0x5000_0000)?)
+                                Some(TextureDictionary::read_resource(&r)?)
                             };
                             for t in dict.iter().flat_map(|d| &d.textures) {
-                                local.textures += 1;
-                                *local.texture_formats.entry(t.format.0).or_default() += 1;
+                                match t {
+                                    Some(t) => {
+                                        local.textures += 1;
+                                        *local.texture_formats.entry(t.format.0).or_default() += 1;
+                                    }
+                                    None => local.null_textures += 1,
+                                }
                             }
                             Ok(())
                         });
@@ -83,6 +103,10 @@ fn every_drawable_and_texture_dictionary_reads() {
                         *t.read.entry(ext.to_string()).or_default() += 1;
                         t.geometries += local.geometries;
                         t.textures += local.textures;
+                        t.null_textures += local.null_textures;
+                        if let Some(v) = other_layout {
+                            *t.other_layout.entry((ext.to_string(), v)).or_default() += 1;
+                        }
                         for (k, v) in local.versions {
                             *t.versions.entry(k).or_default() += v;
                         }
@@ -112,9 +136,10 @@ fn every_drawable_and_texture_dictionary_reads() {
     });
     let t = tally.into_inner().expect("lock");
     println!(
-        "resource census: {:?}, {} geometries, {} textures; versions {:?}",
-        t.read, t.geometries, t.textures, t.versions
+        "resource census: {:?}, {} geometries, {} textures ({} null dictionary entries); versions {:?}",
+        t.read, t.geometries, t.textures, t.null_textures, t.versions
     );
+    println!("not read, another version's layout: {:?}", t.other_layout);
     println!("vertex formats (semantic, code): {:?}", t.vertex_formats);
     println!("texture formats (code): {:?}", t.texture_formats);
     for (msg, (n, paths)) in &t.failures {

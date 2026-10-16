@@ -109,10 +109,29 @@ impl Texture {
 pub struct TextureDictionary {
     /// Name hashes as stored (the joaat of the lowercase name), parallel to `textures`.
     pub hashes: Vec<u32>,
-    pub textures: Vec<Texture>,
+    /// The textures; `None` where the list holds a null pointer (a name kept without its texture, as some patch
+    /// drawables' dictionaries do).
+    pub textures: Vec<Option<Texture>>,
 }
 
+/// The resource version of Enhanced's texture dictionaries (ytd).
+pub const VERSION: u32 = 5;
+
 impl TextureDictionary {
+    /// A ytd's dictionary: its root, after checking the resource is in Enhanced's layout.
+    pub fn read_resource(r: &Resource) -> Result<TextureDictionary> {
+        if r.version != VERSION {
+            return Err(err(
+                0,
+                format!(
+                    "resource version {}, Enhanced's ytd layout is {VERSION}",
+                    r.version
+                ),
+            ));
+        }
+        Self::read(r, 0x5000_0000)
+    }
+
     /// The dictionary at `pointer` (`0x5000_0000` for a ytd's root).
     pub fn read(r: &Resource, pointer: u64) -> Result<TextureDictionary> {
         let d = r.at(pointer, 0x40)?;
@@ -141,8 +160,13 @@ impl TextureDictionary {
         if n > 0 {
             let p = r.at(tex_ptr, 8 * n)?;
             for (i, &hash) in hashes.iter().enumerate() {
-                let t = Texture::read(r, le::u64(p, 8 * i))?;
-                if primase_hash::joaat(t.name.as_bytes()) != hash {
+                let t = match le::u64(p, 8 * i) {
+                    0 => None,
+                    q => Some(Texture::read(r, q)?),
+                };
+                if let Some(t) = &t
+                    && primase_hash::joaat(t.name.as_bytes()) != hash
+                {
                     return Err(err(pointer, format!("{}: name hash {hash:#010x} listed", t.name)));
                 }
                 textures.push(t);

@@ -89,11 +89,12 @@ impl Resource {
     }
 
     /// The `len` bytes a pointer points at (`0x5000_0000 + offset` in the system pages, `0x6000_0000 + offset` in
-    /// the graphics pages); an error when the pointer is of neither kind or the bytes run past its pages.
+    /// the graphics pages, whose offsets may pass 256 MiB and so reach `0x7...`); an error when the pointer is of
+    /// neither kind or the bytes run past its pages.
     pub fn at(&self, pointer: u64, len: usize) -> Result<&[u8]> {
-        let (pages, offset) = match pointer >> 28 {
-            5 => (self.system_data(), pointer - 0x5000_0000),
-            6 => (self.graphics_data(), pointer - 0x6000_0000),
+        let (pages, offset) = match pointer {
+            0x5000_0000..0x6000_0000 => (self.system_data(), pointer - 0x5000_0000),
+            0x6000_0000.. => (self.graphics_data(), pointer - 0x6000_0000),
             _ => return Err(invalid("RSC7", pointer, "not a resource pointer")),
         };
         usize::try_from(offset)

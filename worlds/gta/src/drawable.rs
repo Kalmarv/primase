@@ -146,10 +146,13 @@ pub enum ParamValue {
     Other(u8),
 }
 
-/// A shader parameter: its stored name hash and value.
+/// A shader parameter: its stored name hash, its packed info word as stored (kind in bits 0-1; texture, sampler or
+/// other index in bits 2-9, or constant buffer index in bits 2-7 with byte offset in bits 8-19 and length in bits
+/// 20-31), and its value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     pub name: u32,
+    pub info: u32,
     pub value: ParamValue,
 }
 
@@ -182,7 +185,24 @@ pub struct Drawable {
     pub skeleton: bool,
 }
 
+/// The resource version of Enhanced's drawables (ydr).
+pub const VERSION: u32 = 159;
+
 impl Drawable {
+    /// A ydr's drawable: its root, after checking the resource is in Enhanced's layout.
+    pub fn read_resource(r: &Resource) -> Result<Drawable> {
+        if r.version != VERSION {
+            return Err(err(
+                0,
+                format!(
+                    "resource version {}, Enhanced's ydr layout is {VERSION}",
+                    r.version
+                ),
+            ));
+        }
+        Self::read(r, 0x5000_0000)
+    }
+
     /// The drawable at `pointer` (`0x5000_0000` for a ydr's root).
     pub fn read(r: &Resource, pointer: u64) -> Result<Drawable> {
         let d = r.at(pointer, 0xA8)?;
@@ -464,7 +484,11 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
                 ParamValue::Floats((0..length / 4).map(|j| le::f32(v, 4 * j)).collect())
             }
         };
-        params.push(Param { name, value });
+        params.push(Param {
+            name,
+            info: word,
+            value,
+        });
     }
     Ok(Shader {
         name: le::u32(s, 0x00),

@@ -257,7 +257,10 @@ fn check_ytd(td: &TextureDictionary, o: &Value, diffs: &mut Vec<String>) {
         diffs.push(format!("{} textures, oracle {}", td.textures.len(), ot.len()));
     }
     for (i, (t, o)) in td.textures.iter().zip(ot).enumerate() {
-        check_texture(i, t, o, diffs);
+        match t {
+            Some(t) => check_texture(i, t, o, diffs),
+            None => diffs.push(format!("texture {i}: a null entry, oracle {}", o["name"])),
+        }
     }
 }
 
@@ -291,12 +294,12 @@ fn drawables_and_textures_against_the_oracle() {
         let mut diffs = Vec::new();
         match o["kind"].as_str() {
             Some("drawable") => check_drawable(
-                &Drawable::read(&res, 0x5000_0000).expect("drawable"),
+                &Drawable::read_resource(&res).expect("drawable"),
                 &o["value"],
                 &mut diffs,
             ),
             Some("ytd") => check_ytd(
-                &TextureDictionary::read(&res, 0x5000_0000).expect("ytd"),
+                &TextureDictionary::read_resource(&res).expect("ytd"),
                 &o["value"],
                 &mut diffs,
             ),
