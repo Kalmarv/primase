@@ -20,6 +20,7 @@ pub mod resource;
 pub mod rpf;
 pub mod select;
 pub mod sga;
+pub mod shader_names;
 pub mod texture;
 mod xml;
 

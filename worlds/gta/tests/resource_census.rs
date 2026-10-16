@@ -24,6 +24,8 @@ struct Tally {
     geometries: u64,
     textures: u64,
     null_textures: u64,
+    /// Effect and texture parameter name hashes no name in `shader_names` gives.
+    unnamed: BTreeMap<String, u64>,
     other_layout: BTreeMap<(String, u32), u64>,
     failures: BTreeMap<String, (u64, Vec<String>)>,
 }
@@ -75,6 +77,24 @@ fn every_drawable_and_texture_dictionary_reads() {
                             }
                             let dict = if ext == "ydr" {
                                 let d = Drawable::read_resource(&r)?;
+                                for sh in &d.shaders {
+                                    if primase_gta::shader_names::effect(sh.name).is_none() {
+                                        *local
+                                            .unnamed
+                                            .entry(format!("effect {:#010x}", sh.name))
+                                            .or_default() += 1;
+                                    }
+                                    for p in &sh.params {
+                                        if p.info & 3 == 0
+                                            && primase_gta::shader_names::texture_param(p.name).is_none()
+                                        {
+                                            *local
+                                                .unnamed
+                                                .entry(format!("texture parameter {:#010x}", p.name))
+                                                .or_default() += 1;
+                                        }
+                                    }
+                                }
                                 for g in d.lods.iter().flatten().flat_map(|m| &m.geometries) {
                                     local.geometries += 1;
                                     for e in &g.elements {
@@ -104,6 +124,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                         t.geometries += local.geometries;
                         t.textures += local.textures;
                         t.null_textures += local.null_textures;
+                        for (k, v) in local.unnamed {
+                            *t.unnamed.entry(k).or_default() += v;
+                        }
                         if let Some(v) = other_layout {
                             *t.other_layout.entry((ext.to_string(), v)).or_default() += 1;
                         }
@@ -140,10 +163,12 @@ fn every_drawable_and_texture_dictionary_reads() {
         t.read, t.geometries, t.textures, t.null_textures, t.versions
     );
     println!("not read, another version's layout: {:?}", t.other_layout);
+    println!("unnamed shader names: {:?}", t.unnamed);
     println!("vertex formats (semantic, code): {:?}", t.vertex_formats);
     println!("texture formats (code): {:?}", t.texture_formats);
     for (msg, (n, paths)) in &t.failures {
         println!("  {n}x {msg}\n      e.g. {}", paths.join(", "));
     }
     assert!(t.failures.is_empty(), "{} failure kinds", t.failures.len());
+    assert!(t.unnamed.is_empty(), "shader names without a name");
 }
