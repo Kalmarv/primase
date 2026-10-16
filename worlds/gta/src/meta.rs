@@ -4,7 +4,8 @@
 //! descriptions and data blocks, each block an array of one structure or primitive type. Values inside blocks point
 //! at other blocks by `(block id, byte offset)` packed in 32 bits (`id` 1-based in the low 12 bits, offset in the
 //! next 20); an array of structures that does not fit in one block continues at the start of the next. Names are
-//! joaat hashes of the identifiers the game's parser uses (`CMapData`, `entities`, `archetypeName`).
+//! case-sensitive Jenkins hashes (`joaat_exact`) of the identifiers the game's parser uses (`CMapData`, `entities`,
+//! `archetypeName`).
 //!
 //! [`Meta::read`] checks the container; [`Meta::root`] decodes the root block's structure into a [`Struct`] tree,
 //! following every array and pointer by the descriptions, and fails on anything they do not account for.
@@ -697,12 +698,98 @@ fn read_c_string(r: &Resource, pointer: u64) -> Result<String> {
 impl Struct {
     /// The field of this name (the identifier, hashed).
     pub fn get(&self, name: &str) -> Result<&Value> {
-        let h = primase_hash::joaat(name.as_bytes());
+        let h = primase_hash::joaat_exact(name.as_bytes());
         self.fields
             .iter()
             .find(|(n, _)| *n == h)
             .map(|(_, v)| v)
             .ok_or_else(|| err(0, format!("structure {:#010x} has no field {name}", self.name)))
+    }
+
+    fn kind_err(&self, name: &str, want: &str) -> crate::Error {
+        err(
+            0,
+            format!("structure {:#010x}: field {name} is not {want}", self.name),
+        )
+    }
+
+    pub fn u32(&self, name: &str) -> Result<u32> {
+        match self.get(name)? {
+            Value::U32(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "a u32")),
+        }
+    }
+
+    pub fn i32(&self, name: &str) -> Result<i32> {
+        match self.get(name)? {
+            Value::I32(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "an i32")),
+        }
+    }
+
+    pub fn f32(&self, name: &str) -> Result<f32> {
+        match self.get(name)? {
+            Value::F32(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "an f32")),
+        }
+    }
+
+    pub fn hash(&self, name: &str) -> Result<u32> {
+        match self.get(name)? {
+            Value::Hash(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "a hash")),
+        }
+    }
+
+    pub fn vec3(&self, name: &str) -> Result<[f32; 3]> {
+        match self.get(name)? {
+            Value::Vec3(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "a vector of three")),
+        }
+    }
+
+    pub fn vec4(&self, name: &str) -> Result<[f32; 4]> {
+        match self.get(name)? {
+            Value::Vec4(v) => Ok(*v),
+            _ => Err(self.kind_err(name, "a vector of four")),
+        }
+    }
+
+    /// An enum or flags value.
+    pub fn enum_value(&self, name: &str) -> Result<i32> {
+        match self.get(name)? {
+            Value::Enum { value, .. } => Ok(*value),
+            _ => Err(self.kind_err(name, "an enum")),
+        }
+    }
+
+    pub fn array(&self, name: &str) -> Result<&[Value]> {
+        match self.get(name)? {
+            Value::Array(v) => Ok(v),
+            _ => Err(self.kind_err(name, "an array")),
+        }
+    }
+
+    /// An array of hashes.
+    pub fn hashes(&self, name: &str) -> Result<Vec<u32>> {
+        self.array(name)?
+            .iter()
+            .map(|v| match v {
+                Value::Hash(h) => Ok(*h),
+                _ => Err(self.kind_err(name, "an array of hashes")),
+            })
+            .collect()
+    }
+
+    /// An array of structure pointers, none null.
+    pub fn pointed(&self, name: &str) -> Result<Vec<&Struct>> {
+        self.array(name)?
+            .iter()
+            .map(|v| match v {
+                Value::Pointer(Some(s)) => Ok(s),
+                _ => Err(self.kind_err(name, "an array of structure pointers")),
+            })
+            .collect()
     }
 }
 
@@ -710,7 +797,7 @@ impl Struct {
 mod tests {
     use super::*;
     use crate::resource::PageFlags;
-    use primase_hash::joaat;
+    use primase_hash::joaat_exact as joaat;
 
     fn put(d: &mut [u8], o: usize, b: &[u8]) {
         d[o..o + b.len()].copy_from_slice(b);

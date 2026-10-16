@@ -1,5 +1,6 @@
 //! Census of META resources: every ymap and ytyp of an install read as a META container and its root structure
-//! decoded through every array and pointer, reaching every byte of every data block (a structure covers its extent,
+//! decoded through every array and pointer (then read as `CMapData` or `CMapTypes`, the enums `map` documents
+//! checked against the files' enum descriptions), reaching every byte of every data block (a structure covers its extent,
 //! a string its NUL). Failures are counted by message, unreached bytes by block type.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
@@ -8,8 +9,67 @@ use std::fs::File;
 use std::sync::Mutex;
 
 use primase_core::gate::real_data;
+use primase_gta::map::{MapData, MapTypes};
 use primase_gta::meta::Meta;
 use primase_gta::{EntryKind, Install, Keys};
+use primase_hash::joaat_exact;
+
+/// The enums `map` documents, value by value, as the files' enum descriptions must name them.
+const ENUMS: [(&str, &[&str]); 3] = [
+    (
+        "rage__eLodType",
+        &[
+            "LODTYPES_DEPTH_HD",
+            "LODTYPES_DEPTH_LOD",
+            "LODTYPES_DEPTH_SLOD1",
+            "LODTYPES_DEPTH_SLOD2",
+            "LODTYPES_DEPTH_SLOD3",
+            "LODTYPES_DEPTH_ORPHANHD",
+            "LODTYPES_DEPTH_SLOD4",
+        ],
+    ),
+    (
+        "rage__ePriorityLevel",
+        &[
+            "PRI_REQUIRED",
+            "PRI_OPTIONAL_HIGH",
+            "PRI_OPTIONAL_MEDIUM",
+            "PRI_OPTIONAL_LOW",
+        ],
+    ),
+    (
+        "rage__fwArchetypeDef__eAssetType",
+        &[
+            "ASSET_TYPE_UNINITIALIZED",
+            "ASSET_TYPE_FRAGMENT",
+            "ASSET_TYPE_DRAWABLE",
+            "ASSET_TYPE_DRAWABLEDICTIONARY",
+            "ASSET_TYPE_ASSETLESS",
+        ],
+    ),
+];
+
+/// Fails when one of [`ENUMS`] is described with other values.
+fn check_enums(m: &Meta) -> primase_gta::Result<()> {
+    for (name, values) in ENUMS {
+        let Some(e) = m.enums.get(&joaat_exact(name.as_bytes())) else {
+            continue;
+        };
+        let want: Vec<(u32, i32)> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (joaat_exact(v.as_bytes()), i as i32))
+            .collect();
+        if e.values != want {
+            return Err(primase_gta::Error::Invalid {
+                format: "META",
+                offset: 0,
+                detail: format!("{name} described with other values"),
+            });
+        }
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 struct Tally {
@@ -49,7 +109,17 @@ fn every_ymap_and_ytyp_decodes() {
                         let result = a
                             .resource(file, ei, &keys)
                             .and_then(|r| Meta::read(&r))
-                            .and_then(|m| m.root_covered().map(|(_, u)| (m, u)));
+                            .and_then(|m| {
+                                check_enums(&m)?;
+                                let (root, u) = m.root_covered()?;
+                                // and the typed reading of the root
+                                if ext == "ymap" {
+                                    MapData::from_root(&root)?;
+                                } else {
+                                    MapTypes::from_root(&root)?;
+                                }
+                                Ok((m, u))
+                            });
                         let mut t = tally.lock().expect("lock");
                         if let Ok((m, unreached)) = &result {
                             for (b, &n) in m.blocks.iter().zip(unreached) {
