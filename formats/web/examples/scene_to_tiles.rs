@@ -22,7 +22,9 @@ fn prepare(
     if render {
         primase_image::load_textures(&mut w, folder)?;
         primase_skate_scene::LowerSkatePbr.run(&mut w, &mut PassLog::default())?;
-        primase_skate_scene::LowerLayeredPbr.run(&mut w, &mut PassLog::default())?;
+        // core.layered stays as it is: the writer carries it (PRIMASE_layered_material) for per-pixel blending. The
+        // strongest-layer lowering is the skate target's lossy path and leaves the replaced layered and layer materials
+        // in the world, which the per-cell closure check rejects.
         primase_image::normalize_normals(&mut w)?;
     }
     Ok(w)
