@@ -172,6 +172,7 @@ pub fn fallback_material() -> PbrMaterial {
 /// Components the glTF expresses itself, per kind of object; everything else with a JSON form goes to extras.
 /// The extension a texture slot's [`UvTransform`] is written as.
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
+const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
@@ -203,6 +204,7 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         image_by_hash: BTreeMap::new(),
         sampler_index: BTreeMap::new(),
         texture_transform_used: false,
+        emissive_strength_used: false,
     };
     let json = w.document()?;
     let text = serde_json::to_vec(&json)?;
@@ -269,6 +271,8 @@ struct Writer<'w> {
     sampler_index: BTreeMap<[Wrap; 2], usize>,
     /// A written texture slot has a transform (`KHR_texture_transform` is used).
     texture_transform_used: bool,
+    /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
+    emissive_strength_used: bool,
 }
 
 impl Writer<'_> {
@@ -361,6 +365,9 @@ impl Writer<'_> {
         let mut used = Vec::new();
         if self.texture_transform_used {
             used.push(TEXTURE_TRANSFORM);
+        }
+        if self.emissive_strength_used {
+            used.push(EMISSIVE_STRENGTH);
         }
         if !lights.is_empty() {
             used.push(LIGHTS);
@@ -940,6 +947,14 @@ impl Writer<'_> {
         }
         if pbr.emissive != [0.0; 3] {
             m.insert("emissiveFactor".into(), self.factors(e, &pbr.emissive)?);
+        }
+        if pbr.emissive_strength != 1.0 {
+            let strength = self.factors(e, &[pbr.emissive_strength])?[0].clone();
+            m.insert(
+                "extensions".into(),
+                json!({ EMISSIVE_STRENGTH: {"emissiveStrength": strength} }),
+            );
+            self.emissive_strength_used = true;
         }
         match pbr.alpha_mode {
             AlphaMode::Opaque => {}

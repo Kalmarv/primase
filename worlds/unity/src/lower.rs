@@ -4,7 +4,8 @@
 //!   `_BaseColor`; metallic `_Metallic` and roughness 1 - `_Smoothness`, or with `_METALLICSPECGLOSSMAP` the map's R
 //!   and 1 - A x `_Smoothness` (re-encoded as a glTF metallic-roughness texture, B and G); occlusion from the map's G,
 //!   lerped from white by `_OcclusionStrength` (moved to R); `_BumpMap` x `_BumpScale` with `_NORMALMAP`;
-//!   `_EmissionColor` x `_EmissionMap` with `_EMISSION`; `_Surface` 1 blended, `_AlphaClip` cut out at `_Cutoff`;
+//!   `_EmissionColor` x `_EmissionMap` with `_EMISSION` (HDR colour above 1: normalised, the rest as
+//!   `emissive_strength`); `_Surface` 1 blended, `_AlphaClip` cut out at `_Cutoff`;
 //!   `_Cull` 0 double-sided.
 //! - **Universal Render Pipeline/Unlit**: `_BaseMap` x `_BaseColor`, drawn lit (counted).
 //! - **Universal Render Pipeline/Nature/SpeedTree7**: `_MainTex` x `_Color`, cut out at `_Cutoff` with
@@ -384,10 +385,15 @@ impl Lowering {
         }
         if m.keyword("_EMISSION") {
             let c = linear(m.color("_EmissionColor").unwrap_or([0.0, 0.0, 0.0, 1.0]));
-            if c[..3].iter().any(|&x| x > 1.0) {
-                self.log.approximate("emission above 1 clamped (HDR)", 1);
+            // HDR emission: the factor normalised by its largest channel, the rest as the strength
+            let max = c[0].max(c[1]).max(c[2]);
+            if max > 1.0 {
+                p.emissive = std::array::from_fn(|k| (f64::from(c[k]) / f64::from(max)) as f32);
+                p.emissive_strength = max;
+                self.log.count("HDR emission kept as emissive strength", 1);
+            } else {
+                p.emissive = [c[0], c[1], c[2]];
             }
-            p.emissive = [c[0].min(1.0), c[1].min(1.0), c[2].min(1.0)];
             if let Some(env) = m.texture("_EmissionMap") {
                 p.emissive_texture = self.color(w, env, tiling)?;
             }
@@ -440,7 +446,7 @@ impl Pass for LowerUnityPbr {
     }
     fn approximates(&self) -> &'static str {
         "shaders other than URP Lit by their base colour; maps re-encoded as RGBA8 metallic-roughness and occlusion; \
-         HDR emission clamped; blend modes, detail and parallax maps not represented"
+         blend modes, detail and parallax maps not represented"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = lower_unity_pbr(w).map_err(|e| e.to_string())?;

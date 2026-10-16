@@ -130,6 +130,10 @@ pub struct PbrMaterial {
     pub emissive: [f32; 3],
     /// sRGB colour.
     pub emissive_texture: Option<TextureRef>,
+    /// Multiplies the emission (`KHR_materials_emissive_strength`): finite, >= 0, 1 by default. Emission brighter
+    /// than 1 keeps `emissive` within 0-1 (normalised by its largest channel) and carries the rest here, so a source's
+    /// radiance is kept rather than clamped.
+    pub emissive_strength: f32,
     pub alpha_mode: AlphaMode,
     /// Back faces drawn too (and lit with the flipped normal).
     pub double_sided: bool,
@@ -137,8 +141,19 @@ pub struct PbrMaterial {
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
+    /// 2: `emissive_strength`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
+    }
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        if !self.emissive_strength.is_finite() || self.emissive_strength < 0.0 {
+            return Err(format!(
+                "emissive strength {} is not finite and >= 0",
+                self.emissive_strength
+            ));
+        }
+        Ok(())
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.textures().map(|r| r.texture));
@@ -160,6 +175,7 @@ impl Default for PbrMaterial {
             normal_scale: 1.0,
             emissive: [0.0; 3],
             emissive_texture: None,
+            emissive_strength: 1.0,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
         }

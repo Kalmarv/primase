@@ -859,3 +859,49 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
         assert!(tile.min[1] <= 3.0 && tile.max[1] >= 3.0);
     }
 }
+#[test]
+fn emissive_strength_survives_compression_and_instancing() {
+    use primase_core::pbr::PbrMaterial;
+    let mut w = World::new();
+    let mat = w.spawn();
+    w.insert(
+        mat,
+        PbrMaterial {
+            emissive: [1.0, 0.5, 0.0],
+            emissive_strength: 3.0,
+            ..PbrMaterial::default()
+        },
+    );
+    let proto = w.spawn();
+    let mut m = mesh();
+    m.primitives[0].material = Some(mat);
+    w.insert(proto, m);
+    for x in [0.0f32, 2.0] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3][0] = x;
+        w.insert(e, t);
+    }
+    let set = write(&w, &Options::default()).unwrap();
+    assert_eq!(set.index.tiles[0].instanced_placements, 2);
+    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    assert_eq!(
+        doc["materials"][0]["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"],
+        3.0
+    );
+    assert!(
+        doc["extensionsUsed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "KHR_materials_emissive_strength")
+    );
+}
