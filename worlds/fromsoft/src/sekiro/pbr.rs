@@ -223,7 +223,6 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 log.count("existing ORM textures preserved", 1);
             } else if let Some(name) = &m.normal {
                 let normal = read(payloads, name)?;
-                let rgba = pixels(&normal)?;
                 let metal = binding(&m, "MetallicMap");
                 let mut metal_sampler = None;
                 if let Some(b) = metal {
@@ -242,36 +241,38 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 if nt.scale.contains(&0.) {
                     return Err(invalid("Sekiro PBR", 0, "zero normal scale"));
                 }
-                let mut orm = Vec::with_capacity(rgba.len());
-                for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
-                    let uv = [
-                        (i as u32 % normal.width) as f32 + 0.5,
-                        (i as u32 / normal.width) as f32 + 0.5,
-                    ];
-                    let uv = [uv[0] / normal.width as f32, uv[1] / normal.height as f32];
-                    let metallic = if let (Some(s), Some(mt)) = (&metal_sampler, mt) {
-                        s.sample(std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]))?[0]
-                    } else if scalar.is_some() {
-                        1. // Preserve the source scalar exactly in the material factor.
-                    } else {
-                        p.metallic
-                    };
-                    orm.extend_from_slice(&[
-                        255,
-                        (roughness(px[2] as f32 / 255.)? * 255.).round() as u8,
-                        (metallic * 255.).round() as u8,
-                        255,
-                    ]);
-                }
-                let t = Texture {
-                    width: normal.width,
-                    height: normal.height,
-                    format: TexFormat::Rgba8Unorm,
-                    levels: vec![orm],
-                    color_space: ColorSpace::Linear,
-                    role: TexRole::Mask,
-                    normal: None,
-                };
+                let t = primase_image::map_rgba8_levels(
+                    &normal,
+                    0..1,
+                    primase_image::TextureMetadata {
+                        color_space: ColorSpace::Linear,
+                        role: TexRole::Mask,
+                        normal: None,
+                    },
+                    |px| {
+                        let uv = [
+                            (px.x as f32 + 0.5) / px.width as f32,
+                            (px.y as f32 + 0.5) / px.height as f32,
+                        ];
+                        let metallic = if let (Some(s), Some(mt)) = (&metal_sampler, mt) {
+                            s.sample(std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]))
+                                .map_err(|e| primase_image::Error::Invalid(e.to_string()))?[0]
+                        } else if scalar.is_some() {
+                            1. // Preserve the source scalar exactly in the material factor.
+                        } else {
+                            p.metallic
+                        };
+                        let roughness = roughness(px.rgba[2] as f32 / 255.)
+                            .map_err(|e| primase_image::Error::Invalid(e.to_string()))?;
+                        Ok([
+                            255,
+                            (roughness * 255.).round() as u8,
+                            (metallic * 255.).round() as u8,
+                            255,
+                        ])
+                    },
+                )
+                .map_err(|e| invalid("Sekiro PBR ORM", 0, e))?;
                 let te = spawn(world, format!("{}_orm_{}", name, e.index()), t);
                 let mut r = TextureRef::new(te);
                 r.transform = Some(nt);

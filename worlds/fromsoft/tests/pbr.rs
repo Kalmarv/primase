@@ -180,6 +180,47 @@ fn source_blue_gloss_and_red_metal_survive_as_distinct_orm_channels() {
     assert!(world.get::<materials::Material>(e).unwrap().definition.is_some());
 }
 #[test]
+fn orm_selects_only_base_mip_and_assigns_linear_mask_metadata() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, source("MetallicTex"));
+    let normal = Texture {
+        width: 2,
+        height: 1,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![
+            vec![128, 128, 0, 255, 128, 128, 255, 255],
+            vec![128, 128, 128, 255],
+        ],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Normal,
+        normal: None,
+    };
+    let bytes = BTreeMap::from([
+        ("a".into(), payload(&[80, 90, 100, 255])),
+        ("n".into(), primase_dds::write_dx10(&normal).unwrap()),
+        ("m".into(), payload(&[0, 0, 0, 255])),
+    ]);
+    pbr::lower(&mut world, &bytes).unwrap();
+    let p = world.get::<PbrMaterial>(e).unwrap();
+    let t = world
+        .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!((t.width, t.height), (2, 1));
+    assert_eq!(t.levels, vec![vec![255, 255, 0, 255, 255, 13, 0, 255]]);
+    assert_eq!(t.color_space, ColorSpace::Linear);
+    assert_eq!(t.role, TexRole::Mask);
+    assert_eq!(t.normal, None);
+
+    let mut missing = bytes;
+    missing.get_mut("n").unwrap().truncate(128);
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, source("MetallicTex"));
+    assert!(pbr::lower(&mut world, &missing).is_err());
+}
+
+#[test]
 fn baked_bindings_and_factors_are_authoritative() {
     let mut world = World::new();
     let base = world.spawn();
