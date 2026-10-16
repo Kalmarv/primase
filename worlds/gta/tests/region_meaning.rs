@@ -13,6 +13,9 @@
 //! scene's triangles are compared with ours by position (0.1 mm, winding-agnostic). Named class: decal shaders'
 //! geometry the exporter lifted 12 mm along each vertex's drawn face (the normalised sum of its triangles' face
 //! normals; its `--decal-face-lift`), matched within 0.2 mm; not a pass yet. Any other difference fails the gate.
+//! On identical geometries every scene vertex must have one of ours at its position with its UV0 (1e-5), its normal
+//! (1e-4, against ours normalised: stored normals are quantised; a stored zero normal the exporter writes up, named),
+//! and, where the scene carries COLOR_0, its alpha.
 //! Fragments (yft) are not read yet and are counted.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
@@ -206,6 +209,7 @@ fn region_placements_against_the_scene() {
     };
     let mut geo: BTreeMap<&str, usize> = BTreeMap::new();
     let mut examples = Vec::new();
+    let mut attrs: BTreeMap<&str, usize> = BTreeMap::new();
     for (e, sp) in theirs.iter::<SkatePrototype>() {
         let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
         let Some(&(ours_mesh, d)) = protos.get(&primase_hash::joaat(name.to_lowercase().as_bytes())) else {
@@ -246,6 +250,75 @@ fn region_placements_against_the_scene() {
             if missing == 0 {
                 *geo.entry("geometries identical").or_default() += 1;
                 *geo.entry("our triangles the scene leaves out").or_default() += dropped;
+                // vertex attributes: each scene vertex has one of ours at its position with its UV0, normal and
+                // (where the scene carries COLOR_0) colour alpha
+                let op = &ours_mesh.primitives[(first + g) as usize];
+                let key = |p: [f32; 3]| p.map(|v| (f64::from(v) * 1e4).round() as i64);
+                let mut at: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
+                for (i, p) in op.positions().expect("positions").iter().enumerate() {
+                    at.entry(key(*p)).or_default().push(i);
+                }
+                let f2 = |pr: &primase_core::Primitive, sem| match pr.streams.get(&sem) {
+                    Some(primase_core::Stream::F32x2(v)) => Some(v.clone()),
+                    _ => None,
+                };
+                let f3 = |pr: &primase_core::Primitive, sem| match pr.streams.get(&sem) {
+                    Some(primase_core::Stream::F32x3(v)) => Some(v.clone()),
+                    _ => None,
+                };
+                let c4 =
+                    |pr: &primase_core::Primitive| match pr.streams.get(&primase_core::Semantic::Color(0)) {
+                        Some(primase_core::Stream::U8x4(v)) => Some(v.clone()),
+                        _ => None,
+                    };
+                let (ouv, on, oc) = (
+                    f2(op, primase_core::Semantic::TexCoord(0)),
+                    f3(op, primase_core::Semantic::Normal),
+                    c4(op),
+                );
+                for &pi in &parts {
+                    let tp = &their_mesh.primitives[pi];
+                    let (tuv, tn, tc) = (
+                        f2(tp, primase_core::Semantic::TexCoord(0)),
+                        f3(tp, primase_core::Semantic::Normal),
+                        c4(tp),
+                    );
+                    for (vi, p) in tp.positions().expect("positions").iter().enumerate() {
+                        let cands = at.get(&key(*p)).map(Vec::as_slice).unwrap_or(&[]);
+                        *attrs.entry("scene vertices").or_default() += 1;
+                        let close = |a: &[f32], b: &[f32], tol: f32| {
+                            a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol)
+                        };
+                        if let (Some(t), Some(o)) = (&tuv, &ouv)
+                            && !cands.iter().any(|&c| close(&t[vi], &o[c], 1e-5))
+                        {
+                            *attrs.entry("UV0 differing").or_default() += 1;
+                        }
+                        // the scene's normals are ours normalised (stored normals are quantised, not unit)
+                        let unit = |n: [f32; 3]| {
+                            let l = n.iter().map(|v| v * v).sum::<f32>().sqrt();
+                            if l > 0.0 { n.map(|v| v / l) } else { n }
+                        };
+                        if let (Some(t), Some(o)) = (&tn, &on)
+                            && !cands.iter().any(|&c| close(&t[vi], &unit(o[c]), 1e-4))
+                        {
+                            // a stored normal of zero: that exporter writes straight up
+                            let zero_up = t[vi] == [0.0, 1.0, -0.0] || t[vi] == [0.0, 1.0, 0.0];
+                            let key = if zero_up && cands.iter().any(|&c| o[c].iter().all(|v| *v == 0.0)) {
+                                "zero stored normal (that exporter writes up)"
+                            } else {
+                                "normal differing (after normalising ours)"
+                            };
+                            *attrs.entry(key).or_default() += 1;
+                        }
+                        if let Some(t) = &tc {
+                            match &oc {
+                                Some(o) if cands.iter().any(|&c| o[c][3] == t[vi][3]) => {}
+                                _ => *attrs.entry("COLOR_0 alpha differing").or_default() += 1,
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             // the exporter's decal lift: every scene triangle of a decal shader's geometry is one of ours, as stored
@@ -328,6 +401,7 @@ fn region_placements_against_the_scene() {
         }
     }
     println!("geometry: {geo:?}");
+    println!("vertex attributes of identical geometries: {attrs:?}");
     for x in &examples {
         println!("    differing: {x}");
     }
@@ -335,6 +409,10 @@ fn region_placements_against_the_scene() {
     assert!(
         by_map.is_empty(),
         "placements of ours outside interiors the scene leaves out"
+    );
+    assert!(
+        !attrs.keys().any(|k| k.contains("differing")),
+        "vertex attributes differ: {attrs:?}"
     );
     assert!(unmatched.is_empty() && diffs.is_empty());
 }
