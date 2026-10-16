@@ -104,6 +104,8 @@ struct Acc {
     pos: Vec<f32>,
     nrm: Vec<f32>,
     uv: Vec<f32>,
+    /// Per-vertex blend weight (empty: the part's material is not a vertex blend).
+    blend: Vec<f32>,
     idx: Vec<u32>,
     pieces: Vec<AccPiece>,
     src: Vec<PieceSrc>,
@@ -231,6 +233,7 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
         a.pos.extend_from_slice(&p.pos);
         a.nrm.extend_from_slice(&p.nrm);
         a.uv.extend_from_slice(&p.uv);
+        a.blend.extend_from_slice(&p.blend);
         a.idx.extend(p.idx.iter().map(|i| vbase + i));
         return;
     };
@@ -260,6 +263,7 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
     let flip = sh.mirrored;
     // the mesh to transform: every vertex (the part's order), or the kept triangles' vertices in the order they are
     // first used, corners taken in the order a mirrored placement writes them
+    let mut picked: Option<Vec<u32>> = None;
     let m = match only {
         None => mesh_of(p.idx.clone(), None),
         Some(only) => {
@@ -287,7 +291,9 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
                     t.swap(1, 2);
                 }
             }
-            mesh_of(idx, Some(&verts))
+            let m = mesh_of(idx, Some(&verts));
+            picked = Some(verts);
+            m
         }
     };
     let t = s.pos - origin;
@@ -305,6 +311,13 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
     a.pos.extend(out.positions.iter().flatten());
     a.nrm.extend(out.normals.iter().flatten());
     a.uv.extend(out.uv.iter().flatten());
+    // the transform keeps the picked vertices in order, so the blend weights follow the same pick
+    if !p.blend.is_empty() {
+        match &picked {
+            None => a.blend.extend_from_slice(&p.blend),
+            Some(v) => a.blend.extend(v.iter().map(|&i| p.blend[i as usize])),
+        }
+    }
     a.idx.extend(out.indices.iter().map(|i| vbase + i));
 }
 
@@ -400,6 +413,7 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> (Vec<G
                 nrm: Some(a.nrm.clone()),
                 uv: Some(a.uv.clone()),
                 idx: a.idx.clone(),
+                blend: (!a.blend.is_empty()).then(|| a.blend.clone()),
             });
             lifts.push(a.lift.clone());
             continue;
@@ -423,6 +437,7 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> (Vec<G
                 pos: take(&a.pos, 3),
                 nrm: Some(take(&a.nrm, 3)),
                 uv: Some(take(&a.uv, 2)),
+                blend: (!a.blend.is_empty()).then(|| take(&a.blend, 1)),
                 idx: c.indices,
             });
         }
@@ -1057,8 +1072,8 @@ impl MapWriter {
                             if keep_idx.len() != a.idx.len() {
                                 self.r.clipped += ((a.idx.len() - keep_idx.len()) / 3) as i64;
                                 let mut remap = vec![u32::MAX; a.pos.len() / 3];
-                                let (mut cp, mut cn, mut cu, mut cl) =
-                                    (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                                let (mut cp, mut cn, mut cu, mut cl, mut cb) =
+                                    (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
                                 for i in &mut keep_idx {
                                     let vi = *i as usize;
                                     if remap[vi] == u32::MAX {
@@ -1066,6 +1081,9 @@ impl MapWriter {
                                         cp.extend_from_slice(&a.pos[vi * 3..vi * 3 + 3]);
                                         cn.extend_from_slice(&a.nrm[vi * 3..vi * 3 + 3]);
                                         cu.extend_from_slice(&a.uv[vi * 2..vi * 2 + 2]);
+                                        if !a.blend.is_empty() {
+                                            cb.push(a.blend[vi]);
+                                        }
                                         if !a.lift.is_empty() {
                                             cl.push(a.lift[vi]);
                                         }
@@ -1075,6 +1093,7 @@ impl MapWriter {
                                 a.pos = cp;
                                 a.nrm = cn;
                                 a.uv = cu;
+                                a.blend = cb;
                                 a.lift = cl;
                                 a.idx = keep_idx;
                             }
@@ -1176,6 +1195,20 @@ fn split_long(a: &mut Acc, max: f32) {
         indices: a.idx.clone(),
     };
     let (out, _) = primase_meshops::split_long(&m, max, usize::MAX).expect("finite mesh");
+    if !a.blend.is_empty() {
+        // the split interpolates UVs only: the same split (same positions and triangles, so the same new vertices in
+        // the same order) of the blend weights in the UV slot interpolates them the same way
+        let wm = primase_meshops::Mesh {
+            uv: a.blend.iter().map(|&w| [w, 0.0]).collect(),
+            ..m.clone()
+        };
+        let (wout, _) = primase_meshops::split_long(&wm, max, usize::MAX).expect("finite mesh");
+        assert!(
+            wout.indices == out.indices,
+            "the blend split follows the geometry split"
+        );
+        a.blend = wout.uv.iter().map(|w| w[0]).collect();
+    }
     a.pos = out.positions.iter().flatten().copied().collect();
     a.nrm = out.normals.iter().flatten().copied().collect();
     a.uv = out.uv.iter().flatten().copied().collect();
@@ -1403,6 +1436,7 @@ impl MapWriter {
             glb::write(
                 "water",
                 &[GlbPrim {
+                    blend: None,
                     material: Some(material.to_owned()),
                     pos,
                     nrm: Some(nrm),
@@ -1566,6 +1600,7 @@ impl MapWriter {
             normal_srgb: (m.normal >= 0).then_some(false),
             mask_texture: file(m.mask),
             mask_srgb: (m.mask >= 0).then_some(false),
+            vertex_blend: m.vertex_blend.then_some(true),
         }))
     }
 
@@ -1795,6 +1830,7 @@ impl MapWriter {
                 glb::write(
                     &name,
                     &[GlbPrim {
+                        blend: None,
                         material: None,
                         pos: flat,
                         nrm: None,
@@ -2005,6 +2041,31 @@ impl MapWriter {
         };
         let bytes = crate::json_bytes("map.json", &map, true)?;
         self.files.insert("map.json".into(), bytes);
+
+        // vertex_blend.json (only when the map has vertex-blend materials): for the post-compile stage, each such
+        // material and the objects (mesh, primitive) drawing it, so it retargets exactly those Studio keys
+        let blended: BTreeSet<&str> = self
+            .ctx
+            .mats
+            .list
+            .iter()
+            .filter(|m| m.vertex_blend && used_mats.contains(&m.name))
+            .map(|m| m.name.as_str())
+            .collect();
+        if !blended.is_empty() {
+            let mut record: BTreeMap<&str, Vec<(&str, usize)>> =
+                blended.iter().map(|&n| (n, Vec::new())).collect();
+            for o in &map.objects {
+                if let (Some(m), Some(mesh), Some(prim)) = (o.material, o.mesh, o.primitive)
+                    && let Some(list) = record.get_mut(m)
+                {
+                    list.push((mesh, prim));
+                }
+            }
+            let doc = serde_json::json!({ "format": 1, "materials": record });
+            let bytes = crate::json_bytes("vertex_blend.json", &doc, true)?;
+            self.files.insert("vertex_blend.json".into(), bytes);
+        }
 
         // trainer.json: the trainer spots and the travel points listed too
         for (i, m) in markers.iter().enumerate() {

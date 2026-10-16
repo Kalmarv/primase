@@ -2,7 +2,7 @@
 //! space: textures, materials made on first use, prototypes built from their GLBs, placements, collision soups,
 //! lights, grind curves, water and markers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ use primase_skate_scene::{
     SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
 };
 
+use crate::layered::{BlendOpacity, VertexBlend};
 use crate::material::{MatLib, MaterialSpec, VClass};
 use crate::model::{CollisionMode, SrcMesh, SrcPart};
 use crate::texture::{MASK_TAG, NORMAL_TAG, TexLib, TexRef, TexSource};
@@ -310,6 +311,8 @@ pub struct Scene {
     pub textures: BTreeMap<String, TexDef>,
     /// Material keys in the scene's order, with their entity's component.
     pub materials: HashMap<String, SkateMaterial>,
+    /// Keys of the materials with `reskate.vertex_blend` (their parts carry a weight per vertex).
+    pub vertex_blend: BTreeSet<String>,
     pub protos: Vec<ProtoDef>,
     pub placements: Vec<ScenePlacement>,
     pub soups: Vec<SoupDef>,
@@ -520,6 +523,7 @@ impl Scene {
             tex_keys.insert(e, t.key.clone());
         }
         let mut materials = HashMap::new();
+        let mut vertex_blend = BTreeSet::new();
         let mut mat_keys = HashMap::new();
         let mut labels = HashMap::new();
         for (e, m) in world.iter::<SkateMaterial>() {
@@ -530,6 +534,9 @@ impl Scene {
                 ));
             }
             materials.insert(m.key.clone(), m.clone());
+            if world.has::<VertexBlend>(e) {
+                vertex_blend.insert(m.key.clone());
+            }
             mat_keys.insert(e, m.key.clone());
             if let Some(n) = world.get::<Name>(e) {
                 labels.insert(m.key.clone(), n.0.clone());
@@ -615,7 +622,17 @@ impl Scene {
                 index: i,
                 id: p.id.clone(),
                 glb: mf.map(|m| m.path.clone()),
-                prims: mesh.map(|m| m.primitives.iter().map(glb_prim).collect()),
+                prims: mesh.map(|m| {
+                    let opacity = world.get::<BlendOpacity>(e);
+                    m.primitives
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| GlbPrim {
+                            blend: opacity.and_then(|o| o.0.get(i).cloned().flatten()),
+                            ..glb_prim(p)
+                        })
+                        .collect()
+                }),
                 name: world.get::<Name>(e).map_or_else(|| p.id.clone(), |n| n.0.clone()),
                 col_mode: mode_of(p.collision.as_ref().and_then(|c| c.mode)),
                 mesh: mf.map_or(0, |m| m.mesh),
@@ -785,6 +802,7 @@ impl Scene {
             surf_map,
             textures,
             materials,
+            vertex_blend,
             protos,
             placements,
             soups,
@@ -853,6 +871,8 @@ pub struct GlbPrim {
     pub nrm: Option<Vec<f32>>,
     pub uv: Option<Vec<f32>>,
     pub idx: Vec<u32>,
+    /// Per-vertex blend weight (`reskate.blend_opacity`; only from `core.mesh`).
+    pub blend: Option<Vec<f32>>,
 }
 
 pub fn read_glb(path: &std::path::Path, mesh: u32) -> Result<Vec<GlbPrim>> {
@@ -885,7 +905,13 @@ pub fn glb_prim(pr: &primase_core::Primitive) -> GlbPrim {
         .indices
         .clone()
         .unwrap_or_else(|| (0..(nv - nv % 3) as u32).collect());
-    GlbPrim { pos, nrm, uv, idx }
+    GlbPrim {
+        pos,
+        nrm,
+        uv,
+        idx,
+        blend: None,
+    }
 }
 
 /// The box of a mesh's positions; `None` when it has none.
@@ -1048,6 +1074,7 @@ impl Materializer {
         }
         spec.ocean = e.ocean;
         spec.cast_shadows = e.cast_shadows;
+        spec.vertex_blend = scene.vertex_blend.contains(key);
         let key_of =
             |te: Option<primase_core::Entity>| te.and_then(|t| scene.texture_keys_by_entity.get(&t)).cloned();
         let base_key = key_of(e.base);
@@ -1165,6 +1192,7 @@ pub fn build_mesh(
         part.pos = vec![0.0; nv * 3];
         part.nrm = vec![0.0; nv * 3];
         part.uv = g.uv.clone().unwrap_or_else(|| vec![0.0; nv * 2]);
+        part.blend = g.blend.clone().unwrap_or_default();
         part.idx = g.idx.clone();
         for v in 0..nv {
             let q = w_at(&g.pos, v * 3);
@@ -1283,6 +1311,21 @@ fn flat_normals(p: &mut SrcPart) -> Result<()> {
         indices: p.idx.clone(),
     };
     let f = primase_meshops::flat_normals(&m).map_err(|e| Error::Scene(e.to_string()))?;
+    if !p.blend.is_empty() {
+        // flat normals rebuild the vertices from the UVs it is given: the same rebuild of the blend weights in the
+        // UV slot (same positions and triangles, so the same vertices in the same order) carries them
+        let wm = primase_meshops::Mesh {
+            uv: p.blend.iter().map(|&w| [w, 0.0]).collect(),
+            ..m.clone()
+        };
+        let wf = primase_meshops::flat_normals(&wm).map_err(|e| Error::Scene(e.to_string()))?;
+        if wf.indices != f.indices {
+            return Err(Error::Scene(
+                "flat normals rebuilt the blend weights differently".into(),
+            ));
+        }
+        p.blend = wf.uv.iter().map(|w| w[0]).collect();
+    }
     p.pos = f.positions.iter().flatten().copied().collect();
     p.nrm = f.normals.iter().flatten().copied().collect();
     p.uv = f.uv.iter().flatten().copied().collect();

@@ -22,6 +22,8 @@ pub struct SrcPart {
     pub nrm: Vec<f32>,
     pub uv: Vec<f32>,
     pub idx: Vec<u32>,
+    /// Per-vertex blend weight of a `vertex_blend` part (empty: none).
+    pub blend: Vec<f32>,
 }
 
 impl SrcPart {

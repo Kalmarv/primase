@@ -321,6 +321,7 @@ impl<'a> Collision<'a> {
             glb::write(
                 name,
                 &[GlbPrim {
+                    blend: None,
                     material: None,
                     pos: local,
                     nrm: None,
@@ -684,6 +685,7 @@ impl<'a> Collision<'a> {
                     glb::write(
                         &stem_c,
                         &[GlbPrim {
+                            blend: None,
                             material: None,
                             pos: p,
                             nrm: None,

@@ -64,6 +64,9 @@ struct Attributes {
     normal: Option<usize>,
     #[serde(rename = "TEXCOORD_0", skip_serializing_if = "Option::is_none")]
     texcoord_0: Option<usize>,
+    /// Studio's per-vertex blend weight (a `vertex_blend` material): float scalar 0..1.
+    #[serde(rename = "_RESKATE_BLEND", skip_serializing_if = "Option::is_none")]
+    reskate_blend: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -105,6 +108,8 @@ pub struct GlbPrim {
     pub nrm: Option<Vec<f32>>,
     pub uv: Option<Vec<f32>>,
     pub idx: Vec<u32>,
+    /// Per-vertex blend weight of a `vertex_blend` material, written as `_RESKATE_BLEND`.
+    pub blend: Option<Vec<f32>>,
 }
 
 fn f32_bytes(v: &[f32], out: &mut Vec<u8>) {
@@ -132,6 +137,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
         pos: usize,
         nrm: Option<usize>,
         uv: Option<usize>,
+        blend: Option<usize>,
         idx: usize,
         mat: Option<usize>,
     }
@@ -206,6 +212,19 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
             });
             accs.len() - 1
         });
+        let a_blend = p.blend.as_ref().map(|w| {
+            let mut b = Vec::with_capacity(w.len() * 4);
+            f32_bytes(w, &mut b);
+            let v = view(&mut bin, b, 34962);
+            accs.push(Acc {
+                view: v,
+                comp: 5126,
+                count: nv,
+                kind: "SCALAR",
+                bounds: None,
+            });
+            accs.len() - 1
+        });
         let mut b = Vec::with_capacity(p.idx.len() * 4);
         for i in &p.idx {
             b.extend_from_slice(&i.to_le_bytes());
@@ -233,6 +252,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
             pos: a_pos,
             nrm: a_nrm,
             uv: a_uv,
+            blend: a_blend,
             idx: a_idx,
             mat,
         });
@@ -259,6 +279,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
                         position: p.pos,
                         normal: p.nrm,
                         texcoord_0: p.uv,
+                        reskate_blend: p.blend,
                     },
                     indices: p.idx,
                     material: p.mat,

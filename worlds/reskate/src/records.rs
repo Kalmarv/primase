@@ -97,6 +97,9 @@ pub struct SurfaceMaterial {
     pub mask_texture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mask_srgb: Option<bool>,
+    /// Studio's per-vertex blend; written only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertex_blend: Option<bool>,
 }
 
 /// One object record: a rendered mesh, or collision only (`render: false`).

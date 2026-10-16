@@ -46,6 +46,8 @@ pub struct Material {
     pub cast_shadows: Option<bool>,
     /// base_color_factor (linear RGBA), set by the texture budget.
     pub base_factor: Option<[f32; 4]>,
+    /// Studio's per-vertex blend (`vertex_blend`): its parts carry a weight per vertex.
+    pub vertex_blend: bool,
 }
 
 /// What a front end says a material is.
@@ -70,6 +72,7 @@ pub struct MaterialSpec<'a> {
     pub wrap: Option<String>,
     pub ocean: Option<bool>,
     pub cast_shadows: Option<bool>,
+    pub vertex_blend: bool,
 }
 
 impl<'a> MaterialSpec<'a> {
@@ -95,6 +98,7 @@ impl<'a> MaterialSpec<'a> {
             wrap: None,
             ocean: None,
             cast_shadows: None,
+            vertex_blend: false,
         };
         match class {
             VClass::Cutout => {
@@ -190,6 +194,9 @@ impl MatLib {
         if let Some(c) = s.cast_shadows {
             extra += &format!("|h{}", i32::from(c));
         }
+        if s.vertex_blend {
+            extra += "|vb";
+        }
         let key = format!(
             "{}|{}|{}|{}|{}|{}|{}{}",
             cls as i32,
@@ -244,6 +251,7 @@ impl MatLib {
             ocean: s.ocean,
             cast_shadows: s.cast_shadows,
             base_factor: None,
+            vertex_blend: s.vertex_blend,
         });
         self.map.insert(key, id);
         id
