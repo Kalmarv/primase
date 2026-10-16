@@ -94,10 +94,17 @@ The index's `empty_tile_policy` omits tiles with neither geometry nor viewer
 records. A tile with only records has `content: "metadata_only"`: its GLB contains
 identity nodes and extras, with no meshes, buffers or binary mesh payload.
 Geometry tiles have `content: "geometry"`.
+Images are files of their own (format 2.0): each encoded image is written once,
+as `images/<sha256>.<ext>`, and every tile that uses it references that file by
+`uri`, so tile GLBs carry geometry and materials only. The index lists the image
+files with their lengths, each tile the ones it uses. `WrittenTile::write_to`
+writes a tile's images (those not there yet) before the tile.
+
 Render and collision filenames include the full SHA256 of their own bytes.
 Collision names are finalized before their references are embedded in render
 tiles. `write_to` rejects missing files, mismatched lengths, and stale hashes
-before publishing anything. `tiles.json` is written last and stays unhashed.
+before publishing anything; it writes images, then tiles and collision, and
+`tiles.json` last, which stays unhashed.
 When publishing a new export over an old one, copy the immutable assets first
 and replace `tiles.json` last, and keep older assets while clients may still
 reference them. Indexes need short cache lifetimes; the content-addressed assets

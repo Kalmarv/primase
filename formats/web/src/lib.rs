@@ -6,7 +6,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 mod collision;
 mod compression;
+mod images;
 mod instancing;
+pub use images::{IMAGE_DIR, ImageFiles};
 #[cfg(feature = "ktx2")]
 pub mod ktx2;
 use std::{
@@ -88,12 +90,21 @@ pub struct TileInfo {
     pub placements: u64,
     pub instanced_placements: u64,
     pub viewer_items: u64,
-    /// Scene lights in this tile (format 1.1; omitted when 0).
+    /// Scene lights in this tile (omitted when 0).
     #[serde(skip_serializing_if = "is_zero")]
     pub lights: u64,
-    /// `core.layered` materials in this tile's GLB, written with `PRIMASE_layered_material` (format 1.2; omitted when 0).
+    /// `core.layered` materials in this tile's GLB, written with `PRIMASE_layered_material` (omitted when 0).
     #[serde(skip_serializing_if = "is_zero")]
     pub layered_materials: u64,
+    pub bytes: u64,
+    /// The image files the tile's GLB references (entries of [`Index::images`]), in its image order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+}
+/// An image file shared by the tiles that use it: `images/<sha256>.<ext>` and its length.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ImageFile {
+    pub file: String,
     pub bytes: u64,
 }
 fn is_zero(n: &u64) -> bool {
@@ -119,6 +130,8 @@ pub struct Index {
     pub version: u32,
     pub tile_size: f64,
     pub tiles: Vec<TileInfo>,
+    /// Every image file the tiles reference, by file name.
+    pub images: Vec<ImageFile>,
     pub skipped_degenerate: u64,
     pub placements_without_mesh: u64,
 }
@@ -127,6 +140,8 @@ pub struct TileSet {
     pub collision_files: BTreeMap<String, Vec<u8>>,
     pub index: Index,
     pub files: BTreeMap<String, Vec<u8>>,
+    /// The image files, `images/<sha256>.<ext>`, each once.
+    pub images: BTreeMap<String, Vec<u8>>,
 }
 /// Add `name` to a glTF document's `extensionsUsed` and `extensionsRequired`, keeping the extensions already there.
 pub(crate) fn require_extension(doc: &mut serde_json::Value, name: &str) {
@@ -227,14 +242,21 @@ pub struct WrittenTile {
     pub info: TileInfo,
     pub bytes: Vec<u8>,
     pub collision: Option<(String, Vec<u8>)>,
+    /// The image files it references, with their bytes (shared with other tiles: write each once).
+    pub images: ImageFiles,
 }
 impl WrittenTile {
-    /// Write the tile's GLB and collision sidecar into `folder`.
+    /// Write the tile's image files (those not there yet), then its GLB and collision sidecar, into `folder`.
     pub fn write_to(&self, folder: &Path) -> Result<()> {
-        std::fs::create_dir_all(folder).map_err(|source| Error::Io {
-            path: folder.into(),
-            source,
-        })?;
+        let dir = folder.join(IMAGE_DIR);
+        std::fs::create_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
+        for (name, bytes) in &self.images {
+            let path = folder.join(name);
+            if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64) {
+                continue; // content-addressed: the same name holds the same bytes
+            }
+            std::fs::write(&path, bytes).map_err(|source| Error::Io { path, source })?;
+        }
         for (name, bytes) in
             std::iter::once((&self.info.file, &self.bytes)).chain(self.collision.iter().map(|(n, b)| (n, b)))
         {
@@ -262,6 +284,7 @@ pub struct TilePlan {
     unsplit: Vec<Placement>,
     written: BTreeSet<(i32, i32)>,
     tiles: Vec<TileInfo>,
+    images: BTreeMap<String, u64>,
     skipped: u64,
     without_mesh: u64,
     #[cfg(feature = "ktx2")]
@@ -333,6 +356,7 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         cells: BTreeMap::new(),
         unsplit: Vec::new(),
         written: BTreeSet::new(),
+        images: BTreeMap::new(),
         tiles: Vec::new(),
         skipped: 0,
         without_mesh: 0,
@@ -571,7 +595,7 @@ impl TilePlan {
         let render = if triangles == 0 {
             Ok(None)
         } else {
-            (|| -> Result<Option<(TileInfo, Vec<u8>)>> {
+            (|| -> Result<Option<(TileInfo, Vec<u8>, ImageFiles)>> {
                 if !min.iter().chain(&max).all(|v| v.is_finite()) {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
@@ -607,6 +631,7 @@ impl TilePlan {
                 } else {
                     bytes
                 };
+                let (bytes, files) = images::externalize(&bytes)?;
                 Ok(Some(TileInfo {
                     collision: None,
                     content: TileContent::Geometry,
@@ -622,8 +647,9 @@ impl TilePlan {
                     lights: 0,
                     layered_materials: report.layered_materials,
                     bytes: bytes.len() as u64,
+                    images: files.iter().map(|(n, _)| n.clone()).collect(),
                 })
-                .map(|info| (info, bytes)))
+                .map(|info| (info, bytes, files)))
             })()
         };
         for p in &content.placements {
@@ -642,10 +668,18 @@ impl TilePlan {
                 w.insert(e, t);
             }
         }
-        let Some(mut tile) = self.attach_items((col, row), render?, &content.items, &content.lights)? else {
+        let (render, files) = match render? {
+            Some((info, bytes, files)) => (Some((info, bytes)), files),
+            None => (None, Vec::new()),
+        };
+        let Some(mut tile) = self.attach_items((col, row), render, &content.items, &content.lights)? else {
             return Ok(None);
         };
         tile.info.file = asset_name("tile", col, row, &tile.bytes);
+        for (name, bytes) in &files {
+            self.images.insert(name.clone(), bytes.len() as u64);
+        }
+        tile.images = files;
         self.tiles.push(tile.info.clone());
         Ok(Some(tile))
     }
@@ -665,6 +699,7 @@ impl TilePlan {
                 info,
                 bytes,
                 collision: None,
+                images: Vec::new(),
             }));
         }
         let items: Vec<(usize, &ViewerItem)> = items.iter().map(|&i| (i, &self.items[i])).collect();
@@ -798,12 +833,14 @@ impl TilePlan {
                 lights: lights.len() as u64,
                 layered_materials: 0,
                 bytes: bytes.len() as u64,
+                images: Vec::new(),
             },
         };
         Ok(Some(WrittenTile {
             info,
             bytes,
             collision,
+            images: Vec::new(),
         }))
     }
     /// The index of every tile written; fails unless every planned cell was.
@@ -816,18 +853,16 @@ impl TilePlan {
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row));
         Ok(Index {
-            // 1.1 adds the optional scene lights, 1.2 the optional layered materials; a tile set with neither is 1.0
-            format_version: if tiles.iter().any(|t| t.layered_materials > 0) {
-                "1.2"
-            } else if tiles.iter().any(|t| t.lights > 0) {
-                "1.1"
-            } else {
-                "1.0"
-            },
+            format_version: "2.0",
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: self.options.tile_size,
             tiles,
+            images: self
+                .images
+                .into_iter()
+                .map(|(file, bytes)| ImageFile { file, bytes })
+                .collect(),
             skipped_degenerate: self.skipped,
             placements_without_mesh: self.without_mesh,
         })
@@ -856,20 +891,23 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     let mut set = TileSet {
         collision_files: BTreeMap::new(),
         index: Index {
-            format_version: "1.0",
+            format_version: "2.0",
             empty_tile_policy: "",
             version: 1,
             tile_size: options.tile_size,
             tiles: Vec::new(),
+            images: Vec::new(),
             skipped_degenerate: 0,
             placements_without_mesh: 0,
         },
         files: BTreeMap::new(),
+        images: BTreeMap::new(),
     };
     for cell in plan.cells() {
         let mut w = world.subset(&world.closure(plan.roots(cell)));
         for tile in plan.write_cell(cell, &mut w)? {
             set.files.insert(tile.info.file.clone(), tile.bytes);
+            set.images.extend(tile.images);
             if let Some((name, bytes)) = tile.collision {
                 set.collision_files.insert(name, bytes);
             }
@@ -883,12 +921,17 @@ fn asset_name(kind: &str, col: i32, row: i32, bytes: &[u8]) -> String {
     format!("{kind}_{col}_{row}.{hash}.glb")
 }
 impl Index {
-    /// Publish `tiles.json` in `folder`, after checking that every tile and collision file it names is there with
-    /// its length (a driver writes each [`WrittenTile`] first).
+    /// Publish `tiles.json` in `folder`, after checking that every image, tile and collision file it names is there
+    /// with its length (a driver writes each [`WrittenTile`] first).
     pub fn write_to(&self, folder: &Path) -> Result<()> {
-        for (file, bytes) in self.tiles.iter().flat_map(|t| {
-            std::iter::once((&t.file, t.bytes)).chain(t.collision.iter().map(|c| (&c.file, c.bytes)))
-        }) {
+        for (file, bytes) in self
+            .images
+            .iter()
+            .map(|i| (&i.file, i.bytes))
+            .chain(self.tiles.iter().flat_map(|t| {
+                std::iter::once((&t.file, t.bytes)).chain(t.collision.iter().map(|c| (&c.file, c.bytes)))
+            }))
+        {
             let path = folder.join(file);
             let len = std::fs::metadata(&path)
                 .map_err(|source| Error::Io {
@@ -939,11 +982,37 @@ impl TileSet {
                 "collision index does not match generated files".into(),
             ));
         }
-        std::fs::create_dir_all(folder).map_err(|source| Error::Io {
-            path: folder.into(),
-            source,
-        })?;
-        for (name, bytes) in self.files.iter().chain(&self.collision_files) {
+        if self.index.images.len() != self.images.len()
+            || self.index.images.iter().any(|i| {
+                self.images.get(&i.file).is_none_or(|b| {
+                    b.len() as u64 != i.bytes
+                        || std::path::Path::new(&i.file)
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .is_none_or(|x| {
+                                images::image_name(
+                                    match x {
+                                        "png" => "image/png",
+                                        "ktx2" => "image/ktx2",
+                                        _ => "image/jpeg",
+                                    },
+                                    b,
+                                )
+                                .ok()
+                                .as_deref()
+                                    != Some(i.file.as_str())
+                            })
+                })
+            })
+        {
+            return Err(Error::Invalid(
+                "image index does not match generated files".into(),
+            ));
+        }
+        let dir = folder.join(IMAGE_DIR);
+        std::fs::create_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
+        // images first, then the tiles that reference them, then the index
+        for (name, bytes) in self.images.iter().chain(&self.files).chain(&self.collision_files) {
             let path = folder.join(name);
             std::fs::write(&path, bytes).map_err(|source| Error::Io { path, source })?;
         }

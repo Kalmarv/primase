@@ -68,7 +68,7 @@ fn pivot_tiles_negative_coordinates_and_determinism() {
         ..plain()
     };
     let a = write(&w, &options).unwrap();
-    assert_eq!(serde_json::to_value(&a.index).unwrap()["format_version"], "1.0");
+    assert_eq!(serde_json::to_value(&a.index).unwrap()["format_version"], "2.0");
     assert_eq!(
         a.index
             .tiles
@@ -784,7 +784,7 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
         },
     );
     w.insert(placement, Transform::IDENTITY);
-    assert_eq!(write(&w, &plain()).unwrap().index.format_version, "1.0");
+    assert_eq!(write(&w, &plain()).unwrap().index.format_version, "2.0");
     for (x, kind) in [
         (5.0f32, LightKind::Point),
         (
@@ -813,7 +813,7 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
         );
     }
     let set = write(&w, &plain()).unwrap();
-    assert_eq!(set.index.format_version, "1.1");
+    assert_eq!(set.index.format_version, "2.0");
     let tiles: Vec<_> = set
         .index
         .tiles
@@ -906,7 +906,7 @@ fn emissive_strength_survives_compression_and_instancing() {
     );
 }
 #[test]
-fn layered_materials_survive_tiling_compression_and_bump_the_minor_version() {
+fn layered_materials_survive_tiling_and_compression() {
     use primase_core::pbr::PbrMaterial;
     use primase_core::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
     for compress in [false, true] {
@@ -960,7 +960,7 @@ fn layered_materials_survive_tiling_compression_and_bump_the_minor_version() {
             ..Options::default()
         };
         let set = write(&w, &options).unwrap();
-        assert_eq!(set.index.format_version, "1.2");
+        assert_eq!(set.index.format_version, "2.0");
         assert_eq!(set.index.tiles[0].layered_materials, 1);
         let index = serde_json::to_value(&set.index).unwrap();
         assert_eq!(index["tiles"][0]["layered_materials"], 1);
@@ -995,19 +995,5 @@ fn layered_materials_survive_tiling_compression_and_bump_the_minor_version() {
             prim["attributes"].get("COLOR_1").is_some(),
             "weights kept (compress={compress})"
         );
-        // a tile set without layered materials or lights stays 1.0
-        let mut plain = World::new();
-        let proto = plain.spawn();
-        plain.insert(proto, mesh());
-        let place = plain.spawn();
-        plain.insert(
-            place,
-            Instance {
-                prototype: proto,
-                variant: 0,
-            },
-        );
-        plain.insert(place, Transform::IDENTITY);
-        assert_eq!(write(&plain, &options).unwrap().index.format_version, "1.0");
     }
 }

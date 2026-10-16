@@ -1,4 +1,4 @@
-//! Hash all embedded mip pixels with an independent pure-Rust transcoder.
+//! Hash every image's mip pixels (image files in 2.0, embedded in 1.x) with an independent pure-Rust transcoder.
 use basisu::{DecodeFlags, TargetFormat, Transcoder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -85,6 +85,26 @@ fn reference(
     Ok(out)
 }
 
+/// An image's bytes: its file beside the tiles (format 2.0, `uri`), or its view of the GLB's binary chunk (1.x).
+fn image_bytes(
+    folder: &std::path::Path,
+    doc: &Value,
+    bin: Option<&[u8]>,
+    image: &Value,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if let Some(uri) = image["uri"].as_str() {
+        return Ok(std::fs::read(folder.join(uri))?);
+    }
+    let view = &doc["bufferViews"][image["bufferView"].as_u64().ok_or("image view")? as usize];
+    let start = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+    let length = view["byteLength"].as_u64().ok_or("image length")? as usize;
+    Ok(bin
+        .ok_or("BIN")?
+        .get(start..start + length)
+        .ok_or("image bounds")?
+        .to_vec())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let folder = std::path::PathBuf::from(std::env::args().nth(1).ok_or("usage: ktx2_audit <tile folder>")?);
     let worst_dir = std::env::args().nth(2).map(std::path::PathBuf::from);
@@ -127,14 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let plain = plain_bytes.as_deref().map(primase_gltf::glb::parse).transpose()?;
         let plain_doc: Option<Value> = plain.map(|p| serde_json::from_slice(p.json)).transpose()?;
         for (i, image) in image_list.iter().enumerate() {
-            let view = &doc["bufferViews"][image["bufferView"].as_u64().ok_or("image view")? as usize];
-            let start = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-            let length = view["byteLength"].as_u64().ok_or("image length")? as usize;
-            let bytes = chunks
-                .bin
-                .ok_or("BIN")?
-                .get(start..start + length)
-                .ok_or("image bounds")?;
+            let bytes = &image_bytes(&folder, &doc, chunks.bin, image)?[..];
             let is_png = image["mimeType"] == "image/png";
             let mut hashes = Vec::new();
             let (width, height, decoded) = if is_png {
@@ -175,11 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .find(|p| p["name"] == image["name"])
                     .ok_or("reference image name")?;
-                let view =
-                    &plain_doc["bufferViews"][png_image["bufferView"].as_u64().ok_or("PNG view")? as usize];
-                let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-                let size = view["byteLength"].as_u64().ok_or("PNG length")? as usize;
-                let png = &plain.bin.ok_or("plain BIN")?[offset..offset + size];
+                let png = &image_bytes(&plain_folder, plain_doc, plain.bin, png_image)?[..];
                 let key = (
                     Sha256::digest(png).to_vec(),
                     role.to_owned(),

@@ -116,10 +116,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if image["mimeType"] != "image/ktx2" {
                     continue;
                 }
-                let view = &doc["bufferViews"][image["bufferView"].as_u64().ok_or("image view")? as usize];
-                let start = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-                let length = view["byteLength"].as_u64().ok_or("image length")? as usize;
-                let decoder = Transcoder::new(&chunks.bin.ok_or("bin")?[start..start + length])
+                let uri = image["uri"].as_str().ok_or("image uri")?;
+                let decoder = Transcoder::new(set.images.get(uri).ok_or("image file")?)
                     .map_err(|e| format!("{e:?}"))?;
                 let mut hashes = Vec::new();
                 for mip in 0..decoder.level_count() {

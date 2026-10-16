@@ -1,4 +1,4 @@
-# Web tile format 1.0
+# Web tile format 2.0
 
 This document specifies the output of `primase-web`. It is a consumer contract,
 independent of any viewer, source game or hosting service. Numeric coordinates
@@ -6,12 +6,24 @@ are metres in a right-handed frame: +X east, +Y up, -Z north.
 
 ## Compatibility
 
-`tiles.json` contains `format_version: "1.0"`. The two decimal integers are
+`tiles.json` contains `format_version: "2.0"`. The two decimal integers are
 major and minor. A new major changes an existing field's meaning or requires
 incompatible interpretation. A minor adds optional fields or records; consumers
 of the same major ignore unknown optional fields. Consumers reject unknown
 majors with an explicit unsupported-format error. Required glTF extensions must
 still be supported; a compatible index version does not imply codec support.
+
+### From 1.x to 2.0
+
+1.x tile GLBs were self-contained: every image was embedded in every tile that
+used it, so an image shared by many tiles was stored, downloaded and decoded once
+per tile. In 2.0 images are files of their own, shared by the tiles of a set (see
+[Images](#images)); tile GLBs keep geometry and materials and reference images by
+relative `uri`. The index lists the image files (`images`) and each tile the files
+it uses (`images`). Geometry, materials (layered ones included), collision sidecars, scene lights and
+viewer records are unchanged: decoding a 2.0 tile with its image files gives what the 1.x tile
+held. A 1.x consumer must reject 2.0 (an unknown major), and a 2.0 consumer
+resolves image URIs; nothing else changes for it.
 
 Older unversioned indexes with `version: 1` are the legacy 1.0 layout. Readers
 may accept that one legacy case explicitly. New writers always emit
@@ -25,13 +37,14 @@ JSON numbers must be finite; counts are nonnegative integers.
 
 | Field | Type and meaning |
 |---|---|
-| `format_version` | String `major.minor`, currently `"1.0"` |
+| `format_version` | String `major.minor`, currently `"2.0"` |
 | `version` | Legacy integer `1` |
 | `tile_size` | Positive number, nominal ground-cell side in metres |
 | `empty_tile_policy` | `"omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload"` |
 | `skipped_degenerate` | Count of skipped placements with degenerate transforms |
 | `placements_without_mesh` | Count of placements without loaded render geometry |
 | `tiles` | Array of tile objects; deterministic order by `(col, row)` |
+| `images` | Array of `{file, bytes}`: every image file the tiles reference, ordered by `file` |
 
 | Tile field | Type and meaning |
 |---|---|
@@ -45,8 +58,9 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `instanced_placements` | Placements represented by GPU instancing |
 | `viewer_items` | Number of viewer records in this tile |
 | `collision` (optional) | Object `{file, bytes, records}` for a collision GLB |
-| `lights` (optional, 1.1) | Scene lights in this tile's GLB; omitted when 0 |
-| `layered_materials` (optional, 1.2) | Layered materials in this tile's GLB; omitted when 0 |
+| `lights` (optional) | Scene lights in this tile's GLB; omitted when 0 |
+| `layered_materials` (optional) | Layered materials in this tile's GLB; omitted when 0 |
+| `images` (optional) | Array of the image files the tile's GLB references, in its glTF image order; absent when none |
 
 `collision.records` counts collision meshes, not triangles. Each record's index
 accessor gives its triangle count. Bounds of geometry tiles cover render
@@ -56,10 +70,22 @@ ownership, not clipping boxes: whole meshes or triangles can extend outside.
 Empty cells are omitted. Records without render geometry retain a metadata GLB.
 
 Asset filenames contain the full lowercase SHA256 of their own bytes:
-`tile_<col>_<row>.<sha256>.glb` and
-`collision_<col>_<row>.<sha256>.glb`. Index references and lengths must match the
-files. The index is not content-hashed. Files are self-contained GLB 2.0; image
-and geometry payloads are embedded, with no external glTF buffer/image URIs.
+`tile_<col>_<row>.<sha256>.glb`, `collision_<col>_<row>.<sha256>.glb` and
+`images/<sha256>.<ext>`. Index references and lengths must match the files. The
+index is not content-hashed. Tile and collision files are GLB 2.0 with embedded
+geometry and no external buffers; images are external (see [Images](#images)).
+
+## Images
+
+Every image a tile set uses is one file, `images/<sha256>.<ext>` beside
+`tiles.json`, named by the SHA256 of its bytes: `.ktx2` (`image/ktx2`) or `.png`
+(`image/png`). Tiles that use the same image reference the same file: a glTF image
+in a tile GLB has `uri: "images/<sha256>.<ext>"` (relative to the GLB, which sits
+beside `tiles.json`), its `mimeType` and no `bufferView`. A consumer can load each
+image file once and share it among the tiles that use it, releasing it when the
+last of them is unloaded; `tiles.json` lists every file with its length, so a
+consumer can prefetch them or account for them before loading a tile. Image files
+are immutable: the same name always holds the same bytes.
 
 ## Render GLBs
 
@@ -81,16 +107,13 @@ Quantization may move positions; bounds in the index describe pre-quantization
 geometry. Consumers comparing exact vertex bounds must allow the declared step
 transformed by each placement, plus floating-point transform error.
 
-Images are PNG or KTX2 UASTC LDR 4x4 with Zstandard supercompression. KTX2 textures
+Image files are PNG or KTX2 UASTC LDR 4x4 with Zstandard supercompression. KTX2 textures
 use `KHR_texture_basisu` and are transcoded to a supported GPU format. Colour
 textures use sRGB; normal and data textures are linear. The writer may retain
 PNG when normal or alpha semantics would exceed its lowering error bounds.
 The file's dimensions and mip levels are authoritative; source resolution is
 not an implicit promise. Texture lowering metadata is advisory, not required
 for rendering.
-
-Lights (`KHR_lights_punctual`) are not carried in 1.x tiles: the writer
-writes a tile's placements and what they refer to, not the world's lights.
 
 ## Collision sidecars
 
@@ -135,10 +158,9 @@ consumer must not require any particular source dialect. `web.instances`
 preserves per-instance diagnostic identity where present. Viewer records never
 change glTF geometry or material semantics.
 
-## Scene lights (1.1)
+## Scene lights
 
-A tile set whose scene has lights declares `format_version: "1.1"`; one without
-lights stays `"1.0"`. Each light is a glTF node with `KHR_lights_punctual`
+Scene lights (introduced in 1.1) are carried as before. Each light is a glTF node with `KHR_lights_punctual`
 (listed in `extensionsUsed`, never `extensionsRequired`) in the tile whose cell
 contains the light's position, like a viewer record's anchor; a cell with lights
 but no render geometry gets a metadata-only GLB. The node's `matrix` is the
@@ -149,10 +171,9 @@ unlimited), spot cone angles in radians from the axis. Bounds include light
 positions. Lights are illumination sources only; consumers may render a subset
 (for example the nearest few) and must ignore them without breaking geometry.
 
-## Layered materials (1.2)
+## Layered materials
 
-A tile set with layered materials declares `format_version: "1.2"` (without lights or layered materials it stays
-`"1.0"`, with only lights `"1.1"`). A layered material blends up to four ordinary materials per pixel from an
+Layered materials (introduced in 1.2) are carried as before. A layered material blends up to four ordinary materials per pixel from an
 interpolated vertex channel. It is a glTF material carrying the vendor extension `PRIMASE_layered_material`, listed in
 `extensionsUsed` and never in `extensionsRequired`:
 
