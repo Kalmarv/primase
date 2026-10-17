@@ -130,7 +130,8 @@ fn a_mirror_moves_into_the_geometry_with_fronts_and_bitangents_kept() {
     );
     let before = fronts_and_bitangent(w.get::<Mesh>(e).unwrap());
     let l = Linear::mirror_x();
-    w.apply_linear(e, &l).expect("every component follows");
+    let dropped = w.apply_linear(e, &l).expect("every component follows");
+    assert_eq!(dropped, ["core.mesh_file"], "what it dropped is reported");
     let m = w.get::<Mesh>(e).unwrap().clone();
     // positions, normals and tangent directions mirrored in x, bit for bit (negation only)
     assert_eq!(

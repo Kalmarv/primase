@@ -47,11 +47,20 @@ pub type PassOptions = BTreeMap<String, Options>;
 pub struct PassLog {
     pub counts: BTreeMap<String, u64>,
     pub approximations: BTreeMap<String, u64>,
+    /// Component names the pass removed from some entity without declaring them in [`Pass::removes`] (a component a
+    /// hook dropped, as [`World::apply_linear`] reports): accepted as removals only for a pass that opts in with
+    /// [`Pass::removes_by_log`].
+    pub removed: BTreeSet<String>,
 }
 
 impl PassLog {
     pub fn count(&mut self, what: &str, n: u64) {
         *self.counts.entry(what.to_owned()).or_default() += n;
+    }
+
+    /// Record that the pass removed component `name` from some entity (see [`PassLog::removed`]).
+    pub fn record_removed(&mut self, name: &str) {
+        self.removed.insert(name.to_owned());
     }
 
     /// Record `n` items lowered with an approximation (`"layer blend baked at 1024 px"`).
@@ -104,6 +113,13 @@ pub trait Pass: Send + Sync {
     /// `core.name`, a discarded form's dialect data); a name still held by a surviving entity before the pass must
     /// be declared as ever. Added names are checked as for every pass.
     fn despawns_entities(&self) -> bool {
+        false
+    }
+    /// Whether the components it removes are not all known in advance (a hook decides, as
+    /// [`crate::Component::apply_linear`] does). If so, a name that disappears is accepted when the pass recorded it in
+    /// [`PassLog::removed`] as well as when it is declared in [`Pass::removes`]; a name that disappears unrecorded and
+    /// undeclared is an error as ever.
+    fn removes_by_log(&self) -> bool {
         false
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String>;
@@ -745,7 +761,11 @@ impl PassManager {
         ] {
             let undeclared: Vec<String> = names
                 .iter()
-                .filter(|n| !declared.contains(&n.as_str()) && !(removal && despawned_with(n)))
+                .filter(|n| {
+                    !declared.contains(&n.as_str())
+                        && !(removal && despawned_with(n))
+                        && !(removal && p.removes_by_log() && log.removed.contains(n.as_str()))
+                })
                 .cloned()
                 .collect();
             if !undeclared.is_empty() {
@@ -1675,6 +1695,47 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    /// Takes toy.layered off every entity without declaring it; `opted` says it removes by log, `record` that it
+    /// records the removal there.
+    struct LogStrip {
+        opted: bool,
+        record: bool,
+    }
+    impl Pass for LogStrip {
+        fn name(&self) -> &'static str {
+            "log-strip"
+        }
+        fn removes_by_log(&self) -> bool {
+            self.opted
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            for e in w.iter::<Layered>().map(|(e, _)| e).collect::<Vec<_>>() {
+                w.remove::<Layered>(e);
+            }
+            if self.record {
+                log.record_removed("toy.layered");
+                // recorded but still present elsewhere, or never present: fine
+                log.record_removed("toy.file");
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_pass_removing_by_log_may_take_the_names_it_recorded() {
+        let run = |opted, record| {
+            let pipeline = Pipeline {
+                passes: vec![Box::new(LogStrip { opted, record })],
+            };
+            PassManager::new(PassRegistry::new()).run(&mut world(), &pipeline, &mut RunReport::default())
+        };
+        let undeclared = "pass log-strip removed `[\"toy.layered\"]` without declaring it";
+        assert!(run(true, true).is_ok());
+        // vanished unrecorded, or recorded by a pass that did not opt in: an error as ever
+        assert_eq!(run(true, false).unwrap_err().to_string(), undeclared);
+        assert_eq!(run(false, true).unwrap_err().to_string(), undeclared);
     }
 
     /// One entity with toy.layered, toy.file and game.thing (culled), one with toy.mesh and toy.file (kept).

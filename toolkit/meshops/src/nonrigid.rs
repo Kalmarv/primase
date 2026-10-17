@@ -51,10 +51,16 @@ impl Pass for BakeNonrigid {
     fn legalizes(&self) -> &[&'static str] {
         &["core.transform"]
     }
+    /// What a mapping drops is each component's own answer ([`primase_core::Linearity::Drop`]), recorded in the log.
+    fn removes_by_log(&self) -> bool {
+        true
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        for (k, n) in bake_nonrigid(w).counts {
+        let done = bake_nonrigid(w);
+        for (k, n) in done.counts {
             log.count(&k, n);
         }
+        log.removed.extend(done.removed);
         Ok(())
     }
 }
@@ -83,17 +89,35 @@ fn translation_only(t: &Transform) -> Transform {
     out
 }
 
+/// Note in `log` the components a mapping dropped: counted by name and recorded as removals.
+fn note_dropped(log: &mut PassLog, dropped: &[String]) {
+    for name in dropped {
+        log.count(&format!("components dropped from mapped geometry: {name}"), 1);
+        log.record_removed(name);
+    }
+}
+
 /// A copy of `proto` (and of its LOD forms) with local space mapped by `l`, or why it cannot be made (nothing is left
 /// behind then).
-fn mapped_copy(w: &mut World, proto: Entity, l: &Linear, suffix: &str) -> Result<Entity, String> {
+fn mapped_copy(
+    w: &mut World,
+    proto: Entity,
+    l: &Linear,
+    suffix: &str,
+    log: &mut PassLog,
+) -> Result<Entity, String> {
     if w.has::<MeshFile>(proto) && !w.has::<Mesh>(proto) {
         return Err("prototype geometry not loaded".into());
     }
     let mut made = Vec::new();
+    let mut dropped = PassLog::default();
     let result = (|| {
         let copy = w.duplicate(proto).ok_or("prototype not alive")?;
         made.push(copy);
-        w.apply_linear(copy, l).map_err(|names| names.join(", "))?;
+        note_dropped(
+            &mut dropped,
+            &w.apply_linear(copy, l).map_err(|names| names.join(", "))?,
+        );
         if let Some(Name(n)) = w.get::<Name>(copy) {
             let n = format!("{n}.{suffix}");
             w.insert(copy, Name(n));
@@ -105,7 +129,10 @@ fn mapped_copy(w: &mut World, proto: Entity, l: &Linear, suffix: &str) -> Result
                 }
                 let form = w.duplicate(f.form).ok_or("LOD form not alive")?;
                 made.push(form);
-                w.apply_linear(form, l).map_err(|names| names.join(", "))?;
+                note_dropped(
+                    &mut dropped,
+                    &w.apply_linear(form, l).map_err(|names| names.join(", "))?,
+                );
                 f.form = form;
             }
             w.insert(copy, lods);
@@ -116,6 +143,11 @@ fn mapped_copy(w: &mut World, proto: Entity, l: &Linear, suffix: &str) -> Result
         for e in made {
             w.despawn(e);
         }
+    } else {
+        for (k, n) in dropped.counts {
+            log.count(&k, n);
+        }
+        log.removed.extend(dropped.removed);
     }
     result
 }
@@ -148,7 +180,7 @@ pub fn bake_nonrigid(w: &mut World) -> PassLog {
                     twins
                         .entry(p)
                         .or_insert_with(|| {
-                            let r = mapped_copy(w, p, &linear, "mirrored");
+                            let r = mapped_copy(w, p, &linear, "mirrored", &mut log);
                             if r.is_ok() {
                                 log.count("mirror twins of prototypes made", 1);
                             }
@@ -156,7 +188,7 @@ pub fn bake_nonrigid(w: &mut World) -> PassLog {
                         })
                         .clone()
                 } else {
-                    let r = mapped_copy(w, p, &linear, &format!("baked.e{}", e.index()));
+                    let r = mapped_copy(w, p, &linear, &format!("baked.e{}", e.index()), &mut log);
                     if r.is_ok() {
                         log.count("prototype copies made for sheared placements", 1);
                     }
@@ -168,9 +200,10 @@ pub fn bake_nonrigid(w: &mut World) -> PassLog {
                     }
                 })
             }
-            None if w.has::<Mesh>(e) || w.has::<Collision>(e) => {
-                w.apply_linear(e, &linear).map_err(|names| names.join(", "))
-            }
+            None if w.has::<Mesh>(e) || w.has::<Collision>(e) => w
+                .apply_linear(e, &linear)
+                .map(|dropped| note_dropped(&mut log, &dropped))
+                .map_err(|names| names.join(", ")),
             None if kind == TransformKind::Mirrored && (w.has::<Light>(e) || w.has::<Marker>(e)) => Ok(()),
             None => Err("nothing to map it into".into()),
         };

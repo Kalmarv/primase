@@ -598,8 +598,9 @@ impl World {
 
     /// Map `e`'s local space by `l`: every component of `e` through [`Component::apply_linear`]. All or nothing:
     /// when a component is [`Linearity::Unsupported`] (opaque components always are) nothing changes and the error
-    /// names every such component, sorted.
-    pub fn apply_linear(&mut self, e: Entity, l: &crate::Linear) -> Result<(), Vec<String>> {
+    /// names every such component, sorted. Otherwise the names of the components it dropped ([`Linearity::Drop`]),
+    /// sorted.
+    pub fn apply_linear(&mut self, e: Entity, l: &crate::Linear) -> Result<Vec<String>, Vec<String>> {
         let mut unsupported: Vec<String> = self
             .opaque
             .iter()
@@ -618,16 +619,21 @@ impl World {
             unsupported.sort();
             return Err(unsupported);
         }
+        let mut dropped = Vec::new();
         for (id, r) in done {
             if let Some(c) = self.columns.get_mut(&id) {
                 match r {
                     Linearity::Applied(v) => c.put_remapped(e, v),
-                    Linearity::Drop => c.remove_entity(e),
+                    Linearity::Drop => {
+                        c.remove_entity(e);
+                        dropped.push(c.name().to_string());
+                    }
                     Linearity::Invariant | Linearity::Unsupported => {}
                 }
             }
         }
-        Ok(())
+        dropped.sort();
+        Ok(dropped)
     }
 
     /// Keep `e`'s per-primitive components in step with its rebuilt mesh: every typed component that follows
