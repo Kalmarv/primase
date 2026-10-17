@@ -205,8 +205,10 @@ impl Pass for GtaTintVariants {
             if !tinted_mesh(w, proto) && !forms(w, proto).iter().any(|&f| tinted_mesh(w, f)) {
                 continue;
             }
+            // the first row keeps the prototype; every further row gets a copy, its forms copied with it, all made
+            // before any is tinted (tinting replaces the palette column the copies would need)
+            let mut targets = Vec::with_capacity(by_row.len());
             for (k, (&row, placements)) in by_row.iter().enumerate() {
-                // the first row keeps the prototype; every further row gets a copy, its forms copied with it
                 let target = if k == 0 {
                     proto
                 } else {
@@ -228,6 +230,9 @@ impl Pass for GtaTintVariants {
                     }
                     copy
                 };
+                targets.push((row, target));
+            }
+            for (row, target) in targets {
                 for h in std::iter::once(target).chain(forms(w, target)) {
                     if let Some(mut mesh) = w.remove::<Mesh>(h) {
                         tint_mesh(&mut mesh, row, &palettes, log);
@@ -275,5 +280,115 @@ mod tests {
         // a row past the last takes the last; blue 255 is the last column
         assert_eq!(p.colour(9, p.column(255)), [5, 6, 7]);
         assert_eq!(p.colour(0, p.column(0)), [1, 2, 3]);
+    }
+
+    fn placement(w: &mut World, prototype: Entity, tint: u32) {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        w.insert(
+            e,
+            GtaEntity {
+                ymap: "m".into(),
+                index: 0,
+                interior: None,
+                lod_parent: None,
+                archetype: 0,
+                flags: 0,
+                guid: 0,
+                parent_index: -1,
+                lod_dist: 100.0,
+                child_lod_dist: 0.0,
+                lod_level: 0,
+                num_children: 0,
+                priority_level: 0,
+                ambient_occlusion_multiplier: 255,
+                artificial_ambient_occlusion: 255,
+                tint_value: tint,
+            },
+        );
+    }
+
+    /// Every tint row's prototype gets its own row's colour: the copies for further rows are made from the untinted
+    /// prototype (tinting replaces the palette column they need).
+    #[test]
+    fn every_tint_row_gets_its_own_colour() {
+        let mut w = World::new();
+        // a 1 x 3 palette (one column, rows 0-2): red, green, blue
+        let pal = w.spawn();
+        w.insert(
+            pal,
+            palette(1, 3, vec![vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]]),
+        );
+        let m = w.spawn();
+        w.insert(m, PbrMaterial::default());
+        w.insert(
+            m,
+            GtaShader {
+                drawable: "d".into(),
+                index: 0,
+                name: primase_hash::joaat(b"default_tnt"),
+                preset: 0,
+                render_bucket: 0,
+                bucket_mask: 0,
+                params: vec![(
+                    primase_hash::joaat(b"TintPaletteTex"),
+                    crate::components::GtaParam::Texture {
+                        name: None,
+                        texture: Some(pal),
+                    },
+                )],
+            },
+        );
+        let proto = w.spawn();
+        let mut streams = BTreeMap::new();
+        streams.insert(
+            Semantic::Position,
+            Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        );
+        streams.insert(Semantic::Color(0), Stream::U8x4(vec![[255, 255, 0, 255]; 3]));
+        w.insert(
+            proto,
+            Mesh {
+                primitives: vec![primase_core::Primitive {
+                    topology: primase_core::Topology::Triangles,
+                    streams,
+                    indices: Some(vec![0, 1, 2]),
+                    material: Some(m),
+                }],
+            },
+        );
+        w.insert(
+            proto,
+            crate::components::GtaSources {
+                lod: 0,
+                sources: vec![[0, 0]],
+            },
+        );
+        for row in [0, 1, 2] {
+            placement(&mut w, proto, row);
+        }
+        GtaTintVariants
+            .run(&mut w, &mut PassLog::default())
+            .expect("gta-tint");
+        let colour = |w: &World, row: u32| {
+            let p = w
+                .iter::<GtaTint>()
+                .find(|(_, t)| t.row == row)
+                .map(|(e, _)| e)
+                .expect("a prototype per row");
+            match &w.get::<Mesh>(p).expect("mesh").primitives[0].streams[&Semantic::Color(0)] {
+                Stream::U16x4(c) => c[0],
+                s => panic!("not the tint: {s:?}"),
+            }
+        };
+        assert_eq!(colour(&w, 0), [65535, 0, 0, 65535]);
+        assert_eq!(colour(&w, 1), [0, 65535, 0, 65535]);
+        assert_eq!(colour(&w, 2), [0, 0, 65535, 65535]);
     }
 }
