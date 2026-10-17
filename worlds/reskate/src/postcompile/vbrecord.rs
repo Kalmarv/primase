@@ -25,7 +25,7 @@
 //! claims (the discovery cross-check).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use primase_compress::oodle::Oodle;
 
@@ -191,21 +191,67 @@ fn distinctive(bits: u16) -> bool {
     !matches!(bits, 0x0000 | 0x8000 | 0x3c00)
 }
 
-/// The `_RESKATE_BLEND` weights of the vertices `primitive` of the map GLB at `path` draws (all of them without
-/// indices), in vertex order.
-fn glb_weights(path: &Path, primitive: usize) -> Result<Vec<f32>> {
+/// A recorded file of map folder `map`: `rel` must be a relative path with forward slashes that stays inside the
+/// folder and goes through no link (as the scene reader requires of its files).
+fn map_file(map: &Path, rel: &str) -> Result<PathBuf> {
+    let refuse = |why: &str| bad(W, 0, format!("{RECORD}: '{rel}' {why}"));
+    if rel.is_empty() || rel.contains('\\') || rel.starts_with('/') || rel.as_bytes().get(1) == Some(&b':') {
+        return Err(refuse("is not a relative path with forward slashes"));
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for c in Path::new(rel).components() {
+        match c {
+            std::path::Component::Normal(x) => parts.push(x.to_str().unwrap_or_default()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(refuse("is outside the map folder"));
+                }
+            }
+            _ => return Err(refuse("is not a relative path with forward slashes")),
+        }
+    }
+    let mut full = map.to_path_buf();
+    for p in &parts {
+        full.push(p);
+        if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse("goes through a link: the map folder must hold its files"));
+        }
+    }
+    Ok(full)
+}
+
+/// A map GLB, read and parsed once.
+struct MapGlb {
+    path: PathBuf,
+    gltf: primase_gltf::Gltf,
+}
+
+/// Reads and parses the map GLB at `path`, which must hold the writer's one mesh.
+fn load_glb(path: &Path) -> Result<MapGlb> {
     let bytes = std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
     let fail = |d: String| bad(W, 0, format!("{}: {d}", path.display()));
-    let g = primase_gltf::Gltf::from_glb(&bytes).map_err(|e| fail(e.to_string()))?;
-    let j = g.json();
+    let gltf = primase_gltf::Gltf::from_glb(&bytes).map_err(|e| fail(e.to_string()))?;
     // the writer writes one mesh per GLB, and the record's primitive indices are that mesh's
-    let meshes = j["meshes"].as_array().map_or(0, Vec::len);
+    let meshes = gltf.json()["meshes"].as_array().map_or(0, Vec::len);
     if meshes != 1 {
         return Err(fail(format!("{meshes} meshes, not the writer's one")));
     }
+    Ok(MapGlb {
+        path: path.to_path_buf(),
+        gltf,
+    })
+}
+
+/// The `_RESKATE_BLEND` weights of the vertices `primitive` of a map GLB draws (all of them without indices), in
+/// vertex order.
+fn glb_weights(glb: &MapGlb, primitive: usize) -> Result<Vec<f32>> {
+    let (g, path) = (&glb.gltf, &glb.path);
+    let fail = |d: String| bad(W, 0, format!("{}: {d}", path.display()));
+    let j = g.json();
     let attr = &j["meshes"][0]["primitives"][primitive]["attributes"]["_RESKATE_BLEND"];
     let a = &j["accessors"][attr
         .as_u64()
@@ -283,8 +329,14 @@ fn glb_weights(path: &Path, primitive: usize) -> Result<Vec<f32>> {
 
 /// Resolves every recorded primitive of map folder `map` among `sections` (from [`blend_sections`]).
 pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result<Resolution> {
+    let mut glbs: BTreeMap<&str, MapGlb> = BTreeMap::new();
+    for (mesh, _) in record.materials.values().flatten() {
+        if !glbs.contains_key(mesh.as_str()) {
+            glbs.insert(mesh, load_glb(&map_file(map, mesh)?)?);
+        }
+    }
     resolve_by(record, sections, |mesh, primitive| {
-        glb_weights(&map.join(mesh), primitive)
+        glb_weights(&glbs[mesh], primitive)
     })
 }
 
@@ -673,16 +725,41 @@ mod tests {
         path
     }
 
+    fn weights_at(path: &Path, primitive: usize) -> Result<Vec<f32>> {
+        glb_weights(&load_glb(path)?, primitive)
+    }
+
+    #[test]
+    fn record_paths_stay_in_the_map_folder() {
+        let map = std::env::temp_dir();
+        assert_eq!(
+            map_file(&map, "meshes/a.glb").unwrap(),
+            map.join("meshes").join("a.glb")
+        );
+        assert_eq!(map_file(&map, "meshes/../b.glb").unwrap(), map.join("b.glb"));
+        for (rel, why) in [
+            ("../a.glb", "outside the map folder"),
+            ("meshes/../../a.glb", "outside the map folder"),
+            ("/a.glb", "not a relative path"),
+            ("C:/a.glb", "not a relative path"),
+            ("meshes\\a.glb", "not a relative path"),
+            ("", "not a relative path"),
+        ] {
+            let e = map_file(&map, rel).unwrap_err().to_string();
+            assert!(e.contains(why), "{rel}: {e}");
+        }
+    }
+
     #[test]
     fn glb_weights_are_read_strictly() {
         let ok = glb_file("ok", 1, 2);
-        assert_eq!(glb_weights(&ok, 0).unwrap(), vec![0.25, 0.5]);
+        assert_eq!(weights_at(&ok, 0).unwrap(), vec![0.25, 0.5]);
         let two = glb_file("two", 2, 2);
-        let e = glb_weights(&two, 0).unwrap_err().to_string();
+        let e = weights_at(&two, 0).unwrap_err().to_string();
         assert!(e.contains("2 meshes"), "{e}");
         // a count whose byte length overflows is an error, not a panic
         let huge = glb_file("huge", 1, u64::MAX / 2);
-        let e = glb_weights(&huge, 0).unwrap_err().to_string();
+        let e = weights_at(&huge, 0).unwrap_err().to_string();
         assert!(e.contains("runs past its buffer view"), "{e}");
         for p in [ok, two, huge] {
             let _ = std::fs::remove_file(p);
@@ -718,9 +795,9 @@ mod tests {
         // vertex 2 is not drawn (an overlay sharing its source primitive's vertices): its weight is not the
         // primitive's, since Studio compiles only drawn vertices
         let p = indexed_glb("idx", &[0, 1, 3]);
-        assert_eq!(glb_weights(&p, 0).unwrap(), vec![0.1, 0.2, 0.4]);
+        assert_eq!(weights_at(&p, 0).unwrap(), vec![0.1, 0.2, 0.4]);
         let bad = indexed_glb("idx-bad", &[0, 1, 7]);
-        let e = glb_weights(&bad, 0).unwrap_err().to_string();
+        let e = weights_at(&bad, 0).unwrap_err().to_string();
         assert!(e.contains("index 7 past its 4 vertices"), "{e}");
         for p in [p, bad] {
             let _ = std::fs::remove_file(p);
