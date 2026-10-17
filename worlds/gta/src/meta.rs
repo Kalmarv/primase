@@ -9,6 +9,11 @@
 //!
 //! [`Meta::read`] checks the container; [`Meta::root`] decodes the root block's structure into a [`Struct`] tree,
 //! following every array and pointer by the descriptions, and fails on anything they do not account for.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::resource::Resource;
@@ -200,7 +205,17 @@ fn err(offset: u64, detail: impl ToString) -> crate::Error {
     invalid("META", offset, detail)
 }
 
-use crate::le::{f32 as f32_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
+use crate::le::{f32 as f32_at, u8 as u8_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
+
+/// `len` bytes of `d` at `offset`, if it holds them.
+fn span(d: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
+    d.get(offset..offset.checked_add(len)?)
+}
+
+/// An error's position: `o` bytes past `offset`.
+fn at(offset: usize, o: usize) -> u64 {
+    offset.saturating_add(o) as u64
+}
 
 /// The header's fixed values (`0x10`, `0x14`).
 const HEADER_MAGIC: u32 = 0x5052_4430;
@@ -209,17 +224,18 @@ const HEADER_VERSION: u16 = 0x0079;
 impl Meta {
     /// Reads the container: header, structure and enum descriptions, data blocks.
     pub fn read(r: &Resource) -> Result<Meta> {
-        let h = r.at(0x5000_0000, 0x70)?;
+        let h = r.block::<0x70>(0x5000_0000)?;
         if u32_at(h, 0x10)? != HEADER_MAGIC || u16_at(h, 0x14)? != HEADER_VERSION {
             return Err(err(
                 0x10,
                 format!("header {:#x} {:#x}", u32_at(h, 0x10)?, u16_at(h, 0x14)?),
             ));
         }
-        if h[0x16] > 1 || h[0x17] != 0 || u32_at(h, 0x18)? != 0 || h[0x4E..0x70].iter().any(|&b| b != 0) {
+        let reserved = h.get(0x4E..).unwrap_or_default();
+        if h[0x16] > 1 || h[0x17] != 0 || u32_at(h, 0x18)? != 0 || reserved.iter().any(|&b| b != 0) {
             return Err(err(0x16, "reserved header bytes are not zero"));
         }
-        let root = u32_at(h, 0x1C)? as usize;
+        let root = usize::try_from(u32_at(h, 0x1C)?).map_err(|_| err(0x1C, "root block id"))?;
         let (struct_ptr, enum_ptr, block_ptr, name_ptr) = (
             u64_at(h, 0x20)?,
             u64_at(h, 0x28)?,
@@ -227,29 +243,27 @@ impl Meta {
             u64_at(h, 0x38)?,
         );
         let (n_structs, n_enums, n_blocks) = (
-            u16_at(h, 0x48)? as usize,
-            u16_at(h, 0x4A)? as usize,
-            u16_at(h, 0x4C)? as usize,
+            usize::from(u16_at(h, 0x48)?),
+            usize::from(u16_at(h, 0x4A)?),
+            usize::from(u16_at(h, 0x4C)?),
         );
 
         let mut structs = BTreeMap::new();
         if n_structs > 0 {
-            let s = r.at(struct_ptr, 32 * n_structs)?;
-            for i in 0..n_structs {
-                let d = &s[32 * i..32 * i + 32];
+            let s = r.records(struct_ptr, n_structs, 32)?;
+            for d in s.as_chunks::<32>().0 {
                 let (name, key, size) = (u32_at(d, 0)?, u32_at(d, 4)?, u32_at(d, 0x18)?);
-                let n = u16_at(d, 0x1E)? as usize;
+                let n = usize::from(u16_at(d, 0x1E)?);
                 if u32_at(d, 0xC)? != 0 || u16_at(d, 0x1C)? != 0 {
                     return Err(err(struct_ptr, format!("structure {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.at(u64_at(d, 0x10)?, 16 * n)?
+                    r.records(u64_at(d, 0x10)?, n, 16)?
                 } else {
                     &[][..]
                 };
                 let mut fields = Vec::with_capacity(n);
-                for j in 0..n {
-                    let f = &e[16 * j..16 * j + 16];
+                for f in e.as_chunks::<16>().0 {
                     let kind = Kind::from_code(f[8]).ok_or_else(|| {
                         err(
                             struct_ptr,
@@ -261,7 +275,7 @@ impl Meta {
                         offset: u32_at(f, 4)?,
                         kind,
                         byte9: f[9],
-                        ref_index: u16_at(f, 10)? as i16,
+                        ref_index: i16::from_le_bytes(u16_at(f, 10)?.to_le_bytes()),
                         ref_key: u32_at(f, 12)?,
                     });
                 }
@@ -284,15 +298,15 @@ impl Meta {
 
         let mut enums = BTreeMap::new();
         if n_enums > 0 {
-            let s = r.at(enum_ptr, 24 * n_enums)?;
-            for i in 0..n_enums {
-                let d = &s[24 * i..24 * i + 24];
-                let (name, key, n) = (u32_at(d, 0)?, u32_at(d, 4)?, u32_at(d, 0x10)? as usize);
+            let s = r.records(enum_ptr, n_enums, 24)?;
+            for d in s.as_chunks::<24>().0 {
+                let n = usize::try_from(u32_at(d, 0x10)?).map_err(|_| err(enum_ptr, "enum value count"))?;
+                let (name, key) = (u32_at(d, 0)?, u32_at(d, 4)?);
                 if u32_at(d, 0x14)? != 0 {
                     return Err(err(enum_ptr, format!("enum {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.at(u64_at(d, 8)?, 8 * n)?
+                    r.records(u64_at(d, 8)?, n, 8)?
                 } else {
                     &[][..]
                 };
@@ -302,7 +316,7 @@ impl Meta {
                     .iter()
                     .map(|c| {
                         let [k, v] = crate::le::u32x2_of(c);
-                        (k, v as i32)
+                        (k, i32::from_le_bytes(v.to_le_bytes()))
                     })
                     .collect();
                 if enums.insert(name, EnumInfo { name, key, values }).is_some() {
@@ -311,11 +325,10 @@ impl Meta {
             }
         }
 
-        let s = r.at(block_ptr, 16 * n_blocks)?;
+        let s = r.records(block_ptr, n_blocks, 16)?;
         let mut blocks = Vec::with_capacity(n_blocks);
-        for i in 0..n_blocks {
-            let d = &s[16 * i..16 * i + 16];
-            let len = u32_at(d, 4)? as usize;
+        for d in s.as_chunks::<16>().0 {
+            let len = usize::try_from(u32_at(d, 4)?).map_err(|_| err(block_ptr, "block length"))?;
             let data = if len > 0 {
                 r.at(u64_at(d, 8)?, len)?.to_vec()
             } else {
@@ -326,9 +339,10 @@ impl Meta {
                 data,
             });
         }
-        if root == 0 || root > blocks.len() {
-            return Err(err(0x1C, format!("root block {root} of {}", blocks.len())));
-        }
+        let root = root
+            .checked_sub(1)
+            .filter(|&r| r < blocks.len())
+            .ok_or_else(|| err(0x1C, format!("root block {root} of {}", blocks.len())))?;
 
         let name = match name_ptr {
             0 => None,
@@ -336,7 +350,7 @@ impl Meta {
         };
         Ok(Meta {
             name,
-            root: root - 1,
+            root,
             structs,
             enums,
             blocks,
@@ -358,16 +372,25 @@ impl Meta {
     /// Decodes the root block's first structure, and counts per block the bytes the decoding never reached (a
     /// structure covers its whole extent, padding included; a string covers its terminating NUL).
     pub fn root_covered(&self) -> Result<(Struct, Vec<usize>)> {
-        let block = &self.blocks[self.root];
+        let block = self
+            .blocks
+            .get(self.root)
+            .ok_or_else(|| err(0, format!("root block {} of {}", self.root, self.blocks.len())))?;
         let info = self.struct_info(block.name)?;
         if (info.size as usize) > block.data.len() {
             return Err(err(0, "root block shorter than its structure"));
         }
-        let bytes: usize = self.blocks.iter().map(|b| b.data.len()).sum();
+        let bytes = self
+            .blocks
+            .iter()
+            .map(|b| b.data.len())
+            .fold(0usize, usize::saturating_add);
         let mut walk = Walk {
             seen: self.blocks.iter().map(|b| vec![false; b.data.len()]).collect(),
             reached: BTreeSet::new(),
-            budget: (MAX_DEPTH + 1).saturating_mul(bytes.saturating_add(1)),
+            budget: MAX_DEPTH
+                .saturating_add(1)
+                .saturating_mul(bytes.saturating_add(1)),
         };
         let root = self.decode_struct(self.root, 0, info, 0, &mut walk)?;
         Ok((
@@ -380,9 +403,14 @@ impl Meta {
     }
 
     fn block(&self, id: usize) -> Result<&Block> {
-        id.checked_sub(1)
-            .and_then(|i| self.blocks.get(i))
+        self.blocks
+            .get(Self::index(id)?)
             .ok_or_else(|| err(0, format!("block id {id} of {}", self.blocks.len())))
+    }
+
+    /// A block id's index in `blocks` (ids count from 1).
+    fn index(id: usize) -> Result<usize> {
+        id.checked_sub(1).ok_or_else(|| err(0, "block id 0"))
     }
 
     /// `(block id, offset)` of a packed pointer; `None` for null. The high 32 bits must be zero.
@@ -393,10 +421,10 @@ impl Meta {
         if pointer == 0 {
             return Ok(None);
         }
-        Ok(Some((
-            (pointer & 0xFFF) as usize,
-            ((pointer >> 12) & 0xF_FFFF) as usize,
-        )))
+        // twelve and twenty bits: both fit
+        let id = usize::try_from(pointer & 0xFFF).map_err(|_| err(0, "pointer block"))?;
+        let offset = usize::try_from((pointer >> 12) & 0xF_FFFF).map_err(|_| err(0, "pointer offset"))?;
+        Ok(Some((id, offset)))
     }
 
     fn decode_struct(
@@ -414,51 +442,57 @@ impl Meta {
             .budget
             .checked_sub(1)
             .ok_or_else(|| err(offset as u64, "more structures than the blocks can hold"))?;
-        let data = &self.blocks[block].data;
-        let end = offset + info.size as usize;
-        if end > data.len() {
-            return Err(err(
+        let data = &self
+            .blocks
+            .get(block)
+            .ok_or_else(|| err(0, format!("block {block} of {}", self.blocks.len())))?
+            .data;
+        let size = usize::try_from(info.size).map_err(|_| err(offset as u64, "structure size"))?;
+        let d = span(data, offset, size).ok_or_else(|| {
+            err(
                 offset as u64,
                 format!("structure {:#010x} runs past its block", info.name),
-            ));
-        }
-        let d = &data[offset..end];
-        walk.seen[block][offset..end].fill(true);
+            )
+        })?;
+        walk.mark(block, offset, size)?;
         let mut fields = Vec::with_capacity(info.fields.len());
         for f in &info.fields {
             if f.name == ARRAY_INFO {
                 continue;
             }
-            let o = f.offset as usize;
+            let o = usize::try_from(f.offset).map_err(|_| err(offset as u64, "field offset"))?;
+            let here = at(offset, o);
+            let wide = |n: u32| usize::try_from(n).map_err(|_| err(here, "field size"));
             let size = match f.kind {
-                Kind::Structure => self.struct_info(f.ref_key)?.size as usize,
-                Kind::Chars => f.ref_key as usize,
-                Kind::Inline => (f.ref_key as usize)
+                Kind::Structure => wide(self.struct_info(f.ref_key)?.size)?,
+                Kind::Chars => wide(f.ref_key)?,
+                Kind::Inline => wide(f.ref_key)?
                     .checked_mul(self.element_size(self.array_info(info, f)?)?)
-                    .ok_or_else(|| err((offset + o) as u64, "inline array size overflows"))?,
-                k => k.size().expect("sized kind"),
+                    .ok_or_else(|| err(here, "inline array size overflows"))?,
+                k => k
+                    .size()
+                    .ok_or_else(|| err(here, format!("a {k:?} of no fixed size")))?,
             };
-            if o.checked_add(size).is_none_or(|end| end > d.len()) {
-                return Err(err(
-                    (offset + o) as u64,
+            let v = span(d, o, size).ok_or_else(|| {
+                err(
+                    here,
                     format!(
                         "field {:#010x} of {:#010x} runs past the structure",
                         f.name, info.name
                     ),
-                ));
-            }
-            let v = &d[o..o + size];
+                )
+            })?;
             let value = match f.kind {
-                Kind::Bool => match v[0] {
+                Kind::Bool => match u8_at(v, 0)? {
                     0 => Value::Bool(false),
                     1 => Value::Bool(true),
-                    b => return Err(err((offset + o) as u64, format!("bool {b}"))),
+                    b => return Err(err(here, format!("bool {b}"))),
                 },
-                Kind::I8 => Value::I8(v[0] as i8),
-                Kind::U8 => Value::U8(v[0]),
-                Kind::I16 => Value::I16(u16_at(v, 0)? as i16),
+                Kind::I8 => Value::I8(i8::from_le_bytes([u8_at(v, 0)?])),
+                Kind::U8 => Value::U8(u8_at(v, 0)?),
+                Kind::I16 => Value::I16(i16::from_le_bytes(u16_at(v, 0)?.to_le_bytes())),
                 Kind::U16 => Value::U16(u16_at(v, 0)?),
-                Kind::I32 => Value::I32(u32_at(v, 0)? as i32),
+                Kind::I32 => Value::I32(i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes())),
                 Kind::U32 => Value::U32(u32_at(v, 0)?),
                 Kind::F32 => Value::F32(f32_at(v, 0)?),
                 Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
@@ -466,7 +500,7 @@ impl Meta {
                 Kind::Hash => Value::Hash(u32_at(v, 0)?),
                 Kind::ByteEnum => Value::Enum {
                     enum_name: f.ref_key,
-                    value: i32::from(v[0]),
+                    value: i32::from(u8_at(v, 0)?),
                 },
                 Kind::ShortFlags => Value::Enum {
                     enum_name: f.ref_key,
@@ -474,55 +508,48 @@ impl Meta {
                 },
                 Kind::IntEnum | Kind::IntFlags1 | Kind::IntFlags2 => Value::Enum {
                     enum_name: f.ref_key,
-                    value: u32_at(v, 0)? as i32,
+                    value: i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes()),
                 },
                 Kind::Chars => Value::Chars(v.iter().copied().take_while(|&b| b != 0).collect()),
                 Kind::Inline => {
                     let el = self.array_info(info, f)?;
-                    let n = f.ref_key as usize;
                     let es = self.element_size(el)?;
-                    let mut items = Vec::with_capacity(n);
-                    for i in 0..n {
-                        items.push(self.decode_inline(el, &v[i * es..(i + 1) * es])?);
-                    }
+                    // the field is exactly its elements (its size is their count times this)
+                    let items = v
+                        .chunks_exact(es)
+                        .map(|e| self.decode_inline(el, e))
+                        .collect::<Result<_>>()?;
                     Value::Array(items)
                 }
                 Kind::DataBlock => match Self::unpack(u64_at(v, 0)?)? {
                     None => Value::Data(Vec::new()),
                     Some((id, 0)) => {
                         let data = self.block(id)?.data.clone();
-                        walk.seen[id - 1].fill(true);
+                        walk.mark(Self::index(id)?, 0, data.len())?;
                         Value::Data(data)
                     }
                     Some((_, off)) => {
-                        return Err(err(
-                            (offset + o) as u64,
-                            format!("data block pointer at offset {off}"),
-                        ));
+                        return Err(err(here, format!("data block pointer at offset {off}")));
                     }
                 },
                 Kind::CharPointer => {
-                    let (len, cap) = (u16_at(v, 8)? as usize, u16_at(v, 10)? as usize);
+                    let (len, cap) = (usize::from(u16_at(v, 8)?), usize::from(u16_at(v, 10)?));
                     if u32_at(v, 12)? != 0 || cap < len {
-                        return Err(err((offset + o) as u64, "string length, capacity"));
+                        return Err(err(here, "string length, capacity"));
                     }
                     match Self::unpack(u64_at(v, 0)?)? {
                         None if len == 0 => Value::Str(None),
-                        None => return Err(err((offset + o) as u64, "null string with a length")),
+                        None => return Err(err(here, "null string with a length")),
                         Some((id, off)) => {
                             let b = self.block(id)?;
                             if b.name != BLOCK_STRING {
-                                return Err(err(
-                                    (offset + o) as u64,
-                                    format!("string in a {:#x} block", b.name),
-                                ));
+                                return Err(err(here, format!("string in a {:#x} block", b.name)));
                             }
-                            let s = b
-                                .data
-                                .get(off..off + len)
-                                .ok_or_else(|| err((offset + o) as u64, "string runs past its block"))?;
-                            let nul = usize::from(b.data.get(off + len) == Some(&0));
-                            walk.seen[id - 1][off..off + len + nul].fill(true);
+                            let s = span(&b.data, off, len)
+                                .ok_or_else(|| err(here, "string runs past its block"))?;
+                            let end = off.saturating_add(len);
+                            let nul = usize::from(b.data.get(end) == Some(&0));
+                            walk.mark(Self::index(id)?, off, len.saturating_add(nul))?;
                             Value::Str(Some(s.to_vec()))
                         }
                     }
@@ -530,16 +557,19 @@ impl Meta {
                 Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
                 Kind::Structure => {
                     let si = self.struct_info(f.ref_key)?;
-                    Value::Struct(self.decode_struct(block, offset + o, si, depth + 1, walk)?)
+                    Value::Struct(self.decode_struct(
+                        block,
+                        offset.saturating_add(o),
+                        si,
+                        depth.saturating_add(1),
+                        walk,
+                    )?)
                 }
                 Kind::Array => {
                     let el = self.array_info(info, f)?;
-                    let (count, cap) = (u16_at(v, 8)? as usize, u16_at(v, 10)? as usize);
+                    let (count, cap) = (usize::from(u16_at(v, 8)?), usize::from(u16_at(v, 10)?));
                     if u32_at(v, 12)? != 0 || cap < count {
-                        return Err(err(
-                            (offset + o) as u64,
-                            format!("array count {count}, capacity {cap}"),
-                        ));
+                        return Err(err(here, format!("array count {count}, capacity {cap}")));
                     }
                     Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, walk)?)
                 }
@@ -580,7 +610,7 @@ impl Meta {
                         format!("array of {:#010x}, a structure of size 0", el.ref_key),
                     ));
                 }
-                size => size as usize,
+                size => usize::try_from(size).map_err(|_| err(0, "structure size"))?,
             },
             Kind::Vec3 => 16,
             k => k.size().ok_or_else(|| err(0, format!("array of {k:?}")))?,
@@ -590,12 +620,12 @@ impl Meta {
     /// One element of an inline array.
     fn decode_inline(&self, el: &Field, v: &[u8]) -> Result<Value> {
         Ok(match el.kind {
-            Kind::U8 => Value::U8(v[0]),
-            Kind::I8 => Value::I8(v[0] as i8),
+            Kind::U8 => Value::U8(u8_at(v, 0)?),
+            Kind::I8 => Value::I8(i8::from_le_bytes([u8_at(v, 0)?])),
             Kind::U16 => Value::U16(u16_at(v, 0)?),
-            Kind::I16 => Value::I16(u16_at(v, 0)? as i16),
+            Kind::I16 => Value::I16(i16::from_le_bytes(u16_at(v, 0)?.to_le_bytes())),
             Kind::U32 => Value::U32(u32_at(v, 0)?),
-            Kind::I32 => Value::I32(u32_at(v, 0)? as i32),
+            Kind::I32 => Value::I32(i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes())),
             Kind::F32 => Value::F32(f32_at(v, 0)?),
             Kind::Hash => Value::Hash(u32_at(v, 0)?),
             Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
@@ -611,14 +641,21 @@ impl Meta {
         };
         let b = self.block(id)?;
         let info = self.struct_info(b.name)?;
-        if off % (info.size as usize).max(1) != 0 {
+        let size = usize::try_from(info.size).map_err(|_| err(off as u64, "structure size"))?;
+        if off.checked_rem(size.max(1)) != Some(0) {
             return Err(err(
                 off as u64,
                 format!("pointer into the middle of a {:#010x}", info.name),
             ));
         }
         walk.reach(id, off)?;
-        Ok(Some(self.decode_struct(id - 1, off, info, depth + 1, walk)?))
+        Ok(Some(self.decode_struct(
+            Self::index(id)?,
+            off,
+            info,
+            depth.saturating_add(1),
+            walk,
+        )?))
     }
 
     /// `count` elements starting at a packed pointer, continuing into following blocks of the same name.
@@ -655,34 +692,41 @@ impl Meta {
                     format!("array of {block_name:#x} in a {:#x} block", b.name),
                 ));
             }
-            if off % es != 0 || b.data.len() % es != 0 || off >= b.data.len() {
+            if off.checked_rem(es) != Some(0)
+                || b.data.len().checked_rem(es) != Some(0)
+                || off >= b.data.len()
+            {
                 return Err(err(
                     off as u64,
                     format!("array elements of {es} bytes misaligned in block {id}"),
                 ));
             }
-            while off < b.data.len() && items.len() < count {
-                let v = &b.data[off..off + es];
+            let index = Self::index(id)?;
+            while items.len() < count
+                && let Some(v) = span(&b.data, off, es)
+            {
                 if el.kind != Kind::Structure {
-                    walk.seen[id - 1][off..off + es].fill(true);
+                    walk.mark(index, off, es)?;
                 }
                 items.push(match el.kind {
                     Kind::Structure => {
                         walk.reach(id, off)?;
                         Value::Struct(self.decode_struct(
-                            id - 1,
+                            index,
                             off,
                             self.struct_info(el.ref_key)?,
-                            depth + 1,
+                            depth.saturating_add(1),
                             walk,
                         )?)
                     }
                     Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
                     _ => self.decode_inline(el, v)?,
                 });
-                off += es;
+                off = off.saturating_add(es);
             }
-            id += 1;
+            id = id
+                .checked_add(1)
+                .ok_or_else(|| err(0, "array past the last block"))?;
             off = 0;
         }
         Ok(items)
@@ -703,6 +747,22 @@ struct Walk {
 const MAX_DEPTH: usize = 64;
 
 impl Walk {
+    /// Marks `len` bytes at `offset` of block `index` as reached.
+    fn mark(&mut self, index: usize, offset: usize, len: usize) -> Result<()> {
+        let bytes = self
+            .seen
+            .get_mut(index)
+            .and_then(|b| b.get_mut(offset..offset.checked_add(len)?))
+            .ok_or_else(|| {
+                err(
+                    offset as u64,
+                    format!("{len} bytes at {offset} past block {index}"),
+                )
+            })?;
+        bytes.fill(true);
+        Ok(())
+    }
+
     /// Marks the structure a pointer or array element leads to (block id, offset). A structure is reached once: the
     /// containers are trees, and one reached twice would be decoded again for every path to it (exponentially many
     /// with nesting).
@@ -737,12 +797,16 @@ fn el_code(k: Kind) -> u8 {
 /// A NUL-terminated string at a resource pointer.
 fn read_c_string(r: &Resource, pointer: u64) -> Result<String> {
     let mut s = Vec::new();
+    let mut at = pointer;
     loop {
-        let b = r.at(pointer + s.len() as u64, 1)?[0];
+        let [b] = *r.block::<1>(at)?;
         if b == 0 {
             break;
         }
         s.push(b);
+        at = at
+            .checked_add(1)
+            .ok_or_else(|| err(pointer, "a name past the address space"))?;
     }
     String::from_utf8(s).map_err(|e| err(pointer, e))
 }
@@ -846,6 +910,12 @@ impl Struct {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     use super::*;
     use crate::resource::PageFlags;
