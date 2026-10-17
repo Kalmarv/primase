@@ -71,6 +71,8 @@ pub struct RegionReport {
     pub missing_archetypes: usize,
     /// Placements of time archetypes (each with an hour mask on the `gta.hour` axis).
     pub time_placements: usize,
+    /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
+    pub time_placements_never_shown: usize,
     /// Interior instances read, the entities placed in them, and their entity sets (not read yet).
     pub interiors: usize,
     pub interior_entities: usize,
@@ -212,6 +214,18 @@ fn compose(a: &Transform, b: &Transform) -> Transform {
     let t = lin(a, b.cols[3]);
     cols[3] = std::array::from_fn(|i| (t[i] + f64::from(a.cols[3][i])) as f32);
     Transform { cols }
+}
+
+/// The condition of a placement that exists when all of `literals` hold: none without literals, and the condition
+/// that never holds when a literal names no value (core refuses an empty literal; an hour mask can be empty).
+fn condition(literals: Vec<Literal>) -> Option<Condition> {
+    if literals.is_empty() {
+        None
+    } else if literals.iter().any(|l| l.values == 0) {
+        Some(Condition(Vec::new()))
+    } else {
+        Some(Condition(vec![Clause(literals)]))
+    }
 }
 
 /// The archive sets for the map states asked for: story mode's, and GTA Online's with [`States::All`].
@@ -390,7 +404,7 @@ pub fn read_region(
                 values: 1u64 << value,
             });
         }
-        // a time archetype is shown in the hours its timeFlags' low 24 bits name
+        // a time archetype is shown in the hours its timeFlags' low 24 bits name (none: never)
         if let Some(flags) = a.time_flags {
             let axis = *hour_axis.get_or_insert_with(|| {
                 let e = w.spawn();
@@ -408,14 +422,13 @@ pub fn read_region(
                 );
                 e
             });
-            literals.push(Literal {
-                axis,
-                values: u64::from(flags & 0x00FF_FFFF),
-            });
+            let hours = u64::from(flags & 0x00FF_FFFF);
+            literals.push(Literal { axis, values: hours });
             report.time_placements += 1;
+            report.time_placements_never_shown += usize::from(hours == 0);
         }
-        if !literals.is_empty() {
-            w.insert(p, Condition(vec![Clause(literals)]));
+        if let Some(c) = condition(literals) {
+            w.insert(p, c);
         }
         report.placements += 1;
     }
@@ -424,4 +437,59 @@ pub fn read_region(
         return Err(invalid("region", 0, "no entity had an archetype"));
     }
     Ok((w, report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_hour_mask_never_holds_and_the_world_verifies() {
+        let mut w = World::new();
+        let (map, hour) = (w.spawn(), w.spawn());
+        for (e, key, n) in [(map, "gta.map", 2), (hour, "gta.hour", 24)] {
+            w.insert(
+                e,
+                StateAxis {
+                    key: key.into(),
+                    domain: Domain::Enum((0..n).map(|v: i32| v.to_string()).collect()),
+                    default: 0,
+                    scope: Scope::Global,
+                    class: "test".into(),
+                    source: "test".into(),
+                },
+            );
+        }
+        let online = Literal { axis: map, values: 2 };
+        assert_eq!(condition(Vec::new()), None);
+        assert_eq!(
+            condition(vec![
+                online,
+                Literal {
+                    axis: hour,
+                    values: 1 << 12
+                }
+            ]),
+            Some(Condition(vec![Clause(vec![
+                online,
+                Literal {
+                    axis: hour,
+                    values: 1 << 12
+                }
+            ])]))
+        );
+        let never = condition(vec![
+            online,
+            Literal {
+                axis: hour,
+                values: 0,
+            },
+        ])
+        .expect("a condition");
+        assert_eq!(never, Condition(Vec::new()));
+        let p = w.spawn();
+        w.insert(p, Transform::IDENTITY);
+        w.insert(p, never);
+        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+    }
 }

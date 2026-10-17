@@ -106,13 +106,13 @@ fn region_placements_against_the_scene() {
     };
     let (map_axis, hour_axis) = (axis_of(&ours, "gta.map"), axis_of(&ours, "gta.hour"));
     let (mut at0, mut at12) = (0usize, 0usize);
-    for (_, c) in ours.iter::<Condition>() {
-        let online = c.0[0]
-            .0
-            .iter()
-            .filter(|l| l.axis == map_axis)
-            .all(|l| l.values & 2 != 0);
-        if let Some(h) = c.0[0].0.iter().find(|l| l.axis == hour_axis)
+    // (a placement whose condition never holds has no clause)
+    for c in ours.iter::<Condition>().filter_map(|(_, c)| c.0.first()) {
+        let online =
+            c.0.iter()
+                .filter(|l| l.axis == map_axis)
+                .all(|l| l.values & 2 != 0);
+        if let Some(h) = c.0.iter().find(|l| l.axis == hour_axis)
             && online
         {
             at0 += usize::from(h.values & 1 != 0);
