@@ -29,7 +29,7 @@ pub enum Class {
     Cutout,
     /// Alpha blended.
     Alpha,
-    /// Blended over the surface it lies on (render bucket 2, `*decal*`, `distance_map`).
+    /// Blended over the surface it lies on (render bucket 2, `*decal*` but the ped effects, `distance_map`).
     Decal,
     /// Blended glass (`glass*`).
     Glass,
@@ -183,7 +183,8 @@ pub fn classify(effect: &str, bucket: u8) -> ShaderClass {
         {
             skip = Some(Skip::NotWorldGeometry);
         }
-        if f.contains("decal") || f == "distance_map" {
+        // the ped effects (`ped_decal*`, `ped_nopeddamagedecals`) draw characters, not world surfaces
+        if (f.contains("decal") && !f.starts_with("ped_")) || f == "distance_map" {
             Class::Decal
         } else if f.starts_with("cutout") || f.ends_with("_cutout") || f.contains("cutout_") {
             Class::Cutout
@@ -222,6 +223,8 @@ mod tests {
         assert_eq!(classify("normal_spec", 1).class, Class::Alpha);
         assert_eq!(classify("decal_tnt", 2).class, Class::Decal);
         assert_eq!(classify("distance_map", 2).class, Class::Decal);
+        assert_eq!(classify("ped_decal", 0).class, Class::Opaque);
+        assert_eq!(classify("ped_nopeddamagedecals", 0).class, Class::Opaque);
         assert_eq!(classify("cutout_fence", 3).class, Class::Cutout);
         assert_eq!(classify("cloth_spec_alpha", 3).class, Class::Cutout);
         assert_eq!(classify("glass_pv_env", 1).class, Class::Glass);
