@@ -218,6 +218,68 @@ impl Donor {
     }
 }
 
+/// The installed game's program records of `dingolevel_root`'s program lookup: what a lookup row's program indices
+/// mean. Studio writes its own copy of the records with a private program appended for `vertex_blend` (3,620
+/// programs against the game's 3,619); once every row is retargeted onto stock programs the copy is replaced by
+/// these, so the Patch carries no program the game has no compiled variants of. A runtime that loads the Patch's
+/// table whole (ReSkate 1.1.5, and 2.1.0-pre since it stopped carrying the built-in fpv_drone, so a lone map is no
+/// longer combined over the game's table) builds the private program at boot and crashes at `Skate+0x3db8d40`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StockPrograms {
+    /// The program and relocation sections (everything before the rows).
+    pub head: Vec<u8>,
+    /// The resource metadata's program and relocation sizes (its first 8 bytes).
+    pub sizes: [u8; 8],
+    /// Programs in the table: the program section's first `u32` (3,619 in the game; every stock row's indices are
+    /// below it).
+    pub count: u32,
+}
+
+impl StockPrograms {
+    /// Reads the program records of the program lookup in TOC `root_toc` (relative to the data folder).
+    pub fn find(game: &Source, root_toc: &str) -> Result<StockPrograms> {
+        let t = toc::read(&read_file(&game.folder.toc_path(root_toc))?)?;
+        for (_, region) in &t.bundles {
+            let (files, inline) = bundle::read_region(region)?;
+            let Some((m, first, _)) = game.manifest(&files, &inline)? else {
+                continue;
+            };
+            for (i, a) in m.res.iter().enumerate() {
+                if a.rtype != lookup::PROGRAM_LOOKUP {
+                    continue;
+                }
+                let d = game.payload(files[first + m.ebx.len() + i], a.size as usize)?;
+                let p = lookup::read_programs(&d, &a.rmeta)?;
+                let count = u32::from_le_bytes(
+                    p.head
+                        .get(..4)
+                        .and_then(|b| b.try_into().ok())
+                        .ok_or_else(|| bad(W, 0, "stock program lookup without programs"))?,
+                );
+                let past = p.rows.values().flatten().filter(|&&v| v >= count).count();
+                if past > 0 {
+                    return Err(bad(
+                        W,
+                        0,
+                        format!("the stock program lookup has {past} indices past its {count} programs"),
+                    ));
+                }
+                let sizes: [u8; 8] = a
+                    .rmeta
+                    .get(..8)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(|| bad(W, 0, format!("{root_toc}: program lookup metadata too short")))?;
+                return Ok(StockPrograms {
+                    head: p.head,
+                    sizes,
+                    count,
+                });
+            }
+        }
+        Err(Error::Missing(format!("{root_toc}: no program lookup")))
+    }
+}
+
 /// What a Studio material key becomes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -266,6 +328,8 @@ pub struct Report {
     pub stepped_in_front: usize,
     /// Per retargeted key: (old program row, new program row).
     pub rows: BTreeMap<u64, (Vec<u32>, Vec<u32>)>,
+    /// The program records replaced by the game's: (Studio's program count, the game's).
+    pub programs: Option<(u32, u32)>,
 }
 
 #[allow(
@@ -555,6 +619,7 @@ pub fn apply(
     out: &Path,
     base: Option<&Folder>,
     oodle: Option<&Oodle>,
+    stock: &StockPrograms,
     requests: &[Request],
     values: &mut dyn FnMut(&SectionInput) -> Result<SectionValues>,
 ) -> Result<Report> {
@@ -695,7 +760,32 @@ pub fn apply(
                             }
                         }
                         if hit {
-                            let (d, meta) = lookup::write_programs(&t, &a.rmeta);
+                            // the game's program records instead of Studio's copy (see [`StockPrograms`]): every
+                            // row must index them
+                            if let Some((k, v)) = t
+                                .rows
+                                .iter()
+                                .find_map(|(k, r)| r.iter().find(|&&v| v >= stock.count).map(|v| (k, v)))
+                            {
+                                return Err(bad(
+                                    W,
+                                    0,
+                                    format!(
+                                        "key {k:016x}'s row uses program {v}, past the game's {}: a Studio program this \
+                                         stage does not replace",
+                                        stock.count
+                                    ),
+                                ));
+                            }
+                            let studio = t
+                                .head
+                                .get(..4)
+                                .map_or(0, |b| u32::from_le_bytes(b.try_into().expect("four bytes")));
+                            report.programs = Some((studio, stock.count));
+                            t.head.clone_from(&stock.head);
+                            let mut m = a.rmeta;
+                            m[..8].copy_from_slice(&stock.sizes);
+                            let (d, meta) = lookup::write_programs(&t, &m);
                             b.manifest.res[i].rmeta = meta;
                             Some(d)
                         } else {

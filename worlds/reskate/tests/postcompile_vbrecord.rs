@@ -12,7 +12,8 @@
 //!   plane of the vertex's triangles (normals computed here from Studio's own positions and indices), otherwise
 //!   moved out along the normal's dominant axis only and no further than needed (one half step back would be
 //!   behind); every other section's vertices and every index buffer byte for byte; each key's program and
-//!   texture-set rows are the stock decal's;
+//!   texture-set rows are the stock decal's; the root's program records are the game's (Studio's private
+//!   `vertex_blend` program gone) and every row indexes them;
 //! - applied twice, the outputs are byte-identical (determinism);
 //! - `PRIMASE_RESKATE_BLEND_SPEC` (optional): the same resolution and values from an independent implementation
 //!   (oracle: a Python decode of the Patch and the map's GLBs), as the S2 gate's spec: its keys must equal ours, and
@@ -30,7 +31,7 @@ use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
 use primase_compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::meshset;
-use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, decal_opacity};
+use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, StockPrograms, decal_opacity};
 use primase_reskate::postcompile::vbrecord::{self, Record};
 use primase_testdata::real_data;
 use serde_json::Value;
@@ -55,6 +56,7 @@ fn vbrecord_gate() -> R {
         oodle: Some(&oodle),
     };
     let decal = Donor::find(&game, BAM, ROOT, DECAL_DONOR)?;
+    let stock = StockPrograms::find(&game, ROOT)?;
     let record = Record::read(&map)?.ok_or("the map has no vertex_blend.json")?;
     // ---- resolution, with its margins
     let fo = Folder::open(&patch)?;
@@ -101,8 +103,8 @@ fn vbrecord_gate() -> R {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     let run = |out: &Path| -> R<vbrecord::Resolution> {
-        let (report, res) =
-            vbrecord::apply(&patch, out, &map, Some(&base), Some(&oodle), &decal)?.ok_or("no record")?;
+        let (report, res) = vbrecord::apply(&patch, out, &map, Some(&base), Some(&oodle), &decal, &stock)?
+            .ok_or("no record")?;
         println!(
             "rewrote {} sections in {} MeshSets, max position error {} m",
             report.sections, report.meshsets, report.max_position_error
@@ -179,6 +181,8 @@ fn vbrecord_gate() -> R {
         assert_eq!(pn[k], decal.program_row);
         assert_eq!(tn[k], decal.texture_set);
     }
+    // the game's program records, not Studio's copy with its private program, and every row inside them
+    assert_eq!(StockPrograms::find(&sn, ROOT)?, stock);
     println!("{checked} sections read back; {stepped} vertices stepped in front of their surface");
     // ---- determinism
     let out2 = root.join("b");

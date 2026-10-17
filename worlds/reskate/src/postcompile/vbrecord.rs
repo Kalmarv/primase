@@ -15,18 +15,21 @@
 //!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
 //!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
 //!   vertices), as a half float, occurs in its key's sections;
-//! - a primitive resolves to the one key, among the vertex-blend keys of its GLB's MeshSets, whose sections contain
-//!   all of its weights other than 0 and 1 (those are not distinctive); a primitive with no other weight (a small
-//!   piece of one layer, as the writer's per-rank objects can be) resolves to its GLB's only vertex-blend key.
+//! - a primitive's candidates are the vertex-blend keys of its GLB's MeshSets whose sections contain all of its weights
+//!   other than 0 and 1 (those are not distinctive; a primitive with no other weight, a small piece of one layer or of
+//!   a decal's fade, allows every key of its GLB); a material's key is one all its primitives allow, and a key belongs
+//!   to one material: a material left with a single key takes it, and that key leaves the others' choices, until
+//!   nothing changes (a decal faded by one alpha value, contained in many keys, is told apart this way).
 //!
 //! Validated on ReSkate Studio 20261012 ([`STUDIO_BUILD`]): on a real layered scene every recorded primitive's weights
 //! were all contained in exactly one key, the next-best key containing at most 46% of them, and the sections followed
 //! the GLB's primitive order. The rule assumes that tessellation keeps the source weights and that `TexCoord0.z` is
 //! stored as a half float; a different Studio build should be re-checked against both ([`Resolution`] carries the
-//! margins). Every ambiguity is refused rather than guessed: a primitive with no distinctive weight in a GLB of
-//! several vertex-blend keys, none or several
-//! containing keys, a material resolving to two keys, two materials to one key, and a vertex-blend key no record
-//! claims (the discovery cross-check).
+//! margins). Materials still left with several keys are interchangeable (their primitives' weights fit the same keys,
+//! as decals faded by one alpha value do): the stage treats every key alike, so they take distinct keys by a matching
+//! ([`Resolution::interchangeable`] counts them). Refused rather than guessed: a primitive no key contains, a material
+//! left with no key, two materials with one key, and a vertex-blend key no record claims (the discovery
+//! cross-check).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -37,8 +40,8 @@ use crate::postcompile::fb::MESHSET;
 use crate::postcompile::fb::folder::{Folder, Source};
 use crate::postcompile::meshset;
 use crate::postcompile::vblend::{
-    self, Donor, Report, Request, SectionInput, SectionValues, Target, decal_opacity, lod_geometry,
-    patch_bundles, surface,
+    self, Donor, Report, Request, SectionInput, SectionValues, StockPrograms, Target, decal_opacity,
+    lod_geometry, patch_bundles, surface,
 };
 use crate::postcompile::{Error, Result, bad};
 
@@ -180,6 +183,9 @@ pub struct Resolution {
     /// Per GLB stem: whether the vertex-blend sections appear in the order of the GLB's primitives (observed with
     /// Studio 20261012; reported, not required).
     pub in_primitive_order: BTreeMap<String, bool>,
+    /// Materials whose primitives' weights fit the same keys (a decal faded by one alpha value), given distinct keys by
+    /// a matching: the stage treats every key alike, so the choice does not change its output.
+    pub interchangeable: usize,
 }
 
 /// The GLB stem in a Studio MeshSet's name, lowercase: `.../<stem>___section_<i>_<counter>_<n>` (the writer's
@@ -394,22 +400,64 @@ pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result
             glbs.insert(mesh, load_glb(&map_file(map, mesh)?)?);
         }
     }
-    resolve_by(record, sections, |mesh, primitive| {
+    let names = object_glbs(map)?;
+    resolve_by(record, sections, &names, |mesh, primitive| {
         glb_weights(&glbs[mesh], primitive)
     })
+}
+
+/// The map's object names as Studio writes them into a MeshSet's name (`" / "` and spaces as `___` and `_`, lower case,
+/// before any `___section`), each with the stem of the GLB it draws (from `map.json`): an instance's objects are named
+/// after their tile and prototype, not after its GLB. An object name drawing two GLBs is refused.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: the post-compile step reads the map's vertex-blend record and GLBs"
+)]
+fn object_glbs(map: &Path) -> Result<BTreeMap<String, String>> {
+    let path = map.join("map.json");
+    let bytes = std::fs::read(&path).map_err(|source| Error::Io { path, source })?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| bad(W, 0, format!("map.json: {e}")))?;
+    let mut out = BTreeMap::new();
+    for o in v["objects"].as_array().into_iter().flatten() {
+        let (Some(name), Some(mesh)) = (o["name"].as_str(), o["mesh"].as_str()) else {
+            continue;
+        };
+        let base = name
+            .split(" / ")
+            .next()
+            .unwrap_or(name)
+            .replace(' ', "_")
+            .to_ascii_lowercase();
+        let glb = glb_stem(mesh);
+        if let Some(other) = out.insert(base.clone(), glb.clone())
+            && other != glb
+        {
+            return Err(bad(
+                W,
+                0,
+                format!("map.json: objects named {base} draw {other} and {glb}"),
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// [`resolve`] with the recorded primitives' weights from `weights_of(mesh, primitive)`.
 fn resolve_by(
     record: &Record,
     sections: &[BlendSection],
+    names: &BTreeMap<String, String>,
     weights_of: impl Fn(&str, usize) -> Result<Vec<f32>>,
 ) -> Result<Resolution> {
     // stem -> key -> the weights of its sections; and each stem's keys in section order
     let mut sets: BTreeMap<String, BTreeMap<u64, HashSet<u16>>> = BTreeMap::new();
     let mut order: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for s in sections {
+        // the GLB the MeshSet's object draws (an instance's object is not named after its GLB), else its own stem
         let stem = meshset_stem(&s.mesh);
+        let stem = names.get(&stem).cloned().unwrap_or(stem);
         sets.entry(stem.clone())
             .or_default()
             .entry(s.key)
@@ -433,9 +481,18 @@ fn resolve_by(
             ));
         }
     }
-    let mut primitives = Vec::new();
-    let mut keys: BTreeMap<String, u64> = BTreeMap::new();
-    let mut owner: BTreeMap<u64, String> = BTreeMap::new();
+    // ---- each primitive's candidate keys: those of its GLB whose sections contain all its distinctive weights (every
+    // key of the GLB for a primitive with none: a small piece with only weights 0 and 1)
+    struct Candidate {
+        material: String,
+        mesh: String,
+        primitive: usize,
+        /// key -> how many of the primitive's weights its sections contain
+        contained: Vec<(u64, usize)>,
+        full: BTreeSet<u64>,
+        distinct: usize,
+    }
+    let mut found = Vec::new();
     for (material, pairs) in &record.materials {
         for (mesh, primitive) in pairs {
             let at = format!("material {material} in {mesh} primitive {primitive}");
@@ -455,70 +512,125 @@ fn resolve_by(
                 .map(|&w| half::f16::from_f32(w).to_bits())
                 .filter(|&b| distinctive(b))
                 .collect();
-            // only 0 and 1: nothing to match; it is still the GLB's only vertex-blend key when there is one (a small
-            // piece of one overlay layer, as the writer's per-rank objects have)
-            if weights.is_empty() {
-                let [key] = candidates.keys().copied().collect::<Vec<_>>()[..] else {
-                    return Err(bad(
-                        W,
-                        0,
-                        format!(
-                            "{at}: only weights 0 and 1, nothing identifies its section among {} vertex-blend keys",
-                            candidates.len()
-                        ),
-                    ));
-                };
-                claim(&mut keys, &mut owner, material, key)?;
-                primitives.push(Resolved {
-                    material: material.clone(),
-                    mesh: mesh.clone(),
-                    primitive: *primitive,
-                    key,
-                    distinct_weights: 0,
-                    runner_up: 0.0,
-                });
-                continue;
-            }
             let contained: Vec<(u64, usize)> = candidates
                 .iter()
                 .map(|(&k, set)| (k, weights.iter().filter(|w| set.contains(w)).count()))
                 .collect();
-            let full: Vec<u64> = contained
+            let full: BTreeSet<u64> = contained
                 .iter()
                 .filter(|&&(_, n)| n == weights.len())
                 .map(|&(k, _)| k)
                 .collect();
-            let [key] = full[..] else {
+            if full.is_empty() {
                 return Err(bad(
                     W,
                     0,
                     format!(
-                        "{at}: {} vertex-blend keys of {mesh} contain all {} of its weights ({})",
-                        full.len(),
-                        weights.len(),
-                        full.iter()
-                            .map(|k| format!("{k:016x}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "{at}: 0 vertex-blend keys of {mesh} contain all {} of its weights",
+                        weights.len()
                     ),
                 ));
-            };
-            let runner_up = contained
-                .iter()
-                .filter(|&&(k, _)| k != key)
-                .map(|&(_, n)| n as f64 / weights.len() as f64)
-                .fold(0.0, f64::max);
-            claim(&mut keys, &mut owner, material, key)?;
-            primitives.push(Resolved {
+            }
+            found.push(Candidate {
                 material: material.clone(),
                 mesh: mesh.clone(),
                 primitive: *primitive,
-                key,
-                distinct_weights: weights.len(),
-                runner_up,
+                contained,
+                full,
+                distinct: weights.len(),
             });
         }
     }
+    // ---- a material's key is one every primitive of it allows, and a key belongs to one material: materials with a
+    // single possible key take it and it leaves the others' choices, until nothing changes
+    let mut choices: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+    for c in &found {
+        choices
+            .entry(c.material.clone())
+            .and_modify(|k| *k = k.intersection(&c.full).copied().collect())
+            .or_insert_with(|| c.full.clone());
+    }
+    let mut keys: BTreeMap<String, u64> = BTreeMap::new();
+    let mut owner: BTreeMap<u64, String> = BTreeMap::new();
+    loop {
+        let single: Vec<(String, u64)> = choices
+            .iter()
+            .filter(|(m, k)| k.len() == 1 && !keys.contains_key(*m))
+            .map(|(m, k)| (m.clone(), *k.first().expect("one")))
+            .collect();
+        if single.is_empty() {
+            break;
+        }
+        for (m, k) in single {
+            claim(&mut keys, &mut owner, &m, k)?;
+            for (other, ks) in choices.iter_mut() {
+                if *other != m {
+                    ks.remove(&k);
+                }
+            }
+        }
+    }
+    // ---- materials still left with several keys are interchangeable: their primitives' weights fit the same keys.
+    // The stage treats every recorded key alike (onto the stock decal row, values from Studio's own weights), so which
+    // takes which does not change the output: they get distinct keys by a matching (in name and key order), refused
+    // when none exists
+    let open: Vec<(String, Vec<u64>)> = choices
+        .iter()
+        .filter(|(m, _)| !keys.contains_key(*m))
+        .map(|(m, ks)| {
+            (
+                m.clone(),
+                ks.iter().copied().filter(|k| !owner.contains_key(k)).collect(),
+            )
+        })
+        .collect();
+    let mut taken: BTreeMap<u64, usize> = BTreeMap::new();
+    for i in 0..open.len() {
+        let mut seen = BTreeSet::new();
+        if !augment(i, &open, &mut taken, &mut seen) {
+            let (m, ks) = &open[i];
+            return Err(bad(
+                W,
+                0,
+                format!(
+                    "material {m}: no vertex-blend key left for it ({} keys contain the weights of all its primitives, \
+                     all needed by other materials: {})",
+                    ks.len(),
+                    ks.iter()
+                        .map(|k| format!("{k:016x}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+    }
+    let interchangeable = taken.len();
+    for (k, i) in taken {
+        claim(&mut keys, &mut owner, &open[i].0, k)?;
+    }
+    let primitives: Vec<Resolved> = found
+        .into_iter()
+        .map(|c| {
+            let key = keys[&c.material];
+            let runner_up = if c.distinct == 0 {
+                0.0
+            } else {
+                c.contained
+                    .iter()
+                    .filter(|&&(k, _)| k != key)
+                    .map(|&(_, n)| n as f64 / c.distinct as f64)
+                    .fold(0.0, f64::max)
+            };
+            Resolved {
+                material: c.material,
+                mesh: c.mesh,
+                primitive: c.primitive,
+                key,
+                distinct_weights: c.distinct,
+                runner_up,
+            }
+        })
+        .collect();
     let unclaimed: BTreeSet<u64> = sections
         .iter()
         .map(|s| s.key)
@@ -558,7 +670,36 @@ fn resolve_by(
         keys,
         primitives,
         in_primitive_order,
+        interchangeable,
     })
+}
+
+/// Kuhn's augmenting path: give open material `i` a key of its choices, moving earlier materials to other keys of theirs
+/// where that frees one. `taken`: key -> the open material holding it.
+fn augment(
+    i: usize,
+    open: &[(String, Vec<u64>)],
+    taken: &mut BTreeMap<u64, usize>,
+    seen: &mut BTreeSet<u64>,
+) -> bool {
+    for &k in &open[i].1 {
+        if !seen.insert(k) {
+            continue;
+        }
+        match taken.get(&k).copied() {
+            None => {
+                taken.insert(k, i);
+                return true;
+            }
+            Some(j) => {
+                if augment(j, open, taken, seen) {
+                    taken.insert(k, i);
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The values of a recorded material's section: `Color0` = [`decal_opacity`] of Studio's weight, sub-material 0.
@@ -582,8 +723,8 @@ pub fn blend_values(input: &SectionInput) -> Result<SectionValues> {
 }
 
 /// Applies map folder `map`'s record to Patch `patch` into `out` ([`vblend::apply`]): every recorded material's key
-/// onto the stock decal row of `decal`, its opacities from Studio's weights. `None` (and nothing written) when the
-/// map has no record.
+/// onto the stock decal row of `decal`, its opacities from Studio's weights, and the game's program records `stock`
+/// in place of Studio's. `None` (and nothing written) when the map has no record.
 pub fn apply(
     patch: &Path,
     out: &Path,
@@ -591,6 +732,7 @@ pub fn apply(
     base: Option<&Folder>,
     oodle: Option<&Oodle>,
     decal: &Donor,
+    stock: &StockPrograms,
 ) -> Result<Option<(Report, Resolution)>> {
     let Some(record) = Record::read(map)? else {
         return Ok(None);
@@ -613,7 +755,9 @@ pub fn apply(
             donor: decal.clone(),
         })
         .collect();
-    let report = vblend::apply(patch, out, base, oodle, &requests, &mut |s| blend_values(s))?;
+    let report = vblend::apply(patch, out, base, oodle, stock, &requests, &mut |s| {
+        blend_values(s)
+    })?;
     Ok(Some((report, resolution)))
 }
 
@@ -640,6 +784,15 @@ mod tests {
         );
         assert_eq!(meshset_stem("world/custom/level/meshes/t_1_2_7_0"), "t_1_2");
         assert_eq!(glb_stem("meshes/T_0_-6.glb"), "t_0_-6");
+    }
+
+    /// [`resolve_by`] for a map whose objects are named after their GLBs (no map.json names).
+    fn resolve_by_files(
+        record: &Record,
+        sections: &[BlendSection],
+        weights_of: impl Fn(&str, usize) -> Result<Vec<f32>>,
+    ) -> Result<Resolution> {
+        resolve_by(record, sections, &BTreeMap::new(), weights_of)
     }
 
     fn h(w: &[f32]) -> Vec<u16> {
@@ -694,7 +847,7 @@ mod tests {
     #[test]
     fn primitives_resolve_by_contained_weights() {
         let rec = record(&[("a", "t_0", 2), ("b", "t_0", 3), ("b", "t_1", 0)]);
-        let r = resolve_by(&rec, &sections(), weights).unwrap();
+        let r = resolve_by_files(&rec, &sections(), weights).unwrap();
         assert_eq!(r.keys, BTreeMap::from([("a".into(), 0xa), ("b".into(), 0xb)]));
         // a's weights 0.25 and 0.5: key b contains neither; b's 0.75 in t_0: key a does not contain it
         assert_eq!(r.primitives[0].runner_up, 0.0);
@@ -711,7 +864,7 @@ mod tests {
         s.truncate(2);
         // b's section ahead of a's: still resolved, reported as out of primitive order
         s.reverse();
-        let r = resolve_by(&rec, &s, weights).unwrap();
+        let r = resolve_by_files(&rec, &s, weights).unwrap();
         assert_eq!(r.keys, BTreeMap::from([("a".into(), 0xa), ("b".into(), 0xb)]));
         assert!(!r.in_primitive_order["t_0"]);
     }
@@ -719,11 +872,11 @@ mod tests {
     #[test]
     fn only_zero_and_one_resolve_to_the_glbs_only_key() {
         // t_1's MeshSets have one vertex-blend key: a primitive of only 0 and 1 is that key
-        let r = resolve_by(&record(&[("b", "t_1", 9)]), &sections()[2..], weights).unwrap();
+        let r = resolve_by_files(&record(&[("b", "t_1", 9)]), &sections()[2..], weights).unwrap();
         assert_eq!(r.keys, BTreeMap::from([("b".into(), 0xb)]));
         assert_eq!(r.primitives[0].distinct_weights, 0);
         // and is still one material per key
-        let e = message(resolve_by(
+        let e = message(resolve_by_files(
             &record(&[("a", "t_1", 0), ("b", "t_1", 9)]),
             &sections()[2..],
             weights,
@@ -731,50 +884,96 @@ mod tests {
         assert!(e.contains("resolve to one key"), "{e}");
     }
 
+    /// A key belongs to one material: a material whose weights two keys contain takes the one no other material has.
+    #[test]
+    fn a_key_claimed_by_another_material_is_ruled_out() {
+        let mut s = sections();
+        // c's sections contain a's weights too: a could be 0xa or 0xc, but 0xc is d's (its only possible key)
+        s.push(section("t_0", 0xc, &[0.0, 0.25, 0.5, 0.625]));
+        let r = resolve_by_files(
+            &record(&[("a", "t_0", 2), ("b", "t_0", 3), ("b", "t_1", 0), ("d", "t_0", 8)]),
+            &s,
+            |mesh, p| match (mesh, p) {
+                ("meshes/t_0.glb", 8) => Ok(vec![0.625]),
+                _ => weights(mesh, p),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            r.keys,
+            BTreeMap::from([("a".into(), 0xa), ("b".into(), 0xb), ("d".into(), 0xc)])
+        );
+    }
+
+    /// Two materials whose weights fit the same two keys (decals faded by one alpha value) take one key each; which
+    /// takes which does not change the stage's output.
+    #[test]
+    fn interchangeable_materials_take_distinct_keys() {
+        let s = vec![
+            section("t_0", 0xa, &[0.0, 0.5, 1.0]),
+            section("t_0", 0xb, &[0.0, 0.5, 1.0]),
+        ];
+        let half = |_: &str, _: usize| Ok(vec![0.5, 1.0]);
+        let r = resolve_by_files(&record(&[("x", "t_0", 0), ("y", "t_0", 1)]), &s, half).unwrap();
+        assert_eq!(r.interchangeable, 2);
+        let keys: BTreeSet<u64> = r.keys.values().copied().collect();
+        assert_eq!(keys, BTreeSet::from([0xa, 0xb]));
+        // three such materials for two keys: one is left without a key
+        let e = message(resolve_by_files(
+            &record(&[("x", "t_0", 0), ("y", "t_0", 1), ("z", "t_0", 2)]),
+            &s,
+            half,
+        ));
+        assert!(e.contains("no vertex-blend key left"), "{e}");
+    }
+
     #[test]
     fn every_ambiguity_is_refused() {
         let s = sections();
-        // only 0 and 1 in a GLB of two vertex-blend keys: nothing identifies the section; the error names material
-        // and GLB
-        let e = message(resolve_by(&record(&[("a", "t_0", 9)]), &s, weights));
+        // only 0 and 1 in a GLB of two vertex-blend keys, and no second material for the other key: a key is left
+        // unclaimed
+        let e = message(resolve_by_files(&record(&[("a", "t_0", 9)]), &s, weights));
         assert!(
-            e.contains("only weights 0 and 1") && e.contains("material a in meshes/t_0.glb"),
+            e.contains("keys no recorded material resolves to: 000000000000000b"),
             "{e}"
         );
         // no containing key
-        let e = message(resolve_by(&record(&[("a", "t_1", 5)]), &s, weights));
+        let e = message(resolve_by_files(&record(&[("a", "t_1", 5)]), &s, weights));
         assert!(e.contains("0 vertex-blend keys of meshes/t_1.glb contain"), "{e}");
-        // two containing keys
+        // two keys contain a's weights, one material for them: the other key is left unclaimed
         let mut two = s.clone();
         two.push(section("t_0", 0xc, &[0.25, 0.5]));
-        let e = message(resolve_by(
+        let e = message(resolve_by_files(
             &record(&[("a", "t_0", 2), ("b", "t_0", 3)]),
             &two,
             weights,
         ));
-        assert!(e.contains("2 vertex-blend keys"), "{e}");
-        // one material, two keys
-        let e = message(resolve_by(
+        assert!(
+            e.contains("keys no recorded material resolves to: 000000000000000c"),
+            "{e}"
+        );
+        // one material whose primitives allow no common key
+        let e = message(resolve_by_files(
             &record(&[("a", "t_0", 2), ("a", "t_0", 3)]),
             &s,
             weights,
         ));
-        assert!(e.contains("material a resolves to two keys"), "{e}");
+        assert!(e.contains("material a: no vertex-blend key left"), "{e}");
         // two materials, one key
-        let e = message(resolve_by(
+        let e = message(resolve_by_files(
             &record(&[("a", "t_0", 2), ("b", "t_0", 3), ("c", "t_1", 0)]),
             &s,
             weights,
         ));
         assert!(e.contains("materials b and c resolve to one key"), "{e}");
         // a vertex-blend key no record claims (discovery cross-check)
-        let e = message(resolve_by(&record(&[("a", "t_0", 2)]), &s, weights));
+        let e = message(resolve_by_files(&record(&[("a", "t_0", 2)]), &s, weights));
         assert!(
             e.contains("keys no recorded material resolves to: 000000000000000b"),
             "{e}"
         );
         // a recorded GLB without vertex-blend sections names the Studio build
-        let e = message(resolve_by(&record(&[("a", "t_9", 0)]), &s, weights));
+        let e = message(resolve_by_files(&record(&[("a", "t_9", 0)]), &s, weights));
         assert!(e.contains(STUDIO_BUILD), "{e}");
     }
 
@@ -786,7 +985,7 @@ mod tests {
                 ("b".into(), vec![("b/T_0.glb".into(), 3)]),
             ]),
         };
-        let e = message(resolve_by(&rec, &sections(), weights));
+        let e = message(resolve_by_files(&rec, &sections(), weights));
         assert!(e.contains("share a file stem"), "{e}");
     }
 

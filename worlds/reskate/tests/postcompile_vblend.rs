@@ -28,7 +28,7 @@ use primase_compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{
-    self, DECAL_DONOR, Donor, Request, SectionValues, TWOSET_DONOR, Target,
+    self, DECAL_DONOR, Donor, Request, SectionValues, StockPrograms, TWOSET_DONOR, Target,
 };
 use primase_testdata::real_data;
 use serde_json::Value;
@@ -78,6 +78,7 @@ fn vblend_gate() -> R {
     let spec: Value = serde_json::from_slice(&std::fs::read(&spec_path)?)?;
     let decal = Donor::find(&game, BAM, ROOT, DECAL_DONOR)?;
     let twoset = Donor::find(&game, BAM, ROOT, TWOSET_DONOR)?;
+    let stock = StockPrograms::find(&game, ROOT)?;
     let requests: Vec<Request> = spec["requests"]
         .as_array()
         .unwrap()
@@ -131,7 +132,15 @@ fn vblend_gate() -> R {
                     ))
                 })
         };
-        let report = vblend::apply(&patch, out, Some(&base), Some(&oodle), &requests, &mut values)?;
+        let report = vblend::apply(
+            &patch,
+            out,
+            Some(&base),
+            Some(&oodle),
+            &stock,
+            &requests,
+            &mut values,
+        )?;
         assert_eq!(seen, expected.len(), "every spec section is rewritten once");
         Ok(report)
     };
