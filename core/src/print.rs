@@ -1,11 +1,12 @@
 //! Printing the world around passes (DESIGN.md §4 `print-world-after`): [`WorldPrinter`] is an [`Instrument`] that
-//! writes one text file per pass: what the world holds after it (entities, components and resources by name), what
-//! the pass spawned, despawned and changed, the pass's own counts, and optionally the components of chosen entities.
+//! makes one text per pass: what the world holds after it (entities, components and resources by name), what the
+//! pass spawned, despawned and changed, the pass's own counts, and optionally the components of chosen entities.
 //!
-//! Files, in `<dir>` or `<dir>/<label>` ([`WorldPrinter::set_label`], one label per run): `00-input.txt` (the world
-//! before the first pass), `NN-<pass>.txt` after pass NN (from 01), and `NN-<pass>.failed.txt` instead when the pass
-//! failed (the world as the failure left it; the file before it is the pass's input). A file is never overwritten.
-//! The same world, pipeline and options give the same bytes.
+//! Core does no I/O: each print goes to the [`PrintSink`] the caller supplies (a command writes files, a test keeps
+//! them), with the run's label ([`WorldPrinter::set_label`]) and the print's name: `00-input` (the world before the
+//! first pass), `NN-<pass>` after pass NN (from 01), and `NN-<pass>.failed` instead when the pass failed (the world
+//! as the failure left it; the print before it is the pass's input). Labels and names are safe as file names. The
+//! same world, pipeline and options give the same text.
 //!
 //! Changes are found by comparing a digest of each component's `Debug` text before and after the pass (64-bit
 //! FNV-1a): JSON views summarise bulk data (a mesh shows its counts, not its vertices), so a pass that only moves
@@ -14,9 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
-use std::fs;
-use std::io::Write as _;
-use std::path::PathBuf;
 
 use crate::components::{Name, Source};
 use crate::pass::{Error, Instrument, Step, StepReport};
@@ -119,29 +117,49 @@ impl EntityFilter {
     }
 }
 
-/// Prints the world around every pass of the runs it instruments (see the module docs).
-#[derive(Debug)]
-pub struct WorldPrinter {
-    dir: PathBuf,
+/// Where a [`WorldPrinter`]'s prints go: `label` is the run's label when one is set, `name` the print's name, unique
+/// within a run (see the module docs). An error stops the run as [`Error::Instrument`]. Closures
+/// `FnMut(Option<&str>, &str, &str) -> Result<(), String>` are sinks.
+pub trait PrintSink {
+    fn print(&mut self, label: Option<&str>, name: &str, text: &str) -> Result<(), String>;
+}
+
+impl<F: FnMut(Option<&str>, &str, &str) -> Result<(), String>> PrintSink for F {
+    fn print(&mut self, label: Option<&str>, name: &str, text: &str) -> Result<(), String> {
+        self(label, name, text)
+    }
+}
+
+/// Prints the world around every pass of the runs it instruments, into `sink` (see the module docs).
+pub struct WorldPrinter<S: PrintSink> {
+    sink: S,
     label: Option<String>,
     options: PrintOptions,
     /// The world before the current pass, when a print needs it.
     before: Option<Snapshot>,
 }
 
-impl WorldPrinter {
-    /// Prints into `dir` (created when the first file is written).
-    pub fn new(dir: impl Into<PathBuf>, options: PrintOptions) -> Self {
+impl<S: PrintSink> fmt::Debug for WorldPrinter<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorldPrinter")
+            .field("label", &self.label)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: PrintSink> WorldPrinter<S> {
+    pub fn new(sink: S, options: PrintOptions) -> Self {
         WorldPrinter {
-            dir: dir.into(),
+            sink,
             label: None,
             options,
             before: None,
         }
     }
 
-    /// Print the next runs into `<dir>/<label>`: one label per run (a streamed conversion's cell), since files are
-    /// never overwritten. ASCII letters, digits, `_`, `-` and `.`, not starting with `.`.
+    /// Label the next runs' prints (a streamed conversion's cell): the sink gets it with each print. ASCII letters,
+    /// digits, `_`, `-` and `.`, not starting with `.`, so it is safe as a folder name.
     pub fn set_label(&mut self, label: &str) -> Result<(), String> {
         let ok = !label.is_empty()
             && !label.starts_with('.')
@@ -160,26 +178,8 @@ impl WorldPrinter {
         self.options.only.is_empty() || self.options.only.contains(pass)
     }
 
-    fn write(&self, file: &str, text: &str) -> Result<(), String> {
-        let dir = match &self.label {
-            Some(l) => self.dir.join(l),
-            None => self.dir.clone(),
-        };
-        let path = dir.join(file);
-        let failed = |e: std::io::Error| format!("{}: {e}", path.display());
-        fs::create_dir_all(&dir).map_err(failed)?;
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    format!("{} exists: give each run its own label", path.display())
-                } else {
-                    failed(e)
-                }
-            })?;
-        f.write_all(text.as_bytes()).map_err(failed)
+    fn write(&mut self, name: &str, text: &str) -> Result<(), String> {
+        self.sink.print(self.label.as_deref(), name, text)
     }
 
     /// The text of one print: `head`, the world as `after` holds it, the change from `before`, `report`'s counts and
@@ -199,7 +199,7 @@ impl WorldPrinter {
     }
 }
 
-impl Instrument for WorldPrinter {
+impl<S: PrintSink> Instrument for WorldPrinter<S> {
     fn before_pass(&mut self, step: &Step<'_>, w: &World) -> Result<(), String> {
         if step.index == 0 {
             self.before = None;
@@ -209,7 +209,8 @@ impl Instrument for WorldPrinter {
         }
         let snap = Snapshot::take(w);
         if step.index == 0 && self.options.only.is_empty() {
-            self.write("00-input.txt", &self.render("input", w, None, &snap, None))?;
+            let text = self.render("input", w, None, &snap, None);
+            self.write("00-input", &text)?;
         }
         self.before = Some(snap);
         Ok(())
@@ -223,10 +224,7 @@ impl Instrument for WorldPrinter {
         let after = Snapshot::take(w);
         let head = format!("after step {}: {}", step.index + 1, step.text);
         let text = self.render(&head, w, self.before.as_ref(), &after, Some(report));
-        self.write(
-            &format!("{:02}-{}.txt", step.index + 1, file_name(step.name)),
-            &text,
-        )?;
+        self.write(&format!("{:02}-{}", step.index + 1, file_name(step.name)), &text)?;
         self.before = Some(after);
         Ok(())
     }
@@ -237,7 +235,7 @@ impl Instrument for WorldPrinter {
         let head = format!("step {} failed: {}\nerror: {error}", step.index + 1, step.text);
         let text = self.render(&head, w, before.as_ref(), &after, None);
         self.write(
-            &format!("{:02}-{}.failed.txt", step.index + 1, file_name(step.name)),
+            &format!("{:02}-{}.failed", step.index + 1, file_name(step.name)),
             &text,
         )
     }
@@ -478,7 +476,7 @@ mod tests {
     use crate::components::{Mesh, Primitive, Semantic, Stream, Topology};
     use crate::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
     use crate::world::{Opaque, OpaqueData};
-    use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     fn mesh(x: f32) -> Mesh {
         Mesh {
@@ -573,44 +571,53 @@ mod tests {
         Pipeline { passes }
     }
 
-    fn run(dir: &Path, options: PrintOptions, passes: Vec<Box<dyn Pass>>) -> crate::pass::Result<()> {
-        let mut printer = WorldPrinter::new(dir, options);
-        let mut w = world();
-        PassManager::new(PassRegistry::new()).run_instrumented(
-            &mut w,
+    /// Prints by (label, name), as a sink keeps them.
+    type Prints = Arc<Mutex<BTreeMap<(Option<String>, String), String>>>;
+
+    fn keeper() -> (Prints, impl PrintSink) {
+        let prints = Prints::default();
+        let kept = prints.clone();
+        let sink = move |label: Option<&str>, name: &str, text: &str| {
+            let key = (label.map(str::to_owned), name.to_owned());
+            match kept.lock().unwrap().insert(key, text.to_owned()) {
+                None => Ok(()),
+                Some(_) => Err(format!("{name} printed twice")),
+            }
+        };
+        (prints, sink)
+    }
+
+    /// Run `passes` on [`world`], printing; the prints of the unlabelled run by name.
+    fn run(
+        options: PrintOptions,
+        passes: Vec<Box<dyn Pass>>,
+    ) -> (crate::pass::Result<()>, BTreeMap<String, String>) {
+        let (prints, sink) = keeper();
+        let mut printer = WorldPrinter::new(sink, options);
+        let result = PassManager::new(PassRegistry::new()).run_instrumented(
+            &mut world(),
             &pipeline(passes),
             &mut RunReport::default(),
             &mut printer,
-        )
-    }
-
-    fn fresh(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("primase-print-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        d
-    }
-
-    fn read_prints(dir: &Path) -> BTreeMap<String, String> {
-        fs::read_dir(dir)
+        );
+        let by_name = prints
+            .lock()
             .unwrap()
-            .map(|e| {
-                let e = e.unwrap();
-                let text = fs::read_to_string(e.path()).unwrap();
-                (e.file_name().to_string_lossy().into_owned(), text)
-            })
-            .collect()
+            .iter()
+            .map(|((_, n), t)| (n.clone(), t.clone()))
+            .collect();
+        (result, by_name)
     }
 
     #[test]
     fn prints_counts_changes_and_dumps() {
-        let dir = fresh("changes");
         let options = PrintOptions {
             dump: Some(EntityFilter::parse("source=m11,has=core.mesh").unwrap()),
             ..PrintOptions::default()
         };
-        run(&dir, options, vec![Box::new(Edit)]).unwrap();
-        let prints = read_prints(&dir);
-        assert_eq!(prints.keys().collect::<Vec<_>>(), ["00-input.txt", "01-edit.txt"]);
+        let (result, prints) = run(options, vec![Box::new(Edit)]);
+        result.unwrap();
+        assert_eq!(prints.keys().collect::<Vec<_>>(), ["00-input", "01-edit"]);
         let input = "input
 entities 3
 component core.mesh@1 2
@@ -623,7 +630,7 @@ e0
   core.name@1 \"wall\"
   core.source@1 \"m11:wall\"
 ";
-        assert_eq!(prints["00-input.txt"], input);
+        assert_eq!(prints["00-input"], input);
         // the meshes' JSON views did not change; their vertices did
         let after = "after step 1: edit
 entities 3 spawned 1 despawned 1
@@ -645,27 +652,27 @@ e0
   core.name@1 \"wall2\"
   core.source@1 \"m11:wall\"
 ";
-        assert_eq!(prints["01-edit.txt"], after);
-        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(prints["01-edit"], after);
     }
 
     #[test]
     fn a_failing_pass_is_printed_as_the_failure_left_the_world() {
-        let dir = fresh("failed");
         let options = PrintOptions {
             limit: 1,
             ..PrintOptions::default()
         };
-        let err = run(&dir, options, vec![Box::new(Edit), Box::new(Break)]).unwrap_err();
-        assert_eq!(err.to_string(), "pass break failed: broke on purpose");
-        let prints = read_prints(&dir);
+        let (result, prints) = run(options, vec![Box::new(Edit), Box::new(Break)]);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "pass break failed: broke on purpose"
+        );
         assert_eq!(
             prints.keys().collect::<Vec<_>>(),
-            ["00-input.txt", "01-edit.txt", "02-break.failed.txt"]
+            ["00-input", "01-edit", "02-break.failed"]
         );
-        assert!(prints["01-edit.txt"].contains("changed 2\n  e0 ~core.mesh ~core.name\n  ... 1 more\n"));
+        assert!(prints["01-edit"].contains("changed 2\n  e0 ~core.mesh ~core.name\n  ... 1 more\n"));
         assert_eq!(
-            prints["02-break.failed.txt"],
+            prints["02-break.failed"],
             "step 2 failed: break
 error: pass break failed: broke on purpose
 entities 3 spawned 0 despawned 0
@@ -678,25 +685,26 @@ spawned 0
 despawned 0
 "
         );
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn only_labels_and_no_overwrite() {
-        let dir = fresh("only");
+    fn only_labels_and_sink_errors() {
+        let m = PassManager::new(PassRegistry::new());
+        let edit = || pipeline(vec![Box::new(Edit)]);
+        // not selected: nothing printed
+        let (prints, sink) = keeper();
         let options = PrintOptions {
             only: BTreeSet::from(["break".to_owned()]),
             ..PrintOptions::default()
         };
-        let mut printer = WorldPrinter::new(&dir, options);
-        let m = PassManager::new(PassRegistry::new());
-        let edit = || pipeline(vec![Box::new(Edit)]);
-        // not selected: nothing written
+        let mut printer = WorldPrinter::new(sink, options);
         m.run_instrumented(&mut world(), &edit(), &mut RunReport::default(), &mut printer)
             .unwrap();
-        assert!(!dir.exists());
+        assert!(prints.lock().unwrap().is_empty());
 
-        let mut printer = WorldPrinter::new(&dir, PrintOptions::default());
+        // each run under its label; a sink's refusal stops the run, naming the step
+        let (prints, sink) = keeper();
+        let mut printer = WorldPrinter::new(sink, PrintOptions::default());
         printer.set_label("cell_0_-1").unwrap();
         m.run_instrumented(&mut world(), &edit(), &mut RunReport::default(), &mut printer)
             .unwrap();
@@ -705,20 +713,25 @@ despawned 0
             .unwrap_err();
         assert!(
             matches!(&err, crate::pass::Error::Instrument { step, message }
-                if step == "edit" && message.ends_with("exists: give each run its own label")),
+                if step == "edit" && message == "00-input printed twice"),
             "{err}"
         );
         printer.set_label("cell_0_0").unwrap();
         m.run_instrumented(&mut world(), &edit(), &mut RunReport::default(), &mut printer)
             .unwrap();
-        assert_eq!(
-            read_prints(&dir.join("cell_0_-1")),
-            read_prints(&dir.join("cell_0_0"))
-        );
+        let prints = prints.lock().unwrap();
+        let of = |label: &str| -> Vec<(&String, &String)> {
+            prints
+                .iter()
+                .filter(|((l, _), _)| l.as_deref() == Some(label))
+                .map(|((_, n), t)| (n, t))
+                .collect()
+        };
+        assert_eq!(of("cell_0_-1").len(), 2);
+        assert_eq!(of("cell_0_-1"), of("cell_0_0"));
         for bad in ["", "..", "a/b", ".x", "a b"] {
             assert!(printer.set_label(bad).is_err(), "{bad:?}");
         }
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -739,38 +752,57 @@ despawned 0
         }
     }
 
-    /// The child half of [`prints_are_identical_across_processes`]: prints into the folder the variable names.
+    /// The child half of [`prints_are_identical_across_processes`]: writes its prints, one after another, to the file
+    /// the variable names.
     #[test]
     fn print_child() {
-        let Some(dir) = std::env::var_os("PRIMASE_PRINT_CHILD_DIR") else {
+        let Some(path) = std::env::var_os("PRIMASE_PRINT_CHILD_FILE") else {
             return;
         };
         let options = PrintOptions {
             dump: Some(EntityFilter::parse("all").unwrap()),
             ..PrintOptions::default()
         };
-        run(Path::new(&dir), options, vec![Box::new(Edit), Box::new(Break)]).unwrap_err();
+        let (result, prints) = run(options, vec![Box::new(Edit), Box::new(Break)]);
+        result.unwrap_err();
+        let all: String = prints
+            .iter()
+            .map(|(n, t)| {
+                format!(
+                    "== {n}
+{t}"
+                )
+            })
+            .collect();
+        std::fs::write(path, all).unwrap();
     }
 
     /// Each process seeds its hash maps (the world's column table among them) differently: the prints must not show it.
     #[test]
     fn prints_are_identical_across_processes() {
         let exe = std::env::current_exe().unwrap();
-        let dirs = [fresh("process-a"), fresh("process-b")];
-        for d in &dirs {
+        let texts = ["a", "b"].map(|run| {
+            let path = std::env::temp_dir().join(format!("primase-print-{run}-{}.txt", std::process::id()));
             let status = std::process::Command::new(&exe)
                 .args(["--exact", "print::tests::print_child", "--test-threads=1"])
-                .env("PRIMASE_PRINT_CHILD_DIR", d)
+                .env("PRIMASE_PRINT_CHILD_FILE", &path)
                 .status()
                 .unwrap();
             assert!(status.success());
-        }
-        let [a, b] = dirs.map(|d| {
-            let p = read_prints(&d);
-            fs::remove_dir_all(&d).unwrap();
-            p
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            text
         });
-        assert_eq!(a.len(), 3);
-        assert_eq!(a, b);
+        assert_eq!(
+            texts[0]
+                .matches(
+                    "
+== "
+                )
+                .count()
+                + 1,
+            3
+        );
+        assert_eq!(texts[0], texts[1]);
     }
 }
