@@ -6,9 +6,11 @@
 //! tile; sand, gravel, mud (marsh too), snow and ice by name; soil, clay, dirt tracks and wood chips are dirt; grass,
 //! hay, bushes, leaves and twigs are grass; cloth, carpets, leather, tarpaulin and soft tops are fabric; linoleum,
 //! laminate, fibreglass and polystyrene are plastic; perspex, screens and car glass are glass; water and puddles are
-//! water. Plaster, cardboard, paper, foam and the default material are classified other. The names with no surface a
-//! body stands on (body parts, the physics-only and effect materials, liquids other than water, meat, the TEMP slots)
-//! are left unclassified and counted by name, as are names the table does not know.
+//! water; the effect materials on metal (electrified, steam, flame, the water tower) and electric fences and barbed
+//! wire metal, the beer barrel wood, the pool table's felt and cushions fabric. Plaster, cardboard, paper, foam and the
+//! default material are classified other. The names with no surface a body stands on (body parts, the physics-only
+//! materials: no friction, balls, casters, the ped capsule and car void, dynamic cover bounds; liquids other than
+//! water, meat, the TEMP slots) are left unclassified and counted by name, as are names the table does not know.
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
@@ -97,6 +99,13 @@ pub const GTA_SURFACE_CLASSES: &[(&str, SurfaceClass)] = &[
     ("CAR_METAL", Metal),
     ("CAR_ENGINE", Metal),
     ("STUNT_RAMP_SURFACE", Metal),
+    ("VFX_METAL_ELECTRIFIED", Metal),
+    ("VFX_METAL_WATER_TOWER", Metal),
+    ("VFX_METAL_STEAM", Metal),
+    ("VFX_METAL_FLAME", Metal),
+    ("PHYS_ELECTRIC_FENCE", Metal),
+    ("PHYS_ELECTRIC_METAL", Metal),
+    ("PHYS_BARBED_WIRE", Metal),
     ("WOOD_SOLID_SMALL", Wood),
     ("WOOD_SOLID_MEDIUM", Wood),
     ("WOOD_SOLID_LARGE", Wood),
@@ -110,6 +119,7 @@ pub const GTA_SURFACE_CLASSES: &[(&str, SurfaceClass)] = &[
     ("WOOD_HIGH_DENSITY", Wood),
     ("WOOD_LATTICE", Wood),
     ("WOOD_HIGH_FRICTION", Wood),
+    ("VFX_WOOD_BEER_BARREL", Wood),
     ("ROOF_FELT", Fabric),
     ("TARPAULIN", Fabric),
     ("CLOTH", Fabric),
@@ -120,6 +130,8 @@ pub const GTA_SURFACE_CLASSES: &[(&str, SurfaceClass)] = &[
     ("FEATHER_PILLOW", Fabric),
     ("CAR_SOFTTOP", Fabric),
     ("CAR_SOFTTOP_CLEAR", Fabric),
+    ("PHYS_POOLTABLE_SURFACE", Fabric),
+    ("PHYS_POOLTABLE_CUSHION", Fabric),
     ("PLASTIC", Plastic),
     ("PLASTIC_HOLLOW", Plastic),
     ("PLASTIC_HIGH_DENSITY", Plastic),
