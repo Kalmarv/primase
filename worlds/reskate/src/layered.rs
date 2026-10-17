@@ -24,7 +24,11 @@
 //! strongest other layer (by the summed corner weights of slots `>= 1`, and of the black remainder where the
 //! weights sum below one), drawn over the base with opacity `w_k / (w_0 + w_k)` (0/0 = 0), the two-layer blend
 //! renormalised, and counts the triangles that lose a layer. Its overlays never overlap, but neighbouring triangles
-//! that keep different layers meet in hard edges (measured in game), so it is not the default.
+//! that keep different layers meet in hard edges (measured in game), so it is not the default. The writer draws the
+//! default's overlays in chain order by giving each rank an object of its own ([`crate::blend_order`]).
+//!
+//! Runtime: the in-game results and gates of this lowering are on ReSkate v2.1.0-pre (the latest release, the
+//! official runtime for it) with maps compiled by ReSkate Studio 20261012.
 
 use primase_core::{Component, Entity, Mesh, World};
 use serde::Serialize;
@@ -44,8 +48,33 @@ pub enum VertexBlend {
     VertexAlpha,
 }
 
+impl VertexBlend {
+    /// An overlay's slot is a layer above the base of a blend of at most four layers: 1..=3.
+    pub fn check(self) -> Result<(), String> {
+        match self {
+            VertexBlend::Overlay { slot } if !(1..=3).contains(&slot) => {
+                Err(format!("overlay slot {slot} outside 1..=3"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The overlay's place in its blend's lerp chain, drawn in increasing order: a slot's overlay its slot (1..=3),
+    /// the darkening overlay after every slot (4). `None`: not part of a chain.
+    pub fn chain_rank(self) -> Option<u8> {
+        match self {
+            VertexBlend::Overlay { slot } => Some(slot),
+            VertexBlend::Darkening => Some(4),
+            VertexBlend::VertexAlpha => None,
+        }
+    }
+}
+
 impl Component for VertexBlend {
     const NAME: &'static str = "reskate.vertex_blend";
+    fn verify(&self, _: Entity, _: &World) -> Result<(), String> {
+        self.check()
+    }
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -399,7 +428,7 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 "at most one overlay per triangle: the strongest other layer over the base, renormalised (triangles and area that lose a layer are counted; neighbouring triangles that keep different layers meet in hard edges); decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
             }
             OverlayLimit::All => {
-                "where overlays overlap the game does not draw them in slot order, so the mix there can differ from the blend; decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
+                "where overlays overlap the mix needs them drawn in slot order, which rests on the writer's per-rank objects and the game's measured tie order (past the writer's object cap the order is unstable and the mix there can differ from the blend); decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
             }
         }
     }
@@ -665,6 +694,24 @@ mod tests {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         (*seed >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    #[test]
+    fn an_overlay_slot_is_a_layer_above_the_base() {
+        let mut w = World::new();
+        let e = w.spawn();
+        for slot in 1..=3 {
+            assert_eq!(VertexBlend::Overlay { slot }.verify(e, &w), Ok(()));
+            assert_eq!(VertexBlend::Overlay { slot }.chain_rank(), Some(slot));
+        }
+        for slot in [0, 4, 255] {
+            assert!(
+                VertexBlend::Overlay { slot }.verify(e, &w).is_err(),
+                "slot {slot}"
+            );
+        }
+        assert_eq!(VertexBlend::Darkening.chain_rank(), Some(4));
+        assert_eq!(VertexBlend::VertexAlpha.chain_rank(), None);
     }
 
     #[test]

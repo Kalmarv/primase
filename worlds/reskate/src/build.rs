@@ -34,6 +34,9 @@ pub struct BuildOptions {
     pub min_instances: i64,
     pub min_instance_tris: i64,
     pub overlay_step: f32,
+    /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
+    /// and takes a cull ID: released ReSkate has 40,000, so a map near that should lower it).
+    pub blend_objects: usize,
     pub piece_log: bool,
     pub limit: f32,
     pub map_height: usize,
@@ -63,6 +66,7 @@ impl Default for BuildOptions {
             min_instances: 3,
             min_instance_tris: 150,
             overlay_step: 0.004,
+            blend_objects: 1000,
             piece_log: false,
             limit: 4780.0,
             map_height: 2160,
@@ -97,6 +101,8 @@ pub struct BuildReport {
     pub lights_without_tangent: usize,
     /// The overlay stack's lift record (see `WriteResult::lifts`).
     pub lifts: BTreeMap<String, Vec<Vec<f32>>>,
+    /// The blend-chain overlays as objects of their own.
+    pub blend: crate::blend_order::Stats,
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
@@ -466,6 +472,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         tex_cap: a.tex_cap,
         tex_caps: a.tex_caps.clone(),
         overlay_step: a.overlay_step,
+        blend_objects: a.blend_objects,
         piece_log: a.piece_log,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
@@ -593,6 +600,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
         lights_without_tangent: r.lights_without_tangent,
         lifts: r.lifts.clone(),
+        blend: r.blend.clone(),
     })
 }
 
@@ -687,6 +695,10 @@ fn stats_json(
             water_shifted: ov.water_shifted,
             max_shift_m: ov.max_shift,
             order_cycles_broken: ov.cycles,
+        },
+        blend_order: {
+            let b = &writer.r.blend;
+            (b.tiles_split + b.tiles_shared > 0).then_some(b)
         },
         texture_formats: formats,
         prop_collision_top: top

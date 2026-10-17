@@ -4,6 +4,7 @@
 //! values, PNGs by pixels.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod blend_order;
 pub mod build;
 pub mod collision;
 pub mod glb;

@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::Result;
+use crate::layered::VertexBlend;
 use crate::texture::{Hash64, TexLib, TexRef, safe_label};
 
 /// A surface class as the writer sees it.
@@ -46,8 +47,8 @@ pub struct Material {
     pub cast_shadows: Option<bool>,
     /// base_color_factor (linear RGBA), set by the texture budget.
     pub base_factor: Option<[f32; 4]>,
-    /// Studio's per-vertex blend (`vertex_blend`): its parts carry a weight per vertex.
-    pub vertex_blend: bool,
+    /// Studio's per-vertex blend (`vertex_blend`; what it draws): its parts carry a weight per vertex.
+    pub vertex_blend: Option<VertexBlend>,
 }
 
 /// What a front end says a material is.
@@ -72,7 +73,7 @@ pub struct MaterialSpec<'a> {
     pub wrap: Option<String>,
     pub ocean: Option<bool>,
     pub cast_shadows: Option<bool>,
-    pub vertex_blend: bool,
+    pub vertex_blend: Option<VertexBlend>,
 }
 
 impl<'a> MaterialSpec<'a> {
@@ -98,7 +99,7 @@ impl<'a> MaterialSpec<'a> {
             wrap: None,
             ocean: None,
             cast_shadows: None,
-            vertex_blend: false,
+            vertex_blend: None,
         };
         match class {
             VClass::Cutout => {
@@ -194,8 +195,12 @@ impl MatLib {
         if let Some(c) = s.cast_shadows {
             extra += &format!("|h{}", i32::from(c));
         }
-        if s.vertex_blend {
-            extra += "|vb";
+        // a chain overlay's rank is part of its identity: two overlays alike in everything else (two black layers)
+        // stay two materials, each drawn at its own place in the chain
+        match s.vertex_blend.map(VertexBlend::chain_rank) {
+            Some(None) => extra += "|vb",
+            Some(Some(rank)) => extra += &format!("|vb{rank}"),
+            None => {}
         }
         let key = format!(
             "{}|{}|{}|{}|{}|{}|{}{}",

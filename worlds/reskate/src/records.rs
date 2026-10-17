@@ -282,6 +282,9 @@ pub struct StatsJson<'a> {
     pub soups: Vec<SoupStats<'a>>,
     pub collision_dropped: CollisionDropped,
     pub overlay_stack: OverlayStack,
+    /// The blend-chain overlays as objects of their own (only for maps with such overlays).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blend_order: Option<&'a crate::blend_order::Stats>,
     pub texture_formats: BTreeMap<&'a str, i64>,
     /// The props with the most collision triangles, most first.
     pub prop_collision_top: Map<String, Value>,

@@ -2,7 +2,7 @@
 //! space: textures, materials made on first use, prototypes built from their GLBs, placements, collision soups,
 //! lights, grind curves, water and markers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -311,8 +311,8 @@ pub struct Scene {
     pub textures: BTreeMap<String, TexDef>,
     /// Material keys in the scene's order, with their entity's component.
     pub materials: HashMap<String, SkateMaterial>,
-    /// Keys of the materials with `reskate.vertex_blend` (their parts carry a weight per vertex).
-    pub vertex_blend: BTreeSet<String>,
+    /// The materials with `reskate.vertex_blend` (their parts carry a weight per vertex), by key.
+    pub vertex_blend: BTreeMap<String, VertexBlend>,
     pub protos: Vec<ProtoDef>,
     pub placements: Vec<ScenePlacement>,
     pub soups: Vec<SoupDef>,
@@ -539,7 +539,7 @@ impl Scene {
             tex_keys.insert(e, t.key.clone());
         }
         let mut materials = HashMap::new();
-        let mut vertex_blend = BTreeSet::new();
+        let mut vertex_blend = BTreeMap::new();
         let mut mat_keys = HashMap::new();
         let mut labels = HashMap::new();
         for (e, m) in world.iter::<SkateMaterial>() {
@@ -550,8 +550,8 @@ impl Scene {
                 ));
             }
             materials.insert(m.key.clone(), m.clone());
-            if world.has::<VertexBlend>(e) {
-                vertex_blend.insert(m.key.clone());
+            if let Some(&v) = world.get::<VertexBlend>(e) {
+                vertex_blend.insert(m.key.clone(), v);
             }
             mat_keys.insert(e, m.key.clone());
             if let Some(n) = world.get::<Name>(e) {
@@ -1096,7 +1096,7 @@ impl Materializer {
         }
         spec.ocean = e.ocean;
         spec.cast_shadows = e.cast_shadows;
-        spec.vertex_blend = scene.vertex_blend.contains(key);
+        spec.vertex_blend = scene.vertex_blend.get(key).copied();
         let key_of =
             |te: Option<primase_core::Entity>| te.and_then(|t| scene.texture_keys_by_entity.get(&t)).cloned();
         let base_key = key_of(e.base);

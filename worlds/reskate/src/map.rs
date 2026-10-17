@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::Result;
+use crate::blend_order::{self, Geometry};
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
 use crate::glb::{self, GlbPrim};
 use crate::grind;
@@ -19,6 +19,7 @@ use crate::records::{
 };
 use crate::scene::{GrindCurve, Marker, PlacedLight, SnapMode, SurfaceTable, WaterQuad};
 use crate::texture::TexLib;
+use crate::{Error, Result};
 use primase_meshops::vector::Vec3;
 
 /// What the writer is told (defaults are gta-skate's).
@@ -36,6 +37,10 @@ pub struct WriterOptions {
     pub tex_cap: u32,
     pub tex_caps: Option<String>,
     pub overlay_step: f32,
+    /// The most objects the writer adds to draw blend-chain overlays in chain order (one per tile, dominant axis and
+    /// chain rank: [`crate::blend_order`]); past it a tile's chain overlays stay in its mesh, in an unstable order.
+    /// 0: none added.
+    pub blend_objects: usize,
     pub piece_log: bool,
     pub offset: [f64; 3],
     pub limit: f32,
@@ -76,6 +81,8 @@ pub struct WriteResult {
     pub tex_pixels: u64,
     pub mesh_bytes: u64,
     pub overlay: OverlayStats,
+    /// The blend-chain overlays as objects of their own ([`crate::blend_order`]).
+    pub blend: blend_order::Stats,
     pub prop_col_tris: BTreeMap<String, i64>,
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
@@ -92,6 +99,14 @@ pub struct WriteResult {
     pub travel_points: usize,
     pub budget_flattened: i64,
     pub warnings: Vec<String>,
+}
+
+/// A tile's blend-chain overlays as objects of their own ([`MapWriter::chain_layers`]): the parts of each (axis,
+/// rank), and each axis's lift step.
+#[derive(Debug, Default)]
+struct ChainLayers {
+    groups: BTreeMap<(u8, u8), BTreeMap<usize, Acc>>,
+    steps: BTreeMap<u8, f32>,
 }
 
 /// One merged part: its geometry and its pieces (one per append).
@@ -559,6 +574,138 @@ impl MapWriter {
         })
     }
 
+    /// Take a tile's blend-chain overlays out of its parts as objects of their own ([`blend_order`]): per (dominant
+    /// axis, chain rank), each rank of an axis padded to the box of all of them, with each axis's lift step for the
+    /// tile's translation `at`. Leaves them in the tile (counted) when the objects would pass the cap or an axis has
+    /// no lift step there.
+    fn chain_layers(&mut self, parts: &mut BTreeMap<usize, Acc>, at: Vec3) -> Result<ChainLayers> {
+        let mut ranks: Vec<(usize, u8)> = Vec::new();
+        for &k in parts.keys() {
+            let m = self.ctx.mats.by_id(k);
+            let Some(v) = m.vertex_blend else { continue };
+            v.check().map_err(|e| Error::Scene(format!("{}: {e}", m.name)))?;
+            if let Some(rank) = v.chain_rank() {
+                ranks.push((k, rank));
+            }
+        }
+        if ranks.is_empty() {
+            return Ok(ChainLayers::default());
+        }
+        let mut groups: BTreeMap<(u8, u8), BTreeMap<usize, Geometry>> = BTreeMap::new();
+        let mut tris = 0;
+        for &(k, rank) in &ranks {
+            let a = &parts[&k];
+            // chain overlays are fixed: the overlay stack never lifts them
+            debug_assert!(a.lift.iter().all(|&x| x == 0.0));
+            tris += a.idx.len() / 3;
+            let g = Geometry {
+                pos: a.pos.clone(),
+                nrm: a.nrm.clone(),
+                uv: a.uv.clone(),
+                blend: a.blend.clone(),
+                idx: a.idx.clone(),
+            };
+            for (axis, h) in blend_order::split_by_axis(&g) {
+                groups.entry((axis, rank)).or_default().insert(k, h);
+            }
+        }
+        let st = &mut self.r.blend;
+        st.cap = self.o.blend_objects;
+        if st.objects + groups.len() > self.o.blend_objects {
+            st.tiles_shared += 1;
+            st.overlay_triangles_shared += tris;
+            return Ok(ChainLayers::default());
+        }
+        let axes: BTreeSet<u8> = groups.keys().map(|&(axis, _)| axis).collect();
+        let mut steps = BTreeMap::new();
+        for &axis in &axes {
+            let Some(step) = blend_order::lift_step(at, axis) else {
+                st.tiles_unliftable += 1;
+                st.overlay_triangles_unliftable += tris;
+                return Ok(ChainLayers::default());
+            };
+            steps.insert(axis, step);
+        }
+        for &step in steps.values() {
+            st.steps_widened += usize::from(step > blend_order::LIFT_STEP);
+            st.max_step_m = st.max_step_m.max(step);
+        }
+        st.objects += groups.len();
+        st.tiles_split += 1;
+        st.overlay_triangles_split += tris;
+        for axis in axes {
+            let span = (axis, 0)..=(axis, u8::MAX);
+            let Some((lo, hi)) =
+                blend_order::bounds(groups.range(span.clone()).flat_map(|(_, g)| g.values()))
+            else {
+                continue;
+            };
+            for (_, g) in groups.range_mut(span) {
+                // into the rank's first part in draw order (first use)
+                let first = *g
+                    .keys()
+                    .min_by_key(|&k| parts[k].seq)
+                    .expect("a group has a part");
+                blend_order::pad(g.get_mut(&first).expect("its part"), lo, hi, axis);
+            }
+        }
+        let groups = groups
+            .into_iter()
+            .map(|(key, g)| {
+                let accs = g
+                    .into_iter()
+                    .map(|(k, h)| {
+                        let acc = Acc {
+                            seq: parts[&k].seq,
+                            pos: h.pos,
+                            nrm: h.nrm,
+                            uv: h.uv,
+                            blend: h.blend,
+                            idx: h.idx,
+                            ..Acc::default()
+                        };
+                        (k, acc)
+                    })
+                    .collect();
+                (key, accs)
+            })
+            .collect();
+        for (k, _) in ranks {
+            parts.remove(&k);
+        }
+        Ok(ChainLayers { groups, steps })
+    }
+
+    /// Write a tile's [`Self::chain_layers`]: one GLB and object per (axis, rank), named `<tile>_v<axis><rank>`,
+    /// placed at the tile's translation `at` lifted along the axis by the rank's lift.
+    fn emit_chain_layers(&mut self, layers: &ChainLayers, tile: &str, at: Vec3) -> Result<()> {
+        for (&(axis, rank), group) in &layers.groups {
+            let step = layers.steps[&axis];
+            let mats = &self.ctx.mats;
+            let order = draw_order(group, |k| draw_class(mats.by_id(k)), &[]);
+            let (pr, lifts) = prims(group, mats, &order);
+            let p = at + blend_order::axis_vector(axis) * blend_order::lift(rank, step);
+            let rows = MapObject::translation(p.x, p.y, p.z);
+            let stem = format!("{tile}_v{axis}{rank}");
+            let file = format!("{stem}.glb");
+            record_lifts(&mut self.r, format!("meshes/{file}"), lifts);
+            self.mesh_files.insert(file.clone(), glb::write(&stem, &pr)?);
+            for (i, q) in pr.iter().enumerate() {
+                let name = if pr.len() == 1 {
+                    stem.clone()
+                } else {
+                    format!("{stem} / section {}", i + 1)
+                };
+                let mut ob = MapObject::new(name, rows);
+                ob.mesh = Some(format!("meshes/{file}"));
+                ob.primitive = i;
+                ob.material = q.material.clone();
+                self.objects.push(ob);
+            }
+        }
+        Ok(())
+    }
+
     /// OverlayStack over a set of merged parts; logs the overlay pieces with --piece-log.
     /// Stack the mesh's overlay pieces; returns which material lies under which, `(below, above)`.
     fn stack_overlays(
@@ -586,7 +733,7 @@ impl MapWriter {
                     v0: pc.v0,
                     v1: pc.v1,
                     overlay: matches!(m.class, VClass::Decal | VClass::Water),
-                    fixed: m.vertex_blend,
+                    fixed: m.vertex_blend.is_some(),
                     water: m.class == VClass::Water,
                     pass,
                     order: pc.order,
@@ -1111,14 +1258,21 @@ impl MapWriter {
                             split_long(a, o.max_render_edge);
                         }
                     }
-                    let mats = &self.ctx.mats;
-                    let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
-                    let (pr, lifts) = prims(&parts, mats, &order);
-                    let rows = MapObject::translation(
+                    // the order over every part, before the chain overlays leave: the relations through them still
+                    // order the parts that stay (prims skips the parts that left)
+                    let order = {
+                        let mats = &self.ctx.mats;
+                        draw_order(&parts, |k| draw_class(mats.by_id(k)), &under)
+                    };
+                    let at = Vec3::new(
                         origin.x + off.x,
                         origin.y + off.y,
                         if off.z != 0.0 { origin.z + off.z } else { origin.z },
                     );
+                    let layers = self.chain_layers(&mut parts, at)?;
+                    let mats = &self.ctx.mats;
+                    let (pr, lifts) = prims(&parts, mats, &order);
+                    let rows = MapObject::translation(at.x, at.y, at.z);
                     let file = to.mesh.clone().expect("mesh");
                     record_lifts(&mut self.r, format!("meshes/{file}"), lifts);
                     self.mesh_files
@@ -1136,7 +1290,8 @@ impl MapWriter {
                         self.objects.push(ob);
                     }
                     to.parts = pr.len();
-                    for (k, a) in &parts {
+                    self.emit_chain_layers(&layers, &format!("t_{tx}_{ty}"), at)?;
+                    for (k, a) in parts.iter().chain(layers.groups.values().flatten()) {
                         to.tris += (a.idx.len() / 3) as i64;
                         to.verts += (a.pos.len() / 3) as i64;
                         *self.mat_tris.entry(*k).or_default() += (a.idx.len() / 3) as i64;
@@ -1606,7 +1761,7 @@ impl MapWriter {
             normal_srgb: (m.normal >= 0).then_some(false),
             mask_texture: file(m.mask),
             mask_srgb: (m.mask >= 0).then_some(false),
-            vertex_blend: m.vertex_blend.then_some(true),
+            vertex_blend: m.vertex_blend.is_some().then_some(true),
         }))
     }
 
@@ -2055,7 +2210,7 @@ impl MapWriter {
             .mats
             .list
             .iter()
-            .filter(|m| m.vertex_blend && used_mats.contains(&m.name))
+            .filter(|m| m.vertex_blend.is_some() && used_mats.contains(&m.name))
             .map(|m| m.name.as_str())
             .collect();
         if !blended.is_empty() {

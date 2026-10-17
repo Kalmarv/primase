@@ -87,6 +87,111 @@ fn overlaps(w: &World) -> (usize, usize) {
     (shared, total)
 }
 
+/// The box of every primitive's positions in a GLB (from the accessors' min and max).
+fn glb_box(json: &Value) -> [f64; 6] {
+    let mut b = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+    for p in json["meshes"][0]["primitives"].as_array().unwrap() {
+        let a = &json["accessors"][p["attributes"]["POSITION"].as_u64().unwrap() as usize];
+        for k in 0..3 {
+            b[k] = b[k].min(a["min"][k].as_f64().unwrap());
+            b[k + 3] = b[k + 3].max(a["max"][k].as_f64().unwrap());
+        }
+    }
+    b
+}
+
+/// A (tile, axis)'s rank objects: rank -> (translation, mesh).
+type RankObjects = BTreeMap<u8, ([f32; 3], String)>;
+
+/// Design A' ([`primase_reskate::blend_order`]): every chain rank of a tile's overlays is an object of its own,
+/// `<tile>_v<axis><rank>`, placed at its tile's translation lifted along the axis (the top rank lowest), in no tile
+/// mesh, and the ranks of a (tile, axis) have the same bounds.
+fn check_chain_objects(
+    map: &Value,
+    out: &Path,
+    by_mesh: &BTreeMap<String, (Value, Vec<u8>)>,
+    stats: &primase_reskate::blend_order::Stats,
+) {
+    let mut tile_at: BTreeMap<String, [f32; 3]> = BTreeMap::new();
+    let mut ranks: BTreeMap<(String, u8), RankObjects> = BTreeMap::new();
+    let (mut chain_mats, mut tile_mats) = (BTreeSet::new(), BTreeSet::new());
+    for obj in map["objects"].as_array().unwrap() {
+        let (Some(mesh), Some(mat)) = (obj["mesh"].as_str(), obj["material"].as_str()) else {
+            continue;
+        };
+        let t: Vec<f32> = obj["transform"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap() as f32)
+            .collect();
+        let at = [t[9], t[10], t[11]];
+        let stem = mesh.trim_start_matches("meshes/").trim_end_matches(".glb");
+        if !stem.starts_with("t_") {
+            continue;
+        }
+        match stem.rsplit_once("_v") {
+            Some((tile, ar)) if ar.len() == 2 && ar.bytes().all(|c| c.is_ascii_digit()) => {
+                let (axis, rank) = (ar.as_bytes()[0] - b'0', ar.as_bytes()[1] - b'0');
+                chain_mats.insert(mat.to_owned());
+                let prev = ranks
+                    .entry((tile.to_owned(), axis))
+                    .or_default()
+                    .insert(rank, (at, mesh.to_owned()));
+                assert!(prev.is_none_or(|(p, _)| p == at), "{stem}: sections placed apart");
+            }
+            _ => {
+                tile_mats.insert(mat.to_owned());
+                assert!(
+                    tile_at.insert(stem.to_owned(), at).is_none_or(|p| p == at),
+                    "{stem}"
+                );
+            }
+        }
+    }
+    let both: Vec<_> = chain_mats.intersection(&tile_mats).collect();
+    assert!(
+        both.is_empty(),
+        "chain overlay materials also in tile meshes: {both:?}"
+    );
+    assert_eq!(stats.tiles_shared, 0, "the cap was reached: {stats:?}");
+    assert_eq!(stats.tiles_unliftable, 0, "tiles without a lift step: {stats:?}");
+    let meshes: BTreeSet<&String> = ranks.values().flat_map(|r| r.values().map(|(_, m)| m)).collect();
+    assert_eq!(meshes.len(), stats.objects, "objects added");
+    let mut placements = BTreeSet::new();
+    for ((tile, axis), by_rank) in &ranks {
+        let base = tile_at[tile];
+        // Studio's frame (x, z, -y) back to the writer's
+        let n = primase_reskate::blend_order::axis_vector(*axis);
+        let n = [n.x, n.z, -n.y];
+        let mut last = f32::INFINITY;
+        let mut boxes = BTreeSet::new();
+        for (rank, (at, mesh)) in by_rank {
+            let d: Vec<f32> = (0..3).map(|k| at[k] - base[k]).collect();
+            let along: f32 = (0..3).map(|k| d[k] * n[k]).sum();
+            for k in 0..3 {
+                assert!(n[k] != 0.0 || d[k] == 0.0, "{mesh}: lifted off its axis {d:?}");
+            }
+            assert!(
+                along > 0.0 && along < last,
+                "{mesh}: rank {rank} lift {along} after {last}"
+            );
+            last = along;
+            assert!(
+                placements.insert(at.map(f32::to_bits)),
+                "{mesh}: shares a placement"
+            );
+            let json = match by_mesh.get(mesh) {
+                Some((j, _)) => j.clone(),
+                None => glb(&std::fs::read(out.join(mesh)).unwrap()).0,
+            };
+            boxes.insert(glb_box(&json).map(f64::to_bits));
+        }
+        assert_eq!(boxes.len(), 1, "{tile} axis {axis}: ranks with different bounds");
+    }
+    println!("blend order: {stats:?}");
+}
+
 #[test]
 fn layered_scenes_build_with_vertex_blend_overlays() {
     let Some(root) = primase_testdata::real_data("PRIMASE_SCENES_GTA") else {
@@ -227,6 +332,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             l.sort();
         }
         assert_eq!(record, record_want, "vertex_blend.json vs map.json objects");
+        check_chain_objects(&map, &out, &by_mesh, &report.blend);
         println!(
             "{}: {} vertex_blend materials, {} blended object primitives, {} other",
             scene.display(),
