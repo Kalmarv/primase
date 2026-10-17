@@ -54,6 +54,14 @@ pub struct Options {
     /// The largest file a tile may carry, its GLB and its collision sidecar alike: a cell with a larger one is split
     /// into quadtree [`Subcell`]s, recursively, until each file fits. `None` keeps every cell whole.
     pub tile_byte_budget: Option<u64>,
+    /// A starting view, written to the index as `camera`; `None`: a consumer frames the scene itself.
+    pub camera: Option<Camera>,
+}
+/// A starting view in the index's world frame, metres: where the eye is and the point it looks at.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+pub struct Camera {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
 }
 /// The default [`Options::tile_byte_budget`], 96 MiB.
 pub const DEFAULT_TILE_BYTE_BUDGET: u64 = 96 * 1024 * 1024;
@@ -75,6 +83,7 @@ impl Default for Options {
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
             tile_byte_budget: Some(DEFAULT_TILE_BYTE_BUDGET),
+            camera: None,
         }
     }
 }
@@ -160,6 +169,9 @@ pub struct Index {
     /// The scene's environment (`core.environment`), indexed scene-wide; absent when the scene names none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<IndexEnvironment>,
+    /// [`Options::camera`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
 }
 /// The index's `environment`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -438,6 +450,13 @@ pub fn plan_with_geometry(
 ) -> Result<TilePlan> {
     if !options.tile_size.is_finite() || options.tile_size <= 0. {
         return Err(Error::Invalid("tile size must be finite and positive".into()));
+    }
+    if let Some(c) = options.camera
+        && (!c.eye.iter().chain(&c.target).all(|v| v.is_finite()) || c.eye == c.target)
+    {
+        return Err(Error::Invalid(format!(
+            "camera {c:?}: eye and target must be finite and apart"
+        )));
     }
     if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
         return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
@@ -1218,8 +1237,12 @@ impl TilePlan {
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row, t.cell));
         Ok(Index {
-            // 2.1 adds the optional environment; an index without one stays 2.0
-            format_version: if self.sun.is_some() { "2.1" } else { "2.0" },
+            // the lowest minor that has every optional field the index holds
+            format_version: match (self.options.camera, &self.sun) {
+                (Some(_), _) => "2.2",
+                (None, Some(_)) => "2.1",
+                (None, None) => "2.0",
+            },
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: self.options.tile_size,
@@ -1232,6 +1255,7 @@ impl TilePlan {
             skipped_degenerate: self.skipped,
             placements_without_mesh: self.without_mesh,
             environment: self.sun.map(|sun| IndexEnvironment { sun }),
+            camera: self.options.camera,
         })
     }
 }
@@ -1267,6 +1291,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             skipped_degenerate: 0,
             placements_without_mesh: 0,
             environment: None,
+            camera: None,
         },
         files: BTreeMap::new(),
         images: BTreeMap::new(),

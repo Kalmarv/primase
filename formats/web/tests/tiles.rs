@@ -1317,3 +1317,46 @@ fn the_sun_is_indexed_scene_wide_and_bumps_the_minor_version() {
     let err = write(&w, &plain()).unwrap_err().to_string();
     assert!(err.contains("not a directional core.light"), "{err}");
 }
+
+#[test]
+fn a_starting_camera_goes_to_the_index_as_2_2() {
+    let camera = primase_web::Camera {
+        eye: [10., 50., 20.],
+        target: [0., 0., -100.],
+    };
+    let with = |camera| Options {
+        camera,
+        viewer_items: vec![primase_web::ViewerItem {
+            name: "a".into(),
+            kind: "marker".into(),
+            anchor: [0.; 3],
+            data: serde_json::json!(null),
+        }],
+        ..Default::default()
+    };
+    let index = write(&World::new(), &with(Some(camera))).unwrap().index;
+    assert_eq!(index.format_version, "2.2");
+    let json = serde_json::to_value(&index).unwrap();
+    assert_eq!(
+        json["camera"],
+        serde_json::json!({"eye": [10., 50., 20.], "target": [0., 0., -100.]})
+    );
+    // without one: 2.0 and no field
+    let index = write(&World::new(), &with(None)).unwrap().index;
+    assert_eq!(index.format_version, "2.0");
+    assert!(serde_json::to_value(&index).unwrap().get("camera").is_none());
+    // eye on the target, or not finite: refused
+    for bad in [
+        primase_web::Camera {
+            eye: [1.; 3],
+            target: [1.; 3],
+        },
+        primase_web::Camera {
+            eye: [f64::NAN, 0., 0.],
+            target: [0.; 3],
+        },
+    ] {
+        let err = write(&World::new(), &with(Some(bad))).unwrap_err().to_string();
+        assert!(err.contains("camera"), "{err}");
+    }
+}

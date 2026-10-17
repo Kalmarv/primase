@@ -38,7 +38,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 
 | Field | Type and meaning |
 |---|---|
-| `format_version` | String `major.minor`: `"2.1"` when the index has an `environment`, else `"2.0"` |
+| `format_version` | String `major.minor`: the lowest minor holding every optional field present: `"2.2"` with a `camera`, else `"2.1"` with an `environment`, else `"2.0"` |
 | `version` | Legacy integer `1` |
 | `tile_size` | Positive number, nominal ground-cell side in metres |
 | `empty_tile_policy` | `"omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload"` |
@@ -47,6 +47,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `tiles` | Array of tile objects; deterministic order by `(col, row)`, then `cell` as `(level, x, y)` |
 | `images` | Array of `{file, bytes}`: every image file the tiles reference, ordered by `file` |
 | `environment` (optional, 2.1) | Object `{sun}`: the scene's environment as the source names it, scene-wide (see [Environment](#environment)); absent when the source names none |
+| `camera` (optional, 2.2) | Object `{eye, target}`: a starting view (see [Camera](#camera)); absent: the consumer frames the scene |
 
 | Tile field | Type and meaning |
 |---|---|
@@ -230,8 +231,18 @@ loaded:
 | `direction` | Three numbers, a unit vector in the index's world frame (metres, +X east, +Y up, -Z north): the way the light travels, its transform's local -Z |
 | `cast` (optional) | `"on"` or `"off"`: whether it casts shadows, as the shadow extras; absent: unknown |
 
-Other directional lights stay scene lights of the tile whose cell holds their position. An index without an
-environment is 2.0, unchanged. Ambient light, sky and fog are not carried.
+Other directional lights stay scene lights of the tile whose cell holds their position. Without an environment (and without a camera) the index is 2.0, unchanged. Ambient light, sky and fog are not carried.
+
+## Camera
+
+2.2 adds the optional index field `camera`, a starting view the writer was given:
+
+| Field | Type and meaning |
+|---|---|
+| `eye` | Three numbers: where the view starts, in the index's world frame (metres, +X east, +Y up, -Z north) |
+| `target` | Three numbers: the point it looks at, same frame, apart from `eye` |
+
+Up is +Y. A consumer may start elsewhere (a view the user asked for); without a camera it frames the scene itself.
 
 ## Shadows
 

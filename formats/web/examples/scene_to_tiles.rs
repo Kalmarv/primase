@@ -8,7 +8,7 @@ use primase_core::{Entity, Instance, MeshFile, World};
 use primase_web::{Options, PIVOT_MARGIN};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain]";
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain] [--camera <eye x,y,z>:<target x,y,z>]";
 
 /// `world`'s closure of `roots` with its meshes loaded, and (for rendering) its textures loaded and the materials
 /// lowered as the web writer requires.
@@ -30,6 +30,21 @@ fn prepare(
     }
     Ok(w)
 }
+/// `x,y,z:x,y,z`: the eye, then the point it looks at.
+fn parse_camera(arg: &str) -> Result<primase_web::Camera, Box<dyn std::error::Error>> {
+    let point = |p: &str| -> Result<[f64; 3], Box<dyn std::error::Error>> {
+        let v: Vec<f64> = p.split(',').map(str::parse).collect::<Result<_, _>>()?;
+        v.try_into()
+            .map_err(|_| format!("--camera {arg}: a point is three numbers").into())
+    };
+    let (eye, target) = arg
+        .split_once(':')
+        .ok_or_else(|| format!("--camera {arg}: <eye x,y,z>:<target x,y,z>"))?;
+    Ok(primase_web::Camera {
+        eye: point(eye)?,
+        target: point(target)?,
+    })
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     run(std::env::args().skip(1)).map(|_| ())
 }
@@ -40,6 +55,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     let (mut paths, mut ktx2, mut caps, mut budget) = (Vec::new(), false, Vec::new(), None);
     let mut max_priority: Option<u8> = None;
     let mut with_plain = true;
+    let mut camera = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -49,6 +65,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             // the plain comparison set is left out (a large scene's would not fit beside it)
             "--no-plain" => with_plain = false,
             "--max-priority" => max_priority = Some(args.next().ok_or(USAGE)?.parse()?),
+            // the index's starting view, world frame metres
+            "--camera" => camera = Some(parse_camera(&args.next().ok_or(USAGE)?)?),
             "--budget-mib" => {
                 let mib: u64 = args.next().ok_or(USAGE)?.parse()?;
                 budget = Some(Some(mib * 1024 * 1024));
@@ -92,6 +110,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     }
     let mut options = Options {
         base_dir: folder.into(),
+        camera,
         ..Default::default()
     };
     if let Some(budget) = budget {
