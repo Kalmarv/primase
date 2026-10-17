@@ -1,6 +1,9 @@
-//! A region read from the install against an independent exporter's scene of the same region, by meaning.
+//! A region read from the install against an earlier exporter's scene of the same region, by meaning.
 //!
-//! Oracle (`PRIMASE_GTA_SCENE`): a skate-scene folder whose manifest's `region` is `[x0, y0, x1, y1]` in GTA metres,
+//! Frozen: that exporter is ours, so this is not an independent check and is not extended. It is to be replaced by
+//! comparisons with a third-party reader's exports of chosen assets, the game's own frames and hand-worked fixtures.
+//!
+//! The scene (`PRIMASE_GTA_SCENE`): a skate-scene folder whose manifest's `region` is `[x0, y0, x1, y1]` in GTA metres,
 //! exported from the same install with GTA Online's map; read with `primase-skate-scene`. Placements are matched by
 //! archetype (the joaat of the scene prototype's name) and position (1 cm); a match compares orientation and scale
 //! (1e-5 per transform column component), tint (the instance variant) and priority (the placement's flag bits 8-11,
