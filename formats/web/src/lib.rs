@@ -387,6 +387,12 @@ pub struct TilePlan {
     /// For a record from a world entity (a curve or a marker): the entity's other shown components, by name, as
     /// glTF extras show them, for the record's node.
     item_components: BTreeMap<usize, serde_json::Map<String, serde_json::Value>>,
+    /// Entities whose `core.collision` the read world held: planned with it. A prototype's collision that arrives
+    /// with a cell's world instead (a reader that loads it per part) is written with that cell ([`TilePlan::write_cell`]).
+    planned_collision: BTreeSet<Entity>,
+    /// Placements whose part-loaded collision has been written (a placement filed by triangle centre is in several
+    /// cells: its collision goes with the first).
+    part_collided: BTreeSet<Entity>,
     ground_markers: u64,
     lights: Vec<PlannedLight>,
     sun: Option<IndexSun>,
@@ -521,6 +527,8 @@ pub fn plan_with_geometry(
         },
         items: options.viewer_items.clone(),
         item_components: BTreeMap::new(),
+        planned_collision: world.iter::<primase_core::Collision>().map(|(e, _)| e).collect(),
+        part_collided: BTreeSet::new(),
         ground_markers: 0,
         lights: Vec::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
@@ -770,6 +778,24 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
+        // a prototype whose collision came with the cell's world (not in the read world): this cell's placements of it
+        // collide, each placement once
+        let placed: BTreeSet<Entity> = content
+            .placements
+            .iter()
+            .filter(|p| {
+                !self.planned_collision.contains(&p.prototype) && !self.part_collided.contains(&p.entity)
+            })
+            .map(|p| p.entity)
+            .collect();
+        for item in collision::placement_items(world, &placed)? {
+            if item.anchor.iter().any(|v| !v.is_finite()) {
+                return Err(Error::Invalid("collision with a non-finite position".into()));
+            }
+            content.items.push(self.items.len());
+            self.items.push(item);
+        }
+        self.part_collided.extend(placed);
         // a prototype whose cell loaded no mesh (planned from a world that loads per cell): counted as at planning
         let before = content.placements.len();
         content.placements.retain(|p| !meshless(world, p.prototype));

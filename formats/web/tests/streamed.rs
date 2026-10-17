@@ -218,3 +218,54 @@ fn the_target_wants_a_cells_files_loaded_and_lods_chosen() {
     assert!(t.illegal_entities(&w, "test.dialect", Mode::Full).is_empty());
     assert!(matches!(t.legality(Lods::NAME), Some(Legality::Illegal)));
 }
+
+#[test]
+fn collision_a_cell_loads_on_its_prototypes_is_written_with_the_cell() {
+    use primase_core::{Collision, Surfaces};
+    // two placements of one prototype, in cells 0 and 2, and a third of another; the read world has no collision,
+    // each cell's world brings the first prototype's (a reader that loads it per part)
+    let (mut light, placed) = world(&[(10., 2.), (450., 2.), (20., 2.)]);
+    let proto = light.get::<Instance>(placed[0]).unwrap().prototype;
+    light.insert(
+        placed[1],
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    let light = light;
+    let load = |roots: &BTreeSet<Entity>| {
+        let mut w = light.subset(&light.closure(roots.iter().copied()));
+        if w.is_alive(proto) {
+            let mut s = Surfaces::default();
+            let concrete = s.index("concrete").unwrap();
+            w.insert_resource(s);
+            let mut c = Collision::default();
+            c.extend(
+                &[[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]],
+                &[[0, 1, 2]],
+                concrete,
+                |p| p,
+            );
+            w.insert(proto, c);
+        }
+        w
+    };
+    let options = Options {
+        compress: false,
+        ..Options::default()
+    };
+    let mut plan = plan_with_geometry(&light, &options, &|_| true).unwrap();
+    let mut sidecars = Vec::new();
+    for cell in plan.cells() {
+        let w = load(&plan.roots(cell));
+        for tile in plan.write_cell(cell, &w).unwrap() {
+            if let Some(c) = tile.info.collision {
+                sidecars.push((tile.info.col, c.records));
+            }
+        }
+    }
+    plan.finish().unwrap();
+    // one record per placement of the colliding prototype, in its own cell
+    assert_eq!(sidecars, [(0, 1), (2, 1)]);
+}

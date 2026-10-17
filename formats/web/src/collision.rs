@@ -2,7 +2,7 @@ use crate::{Error, Result, ViewerItem};
 use primase_core::{Collision, Entity, Instance, Name, Surfaces, Transform, World};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Deserialize)]
 struct Soup {
@@ -18,13 +18,29 @@ struct Soup {
 /// placement's transform, any other entity's through its own (or none), triangles flipped under a mirroring transform
 /// so fronts stay counter-clockwise. Surfaces are the world's indices, named.
 pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
+    items(world, None)
+}
+
+/// [`world_items`] of the prototypes `placements` place, once per placement of them in `placements`: the collision
+/// a cell's world brought with its prototypes.
+pub(super) fn placement_items(world: &World, placements: &BTreeSet<Entity>) -> Result<Vec<ViewerItem>> {
+    if placements.is_empty() {
+        return Ok(Vec::new());
+    }
+    items(world, Some(placements))
+}
+
+/// The collision items of `world`, or with `only` just those of prototypes placed by these placements.
+fn items(world: &World, only: Option<&BTreeSet<Entity>>) -> Result<Vec<ViewerItem>> {
     let names: Vec<String> = world
         .resource::<Surfaces>()
         .map(|s| s.0.iter().map(|x| x.name.clone()).collect())
         .unwrap_or_default();
     let mut placed: BTreeMap<Entity, Vec<Entity>> = BTreeMap::new();
     for (e, i) in world.iter::<Instance>() {
-        placed.entry(i.prototype).or_default().push(e);
+        if only.is_none_or(|o| o.contains(&e)) {
+            placed.entry(i.prototype).or_default().push(e);
+        }
     }
     let name = |e: Entity| {
         world
@@ -46,6 +62,8 @@ pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
                     )
                 })
                 .collect(),
+            // with `only`, a prototype's collision for those placements alone
+            None if only.is_some() => continue,
             None => vec![(
                 e,
                 world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY),
