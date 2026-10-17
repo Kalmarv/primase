@@ -600,6 +600,32 @@ impl Scene {
         Ok(out)
     }
 
+    /// The Light the scene's RenderSettings names as its sun (`m_Sun`); `None` when it names none (Unity then lights
+    /// its procedural sky by the brightest directional light, a choice of the engine's, not the scene's).
+    pub fn render_settings_sun(&self, player: &Player) -> Result<Option<ObjRef>> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let mut found = None;
+        for o in &f.objects {
+            if player.class_name(&r(o.path_id)) != Some("RenderSettings") {
+                continue;
+            }
+            if found.is_some() {
+                return Err(invalid(format!("{file}: more than one RenderSettings")));
+            }
+            let settings = player.decode(&r(o.path_id))?;
+            found = Some(match settings.get("m_Sun") {
+                Some(p) => player.resolve(file, p)?,
+                None => None,
+            });
+        }
+        Ok(found.flatten())
+    }
+
     /// The lights that shine (GameObject active, Light enabled), in the order of the scene's object table, and how
     /// many do not.
     pub fn lights(&self, player: &Player) -> Result<(Vec<LightComponent>, u64)> {

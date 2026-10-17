@@ -22,8 +22,9 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, ShadowCast, S
 use crate::Result;
 use crate::components::{
     ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCollider, UnityColliderShape, UnityLeftOut,
-    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderer, UnityTerrain,
-    UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree, UnityTreeInstance,
+    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings,
+    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
+    UnityTree, UnityTreeInstance,
 };
 use crate::material::{UnityMaterialData, shader_name};
 use crate::mesh::UnityMeshData;
@@ -105,6 +106,8 @@ pub struct LevelReport {
     pub lights: usize,
     /// Lights whose GameObject is inactive or that are disabled (not read).
     pub lights_off: u64,
+    /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
+    pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
     /// moved by physics).
     pub colliders: usize,
@@ -849,8 +852,13 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         b.report.tree_colliders += 1;
     }
     let (lights, off) = scene.lights(player)?;
+    let sun = scene.render_settings_sun(player)?;
+    let mut sun_entity = None;
     for l in &lights {
         let e = w.spawn();
+        if sun.as_ref() == Some(&l.light) {
+            sun_entity = Some(e);
+        }
         w.insert(e, Name(l.path.clone()));
         w.insert(e, UNITY.transform(&transform_of(&l.world)));
         w.insert(
@@ -877,6 +885,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     }
     b.report.lights = lights.len();
     b.report.lights_off = off;
+    b.report.sun_named = sun.is_some();
+    w.insert_resource(UnityRenderSettings { sun: sun_entity });
     b.report.renderers = renderers.len();
     b.report.tree_renderers = trees.len();
     b.report.prototypes = prototypes.len();

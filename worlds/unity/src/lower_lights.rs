@@ -15,13 +15,17 @@
 //!   `core.light` wants: the transform is used as it is.
 //!
 //! Area lights (rectangle, disc) are baked-only in URP and have no punctual form: not lowered, counted.
+//!
+//! The sun: the light RenderSettings names (`unity.render_settings`), once lowered to a directional light, becomes
+//! `core.environment`'s sun. A scene that names none gets none: Unity's fallback (the brightest directional light) is
+//! the engine's choice, not the scene's, and is not guessed.
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, Light, LightKind, World};
 use primase_image::srgb_to_linear;
 
 use crate::Result;
-use crate::components::UnityLight;
+use crate::components::{UnityLight, UnityRenderSettings};
 
 /// Lower every `unity.light` (see the module documentation).
 pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
@@ -75,6 +79,20 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
         );
     }
     log.approximate("URP intensity taken as candela (lux for directional lights)", 1);
+    // the sun RenderSettings names, once it is a directional light
+    if let Some(sun) = w.resource::<UnityRenderSettings>().and_then(|r| r.sun) {
+        if w.get::<Light>(sun)
+            .is_some_and(|l| l.kind == LightKind::Directional)
+        {
+            w.insert_resource(primase_core::Environment { sun: Some(sun) });
+            log.count("sun named by RenderSettings", 1);
+        } else {
+            log.count(
+                "RenderSettings sun not a directional light (no environment sun)",
+                1,
+            );
+        }
+    }
     Ok(log)
 }
 
@@ -104,5 +122,70 @@ impl Pass for LowerUnityLights {
             log.approximate(&k, n);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::UnityObject;
+
+    fn light(w: &mut World, kind: i64) -> Entity {
+        let e = w.spawn();
+        w.insert(
+            e,
+            UnityLight {
+                light: UnityObject {
+                    file: "level1".into(),
+                    path_id: i64::from(e.index()) + 1,
+                },
+                kind,
+                color: [1.0; 4],
+                intensity: 2.0,
+                range: 10.0,
+                spot_angle: 30.0,
+                inner_spot_angle: 0.0,
+                shadows: 2,
+                color_temperature: None,
+                bounce_intensity: 1.0,
+                light_unit: None,
+                lux_at_distance: None,
+                area_size: [1.0; 2],
+                render_mode: 0,
+                culling_mask: u32::MAX,
+                cookie: None,
+            },
+        );
+        w.insert(e, primase_core::Transform::IDENTITY);
+        e
+    }
+
+    #[test]
+    fn the_named_directional_sun_becomes_the_environment_sun() {
+        let mut w = World::new();
+        let sun = light(&mut w, 1);
+        let lamp = light(&mut w, 2);
+        // nothing named: no environment
+        let mut plain = w.clone();
+        lower_unity_lights(&mut plain).unwrap();
+        assert!(plain.resource::<primase_core::Environment>().is_none());
+        // named
+        let mut named = w.clone();
+        named.insert_resource(UnityRenderSettings { sun: Some(sun) });
+        let log = lower_unity_lights(&mut named).unwrap();
+        assert_eq!(log.counts["sun named by RenderSettings"], 1);
+        assert_eq!(
+            named.resource::<primase_core::Environment>(),
+            Some(&primase_core::Environment { sun: Some(sun) })
+        );
+        assert!(named.verify_resources().is_empty());
+        // a named light that is not directional is not a sun
+        w.insert_resource(UnityRenderSettings { sun: Some(lamp) });
+        let log = lower_unity_lights(&mut w).unwrap();
+        assert_eq!(
+            log.counts["RenderSettings sun not a directional light (no environment sun)"],
+            1
+        );
+        assert!(w.resource::<primase_core::Environment>().is_none());
     }
 }

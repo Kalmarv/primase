@@ -377,6 +377,29 @@ impl Component for UnityLight {
     }
 }
 
+/// The scene's RenderSettings as far as they are read (`unity.render_settings`, a world resource): `sun`, the light
+/// entity `m_Sun` names, when it is one of the lights read (it shines); `None` when it names none or one that does not
+/// shine. `lower-unity-lights` makes it `core.environment`'s sun.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct UnityRenderSettings {
+    pub sun: Option<Entity>,
+}
+
+impl primase_core::Resource for UnityRenderSettings {
+    const NAME: &'static str = "unity.render_settings";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.sun);
+    }
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        if self.sun.is_some_and(|e| !keep(e)) {
+            self.sun = None;
+        }
+    }
+}
+
 /// A mesh collider's source geometry as stored (Unity's frame): every submesh's triangles, base vertex applied.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ColliderMesh {

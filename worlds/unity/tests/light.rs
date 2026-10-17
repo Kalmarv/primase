@@ -161,3 +161,58 @@ fn lights_lower_to_core() {
     assert_eq!(lowered, stored.len());
     gate.assert_passed();
 }
+
+/// RenderSettings' sun against an independent reader (`PRIMASE_UNITY_SUN`: `m_Sun` as stored and, when it names a
+/// light, that light's `game_object` name and `light_type`), for the scan's level: the light we read as named, and
+/// the environment sun the lowering makes of it (none when it names none or a light that is not directional).
+#[test]
+fn render_settings_sun_matches_the_independent_reader() {
+    use primase_core::{Environment, Name, World};
+    use primase_unity::components::UnityRenderSettings;
+    use primase_unity::level::read_level;
+    use primase_unity::lower_lights::lower_unity_lights;
+    let (Some(data), Some(tpk), Some(scan), Some(oracle)) = (
+        real_data("PRIMASE_UNITY_DATA"),
+        real_data("PRIMASE_UNITY_TPK"),
+        real_data("PRIMASE_UNITY_SCAN"),
+        real_data("PRIMASE_UNITY_SUN"),
+    ) else {
+        return;
+    };
+    let scan: Json = serde_json::from_slice(&std::fs::read(&scan).unwrap()).unwrap();
+    let oracle: Json = serde_json::from_slice(&std::fs::read(&oracle).unwrap()).unwrap();
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let level = scan["level"].as_str().unwrap();
+    let named = Scene::read(&player, level)
+        .unwrap()
+        .render_settings_sun(&player)
+        .unwrap();
+    let path_id = oracle["m_Sun"]["m_PathID"].as_i64().unwrap();
+    assert_eq!(named.as_ref().map_or(0, |r| r.path_id), path_id, "m_Sun");
+    let mut w = World::new();
+    let report = read_level(&player, level, &mut w).unwrap();
+    assert_eq!(report.sun_named, path_id != 0);
+    lower_unity_lights(&mut w).unwrap();
+    let sun = w.resource::<UnityRenderSettings>().and_then(|r| r.sun);
+    let environment = w.resource::<Environment>().and_then(|e| e.sun);
+    println!("RenderSettings sun: m_PathID {path_id}; read {sun:?}; environment sun {environment:?}");
+    if path_id == 0 {
+        assert_eq!((sun, environment), (None, None));
+    } else if oracle["active"] == true && oracle["light_enabled"] == 1 {
+        let e = sun.expect("the named light shines");
+        assert!(
+            w.get::<Name>(e)
+                .unwrap()
+                .0
+                .ends_with(oracle["game_object"].as_str().unwrap())
+        );
+        assert_eq!(environment.is_some(), oracle["light_type"] == 1);
+    } else {
+        assert_eq!(sun, None, "a named light that does not shine is not read");
+    }
+    assert!(w.verify_resources().is_empty());
+}
