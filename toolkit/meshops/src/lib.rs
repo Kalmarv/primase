@@ -10,6 +10,8 @@ pub use layered_plan::{
     LayeredMeshSource, LayeredPartSource, LayeredPbrPlan, lower_layered_pbr, plan_layered_pbr,
 };
 mod hull;
+mod nonrigid;
+pub use nonrigid::{BakeNonrigid, bake_nonrigid, register};
 mod primitive;
 mod texcoords;
 pub mod vector;
