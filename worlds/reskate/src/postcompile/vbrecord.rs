@@ -7,20 +7,24 @@
 //! primitive is found in the compile by its weights:
 //! - Studio compiles a `vertex_blend` material's surfaces with `TexCoord0:Half4`, the weight in `z`
 //!   ([`crate::postcompile::vblend`]); it names a MeshSet after the first map object drawing the GLB (`" / "` and
-//!   spaces become `___` and `_`), and the writer names objects `<GLB stem> / section N`, so the MeshSets of a GLB
-//!   are the ones named `<stem>___section_...` (a map not written by the writer may not follow this);
+//!   spaces become `___` and `_`) followed by `_<counter>_<n>`, and the writer names objects `<GLB stem> / section
+//!   N`, or `<GLB stem>` when the GLB has one primitive, so the MeshSets of a GLB are the ones named
+//!   `<stem>___section_..._<counter>_<n>` or `<stem>_<counter>_<n>` (a map not written by the writer may not follow
+//!   this);
 //! - Studio tessellates and re-wraps those surfaces (about five times the triangles), so section vertices are not the
 //!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
 //!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
 //!   vertices), as a half float, occurs in its key's sections;
 //! - a primitive resolves to the one key, among the vertex-blend keys of its GLB's MeshSets, whose sections contain
-//!   all of its weights other than 0 and 1 (those are not distinctive).
+//!   all of its weights other than 0 and 1 (those are not distinctive); a primitive with no other weight (a small
+//!   piece of one layer, as the writer's per-rank objects can be) resolves to its GLB's only vertex-blend key.
 //!
 //! Validated on ReSkate Studio 20261012 ([`STUDIO_BUILD`]): on a real layered scene every recorded primitive's weights
 //! were all contained in exactly one key, the next-best key containing at most 46% of them, and the sections followed
 //! the GLB's primitive order. The rule assumes that tessellation keeps the source weights and that `TexCoord0.z` is
 //! stored as a half float; a different Studio build should be re-checked against both ([`Resolution`] carries the
-//! margins). Every ambiguity is refused rather than guessed: a primitive with no distinctive weight, none or several
+//! margins). Every ambiguity is refused rather than guessed: a primitive with no distinctive weight in a GLB of
+//! several vertex-blend keys, none or several
 //! containing keys, a material resolving to two keys, two materials to one key, and a vertex-blend key no record
 //! claims (the discovery cross-check).
 
@@ -178,10 +182,20 @@ pub struct Resolution {
     pub in_primitive_order: BTreeMap<String, bool>,
 }
 
-/// The GLB stem in a Studio MeshSet's name (`.../<stem>___section_...`, from the writer's object name), lowercase.
+/// The GLB stem in a Studio MeshSet's name, lowercase: `.../<stem>___section_<i>_<counter>_<n>` (the writer's
+/// `<stem> / section <i>`) or `.../<stem>_<counter>_<n>` (its `<stem>`, a GLB of one primitive).
 fn meshset_stem(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or(name);
-    base.split("___").next().unwrap_or(base).to_ascii_lowercase()
+    if let Some((stem, _)) = base.split_once("___") {
+        return stem.to_ascii_lowercase();
+    }
+    // Studio's `_<counter>_<n>` suffix
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    let stem = match base.rsplitn(3, '_').collect::<Vec<_>>()[..] {
+        [n, counter, stem] if numeric(n) && numeric(counter) => stem,
+        _ => base,
+    };
+    stem.to_ascii_lowercase()
 }
 
 fn glb_stem(mesh: &str) -> String {
@@ -342,6 +356,36 @@ fn glb_weights(glb: &MapGlb, primitive: usize) -> Result<Vec<f32>> {
         .collect())
 }
 
+/// Record that `material` is `key`: refused when the material already resolved to another key or the key to another
+/// material.
+fn claim(
+    keys: &mut BTreeMap<String, u64>,
+    owner: &mut BTreeMap<u64, String>,
+    material: &str,
+    key: u64,
+) -> Result<()> {
+    if let Some(&k) = keys.get(material)
+        && k != key
+    {
+        return Err(bad(
+            W,
+            0,
+            format!("material {material} resolves to two keys, {k:016x} and {key:016x}"),
+        ));
+    }
+    keys.insert(material.to_owned(), key);
+    if let Some(other) = owner.insert(key, material.to_owned())
+        && other != material
+    {
+        return Err(bad(
+            W,
+            0,
+            format!("materials {other} and {material} resolve to one key, {key:016x}"),
+        ));
+    }
+    Ok(())
+}
+
 /// Resolves every recorded primitive of map folder `map` among `sections` (from [`blend_sections`]).
 pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result<Resolution> {
     let mut glbs: BTreeMap<&str, MapGlb> = BTreeMap::new();
@@ -411,12 +455,29 @@ fn resolve_by(
                 .map(|&w| half::f16::from_f32(w).to_bits())
                 .filter(|&b| distinctive(b))
                 .collect();
+            // only 0 and 1: nothing to match; it is still the GLB's only vertex-blend key when there is one (a small
+            // piece of one overlay layer, as the writer's per-rank objects have)
             if weights.is_empty() {
-                return Err(bad(
-                    W,
-                    0,
-                    format!("{at}: only weights 0 and 1, nothing identifies its section"),
-                ));
+                let [key] = candidates.keys().copied().collect::<Vec<_>>()[..] else {
+                    return Err(bad(
+                        W,
+                        0,
+                        format!(
+                            "{at}: only weights 0 and 1, nothing identifies its section among {} vertex-blend keys",
+                            candidates.len()
+                        ),
+                    ));
+                };
+                claim(&mut keys, &mut owner, material, key)?;
+                primitives.push(Resolved {
+                    material: material.clone(),
+                    mesh: mesh.clone(),
+                    primitive: *primitive,
+                    key,
+                    distinct_weights: 0,
+                    runner_up: 0.0,
+                });
+                continue;
             }
             let contained: Vec<(u64, usize)> = candidates
                 .iter()
@@ -447,27 +508,7 @@ fn resolve_by(
                 .filter(|&&(k, _)| k != key)
                 .map(|&(_, n)| n as f64 / weights.len() as f64)
                 .fold(0.0, f64::max);
-            match keys.get(material) {
-                Some(&k) if k != key => {
-                    return Err(bad(
-                        W,
-                        0,
-                        format!("material {material} resolves to two keys, {k:016x} and {key:016x}"),
-                    ));
-                }
-                _ => {
-                    keys.insert(material.clone(), key);
-                }
-            }
-            if let Some(other) = owner.insert(key, material.clone())
-                && other != *material
-            {
-                return Err(bad(
-                    W,
-                    0,
-                    format!("materials {other} and {material} resolve to one key, {key:016x}"),
-                ));
-            }
+            claim(&mut keys, &mut owner, material, key)?;
             primitives.push(Resolved {
                 material: material.clone(),
                 mesh: mesh.clone(),
@@ -592,6 +633,12 @@ mod tests {
             "t_1_-5"
         );
         assert_eq!(meshset_stem("world/custom/level/meshes/Plain"), "plain");
+        // a GLB of one primitive: the object is named after the GLB alone
+        assert_eq!(
+            meshset_stem("world/custom/dingolevel_reskate_legion/meshes/t_0_-5_v23_70_0"),
+            "t_0_-5_v23"
+        );
+        assert_eq!(meshset_stem("world/custom/level/meshes/t_1_2_7_0"), "t_1_2");
         assert_eq!(glb_stem("meshes/T_0_-6.glb"), "t_0_-6");
     }
 
@@ -626,7 +673,7 @@ mod tests {
             ("meshes/t_0.glb", 2) => vec![0.0, 0.25, 0.5, 1.0],
             ("meshes/t_0.glb", 3) => vec![0.0, 0.75, 1.0],
             ("meshes/t_1.glb", 0) => vec![0.75, 0.125],
-            ("meshes/t_1.glb", 9) => vec![0.0, 1.0, 1.0],
+            ("meshes/t_1.glb", 9) | ("meshes/t_0.glb", 9) => vec![0.0, 1.0, 1.0],
             _ => vec![0.25],
         })
     }
@@ -670,12 +717,28 @@ mod tests {
     }
 
     #[test]
+    fn only_zero_and_one_resolve_to_the_glbs_only_key() {
+        // t_1's MeshSets have one vertex-blend key: a primitive of only 0 and 1 is that key
+        let r = resolve_by(&record(&[("b", "t_1", 9)]), &sections()[2..], weights).unwrap();
+        assert_eq!(r.keys, BTreeMap::from([("b".into(), 0xb)]));
+        assert_eq!(r.primitives[0].distinct_weights, 0);
+        // and is still one material per key
+        let e = message(resolve_by(
+            &record(&[("a", "t_1", 0), ("b", "t_1", 9)]),
+            &sections()[2..],
+            weights,
+        ));
+        assert!(e.contains("resolve to one key"), "{e}");
+    }
+
+    #[test]
     fn every_ambiguity_is_refused() {
         let s = sections();
-        // only 0 and 1: nothing identifies the section; the error names material and GLB
-        let e = message(resolve_by(&record(&[("a", "t_1", 9)]), &s, weights));
+        // only 0 and 1 in a GLB of two vertex-blend keys: nothing identifies the section; the error names material
+        // and GLB
+        let e = message(resolve_by(&record(&[("a", "t_0", 9)]), &s, weights));
         assert!(
-            e.contains("only weights 0 and 1") && e.contains("material a in meshes/t_1.glb"),
+            e.contains("only weights 0 and 1") && e.contains("material a in meshes/t_0.glb"),
             "{e}"
         );
         // no containing key
