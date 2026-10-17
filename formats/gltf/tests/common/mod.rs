@@ -270,13 +270,11 @@ pub fn build(dir: &Path) -> Built {
     w.insert(proto_rich, Source("msb:c1100/rich".into()));
     w.insert(
         proto_rich,
-        Mesh {
-            primitives: vec![
-                rich_primitive(Some(mat_pbr), 0.0),
-                rich_primitive(Some(mat_mask), 2.0),
-                rich_primitive(None, 4.0),
-            ],
-        },
+        Mesh::new(vec![
+            rich_primitive(Some(mat_pbr), 0.0),
+            rich_primitive(Some(mat_mask), 2.0),
+            rich_primitive(None, 4.0),
+        ]),
     );
     w.insert(
         proto_rich,
@@ -303,52 +301,46 @@ pub fn build(dir: &Path) -> Built {
     let big_idx: Vec<u32> = (0..n as u32).rev().collect();
     w.insert(
         proto_big,
-        Mesh {
-            primitives: vec![
-                Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(big_pos.clone()))]),
-                    indices: Some(big_idx),
-                    material: Some(mat_plain),
-                },
-                Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(big_pos[..9].to_vec()))]),
-                    indices: None,
-                    material: Some(mat_pbr),
-                },
-            ],
-        },
+        Mesh::new(vec![
+            Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(big_pos.clone()))]),
+                indices: Some(big_idx),
+                material: Some(mat_plain),
+            },
+            Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(big_pos[..9].to_vec()))]),
+                indices: None,
+                material: Some(mat_pbr),
+            },
+        ]),
     );
 
     let proto_lines = w.spawn();
     w.insert(proto_lines, Name("rail".into()));
     w.insert(
         proto_lines,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Lines,
-                streams: BTreeMap::from([
-                    (
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0.0; 3], [0.0, 0.0, -3.0], [1.0, 2.0, 3.0]]),
-                    ),
-                    (Semantic::Color(0), Stream::U16x4(vec![[65535, 0, 0, 65535]; 3])),
-                    (Semantic::Joints(0), Stream::U8x4(vec![[0; 4]; 3])),
-                ]),
-                indices: Some(vec![0, 1, 1, 2]),
-                material: None,
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Lines,
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0.0; 3], [0.0, 0.0, -3.0], [1.0, 2.0, 3.0]]),
+                ),
+                (Semantic::Color(0), Stream::U16x4(vec![[65535, 0, 0, 65535]; 3])),
+                (Semantic::Joints(0), Stream::U8x4(vec![[0; 4]; 3])),
+            ]),
+            indices: Some(vec![0, 1, 1, 2]),
+            material: None,
+        }]),
     );
 
     let proto_unplaced = w.spawn();
     w.insert(proto_unplaced, Name("unused".into()));
     w.insert(
         proto_unplaced,
-        Mesh {
-            primitives: vec![rich_primitive(Some(mat_pbr), 0.0)],
-        },
+        Mesh::new(vec![rich_primitive(Some(mat_pbr), 0.0)]),
     );
     let proto_empty = w.spawn();
     w.insert(proto_empty, Name("no geometry".into()));
@@ -360,12 +352,7 @@ pub fn build(dir: &Path) -> Built {
         soup,
         t([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [100., 0., -50.]]),
     );
-    w.insert(
-        soup,
-        Mesh {
-            primitives: vec![rich_primitive(Some(mat_plain), 0.0)],
-        },
-    );
+    w.insert(soup, Mesh::new(vec![rich_primitive(Some(mat_plain), 0.0)]));
 
     let place = |w: &mut World, proto: Entity, variant: u32, tr: Transform, src: &str| {
         let e = w.spawn();

@@ -53,7 +53,7 @@ pub fn mesh_file_box(base_dir: &Path, file: &MeshFile) -> Result<Option<[[f64; 3
             detail: detail.into(),
         })
     };
-    let item = format!("meshes[{}].primitives", file.mesh);
+    let item = format!("meshes[{}].primitives()", file.mesh);
     let primitives = doc["meshes"][file.mesh as usize]["primitives"]
         .as_array()
         .ok_or_else(|| invalid(item, "missing"))?;
@@ -125,10 +125,10 @@ pub fn load_mesh_files(world: &mut World, base_dir: &Path) -> Result<LoadReport>
             });
         }
         let mut mesh: Mesh = read.to_mesh();
-        for (p, m) in mesh.primitives.iter_mut().zip(&file.materials) {
+        for (p, m) in mesh.primitives_mut().iter_mut().zip(&file.materials) {
             p.material = *m;
         }
-        report.primitives += mesh.primitives.len() as u64;
+        report.primitives += mesh.primitives().len() as u64;
         report.meshes += 1;
         world.insert(e, mesh);
     }

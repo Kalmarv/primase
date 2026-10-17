@@ -209,11 +209,11 @@ fn object_world(
                 uv_scale: m.uv_scale,
             })
             .collect();
-        let mut mesh = Mesh::default();
+        let mut primitives = Vec::new();
         for part in model.geometry(&choices)? {
             let material = world.spawn();
             world.insert(material, m[part.material].clone());
-            mesh.primitives.push(Primitive {
+            primitives.push(Primitive {
                 topology: Topology::Triangles,
                 streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(part.mesh.positions))]),
                 indices: Some(part.mesh.indices),
@@ -221,7 +221,7 @@ fn object_world(
             });
         }
         let e = world.spawn();
-        world.insert(e, mesh);
+        world.insert(e, Mesh::new(primitives));
         world.insert(
             e,
             SkatePrototype {

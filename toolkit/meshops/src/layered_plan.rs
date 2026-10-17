@@ -59,10 +59,7 @@ impl LayeredPbrPlan {
             materials.insert(key, entity);
         }
         for ((entity, parts), (_, from)) in self.plans.into_iter().zip(remaps) {
-            world
-                .remap_primitives(entity, &from)
-                .expect("the same remap succeeded on the copy");
-            let mut mesh = Mesh::default();
+            let mut primitives = Vec::new();
             let mut variants = Vec::new();
             for (_source, key, mut part, variant) in parts {
                 if let Some(key) = key {
@@ -79,10 +76,12 @@ impl LayeredPbrPlan {
                         (part.indices.as_ref().expect("split indices").len() / 3) as u64,
                     );
                 }
-                mesh.primitives.push(part);
+                primitives.push(part);
                 variants.push(variant);
             }
-            world.insert(entity, mesh);
+            world
+                .rebuild_primitives(entity, |_| Ok((primitives, from)))
+                .expect("the same remap succeeded on the copy");
             world.remove::<MeshFile>(entity);
             if world.has::<MaterialVariants>(entity) {
                 world.insert(entity, MaterialVariants(variants));
@@ -110,7 +109,7 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
     let mut replaced_hosts = BTreeSet::new();
     let transformed_uv = (0..=u8::MAX).find(|&i| {
         world.iter::<Mesh>().all(|(_, m)| {
-            m.primitives
+            m.primitives()
                 .iter()
                 .all(|p| !p.streams.contains_key(&primase_core::Semantic::TexCoord(i)))
         })
@@ -137,12 +136,12 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
     }
     for (entity, mesh) in world.iter::<Mesh>() {
         let variants = world.get::<MaterialVariants>(entity);
-        if variants.is_some_and(|v| v.0.len() != mesh.primitives.len()) {
+        if variants.is_some_and(|v| v.0.len() != mesh.primitives().len()) {
             return Err(Error("material variant count differs from primitives".into()));
         }
         let mut parts = Vec::new();
         let mut changed = false;
-        for (i, primitive) in mesh.primitives.iter().enumerate() {
+        for (i, primitive) in mesh.primitives().iter().enumerate() {
             let variant = variants.map(|v| v.0[i].clone()).unwrap_or_default();
             if variant.values().any(|m| world.has::<LayeredMaterial>(*m)) {
                 return Err(Error("layered material is not allowed as a variant".into()));
@@ -229,7 +228,11 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
         .iter()
         .map(|(entity, parts)| LayeredMeshSource {
             entity: *entity,
-            primitive_count: world.get::<Mesh>(*entity).expect("planned mesh").primitives.len(),
+            primitive_count: world
+                .get::<Mesh>(*entity)
+                .expect("planned mesh")
+                .primitives()
+                .len(),
             parts: parts
                 .iter()
                 .map(|(primitive, key, _, _)| LayeredPartSource {

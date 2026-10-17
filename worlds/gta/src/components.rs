@@ -240,7 +240,7 @@ impl Component for GtaSources {
     }
     /// One source per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
-        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
+        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives().len());
         if n != self.sources.len() {
             return Err(format!("{n} primitives, {} sources", self.sources.len()));
         }
@@ -263,7 +263,7 @@ impl Component for GtaPoses {
     }
     /// One pose per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
-        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
+        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives().len());
         if n != self.0.len() {
             return Err(format!("{n} primitives, {} poses", self.0.len()));
         }

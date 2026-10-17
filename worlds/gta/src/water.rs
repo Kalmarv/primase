@@ -476,14 +476,12 @@ impl Pass for LowerGtaWater {
             streams.insert(Semantic::Position, Stream::F32x3(positions));
             w.insert(
                 proto,
-                Mesh {
-                    primitives: vec![Primitive {
-                        topology: Topology::Triangles,
-                        streams,
-                        indices: Some(indices),
-                        material: Some(material),
-                    }],
-                },
+                Mesh::new(vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams,
+                    indices: Some(indices),
+                    material: Some(material),
+                }]),
             );
             log.count("water surfaces", 1);
         }
@@ -662,11 +660,11 @@ mod tests {
         let placed: Vec<_> = w.iter::<Instance>().collect();
         assert_eq!(placed.len(), 1);
         let mesh = w.get::<Mesh>(placed[0].1.prototype).unwrap();
-        let p = mesh.primitives[0].positions().unwrap();
+        let p = mesh.primitives()[0].positions().unwrap();
         // the 5 x 5 corner of the first quad, flat at the sea's height (core y up)
         assert!(p.iter().all(|v| v[1] == 0.0));
         let m = w
-            .get::<PbrMaterial>(mesh.primitives[0].material.unwrap())
+            .get::<PbrMaterial>(mesh.primitives()[0].material.unwrap())
             .unwrap();
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
         assert!((m.roughness - (2.0f32 / 1120.0).powf(0.25)).abs() < 1e-6);

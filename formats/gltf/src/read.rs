@@ -52,9 +52,7 @@ pub struct ReadMesh {
 impl ReadMesh {
     /// The core mesh, every primitive's material `None`.
     pub fn to_mesh(&self) -> Mesh {
-        Mesh {
-            primitives: self.primitives.iter().map(|p| p.primitive.clone()).collect(),
-        }
+        Mesh::new(self.primitives.iter().map(|p| p.primitive.clone()).collect())
     }
 }
 
@@ -175,7 +173,7 @@ impl Gltf {
         let primitives = prims
             .iter()
             .enumerate()
-            .map(|(i, p)| self.read_primitive(p, &format!("{path}.primitives[{i}]")))
+            .map(|(i, p)| self.read_primitive(p, &format!("{path}.primitives()[{i}]")))
             .collect::<Result<_>>()?;
         Ok(ReadMesh {
             name: m.str_opt("name")?.map(str::to_owned),

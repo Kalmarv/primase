@@ -71,7 +71,7 @@ fn overlaps(w: &World) -> (usize, usize) {
             continue;
         };
         let mut seen: BTreeSet<[u32; 3]> = BTreeSet::new();
-        for (p, o) in mesh.primitives.iter().zip(&op.0) {
+        for (p, o) in mesh.primitives().iter().zip(&op.0) {
             if o.is_none() {
                 seen.clear();
                 continue;

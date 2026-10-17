@@ -54,7 +54,7 @@ fn materials(w: &World, prototype: Entity, variant: u32) -> Vec<Option<Entity>> 
         return Vec::new();
     };
     let variants = w.get::<MaterialVariants>(prototype);
-    mesh.primitives
+    mesh.primitives()
         .iter()
         .enumerate()
         .map(|(i, p)| {

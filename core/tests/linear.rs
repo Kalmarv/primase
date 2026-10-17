@@ -17,25 +17,23 @@ fn triangle() -> Mesh {
     );
     streams.insert(Semantic::Normal, Stream::F32x3(vec![[0.0, 1.0, 0.0]; 3]));
     streams.insert(Semantic::Tangent, Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3]));
-    Mesh {
-        primitives: vec![Primitive {
-            topology: Topology::Triangles,
-            streams,
-            indices: Some(vec![0, 1, 2]),
-            material: None,
-        }],
-    }
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams,
+        indices: Some(vec![0, 1, 2]),
+        material: None,
+    }])
 }
 
 fn f3(m: &Mesh, s: Semantic) -> Vec<[f32; 3]> {
-    match m.primitives[0].streams.get(&s) {
+    match m.primitives()[0].streams.get(&s) {
         Some(Stream::F32x3(v)) => v.clone(),
         _ => panic!("{s:?}"),
     }
 }
 
 fn f4(m: &Mesh, s: Semantic) -> Vec<[f32; 4]> {
-    match m.primitives[0].streams.get(&s) {
+    match m.primitives()[0].streams.get(&s) {
         Some(Stream::F32x4(v)) => v.clone(),
         _ => panic!("{s:?}"),
     }
@@ -61,7 +59,7 @@ fn fronts_and_bitangent(m: &Mesh) -> (Vec<f32>, [f32; 3]) {
         f3(m, Semantic::Normal),
         f4(m, Semantic::Tangent),
     );
-    let idx = m.primitives[0].indices.clone().unwrap();
+    let idx = m.primitives()[0].indices.clone().unwrap();
     let fronts = idx
         .as_chunks::<3>()
         .0
@@ -142,7 +140,7 @@ fn a_mirror_moves_into_the_geometry_with_fronts_and_bitangents_kept() {
     assert_eq!(f3(&m, Semantic::Normal), [[0.0, 1.0, 0.0]; 3].to_vec());
     assert_eq!(f4(&m, Semantic::Tangent), [[-1.0, 0.0, 0.0, -1.0]; 3].to_vec());
     // the triangle reversed, so its front still faces its normal; the bitangent is the mirrored one (x negated)
-    assert_eq!(m.primitives[0].indices.as_deref(), Some(&[0, 2, 1][..]));
+    assert_eq!(m.primitives()[0].indices.as_deref(), Some(&[0, 2, 1][..]));
     let after = fronts_and_bitangent(&m);
     assert!(before.0[0] > 0.0 && after.0[0] > 0.0, "{before:?} {after:?}");
     assert_eq!(after.1, [-before.1[0], before.1[1], before.1[2]]);
@@ -168,7 +166,7 @@ fn a_shear_maps_points_and_keeps_normals_perpendicular() {
     }
     assert!((dot(n, n) - 1.0).abs() < 1e-6 && n[1] > 0.0, "{n:?}");
     assert_eq!(
-        m.primitives[0].indices.as_deref(),
+        m.primitives()[0].indices.as_deref(),
         Some(&[0, 1, 2][..]),
         "no mirror, order kept"
     );

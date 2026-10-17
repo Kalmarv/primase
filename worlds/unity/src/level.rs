@@ -966,7 +966,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 // a mesh with no submesh that has indices draws nothing: no core mesh
                 if !primitives.is_empty() {
                     b.report.primitives += primitives.len();
-                    w.insert(e, Mesh { primitives });
+                    w.insert(e, Mesh::new(primitives));
                 }
                 w.insert(
                     e,
@@ -1097,7 +1097,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 }
                 let f = w.spawn();
                 if !primitives.is_empty() {
-                    w.insert(f, Mesh { primitives });
+                    w.insert(f, Mesh::new(primitives));
                 }
                 w.insert(
                     f,
@@ -1156,7 +1156,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         let Some(mesh) = w.get_mut::<Mesh>(p.entity) else {
             continue;
         };
-        for (prim, &k) in mesh.primitives.iter_mut().zip(&p.drawn) {
+        for (prim, &k) in mesh.primitives_mut().iter_mut().zip(&p.drawn) {
             prim.material = material(&p.variants[0], k);
         }
         if overrides.iter().any(|o| !o.is_empty()) {

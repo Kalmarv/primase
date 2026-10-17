@@ -49,24 +49,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prototype = world.spawn();
     world.insert(
         prototype,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams: BTreeMap::from([
-                    (
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0., 0., 0.], [2., 0., 0.], [0., 2., 0.]]),
-                    ),
-                    (Semantic::Normal, Stream::F32x3(vec![[0., 0., 1.]; 3])),
-                    (
-                        Semantic::TexCoord(0),
-                        Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
-                    ),
-                ]),
-                indices: Some(vec![0, 1, 2]),
-                material: Some(material),
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [2., 0., 0.], [0., 2., 0.]]),
+                ),
+                (Semantic::Normal, Stream::F32x3(vec![[0., 0., 1.]; 3])),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+                ),
+            ]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(material),
+        }]),
     );
     for (x, scale) in [(1., 1.), (4., 1.), (7., 1.), (10., -1.)] {
         let e = world.spawn();

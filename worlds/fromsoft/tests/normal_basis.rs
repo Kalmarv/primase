@@ -262,7 +262,7 @@ fn castle_gx_emissive_geometry() -> Result<()> {
             .iter::<Instance>()
             .filter(|(_, i)| i.prototype == entity)
             .count();
-        for p in &mesh.primitives {
+        for p in mesh.primitives() {
             if p.material
                 .and_then(|e| world.get::<Material>(e))
                 .is_some_and(|m| m.shader == "GXFlver_ColDifSpcBumpEmiIbl")

@@ -32,14 +32,12 @@ fn roof(lift: f32) -> Mesh {
             [1.0, 0.0, 0.0, -1.0],
         ]),
     );
-    Mesh {
-        primitives: vec![Primitive {
-            topology: Topology::Triangles,
-            streams,
-            indices: Some(vec![0, 1, 2, 2, 1, 3]),
-            material: None,
-        }],
-    }
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams,
+        indices: Some(vec![0, 1, 2, 2, 1, 3]),
+        material: None,
+    }])
 }
 
 fn t(cols: [[f32; 3]; 4]) -> Transform {
@@ -95,7 +93,7 @@ fn drawn(w: &World, e: Entity) -> Vec<Drawn> {
         }))
     };
     let mut out = Vec::new();
-    for p in &mesh.primitives {
+    for p in mesh.primitives() {
         let (Some(Stream::F32x3(pos)), Some(Stream::F32x3(nor)), Some(Stream::F32x4(tan))) = (
             p.streams.get(&Semantic::Position),
             p.streams.get(&Semantic::Normal),

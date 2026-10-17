@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::{Error, Result};
 
-/// A JSON object being read, with the path used in errors (`meshes[3].primitives[0]`).
+/// A JSON object being read, with the path used in errors (`meshes[3].primitives()[0]`).
 #[derive(Clone, Copy, Debug)]
 pub struct Obj<'a> {
     pub map: &'a Map<String, Value>,

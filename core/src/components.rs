@@ -1090,14 +1090,12 @@ mod tests {
         w.insert(p, Name("a".into()));
         w.insert(
             p,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.; 3]; 3]))]),
-                    indices: None,
-                    material: Some(mat),
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.; 3]; 3]))]),
+                indices: None,
+                material: Some(mat),
+            }]),
         );
         let got: Vec<(&str, Option<Value>)> = w
             .components_json(p)
@@ -1141,17 +1139,15 @@ mod tests {
         w.insert(e2, m);
         w.insert(
             e2,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([(
-                        Semantic::TexCoord(0),
-                        Stream::F32x2(vec![[0.0, f32::NEG_INFINITY]]),
-                    )]),
-                    indices: None,
-                    material: None,
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0.0, f32::NEG_INFINITY]]),
+                )]),
+                indices: None,
+                material: None,
+            }]),
         );
         let got: Vec<(&str, Entity, String)> = w.verify_components();
         assert_eq!(

@@ -484,17 +484,15 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn mesh(x: f32) -> Mesh {
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams: BTreeMap::from([(
-                    Semantic::Position,
-                    Stream::F32x3(vec![[x, 0., 0.], [0., 1., 0.], [0., 0., 1.]]),
-                )]),
-                indices: None,
-                material: None,
-            }],
-        }
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([(
+                Semantic::Position,
+                Stream::F32x3(vec![[x, 0., 0.], [0., 1., 0.], [0., 0., 1.]]),
+            )]),
+            indices: None,
+            material: None,
+        }])
     }
 
     /// e0 a named mesh from `m11:wall`, e1 a named light-ish opaque thing, e2 a bare mesh.
@@ -543,7 +541,7 @@ mod tests {
             for e in meshes {
                 if let Some(Stream::F32x3(v)) = w
                     .get_mut::<Mesh>(e)
-                    .and_then(|m| m.primitives[0].streams.get_mut(&Semantic::Position))
+                    .and_then(|m| m.primitives_mut()[0].streams.get_mut(&Semantic::Position))
                 {
                     v[0][0] += 1.;
                     log.count("moved", 1);

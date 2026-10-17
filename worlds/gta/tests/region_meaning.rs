@@ -445,7 +445,7 @@ fn region_placements_against_the_scene() {
     let tris = |m: &Mesh, prims: &[usize]| -> BTreeMap<[[i64; 3]; 3], usize> {
         let mut out = BTreeMap::new();
         for &i in prims {
-            for (k, n) in tris_of(&m.primitives[i]) {
+            for (k, n) in tris_of(&m.primitives()[i]) {
                 *out.entry(k).or_default() += n;
             }
         }
@@ -504,7 +504,7 @@ fn region_placements_against_the_scene() {
                 // winding: each scene triangle as ours wind it (corners in cyclic order)
                 let mut ours_o = BTreeMap::new();
                 for &k in &ats {
-                    ours_o.extend(oriented(&ours_mesh.primitives[k]));
+                    ours_o.extend(oriented(&ours_mesh.primitives()[k]));
                 }
                 // a geometry whose triangles' facing against the stored normals sums to zero is undecided: ours keeps
                 // the game's order, that exporter's float sum may have flipped it
@@ -514,10 +514,10 @@ fn region_placements_against_the_scene() {
                         .iter()
                         .position(|s| *s == g)
                         .expect("the geometry as read");
-                    facing(&read_mesh.primitives[k]).0 == 0.0
+                    facing(&read_mesh.primitives()[k]).0 == 0.0
                 };
                 for &pi in &parts {
-                    for (k, n) in oriented(&their_mesh.primitives[pi]) {
+                    for (k, n) in oriented(&their_mesh.primitives()[pi]) {
                         if !ours_o.contains_key(&k) && undecided {
                             *geo.entry("scene triangles wound the other way on geometries their normals leave undecided (facing sum 0)").or_default() += n;
                         } else if !ours_o.contains_key(&k) {
@@ -536,7 +536,7 @@ fn region_placements_against_the_scene() {
                                     .iter()
                                     .position(|s| *s == g)
                                     .expect("the geometry as read");
-                                let (sum, size) = facing(&read_mesh.primitives[k]);
+                                let (sum, size) = facing(&read_mesh.primitives()[k]);
                                 wound_examples.push(format!(
                                     "{name} {g:?} ({shader}): facing sum {sum:.3e} of {size:.3e} ({:.2e})",
                                     sum / size.max(f64::MIN_POSITIVE)
@@ -572,7 +572,7 @@ fn region_placements_against_the_scene() {
                 );
                 let mut at: BTreeMap<[i64; 3], Vec<Attrs>> = BTreeMap::new();
                 for &k in &ats {
-                    let op = &ours_mesh.primitives[k];
+                    let op = &ours_mesh.primitives()[k];
                     let (ouv, on, oc) = (
                         f2(op, primase_core::Semantic::TexCoord(0)),
                         f3(op, primase_core::Semantic::Normal),
@@ -610,7 +610,7 @@ fn region_placements_against_the_scene() {
                     }
                 }
                 for &pi in &parts {
-                    let tp = &their_mesh.primitives[pi];
+                    let tp = &their_mesh.primitives()[pi];
                     let (tuv, tn, tc) = (
                         f2(tp, primase_core::Semantic::TexCoord(0)),
                         f3(tp, primase_core::Semantic::Normal),
@@ -671,7 +671,7 @@ fn region_placements_against_the_scene() {
                     .iter()
                     .position(|s| *s == g)
                     .expect("the geometry as read");
-                let op = &read_mesh.primitives[k];
+                let op = &read_mesh.primitives()[k];
                 let ours: Vec<[f64; 3]> = op
                     .positions()
                     .expect("positions")
@@ -683,7 +683,7 @@ fn region_placements_against_the_scene() {
                 let each = parts
                     .iter()
                     .map(|&i| {
-                        let r = replay_lift(&ours, &our_tris, &[&their_mesh.primitives[i]], false, false);
+                        let r = replay_lift(&ours, &our_tris, &[&their_mesh.primitives()[i]], false, false);
                         if only_some && r != Lift::Exact {
                             println!("      lift: {name} {g:?} part {i}: {r:?}");
                         }
@@ -697,7 +697,7 @@ fn region_placements_against_the_scene() {
                     // that exporter sums over its bucket: all the geometry's scene parts, and the triangles of ours
                     // the scene has none of (left out after the lift)
                     let all: Vec<&primase_core::Primitive> =
-                        parts.iter().map(|&i| &their_mesh.primitives[i]).collect();
+                        parts.iter().map(|&i| &their_mesh.primitives()[i]).collect();
                     let together = replay_lift(&ours, &our_tris, &all, true, only_some);
                     if only_some {
                         println!(
@@ -724,7 +724,7 @@ fn region_placements_against_the_scene() {
                     if only_some {
                         // the scene part's first corners against the nearest vertex of ours, drawn and as read
                         let near = |m: &Mesh, src: &GtaSources, c: [f64; 3]| {
-                            m.primitives
+                            m.primitives()
                                 .iter()
                                 .zip(&src.sources)
                                 .filter(|(_, s)| **s == g)
@@ -735,7 +735,7 @@ fn region_placements_against_the_scene() {
                                 .min_by(|x, y| dot(*x, *x).total_cmp(&dot(*y, *y)))
                                 .map(|d| d.map(|x| (x * 1e4).round() / 1e4))
                         };
-                        let tp = &their_mesh.primitives[parts[0]];
+                        let tp = &their_mesh.primitives()[parts[0]];
                         for c in tp.positions().unwrap_or(&[]).iter().take(3) {
                             let c = c.map(f64::from);
                             println!(
@@ -800,7 +800,7 @@ fn region_placements_against_the_scene() {
         }
         let mut mats: Vec<primase_core::Entity> = theirs
             .get::<Mesh>(e)
-            .map(|m| m.primitives.iter().filter_map(|p| p.material).collect())
+            .map(|m| m.primitives().iter().filter_map(|p| p.material).collect())
             .unwrap_or_default();
         if let Some(v) = theirs.get::<primase_core::MaterialVariants>(e) {
             mats.extend(v.0.iter().flat_map(|m| m.values().copied()));
@@ -970,7 +970,7 @@ fn region_placements_against_the_scene() {
             // gta-tint splits a geometry by palette colour: our primitive is the one holding most of the scene part's
             // triangles, by position, else (a lifted decal) by UV with the centroid within 2 cm
             let at = {
-                let tp = &their_mesh.primitives[i];
+                let tp = &their_mesh.primitives()[i];
                 let (want_pos, want_uv) = (tris_of(tp), uv_tris(tp));
                 let best = |score: &dyn Fn(usize) -> usize| {
                     cands
@@ -982,13 +982,13 @@ fn region_placements_against_the_scene() {
                         .map(|(_, k)| k)
                 };
                 best(&|k| {
-                    let ours = tris_of(&om.primitives[k]);
+                    let ours = tris_of(&om.primitives()[k]);
                     want_pos.keys().filter(|t| ours.contains_key(*t)).count()
                 })
                 .or_else(|| {
                     best(&|k| {
                         let mut ours: BTreeMap<[[i64; 2]; 3], Vec<[f64; 3]>> = BTreeMap::new();
-                        for (uv, c) in uv_tris(&om.primitives[k]) {
+                        for (uv, c) in uv_tris(&om.primitives()[k]) {
                             ours.entry(uv).or_default().push(c);
                         }
                         want_uv
@@ -1003,9 +1003,9 @@ fn region_placements_against_the_scene() {
                 })
                 .unwrap_or(cands[0])
             };
-            let op = &om.primitives[at];
+            let op = &om.primitives()[at];
             // a tinted part's materials are its variants' (one per tint row)
-            let tm = their_mesh.primitives[i]
+            let tm = their_mesh.primitives()[i]
                 .material
                 .or_else(|| {
                     theirs
@@ -1022,7 +1022,7 @@ fn region_placements_against_the_scene() {
                 let diffs = layered_diffs(
                     &theirs,
                     tm,
-                    &their_mesh.primitives[i],
+                    &their_mesh.primitives()[i],
                     &drawn,
                     om_e,
                     op,
@@ -1223,8 +1223,8 @@ fn region_placements_against_the_scene() {
                         }
                         let tint = drawn
                             .get::<Mesh>(ours_e)
-                            .and_then(|m| m.primitives.get(at))
-                            .map_or_else(Default::default, |op| tint_at(&their_mesh.primitives[i], op));
+                            .and_then(|m| m.primitives().get(at))
+                            .map_or_else(Default::default, |op| tint_at(&their_mesh.primitives()[i], op));
                         let got = tint
                             .colours
                             .iter()
@@ -1232,7 +1232,7 @@ fn region_placements_against_the_scene() {
                             .and_then(|(c, _)| quantised_tint(*c));
                         if want != got {
                             if only_some {
-                                tint_debug(&read, oe, g, &their_mesh.primitives[i], om_e, *row);
+                                tint_debug(&read, oe, g, &their_mesh.primitives()[i], om_e, *row);
                                 println!("      scene material: {:?}", theirs.get::<SkateMaterial>(*tm));
                             }
                             if tint.palette_colours <= 8 {
@@ -1241,7 +1241,7 @@ fn region_placements_against_the_scene() {
                                     tint.colours, tint.triangles, tint.palette_colours
                                 );
                             }
-                            let rule = exporter_tint(&read, oe, g, &their_mesh.primitives[i], om_e, *row);
+                            let rule = exporter_tint(&read, oe, g, &their_mesh.primitives()[i], om_e, *row);
                             if only_some {
                                 let pal = read
                                     .get::<primase_gta::components::GtaShader>(om_e)
@@ -1310,7 +1310,7 @@ fn region_placements_against_the_scene() {
             // fading by vertex alpha: a COLOR_0 alpha below opaque (gta-tint's colour alone is opaque) at the scene
             // part's vertices (that exporter splits a geometry into parts and gives a part vertex alpha only where
             // one of its own vertices fades)
-            let faded = faded_at(&their_mesh.primitives[i], op);
+            let faded = faded_at(&their_mesh.primitives()[i], op);
             if sm.vertex_alpha.unwrap_or(false) != faded {
                 diffs.push(format!(
                     "vertex alpha: scene {}, ours {faded}",
@@ -1994,7 +1994,7 @@ fn exporter_tint(
         .sources
         .iter()
         .position(|s| *s == g)?;
-    let p = &mesh.primitives[k];
+    let p = &mesh.primitives()[k];
     let s = read.get::<primase_gta::components::GtaShader>(material)?;
     let pal = primase_gta::lower::texture(s, "TintPaletteTex")??;
     let t = read.get::<primase_core::Texture>(pal)?;
@@ -2060,7 +2060,7 @@ fn tint_debug(
     let Some(k) = sources.sources.iter().position(|s| *s == g) else {
         return;
     };
-    let p = &mesh.primitives[k];
+    let p = &mesh.primitives()[k];
     let s = read
         .get::<primase_gta::components::GtaShader>(material)
         .expect("shader");

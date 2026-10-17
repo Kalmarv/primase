@@ -65,27 +65,25 @@ fn world(composition: Composition) -> (World, primase_core::Entity, primase_core
     let proto = w.spawn();
     w.insert(
         proto,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams: BTreeMap::from([
-                    (
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
-                    ),
-                    (
-                        Semantic::TexCoord(0),
-                        Stream::F32x2(vec![[0.25, 0.5], [0.75, 0.5], [0.5, 0.5]]),
-                    ),
-                    (
-                        Semantic::Color(0),
-                        Stream::F32x4(vec![[0.2, 0., 0., 1.], [0.4, 0., 0., 1.], [0.6, 0., 0., 1.]]),
-                    ),
-                ]),
-                indices: Some(vec![0, 1, 2]),
-                material: Some(host),
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+                ),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0.25, 0.5], [0.75, 0.5], [0.5, 0.5]]),
+                ),
+                (
+                    Semantic::Color(0),
+                    Stream::F32x4(vec![[0.2, 0., 0., 1.], [0.4, 0., 0., 1.], [0.6, 0., 0., 1.]]),
+                ),
+            ]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(host),
+        }]),
     );
     (w, host, proto)
 }
@@ -107,7 +105,7 @@ fn channels_are_evaluated_at_each_vertex_into_a_new_colour_stream() {
     assert!(!l.weights.per_pixel());
     assert_eq!(l.weights.attribute, Semantic::Color(1), "COLOR_0 is taken");
     assert_eq!(l.weights.mapping, WeightMapping::Identity);
-    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives[0]
+    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives()[0]
         .streams
         .get(&Semantic::Color(1))
     else {
@@ -132,7 +130,7 @@ fn over_is_baked_to_summed_slot_weights() {
         (l.weights.composition, l.weights.mapping),
         (Composition::Sum, WeightMapping::Identity)
     );
-    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives[0]
+    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives()[0]
         .streams
         .get(&Semantic::Color(1))
     else {

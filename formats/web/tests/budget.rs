@@ -28,14 +28,12 @@ fn grid(n: usize, size: f32, seed: f32) -> Mesh {
             ]);
         }
     }
-    Mesh {
-        primitives: vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(positions))]),
-            indices: Some(indices),
-            material: None,
-        }],
-    }
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(positions))]),
+        indices: Some(indices),
+        material: None,
+    }])
 }
 
 /// A placement of `proto` at east `x`, north `north`.

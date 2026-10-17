@@ -60,7 +60,7 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
     let mut uses: Vec<(Prim, Vec<Entity>, bool)> = Vec::new();
     for (e, mesh) in world.iter::<Mesh>() {
         let variants = world.get::<MaterialVariants>(e);
-        for (i, p) in mesh.primitives.iter().enumerate() {
+        for (i, p) in mesh.primitives().iter().enumerate() {
             let mut ms: Vec<Entity> = p.material.into_iter().collect();
             if let Some(v) = variants.and_then(|v| v.0.get(i)) {
                 ms.extend(v.values().copied());
@@ -151,7 +151,7 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
                 matches!(
                     world
                         .get::<Mesh>(e)
-                        .map(|m| m.primitives[i].streams.get(&Semantic::TexCoord(n))),
+                        .map(|m| m.primitives()[i].streams.get(&Semantic::TexCoord(n))),
                     Some(Some(Stream::F32x2(_)))
                 )
             };
@@ -161,7 +161,9 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
             }
             for &((e, i), _) in prims {
                 let mesh = world.get_mut::<Mesh>(e).expect("loaded");
-                if let Some(Stream::F32x2(uv)) = mesh.primitives[i].streams.get_mut(&Semantic::TexCoord(n)) {
+                if let Some(Stream::F32x2(uv)) =
+                    mesh.primitives_mut()[i].streams.get_mut(&Semantic::TexCoord(n))
+                {
                     for x in uv.iter_mut() {
                         *x = t.apply(*x);
                     }

@@ -33,17 +33,15 @@ fn asset_names_hash_their_own_bytes_and_reject_stale_content() {
     assert!(set.write_to(&destination).is_err());
 }
 fn mesh() -> Mesh {
-    Mesh {
-        primitives: vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(
-                Semantic::Position,
-                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
-            )]),
-            indices: Some(vec![0, 1, 2]),
-            material: None,
-        }],
-    }
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([(
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+        )]),
+        indices: Some(vec![0, 1, 2]),
+        material: None,
+    }])
 }
 #[test]
 fn pivot_tiles_negative_coordinates_and_determinism() {
@@ -90,7 +88,7 @@ fn triangle_centres_keep_whole_faces() {
     let mut w = World::new();
     let e = w.spawn();
     let mut m = mesh();
-    m.primitives[0].streams.insert(
+    m.primitives_mut()[0].streams.insert(
         Semantic::Position,
         Stream::F32x3(vec![
             [198., 0., 0.],
@@ -101,7 +99,7 @@ fn triangle_centres_keep_whole_faces() {
             [201., 0., 1.],
         ]),
     );
-    m.primitives[0].indices = Some(vec![0, 1, 2, 3, 4, 5]);
+    m.primitives_mut()[0].indices = Some(vec![0, 1, 2, 3, 4, 5]);
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
     let mut o = plain();
@@ -114,8 +112,8 @@ fn triangle_centres_keep_whole_faces() {
         assert_eq!(t.triangles, 1);
         let g = primase_gltf::Gltf::from_glb(&tiles.files[&t.file]).unwrap();
         let mesh = g.read_mesh(0).unwrap().to_mesh();
-        assert_eq!(mesh.primitives[0].vertex_count(), 3);
-        assert_eq!(mesh.primitives[0].indices, Some(vec![0, 1, 2]));
+        assert_eq!(mesh.primitives()[0].vertex_count(), 3);
+        assert_eq!(mesh.primitives()[0].indices, Some(vec![0, 1, 2]));
     }
 }
 #[test]
@@ -123,7 +121,7 @@ fn bad_meshes_and_options_are_errors() {
     let mut w = World::new();
     let e = w.spawn();
     let mut m = mesh();
-    m.primitives[0].indices = Some(vec![0, 1, 9]);
+    m.primitives_mut()[0].indices = Some(vec![0, 1, 9]);
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
     assert!(write(&w, &plain()).is_err());
@@ -289,17 +287,17 @@ fn quantized_streams_decode_exactly_and_validate() {
     let mut w = World::new();
     let p = w.spawn();
     let mut m = mesh();
-    m.primitives[0]
+    m.primitives_mut()[0]
         .streams
         .insert(Semantic::Normal, Stream::F32x3(vec![[0., 1., 0.]; 3]));
-    m.primitives[0]
+    m.primitives_mut()[0]
         .streams
         .insert(Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 3]));
-    m.primitives[0].streams.insert(
+    m.primitives_mut()[0].streams.insert(
         Semantic::TexCoord(0),
         Stream::F32x2(vec![[0., 0.5], [1., 0.], [0., 1.]]),
     );
-    m.primitives[0].streams.insert(
+    m.primitives_mut()[0].streams.insert(
         Semantic::TexCoord(1),
         Stream::F32x2(vec![[0., 0.], [2., 0.], [0., 2.]]),
     );
@@ -633,8 +631,8 @@ fn texture_transforms_survive_instancing_and_compression() {
     );
     let p = w.spawn();
     let mut m = mesh();
-    m.primitives[0].material = Some(mat);
-    m.primitives[0].streams.insert(
+    m.primitives_mut()[0].material = Some(mat);
+    m.primitives_mut()[0].streams.insert(
         Semantic::TexCoord(0),
         Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
     );
@@ -970,7 +968,7 @@ fn emissive_strength_survives_compression_and_instancing() {
     );
     let proto = w.spawn();
     let mut m = mesh();
-    m.primitives[0].material = Some(mat);
+    m.primitives_mut()[0].material = Some(mat);
     w.insert(proto, m);
     for x in [0.0f32, 2.0] {
         let e = w.spawn();
@@ -1087,8 +1085,8 @@ fn vertex_colours_survive_compression_and_instancing() {
         );
         let proto = w.spawn();
         let mut m = mesh();
-        m.primitives[0].material = Some(mat);
-        m.primitives[0]
+        m.primitives_mut()[0].material = Some(mat);
+        m.primitives_mut()[0]
             .streams
             .insert(Semantic::Color(0), Stream::U8x4(colours.clone()));
         w.insert(proto, m);
@@ -1177,8 +1175,8 @@ fn layered_materials_survive_tiling_and_compression() {
         );
         let proto = w.spawn();
         let mut m = mesh();
-        m.primitives[0].material = Some(host);
-        m.primitives[0].streams.insert(
+        m.primitives_mut()[0].material = Some(host);
+        m.primitives_mut()[0].streams.insert(
             Semantic::Color(1),
             Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
         );

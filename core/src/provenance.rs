@@ -130,12 +130,12 @@ impl Component for Provenance {
         }
         if !self.parts.is_empty()
             && let Some(m) = w.get::<Mesh>(e)
-            && m.primitives.len() != self.parts.len()
+            && m.primitives().len() != self.parts.len()
         {
             return Err(format!(
                 "{} parts for {} primitives",
                 self.parts.len(),
-                m.primitives.len()
+                m.primitives().len()
             ));
         }
         Ok(())
@@ -241,12 +241,7 @@ mod tests {
     fn parts_follow_the_mesh_and_the_verifier_holds_them_to_it() {
         let mut w = World::new();
         let e = w.spawn();
-        w.insert(
-            e,
-            Mesh {
-                primitives: vec![prim(), prim(), prim()],
-            },
-        );
+        w.insert(e, Mesh::new(vec![prim(), prim(), prim()]));
         let mut p = Provenance::default();
         for m in [0, 1, 1] {
             p.push_part(flver(m));
@@ -256,7 +251,7 @@ mod tests {
         assert_eq!(w.verify_components(), []);
 
         // a pass drops primitive 0 and splits primitive 2 in two, forgetting provenance: the verifier names it
-        w.get_mut::<Mesh>(e).unwrap().primitives = vec![prim(), prim(), prim(), prim()];
+        *w.get_mut::<Mesh>(e).unwrap() = Mesh::new(vec![prim(), prim(), prim(), prim()]);
         let failures = w.verify_components();
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].2, "3 parts for 4 primitives");

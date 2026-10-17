@@ -41,23 +41,21 @@ fn scene(name: &str) -> PathBuf {
     w.insert(proto, Name("tri".into()));
     w.insert(
         proto,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams: BTreeMap::from([
-                    (
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]]),
-                    ),
-                    (
-                        Semantic::TexCoord(0),
-                        Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
-                    ),
-                ]),
-                indices: None,
-                material: Some(m),
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]]),
+                ),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                ),
+            ]),
+            indices: None,
+            material: Some(m),
+        }]),
     );
     let mut at = |x: f32, light: bool, placed: bool| {
         if placed {

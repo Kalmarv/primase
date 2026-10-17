@@ -23,12 +23,10 @@ fn a_mesh_files_box_is_read_from_its_json() {
     let e = w.spawn();
     w.insert(
         e,
-        Mesh {
-            primitives: vec![
-                triangle([[0., 0., 0.], [1., 0., 0.], [0., 2., 0.]]),
-                triangle([[-3., 0., 0.], [0., 0., 5.], [0., 0., -1.]]),
-            ],
-        },
+        Mesh::new(vec![
+            triangle([[0., 0., 0.], [1., 0., 0.], [0., 2., 0.]]),
+            triangle([[-3., 0., 0.], [0., 0., 5.], [0., 0., -1.]]),
+        ]),
     );
     w.insert(e, Transform::IDENTITY);
     primase_gltf::write_file(&w, &primase_gltf::WriteOptions::default(), &dir.join("a.glb")).unwrap();

@@ -55,12 +55,12 @@ fn material(w: &mut World, base: Option<UvTransform>, normal: Option<Option<UvTr
 
 fn prototype(w: &mut World, prims: Vec<Primitive>) -> Entity {
     let e = w.spawn();
-    w.insert(e, Mesh { primitives: prims });
+    w.insert(e, Mesh::new(prims));
     e
 }
 
 fn uv(w: &World, e: Entity, i: usize) -> Vec<[f32; 2]> {
-    match &w.get::<Mesh>(e).unwrap().primitives[i].streams[&Semantic::TexCoord(0)] {
+    match &w.get::<Mesh>(e).unwrap().primitives()[i].streams[&Semantic::TexCoord(0)] {
         Stream::F32x2(v) => v.clone(),
         _ => panic!("not F32x2"),
     }

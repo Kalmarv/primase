@@ -92,14 +92,14 @@ impl Component for BlendOpacity {
     }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let mesh = w.get::<Mesh>(e).ok_or("blend opacity without core.mesh")?;
-        if self.0.len() != mesh.primitives.len() {
+        if self.0.len() != mesh.primitives().len() {
             return Err(format!(
                 "{} opacity lists for {} primitives",
                 self.0.len(),
-                mesh.primitives.len()
+                mesh.primitives().len()
             ));
         }
-        for (i, (o, p)) in self.0.iter().zip(&mesh.primitives).enumerate() {
+        for (i, (o, p)) in self.0.iter().zip(mesh.primitives()).enumerate() {
             if let Some(o) = o {
                 if o.len() != p.vertex_count() {
                     return Err(format!(
@@ -486,14 +486,14 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         for (e, mesh) in world.iter::<Mesh>() {
             let variants = world.get::<MaterialVariants>(e);
             if !mesh
-                .primitives
+                .primitives()
                 .iter()
                 .any(|p| p.material.is_some_and(|m| layered.contains_key(&m)))
             {
                 continue;
             }
             let mut parts: Vec<PlannedPart> = Vec::new();
-            for (i, p) in mesh.primitives.iter().enumerate() {
+            for (i, p) in mesh.primitives().iter().enumerate() {
                 let Some((m, l)) = p.material.and_then(|m| layered.get(&m).map(|l| (m, l))) else {
                     parts.push((i, p.clone(), None, None));
                     continue;
@@ -637,19 +637,18 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         }
         // ---- apply
         for ((entity, parts), (_, from)) in plans.into_iter().zip(remaps) {
-            let mut mesh = Mesh::default();
+            let mut primitives = Vec::new();
             let mut opacity = Vec::new();
             for (_, mut prim, op, what) in parts {
                 if let Some(key) = what {
                     prim.material = Some(made[&key]);
                 }
-                mesh.primitives.push(prim);
+                primitives.push(prim);
                 opacity.push(op);
             }
             world
-                .remap_primitives(entity, &from)
+                .rebuild_primitives(entity, |_| Ok((primitives, from)))
                 .expect("the same remap succeeded on the copy");
-            world.insert(entity, mesh);
             world.remove::<MeshFile>(entity);
             if opacity.iter().any(Option::is_some) {
                 world.insert(entity, BlendOpacity(opacity));
@@ -961,23 +960,21 @@ mod tests {
         let mesh = world.spawn();
         world.insert(
             mesh,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    material: Some(m),
-                    indices: None,
-                    streams: BTreeMap::from([
-                        (
-                            Semantic::Position,
-                            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
-                        ),
-                        (
-                            Semantic::Color(1),
-                            Stream::F32x4(vec![[1., 0., 0., 0.], [1., 0., 0., 0.], [0.5, 0.5, 0., 0.]]),
-                        ),
-                    ]),
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                material: Some(m),
+                indices: None,
+                streams: BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+                    ),
+                    (
+                        Semantic::Color(1),
+                        Stream::F32x4(vec![[1., 0., 0., 0.], [1., 0., 0., 0.], [0.5, 0.5, 0., 0.]]),
+                    ),
+                ]),
+            }]),
         );
         if let Some(n) = parts {
             world.insert(
@@ -1053,7 +1050,7 @@ mod tests {
         LowerLayeredReskate::default().run(&mut world, &mut log).unwrap();
         assert_eq!(log.counts["overlay primitives"], 1);
         assert!(!world.has::<LayeredMaterial>(m) && !world.has::<SkateMaterial>(m));
-        let prims = &world.get::<Mesh>(mesh).unwrap().primitives;
+        let prims = &world.get::<Mesh>(mesh).unwrap().primitives();
         assert_eq!(prims.len(), 2);
         assert_eq!(world.get::<SkateParts>(mesh).unwrap().0.len(), 2);
         let overlay = world.get::<SkateMaterial>(prims[1].material.unwrap()).unwrap();

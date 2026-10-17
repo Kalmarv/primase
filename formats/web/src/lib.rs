@@ -288,7 +288,7 @@ fn indices(p: &Primitive) -> Vec<u32> {
         .unwrap_or_else(|| (0..p.vertex_count() as u32).collect())
 }
 fn validate_mesh(mesh: &Mesh) -> Result<()> {
-    for p in &mesh.primitives {
+    for p in mesh.primitives() {
         let positions = p
             .positions()
             .ok_or_else(|| Error::Invalid("missing float3 positions".into()))?;
@@ -732,7 +732,7 @@ impl TilePlan {
         let mesh = loaded(world, p.prototype)?;
         validate_mesh(mesh)?;
         let mut parts = BTreeMap::<(i32, i32), Vec<(usize, Vec<u32>)>>::new();
-        for (part, prim) in mesh.primitives.iter().enumerate() {
+        for (part, prim) in mesh.primitives().iter().enumerate() {
             if prim.topology != Topology::Triangles {
                 return Err(Error::Invalid("split-by-tile requires triangle lists".into()));
             }
@@ -922,7 +922,7 @@ impl TilePlan {
             let mesh = loaded(world, p.prototype)?;
             let mut by = BTreeMap::<Subcell, Vec<(usize, Vec<u32>)>>::new();
             for (part, tris) in parts {
-                let prim = &mesh.primitives[*part];
+                let prim = &mesh.primitives()[*part];
                 let pos = prim
                     .positions()
                     .ok_or_else(|| Error::Invalid("missing positions".into()))?;
@@ -990,14 +990,14 @@ impl TilePlan {
                 None => None,
                 Some(parts) => {
                     let variants = w.get::<MaterialVariants>(p.prototype);
-                    if variants.is_some_and(|v| v.0.len() != mesh.primitives.len()) {
+                    if variants.is_some_and(|v| v.0.len() != mesh.primitives().len()) {
                         return Err(Error::Invalid(
                             "material variant count differs from primitive count".into(),
                         ));
                     }
-                    let mut chunk = Mesh::default();
+                    let mut chunk = Vec::new();
                     for (part, tris) in parts {
-                        let prim = &mesh.primitives[*part];
+                        let prim = &mesh.primitives()[*part];
                         let all = indices(prim);
                         let idx: Vec<u32> = tris
                             .iter()
@@ -1008,13 +1008,13 @@ impl TilePlan {
                         sub.material = variants
                             .and_then(|v| v.0[*part].get(&p.variant).copied())
                             .or(prim.material);
-                        chunk.primitives.push(sub);
+                        chunk.push(sub);
                     }
-                    Some(chunk)
+                    Some(Mesh::new(chunk))
                 }
             };
             let drawn = piece.as_ref().unwrap_or(mesh);
-            for prim in &drawn.primitives {
+            for prim in drawn.primitives() {
                 let pos = prim
                     .positions()
                     .ok_or_else(|| Error::Invalid("missing positions".into()))?;

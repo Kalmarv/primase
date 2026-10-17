@@ -16,17 +16,15 @@ fn world(placements: &[(f32, f32)]) -> (World, Vec<Entity>) {
         let proto = w.spawn();
         w.insert(
             proto,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([(
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0., 0., 0.], [width, 0., 0.], [0., 0., -1.]]),
-                    )]),
-                    indices: Some(vec![0, 1, 2]),
-                    material: None,
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [width, 0., 0.], [0., 0., -1.]]),
+                )]),
+                indices: Some(vec![0, 1, 2]),
+                material: None,
+            }]),
         );
         let e = w.spawn();
         w.insert(
@@ -47,7 +45,7 @@ fn world(placements: &[(f32, f32)]) -> (World, Vec<Entity>) {
 fn mesh_box(w: &World, p: Entity) -> Result<Option<LocalBox>> {
     Ok(w.get::<Mesh>(p).map(|m| {
         let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
-        for v in m.primitives[0].positions().unwrap() {
+        for v in m.primitives()[0].positions().unwrap() {
             for k in 0..3 {
                 b[0][k] = b[0][k].min(f64::from(v[k]));
                 b[1][k] = b[1][k].max(f64::from(v[k]));
@@ -62,7 +60,7 @@ fn spanning_marks_wide_and_misplaced_placements() {
     // a 2 m prop, a 300 m wide one, and a 2 m one whose geometry lies 50 m from its pivot
     let (mut w, placed) = world(&[(10., 2.), (10., 300.), (500., 2.)]);
     let far = w.get::<Instance>(placed[2]).unwrap().prototype;
-    if let Some(Stream::F32x3(v)) = w.get_mut::<Mesh>(far).unwrap().primitives[0]
+    if let Some(Stream::F32x3(v)) = w.get_mut::<Mesh>(far).unwrap().primitives_mut()[0]
         .streams
         .get_mut(&Semantic::Position)
     {

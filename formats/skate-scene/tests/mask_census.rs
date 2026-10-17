@@ -78,23 +78,21 @@ fn source_mask_channels_match_independent_pixels() -> Result<(), Box<dyn std::er
         let prototype = world.spawn();
         world.insert(
             prototype,
-            Mesh {
-                primitives: vec![Primitive {
-                    material: Some(material),
-                    topology: primase_core::Topology::Triangles,
-                    indices: None,
-                    streams: std::collections::BTreeMap::from([
-                        (
-                            primase_core::Semantic::Position,
-                            primase_core::Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
-                        ),
-                        (
-                            primase_core::Semantic::TexCoord(0),
-                            primase_core::Stream::F32x2(vec![[0.0; 2], [1.0, 0.0], [0.0, 1.0]]),
-                        ),
-                    ]),
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                material: Some(material),
+                topology: primase_core::Topology::Triangles,
+                indices: None,
+                streams: std::collections::BTreeMap::from([
+                    (
+                        primase_core::Semantic::Position,
+                        primase_core::Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+                    ),
+                    (
+                        primase_core::Semantic::TexCoord(0),
+                        primase_core::Stream::F32x2(vec![[0.0; 2], [1.0, 0.0], [0.0, 1.0]]),
+                    ),
+                ]),
+            }]),
         );
         let placement = world.spawn();
         world.insert(

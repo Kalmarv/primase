@@ -84,14 +84,12 @@ fn world(weights: Option<Semantic>, mapping: WeightMapping, layers: usize) -> (W
     let proto = w.spawn();
     w.insert(
         proto,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams,
-                indices: Some(vec![0, 1, 2]),
-                material: Some(host),
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: Some(vec![0, 1, 2]),
+            material: Some(host),
+        }]),
     );
     let place = w.spawn();
     w.insert(

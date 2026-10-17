@@ -58,3 +58,46 @@ fn an_index_a_component_lacks_is_refused_and_changes_nothing() {
     assert_eq!(w.get::<Sources>(e).unwrap().0, ["a", "b", "c"]);
     assert_eq!(w.get::<MaterialVariants>(e).unwrap().0.len(), 2);
 }
+
+#[test]
+fn rebuild_primitives_changes_the_mesh_and_its_per_primitive_data_together() {
+    use primase_core::{Mesh, Primitive, Topology};
+    let prim = |material: Option<primase_core::Entity>| Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::new(),
+        indices: None,
+        material,
+    };
+    let mut w = World::new();
+    let (a, b) = (w.spawn(), w.spawn());
+    let e = w.spawn();
+    w.insert(e, Mesh::new(vec![prim(Some(a)), prim(Some(b))]));
+    w.insert(e, Sources(vec!["a", "b"]));
+    // primitive 1 split in two, primitive 0 dropped
+    w.rebuild_primitives(e, |m| {
+        let p = m.primitives()[1].clone();
+        Ok((vec![p.clone(), p], vec![1, 1]))
+    })
+    .unwrap();
+    assert_eq!(w.get::<Mesh>(e).unwrap().primitives().len(), 2);
+    assert_eq!(w.get::<Sources>(e).unwrap().0, ["b", "b"]);
+    // a source past the old list, or a count that disagrees: refused, nothing changed
+    let before = w.get::<Mesh>(e).unwrap().clone();
+    let err = w
+        .rebuild_primitives(e, |m| Ok((m.primitives().to_vec(), vec![0, 5])))
+        .unwrap_err();
+    assert_eq!(err, "source primitive 5 of 2");
+    let err = w
+        .rebuild_primitives(e, |m| Ok((m.primitives().to_vec(), vec![0])))
+        .unwrap_err();
+    assert_eq!(err, "2 primitives with 1 sources");
+    assert_eq!(w.get::<Mesh>(e), Some(&before));
+    assert_eq!(w.get::<Sources>(e).unwrap().0, ["b", "b"]);
+    // a component that cannot follow: refused by name, nothing changed
+    w.insert(e, Sources(vec!["only one"]));
+    let err = w
+        .rebuild_primitives(e, |m| Ok((m.primitives().to_vec(), vec![0, 1])))
+        .unwrap_err();
+    assert!(err.starts_with("test.sources: "), "{err}");
+    assert_eq!(w.get::<Mesh>(e), Some(&before));
+}

@@ -247,7 +247,7 @@ fn terrain_geometry_matches_the_port() {
         let (x1, z1) = ((x0 + 128).min(n - 1), (z0 + 128).min(n - 1));
         let nx = x1 - x0 + 1;
         let proto = w.get::<Instance>(e).unwrap().prototype;
-        let prim = &w.get::<Mesh>(proto).unwrap().primitives[0];
+        let prim = &w.get::<Mesh>(proto).unwrap().primitives()[0];
         let (Some(Stream::F32x3(pos)), Some(Stream::F32x3(nrm))) = (
             prim.streams.get(&Semantic::Position),
             prim.streams.get(&Semantic::Normal),

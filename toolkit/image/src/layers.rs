@@ -67,7 +67,7 @@ impl Pass for BakeLayerChannels {
         // every primitive drawn with each material, and a colour stream none of them has
         let mut drawn: BTreeMap<Entity, Vec<(Entity, usize)>> = BTreeMap::new();
         for (mesh, m) in w.iter::<Mesh>() {
-            for (i, p) in m.primitives.iter().enumerate() {
+            for (i, p) in m.primitives().iter().enumerate() {
                 if let Some(mat) = p.material
                     && materials.iter().any(|(e, _)| *e == mat)
                 {
@@ -80,7 +80,7 @@ impl Pass for BakeLayerChannels {
             let prims = drawn.get(e).cloned().unwrap_or_default();
             let used: BTreeSet<u8> = prims
                 .iter()
-                .filter_map(|&(mesh, i)| w.get::<Mesh>(mesh).map(|m| &m.primitives[i]))
+                .filter_map(|&(mesh, i)| w.get::<Mesh>(mesh).map(|m| &m.primitives()[i]))
                 .flat_map(|p| p.streams.keys())
                 .filter_map(|s| match s {
                     Semantic::Color(n) => Some(*n),
@@ -93,7 +93,7 @@ impl Pass for BakeLayerChannels {
             let slots = l.layers.len();
             let mut streams = Vec::new();
             for &(mesh, i) in &prims {
-                let p = &w.get::<Mesh>(mesh).ok_or("mesh vanished")?.primitives[i];
+                let p = &w.get::<Mesh>(mesh).ok_or("mesh vanished")?.primitives()[i];
                 let count = p.positions().map_or(0, |v| v.len());
                 let mut out = Vec::with_capacity(count);
                 for v in 0..count {
@@ -114,7 +114,7 @@ impl Pass for BakeLayerChannels {
             };
             for (mesh, i, s) in streams {
                 if let Some(m) = w.get_mut::<Mesh>(mesh) {
-                    m.primitives[i].streams.insert(Semantic::Color(n), s);
+                    m.primitives_mut()[i].streams.insert(Semantic::Color(n), s);
                     log.approximate("primitives with layer weights baked at their vertices", 1);
                 }
             }

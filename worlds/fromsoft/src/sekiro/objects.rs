@@ -38,7 +38,7 @@ fn main_material(world: &World, prototype: primase_core::Entity) -> Result<i32> 
         .get::<Mesh>(prototype)
         .ok_or_else(|| invalid("object collision", 0, "missing prototype mesh"))?;
     let mut areas = BTreeMap::<String, f64>::new();
-    for p in &mesh.primitives {
+    for p in mesh.primitives() {
         let Some(m) = p.material.and_then(|e| world.get::<Material>(e)) else {
             continue;
         };

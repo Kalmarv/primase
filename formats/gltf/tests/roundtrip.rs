@@ -104,7 +104,7 @@ fn round_trip_geometry_and_transforms() {
         .unwrap();
     assert_eq!(m.name.as_deref(), Some("rich"));
     assert_eq!(m.primitives.len(), 3);
-    for (got, want) in m.primitives.iter().zip(&rich.primitives) {
+    for (got, want) in m.primitives.iter().zip(rich.primitives()) {
         assert!(same_streams(&got.primitive.streams, &want.streams));
         assert_eq!(got.primitive.indices, want.indices);
         assert_eq!(got.primitive.topology, Topology::Triangles);
@@ -165,15 +165,15 @@ fn round_trip_geometry_and_transforms() {
     assert_eq!(bits(&f32s(&big["translation"])), bits(&[-0.0, 1.0, 2.0]));
     let big_mesh = gltf.read_mesh(big["mesh"].as_u64().unwrap() as usize).unwrap();
     let want = b.world.get::<Mesh>(b.proto_big).unwrap();
-    assert_eq!(big_mesh.to_mesh().primitives.len(), 2);
-    for (got, want) in big_mesh.primitives.iter().zip(&want.primitives) {
+    assert_eq!(big_mesh.to_mesh().primitives().len(), 2);
+    for (got, want) in big_mesh.primitives.iter().zip(want.primitives()) {
         let pos = |p: &primase_core::Primitive| format!("{:?}", p.streams.get(&Semantic::Position));
         assert_eq!(pos(&got.primitive), pos(want));
         assert_eq!(got.primitive.indices, want.indices);
     }
     assert!(same_streams(
         &big_mesh.primitives[0].primitive.streams,
-        &want.primitives[0].streams
+        &want.primitives()[0].streams
     ));
     // The second primitive's material samples sets 0 and 1, which it lacks: zeros, from one shared accessor.
     let filled = &big_mesh.primitives[1].primitive.streams;
@@ -259,7 +259,7 @@ fn check_baked(baked: &Mesh, proto: &Mesh, tr: [[f32; 3]; 4], mirrored: bool) {
         ]
     };
     let f64v = |v: [f32; 3]| v.map(f64::from);
-    for (bp, pp) in baked.primitives.iter().zip(&proto.primitives) {
+    for (bp, pp) in baked.primitives().iter().zip(proto.primitives()) {
         let (Some(Stream::F32x3(bpos)), Some(Stream::F32x3(ppos))) = (
             bp.streams.get(&Semantic::Position),
             pp.streams.get(&Semantic::Position),
@@ -564,12 +564,12 @@ fn output_is_deterministic() {
 fn bad_worlds_are_errors() {
     let b = build(&scratch("bad"));
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives[0].indices = Some(vec![0, 1, 9]);
+    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0].indices = Some(vec![0, 1, 9]);
     let err = write(&w, &options(&b)).unwrap_err().to_string();
     assert!(err.contains("index 9 of 4 vertices"), "{err}");
 
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives[0]
+    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0]
         .streams
         .insert(Semantic::Normal, Stream::F32x3(vec![[0.0; 3]; 3]));
     assert!(
@@ -580,7 +580,7 @@ fn bad_worlds_are_errors() {
     );
 
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives[0]
+    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0]
         .streams
         .insert(Semantic::Position, Stream::F32x3(vec![[f32::NAN; 3]; 4]));
     assert!(
@@ -645,15 +645,15 @@ fn load_mesh_files_restores_meshes() {
     assert_eq!((report.meshes, report.files, report.primitives), (2, 1, 5));
     let got = w.get::<Mesh>(p1).unwrap();
     let want = b.world.get::<Mesh>(b.proto_rich).unwrap();
-    for (g, x) in got.primitives.iter().zip(&want.primitives) {
+    for (g, x) in got.primitives().iter().zip(want.primitives()) {
         assert!(same_streams(&g.streams, &x.streams));
         assert_eq!(g.indices, x.indices);
     }
     assert_eq!(
-        got.primitives.iter().map(|p| p.material).collect::<Vec<_>>(),
+        got.primitives().iter().map(|p| p.material).collect::<Vec<_>>(),
         [Some(m1), None, None]
     );
-    assert_eq!(w.get::<Mesh>(p2).unwrap().primitives[1].material, Some(m1));
+    assert_eq!(w.get::<Mesh>(p2).unwrap().primitives()[1].material, Some(m1));
 
     let mut w2 = World::new();
     let p = w2.spawn();

@@ -52,7 +52,7 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
                 Ok(m) => {
                     let mesh = m.to_mesh();
                     triangles += mesh
-                        .primitives
+                        .primitives()
                         .iter()
                         .map(|p| p.indices.as_ref().map_or(p.vertex_count(), Vec::len) as u64 / 3)
                         .sum::<u64>();
@@ -79,8 +79,8 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
         };
         for (i, want) in originals.iter().enumerate() {
             let got: Mesh = back.read_mesh(i).unwrap().to_mesh();
-            let same = got.primitives.len() == want.primitives.len()
-                && got.primitives.iter().zip(&want.primitives).all(|(a, b)| {
+            let same = got.primitives().len() == want.primitives().len()
+                && got.primitives().iter().zip(want.primitives()).all(|(a, b)| {
                     format!("{:?}", a.streams) == format!("{:?}", b.streams)
                         && a.indices == b.indices
                         && a.topology == b.topology

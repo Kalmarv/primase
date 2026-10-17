@@ -155,14 +155,14 @@ impl Pass for PoseFragments {
             let mut mesh = w
                 .remove::<Mesh>(e)
                 .ok_or("gta.poses on an entity without core.mesh")?;
-            if poses.len() != mesh.primitives.len() {
+            if poses.len() != mesh.primitives().len() {
                 return Err(format!(
                     "{e:?}: {} poses for {} primitives",
                     poses.len(),
-                    mesh.primitives.len()
+                    mesh.primitives().len()
                 ));
             }
-            for (p, pose) in mesh.primitives.iter_mut().zip(poses) {
+            for (p, pose) in mesh.primitives_mut().iter_mut().zip(poses) {
                 let Some(pose) = pose else { continue };
                 let t = Placing::new(pose);
                 log.count("primitives posed", 1);
@@ -289,14 +289,12 @@ mod tests {
         let e = w.spawn();
         w.insert(
             e,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    streams,
-                    indices: Some(vec![0, 1, 2]),
-                    material: None,
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(vec![0, 1, 2]),
+                material: None,
+            }]),
         );
         // mirrored in x: the triangle now lies the other way round, its normals still +z
         w.insert(
@@ -309,7 +307,7 @@ mod tests {
         );
         let mut log = PassLog::default();
         PoseFragments.run(&mut w, &mut log).expect("posed");
-        let p = &w.get::<Mesh>(e).expect("mesh").primitives[0];
+        let p = &w.get::<Mesh>(e).expect("mesh").primitives()[0];
         assert_eq!(p.indices.as_deref(), Some(&[0, 2, 1][..]));
         let Some(Stream::F32x3(v)) = p.streams.get(&Semantic::Position) else {
             panic!("positions")

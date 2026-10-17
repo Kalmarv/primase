@@ -202,7 +202,7 @@ fn mesh(
             });
         }
     }
-    Ok(Mesh { primitives })
+    Ok(Mesh::new(primitives))
 }
 
 impl Ctx<'_> {
@@ -591,7 +591,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     .collect(),
             };
             let holder = if lod == 0 {
-                ctx.report.geometries += m.primitives.len();
+                ctx.report.geometries += m.primitives().len();
                 proto
             } else {
                 let f = w.spawn();

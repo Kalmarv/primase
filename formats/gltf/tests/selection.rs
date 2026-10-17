@@ -14,17 +14,15 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 fn quad(material: Option<primase_core::Entity>, indices: Vec<u32>) -> Mesh {
-    Mesh {
-        primitives: vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(
-                Semantic::Position,
-                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [1., 0., -1.], [0., 0., -1.]]),
-            )]),
-            indices: Some(indices),
-            material,
-        }],
-    }
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([(
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [1., 0., -1.], [0., 0., -1.]]),
+        )]),
+        indices: Some(indices),
+        material,
+    }])
 }
 
 fn document(w: &World, selection: Option<Selection>) -> Value {

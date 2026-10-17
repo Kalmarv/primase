@@ -40,23 +40,21 @@ fn world() -> World {
         let proto = w.spawn();
         w.insert(
             proto,
-            Mesh {
-                primitives: vec![Primitive {
-                    topology: Topology::Triangles,
-                    streams: BTreeMap::from([
-                        (
-                            Semantic::Position,
-                            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]]),
-                        ),
-                        (
-                            Semantic::TexCoord(0),
-                            Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
-                        ),
-                    ]),
-                    indices: Some(vec![0, 1, 2]),
-                    material: Some(mat),
-                }],
-            },
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]]),
+                    ),
+                    (
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+                    ),
+                ]),
+                indices: Some(vec![0, 1, 2]),
+                material: Some(mat),
+            }]),
         );
         protos.push(proto);
     }

@@ -54,10 +54,10 @@ pub fn prepare_scene_assets(world: &mut World, directory: &Path) -> Result<()> {
         let Some(mesh) = world.get::<Mesh>(e).cloned() else {
             continue;
         };
-        let materials = mesh.primitives.iter().map(|p| p.material).collect();
+        let materials = mesh.primitives().iter().map(|p| p.material).collect();
         let mut glb = World::default();
         let mut local = mesh;
-        for p in &mut local.primitives {
+        for p in local.primitives_mut() {
             p.material = None;
         }
         let proto = glb.spawn();

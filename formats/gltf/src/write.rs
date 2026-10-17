@@ -614,7 +614,7 @@ impl Writer<'_> {
         };
         let kind = place.transform.classify();
         let materials = match from.src {
-            Src::Piece(_) => mesh.primitives.iter().map(|p| p.material).collect(),
+            Src::Piece(_) => mesh.primitives().iter().map(|p| p.material).collect(),
             Src::Prototype(_) => self.resolve_materials(place, mesh)?,
         };
         let mut node = Map::new();
@@ -701,19 +701,19 @@ impl Writer<'_> {
     fn resolve_materials(&self, place: &Place, mesh: &Mesh) -> Result<Vec<Option<Entity>>> {
         let variants = self.world.get::<MaterialVariants>(place.prototype);
         if let Some(v) = variants
-            && v.0.len() != mesh.primitives.len()
+            && v.0.len() != mesh.primitives().len()
         {
             return Err(Error::World {
                 entity: place.prototype,
                 detail: format!(
                     "core.material_variants has {} entries for {} primitives",
                     v.0.len(),
-                    mesh.primitives.len()
+                    mesh.primitives().len()
                 ),
             });
         }
         Ok(mesh
-            .primitives
+            .primitives()
             .iter()
             .enumerate()
             .map(|(i, p)| {
@@ -737,7 +737,7 @@ impl Writer<'_> {
             return Ok(i);
         }
         let accessors = self.prototype_accessors(from.src, mesh)?;
-        let base: Vec<Option<Entity>> = mesh.primitives.iter().map(|p| p.material).collect();
+        let base: Vec<Option<Entity>> = mesh.primitives().iter().map(|p| p.material).collect();
         let mut name = from.name.clone();
         if key.1 != base {
             name = format!("{name}.v{variant}");
@@ -756,7 +756,7 @@ impl Writer<'_> {
         mesh: &Mesh,
     ) -> Result<usize> {
         let mut prims = Vec::with_capacity(accessors.len());
-        for ((acc, material), prim) in accessors.iter().zip(materials).zip(&mesh.primitives) {
+        for ((acc, material), prim) in accessors.iter().zip(materials).zip(mesh.primitives()) {
             let mut p = Map::new();
             let mut attrs: Map<String, Value> = acc
                 .attributes
@@ -828,14 +828,14 @@ impl Writer<'_> {
             return Ok(a.clone());
         }
         let (Src::Prototype(prototype) | Src::Piece(prototype)) = src;
-        if mesh.primitives.is_empty() {
+        if mesh.primitives().is_empty() {
             return Err(Error::World {
                 entity: prototype,
                 detail: "core.mesh without primitives".into(),
             });
         }
-        let mut out = Vec::with_capacity(mesh.primitives.len());
-        for (i, prim) in mesh.primitives.iter().enumerate() {
+        let mut out = Vec::with_capacity(mesh.primitives().len());
+        for (i, prim) in mesh.primitives().iter().enumerate() {
             let a = self.primitive_accessors(prim).map_err(|detail| Error::World {
                 entity: prototype,
                 detail: format!("primitive {i}: {detail}"),

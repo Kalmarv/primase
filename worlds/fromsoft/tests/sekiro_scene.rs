@@ -110,11 +110,11 @@ fn installed_area_scene() -> Result<()> {
         let a = load(&folder, p)?;
         let b = load(&reference, w)?;
         let original = world.get::<primase_core::Mesh>(source_protos[id]).ok_or("mesh")?;
-        assert_eq!(a.primitives.len(), b.primitives.len(), "{id} parts");
-        for (i, (a, b)) in a.primitives.iter().zip(&b.primitives).enumerate() {
+        assert_eq!(a.primitives().len(), b.primitives().len(), "{id} parts");
+        for (i, (a, b)) in a.primitives().iter().zip(b.primitives()).enumerate() {
             use primase_core::{Semantic, Stream};
             assert_eq!(a.indices, b.indices, "{id}/{i} topology");
-            if let Some(tangents) = original.primitives[i].streams.get(&Semantic::Tangent) {
+            if let Some(tangents) = original.primitives()[i].streams.get(&Semantic::Tangent) {
                 assert_eq!(
                     a.streams.get(&Semantic::Tangent),
                     Some(tangents),
@@ -146,7 +146,7 @@ fn installed_area_scene() -> Result<()> {
             maximum_normal_error = maximum_normal_error.max(error);
             let m = world
                 .get::<primase_fromsoft::materials::Material>(
-                    original.primitives[i].material.ok_or("material")?,
+                    original.primitives()[i].material.ok_or("material")?,
                 )
                 .ok_or("source material")?;
             let (Stream::F32x2(au), Stream::F32x2(bu)) = (

@@ -238,7 +238,7 @@ impl Pass for GtaTerrainLayers {
         }
         // every terrain primitive's weights in COLOR_1
         for_each_mesh(w, |mesh| {
-            for p in &mut mesh.primitives {
+            for p in mesh.primitives_mut() {
                 let Some((mode, lookup)) = p.material.and_then(|m| weights.get(&m)) else {
                     continue;
                 };

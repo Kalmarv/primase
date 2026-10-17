@@ -66,12 +66,7 @@ fn world() -> World {
     };
     let proto = w.spawn();
     w.insert(proto, Name("wall".into()));
-    w.insert(
-        proto,
-        Mesh {
-            primitives: vec![prim(stone, 0.0), prim(paint, 2.0)],
-        },
-    );
+    w.insert(proto, Mesh::new(vec![prim(stone, 0.0), prim(paint, 2.0)]));
     for x in [0.0, 30.0] {
         let at = w.spawn();
         w.insert(

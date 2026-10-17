@@ -58,12 +58,7 @@ fn fixture() -> (World, primase_core::Entity) {
         indices: Some(vec![0, 1, 2, 3, 4, 5]),
         material: Some(layered),
     };
-    world.insert(
-        entity,
-        Mesh {
-            primitives: vec![part],
-        },
-    );
+    world.insert(entity, Mesh::new(vec![part]));
     world.insert(entity, MaterialVariants(vec![BTreeMap::new()]));
     world.insert(
         entity,
@@ -80,7 +75,7 @@ fn fixture() -> (World, primase_core::Entity) {
 fn planned_sources_keep_null_slots_and_apply_preserves_order_and_streams() {
     let (mut world, entity) = fixture();
     let before = format!("{world:?}");
-    let original = world.get::<Mesh>(entity).unwrap().primitives[0].clone();
+    let original = world.get::<Mesh>(entity).unwrap().primitives()[0].clone();
     let plan = plan_layered_pbr(&world, SelectionPolicy::CoreWeights).unwrap();
     assert_eq!(format!("{world:?}"), before, "planning does not mutate");
     assert_eq!(plan.policy(), SelectionPolicy::CoreWeights);
@@ -99,16 +94,16 @@ fn planned_sources_keep_null_slots_and_apply_preserves_order_and_streams() {
     primase_meshops::lower_layered_pbr(&mut world, SelectionPolicy::CoreWeights, &mut log, |_, _| Ok(()))
         .unwrap();
     let mesh = world.get::<Mesh>(entity).unwrap();
-    assert_eq!(mesh.primitives.len(), 2);
-    assert_eq!(mesh.primitives[0].indices, Some(vec![0, 1, 2]));
-    assert_eq!(mesh.primitives[1].indices, Some(vec![3, 4, 5]));
-    for part in &mesh.primitives {
+    assert_eq!(mesh.primitives().len(), 2);
+    assert_eq!(mesh.primitives()[0].indices, Some(vec![0, 1, 2]));
+    assert_eq!(mesh.primitives()[1].indices, Some(vec![3, 4, 5]));
+    for part in mesh.primitives() {
         for (semantic, stream) in &original.streams {
             assert_eq!(&part.streams[semantic], stream);
         }
     }
     let black = world
-        .get::<PbrMaterial>(mesh.primitives[1].material.unwrap())
+        .get::<PbrMaterial>(mesh.primitives()[1].material.unwrap())
         .unwrap();
     assert_eq!(black.base_color, [0., 0., 0., 1.]);
     assert!(!world.has::<MeshFile>(entity));
@@ -122,7 +117,7 @@ fn invalid_later_mesh_does_not_publish_earlier_plans() {
     let (mut world, entity) = fixture();
     let second = world.spawn();
     let mut bad = world.get::<Mesh>(entity).unwrap().clone();
-    bad.primitives[0].streams.remove(&Semantic::Color(1));
+    bad.primitives_mut()[0].streams.remove(&Semantic::Color(1));
     world.insert(second, bad);
     let before = format!("{world:?}");
     assert!(plan_layered_pbr(&world, SelectionPolicy::CoreWeights).is_err());
@@ -132,7 +127,9 @@ fn invalid_later_mesh_does_not_publish_earlier_plans() {
 #[test]
 fn unloaded_layered_variants_are_refused_before_mutation() {
     let (mut world, entity) = fixture();
-    let layered = world.get::<Mesh>(entity).unwrap().primitives[0].material.unwrap();
+    let layered = world.get::<Mesh>(entity).unwrap().primitives()[0]
+        .material
+        .unwrap();
     let ordinary = world.get::<LayeredMaterial>(layered).unwrap().layers[0]
         .as_ref()
         .unwrap()
@@ -175,8 +172,10 @@ fn metadata_validation_failure_does_not_mutate_world_or_log() {
 #[test]
 fn empty_split_still_prunes_the_replaced_host() {
     let (mut world, entity) = fixture();
-    let host = world.get::<Mesh>(entity).unwrap().primitives[0].material.unwrap();
-    world.get_mut::<Mesh>(entity).unwrap().primitives[0].indices = Some(vec![]);
+    let host = world.get::<Mesh>(entity).unwrap().primitives()[0]
+        .material
+        .unwrap();
+    world.get_mut::<Mesh>(entity).unwrap().primitives_mut()[0].indices = Some(vec![]);
     primase_meshops::lower_layered_pbr(
         &mut world,
         SelectionPolicy::CoreWeights,
@@ -185,7 +184,7 @@ fn empty_split_still_prunes_the_replaced_host() {
     )
     .unwrap();
     assert!(!world.entities().any(|e| e == host));
-    assert!(world.get::<Mesh>(entity).unwrap().primitives.is_empty());
+    assert!(world.get::<Mesh>(entity).unwrap().primitives().is_empty());
     assert_eq!(world.closure([entity]).len(), world.entity_count());
 }
 
@@ -198,7 +197,7 @@ impl Component for Sources {
         Some(remap_list(&self.0, from).map(Sources))
     }
     fn verify(&self, entity: primase_core::Entity, world: &World) -> Result<(), String> {
-        let n = world.get::<Mesh>(entity).map_or(0, |m| m.primitives.len());
+        let n = world.get::<Mesh>(entity).map_or(0, |m| m.primitives().len());
         if self.0.len() != n {
             return Err(format!("{} sources for {n} primitives", self.0.len()));
         }
@@ -215,7 +214,7 @@ fn a_split_carries_every_per_primitive_component() {
     let mut log = PassLog::default();
     primase_meshops::lower_layered_pbr(&mut world, SelectionPolicy::CoreWeights, &mut log, |_, _| Ok(()))
         .unwrap();
-    assert_eq!(world.get::<Mesh>(entity).unwrap().primitives.len(), 2);
+    assert_eq!(world.get::<Mesh>(entity).unwrap().primitives().len(), 2);
     assert_eq!(world.get::<Sources>(entity), Some(&Sources(vec!["a", "a"])));
     assert_eq!(world.verify_components(), vec![]);
 }

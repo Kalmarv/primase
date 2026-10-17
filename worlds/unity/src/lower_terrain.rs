@@ -205,12 +205,7 @@ pub fn lower_unity_terrain(w: &mut World) -> Result<PassLog> {
         log.approximate("terrain cells split along one diagonal", 1);
         let p = w.spawn();
         w.insert(p, Name(format!("{name} (terrain)")));
-        w.insert(
-            p,
-            Mesh {
-                primitives: vec![prim],
-            },
-        );
+        w.insert(p, Mesh::new(vec![prim]));
         w.insert(
             e,
             Instance {

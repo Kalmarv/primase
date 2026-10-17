@@ -91,12 +91,7 @@ fn world() -> World {
         indices: None,
         material: Some(m),
     };
-    w.insert(
-        proto,
-        Mesh {
-            primitives: vec![prim(rock), prim(plain)],
-        },
-    );
+    w.insert(proto, Mesh::new(vec![prim(rock), prim(plain)]));
     let at = w.spawn();
     w.insert(
         at,

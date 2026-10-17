@@ -179,7 +179,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     let mut drawn: BTreeSet<Entity> = BTreeSet::new();
     for &p in &placed {
         if let Some(mesh) = world.get::<Mesh>(p) {
-            drawn.extend(mesh.primitives.iter().filter_map(|q| q.material));
+            drawn.extend(mesh.primitives().iter().filter_map(|q| q.material));
         }
         if let Some(v) = world.get::<MaterialVariants>(p) {
             drawn.extend(v.0.iter().flat_map(|o| o.values().copied()));
@@ -330,7 +330,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // prototypes and placements
     let mut taken = BTreeSet::new();
     for p in placed {
-        let Some(parts) = world.get::<Mesh>(p).map(|m| m.primitives.len()) else {
+        let Some(parts) = world.get::<Mesh>(p).map(|m| m.primitives().len()) else {
             continue;
         };
         let id = key(&name(world, p, "prototype"), &mut taken);

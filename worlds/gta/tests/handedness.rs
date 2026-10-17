@@ -107,9 +107,9 @@ fn frame_change_keeps_fronts_and_bitangents() {
         .iter()
         .flat_map(|m| m["geometries"].as_array().unwrap())
         .collect();
-    assert_eq!(mesh.primitives.len(), geometries.len(), "{stem}: primitives");
+    assert_eq!(mesh.primitives().len(), geometries.len(), "{stem}: primitives");
     let (mut triangles, mut tangents, mut negative) = (0usize, 0usize, 0usize);
-    for (i, (prim, g)) in mesh.primitives.iter().zip(&geometries).enumerate() {
+    for (i, (prim, g)) in mesh.primitives().iter().zip(&geometries).enumerate() {
         let src_p: Vec<[f32; 3]> = g["positions"].as_array().unwrap().iter().map(v3).collect();
         let pos = prim.positions().unwrap();
         assert_eq!(pos.len(), src_p.len(), "{stem} geometry {i}: vertices");

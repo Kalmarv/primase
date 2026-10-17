@@ -31,12 +31,7 @@ fn world() -> World {
         ("b.ydr", ["model 0 geometry 0"; 2]),
     ] {
         let p = w.spawn();
-        w.insert(
-            p,
-            Mesh {
-                primitives: vec![primitive(), primitive()],
-            },
-        );
+        w.insert(p, Mesh::new(vec![primitive(), primitive()]));
         let mut prov = Provenance::default();
         for item in items {
             prov.push_part(drawable(file).with_item(item));

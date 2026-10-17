@@ -28,12 +28,7 @@ fn world() -> World {
         },
     );
     let proto = w.spawn();
-    w.insert(
-        proto,
-        Mesh {
-            primitives: vec![common::rich_primitive(Some(m), 0.0)],
-        },
-    );
+    w.insert(proto, Mesh::new(vec![common::rich_primitive(Some(m), 0.0)]));
     for (x, shadows) in [
         (
             0.0,

@@ -34,7 +34,7 @@ pub enum Error {
     Glb { offset: usize, detail: String },
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
-    /// The glTF document breaks a rule the reader enforces; `item` is its JSON path (`meshes[2].primitives[0]`).
+    /// The glTF document breaks a rule the reader enforces; `item` is its JSON path (`meshes[2].primitives()[0]`).
     #[error("{item}: {detail}")]
     Invalid { item: String, detail: String },
     /// An error inside one file.

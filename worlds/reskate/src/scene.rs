@@ -589,7 +589,7 @@ impl Scene {
                     }
                     PartDef {
                         material: match mesh {
-                            Some(m) => m.primitives.get(pi).and_then(|p| p.material),
+                            Some(m) => m.primitives().get(pi).and_then(|p| p.material),
                             None => mf.and_then(|m| m.materials.get(pi).copied().flatten()),
                         }
                         .and_then(mkey),
@@ -641,7 +641,7 @@ impl Scene {
                 glb: mf.map(|m| m.path.clone()),
                 prims: mesh.map(|m| {
                     let opacity = world.get::<BlendOpacity>(e);
-                    m.primitives
+                    m.primitives()
                         .iter()
                         .enumerate()
                         .map(|(i, p)| GlbPrim {
@@ -944,7 +944,7 @@ pub fn glb_prim(pr: &primase_core::Primitive) -> GlbPrim {
 /// The box of a mesh's positions; `None` when it has none.
 fn mesh_bounds(m: &Mesh) -> Option<([f32; 3], [f32; 3])> {
     let mut it = m
-        .primitives
+        .primitives()
         .iter()
         .flat_map(|p| p.positions().unwrap_or(&[]).iter())
         .peekable();

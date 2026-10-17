@@ -39,12 +39,7 @@ fn world(specular: impl FnOnce(&mut World) -> Option<Specular>) -> World {
         },
     );
     let e = w.spawn();
-    w.insert(
-        e,
-        Mesh {
-            primitives: vec![common::rich_primitive(Some(m), 0.0)],
-        },
-    );
+    w.insert(e, Mesh::new(vec![common::rich_primitive(Some(m), 0.0)]));
     w.insert(e, Transform::IDENTITY);
     w
 }

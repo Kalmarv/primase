@@ -107,7 +107,7 @@ fn tint_mesh(
     palettes: &BTreeMap<Entity, (Palette, TintColumn)>,
     log: &mut PassLog,
 ) {
-    for p in &mut mesh.primitives {
+    for p in mesh.primitives_mut() {
         let Some((palette, column)) = p.material.and_then(|m| palettes.get(&m)) else {
             continue;
         };
@@ -142,7 +142,9 @@ fn tint_mesh(
 }
 
 fn vertices(m: Option<&Mesh>) -> u64 {
-    m.map_or(0, |m| m.primitives.iter().map(|p| p.vertex_count() as u64).sum())
+    m.map_or(0, |m| {
+        m.primitives().iter().map(|p| p.vertex_count() as u64).sum()
+    })
 }
 
 impl Pass for GtaTintVariants {
@@ -189,7 +191,7 @@ impl Pass for GtaTintVariants {
         }
         let tinted_mesh = |w: &World, e: Entity| {
             w.get::<Mesh>(e).is_some_and(|m| {
-                m.primitives
+                m.primitives()
                     .iter()
                     .any(|p| p.material.is_some_and(|m| palettes.contains_key(&m)))
             })
@@ -344,14 +346,12 @@ mod tests {
         streams.insert(Semantic::Color(0), Stream::U8x4(vec![[255, 255, 0, 255]; 3]));
         w.insert(
             proto,
-            Mesh {
-                primitives: vec![primase_core::Primitive {
-                    topology: primase_core::Topology::Triangles,
-                    streams,
-                    indices: Some(vec![0, 1, 2]),
-                    material: Some(m),
-                }],
-            },
+            Mesh::new(vec![primase_core::Primitive {
+                topology: primase_core::Topology::Triangles,
+                streams,
+                indices: Some(vec![0, 1, 2]),
+                material: Some(m),
+            }]),
         );
         w.insert(
             proto,
@@ -372,7 +372,7 @@ mod tests {
                 .find(|(_, t)| t.row == row)
                 .map(|(e, _)| e)
                 .expect("a prototype per row");
-            match &w.get::<Mesh>(p).expect("mesh").primitives[0].streams[&Semantic::Color(0)] {
+            match &w.get::<Mesh>(p).expect("mesh").primitives()[0].streams[&Semantic::Color(0)] {
                 Stream::U16x4(c) => c[0],
                 s => panic!("not the tint: {s:?}"),
             }

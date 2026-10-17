@@ -74,7 +74,7 @@ fn every_named_region_through_the_gta_passes() {
         // every drawn primitive's material is lowered
         let mut unlowered = 0;
         for (_, m) in w.iter::<Mesh>() {
-            for p in &m.primitives {
+            for p in m.primitives() {
                 if let Some(mat) = p.material
                     && !w.has::<PbrMaterial>(mat)
                     && !w.has::<LayeredMaterial>(mat)

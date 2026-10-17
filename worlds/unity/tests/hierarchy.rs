@@ -283,14 +283,14 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
             .filter(|&k| data.submeshes[k].index_count > 0)
             .collect();
         let mut problems = Vec::new();
-        if mesh.primitives.len() != drawn.len() {
+        if mesh.primitives().len() != drawn.len() {
             problems.push(format!(
                 "{} primitives for {} submeshes with indices",
-                mesh.primitives.len(),
+                mesh.primitives().len(),
                 drawn.len()
             ));
         }
-        for (&k, p) in drawn.iter().zip(&mesh.primitives) {
+        for (&k, p) in drawn.iter().zip(mesh.primitives()) {
             let s = data.submeshes[k];
             let at = (s.first_byte / data.index_size) as usize;
             let theirs: Vec<u32> = data.indices[at..at + s.index_count as usize]

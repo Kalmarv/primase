@@ -156,7 +156,7 @@ fn select_geometry(
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
         let mut materials = Vec::new();
-        let mut mesh = Mesh::default();
+        let mut primitives = Vec::new();
         let mut cards = Vec::new();
         for part in parts {
             for p in &part.mesh.positions {
@@ -172,7 +172,7 @@ fn select_geometry(
             }
             materials.push(resolved[part.material].clone());
             let tangents = part.tangents;
-            mesh.primitives.push(Primitive {
+            primitives.push(Primitive {
                 topology: Topology::Triangles,
                 streams: BTreeMap::from([
                     (Semantic::Position, Stream::F32x3(part.mesh.positions)),
@@ -183,7 +183,7 @@ fn select_geometry(
                 material: None,
             });
             if !tangents.is_empty() {
-                mesh.primitives
+                primitives
                     .last_mut()
                     .expect("inserted primitive")
                     .streams
@@ -194,7 +194,7 @@ fn select_geometry(
             key,
             Prototype {
                 cards,
-                mesh,
+                mesh: Mesh::new(primitives),
                 materials,
                 min,
                 max,
@@ -207,7 +207,7 @@ fn select_geometry(
     for (key, p) in placements {
         let Some(proto) = prototypes
             .get(&key)
-            .filter(|p| !p.mesh.primitives.is_empty() || !p.cards.is_empty())
+            .filter(|p| !p.mesh.primitives().is_empty() || !p.cards.is_empty())
         else {
             report.skipped_empty += 1;
             continue;
@@ -218,7 +218,7 @@ fn select_geometry(
             continue;
         }
         blocker_cards.record(&key, format!("{area}:{}", p.name), &transform, &proto.cards);
-        if proto.mesh.primitives.is_empty() {
+        if proto.mesh.primitives().is_empty() {
             report.skipped_empty += 1;
             continue;
         }
@@ -476,7 +476,7 @@ pub fn read_area(
     for key in used {
         let mut proto = prototypes.remove(&key).expect("selected");
         let mut parts = Vec::new();
-        for (primitive, m) in proto.mesh.primitives.iter_mut().zip(proto.materials) {
+        for (primitive, m) in proto.mesh.primitives_mut().iter_mut().zip(proto.materials) {
             let identity = primase_core::json::to_value(&m)
                 .map_err(|e| invalid("Sekiro material", 0, e))?
                 .to_string();

@@ -187,16 +187,16 @@ struct SpecularMap {
 /// Keeps the primitives of `mesh` that `keep` accepts: the old index of each kept one, for
 /// [`World::remap_primitives`] (`None` when every one is kept).
 pub fn retain_primitives(mesh: &mut Mesh, mut keep: impl FnMut(&Primitive) -> bool) -> Option<Vec<usize>> {
-    let mut from = Vec::with_capacity(mesh.primitives.len());
-    let mut kept = Vec::with_capacity(mesh.primitives.len());
-    let n = mesh.primitives.len();
-    for (i, p) in mesh.primitives.drain(..).enumerate() {
+    let mut from = Vec::with_capacity(mesh.primitives().len());
+    let mut kept = Vec::with_capacity(mesh.primitives().len());
+    let n = mesh.primitives().len();
+    for (i, p) in std::mem::take(mesh).into_primitives().into_iter().enumerate() {
         if keep(&p) {
             from.push(i);
             kept.push(p);
         }
     }
-    mesh.primitives = kept;
+    *mesh = Mesh::new(kept);
     (from.len() < n).then_some(from)
 }
 
@@ -306,7 +306,7 @@ impl Pass for LowerGtaPbr {
         // other forms, which core.lods needs it for)
         let emptied: Vec<Entity> = w
             .iter::<Mesh>()
-            .filter(|(e, m)| m.primitives.is_empty() && w.has::<GtaSources>(*e))
+            .filter(|(e, m)| m.primitives().is_empty() && w.has::<GtaSources>(*e))
             .map(|(e, _)| e)
             .filter(|e| w.get::<Lods>(*e).is_none_or(|l| l.forms.is_empty()))
             .collect();
@@ -630,7 +630,7 @@ impl Pass for GtaVertexColours {
             .resource::<crate::tint::GtaTinted>()
             .map_or(BTreeSet::new(), |t| t.0.clone());
         for_each_mesh(w, |mesh| {
-            for p in &mut mesh.primitives {
+            for p in mesh.primitives_mut() {
                 let Some(m) = p.material else { continue };
                 let Some(c) = classes.get(&m) else { continue };
                 if c.class == Class::Terrain && !layered.contains(&m) && !lowered.contains(&m) {
@@ -814,12 +814,7 @@ mod tests {
             material: Some(m),
         };
         let proto = w.spawn();
-        w.insert(
-            proto,
-            primase_core::Mesh {
-                primitives: vec![prim(cable), prim(plain)],
-            },
-        );
+        w.insert(proto, primase_core::Mesh::new(vec![prim(cable), prim(plain)]));
         w.insert(
             proto,
             GtaSources {
@@ -830,7 +825,7 @@ mod tests {
         super::LowerGtaPbr::default()
             .run(&mut w, &mut primase_core::pass::PassLog::default())
             .unwrap();
-        assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives.len(), 1);
+        assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives().len(), 1);
         assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 1]]);
     }
 

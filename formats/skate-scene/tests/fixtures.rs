@@ -381,21 +381,19 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     let prototype = world.spawn();
     world.insert(
         prototype,
-        Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                indices: Some(vec![0, 1, 2]),
-                material: Some(layered),
-                streams: std::collections::BTreeMap::from([
-                    (
-                        Semantic::Position,
-                        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
-                    ),
-                    (Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3])),
-                    (Semantic::Color(1), Stream::F32x4(vec![[1., 0., 0., 0.]; 3])),
-                ]),
-            }],
-        },
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            indices: Some(vec![0, 1, 2]),
+            material: Some(layered),
+            streams: std::collections::BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+                ),
+                (Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3])),
+                (Semantic::Color(1), Stream::F32x4(vec![[1., 0., 0., 0.]; 3])),
+            ]),
+        }]),
     );
     let closure = world.closure([prototype]);
     for entity in [layered, ordinary, base, mask] {
@@ -411,7 +409,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
     primase_image::normalize_normals(&mut cell).unwrap();
-    let material = cell.get::<Mesh>(prototype).unwrap().primitives[0]
+    let material = cell.get::<Mesh>(prototype).unwrap().primitives()[0]
         .material
         .unwrap();
     let pbr = cell.get::<primase_core::pbr::PbrMaterial>(material).unwrap();
