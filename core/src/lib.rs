@@ -13,6 +13,7 @@ mod lod;
 pub use lod::{LodChoice, LodForm, Lods, SelectLod, select_lod};
 pub mod pass;
 pub mod pbr;
+pub mod print;
 mod priority;
 pub use priority::{DropOptional, Priority, drop_optional};
 pub mod state;

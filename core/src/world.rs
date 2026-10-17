@@ -193,6 +193,8 @@ trait AnyColumn: Any + Send + Sync {
     fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>>;
     /// Every value's `Component::verify`, as (entity, message) for those that fail, in entity order.
     fn verify(&self, w: &World) -> Vec<(Entity, String)>;
+    /// Every value through `Debug`, in entity order.
+    fn visit_debug(&self, f: &mut dyn FnMut(Entity, &dyn fmt::Debug));
     fn entities(&self) -> Vec<Entity>;
     /// [`Component::references`] of entity `e`'s value, if it has one.
     fn references(&self, e: Entity, out: &mut Vec<Entity>);
@@ -235,6 +237,11 @@ impl<T: Component> AnyColumn for Column<T> {
             .iter()
             .filter_map(|(e, v)| v.verify(*e, w).err().map(|m| (*e, m)))
             .collect()
+    }
+    fn visit_debug(&self, f: &mut dyn FnMut(Entity, &dyn fmt::Debug)) {
+        for (e, v) in &self.values {
+            f(*e, v);
+        }
     }
     fn entities(&self) -> Vec<Entity> {
         self.values.keys().copied().collect()
@@ -302,6 +309,7 @@ trait AnyResource: Any + Send + Sync {
     fn name(&self) -> &'static str;
     fn version(&self) -> u32;
     fn json(&self) -> Result<Option<serde_json::Value>, JsonError>;
+    fn debug(&self) -> &dyn fmt::Debug;
     fn verify(&self, w: &World) -> Result<(), String>;
     fn references(&self, out: &mut Vec<Entity>);
     fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool);
@@ -319,6 +327,9 @@ impl<T: Resource> AnyResource for T {
     }
     fn json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         self.to_json()
+    }
+    fn debug(&self) -> &dyn fmt::Debug {
+        self
     }
     fn verify(&self, w: &World) -> Result<(), String> {
         Resource::verify(self, w)
@@ -834,6 +845,62 @@ impl World {
         }
         out.sort_by(|a, b| a.name.cmp(b.name));
         Ok(out)
+    }
+
+    /// Every component (typed and opaque) with its schema version, for debugging tools: `f(name, version, entity,
+    /// value)`, by name then entity. Values are shown through `Debug`, which is not a format: its text may change
+    /// between builds and toolchains, so nothing that is gated, cached or compared across builds may depend on it.
+    pub fn visit_components_debug(&self, f: &mut dyn FnMut(&str, u32, Entity, &dyn fmt::Debug)) {
+        enum Kind<'a> {
+            Typed(&'a dyn AnyColumn),
+            Opaque(&'a BTreeMap<Entity, Opaque>),
+        }
+        let mut kinds: Vec<(&str, Kind<'_>)> = self
+            .columns
+            .values()
+            .filter(|c| c.len() > 0)
+            .map(|c| (c.name(), Kind::Typed(c.as_ref())))
+            .collect();
+        kinds.extend(
+            self.opaque
+                .iter()
+                .filter(|(_, c)| !c.is_empty())
+                .map(|(n, c)| (n.as_str(), Kind::Opaque(c))),
+        );
+        // a name is typed or opaque, never both (insert_opaque refuses typed names)
+        kinds.sort_unstable_by_key(|(n, _)| *n);
+        for (name, kind) in kinds {
+            match kind {
+                Kind::Typed(c) => {
+                    let version = c.version();
+                    c.visit_debug(&mut |e, v| f(name, version, e, v));
+                }
+                Kind::Opaque(c) => {
+                    for (e, o) in c {
+                        f(name, o.version, *e, &o.data);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every resource (typed and opaque) with its schema version, by name, through `Debug`; as
+    /// [`World::visit_components_debug`], for debugging tools only.
+    pub fn visit_resources_debug(&self, f: &mut dyn FnMut(&str, u32, &dyn fmt::Debug)) {
+        let mut all: Vec<(&str, u32, &dyn fmt::Debug)> = self
+            .resources
+            .values()
+            .map(|r| (r.name(), r.version(), r.debug()))
+            .collect();
+        all.extend(
+            self.opaque_resources
+                .iter()
+                .map(|(n, o)| (n.as_str(), o.version, &o.data as &dyn fmt::Debug)),
+        );
+        all.sort_unstable_by_key(|(n, _, _)| *n);
+        for (name, version, value) in all {
+            f(name, version, value);
+        }
     }
 
     // ---- opaque components -------------------------------------------------------------------------------------

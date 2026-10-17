@@ -17,6 +17,9 @@
 //! - The verifier ([`Component::verify`] on every component, [`crate::Resource::verify`] on every resource, plus the
 //!   manager's world [`Validator`]s) runs after the
 //!   reader, after every pass and before the writer; its errors name the step and the entity.
+//! - An [`Instrument`] sees the world before and after every pass and when one fails (`print-world-after`, see
+//!   [`crate::print`]). [`PassManager::run`] and [`PassManager::convert`] are [`PassManager::run_instrumented`] and
+//!   [`PassManager::convert_instrumented`] with an instrument that does nothing.
 //!
 //! Everything is deterministic: passes, names and candidates are walked in sorted order.
 
@@ -404,6 +407,8 @@ pub enum Error {
         after: String,
         failures: Vec<VerifyFailure>,
     },
+    #[error("instrument at {step}: {message}")]
+    Instrument { step: String, message: String },
     #[error("`{target}` does not accept `{name}` on {entities:?} after the pipeline")]
     Illegal {
         target: String,
@@ -462,6 +467,47 @@ impl fmt::Display for RunReport {
         Ok(())
     }
 }
+
+/// One pass of a pipeline run, as an [`Instrument`] sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Step<'a> {
+    /// Position in the pipeline, from 0.
+    pub index: usize,
+    /// The pass's stable name (`select-lod`).
+    pub name: &'static str,
+    /// The pass with its options, as in the pipeline text (`select-lod{form=default}`).
+    pub text: &'a str,
+}
+
+/// Hooks the manager calls around every pass of a run (DESIGN.md §4 instrumentation): before it runs, after it ran and
+/// passed the verifier, and instead of `after_pass` when it fails (the world is then as the failure left it). An error
+/// from `before_pass` or `after_pass` stops the run as [`Error::Instrument`]; one from `pass_failed` is dropped in
+/// favour of the pass's own error. Instruments only look: they get the world by shared reference.
+pub trait Instrument {
+    fn before_pass(&mut self, _step: &Step<'_>, _w: &World) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    fn after_pass(
+        &mut self,
+        _step: &Step<'_>,
+        _w: &World,
+        _report: &StepReport,
+    ) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    fn pass_failed(
+        &mut self,
+        _step: &Step<'_>,
+        _w: &World,
+        _error: &Error,
+    ) -> std::result::Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The instrument of an uninstrumented run.
+struct NoInstrument;
+impl Instrument for NoInstrument {}
 
 const INF: u32 = u32::MAX;
 
@@ -535,67 +581,105 @@ impl PassManager {
 
     /// Run a pipeline as written, verifying after every pass and checking each pass's declarations.
     pub fn run(&self, w: &mut World, pipeline: &Pipeline, report: &mut RunReport) -> Result<()> {
-        for p in &pipeline.passes {
+        self.run_instrumented(w, pipeline, report, &mut NoInstrument)
+    }
+
+    /// [`PassManager::run`], calling `instrument` around every pass.
+    pub fn run_instrumented(
+        &self,
+        w: &mut World,
+        pipeline: &Pipeline,
+        report: &mut RunReport,
+        instrument: &mut dyn Instrument,
+    ) -> Result<()> {
+        for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
-            for &r in p.requires() {
-                if !w.has_component_named(r) {
-                    return Err(Error::Missing {
-                        pass: text,
-                        name: r.to_owned(),
-                    });
+            let step = Step {
+                index,
+                name: p.name(),
+                text: &text,
+            };
+            let hook = |r: std::result::Result<(), String>| {
+                r.map_err(|message| Error::Instrument {
+                    step: text.clone(),
+                    message,
+                })
+            };
+            hook(instrument.before_pass(&step, w))?;
+            match self.run_pass(w, p.as_ref(), &text) {
+                Ok(done) => {
+                    hook(instrument.after_pass(&step, w, &done))?;
+                    report.steps.push(done);
+                }
+                Err(e) => {
+                    // the pass's error is the one that matters; a failing hook has nothing to add to it
+                    let _ = instrument.pass_failed(&step, w, &e);
+                    return Err(e);
                 }
             }
-            let before: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
-            // who held each name a despawning pass may make disappear without declaring it
-            let holders: BTreeMap<&str, Vec<Entity>> = if p.despawns_entities() {
-                before
-                    .iter()
-                    .filter(|n| !p.removes().contains(&n.as_str()))
-                    .map(|n| (n.as_str(), w.entities_named(n)))
-                    .collect()
-            } else {
-                BTreeMap::new()
-            };
-            let mut log = PassLog::default();
-            p.run(w, &mut log).map_err(|message| Error::Pass {
-                pass: text.clone(),
-                message,
-            })?;
-            let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
-            let added: Vec<String> = after.difference(&before).cloned().collect();
-            let removed: Vec<String> = before.difference(&after).cloned().collect();
-            let despawned_with = |n: &str| {
-                holders
-                    .get(n)
-                    .is_some_and(|held| held.iter().all(|&e| !w.is_alive(e)))
-            };
-            for (what, names, declared, removal) in [
-                ("added", &added, p.provides(), false),
-                ("removed", &removed, p.removes(), true),
-            ] {
-                let undeclared: Vec<String> = names
-                    .iter()
-                    .filter(|n| !declared.contains(&n.as_str()) && !(removal && despawned_with(n)))
-                    .cloned()
-                    .collect();
-                if !undeclared.is_empty() {
-                    return Err(Error::Undeclared {
-                        pass: text,
-                        what,
-                        names: undeclared,
-                    });
-                }
-            }
-            self.verify(w, &text)?;
-            report.steps.push(StepReport {
-                pass: text,
-                approximates: p.approximates(),
-                log,
-                added,
-                removed,
-            });
         }
         Ok(())
+    }
+
+    /// One pass: its requirements, the run, its declarations, the verifier.
+    fn run_pass(&self, w: &mut World, p: &dyn Pass, text: &str) -> Result<StepReport> {
+        for &r in p.requires() {
+            if !w.has_component_named(r) {
+                return Err(Error::Missing {
+                    pass: text.to_owned(),
+                    name: r.to_owned(),
+                });
+            }
+        }
+        let before: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
+        // who held each name a despawning pass may make disappear without declaring it
+        let holders: BTreeMap<&str, Vec<Entity>> = if p.despawns_entities() {
+            before
+                .iter()
+                .filter(|n| !p.removes().contains(&n.as_str()))
+                .map(|n| (n.as_str(), w.entities_named(n)))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+        let mut log = PassLog::default();
+        p.run(w, &mut log).map_err(|message| Error::Pass {
+            pass: text.to_owned(),
+            message,
+        })?;
+        let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
+        let added: Vec<String> = after.difference(&before).cloned().collect();
+        let removed: Vec<String> = before.difference(&after).cloned().collect();
+        let despawned_with = |n: &str| {
+            holders
+                .get(n)
+                .is_some_and(|held| held.iter().all(|&e| !w.is_alive(e)))
+        };
+        for (what, names, declared, removal) in [
+            ("added", &added, p.provides(), false),
+            ("removed", &removed, p.removes(), true),
+        ] {
+            let undeclared: Vec<String> = names
+                .iter()
+                .filter(|n| !declared.contains(&n.as_str()) && !(removal && despawned_with(n)))
+                .cloned()
+                .collect();
+            if !undeclared.is_empty() {
+                return Err(Error::Undeclared {
+                    pass: text.to_owned(),
+                    what,
+                    names: undeclared,
+                });
+            }
+        }
+        self.verify(w, text)?;
+        Ok(StepReport {
+            pass: text.to_owned(),
+            approximates: p.approximates(),
+            log,
+            added,
+            removed,
+        })
     }
 
     /// Choose the passes that take the world to what `target` accepts (see the module docs), in run order.
@@ -791,10 +875,21 @@ impl PassManager {
     /// Plan, run and check: verify the reader's world, run the planned pipeline (verifying after every pass), then
     /// check that the target accepts every component and verify once more before the writer.
     pub fn convert(&self, w: &mut World, target: &Target, mode: Mode) -> Result<RunReport> {
+        self.convert_instrumented(w, target, mode, &mut NoInstrument)
+    }
+
+    /// [`PassManager::convert`], calling `instrument` around every pass of the planned pipeline.
+    pub fn convert_instrumented(
+        &self,
+        w: &mut World,
+        target: &Target,
+        mode: Mode,
+        instrument: &mut dyn Instrument,
+    ) -> Result<RunReport> {
         self.verify(w, "the reader")?;
         let mut report = RunReport::default();
         let pipeline = self.plan(w, target, mode, &mut report)?;
-        self.run(w, &pipeline, &mut report)?;
+        self.run_instrumented(w, &pipeline, &mut report, instrument)?;
         for name in w.component_names() {
             let bad = target.illegal_entities(w, name, mode);
             if !bad.is_empty() {
