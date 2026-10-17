@@ -4,9 +4,14 @@
 //! w0 = (1-r)(1-g)(1-b), w1 = (1-r)(1-g)b, w2 = (1-r)g(1-b), w3 = (1-r)gb, and sum the layers' diffuse and normals with
 //! those weights: core's `rgb_product_4` on COLOR_1. A terrain material gets a `core.layered` whose slots are layer
 //! materials (`DiffuseTexture_layer0..3`; a layer whose texture the lookup did not find is a null slot), each a
-//! `pbr.material` with the terrain material's own roughness ([`crate::lower::roughness`] of its `Specular`), metallic
-//! 0, opaque. The terrain material gets no `pbr.material` of its own; one with no layer texture found gets a grey one
-//! instead of a blend.
+//! `pbr.material` with the terrain material's own roughness and specular, metallic 0, opaque. The terrain material
+//! gets no `pbr.material` of its own; one with no layer texture found gets a grey one instead of a blend.
+//!
+//! Specular, as the terrain pixel shaders write it (no layer has its own): intensity `SpecularColor`^2 (dry), power
+//! `Specular`, Fresnel 0.98; `*_spm` effects take `specularIntensityMultSpecMap` and `specularFalloffMultSpecMap`
+//! scaled per pixel by the layers' height maps, which is not lowered (counted). In `KHR_materials_specular` terms
+//! (see [`crate::lower`]) factor the intensity, colour (1 - 0.98) / 0.04, roughness [`crate::lower::roughness`] of
+//! the power.
 //!
 //! The lookup-blended effects (`*_cm*`, `*_2tex_blend*`) take green and blue per pixel from `lookupTexture` at
 //! TEXCOORD1 instead, mixed with vertex colour 1's by vertex colour 0's alpha (`*_cm*`: the lookup alone); the
@@ -17,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::{
     ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Semantic, Stream, TexRole, Texture,
     WeightMapping, World,
@@ -25,7 +30,7 @@ use primase_core::{
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::GtaShader;
-use crate::lower::{GREY, classes, for_each_mesh, roughness, scalar, texture};
+use crate::lower::{DEFAULT_FRESNEL, GREY, classes, for_each_mesh, roughness, scalar, texture};
 use crate::shader_class::Class;
 
 /// How a terrain effect gets green and blue of its weights.
@@ -104,7 +109,8 @@ impl Pass for GtaTerrainLayers {
         &["core.mesh", "gta.sources", "core.texture"]
     }
     fn approximates(&self) -> &'static str {
-        "lookup-blended terrain weighed per vertex (the lookup sampled at each vertex); terrain tint not applied"
+        "lookup-blended terrain weighed per vertex (the lookup sampled at each vertex); terrain tint not applied; \
+         the specular-map terrains' per-pixel height term left out; the Blinn-Phong lobe as GGX, dry"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -120,7 +126,32 @@ impl Pass for GtaTerrainLayers {
             if c.tint.is_some() {
                 log.approximate("tinted terrain layered without its tint", 1);
             }
-            let rough = scalar(s, "Specular").map_or(1.0, roughness);
+            let (intensity, power) = match scalar(s, "SpecularColor") {
+                Some(i) => (Some(i * i), scalar(s, "Specular")),
+                None => {
+                    let i = scalar(s, "specularIntensityMultSpecMap");
+                    if i.is_some() {
+                        log.approximate("specular-map terrain without its per-pixel height term", 1);
+                    }
+                    (i, scalar(s, "specularFalloffMultSpecMap"))
+                }
+            };
+            let rough = power.map_or(1.0, roughness);
+            let specular = match intensity {
+                Some(i) => Some(Specular {
+                    factor: i.clamp(0.0, 1.0),
+                    texture: None,
+                    color: [(1.0 - DEFAULT_FRESNEL) / 0.04; 3],
+                    color_texture: None,
+                }),
+                None => {
+                    log.count(
+                        "terrain materials without a specular intensity: specular unstated",
+                        1,
+                    );
+                    None
+                }
+            };
             let slots: Vec<Option<Entity>> = (0..4)
                 .map(|i| texture(s, &format!("DiffuseTexture_layer{i}")).flatten())
                 .collect();
@@ -141,24 +172,25 @@ impl Pass for GtaTerrainLayers {
             };
             weights.insert(m, (mode, lookup));
             if slots.iter().all(Option::is_none) {
-                grey.push(m);
+                grey.push((m, specular));
             } else {
-                layered.push((m, slots, rough));
+                layered.push((m, slots, rough, specular));
             }
         }
         let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
-        for m in grey {
+        for (m, specular) in grey {
             log.count("terrain materials with no layer texture: grey", 1);
             w.insert(
                 m,
                 PbrMaterial {
                     base_color: [srgb(GREY), srgb(GREY), srgb(GREY), 1.0],
                     metallic: 0.0,
+                    specular,
                     ..PbrMaterial::default()
                 },
             );
         }
-        for (m, slots, rough) in layered {
+        for (m, slots, rough, specular) in layered {
             let mut layers = Vec::with_capacity(4);
             for slot in slots {
                 let Some(t) = slot else {
@@ -180,6 +212,7 @@ impl Pass for GtaTerrainLayers {
                         base_color_texture: Some(TextureRef::new(t)),
                         metallic: 0.0,
                         roughness: rough,
+                        specular,
                         alpha_mode: AlphaMode::Opaque,
                         ..PbrMaterial::default()
                     },

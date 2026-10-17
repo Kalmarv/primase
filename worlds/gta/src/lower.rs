@@ -4,16 +4,27 @@
 //! - `lower-gta-pbr`: the geometry of shaders with nothing a surface material can draw is dropped (counted by
 //!   reason), and so is night-only geometry unless the pass is told it is night; every other shader but terrain's
 //!   (`gta-terrain-layers`) gets a `pbr.material`.
+//!
+//!   Specular, as GTA's shaders and deferred lights compute it: a shader's G-buffer intensity is
+//!   I = `SpecularColor` x dot((s.r^2, s.g^2, s.b), `SpecularMapIntensityMask`) for its specular map s (`SpecularTex`),
+//!   its power n = `Specular` x s.a, and its `Fresnel` F; the lights add I x Schlick(F0 = 1 - F, F90 = 1) x a
+//!   normalised Blinn-Phong lobe of exponent [`exponent`]`(n)`. In `KHR_materials_specular` terms (dielectric F0 =
+//!   0.04 x colour x factor, F90 = factor) that is factor I, colour (1 - F) / 0.04: the factor `SpecularColor`, a
+//!   texture derived from the map (one per map, mask and power) holding the strength dot((s.r^2, s.g^2, s.b), mask) and
+//!   the roughness of the exponent of `Specular` x s.a, per texel. A shader without `SpecularColor` writes no intensity
+//!   (dry), so its specular factor is 0.
 //! - `gta-vertex-colours`: vertex colour 0 kept where it fades the surface (as white with GTA's alpha), vertex colour 1
 //!   kept where it weighs a layered material, both dropped elsewhere (glTF multiplies COLOR_0 into the base colour;
 //!   GTA's red and green are ambient occlusion and its blue a palette column, none of them a colour).
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::{
-    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Primitive, Semantic, Stream, TexRole, Texture, World,
+    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole,
+    Texture, World,
 };
+use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::{GtaParam, GtaShader, GtaSources};
 use crate::shader_class::{Class, ShaderClass, Skip, classify};
@@ -24,6 +35,10 @@ pub const CUTOFF: f32 = 0.5;
 pub const WATER: [u8; 4] = [0x30, 0x62, 0x7A, 190];
 /// The base colour of a surface with no base texture, or whose texture the lookup did not find (sRGB grey 128).
 pub const GREY: u8 = 128;
+/// The Fresnel value of a shader without a `Fresnel` parameter: what `default`'s pixel shader writes.
+pub const DEFAULT_FRESNEL: f32 = 0.98;
+/// The specular map intensity mask of a shader without `SpecularMapIntensityMask`: the red channel.
+pub const DEFAULT_MASK: [f32; 3] = [1.0, 0.0, 0.0];
 
 /// The class of every shader material in `w` (an effect name hash no name in [`crate::shader_names`] gives is an
 /// error).
@@ -64,10 +79,69 @@ pub fn texture(s: &GtaShader, name: &str) -> Option<Option<Entity>> {
     }
 }
 
-/// Perceptual roughness of a Blinn-Phong specular power `n`: the microfacet alpha with the same highlight,
-/// `alpha = sqrt(2 / (n + 2))` (Walter et al. 2007), is roughness squared.
-pub fn roughness(power: f32) -> f32 {
-    (2.0 / (power.max(0.0) + 2.0)).powf(0.25)
+/// The Blinn-Phong exponent GTA's deferred lights use for a specular power `n` (a shader's `Specular`, times its
+/// specular map's alpha): the G-buffer keeps n / 512 (so n stops at 512), the lights take 3n below 500 and
+/// 1500 + 558 (n - 500) above.
+pub fn exponent(n: f32) -> f32 {
+    let n = n.clamp(0.0, 512.0);
+    if n < 500.0 {
+        3.0 * n
+    } else {
+        1500.0 + 558.0 * (n - 500.0)
+    }
+}
+
+/// Perceptual roughness of a GTA specular power `n`: the microfacet alpha with the highlight of the Blinn-Phong
+/// [`exponent`] e, `alpha = sqrt(2 / (e + 2))` (Walter et al. 2007), is roughness squared.
+pub fn roughness(n: f32) -> f32 {
+    (2.0 / (exponent(n) + 2.0)).powf(0.25)
+}
+
+/// The specular texture derived from specular map `t` (every level) under intensity mask `mask`, per texel as the
+/// shader samples it (linear): A (and R) the strength dot((r^2, g^2, b), mask) clamped to 0-1 (`KHR_materials_specular`
+/// reads A), G the [`roughness`] of the power `power` x a (glTF's metallic-roughness reads G; 1 without a power), B 0.
+pub fn specular_texture(t: &Texture, mask: [f32; 3], power: Option<f32>) -> Result<Texture, String> {
+    let linear = |c: u8| match t.color_space {
+        ColorSpace::Srgb => primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32,
+        ColorSpace::Linear => f32::from(c) / 255.0,
+    };
+    let mut levels = Vec::with_capacity(t.levels.len());
+    for (i, level) in t.levels.iter().enumerate() {
+        let (w, h) = ((t.width >> i).max(1), (t.height >> i).max(1));
+        let rgba = Decoder::default()
+            .decode_rgba8(t.format, w, h, level)
+            .map_err(|e| format!("specular map: {e}"))?;
+        levels.push(
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| {
+                    let [r, g, b] = [p[0], p[1], p[2]].map(linear);
+                    let v = (r * r * mask[0] + g * g * mask[1] + b * mask[2]).clamp(0.0, 1.0);
+                    let strength = (v * 255.0).round() as u8;
+                    let rough = power.map_or(1.0, |n| roughness(n * f32::from(p[3]) / 255.0));
+                    [strength, (rough * 255.0).round() as u8, 0, strength]
+                })
+                .collect(),
+        );
+    }
+    Ok(Texture {
+        width: t.width,
+        height: t.height,
+        format: TexFormat::Rgba8Unorm,
+        levels,
+        color_space: ColorSpace::Linear,
+        role: TexRole::Mask,
+        normal: None,
+    })
+}
+
+/// A material's specular map, its intensity mask and its power, to derive a texture from ([`specular_texture`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpecularMap {
+    texture: Entity,
+    mask: [f32; 3],
+    power: Option<f32>,
 }
 
 /// Keeps the primitives of `mesh` (and their sources) that `keep` accepts.
@@ -116,7 +190,10 @@ pub fn for_each_mesh(
 /// - two-sided for the shaders GTA draws from both sides (cloth);
 /// - emission (`*emissive*`, night-only emission only at night): the base texture, scaled by `EmissiveMultiplier`;
 /// - metallic 0 (GTA has no metalness); roughness from the specular power `Specular` ([`roughness`]), 1 for shaders
-///   without one.
+///   without one;
+/// - specular (`KHR_materials_specular`): factor `SpecularColor` (0 without one), colour (1 - `Fresnel`) / 0.04, the
+///   strength and the roughness per texel (the map's alpha scaling the power) in one texture derived from `SpecularTex`
+///   ([`specular_texture`]), its specular and metallic-roughness texture; none for water.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LowerGtaPbr {
     /// The world is lowered for night: night-only geometry kept and night emission on.
@@ -161,8 +238,9 @@ impl Pass for LowerGtaPbr {
         &["core.mesh"]
     }
     fn approximates(&self) -> &'static str {
-        "alpha tested at 0.5 (the game's reference is a render state); specular intensity not carried (metal-rough \
-         has no specular factor); normal and specular maps not lowered yet; water a blended flat colour"
+        "alpha tested at 0.5 (the game's reference is a render state); the Blinn-Phong lobe as GGX of the same \
+         highlight, dry (no wetness); normal maps not lowered yet; water a \
+         blended flat colour"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -198,6 +276,8 @@ impl Pass for LowerGtaPbr {
         }
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
+        // per specular map, mask and power (bits), its derived texture
+        let mut derived: BTreeMap<(Entity, [u32; 3], Option<u32>), Option<Entity>> = BTreeMap::new();
         for (&e, c) in &classes {
             if dropped.contains_key(&e) {
                 continue;
@@ -207,8 +287,48 @@ impl Pass for LowerGtaPbr {
                 continue;
             }
             let s = w.get::<GtaShader>(e).expect("shader");
-            let m = self.material(s, c, log);
+            let (mut m, map) = self.material(s, c, log);
             colour.extend(m.base_color_texture.map(|t| t.texture));
+            if let Some(SpecularMap {
+                texture: t,
+                mask,
+                power,
+            }) = map
+            {
+                let key = (t, mask.map(f32::to_bits), power.map(f32::to_bits));
+                let texture = match derived.get(&key) {
+                    Some(d) => *d,
+                    None => {
+                        let d = match w.get::<Texture>(t) {
+                            Some(tex) => {
+                                let d = specular_texture(tex, mask, power)?;
+                                let name = w.get::<Name>(t).map(|n| format!("{}_specular", n.0));
+                                let de = w.spawn();
+                                w.insert(de, d);
+                                if let Some(n) = name {
+                                    w.insert(de, Name(n));
+                                }
+                                log.count("specular textures derived (strength A, roughness G)", 1);
+                                Some(de)
+                            }
+                            None => {
+                                log.count("specular maps not loaded: intensity unmasked", 1);
+                                None
+                            }
+                        };
+                        derived.insert(key, d);
+                        d
+                    }
+                };
+                if let Some(d) = texture {
+                    m.specular.as_mut().expect("specular").texture = Some(TextureRef::new(d));
+                    if power.is_some() {
+                        // the roughness is the texture's (the factor multiplies it)
+                        m.metallic_roughness_texture = Some(TextureRef::new(d));
+                        m.roughness = 1.0;
+                    }
+                }
+            }
             lowered.push((e, m));
         }
         log.count("materials", lowered.len() as u64);
@@ -229,7 +349,13 @@ impl Pass for LowerGtaPbr {
 }
 
 impl LowerGtaPbr {
-    fn material(&self, s: &GtaShader, c: &ShaderClass, log: &mut PassLog) -> PbrMaterial {
+    /// The material, and its specular map, intensity mask and power when it has a map to derive a texture from.
+    fn material(
+        &self,
+        s: &GtaShader,
+        c: &ShaderClass,
+        log: &mut PassLog,
+    ) -> (PbrMaterial, Option<SpecularMap>) {
         let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
         let mut m = PbrMaterial {
             metallic: 0.0,
@@ -282,15 +408,56 @@ impl LowerGtaPbr {
         } else if c.night_emissive {
             log.count("night emission off (day)", 1);
         }
-        for (name, what) in [
-            ("BumpTex", "normal maps not lowered yet"),
-            ("SpecularTex", "specular maps not lowered yet"),
-        ] {
-            if matches!(texture(s, name), Some(Some(_))) {
-                log.approximate(what, 1);
-            }
+        let mut map = None;
+        if c.class != Class::Water {
+            let fresnel = scalar(s, "Fresnel")
+                .filter(|f| (0.0..=1.0).contains(f))
+                .unwrap_or(DEFAULT_FRESNEL);
+            let factor = match scalar(s, "SpecularColor") {
+                None => {
+                    log.count("no specular intensity: specular factor 0", 1);
+                    0.0
+                }
+                Some(i) => {
+                    if i > 1.0 {
+                        log.approximate("specular intensity above 1 clamped to 1", 1);
+                    }
+                    match texture(s, "SpecularTex") {
+                        Some(Some(t)) => {
+                            let mask = match param(s, "SpecularMapIntensityMask") {
+                                Some(GtaParam::Floats(f))
+                                    if f.len() >= 3 && f[..3].iter().all(|v| v.is_finite()) =>
+                                {
+                                    [f[0], f[1], f[2]]
+                                }
+                                _ => {
+                                    log.count("specular maps without an intensity mask: red", 1);
+                                    DEFAULT_MASK
+                                }
+                            };
+                            map = Some(SpecularMap {
+                                texture: t,
+                                mask,
+                                power: scalar(s, "Specular"),
+                            });
+                        }
+                        Some(None) => log.count("specular map not found: intensity unmasked", 1),
+                        None => {}
+                    }
+                    i.clamp(0.0, 1.0)
+                }
+            };
+            m.specular = Some(Specular {
+                factor,
+                texture: None,
+                color: [(1.0 - fresnel) / 0.04; 3],
+                color_texture: None,
+            });
         }
-        m
+        if matches!(texture(s, "BumpTex"), Some(Some(_))) {
+            log.approximate("normal maps not lowered yet", 1);
+        }
+        (m, map)
     }
 }
 
@@ -375,12 +542,49 @@ impl Pass for GtaVertexColours {
 
 #[cfg(test)]
 mod tests {
-    use super::roughness;
+    use super::{exponent, roughness, specular_texture};
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 
     #[test]
     fn roughness_of_a_specular_power() {
         assert_eq!(roughness(0.0), 1.0);
-        assert!((roughness(30.0) - 0.5).abs() < 1e-6);
+        // exponent 30: alpha sqrt(2 / 32) = 0.25
+        assert_eq!(exponent(10.0), 30.0);
+        assert!((roughness(10.0) - 0.5).abs() < 1e-6);
+        assert_eq!(exponent(501.0), 2058.0);
+        assert_eq!(exponent(9000.0), exponent(512.0));
         assert!(roughness(512.0) < roughness(100.0));
+    }
+
+    #[test]
+    fn specular_texture_squares_red_and_green_and_scales_the_power_by_alpha() {
+        let t = Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 0, 0, 7, 128, 128, 255, 9], vec![51, 0, 0, 0]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Other,
+            normal: None,
+        };
+        let s = specular_texture(&t, [1.0, 0.0, 0.0], None).unwrap();
+        assert_eq!(
+            (s.format, s.role, s.color_space),
+            (TexFormat::Rgba8Unorm, TexRole::Mask, ColorSpace::Linear)
+        );
+        // strength in R and A, roughness 1 without a power in G, B 0; 128/255 squared is 0.252: 64
+        assert_eq!(s.levels[0], vec![255, 255, 0, 255, 64, 255, 0, 64]);
+        // 51/255 = 0.2, squared 0.04: 10
+        assert_eq!(s.levels[1], vec![10, 255, 0, 10]);
+        let s = specular_texture(&t, [0.0, 0.5, 0.5], None).unwrap();
+        // 0.5 * 0.252 + 0.5 * 1 = 0.626: 160
+        assert_eq!((s.levels[0][4], s.levels[0][7]), (160, 160));
+        // power 10 x alpha: alpha 255 (level 1's 0 aside) gives exponent 30, roughness 0.5
+        let mut opaque = t.clone();
+        opaque.levels[0] = vec![255, 0, 0, 255, 0, 0, 0, 0];
+        let s = specular_texture(&opaque, [1.0, 0.0, 0.0], Some(10.0)).unwrap();
+        assert_eq!(s.levels[0][1], 128);
+        // alpha 0: power 0, roughness 1
+        assert_eq!(s.levels[0][5], 255);
     }
 }
