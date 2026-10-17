@@ -74,7 +74,7 @@ impl Component for Lods {
         out.extend(self.forms.iter().map(|f| f.form));
     }
     /// `default`, when there is one, one of the forms; with other forms, on an entity with a mesh; each form another
-    /// alive entity, listed once, not placed and without forms of its own.
+    /// entity (alive: the world checks every reference), listed once, not placed and without forms of its own.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         if let Some(d) = self.default
             && d > self.forms.len()
@@ -86,8 +86,8 @@ impl Component for Lods {
         }
         let mut seen = BTreeSet::new();
         for f in &self.forms {
-            if f.form == e || !w.is_alive(f.form) {
-                return Err(format!("form {:?} is not another alive entity", f.form));
+            if f.form == e {
+                return Err(format!("form {:?} is the entity itself", f.form));
             }
             if !seen.insert(f.form) {
                 return Err(format!("form {:?} is listed twice", f.form));
@@ -486,6 +486,6 @@ mod tests {
         let gone = failure(&|w, _, forms| {
             w.despawn(forms[1]);
         });
-        assert!(gone[0].contains("not another alive entity"), "{gone:?}");
+        assert!(gone[0].contains("which is not alive"), "{gone:?}");
     }
 }

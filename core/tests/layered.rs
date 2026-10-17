@@ -41,7 +41,16 @@ fn verifies_null_slots_references_and_nonrecursive_materials() {
     world.insert(ordinary, material.clone());
     assert!(material.verify(entity, &world).is_err());
     world.despawn(ordinary);
-    assert!(material.verify(entity, &world).is_err());
+    // a layer whose material is gone: the world's reference check, not the material's own
+    assert!(material.verify(entity, &world).is_ok());
+    assert_eq!(
+        world.verify_components(),
+        [(
+            "core.layered",
+            entity,
+            format!("refers to {ordinary:?}, which is not alive")
+        )]
+    );
     material.layers[0] = None;
     assert!(material.verify(entity, &world).is_ok());
     material.layers.pop();

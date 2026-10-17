@@ -102,7 +102,7 @@ impl Component for StateAxis {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         if self.key.is_empty() || self.key.contains([':', ';']) {
             return Err(format!(
                 "key {:?} is empty or holds ':' or ';' (the assign syntax)",
@@ -129,11 +129,7 @@ impl Component for StateAxis {
                 self.key, self.default
             ));
         }
-        if let Scope::Local(owner) = self.scope
-            && !w.is_alive(owner)
-        {
-            return Err(format!("{}: owner {owner:?} is not alive", self.key));
-        }
+        // a local axis's owner is a reference: the world checks that it is alive
         Ok(())
     }
     fn references(&self, out: &mut Vec<Entity>) {
@@ -253,9 +249,6 @@ impl Component for StateOverride {
                 Override::Transform(t) => t.verify(e, w)?,
                 Override::Variant(_) | Override::Prototype(_) if !w.has::<Instance>(e) => {
                     return Err(format!("{} override on an entity without an instance", o.kind()));
-                }
-                Override::Prototype(p) if !w.is_alive(*p) => {
-                    return Err(format!("prototype override to {p:?}, which is not alive"));
                 }
                 _ => {}
             }

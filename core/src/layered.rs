@@ -78,13 +78,8 @@ impl Component for LayeredMaterial {
             return Err("rgb_product_4 requires four slots".into());
         }
         for (i, layer) in self.layers.iter().enumerate() {
+            // that the material is alive, the world checks for every reference
             let Some(layer) = layer else { continue };
-            if !world.is_alive(layer.material) {
-                return Err(format!(
-                    "layer {i} references missing material {:?}",
-                    layer.material
-                ));
-            }
             if layer.material == entity || world.get::<Self>(layer.material).is_some() {
                 return Err(format!("layer {i} references a layered material"));
             }

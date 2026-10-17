@@ -55,9 +55,10 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
         Ok(None)
     }
 
-    /// The component's own invariants on entity `e` (indices in range, entity references alive, stream lengths
-    /// equal, ...). The pass manager runs it on every component after the reader, after every pass and before the
-    /// writer. World-wide rules (one name -> one payload) are `pass::Validator`s instead.
+    /// The component's own invariants on entity `e` (indices in range, stream lengths equal, ...). The pass manager
+    /// runs it on every component after the reader, after every pass and before the writer, together with the
+    /// world's own check that every entity of [`Component::references`] is alive. World-wide rules (one name -> one
+    /// payload) are `pass::Validator`s instead.
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         Ok(())
     }
@@ -234,7 +235,8 @@ trait AnyColumn: Any + Send + Sync {
     fn version(&self) -> u32;
     /// `None` when the entity has no such component; else its JSON view.
     fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>>;
-    /// Every value's `Component::verify`, as (entity, message) for those that fail, in entity order.
+    /// Every value's `Component::verify`, and that each entity its `Component::references` names is alive, as
+    /// (entity, message) for those that fail, in entity order.
     fn verify(&self, w: &World) -> Vec<(Entity, String)>;
     /// Every value through `Debug`, in entity order.
     fn visit_debug(&self, f: &mut dyn FnMut(Entity, &dyn fmt::Debug));
@@ -285,10 +287,19 @@ impl<T: Component> AnyColumn for Column<T> {
         self.values.get(&e).map(Component::to_json)
     }
     fn verify(&self, w: &World) -> Vec<(Entity, String)> {
-        self.values
-            .iter()
-            .filter_map(|(e, v)| v.verify(*e, w).err().map(|m| (*e, m)))
-            .collect()
+        let mut out = Vec::new();
+        let mut refs = Vec::new();
+        for (e, v) in &self.values {
+            if let Err(m) = v.verify(*e, w) {
+                out.push((*e, m));
+            }
+            refs.clear();
+            v.references(&mut refs);
+            if let Some(r) = refs.iter().find(|r| !w.alive.contains(r)) {
+                out.push((*e, format!("refers to {r:?}, which is not alive")));
+            }
+        }
+        out
     }
     fn visit_debug(&self, f: &mut dyn FnMut(Entity, &dyn fmt::Debug)) {
         for (e, v) in &self.values {
@@ -794,6 +805,11 @@ impl World {
                 "{} is a resource's name: a name is a component's or a resource's, not both",
                 T::NAME
             );
+            assert!(
+                !self.opaque.contains_key(T::NAME),
+                "{} is an opaque component's name: a name is typed or opaque, never both",
+                T::NAME
+            );
             self.names.insert(T::NAME, id);
         }
         self.columns
@@ -918,8 +934,8 @@ impl World {
         out
     }
 
-    /// Every typed component's [`Component::verify`]: (component name, entity, message) for each failure, by name
-    /// then entity.
+    /// Every typed component's [`Component::verify`], and that each entity it refers to ([`Component::references`])
+    /// is alive: (component name, entity, message) for each failure, by name then entity.
     pub fn verify_components(&self) -> Vec<(&'static str, Entity, String)> {
         let mut out: Vec<(&'static str, Entity, String)> = self
             .columns
@@ -1033,7 +1049,7 @@ impl World {
                 .filter(|(_, c)| !c.is_empty())
                 .map(|(n, c)| (n.as_str(), Kind::Opaque(c))),
         );
-        // a name is typed or opaque, never both (insert_opaque refuses typed names)
+        // a name is typed or opaque, never both (each insert refuses the other kind's names)
         kinds.sort_unstable_by_key(|(n, _)| *n);
         for (name, kind) in kinds {
             match kind {
@@ -1438,6 +1454,49 @@ mod tests {
             w.resources_json().unwrap_err().to_string(),
             "test.res: inf at the value: JSON has no non-finite numbers"
         );
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Points(Entity);
+    impl Component for Points {
+        const NAME: &'static str = "test.points";
+        fn references(&self, out: &mut Vec<Entity>) {
+            out.push(self.0);
+        }
+    }
+
+    #[test]
+    fn a_reference_to_a_despawned_entity_fails_verification() {
+        let mut w = World::new();
+        let target = w.spawn();
+        let holder = w.spawn();
+        w.insert(holder, Points(target));
+        assert!(w.verify_components().is_empty());
+        w.despawn(target);
+        assert_eq!(
+            w.verify_components(),
+            [(
+                "test.points",
+                holder,
+                format!("refers to {target:?}, which is not alive")
+            )]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "opaque component")]
+    fn a_typed_component_cannot_take_an_opaque_name() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_opaque(
+            e,
+            "test.a",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Bytes(vec![]),
+            },
+        );
+        w.insert(e, A(1));
     }
 
     #[test]
