@@ -26,7 +26,7 @@ use crate::components::{
     UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
     UnityTree, UnityTreeInstance,
 };
-use crate::material::{UnityMaterialData, shader_name};
+use crate::material::{ShaderData, UnityMaterialData};
 use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
 use crate::scene::{ColliderComponent, ColliderShape};
@@ -138,7 +138,7 @@ struct Builder<'a> {
     layers: BTreeMap<ObjRef, Entity>,
     collider_meshes: BTreeMap<ObjRef, std::sync::Arc<ColliderMesh>>,
     physic_materials: BTreeMap<ObjRef, UnityPhysicMaterial>,
-    shaders: BTreeMap<ObjRef, String>,
+    shaders: BTreeMap<ObjRef, ShaderData>,
     report: LevelReport,
 }
 
@@ -473,13 +473,13 @@ impl Builder<'_> {
         Ok(out)
     }
 
-    fn shader(&mut self, r: &ObjRef) -> Result<String> {
-        if let Some(n) = self.shaders.get(r) {
-            return Ok(n.clone());
+    fn shader(&mut self, r: &ObjRef) -> Result<ShaderData> {
+        if let Some(s) = self.shaders.get(r) {
+            return Ok(s.clone());
         }
-        let n = shader_name(self.player, r)?;
-        self.shaders.insert(r.clone(), n.clone());
-        Ok(n)
+        let s = ShaderData::read(self.player, r)?;
+        self.shaders.insert(r.clone(), s.clone());
+        Ok(s)
     }
 
     fn material(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
@@ -488,6 +488,10 @@ impl Builder<'_> {
         }
         let m = UnityMaterialData::read(self.player, r)?;
         let shader = m.shader.as_ref().map(|s| self.shader(s)).transpose()?;
+        let (shader, shader_state) = match shader {
+            Some(s) => (Some(s.name), s.subshaders),
+            None => (None, Vec::new()),
+        };
         let mut textures = Vec::with_capacity(m.textures.len());
         for (name, env) in &m.textures {
             // a texture property may name another class (a RenderTexture, a Cubemap): only Texture2D is read
@@ -513,6 +517,7 @@ impl Builder<'_> {
             UnityMaterial {
                 material: UnityObject::from(r),
                 shader,
+                shader_state,
                 textures,
                 floats: m.floats,
                 ints: m.ints,

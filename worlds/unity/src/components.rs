@@ -105,12 +105,14 @@ pub struct UnityTexEnv {
     pub offset: [f32; 2],
 }
 
-/// A material as Unity stores it: its shader's name and saved properties in stored order (colours gamma-encoded, as
-/// stored), keywords, tags and render queue.
+/// A material as Unity stores it: its shader's name and render state (its subshaders, as
+/// [`crate::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored), keywords,
+/// tags and render queue.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityMaterial {
     pub material: UnityObject,
     pub shader: Option<String>,
+    pub shader_state: Vec<crate::material::SubShader>,
     pub textures: Vec<UnityTexEnv>,
     pub floats: Vec<(String, f32)>,
     pub ints: Vec<(String, i64)>,
@@ -121,6 +123,15 @@ pub struct UnityMaterial {
 }
 
 impl UnityMaterial {
+    /// A shader render-state value: the bound material property's float where it names one the material has, else
+    /// the shader's own value.
+    pub fn state_value(&self, v: &crate::material::ShaderValue) -> f32 {
+        v.property
+            .as_deref()
+            .and_then(|p| self.float(p))
+            .unwrap_or(v.value)
+    }
+
     pub fn float(&self, name: &str) -> Option<f32> {
         self.floats.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
     }
@@ -143,6 +154,8 @@ impl UnityMaterial {
 
 impl Component for UnityMaterial {
     const NAME: &'static str = "unity.material";
+    /// 2: `shader_state`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

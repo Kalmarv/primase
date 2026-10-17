@@ -1,6 +1,6 @@
-//! Unity materials as stored: the shader's name and the saved properties (textures with their tiling and offset,
-//! floats, integers, colours), keywords, tags and render queue. What they mean depends on the shader; lowering to
-//! `pbr.material` is [`crate::lower`].
+//! Unity materials as stored: the shader's name and render state, and the saved properties (textures with their tiling
+//! and offset, floats, integers, colours), keywords, tags and render queue. What they mean depends on the shader;
+//! lowering to `pbr.material` is [`crate::lower`].
 
 use crate::player::{ObjRef, Player};
 use crate::value::{Array, Value};
@@ -130,12 +130,127 @@ impl UnityMaterialData {
     }
 }
 
-/// The name of the Shader `r` (`m_ParsedForm.m_Name`).
-pub fn shader_name(player: &Player, r: &ObjRef) -> Result<String> {
-    let s = player.decode(r)?;
+/// A render-state value of a shader pass: the value the shader declares, and the material property it is bound to
+/// (`Blend [_SrcBlend] ...`), which then gives the value.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ShaderValue {
+    pub value: f32,
+    pub property: Option<String>,
+}
+
+/// A shader pass's render state: its `LightMode` tag, the first render target's blend factors (Unity's `BlendMode`:
+/// 0 Zero, 1 One, 5 SrcAlpha, 10 OneMinusSrcAlpha, ...), depth writes and culling (0 off, 1 front, 2 back).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ShaderPass {
+    pub light_mode: Option<String>,
+    pub src_blend: ShaderValue,
+    pub dst_blend: ShaderValue,
+    pub zwrite: ShaderValue,
+    pub cull: ShaderValue,
+}
+
+/// A subshader: its tags as stored (Unity upper-cases some keys: `QUEUE`) and its passes in order.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct SubShader {
+    pub tags: Vec<(String, String)>,
+    pub passes: Vec<ShaderPass>,
+}
+
+/// A Shader's name and render state (`m_ParsedForm`); its compiled programs are not read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderData {
+    pub name: String,
+    pub subshaders: Vec<SubShader>,
+}
+
+fn tag_list(v: Option<&Value>) -> Result<Vec<(String, String)>> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    let inner = v.get("tags").or_else(|| v.get("m_Tags")).unwrap_or(v);
+    pairs_of(inner, "tag")
+}
+
+fn pairs_of(v: &Value, what: &str) -> Result<Vec<(String, String)>> {
+    let items: &[Value] = match v {
+        Value::Array(Array::Values(items)) => items,
+        Value::Array(a) if a.is_empty() => &[],
+        _ => return Err(invalid(format!("shader: {what}s are not a list"))),
+    };
+    items
+        .iter()
+        .map(|p| match p {
+            Value::Pair(kv) => Ok((
+                kv.0.as_str()
+                    .ok_or_else(|| invalid(format!("shader: {what} key")))?
+                    .to_owned(),
+                kv.1.as_str()
+                    .ok_or_else(|| invalid(format!("shader: {what} value")))?
+                    .to_owned(),
+            )),
+            _ => Err(invalid(format!("shader: {what} entry is not a pair"))),
+        })
+        .collect()
+}
+
+fn shader_value(v: Option<&Value>, what: &str) -> Result<ShaderValue> {
+    let v = v.ok_or_else(|| invalid(format!("shader pass: no {what}")))?;
+    let value = v
+        .get("val")
+        .and_then(Value::as_f32)
+        .ok_or_else(|| invalid(format!("shader pass: {what} without a value")))?;
+    let property = match v.get("name").and_then(Value::as_str) {
+        None | Some("") | Some("<noninit>") => None,
+        Some(n) => Some(n.to_owned()),
+    };
+    Ok(ShaderValue { value, property })
+}
+
+impl ShaderData {
+    /// Read the Shader `r` of `player`.
+    pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
+        let s = player.decode(r)?;
+        let name =
+            shader_name_of(&s).ok_or_else(|| invalid(format!("shader {}/{}: no name", r.file, r.path_id)))?;
+        let mut subshaders = Vec::new();
+        if let Some(form) = s.get("m_ParsedForm") {
+            for sub in list(form, "m_SubShaders")? {
+                let mut passes = Vec::new();
+                for p in list(sub, "m_Passes")? {
+                    let st = p
+                        .get("m_State")
+                        .ok_or_else(|| invalid(format!("shader {name}: a pass without m_State")))?;
+                    let rt = st
+                        .get("rtBlend0")
+                        .ok_or_else(|| invalid(format!("shader {name}: a pass without rtBlend0")))?;
+                    passes.push(ShaderPass {
+                        light_mode: tag_list(st.get("m_Tags"))?
+                            .into_iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("LightMode"))
+                            .map(|(_, v)| v),
+                        src_blend: shader_value(rt.get("srcBlend"), "srcBlend")?,
+                        dst_blend: shader_value(rt.get("destBlend"), "destBlend")?,
+                        zwrite: shader_value(st.get("zWrite"), "zWrite")?,
+                        cull: shader_value(st.get("culling"), "culling")?,
+                    });
+                }
+                subshaders.push(SubShader {
+                    tags: tag_list(sub.get("m_Tags"))?,
+                    passes,
+                });
+            }
+        }
+        Ok(ShaderData { name, subshaders })
+    }
+}
+
+fn shader_name_of(s: &Value) -> Option<String> {
     s.at(&["m_ParsedForm", "m_Name"])
         .or_else(|| s.get("m_Name"))
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+/// The name of the Shader `r` (`m_ParsedForm.m_Name`).
+pub fn shader_name(player: &Player, r: &ObjRef) -> Result<String> {
+    shader_name_of(&player.decode(r)?)
         .ok_or_else(|| invalid(format!("shader {}/{}: no name", r.file, r.path_id)))
 }
