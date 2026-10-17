@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use primase_gltf::glb::Document;
 use serde_json::{Map, Value, json};
 
 use crate::{Error, Result};
@@ -83,12 +84,8 @@ impl Table {
     }
 }
 
-pub(super) fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let chunks = primase_gltf::glb::parse(&bytes)?;
-    if !contains(chunks.json, SOURCE.as_bytes()) {
-        return Ok(bytes);
-    }
-    let mut doc: Value = serde_json::from_slice(chunks.json)?;
+pub(super) fn apply(mut tile: Document) -> Result<Document> {
+    let doc = &mut tile.json;
     let mut table = Table::default();
     let mut found = false;
     for kind in ["meshes", "nodes", "materials", "textures"] {
@@ -108,20 +105,12 @@ pub(super) fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
             }
         }
     }
-    if !found {
-        return Ok(bytes);
+    if found {
+        let scene = doc
+            .get_mut("scenes")
+            .and_then(|s| s.get_mut(0))
+            .ok_or_else(|| Error::Invalid("tile has no scene for its origin table".into()))?;
+        scene["extras"]["primase"][TABLE] = json!({"version": 1, "value": table.origins});
     }
-    let scene = doc
-        .get_mut("scenes")
-        .and_then(|s| s.get_mut(0))
-        .ok_or_else(|| Error::Invalid("tile has no scene for its origin table".into()))?;
-    scene["extras"]["primase"][TABLE] = json!({"version": 1, "value": table.origins});
-    Ok(primase_gltf::glb::assemble(
-        &serde_json::to_vec(&doc)?,
-        chunks.bin.unwrap_or(&[]),
-    )?)
-}
-
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
+    Ok(tile)
 }

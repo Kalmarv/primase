@@ -1044,11 +1044,12 @@ impl TilePlan {
         let render = if triangles == 0 {
             Ok(None)
         } else {
-            (|| -> Result<Option<(TileInfo, Vec<u8>, ImageFiles)>> {
+            (|| -> Result<Option<(TileInfo, primase_gltf::glb::Document, ImageFiles)>> {
                 if !min.iter().chain(&max).all(|v| v.is_finite()) {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
-                let (bytes, report) = primase_gltf::write(
+                // one document through every stage, assembled once (attach_items)
+                let (doc, report) = primase_gltf::write_document(
                     w,
                     &primase_gltf::WriteOptions {
                         group_by: primase_gltf::GroupBy::None,
@@ -1068,21 +1069,21 @@ impl TilePlan {
                     .iter()
                     .map(|p| (p.entity.index(), p.transform))
                     .collect();
-                let (bytes, instanced_placements) =
-                    instancing::apply(bytes, &transforms, self.options.gpu_instancing)?;
-                let bytes = provenance::apply(bytes)?;
+                let (doc, instanced_placements) =
+                    instancing::apply(doc, &transforms, self.options.gpu_instancing)?;
+                let doc = provenance::apply(doc)?;
                 #[cfg(feature = "ktx2")]
-                let bytes = if self.options.ktx2 {
-                    self.textures.apply(bytes)?
+                let doc = if self.options.ktx2 {
+                    self.textures.apply(doc)?
                 } else {
-                    bytes
+                    doc
                 };
-                let bytes = if self.options.compress {
-                    compression::apply(bytes)?
+                let doc = if self.options.compress {
+                    compression::apply(doc)?
                 } else {
-                    bytes
+                    doc
                 };
-                let (bytes, files) = images::externalize(&bytes)?;
+                let (doc, files) = images::externalize(doc)?;
                 Ok(Some(TileInfo {
                     collision: None,
                     content: TileContent::Geometry,
@@ -1098,10 +1099,11 @@ impl TilePlan {
                     viewer_items: 0,
                     lights: 0,
                     layered_materials: report.layered_materials,
-                    bytes: bytes.len() as u64,
+                    // set when the GLB is assembled
+                    bytes: 0,
                     images: files.iter().map(|(n, _)| n.clone()).collect(),
                 })
-                .map(|info| (info, bytes, files)))
+                .map(|info| (info, doc, files)))
             })()
         };
         let (render, files) = match render? {
@@ -1123,18 +1125,26 @@ impl TilePlan {
         &self,
         (col, row): (i32, i32),
         sub: Option<Subcell>,
-        render: Option<(TileInfo, Vec<u8>)>,
+        render: Option<(TileInfo, primase_gltf::glb::Document)>,
         items: &[usize],
         lights: &[usize],
     ) -> Result<Option<WrittenTile>> {
         use serde_json::{Value, json};
         if items.is_empty() && lights.is_empty() {
-            return Ok(render.map(|(info, bytes)| WrittenTile {
-                info,
-                bytes,
-                collision: None,
-                images: Vec::new(),
-            }));
+            return render
+                .map(|(info, doc)| {
+                    let bytes = doc.to_glb()?;
+                    Ok(WrittenTile {
+                        info: TileInfo {
+                            bytes: bytes.len() as u64,
+                            ..info
+                        },
+                        bytes,
+                        collision: None,
+                        images: Vec::new(),
+                    })
+                })
+                .transpose();
         }
         let items: Vec<(usize, &ViewerItem)> = items.iter().map(|&i| (i, &self.items[i])).collect();
         let mut collision_name = String::new();
@@ -1150,17 +1160,15 @@ impl TilePlan {
             collision_name = asset_name("collision", col, row, sub, &bytes);
             Some((collision_name.clone(), bytes))
         };
-        let (mut doc, bin) = if let Some((_, bytes)) = &render {
-            let chunks = primase_gltf::glb::parse(bytes)?;
-            (
-                serde_json::from_slice::<Value>(chunks.json)?,
-                chunks.bin.unwrap_or(&[]).to_vec(),
-            )
-        } else {
-            (
-                json!({"asset":{"version":"2.0","generator":"primase-web"},"scene":0,"scenes":[{"nodes":[]}],"nodes":[]}),
-                Vec::new(),
-            )
+        let (render, (mut doc, bin)) = match render {
+            Some((info, d)) => (Some(info), (d.json, d.bin)),
+            None => (
+                None,
+                (
+                    json!({"asset":{"version":"2.0","generator":"primase-web"},"scene":0,"scenes":[{"nodes":[]}],"nodes":[]}),
+                    Vec::new(),
+                ),
+            ),
         };
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];
@@ -1246,7 +1254,7 @@ impl TilePlan {
             records: collisions.len(),
         });
         let info = match render {
-            Some((mut info, _)) => {
+            Some(mut info) => {
                 for k in 0..3 {
                     info.min[k] = info.min[k].min(min[k]);
                     info.max[k] = info.max[k].max(max[k]);

@@ -96,6 +96,35 @@ pub fn assemble(json: &[u8], bin: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// A GLB held as its two parts, to be changed by several stages and assembled once: the JSON document and the
+/// binary chunk, 4-byte padded with zeros as [`parse`] returns a GLB's (so a stage sees what it would see after an
+/// [`assemble`] and a [`parse`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Document {
+    pub json: serde_json::Value,
+    pub bin: Vec<u8>,
+}
+
+impl Document {
+    /// The parts, the binary chunk padded.
+    pub fn new(json: serde_json::Value, mut bin: Vec<u8>) -> Self {
+        bin.resize(bin.len().next_multiple_of(4), 0);
+        Document { json, bin }
+    }
+    /// A GLB's parts ([`parse`]).
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let chunks = parse(bytes)?;
+        Ok(Document::new(
+            serde_json::from_slice(chunks.json)?,
+            chunks.bin.unwrap_or(&[]).to_vec(),
+        ))
+    }
+    /// The GLB ([`assemble`]).
+    pub fn to_glb(&self) -> Result<Vec<u8>> {
+        assemble(&serde_json::to_vec(&self.json)?, &self.bin)
+    }
+}
+
 fn u32_at(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }

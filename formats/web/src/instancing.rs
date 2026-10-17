@@ -1,5 +1,6 @@
 use crate::{Error, Result, require_extension};
 use primase_core::Transform;
+use primase_gltf::glb::Document;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 const EXT: &str = "EXT_mesh_gpu_instancing";
@@ -115,13 +116,14 @@ const SHADOWS: &str = "primase.shadows";
 /// positive, non-sheared TRS groups sharing the same resolved glTF mesh and the same
 /// `primase.shadows` (an instanced node has one shadow setting, kept on it).
 pub(super) fn apply(
-    bytes: Vec<u8>,
+    input: Document,
     transforms: &BTreeMap<u32, Transform>,
     enabled: bool,
-) -> Result<(Vec<u8>, u64)> {
-    let chunks = primase_gltf::glb::parse(&bytes)?;
-    let mut doc: Value = serde_json::from_slice(chunks.json)?;
-    let mut bin = chunks.bin.unwrap_or(&[]).to_vec();
+) -> Result<(Document, u64)> {
+    let Document {
+        json: mut doc,
+        mut bin,
+    } = input;
     let length = doc["buffers"][0]["byteLength"].as_u64().unwrap_or(0) as usize;
     bin.truncate(length);
     let mut nodes = doc["nodes"]
@@ -212,8 +214,5 @@ pub(super) fn apply(
     if !bin.is_empty() {
         doc["buffers"][0]["byteLength"] = json!(bin.len());
     }
-    Ok((
-        primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?,
-        count,
-    ))
+    Ok((Document::new(doc, bin), count))
 }

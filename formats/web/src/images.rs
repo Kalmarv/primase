@@ -1,6 +1,7 @@
 //! Shared images (format 2.0): a tile GLB's embedded images move out into files named by the SHA256 of their bytes,
 //! referenced by URI, and the GLB's binary chunk is compacted to what remains (geometry and its views).
 use crate::{Error, Result};
+use primase_gltf::glb::Document;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -39,13 +40,12 @@ pub fn image_name(mime: &str, bytes: &[u8]) -> Result<String> {
 /// bufferView is dropped and the binary chunk holds only the remaining views, in their order, 4-byte aligned. Views
 /// keep their meaning: a meshopt view's compressed range (its extension's) and a plain view's range are both moved.
 /// Returns the GLB and the images it references, in image order, each once.
-pub fn externalize(glb: &[u8]) -> Result<(Vec<u8>, ImageFiles)> {
-    let chunks = primase_gltf::glb::parse(glb)?;
-    let mut doc: Value = serde_json::from_slice(chunks.json)?;
-    let bin = chunks.bin.unwrap_or(&[]);
-    let Some(images) = doc.get("images").and_then(Value::as_array).cloned() else {
-        return Ok((glb.to_vec(), Vec::new()));
+pub fn externalize(input: Document) -> Result<(Document, ImageFiles)> {
+    let Some(images) = input.json.get("images").and_then(Value::as_array).cloned() else {
+        return Ok((input, Vec::new()));
     };
+    let Document { json: mut doc, bin } = input;
+    let bin = &bin[..];
     let views = doc["bufferViews"].as_array().cloned().unwrap_or_default();
     let mut image_views = BTreeMap::new();
     let mut files: ImageFiles = Vec::new();
@@ -136,8 +136,5 @@ pub fn externalize(glb: &[u8]) -> Result<(Vec<u8>, ImageFiles)> {
     if let Some(buffer) = doc["buffers"].get_mut(0) {
         buffer["byteLength"] = json!(out.len());
     }
-    Ok((
-        primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &out)?,
-        files,
-    ))
+    Ok((Document::new(doc, out), files))
 }

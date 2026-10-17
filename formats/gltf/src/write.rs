@@ -232,6 +232,15 @@ const CONSUMED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME
 
 /// Write the world as GLB bytes.
 pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteReport)> {
+    let (doc, mut report) = write_document(world, options)?;
+    let bytes = doc.to_glb()?;
+    report.glb_bytes = bytes.len() as u64;
+    Ok((bytes, report))
+}
+
+/// [`write`] as a [`glb::Document`], for a caller that changes it further before assembling the GLB once
+/// (`WriteReport::glb_bytes` is then 0).
+pub fn write_document(world: &World, options: &WriteOptions) -> Result<(glb::Document, WriteReport)> {
     if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
         return Err(Error::World {
             entity,
@@ -264,10 +273,7 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         layered_weights: BTreeMap::new(),
     };
     let json = w.document()?;
-    let text = serde_json::to_vec(&json)?;
-    let bytes = glb::assemble(&text, &w.bin)?;
-    w.report.glb_bytes = bytes.len() as u64;
-    Ok((bytes, w.report))
+    Ok((glb::Document::new(json, std::mem::take(&mut w.bin)), w.report))
 }
 
 /// Write the world to a GLB file.

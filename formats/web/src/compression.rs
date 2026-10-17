@@ -1,4 +1,5 @@
 use crate::{Error, Result, require_extension as extension};
+use primase_gltf::glb::Document;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -64,10 +65,11 @@ where
 
 /// Uniform, origin-centred signed-16 positions; normal/tangent signed normalized
 /// 16-bit; unit UVs unsigned normalized 16-bit. Uniform decoding preserves normals.
-pub(super) fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let chunks = primase_gltf::glb::parse(&bytes)?;
-    let mut doc: Value = serde_json::from_slice(chunks.json)?;
-    let mut source = chunks.bin.unwrap_or(&[]).to_vec();
+pub(super) fn apply(input: Document) -> Result<Document> {
+    let Document {
+        json: mut doc,
+        bin: mut source,
+    } = input;
     let meshes = doc["meshes"].as_array().expect("writer meshes").clone();
     let mut position_scale = BTreeMap::<usize, f32>::new();
     let mut kinds = BTreeMap::<usize, String>::new();
@@ -238,5 +240,5 @@ pub(super) fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
     }
     let max_step = mesh_scales.iter().copied().fold(0f32, f32::max);
     doc["asset"]["extras"]["primase.quantization"] = json!({"position_max_local_error":max_error,"position_max_local_step":max_step,"position_bits":16,"normal_bits":16,"uv_bits":16});
-    Ok(primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?)
+    Ok(Document::new(doc, bin))
 }
