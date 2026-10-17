@@ -1444,17 +1444,16 @@ impl Reader<'_> {
                 }
                 next = c.first + c.count;
                 let e = self.w.spawn();
-                self.w.insert(
-                    e,
-                    SkateGrindCurve {
-                        points: t.points[c.first as usize..(c.first + c.count) as usize].to_vec(),
-                        closed: c.flags & flags::CLOSED != 0,
-                        kind: ((c.flags >> 4) & 15) as u8,
-                        radius: c.radius,
-                        surface: c.surface,
-                        unknown_flags: c.flags & !0xF1,
-                    },
-                );
+                let curve = SkateGrindCurve {
+                    points: t.points[c.first as usize..(c.first + c.count) as usize].to_vec(),
+                    closed: c.flags & flags::CLOSED != 0,
+                    kind: ((c.flags >> 4) & 15) as u8,
+                    radius: c.radius,
+                    surface: c.surface,
+                    unknown_flags: c.flags & !0xF1,
+                };
+                self.w.insert(e, curve.core());
+                self.w.insert(e, curve);
             }
             if next as usize != t.points.len() {
                 self.rep
@@ -1585,21 +1584,24 @@ impl Reader<'_> {
             if let Some(n) = name {
                 self.w.insert(ent, Name(n));
             }
-            self.w.insert(
-                ent,
-                SkateMarker {
-                    kind,
-                    position,
-                    yaw,
-                    m,
-                    blueprint,
-                    snap,
-                    lift,
-                    shelter,
-                    trainer,
-                    other,
-                },
-            );
+            let marker = SkateMarker {
+                kind,
+                position,
+                yaw,
+                m,
+                blueprint,
+                snap,
+                lift,
+                shelter,
+                trainer,
+                other,
+            };
+            let (core, transform) = marker.core();
+            self.w.insert(ent, core);
+            if let Some(t) = transform {
+                self.w.insert(ent, t);
+            }
+            self.w.insert(ent, marker);
         }
         if travel > 25 {
             self.rep

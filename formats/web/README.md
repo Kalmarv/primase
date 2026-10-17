@@ -13,7 +13,15 @@ loaded. Then, per cell, the driver takes the world's `World::closure` of
 lowers its materials, calls `TilePlan::write_cell` and stores each `WrittenTile`
 (`WrittenTile::write_to`) before dropping that world. `TilePlan::finish` returns
 the index, and `Index::write_to` publishes `tiles.json` once every file it names
-is in place. `write` is that pipeline over an already prepared world.
+is in place. `write` is that pipeline over an already prepared world. Each tile is
+written as a `primase_gltf::Selection` of the cell's world, which stays unchanged,
+so one loaded cell can be written by several plans (the example's plain set).
+
+A reader that loads meshes only per cell plans with `plan_with_geometry`, saying
+which prototypes have geometry still to load; `spanning` finds, from prototype
+boxes (`primase_gltf::mesh_file_box` reads one from a GLB's JSON alone), the
+placements whose pivot does not locate their geometry, to be filed by triangle
+centre.
 
 `Options::tile_byte_budget` (96 MiB by default, `None` to disable) caps each file a
 tile carries, its GLB and its collision sidecar: a cell with a larger one is split
@@ -24,7 +32,7 @@ makes it so or at the level limit, is written and listed in
 `TilePlan::over_budget` (`TileSet::over_budget`). `scene_to_tiles` takes
 `--budget-mib N` or `--no-budget`. The writer
 never loads or lowers: what it needs missing is an error. A tile holds its
-placements and what they refer to; the world's lights are not written. The world uses metres and +Y up. Ground tiles
+placements and what they refer to, and the world's lights whose position it contains. The world uses metres and +Y up. Ground tiles
 use floor(east/tile_size), floor(north/tile_size), with a default size of 200 metres.
 The shared ground frame maps east to X and north to -Z.
 Negative coordinates use floor, not truncation toward zero.
@@ -84,8 +92,9 @@ extensions include `KHR_mesh_quantization` and meshopt. PNG bytes stay unchanged
 a JSON payload. They become identity nodes with JavaScript-safe unique names and
 versioned `web.viewer` extras. Payload positions remain in world space. Anchors
 choose streaming tiles, including metadata-only tiles; records are not clipped
-or duplicated across tile boundaries. The example lowers grind curves, markers
-(including spawns), and world collision soups into these records. Prototype
+or duplicated across tile boundaries. The writer adds records of the world's
+curves and markers (`core.curve`, `core.marker`) and of its world collision
+soups (FORMAT.md, "Optional viewer records"). Prototype
 collision remains prototype metadata and is not expanded into world soups.
 Collision records are stored separately in `collision_<col>_<row>.glb`; each
 tile's optional `collision` index entry records its filename, byte size and record

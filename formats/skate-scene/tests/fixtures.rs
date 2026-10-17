@@ -516,6 +516,72 @@ fn the_world_holds_what_the_manifest_says() {
 }
 
 #[test]
+fn markers_and_curves_are_core_facts_too() {
+    use primase_core::{Curve, Marker};
+    let (w, _) = read(&fixture("core_markers"));
+    assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+    let markers: Vec<_> = w
+        .iter::<Marker>()
+        .map(|(e, m)| (m.clone(), w.get::<Transform>(e).copied()))
+        .collect();
+    let at = |p: [f32; 3]| {
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = p;
+        Some(t)
+    };
+    let marker = |kind: &str, ground| Marker {
+        kind: kind.into(),
+        ground,
+    };
+    assert_eq!(
+        markers,
+        [
+            // a height: placed, facing yaw 0 (+Z)
+            (marker("spawn", None), at([0., 120., 0.])),
+            // no height: a ground position (east, north), no transform
+            (marker("travel", Some([12., 40.])), None),
+            (marker("trainer", None), at([80., 300., 12.])),
+            // an effect: its matrix
+            (marker("vfx", None), at([0., 140., 0.])),
+        ]
+    );
+    let bits = |t: Transform| t.cols.map(|c| c.map(f32::to_bits));
+    assert_eq!(
+        bits(markers[0].1.unwrap()),
+        bits(at([0., 120., 0.]).unwrap()),
+        "yaw 0 is the identity, without -0"
+    );
+    let curves: Vec<_> = w.iter::<Curve>().map(|(_, c)| c.clone()).collect();
+    assert_eq!(
+        curves,
+        [
+            Curve {
+                kind: "coping".into(),
+                points: vec![[0., 1., 0.], [1., 1., 0.]],
+                closed: true,
+            },
+            Curve {
+                kind: "rail".into(),
+                points: vec![[2., 1., 0.], [3., 1., 1.], [4., 1., 2.]],
+                closed: false,
+            },
+        ]
+    );
+    // yaw 90 faces +X: the marker's local +Z turns to east
+    let turned = MANIFEST.replace(
+        r#""position": [0, 120, 0], "yaw": 0"#,
+        r#""position": [0, 120, 0], "yaw": 90"#,
+    );
+    assert_ne!(turned, MANIFEST);
+    let (w, _) = read(&fixture_with("core_markers_yaw", &turned, |_| {}));
+    let (e, _) = w.iter::<Marker>().next().unwrap();
+    let c = w.get::<Transform>(e).unwrap().cols;
+    for (got, want) in c[2].iter().chain(&c[0]).zip([1., 0., 0., 0., 0., -1.]) {
+        assert!((got - want).abs() < 1e-6, "{c:?}");
+    }
+}
+
+#[test]
 fn edits_are_written() {
     let (mut w, _) = read(&fixture("edit_src"));
     // move a placement, give a light a new group and source, drop a prototype's placements' sources

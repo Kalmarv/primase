@@ -13,6 +13,71 @@ use primase_core::{Entity, Mesh, MeshFile, World};
 use crate::read::Gltf;
 use crate::{Error, Result};
 
+/// The box of a `core.mesh_file`'s mesh in its own space, `[min, max]` (metres), from its POSITION accessors' `min`
+/// and `max` (glTF requires them), reading only the GLB's header and JSON chunk: what a planner that loads meshes
+/// later needs to know first. `None` for a mesh without positions. The path is relative to `base_dir`.
+pub fn mesh_file_box(base_dir: &Path, file: &MeshFile) -> Result<Option<[[f64; 3]; 2]>> {
+    use std::io::Read;
+    let path = base_dir.join(&file.path);
+    let in_file = |e: Error| e.in_file(&path);
+    let io = |source| Error::Io {
+        path: path.clone(),
+        source,
+    };
+    let mut f = std::fs::File::open(&path).map_err(io)?;
+    let len = f.metadata().map_err(io)?.len();
+    let mut head = [0u8; 20];
+    f.read_exact(&mut head).map_err(io)?;
+    let glb = |offset, detail: &str| {
+        in_file(Error::Glb {
+            offset,
+            detail: detail.into(),
+        })
+    };
+    if &head[..4] != b"glTF" {
+        return Err(glb(0, "not a GLB"));
+    }
+    if &head[16..20] != b"JSON" {
+        return Err(glb(16, "the first chunk is not JSON"));
+    }
+    let json_len = u64::from(u32::from_le_bytes([head[12], head[13], head[14], head[15]]));
+    if json_len > len.saturating_sub(20) {
+        return Err(glb(12, "the JSON chunk runs past the end of the file"));
+    }
+    let mut json = vec![0u8; json_len as usize];
+    f.read_exact(&mut json).map_err(io)?;
+    let doc: serde_json::Value = serde_json::from_slice(&json).map_err(|e| in_file(e.into()))?;
+    let invalid = |item: String, detail: &str| {
+        in_file(Error::Invalid {
+            item,
+            detail: detail.into(),
+        })
+    };
+    let item = format!("meshes[{}].primitives", file.mesh);
+    let primitives = doc["meshes"][file.mesh as usize]["primitives"]
+        .as_array()
+        .ok_or_else(|| invalid(item, "missing"))?;
+    let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+    for p in primitives {
+        let Some(a) = p["attributes"]["POSITION"].as_u64() else {
+            continue;
+        };
+        let accessor = &doc["accessors"][a as usize];
+        for (side, key) in ["min", "max"].into_iter().enumerate() {
+            for k in 0..3 {
+                let v = accessor[key][k]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| {
+                        invalid(format!("accessors[{a}].{key}"), "POSITION needs 3 finite numbers")
+                    })?;
+                b[side][k] = if side == 0 { b[0][k].min(v) } else { b[1][k].max(v) };
+            }
+        }
+    }
+    Ok(b[0][0].is_finite().then_some(b))
+}
+
 /// What [`load_mesh_files`] did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoadReport {

@@ -4,43 +4,11 @@
 #[path = "support/mod.rs"]
 mod support;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::{Entity, Instance, MeshFile, Name, World};
-use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
-use primase_web::{LocalBox, Options, PIVOT_MARGIN, ViewerItem};
+use primase_core::{Entity, Instance, MeshFile, World};
+use primase_web::{Options, PIVOT_MARGIN};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
 use std::path::Path;
 const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain]";
-
-/// A prototype file mesh's local box, from its POSITION accessors' `min` and `max` (glTF requires them), reading only
-/// the GLB's JSON chunk; `None` for a mesh without positions.
-fn local_box(folder: &Path, f: &MeshFile) -> Result<Option<LocalBox>, Box<dyn std::error::Error>> {
-    let path = folder.join(&f.path);
-    let mut file = std::fs::File::open(&path)?;
-    let mut head = [0u8; 20];
-    file.read_exact(&mut head)?;
-    if &head[..4] != b"glTF" || &head[16..20] != b"JSON" {
-        return Err(format!("{}: not a GLB with a JSON chunk", path.display()).into());
-    }
-    let mut json = vec![0u8; u32::from_le_bytes(head[12..16].try_into()?) as usize];
-    file.read_exact(&mut json)?;
-    let doc: serde_json::Value = serde_json::from_slice(&json)?;
-    let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
-    for p in doc["meshes"][f.mesh as usize]["primitives"]
-        .as_array()
-        .ok_or("mesh primitives")?
-    {
-        let Some(a) = p["attributes"]["POSITION"].as_u64() else {
-            continue;
-        };
-        let a = &doc["accessors"][a as usize];
-        for k in 0..3 {
-            b[0][k] = b[0][k].min(a["min"][k].as_f64().ok_or("POSITION min")?);
-            b[1][k] = b[1][k].max(a["max"][k].as_f64().ok_or("POSITION max")?);
-        }
-    }
-    Ok(b[0][0].is_finite().then_some(b))
-}
 
 /// `world`'s closure of `roots` with its meshes loaded, and (for rendering) its textures loaded and the materials
 /// lowered as the web writer requires.
@@ -139,44 +107,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
                 .collect::<Result<_, _>>()?;
         }
     }
-    options.split_by_tile = world
-        .iter::<SkatePlacement>()
-        .filter_map(|(e, p)| p.split_by_tile.then_some(e))
-        .collect();
-    let name = |e| {
-        world
-            .get::<Name>(e)
-            .map_or_else(|| format!("Entity_{}", e.index()), |n| n.0.clone())
-    };
-    for (e, c) in world.iter::<SkateGrindCurve>() {
-        if let Some(p) = c.points.first() {
-            options.viewer_items.push(ViewerItem {
-                name: name(e),
-                kind: "grind_curve".into(),
-                anchor: p.map(f64::from),
-                data: serde_json::to_value(c)?,
-            });
-        }
-    }
-    for (e, m) in world.iter::<SkateMarker>() {
-        let anchor = m
-            .xyz()
-            .map(|(x, y, z)| [x as f64, y.unwrap_or(0.) as f64, z as f64])
-            .or_else(|| m.m.map(|v| [v[9] as f64, v[10] as f64, v[11] as f64]))
-            .unwrap_or([0.; 3]);
-        options.viewer_items.push(ViewerItem {
-            name: name(e),
-            kind: if m.kind == primase_skate_scene::MarkerKind::Spawn {
-                "spawn"
-            } else {
-                "marker"
-            }
-            .into(),
-            anchor,
-            data: serde_json::to_value(m)?,
-        });
-    }
-    // collision: the writer takes the world's core.collision itself
+    // viewer records: the writer takes the world's core.curve, core.marker and core.collision itself
     let plain_options = Options {
         compress: false,
         gpu_instancing: false,
@@ -193,7 +124,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     for (_, i) in world.iter::<Instance>() {
         if let std::collections::btree_map::Entry::Vacant(v) = boxes.entry(i.prototype) {
             v.insert(match world.get::<MeshFile>(i.prototype) {
-                Some(f) => local_box(folder, f)?,
+                Some(f) => primase_gltf::mesh_file_box(folder, f)?,
                 None => None,
             });
         }
@@ -202,26 +133,28 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         Ok(boxes.get(&p).copied().flatten())
     })?;
     let mut plans = Vec::new();
-    let mut marked = 0;
-    for (k, (options, out)) in sets.iter().enumerate() {
-        let mut options = options.clone();
-        let before = options.split_by_tile.len();
-        options.split_by_tile.extend(spans.marked.iter().copied());
-        if k == 0 {
-            marked = options.split_by_tile.len() - before;
-        }
+    for (options, out) in &sets {
+        let options = Options {
+            split_by_tile: spans.marked.iter().copied().collect(),
+            ..options.clone()
+        };
         let geometry = |p: Entity| boxes.get(&p).is_some_and(Option::is_some);
         plans.push((primase_web::plan_with_geometry(&world, &options, &geometry)?, out));
     }
     println!(
-        "placements filed by triangle centre as their pivot does not locate them: {marked} (wider than a cell {}, pivot over {PIVOT_MARGIN} m outside their box {}, either {}, already split by the scene {}; straddling a cell edge {}; of {} measured)",
+        "placements filed by triangle centre as their pivot does not locate them: {} (wider than a cell {}, pivot over {PIVOT_MARGIN} m outside their box {}; straddling a cell edge {}; of {} measured)",
+        spans.marked.len(),
         spans.wider_than_a_cell,
         spans.pivot_outside,
-        spans.marked.len(),
-        spans.marked.len() - marked,
         spans.straddling,
         spans.measured
     );
+    if plans[0].0.ground_markers() > 0 {
+        println!(
+            "markers without a height, shown at height 0: {}",
+            plans[0].0.ground_markers()
+        );
+    }
     for e in plans[0].0.unsplit() {
         let proto = world.get::<Instance>(e).map_or(e, |i| i.prototype);
         let w = prepare(&world, &BTreeSet::from([e, proto]), folder, false)?;
@@ -269,7 +202,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         index.tiles.iter().map(|t| t.triangles).sum::<u64>(),
         index.tiles.iter().map(|t| t.placements).sum::<u64>(),
         index.tiles.iter().map(|t| t.instanced_placements).sum::<u64>(),
-        sets[0].0.viewer_items.len(),
+        index.tiles.iter().map(|t| t.viewer_items).sum::<u64>(),
         index.tiles.iter().map(|t| t.lights).sum::<u64>(),
         bytes[0],
         if with_plain {

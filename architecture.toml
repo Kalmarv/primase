@@ -71,12 +71,6 @@ removed_when = "primase convert replaces the example (the rule moves into primas
 
 [[entry_point]]
 file = "formats/web/examples/scene_to_tiles.rs"
-what = "reads a format itself"
-reason = "parses prototype GLB headers for their bounds"
-removed_when = "the reader supplies prototype bounds"
-
-[[entry_point]]
-file = "formats/web/examples/scene_to_tiles.rs"
 what = "runs a pass outside the pass manager"
 reason = "runs lower-skate-pbr and lower-skate-lights directly"
 removed_when = "primase convert replaces the example"

@@ -169,8 +169,8 @@ The skate-scene reader (`formats/skate-scene`) is the bridge; its world goes to 
 | `PLAC` record | `core.transform`, `core.instance`, `core.tile` (flag 1), `skate.placement`, `core.source` |
 | `collision[i]` + `SOUP` | `skate.collision`, `skate.soup` |
 | `LGHT` record | `skate.light`, `core.source` |
-| `CURV` curve | `skate.grind_curve` |
-| `water[i]`, `markers[i]` | `skate.water`; `skate.marker`, `core.name` |
+| `CURV` curve | `skate.grind_curve`, `core.curve` |
+| `water[i]`, `markers[i]` | `skate.water`; `skate.marker`, `core.marker`, `core.transform` (a height or `m`), `core.name` |
 
 v1 -> v2 -> v1 is exact for everything the v1 round-trip gate checks (tables byte-identical, manifest equal as
 JSON, files byte-identical), since every v1 detail the writer needs lives in those components. The gate for v2:
@@ -358,8 +358,8 @@ The skate-scene reader (`formats/skate-scene`) is the bridge; its world goes to 
 | `PLAC` record | `core.transform`, `core.instance`, `core.tile` (flag 1), `skate.placement`, `core.source` |
 | `collision[i]` + `SOUP` | `skate.collision`, `skate.soup` |
 | `LGHT` record | `skate.light`, `core.source` |
-| `CURV` curve | `skate.grind_curve` |
-| `water[i]`, `markers[i]` | `skate.water`; `skate.marker`, `core.name` |
+| `CURV` curve | `skate.grind_curve`, `core.curve` |
+| `water[i]`, `markers[i]` | `skate.water`; `skate.marker`, `core.marker`, `core.transform` (a height or `m`), `core.name` |
 
 v1 -> v2 -> v1 is exact for everything the v1 round-trip gate checks (tables byte-identical, manifest equal as
 JSON, files byte-identical), since every v1 detail the writer needs lives in those components. The gate for v2:

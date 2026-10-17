@@ -180,6 +180,20 @@ provides a marker position. Known kinds:
   closes the polyline. Allocate the closing point when creating its geometry.
 - `spawn` and `marker`: draw a gizmo at the anchor; other payload fields are
   optional source information.
+
+The writer makes records of the world's curves and markers (`core.curve` and
+`core.marker`), after the caller's own: a curve is a `grind_curve` anchored at
+its first point, a marker a `spawn` (marker kind `spawn`) or a `marker` (any
+other kind) anchored at its position. `name` is the entity's name (else
+`Entity_<n>`) and `data` the core component: `{"kind", "points", "closed"}` for
+a curve, `{"kind", "ground"}` for a marker. `data.kind` is a lower-case word:
+known curve kinds are `rail`, `ledge` and `coping`, known marker kinds `spawn`,
+`travel`, `trainer`, `vfx` and `trigger_effect`; a source may give others, which
+a consumer shows as a plain curve or marker. A marker whose source leaves its
+height to be found (`data.ground` is its east/north position) is anchored at
+height 0. The record node's `extras.primase` also carries the entity's other
+components (a source dialect's, such as `skate.marker` or `skate.grind_curve`)
+as `{"version", "value"}`, as glTF node extras do.
 - `collision_reference`: `data.file` identifies the tile collision GLB and
   `data.record` indexes its collision mesh record.
 

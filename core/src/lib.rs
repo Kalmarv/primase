@@ -12,6 +12,8 @@ pub mod json;
 pub mod layered;
 mod lod;
 pub use lod::{LodChoice, LodForm, Lods, SelectLod, select_lod};
+mod marker;
+pub use marker::{Curve, Marker, kind_is_valid};
 pub mod pass;
 pub mod pbr;
 pub mod print;

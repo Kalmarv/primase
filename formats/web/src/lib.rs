@@ -362,6 +362,10 @@ impl WrittenTile {
 pub struct TilePlan {
     options: Options,
     items: Vec<ViewerItem>,
+    /// For a record from a world entity (a curve or a marker): the entity's other shown components, by name, as
+    /// glTF extras show them, for the record's node.
+    item_components: BTreeMap<usize, serde_json::Map<String, serde_json::Value>>,
+    ground_markers: u64,
     lights: Vec<PlannedLight>,
     sun: Option<IndexSun>,
     cells: BTreeMap<(i32, i32), Cell>,
@@ -459,6 +463,8 @@ pub fn plan_with_geometry(
             ..options.clone()
         },
         items: options.viewer_items.clone(),
+        item_components: BTreeMap::new(),
+        ground_markers: 0,
         lights: Vec::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         cells: BTreeMap::new(),
@@ -488,7 +494,8 @@ pub fn plan_with_geometry(
             plan.cells.entry(key).or_default().placements.push(p);
         }
     }
-    // the world's collision geometry, in world space, after the caller's viewer items
+    // after the caller's viewer items: the world's curves and markers, then its collision geometry, in world space
+    plan.ground_markers = core_items(world, &mut plan.items, &mut plan.item_components)?;
     plan.items.extend(collision::world_items(world)?);
     for (i, item) in plan.items.iter().enumerate() {
         if item.anchor.iter().any(|v| !v.is_finite()) || item.kind.is_empty() {
@@ -516,6 +523,71 @@ pub fn plan_with_geometry(
     }
     Ok(plan)
 }
+/// Viewer records of the world's `core.curve`s (kind `grind_curve`) and then its `core.marker`s (`spawn`, or
+/// `marker` for any other kind), each by entity, appended to `items`: named by their `core.name`, anchored at a
+/// curve's first point or a marker's position, with the core component as their data and the entity's other shown
+/// components in `components`. A marker with a ground position is anchored at height 0; their number is returned.
+fn core_items(
+    world: &World,
+    items: &mut Vec<ViewerItem>,
+    components: &mut BTreeMap<usize, serde_json::Map<String, serde_json::Value>>,
+) -> Result<u64> {
+    use primase_core::{Component, Curve, Marker};
+    let json_error = |e: Entity, detail: String| Error::Invalid(format!("{e:?}: {detail}"));
+    let mut record = |e: Entity, kind: &str, anchor: [f64; 3], core: &str| -> Result<()> {
+        let mut data = None;
+        let mut others = serde_json::Map::new();
+        for c in world
+            .components_json(e)
+            .map_err(|err| json_error(e, err.to_string()))?
+        {
+            match (c.name, c.value) {
+                (name, Some(v)) if name == core => data = Some(v),
+                (Name::NAME | Transform::NAME, _) | (_, None) => {}
+                (name, Some(v)) => {
+                    others.insert(
+                        name.to_owned(),
+                        serde_json::json!({"version": c.version, "value": v}),
+                    );
+                }
+            }
+        }
+        if !others.is_empty() {
+            components.insert(items.len(), others);
+        }
+        items.push(ViewerItem {
+            name: world
+                .get::<Name>(e)
+                .map_or_else(|| format!("Entity_{}", e.index()), |n| n.0.clone()),
+            kind: kind.to_owned(),
+            anchor,
+            data: data.ok_or_else(|| json_error(e, format!("{core} has no JSON view")))?,
+        });
+        Ok(())
+    };
+    for (e, c) in world.iter::<Curve>() {
+        let first = c
+            .points
+            .first()
+            .ok_or_else(|| json_error(e, "a curve without points".into()))?;
+        record(e, "grind_curve", first.map(f64::from), Curve::NAME)?;
+    }
+    let mut ground = 0;
+    for (e, m) in world.iter::<Marker>() {
+        let anchor = match (world.get::<Transform>(e), m.ground) {
+            (Some(t), _) => t.cols[3].map(f64::from),
+            // east, north: x = east, z = -north
+            (None, Some([east, north])) => {
+                ground += 1;
+                [f64::from(east), 0., -f64::from(north)]
+            }
+            (None, None) => return Err(json_error(e, "a marker without a position".into())),
+        };
+        let kind = if m.kind == "spawn" { "spawn" } else { "marker" };
+        record(e, kind, anchor, Marker::NAME)?;
+    }
+    Ok(ground)
+}
 /// The index's record of the sun `e` (a directional `core.light`, checked by the resource's verify).
 fn sun(world: &World, e: Entity) -> Result<IndexSun> {
     let light = world
@@ -540,6 +612,11 @@ fn sun(world: &World, e: Entity) -> Result<IndexSun> {
     })
 }
 impl TilePlan {
+    /// Viewer records of markers with a ground position (no height: the source leaves it to its consumer), anchored
+    /// at height 0.
+    pub fn ground_markers(&self) -> u64 {
+        self.ground_markers
+    }
     /// Placements filed by triangle centre that still wait for [`TilePlan::split`].
     pub fn unsplit(&self) -> Vec<Entity> {
         self.unsplit.iter().map(|p| p.entity).collect()
@@ -999,7 +1076,14 @@ impl TilePlan {
             } else {
                 serde_json::to_value(item)?
             };
-            doc["nodes"].as_array_mut().expect("nodes").push(json!({"name":format!("Viewer_{safe}_{i}"),"extras":{"primase":{"web.viewer":{"version":1,"value":value}}}}));
+            // the record, then the source entity's components
+            let mut extras = serde_json::Map::new();
+            extras.insert("web.viewer".into(), json!({"version":1,"value":value}));
+            extras.extend(self.item_components.get(i).cloned().unwrap_or_default());
+            doc["nodes"]
+                .as_array_mut()
+                .expect("nodes")
+                .push(json!({"name":format!("Viewer_{safe}_{i}"),"extras":{"primase":extras}}));
             doc["scenes"][0]["nodes"]
                 .as_array_mut()
                 .expect("roots")

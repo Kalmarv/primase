@@ -432,6 +432,49 @@ impl SkateMarker {
     pub fn xyz(&self) -> Option<(f32, Option<f32>, f32)> {
         self.position.map(|([x, z], y)| (x, y, z))
     }
+
+    /// The marker as the core states it: its kind, and where it is. An effect's `m` is its transform; else a
+    /// position with a height is the translation, turned by `yaw` (degrees about +Y; yaw 0 faces +Z, 90 +X: the
+    /// marker's local +Z is its facing); a position without one is a ground position (the yaw stays here only).
+    pub(crate) fn core(&self) -> (primase_core::Marker, Option<primase_core::Transform>) {
+        let kind = self.kind.as_str().to_owned();
+        let transform = match (self.m, self.position) {
+            (Some(m), _) => Some(primase_core::Transform {
+                cols: std::array::from_fn(|c| [m[3 * c], m[3 * c + 1], m[3 * c + 2]]),
+            }),
+            (None, Some(([x, z], Some(y)))) => {
+                let (sin, cos) = self.yaw.unwrap_or(0.).to_radians().sin_cos();
+                let (sin, cos) = (sin as f32, cos as f32);
+                // no -0 in the identity a yaw of 0 gives
+                let minus_sin = if sin == 0. { 0. } else { -sin };
+                Some(primase_core::Transform {
+                    cols: [[cos, 0., minus_sin], [0., 1., 0.], [sin, 0., cos], [x, y, z]],
+                })
+            }
+            _ => None,
+        };
+        let ground = match (transform, self.position) {
+            (None, Some(([x, z], None))) => Some(primase_core::frame::ground([x, 0., z])),
+            _ => None,
+        };
+        (primase_core::Marker { kind, ground }, transform)
+    }
+}
+
+impl SkateGrindCurve {
+    /// The curve as the core states it, its kind from bits 4-7 (`rail`, `ledge`, `coping`; another value `kind_<n>`).
+    pub(crate) fn core(&self) -> primase_core::Curve {
+        primase_core::Curve {
+            kind: match self.kind {
+                0 => "rail".to_owned(),
+                1 => "ledge".to_owned(),
+                2 => "coping".to_owned(),
+                n => format!("kind_{n}"),
+            },
+            points: self.points.clone(),
+            closed: self.closed,
+        }
+    }
 }
 
 macro_rules! shown {

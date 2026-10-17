@@ -411,6 +411,94 @@ fn viewer_records_make_metadata_only_tiles_and_keep_payloads() {
 }
 
 #[test]
+fn the_worlds_curves_and_markers_are_viewer_records() {
+    use primase_core::{Curve, Marker, Name, Opaque, OpaqueData};
+    let mut w = World::new();
+    let rail = w.spawn();
+    w.insert(
+        rail,
+        Curve {
+            kind: "rail".into(),
+            points: vec![[5., 1., -5.], [6., 1., -5.]],
+            closed: false,
+        },
+    );
+    w.insert(rail, Name("rail a".into()));
+    w.insert_opaque(
+        rail,
+        "test.dialect",
+        Opaque {
+            version: 3,
+            data: OpaqueData::Json(serde_json::json!({"surface": 4})),
+        },
+    );
+    let spawn = w.spawn();
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [10., 2., -20.];
+    w.insert(spawn, t);
+    w.insert(
+        spawn,
+        Marker {
+            kind: "spawn".into(),
+            ground: None,
+        },
+    );
+    let stop = w.spawn();
+    w.insert(
+        stop,
+        Marker {
+            kind: "travel".into(),
+            ground: Some([12., 40.]),
+        },
+    );
+    let options = Options {
+        viewer_items: vec![primase_web::ViewerItem {
+            name: "own".into(),
+            kind: "marker".into(),
+            anchor: [1., 0., -1.],
+            data: serde_json::json!(null),
+        }],
+        ..Default::default()
+    };
+    assert_eq!(primase_web::plan(&w, &options).unwrap().ground_markers(), 1);
+    let set = write(&w, &options).unwrap();
+    let mut records = Vec::new();
+    for tile in &set.index.tiles {
+        let chunks = primase_gltf::glb::parse(&set.files[&tile.file]).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+        for node in doc["nodes"].as_array().unwrap() {
+            records.push((node["name"].clone(), node["extras"]["primase"].clone()));
+        }
+    }
+    records.sort_by_key(|(name, _)| name.as_str().unwrap().to_owned());
+    let viewer = |kind: &str, name: &str, anchor: [f64; 3], data: serde_json::Value| serde_json::json!({"version": 1, "value": {"name": name, "kind": kind, "anchor": anchor, "data": data}});
+    assert_eq!(
+        records,
+        [
+            (
+                "Viewer_Entity_1_2".into(),
+                serde_json::json!({"web.viewer": viewer("spawn", "Entity_1", [10., 2., -20.], serde_json::json!({"kind": "spawn", "ground": null}))})
+            ),
+            (
+                "Viewer_Entity_2_3".into(),
+                serde_json::json!({"web.viewer": viewer("marker", "Entity_2", [12., 0., -40.], serde_json::json!({"kind": "travel", "ground": [12., 40.]}))})
+            ),
+            (
+                "Viewer_own_0".into(),
+                serde_json::json!({"web.viewer": viewer("marker", "own", [1., 0., -1.], serde_json::json!(null))})
+            ),
+            (
+                "Viewer_rail_a_1".into(),
+                serde_json::json!({
+                    "web.viewer": viewer("grind_curve", "rail a", [5., 1., -5.], serde_json::json!({"kind": "rail", "points": [[5., 1., -5.], [6., 1., -5.]], "closed": false})),
+                    "test.dialect": {"version": 3, "value": {"surface": 4}},
+                })
+            ),
+        ]
+    );
+}
+
+#[test]
 fn empty_prototypes_are_counted_but_unloaded_files_are_errors() {
     let mut w = World::new();
     let p = w.spawn();
