@@ -46,6 +46,11 @@ impl Pass for BakeNonrigid {
             "core.lods",
         ]
     }
+    /// It lowers non-rigid transforms: a target that takes only rigid ones (a dynamic `core.transform`) gets it
+    /// from the planner.
+    fn legalizes(&self) -> &[&'static str] {
+        &["core.transform"]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         for (k, n) in bake_nonrigid(w).counts {
             log.count(&k, n);

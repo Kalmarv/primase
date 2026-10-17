@@ -345,6 +345,47 @@ fn mirrored_and_sheared_placements_draw_the_same_with_regular_transforms() {
 }
 
 #[test]
+fn a_target_taking_rigid_transforms_is_planned_with_the_pass() {
+    use primase_core::pass::{Mode, PassManager, PassOptions, PassRegistry, RunReport, Target};
+    let mut reg = PassRegistry::new();
+    primase_meshops::register(&mut reg);
+    let manager = PassManager::new(reg);
+    let target = Target::new("rigid").dynamic_typed::<Transform>(|t| {
+        matches!(t.classify(), TransformKind::Regular | TransformKind::Degenerate)
+    });
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(proto, roof(0.0));
+    let p = w.spawn();
+    w.insert(p, Transform::IDENTITY);
+    w.insert(
+        p,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    let plan = |w: &World| {
+        manager
+            .plan(
+                w,
+                &target,
+                Mode::Partial,
+                &PassOptions::new(),
+                &mut RunReport::default(),
+            )
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(plan(&w), "", "rigid already: nothing to do");
+    w.insert(
+        p,
+        t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]),
+    );
+    assert_eq!(plan(&w), "bake-nonrigid");
+}
+
+#[test]
 fn a_prototype_that_cannot_follow_keeps_its_placements_as_they_were() {
     let mut w = World::new();
     let proto = w.spawn();
