@@ -12,8 +12,8 @@
 //!
 //! Both rows draw the stock declaration `[Pos:Half4, Color0:UByte4N, TexCoord0:Half2, SubMaterial:UByte4,
 //! TangentSpace:UByte4N]`, one stream each. Studio's `[Pos:Float3, TexCoord0:Half2, TangentSpace:UByte4N]` sections
-//! of a retargeted key are rewritten into it: positions to half floats (w = 1), texture coordinates and tangent
-//! frames copied byte for byte, `Color0` and the sub-material index from the caller. A `vertex_blend` material's
+//! of a retargeted key are rewritten into it: positions to half floats (w = 1; a decal section's never behind its
+//! own surface, see [`half_in_front`]), texture coordinates and tangent frames copied byte for byte, `Color0` and the sub-material index from the caller. A `vertex_blend` material's
 //! sections have `TexCoord0:Half4` instead, the per-vertex weight in `z` (Studio 20261012 and later; see
 //! [`crate::postcompile::vbrecord`]): the weight is handed to the caller ([`SectionInput::blend`]) and `x, y` are
 //! written as the stock `Half2`. Everything else of the MeshSet is kept; vertex offsets, the stride byte, the
@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use half::f16;
 use primase_compress::Compressor;
 use primase_compress::cas::CasRaw;
 use primase_compress::oodle::Oodle;
@@ -261,6 +262,8 @@ pub struct Report {
     pub meshsets: usize,
     /// Largest |position - half-float position| over all rewritten vertices, in metres.
     pub max_position_error: f32,
+    /// Decal vertices whose nearest half-float position lay behind their surface and were stepped in front of it.
+    pub stepped_in_front: usize,
     /// Per retargeted key: (old program row, new program row).
     pub rows: BTreeMap<u64, (Vec<u32>, Vec<u32>)>,
 }
@@ -732,12 +735,120 @@ pub fn apply(
     Ok(report)
 }
 
-fn half_bits(v: f32, what: &'static str) -> Result<[u8; 2]> {
-    let h = half::f16::from_f32(v);
-    if !h.is_finite() {
-        return Err(bad(what, 0, format!("{v} does not fit a half float")));
+/// A position as half floats, each coordinate rounded to nearest.
+fn half_nearest(p: [f32; 3]) -> Result<[f16; 3]> {
+    let h = p.map(f16::from_f32);
+    if h.iter().any(|c| !c.is_finite()) {
+        return Err(bad(W, 0, format!("position {p:?} does not fit half floats")));
     }
-    Ok(h.to_le_bytes())
+    Ok(h)
+}
+
+/// The next half float from `h` toward +infinity (`up`) or -infinity.
+fn half_step(h: f16, up: bool) -> f16 {
+    let b = h.to_bits();
+    let negative = b & 0x8000 != 0;
+    let bits = if b & 0x7fff == 0 {
+        if up { 0x0001 } else { 0x8001 }
+    } else if negative != up {
+        b + 1
+    } else {
+        b - 1
+    };
+    f16::from_bits(bits)
+}
+
+/// A decal vertex as half floats, never behind its own surface: the nearest half-float position, or, when that lies
+/// behind the plane through `p` with normal `n`, the normal's dominant coordinate moved out by the shortfall and
+/// rounded away from the surface (so the vertex ends at most one half-float step of that coordinate in front).
+/// Rounding to nearest moves a vertex up to half a step per axis (7.8 mm at 16..32 m from the mesh origin), enough
+/// to hide a coplanar overlay under its base. A zero normal (a vertex no triangle uses) keeps the nearest position.
+/// Returns whether the vertex was moved.
+fn half_in_front(p: [f32; 3], n: [f32; 3]) -> Result<([f16; 3], bool)> {
+    let mut h = half_nearest(p)?;
+    let depth = |h: &[f16; 3]| (0..3).map(|i| (h[i].to_f32() - p[i]) * n[i]).sum::<f32>();
+    let axis = (0..3).fold(0, |a, i| if n[i].abs() > n[a].abs() { i } else { a });
+    let d = depth(&h);
+    if n[axis] == 0.0 || d >= 0.0 {
+        return Ok((h, false));
+    }
+    let up = n[axis] > 0.0;
+    let target = h[axis].to_f32() - d / n[axis];
+    let mut c = f16::from_f32(target);
+    if (up && c.to_f32() < target) || (!up && c.to_f32() > target) {
+        c = half_step(c, up);
+    }
+    h[axis] = c;
+    // the depth sum rounds in f32: at most one more step
+    for _ in 0..2 {
+        if !h[axis].is_finite() {
+            break;
+        }
+        if depth(&h) >= 0.0 {
+            return Ok((h, true));
+        }
+        h[axis] = half_step(h[axis], up);
+    }
+    Err(bad(
+        W,
+        0,
+        format!("position {p:?}: no half-float position in front of its surface {n:?}"),
+    ))
+}
+
+/// Area-weighted vertex normals of a section from its own triangles (its indices count from its first vertex),
+/// in the triangles' winding; zero for a vertex no triangle uses.
+fn vertex_normals(
+    sec: &meshset::Section,
+    lod: &meshset::Lod,
+    geo: &[u8],
+    positions: &[[f32; 3]],
+    mesh: &str,
+) -> Result<Vec<[f32; 3]>> {
+    let size = usize::from(lod.index_size);
+    let start = lod.vertex_bytes as usize + sec.start_index as usize * size;
+    let count = sec.primitives as usize * 3;
+    let span = primase_bytes::checked_span(start, count, size, geo.len())
+        .map_err(|e| bad(W, sec.at, format!("{mesh}: section indices: {e}")))?;
+    let idx: Vec<usize> = geo[span]
+        .chunks_exact(size)
+        .map(|c| {
+            if size == 2 {
+                usize::from(u16::from_le_bytes([c[0], c[1]]))
+            } else {
+                u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as usize
+            }
+        })
+        .collect();
+    if let Some(&i) = idx.iter().find(|&&i| i >= positions.len()) {
+        return Err(bad(
+            W,
+            sec.at,
+            format!(
+                "{mesh}: index {i} is past the section's {} vertices",
+                positions.len()
+            ),
+        ));
+    }
+    let mut out = vec![[0f32; 3]; positions.len()];
+    for t in idx.as_chunks::<3>().0 {
+        let [a, b, c] = [positions[t[0]], positions[t[1]], positions[t[2]]];
+        let (u, v) = (
+            [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+            [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+        );
+        let f = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for &k in t {
+            for j in 0..3 {
+                out[k][j] += f[j];
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Rewrites resource `i` of bundle `b` when one of its sections uses a requested key: new geometry chunks (one per
@@ -808,11 +919,22 @@ fn rewrite_meshset(
                     };
                     let v = values(&input)?;
                     check_values(&r.target, n, &v)?;
-                    for p in &positions {
-                        for c in p {
-                            vb.extend(half_bits(*c, "position")?);
-                            let back = half::f16::from_f32(*c).to_f32();
-                            report.max_position_error = report.max_position_error.max((back - c).abs());
+                    // a decal is drawn over another surface and hidden where it lies behind it (measured: 4 mm
+                    // behind is invisible), so its vertices are never rounded behind their own surface
+                    let normals = match r.target {
+                        Target::Decal => Some(vertex_normals(sec, lod, &geo, &positions, &a.name)?),
+                        Target::TwoSet { .. } => None,
+                    };
+                    for (vi, p) in positions.iter().enumerate() {
+                        let (h, stepped) = match &normals {
+                            Some(nrm) => half_in_front(*p, nrm[vi])?,
+                            None => (half_nearest(*p)?, false),
+                        };
+                        report.stepped_in_front += usize::from(stepped);
+                        for (c, hc) in p.iter().zip(h) {
+                            vb.extend(hc.to_le_bytes());
+                            report.max_position_error =
+                                report.max_position_error.max((hc.to_f32() - c).abs());
                         }
                         vb.extend(half::f16::ONE.to_le_bytes());
                     }
@@ -892,5 +1014,71 @@ mod tests {
         };
         assert!(check_values(&Target::Decal, 2, &v).is_ok());
         assert!(check_values(&Target::Decal, 3, &v).is_err());
+    }
+
+    #[test]
+    fn half_steps_cross_zero_and_both_signs() {
+        let h = |v: f32| f16::from_f32(v);
+        assert_eq!(half_step(h(1.0), true).to_f32(), 1.0 + 2f32.powi(-10));
+        assert_eq!(half_step(h(1.0), false).to_f32(), 1.0 - 2f32.powi(-11));
+        assert_eq!(half_step(h(-1.0), true).to_f32(), -1.0 + 2f32.powi(-11));
+        assert_eq!(half_step(h(-1.0), false).to_f32(), -1.0 - 2f32.powi(-10));
+        assert!(half_step(h(0.0), true).to_f32() > 0.0 && half_step(h(-0.0), false).to_f32() < 0.0);
+        assert_eq!(half_step(half_step(h(0.0), true), false).to_f32(), 0.0);
+    }
+
+    #[test]
+    fn decal_vertices_never_round_behind_their_surface() {
+        // a deterministic spread of positions up to 120 m from the origin (y also near 0, where its steps are tiny
+        // against x and z's) and tilted normals
+        let mut s = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut moved_count = 0;
+        for _ in 0..20_000 {
+            let p = [
+                next() * 240.0 - 120.0,
+                next() * 64.0 - 32.0,
+                next() * 240.0 - 120.0,
+            ];
+            let n = [
+                next() * 0.6 - 0.3,
+                if next() < 0.5 { 1.0 } else { -1.0 },
+                next() * 0.6 - 0.3,
+            ];
+            let (h, moved) = half_in_front(p, n).unwrap();
+            let d: f32 = (0..3).map(|i| (h[i].to_f32() - p[i]) * n[i]).sum();
+            assert!(d >= 0.0, "{p:?} {n:?} -> {h:?} is {d} behind");
+            if moved {
+                // minimal: one step back toward the surface would put it behind
+                let mut back = h;
+                back[1] = half_step(h[1], n[1] < 0.0);
+                let db: f32 = (0..3).map(|i| (back[i].to_f32() - p[i]) * n[i]).sum();
+                assert!(db < 0.0, "{p:?} {n:?} -> {h:?} is further out than needed");
+                moved_count += 1;
+            } else {
+                assert_eq!(h, half_nearest(p).unwrap());
+            }
+        }
+        // about half the vertices round behind their surface to nearest; all of those are moved
+        assert!((5_000..15_000).contains(&moved_count), "{moved_count} moved");
+        // in front already, and without a normal: the nearest position
+        assert_eq!(
+            half_in_front([0.0, 30.4976, 0.0], [0.0, 1.0, 0.0]).unwrap().0[1].to_f32(),
+            30.5
+        );
+        assert!(!half_in_front([0.0, 30.4976, 0.0], [0.0; 3]).unwrap().1);
+        // the legion S1 desground vertex lifted 12 mm: 30.5096 rounds to 30.515625 (in front)
+        assert!(!half_in_front([0.0, 30.5096, 0.0], [0.0, 1.0, 0.0]).unwrap().1);
+        // just above a representable value, facing up: the next one up, not the nearest below
+        let (h, moved) = half_in_front([0.0, 30.501, 0.0], [0.0, 1.0, 0.0]).unwrap();
+        assert!(moved && h[1].to_f32() == 30.515625, "{h:?}");
+        // facing down: the next one down
+        let (h, moved) = half_in_front([0.0, 30.514, 0.0], [0.0, -1.0, 0.0]).unwrap();
+        assert!(moved && h[1].to_f32() == 30.5, "{h:?}");
     }
 }

@@ -7,9 +7,12 @@
 //!   whether each GLB's sections follow its primitive order are printed;
 //! - the stage is applied into `PRIMASE_OUT` and read back with our readers: every MeshSet reads; each section of a
 //!   resolved key has the stock decal declaration (both copies), `Color0` = `decal_opacity` of Studio's weight,
-//!   sub-material 0, texture coordinates equal to Studio's `x, y`, tangent frames byte for byte, positions equal to
-//!   Studio's to half precision (w = 1); every other section's vertices and every index buffer byte for byte; each
-//!   key's program and texture-set rows are the stock decal's;
+//!   sub-material 0, texture coordinates equal to Studio's `x, y`, tangent frames byte for byte, positions at half
+//!   precision (w = 1) never behind their surface: Studio's position rounded to nearest where that is not behind the
+//!   plane of the vertex's triangles (normals computed here from Studio's own positions and indices), otherwise
+//!   moved out along the normal's dominant axis only and no further than needed (one half step back would be
+//!   behind); every other section's vertices and every index buffer byte for byte; each key's program and
+//!   texture-set rows are the stock decal's;
 //! - applied twice, the outputs are byte-identical (determinism);
 //! - `PRIMASE_RESKATE_BLEND_SPEC` (optional): the same resolution and values from an independent implementation
 //!   (oracle: a Python decode of the Patch and the map's GLBs), as the S2 gate's spec: its keys must equal ours, and
@@ -118,7 +121,7 @@ fn vbrecord_gate() -> R {
     let (mo, mn) = (meshes(&so)?, meshes(&sn)?);
     assert_eq!(mo.keys().collect::<Vec<_>>(), mn.keys().collect::<Vec<_>>());
     let keys: BTreeSet<u64> = resolution.keys.values().copied().collect();
-    let mut checked = 0;
+    let (mut checked, mut stepped) = (0, 0);
     for ((bn, name), (dn, cn)) in &mn {
         let (d0, c0) = &mo[&(bn.clone(), name.clone())];
         let (msn, mso) = (meshset::read(dn)?, meshset::read(d0)?);
@@ -153,12 +156,17 @@ fn vbrecord_gate() -> R {
                 assert_eq!(stream(s1, gn, 2), want_uv, "{at} texture coordinates");
                 assert_eq!(stream(s1, gn, 4), stream(s0, go, 2), "{at} tangent frames");
                 let (pn, po) = (stream(s1, gn, 0), stream(s0, go, 0));
-                for (h, f) in pn.as_chunks::<8>().0.iter().zip(po.as_chunks::<12>().0) {
-                    for c in 0..3 {
-                        let want =
-                            half::f16::from_f32(f32::from_le_bytes(f[4 * c..4 * c + 4].try_into().unwrap()));
-                        assert_eq!(&h[2 * c..2 * c + 2], &want.to_le_bytes(), "{at} position");
-                    }
+                let studio: Vec<[f32; 3]> = po
+                    .as_chunks::<12>()
+                    .0
+                    .iter()
+                    .map(|f| [0, 1, 2].map(|c| f32::from_le_bytes(f[4 * c..4 * c + 4].try_into().unwrap())))
+                    .collect();
+                let normals = section_normals(lo, s0, go, &studio);
+                for (vi, (h, f)) in pn.as_chunks::<8>().0.iter().zip(&studio).enumerate() {
+                    let got = [0, 1, 2].map(|c| half::f16::from_le_bytes([h[2 * c], h[2 * c + 1]]));
+                    in_front_or_nearest(*f, normals[vi], got, &format!("{at} vertex {vi}"));
+                    stepped += usize::from(got != f.map(half::f16::from_f32));
                     assert_eq!(&h[6..8], &half::f16::ONE.to_le_bytes());
                 }
                 checked += 1;
@@ -171,7 +179,7 @@ fn vbrecord_gate() -> R {
         assert_eq!(pn[k], decal.program_row);
         assert_eq!(tn[k], decal.texture_set);
     }
-    println!("{checked} sections read back");
+    println!("{checked} sections read back; {stepped} vertices stepped in front of their surface");
     // ---- determinism
     let out2 = root.join("b");
     run(&out2)?;
@@ -216,4 +224,82 @@ fn vbrecord_gate() -> R {
         }
     }
     Ok(())
+}
+
+/// Area-weighted vertex normals of section `s` of LOD `l` from its indices (counted from its first vertex) and
+/// Studio's positions.
+fn section_normals(l: &meshset::Lod, s: &meshset::Section, g: &[u8], p: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    let size = usize::from(l.index_size);
+    let at = l.vertex_bytes as usize + s.start_index as usize * size;
+    let raw = &g[at..at + s.primitives as usize * 3 * size];
+    let idx: Vec<usize> = raw
+        .chunks(size)
+        .map(|c| {
+            if size == 2 {
+                u16::from_le_bytes([c[0], c[1]]) as usize
+            } else {
+                u32::from_le_bytes(c.try_into().unwrap()) as usize
+            }
+        })
+        .collect();
+    let mut n = vec![[0f32; 3]; p.len()];
+    for t in idx.chunks(3) {
+        let (a, b, c) = (p[t[0]], p[t[1]], p[t[2]]);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let f = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for &k in t {
+            for j in 0..3 {
+                n[k][j] += f[j];
+            }
+        }
+    }
+    n
+}
+
+/// The next half float after `h` toward +infinity (`up`) or -infinity, by value.
+fn next_half(h: half::f16, up: bool) -> half::f16 {
+    let x = h.to_f32();
+    // the smallest step at x's magnitude, from the binade of |x| (subnormal spacing below 2^-14)
+    let step = |m: f32| {
+        if m < 2f32.powi(-14) {
+            2f32.powi(-24)
+        } else {
+            2f32.powi(m.log2().floor() as i32 - 10)
+        }
+    };
+    let y = if up {
+        x + step(if x < 0.0 { (x + 2f32.powi(-25)).abs() } else { x })
+    } else {
+        x - step(if x > 0.0 { (x - 2f32.powi(-25)).abs() } else { -x })
+    };
+    half::f16::from_f32(y)
+}
+
+/// The stage's position rule for a decal vertex `f` with normal `n`, checked on what it wrote (`got`).
+fn in_front_or_nearest(f: [f32; 3], n: [f32; 3], got: [half::f16; 3], at: &str) {
+    let nearest = f.map(half::f16::from_f32);
+    let depth = |h: [half::f16; 3]| (0..3).map(|i| (h[i].to_f32() - f[i]) * n[i]).sum::<f32>();
+    let axis = (0..3).fold(0, |a, i| if n[i].abs() > n[a].abs() { i } else { a });
+    if n[axis] == 0.0 || depth(nearest) >= 0.0 {
+        assert_eq!(got, nearest, "{at}: nearest position expected");
+        return;
+    }
+    assert!(
+        depth(got) >= 0.0,
+        "{at}: {got:?} behind its surface ({f:?}, normal {n:?})"
+    );
+    for i in (0..3).filter(|&i| i != axis) {
+        assert_eq!(got[i], nearest[i], "{at}: moved off the dominant axis");
+    }
+    let mut back = got;
+    back[axis] = next_half(got[axis], n[axis] < 0.0);
+    assert!(
+        depth(back) < 0.0,
+        "{at}: {got:?} is further out than needed ({f:?}, normal {n:?})"
+    );
 }

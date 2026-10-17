@@ -581,6 +581,7 @@ impl MapWriter {
                     v0: pc.v0,
                     v1: pc.v1,
                     overlay: matches!(m.class, VClass::Decal | VClass::Water),
+                    fixed: m.vertex_blend,
                     water: m.class == VClass::Water,
                     pass,
                     order: pc.order,

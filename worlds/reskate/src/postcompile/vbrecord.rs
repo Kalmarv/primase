@@ -6,7 +6,9 @@
 //! material's name (they appear to be derived from its contents) and its output names no material, so each recorded
 //! primitive is found in the compile by its weights:
 //! - Studio compiles a `vertex_blend` material's surfaces with `TexCoord0:Half4`, the weight in `z`
-//!   ([`crate::postcompile::vblend`]); its MeshSets are named after the GLB (`<stem>___section_...`);
+//!   ([`crate::postcompile::vblend`]); it names a MeshSet after the first map object drawing the GLB (`" / "` and
+//!   spaces become `___` and `_`), and the writer names objects `<GLB stem> / section N`, so the MeshSets of a GLB
+//!   are the ones named `<stem>___section_...` (a map not written by the writer may not follow this);
 //! - Studio tessellates and re-wraps those surfaces (about five times the triangles), so section vertices are not the
 //!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
 //!   primitive, as a half float, occurs in its key's sections;
@@ -170,7 +172,7 @@ pub struct Resolution {
     pub in_primitive_order: BTreeMap<String, bool>,
 }
 
-/// The GLB stem a Studio MeshSet is named after (`.../<stem>___section_...`), lowercase.
+/// The GLB stem in a Studio MeshSet's name (`.../<stem>___section_...`, from the writer's object name), lowercase.
 fn meshset_stem(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or(name);
     base.split("___").next().unwrap_or(base).to_ascii_lowercase()

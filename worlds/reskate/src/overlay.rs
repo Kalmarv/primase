@@ -25,6 +25,10 @@ pub struct Piece {
     pub v0: usize,
     pub v1: usize,
     pub overlay: bool,
+    /// An overlay drawn where it was authored, never lifted: a vertex-blend layer, coplanar with its base by design
+    /// (decals draw coplanar and are hidden behind; its opacity separates it, a lift only risks changing the
+    /// layers' look). It still takes part in the relations (draw order) and other overlays stack above it.
+    pub fixed: bool,
     pub water: bool,
     pub pass: i32,
     pub order: i32,
@@ -342,6 +346,10 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
     let mut ds: Vec<f32> = Vec::new();
     for &k in &order {
         st.pieces += 1;
+        if pieces[k].fixed {
+            placed[k] = true;
+            continue;
+        }
         ds.clear();
         for &i in &piece_tris[k] {
             let t = tris[i];
@@ -416,4 +424,83 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
         .collect();
     under.sort_unstable();
     Stacked { stats: st, under }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 1 x 1 m square at height `y` (two triangles, wound to face +y), appended to `pos` / `idx`.
+    fn square(pos: &mut Vec<f32>, idx: &mut Vec<u32>, y: f32) -> (usize, usize, usize, usize) {
+        let (v0, t0) = (pos.len() / 3, idx.len() / 3);
+        pos.extend([0.0, y, 0.0, 1.0, y, 0.0, 1.0, y, 1.0, 0.0, y, 1.0]);
+        let b = v0 as u32;
+        idx.extend([b, b + 2, b + 1, b, b + 3, b + 2]);
+        (t0, idx.len() / 3, v0, pos.len() / 3)
+    }
+
+    fn piece(
+        part: usize,
+        span: (usize, usize, usize, usize),
+        overlay: bool,
+        fixed: bool,
+        order: i32,
+    ) -> Piece {
+        Piece {
+            part,
+            t0: span.0,
+            t1: span.1,
+            v0: span.2,
+            v1: span.3,
+            overlay,
+            fixed,
+            water: false,
+            pass: 1,
+            order,
+            entity: 0,
+            shift: 0.0,
+        }
+    }
+
+    #[test]
+    fn fixed_overlays_stay_and_other_overlays_stack_above_them() {
+        // part 0: the base; part 1: two vertex-blend layers (fixed), all coplanar; part 2: an ordinary decal
+        let (mut p0, mut i0, mut p1, mut i1, mut p2, mut i2) =
+            (vec![], vec![], vec![], vec![], vec![], vec![]);
+        let base = square(&mut p0, &mut i0, 0.0);
+        let l1 = square(&mut p1, &mut i1, 0.0);
+        let l2 = square(&mut p1, &mut i1, 0.0);
+        let decal = square(&mut p2, &mut i2, 0.0);
+        let mut pieces = vec![
+            piece(0, base, false, false, 0),
+            piece(1, l1, true, true, 1),
+            piece(1, l2, true, true, 2),
+            piece(2, decal, true, false, 3),
+        ];
+        let (i0c, i1c, i2c) = (i0.clone(), i1.clone(), i2.clone());
+        let mut parts = Parts {
+            pos: vec![&mut p0, &mut p1, &mut p2],
+            idx: vec![&i0c, &i1c, &i2c],
+        };
+        let st = apply(0.004, &mut parts, &mut pieces);
+        assert!(
+            p1.as_chunks::<3>().0.iter().all(|v| v[1] == 0.0),
+            "fixed layers lifted: {p1:?}"
+        );
+        assert_eq!((pieces[1].shift, pieces[2].shift), (0.0, 0.0));
+        assert!(
+            (pieces[3].shift - 0.004).abs() < 1e-6,
+            "decal shift {}",
+            pieces[3].shift
+        );
+        assert!(p2.as_chunks::<3>().0.iter().all(|v| (v[1] - 0.004).abs() < 1e-6));
+        // the layers keep their order relations: layer 1 under layer 2 under the decal
+        assert!(
+            st.under.contains(&(1, 2)) && st.under.contains(&(2, 3)),
+            "{:?}",
+            st.under
+        );
+        assert_eq!((st.stats.pieces, st.stats.shifted), (3, 1));
+        drop((i0, i1, i2));
+    }
 }
