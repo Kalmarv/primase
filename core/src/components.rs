@@ -100,6 +100,29 @@ impl Transform {
         dot(c[0], cross(c[1], c[2]))
     }
 
+    /// A rigid transform at `position` whose local -Z points along `direction` (as a light or camera shines) and whose
+    /// +Y is as near world +Y as possible (+Z when `direction` is vertical); `None` for a zero or non-finite
+    /// direction. A point light or round spot cone looks the same under any roll, so no roll is taken from the source.
+    pub fn facing(position: [f32; 3], direction: [f32; 3]) -> Option<Transform> {
+        let unit = |v: [f32; 3]| {
+            let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            (n > 0.0 && n.is_finite()).then(|| v.map(|x| x / n))
+        };
+        let cross = |a: [f32; 3], b: [f32; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let z = unit(direction.map(|x| -x))?;
+        let x = unit(cross([0.0, 1.0, 0.0], z)).or_else(|| unit(cross([0.0, 0.0, 1.0], z)))?;
+        let y = cross(z, x);
+        Some(Transform {
+            cols: [x, y, z, position],
+        })
+    }
+
     /// Point `p` through the transform, `M p + t`, computed in f64 and rounded once to f32.
     pub fn apply(&self, p: [f32; 3]) -> [f32; 3] {
         std::array::from_fn(|i| {

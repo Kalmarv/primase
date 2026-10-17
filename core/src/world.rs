@@ -645,6 +645,25 @@ impl World {
         Ok(())
     }
 
+    /// Every component of `from`, typed and opaque, copied onto `to`, replacing `to`'s of the same name (`to` keeps
+    /// the others): for a pass that makes another entity like one it knows only partly (a prototype per tint row,
+    /// keeping whatever dialect data the reader attached). References are copied as they are. False, and nothing
+    /// changed, unless both are alive and differ.
+    pub fn copy_components(&mut self, from: Entity, to: Entity) -> bool {
+        if from == to || !self.alive.contains(&from) || !self.alive.contains(&to) {
+            return false;
+        }
+        for c in self.columns.values_mut() {
+            c.copy_entity(from, to);
+        }
+        for col in self.opaque.values_mut() {
+            if let Some(v) = col.get(&from).cloned() {
+                col.insert(to, v);
+            }
+        }
+        true
+    }
+
     pub fn is_alive(&self, e: Entity) -> bool {
         self.alive.contains(&e)
     }
@@ -1353,6 +1372,30 @@ mod tests {
             },
         );
         assert_eq!(w.resource_names(), ["game.settings", "test.r"]);
+    }
+
+    #[test]
+    fn copy_components_replaces_by_name_keeps_the_rest_and_the_source() {
+        let mut w = World::new();
+        let from = w.spawn();
+        let to = w.spawn();
+        w.insert(from, A(9));
+        w.insert(to, A(1));
+        w.insert(to, B("kept"));
+        let opaque = Opaque {
+            version: 4,
+            data: OpaqueData::Bytes(vec![3, 2, 1]),
+        };
+        w.insert_opaque(from, "game.form", opaque.clone());
+        assert!(!w.copy_components(from, from));
+        assert!(!w.copy_components(from, Entity::from_index(999)));
+        assert!(w.copy_components(from, to));
+        assert!(w.is_alive(from));
+        assert_eq!(w.get::<A>(from), Some(&A(9)));
+        assert_eq!(w.get_opaque(from, "game.form"), Some(&opaque));
+        assert_eq!(w.get::<A>(to), Some(&A(9)));
+        assert_eq!(w.get::<B>(to), Some(&B("kept")));
+        assert_eq!(w.get_opaque(to, "game.form"), Some(&opaque));
     }
 
     #[test]

@@ -216,28 +216,9 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
         range: (l.range > 0.0).then_some(l.range),
         cast_shadows: Some(l.cast_shadow),
     };
-    let unit = |v: [f32; 3]| {
-        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        (n > 0.0 && n.is_finite()).then(|| v.map(|x| x / n))
-    };
-    let cross = |a: [f32; 3], b: [f32; 3]| {
-        [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ]
-    };
-    let z = unit(l.direction.map(|x| -x)).ok_or("a light direction that is zero or not finite")?;
-    let x = unit(cross([0.0, 1.0, 0.0], z))
-        .or_else(|| unit(cross([0.0, 0.0, 1.0], z)))
-        .ok_or("no light basis")?;
-    let y = cross(z, x);
-    Ok((
-        light,
-        Transform {
-            cols: [x, y, z, l.position],
-        },
-    ))
+    let transform =
+        Transform::facing(l.position, l.direction).ok_or("a light direction that is zero or not finite")?;
+    Ok((light, transform))
 }
 
 /// sRGB-encoded byte -> linear (IEC 61966-2-1 piecewise curve), in f64, rounded once to f32.
