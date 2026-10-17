@@ -3,6 +3,11 @@
 //! `0x6000_0000 + offset` (graphics). Loose resource files start with an RSC7 header carrying the flags; inside an
 //! archive the entry carries them and the 16 bytes before the body hold no header (only the scattered bytes of an
 //! oversized length, see `rpf`).
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use primase_compress::{Decompressor, Deflate};
 
 use crate::{Result, invalid};
@@ -17,7 +22,8 @@ pub struct PageFlags(pub u32);
 impl PageFlags {
     /// The base page size: 512 bytes shifted by the low four bits.
     pub fn base_size(self) -> u64 {
-        0x200u64 << (self.0 & 0xF)
+        // a shift of at most 15 bits: no overflow
+        0x200u64.wrapping_shl(self.0 & 0xF)
     }
 
     /// Page counts, largest page size (base << 8) first.
@@ -36,14 +42,18 @@ impl PageFlags {
         ]
     }
 
-    /// The pages' total size in bytes.
+    /// Each page size's shift from the base size, largest first (parallel to [`PageFlags::page_counts`]).
+    const PAGE_SHIFTS: [u32; 9] = [8, 7, 6, 5, 4, 3, 2, 1, 0];
+
+    /// The pages' total size in bytes. The flags' fields bound it (a base of at most 2^24 bytes, at most 127 pages
+    /// of a size, shifts of at most 8), far below u64's range: saturating arithmetic never saturates.
     pub fn size(self) -> u64 {
         let base = self.base_size();
         self.page_counts()
             .iter()
-            .enumerate()
-            .map(|(i, &c)| u64::from(c) * (base << (8 - i)))
-            .sum()
+            .zip(Self::PAGE_SHIFTS)
+            .map(|(&c, s)| u64::from(c).saturating_mul(base.wrapping_shl(s)))
+            .fold(0u64, u64::saturating_add)
     }
 
     /// The size of the smallest page present (the last one laid out); 0 without pages.
@@ -51,10 +61,10 @@ impl PageFlags {
         let base = self.base_size();
         self.page_counts()
             .iter()
-            .enumerate()
+            .zip(Self::PAGE_SHIFTS)
             .rev()
-            .find(|(_, c)| **c > 0)
-            .map_or(0, |(i, _)| base << (8 - i))
+            .find(|(c, _)| **c > 0)
+            .map_or(0, |(_, s)| base.wrapping_shl(s))
     }
 
     /// The four high bits: half of the resource version.
@@ -78,14 +88,22 @@ pub struct Resource {
 }
 
 impl Resource {
+    /// The system pages, then the graphics pages (`data` holds exactly both, as [`inflate`] makes it).
+    fn pages(&self) -> (&[u8], &[u8]) {
+        usize::try_from(self.system.size())
+            .ok()
+            .and_then(|n| self.data.split_at_checked(n))
+            .unwrap_or((&self.data, &[]))
+    }
+
     /// The system (virtual) pages.
     pub fn system_data(&self) -> &[u8] {
-        &self.data[..self.system.size() as usize]
+        self.pages().0
     }
 
     /// The graphics (physical) pages.
     pub fn graphics_data(&self) -> &[u8] {
-        &self.data[self.system.size() as usize..]
+        self.pages().1
     }
 
     /// The `len` bytes a pointer points at (`0x5000_0000 + offset` in the system pages, `0x6000_0000 + offset` in
@@ -93,8 +111,8 @@ impl Resource {
     /// neither kind or the bytes run past its pages.
     pub fn at(&self, pointer: u64, len: usize) -> Result<&[u8]> {
         let (pages, offset) = match pointer {
-            0x5000_0000..0x6000_0000 => (self.system_data(), pointer - 0x5000_0000),
-            0x6000_0000.. => (self.graphics_data(), pointer - 0x6000_0000),
+            0x5000_0000..0x6000_0000 => (self.system_data(), pointer.wrapping_sub(0x5000_0000)),
+            0x6000_0000.. => (self.graphics_data(), pointer.wrapping_sub(0x6000_0000)),
             _ => return Err(invalid("RSC7", pointer, "not a resource pointer")),
         };
         usize::try_from(offset)
@@ -123,21 +141,24 @@ impl Resource {
 /// The 16-byte RSC7 header of a loose resource file: version, system flags, graphics flags.
 pub fn header(stored: &[u8]) -> Result<(u32, PageFlags, PageFlags)> {
     let h = stored
-        .get(..16)
+        .first_chunk::<16>()
         .ok_or_else(|| invalid("RSC7", 0, "shorter than its header"))?;
-    let w = |i: usize| u32::from_le_bytes([h[4 * i], h[4 * i + 1], h[4 * i + 2], h[4 * i + 3]]);
-    if w(0) != MAGIC {
-        return Err(invalid("RSC7", 0, format!("magic {:#010x}", w(0))));
+    let [magic, version, system, graphics] = crate::le::u32x4_of(h);
+    if magic != MAGIC {
+        return Err(invalid("RSC7", 0, format!("magic {magic:#010x}")));
     }
-    Ok((w(1), PageFlags(w(2)), PageFlags(w(3))))
+    Ok((version, PageFlags(system), PageFlags(graphics)))
 }
 
 /// Inflate a resource body (already decrypted) laid out by `system` and `graphics`. The body must be one complete
 /// DEFLATE stream consumed to its end that fills the pages exactly, or ends inside the last page (the rest of that
 /// page is zero-filled and counted in `zero_filled`); anything else is an error.
 pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Resource> {
-    let size = system.size() + graphics.size();
-    let size = usize::try_from(size).map_err(|_| invalid("RSC7", 0, "page size overflows"))?;
+    let size = system
+        .size()
+        .checked_add(graphics.size())
+        .and_then(|s| usize::try_from(s).ok())
+        .ok_or_else(|| invalid("RSC7", 0, "page size overflows"))?;
     let last = if graphics.size() > 0 {
         graphics.last_page_size()
     } else {
@@ -146,11 +167,13 @@ pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Re
     let (data, zero_filled) = match Deflate.decompress(body, size) {
         Ok(d) => (d, 0),
         Err(primase_compress::Error::Size { expected, actual })
-            if actual < expected && ((expected - actual) as u64) < last =>
+            if expected
+                .checked_sub(actual)
+                .is_some_and(|short| short > 0 && (short as u64) < last) =>
         {
             let mut d = Deflate.decompress(body, actual)?;
             d.resize(expected, 0);
-            (d, (expected - actual) as u64)
+            (d, expected.abs_diff(actual) as u64)
         }
         Err(e) => return Err(e.into()),
     };
@@ -166,12 +189,21 @@ pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Re
 /// A loose resource file (RSC7 header + body).
 pub fn inflate_file(stored: &[u8]) -> Result<Resource> {
     let (version, system, graphics) = header(stored)?;
-    let mut r = inflate(&stored[16..], system, graphics)?;
+    let body = stored
+        .get(16..)
+        .ok_or_else(|| invalid("RSC7", 0, "shorter than its header"))?;
+    let mut r = inflate(body, system, graphics)?;
     r.version = version;
     Ok(r)
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     use super::*;
 

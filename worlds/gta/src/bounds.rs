@@ -308,6 +308,7 @@ fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
 #[allow(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
     reason = "fixtures, not untrusted bytes"
 )]
 mod polygon_tests {

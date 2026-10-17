@@ -7,6 +7,11 @@
 //! (16-bit length). `FF FF` closes the open element; `FD FF` and a 32-bit length give the open element's text. A value
 //! that is not an attribute becomes a child element carrying it in its `value` attribute (`x`, `y`, `z` for three
 //! floats), as the XML form writes them. The stream must end exactly where the root closes.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::xml::Element;
 use crate::{Result, invalid};
 
@@ -23,23 +28,30 @@ struct Cursor<'a> {
 
 impl Cursor<'_> {
     fn take(&mut self, n: usize) -> Result<&[u8]> {
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or_else(|| err(self.at, "a length past the address space"))?;
         let s = self
             .d
-            .get(self.at..self.at + n)
+            .get(self.at..end)
             .ok_or_else(|| err(self.at, "ends early"))?;
-        self.at += n;
+        self.at = end;
         Ok(s)
     }
+    /// The next `N` bytes, as an array.
+    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let at = self.at;
+        <[u8; N]>::try_from(self.take(N)?).map_err(|_| err(at, "ends early"))
+    }
     fn u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
+        self.array().map(u8::from_le_bytes)
     }
     fn u16(&mut self) -> Result<u16> {
-        let b = self.take(2)?;
-        Ok(u16::from_le_bytes([b[0], b[1]]))
+        self.array().map(u16::from_le_bytes)
     }
     fn u32(&mut self) -> Result<u32> {
-        let b = self.take(4)?;
-        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.array().map(u32::from_le_bytes)
     }
     fn f32(&mut self) -> Result<f32> {
         self.u32().map(f32::from_bits)
@@ -118,7 +130,10 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                 } else if i > names.len() {
                     return Err(err(at, format!("descriptor {i} of {}", names.len())));
                 }
-                let (name, declared) = names[i].clone();
+                let (name, declared) = names
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| err(at, format!("descriptor {i} of {}", names.len())))?;
                 if kind != declared {
                     return Err(err(at, format!("{name}: type {kind:#x}, declared {declared:#x}")));
                 }
@@ -155,8 +170,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                 let open = stack
                     .last_mut()
                     .ok_or_else(|| err(at, "a value outside an element"))?;
-                if open.pending_attributes > 0 {
-                    open.pending_attributes -= 1;
+                if let Some(left) = open.pending_attributes.checked_sub(1) {
+                    open.pending_attributes = left;
                     let v = value.into_iter().next().expect("one value").1;
                     open.el.attrs.push((name, v));
                 } else {
@@ -172,6 +187,12 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     use super::*;
 
