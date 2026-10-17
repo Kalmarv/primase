@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
     NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
@@ -177,6 +177,79 @@ pub fn distance_texture(t: &Texture) -> Result<Texture, String> {
     })
 }
 
+/// The emission of an emissive shader's base texture `t` (every level), as its G-buffer pixel shader writes it: the
+/// colour times the texture's alpha, in linear light (the alpha is the emission mask), opaque, sRGB as every base
+/// colour texture is drawn; `None` when every texel's alpha is 255 (the base texture emits as it is).
+pub fn emissive_texture(t: &Texture) -> Result<Option<Texture>, String> {
+    let mut levels = Vec::with_capacity(t.levels.len());
+    let mut masked = false;
+    for (i, level) in t.levels.iter().enumerate() {
+        let (w, h) = ((t.width >> i).max(1), (t.height >> i).max(1));
+        let rgba = Decoder::default()
+            .decode_rgba8(t.format, w, h, level)
+            .map_err(|e| format!("emissive base: {e}"))?;
+        levels.push(
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| {
+                    masked |= p[3] < 255;
+                    let a = f64::from(p[3]) / 255.0;
+                    let c = |v: u8| {
+                        primase_image::linear_to_srgb8(
+                            primase_image::srgb_to_linear(f64::from(v) / 255.0) * a,
+                        )
+                    };
+                    [c(p[0]), c(p[1]), c(p[2]), 255]
+                })
+                .collect(),
+        );
+    }
+    Ok(masked.then_some(Texture {
+        width: t.width,
+        height: t.height,
+        format: TexFormat::Rgba8Unorm,
+        levels,
+        color_space: ColorSpace::Srgb,
+        role: TexRole::Color,
+        normal: None,
+    }))
+}
+
+/// The texture-coordinate transform of a shader's `globalAnimUV0` and `globalAnimUV1` rows (its vertex shader's
+/// u' = row 0 . (u, v, 1), v' = row 1 . (u, v, 1); GTA's coordinates have glTF's top-left origin), as stored: the rest
+/// state of a UV animation a clip may drive. `None` without both rows or when they are the identity; a transform with
+/// shear (no offset, scale and rotation give it) is left out, counted.
+pub fn anim_uv(s: &GtaShader, log: &mut PassLog) -> Option<UvTransform> {
+    let row = |n: &str| match param(s, n) {
+        Some(GtaParam::Floats(f)) if f.len() >= 3 && f[..3].iter().all(|v| v.is_finite()) => {
+            Some([f[0], f[1], f[2]])
+        }
+        _ => None,
+    };
+    let ([a, b, c], [d, e, f]) = (row("globalAnimUV0")?, row("globalAnimUV1")?);
+    if [a, b, c, d, e, f] == [1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+        return None;
+    }
+    // [a b; d e] = R(rotation) diag(scale): columns (a, d) and (b, e) orthogonal
+    let rotation = d.atan2(a);
+    let (cos, sin) = (rotation.cos(), rotation.sin());
+    let scale = [a.hypot(d), e * cos - b * sin];
+    let x = UvTransform {
+        offset: [c, f],
+        scale,
+        rotation,
+    };
+    let (rb, re) = (-scale[1] * sin, scale[1] * cos);
+    let tolerance = 1e-4 * (1.0 + b.abs().max(e.abs()));
+    if (rb - b).abs() > tolerance || (re - e).abs() > tolerance {
+        log.approximate("UV animation transforms with shear left out", 1);
+        return None;
+    }
+    log.approximate("UV animation at its stored (rest) transform", 1);
+    Some(x)
+}
+
 /// A material's specular map, its intensity mask and its power, to derive a texture from ([`specular_texture`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpecularMap {
@@ -235,7 +308,9 @@ pub fn for_each_mesh(
 /// - alpha: opaque for opaque surfaces, tested at [`CUTOFF`] for cutouts and foliage, blended for alpha, decals, glass
 ///   and water;
 /// - two-sided for the shaders GTA draws from both sides (cloth);
-/// - emission (`*emissive*`, night-only emission only at night): the base texture, scaled by `EmissiveMultiplier`;
+/// - emission (`*emissive*`, night-only emission only at night): the base texture times its alpha (the shaders' emission
+///   mask: a texture derived from it, [`emissive_texture`], where the alpha is not all 255), scaled by
+///   `EmissiveMultiplier` and by vertex colour 0's blue (primitives split by it, [`emission_by_vertex`]);
 /// - metallic 0 (GTA has no metalness); roughness from the specular power `Specular` ([`roughness`]), 1 for shaders
 ///   without one;
 /// - specular (`KHR_materials_specular`): factor `SpecularColor` (0 without one), colour (1 - `Fresnel`) / 0.04, the
@@ -286,7 +361,8 @@ impl Pass for LowerGtaPbr {
     fn approximates(&self) -> &'static str {
         "alpha tested at 0.5 (the game's reference is a render state); distance-map sign text cut at the field's \
          half (the game blends a smoothstep band around it); the Blinn-Phong lobe as GGX of the same highlight, dry \
-         (no wetness); detail maps not carried; water a blended flat colour"
+         (no wetness); detail maps not carried; water a blended flat colour; UV animation at its stored (rest) \
+         transform; per-vertex emission (vertex colour blue) per triangle, in 16 levels"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -325,6 +401,8 @@ impl Pass for LowerGtaPbr {
         let mut fields: BTreeMap<Entity, Option<Entity>> = BTreeMap::new();
         // per specular map, mask and power (bits), its derived texture
         let mut derived: BTreeMap<(Entity, [u32; 3], Option<u32>), Option<Entity>> = BTreeMap::new();
+        // per emissive base texture, its masked emission (None: it emits as it is)
+        let mut emissive_masks: BTreeMap<Entity, Option<Entity>> = BTreeMap::new();
         for (&e, c) in &classes {
             if dropped.contains_key(&e) {
                 continue;
@@ -334,6 +412,7 @@ impl Pass for LowerGtaPbr {
                 continue;
             }
             let s = w.get::<GtaShader>(e).expect("shader");
+            let anim = anim_uv(s, log);
             let (mut m, map, distance) = self.material(s, c, log);
             if let Some(t) = distance {
                 let derived = match fields.get(&t) {
@@ -360,6 +439,32 @@ impl Pass for LowerGtaPbr {
                 m.base_color_texture = derived.map(TextureRef::new);
             }
             colour.extend(m.base_color_texture.map(|t| t.texture));
+            // the emission: the base texture times its alpha
+            if let Some(base) = m.emissive_texture {
+                let mask = match emissive_masks.get(&base.texture) {
+                    Some(d) => *d,
+                    None => {
+                        let d = match w.get::<Texture>(base.texture).map(emissive_texture).transpose()? {
+                            Some(Some(tex)) => {
+                                let name = w.get::<Name>(base.texture).map(|n| format!("{}_emissive", n.0));
+                                let de = w.spawn();
+                                w.insert(de, tex);
+                                if let Some(n) = name {
+                                    w.insert(de, Name(n));
+                                }
+                                log.count("emissive textures derived (base colour times its alpha)", 1);
+                                Some(de)
+                            }
+                            _ => None,
+                        };
+                        emissive_masks.insert(base.texture, d);
+                        d
+                    }
+                };
+                if let Some(d) = mask {
+                    m.emissive_texture = Some(TextureRef { texture: d, ..base });
+                }
+            }
             if let Some(SpecularMap {
                 texture: t,
                 mask,
@@ -398,6 +503,26 @@ impl Pass for LowerGtaPbr {
                         m.metallic_roughness_texture = Some(TextureRef::new(d));
                         m.roughness = 1.0;
                     }
+                }
+            }
+            // the vertex shader's texture coordinates, which every slot samples
+            if let Some(x) = anim {
+                let spec = m
+                    .specular
+                    .as_mut()
+                    .map(|s| [&mut s.texture, &mut s.color_texture]);
+                for r in [
+                    &mut m.base_color_texture,
+                    &mut m.metallic_roughness_texture,
+                    &mut m.occlusion_texture,
+                    &mut m.normal_texture,
+                    &mut m.emissive_texture,
+                ]
+                .into_iter()
+                .chain(spec.into_iter().flatten())
+                .flatten()
+                {
+                    r.transform = Some(x);
                 }
             }
             lowered.push((e, m));
@@ -457,8 +582,146 @@ impl Pass for LowerGtaPbr {
                 log.count("base colour textures marked sRGB colour", 1);
             }
         }
-        Ok(())
+        emission_by_vertex(w, &classes, log)
     }
+}
+
+/// The levels of vertex blue [`emission_by_vertex`] rounds to: 0, 17, ..., 255 (at most 8 / 255 off).
+pub const EMISSION_LEVELS: u32 = 16;
+
+/// The emission per vertex: GTA's emissive shaders scale a surface's emission by vertex colour 0's blue (their vertex
+/// shaders pass it through; the pixel shaders multiply it with the texture's alpha and `EmissiveMultiplier`), and glTF
+/// has no per-vertex emission. So each triangle of an emitting primitive takes its vertices' blue (their mean where they
+/// differ, counted), rounded to one of [`EMISSION_LEVELS`] levels (0 and 255 exact; a smooth gradient would otherwise
+/// copy the material per value), the triangles are grouped by it, and each group other than full blue (255) draws with
+/// a copy of the material (every component copied) whose `emissive_strength` is scaled by blue / 255, or that emits
+/// nothing at blue 0. Tinted shaders are left as they are: their blue is the palette column.
+pub fn emission_by_vertex(
+    w: &mut World,
+    classes: &BTreeMap<Entity, ShaderClass>,
+    log: &mut PassLog,
+) -> Result<(), String> {
+    let emitting: BTreeSet<Entity> = w
+        .iter::<PbrMaterial>()
+        .filter(|(e, m)| {
+            m.emissive != [0.0; 3] && classes.get(e).is_some_and(|c| c.emissive && c.tint.is_none())
+        })
+        .map(|(e, _)| e)
+        .collect();
+    if emitting.is_empty() {
+        return Ok(());
+    }
+    // per triangle of each emitting primitive, its blue; the material copies the blues other than 255 need
+    let blues = |p: &Primitive| -> Option<Vec<u8>> {
+        let (Some(Stream::U8x4(c)), Some(i), primase_core::Topology::Triangles) =
+            (p.streams.get(&Semantic::Color(0)), p.indices.as_ref(), p.topology)
+        else {
+            return None;
+        };
+        i.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let b = t.map(|v| c.get(v as usize).map(|c| u32::from(c[2])));
+                let [x, y, z] = [b[0]?, b[1]?, b[2]?];
+                let step = 255 / (EMISSION_LEVELS - 1);
+                Some((((x + y + z + 1) / 3 + step / 2) / step * step) as u8)
+            })
+            .collect()
+    };
+    let mut copies: BTreeMap<(Entity, u8), Entity> = BTreeMap::new();
+    let mut wanted: BTreeSet<(Entity, u8)> = BTreeSet::new();
+    for (_, mesh) in w.iter::<Mesh>() {
+        for p in mesh.primitives() {
+            let Some(m) = p.material.filter(|m| emitting.contains(m)) else {
+                continue;
+            };
+            wanted.extend(
+                blues(p)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|&b| b != 255)
+                    .map(|b| (m, b)),
+            );
+        }
+    }
+    for (m, b) in wanted {
+        let copy = w.spawn();
+        w.copy_components(m, copy);
+        if let Some(name) = w.get::<Name>(m).map(|n| format!("{}_emission{b}", n.0)) {
+            w.insert(copy, Name(name));
+        }
+        let pbr = w.get_mut::<PbrMaterial>(copy).expect("a lowered material");
+        if b == 0 {
+            pbr.emissive = [0.0; 3];
+            pbr.emissive_texture = None;
+            pbr.emissive_strength = 1.0;
+        } else {
+            pbr.emissive_strength *= f32::from(b) / 255.0;
+        }
+        log.count(
+            "materials copied for their vertices' emission (vertex colour blue)",
+            1,
+        );
+        copies.insert((m, b), copy);
+    }
+    for_each_mesh(w, |mesh| {
+        let mut from = Vec::with_capacity(mesh.primitives().len());
+        let mut out = Vec::with_capacity(mesh.primitives().len());
+        let mut split = false;
+        for (k, p) in std::mem::take(mesh).into_primitives().into_iter().enumerate() {
+            let m = p.material.filter(|m| emitting.contains(m));
+            let Some((m, blue)) = m.and_then(|m| Some((m, blues(&p)?))) else {
+                from.push(k);
+                out.push(p);
+                continue;
+            };
+            let indices = p.indices.as_ref().expect("triangles with indices");
+            let straddling = indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter(|t| {
+                    let c = match p.streams.get(&Semantic::Color(0)) {
+                        Some(Stream::U8x4(c)) => c,
+                        _ => return false,
+                    };
+                    let b = t.map(|v| c[v as usize][2]);
+                    b[0] != b[1] || b[1] != b[2]
+                })
+                .count();
+            if straddling > 0 {
+                log.approximate(
+                    "triangles whose vertices emit differently (vertex colour blue): their mean",
+                    straddling as u64,
+                );
+            }
+            // groups in order of first use
+            let mut groups: Vec<(u8, Vec<u32>)> = Vec::new();
+            for (t, &b) in indices.as_chunks::<3>().0.iter().zip(&blue) {
+                match groups.iter_mut().find(|(g, _)| *g == b) {
+                    Some((_, i)) => i.extend_from_slice(t),
+                    None => groups.push((b, t.to_vec())),
+                }
+            }
+            if let [(255, _)] = groups.as_slice() {
+                from.push(k);
+                out.push(p);
+                continue;
+            }
+            split = true;
+            for (b, i) in groups {
+                let mut q =
+                    primase_meshops::subset_primitive(&p, &i).map_err(|e| format!("emission split: {e}"))?;
+                q.material = Some(if b == 255 { m } else { copies[&(m, b)] });
+                from.push(k);
+                out.push(q);
+            }
+            log.count("primitives split by their vertices' emission", 1);
+        }
+        *mesh = Mesh::new(out);
+        Ok(split.then_some(from))
+    })
 }
 
 impl LowerGtaPbr {
@@ -834,6 +1097,55 @@ mod tests {
         assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 1]]);
     }
 
+    /// globalAnimUV rows as glTF's texture transform: a half scale with a quarter offset; a quarter turn (u' = 1 - v,
+    /// v' = u); identity rows give none, sheared rows none (counted).
+    #[test]
+    fn anim_uv_rows_become_a_texture_transform() {
+        use crate::components::{GtaParam, GtaShader};
+        let shader = |r0: [f32; 3], r1: [f32; 3]| GtaShader {
+            drawable: "d".into(),
+            index: 0,
+            name: primase_hash::joaat(b"emissive"),
+            preset: 0,
+            render_bucket: 0,
+            bucket_mask: 0,
+            params: vec![
+                (
+                    primase_hash::joaat(b"globalAnimUV0"),
+                    GtaParam::Floats(r0.to_vec()),
+                ),
+                (
+                    primase_hash::joaat(b"globalAnimUV1"),
+                    GtaParam::Floats(r1.to_vec()),
+                ),
+            ],
+        };
+        let mut log = primase_core::pass::PassLog::default();
+        let x = super::anim_uv(&shader([0.5, 0.0, 0.25], [0.0, 0.5, 0.0]), &mut log).unwrap();
+        assert_eq!((x.offset, x.scale, x.rotation), ([0.25, 0.0], [0.5, 0.5], 0.0));
+        let q = super::anim_uv(&shader([0.0, -1.0, 1.0], [1.0, 0.0, 0.0]), &mut log).unwrap();
+        for (uv, want) in [([0.0, 0.0], [1.0, 0.0]), ([0.25, 0.5], [0.5, 0.25])] {
+            let got = q.apply(uv);
+            assert!(
+                (got[0] - want[0]).abs() < 1e-6 && (got[1] - want[1]).abs() < 1e-6,
+                "{got:?}"
+            );
+        }
+        assert_eq!(
+            super::anim_uv(&shader([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), &mut log),
+            None
+        );
+        assert_eq!(
+            super::anim_uv(&shader([1.0, 1.0, 0.0], [0.0, 1.0, 0.0]), &mut log),
+            None
+        );
+        assert_eq!(
+            log.approximations
+                .get("UV animation transforms with shear left out"),
+            Some(&1)
+        );
+    }
+
     #[test]
     fn roughness_of_a_specular_power() {
         assert_eq!(roughness(0.0), 1.0);
@@ -843,6 +1155,106 @@ mod tests {
         assert_eq!(exponent(501.0), 2058.0);
         assert_eq!(exponent(9000.0), exponent(512.0));
         assert!(roughness(512.0) < roughness(100.0));
+    }
+
+    /// An emissive primitive whose first triangle's vertices are full blue and whose second's are 0: split in two, the
+    /// second drawn with a copy of the material that emits nothing; its source follows the split.
+    #[test]
+    fn emission_follows_vertex_blue() {
+        use crate::components::{GtaShader, GtaSources};
+        use primase_core::pass::Pass;
+        let mut w = primase_core::World::new();
+        let t = w.spawn();
+        w.insert(t, rgba([200, 100, 50, 255]));
+        let m = w.spawn();
+        w.insert(
+            m,
+            GtaShader {
+                drawable: "d".into(),
+                index: 0,
+                name: primase_hash::joaat(b"emissive"),
+                preset: 0,
+                render_bucket: 0,
+                bucket_mask: 0,
+                params: vec![(
+                    primase_hash::joaat(b"DiffuseTex"),
+                    crate::components::GtaParam::Texture {
+                        name: None,
+                        texture: Some(t),
+                    },
+                )],
+            },
+        );
+        let proto = w.spawn();
+        let blue = |b: u8| [255, 255, b, 255];
+        w.insert(
+            proto,
+            primase_core::Mesh::new(vec![primase_core::Primitive {
+                topology: primase_core::Topology::Triangles,
+                streams: std::collections::BTreeMap::from([
+                    (
+                        primase_core::Semantic::Position,
+                        primase_core::Stream::F32x3(vec![[0.0; 3]; 6]),
+                    ),
+                    (
+                        primase_core::Semantic::Color(0),
+                        primase_core::Stream::U8x4(vec![
+                            blue(255),
+                            blue(255),
+                            blue(255),
+                            blue(0),
+                            blue(0),
+                            blue(0),
+                        ]),
+                    ),
+                ]),
+                indices: Some(vec![0, 1, 2, 3, 4, 5]),
+                material: Some(m),
+            }]),
+        );
+        w.insert(
+            proto,
+            GtaSources {
+                lod: 0,
+                sources: vec![[0, 7]],
+            },
+        );
+        super::LowerGtaPbr::default()
+            .run(&mut w, &mut primase_core::pass::PassLog::default())
+            .unwrap();
+        let mesh = w.get::<primase_core::Mesh>(proto).unwrap();
+        assert_eq!(mesh.primitives().len(), 2);
+        assert_eq!(mesh.primitives()[0].material, Some(m));
+        let dark = mesh.primitives()[1].material.unwrap();
+        assert_ne!(dark, m);
+        let lit = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
+        assert_eq!(lit.emissive, [1.0; 3]);
+        let off = w.get::<primase_core::pbr::PbrMaterial>(dark).unwrap();
+        assert_eq!((off.emissive, off.emissive_texture), ([0.0; 3], None));
+        assert!(w.has::<GtaShader>(dark));
+        assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 7], [0, 7]]);
+    }
+
+    /// Emission is the colour times the alpha in linear light: (255, 255, 255, 128) emits linear 128 / 255, sRGB 188;
+    /// an opaque texture needs no derived one.
+    #[test]
+    fn emissive_texture_is_the_colour_times_the_alpha() {
+        let t = Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 128, 0, 255, 255, 255, 255, 128], vec![10, 20, 30, 0]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Other,
+            normal: None,
+        };
+        let e = super::emissive_texture(&t).unwrap().expect("masked");
+        assert_eq!(e.levels[0], vec![255, 128, 0, 255, 188, 188, 188, 255]);
+        assert_eq!(e.levels[1], vec![0, 0, 0, 255]);
+        assert_eq!((e.role, e.color_space), (TexRole::Color, ColorSpace::Srgb));
+        let mut opaque = t.clone();
+        opaque.levels = vec![vec![1, 2, 3, 255, 4, 5, 6, 255], vec![7, 8, 9, 255]];
+        assert_eq!(super::emissive_texture(&opaque).unwrap(), None);
     }
 
     #[test]
