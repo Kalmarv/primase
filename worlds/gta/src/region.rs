@@ -6,6 +6,10 @@
 //!   state). Entities are the same in both when their map file is.
 //! - Time archetypes are shown in some hours only: their placements carry a `core.condition` on the global axis
 //!   `gta.hour` {0..23} (default 12) with the hours their timeFlags name; `resolve-state` picks the hour.
+//! - Script-managed maps (`CMapData` flags bit 0: the game streams them only when a script requests them, an IPL):
+//!   each is a global bool axis `gta.ipl.<map name>` (class `ipl`), and the placements of that map, and of maps whose
+//!   LOD parent chain reaches it, carry a condition on it. The default (whether the game's start scripts load it) is
+//!   [`ipl_default`].
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
 //! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
@@ -78,6 +82,11 @@ pub struct RegionReport {
     pub time_placements: usize,
     /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
     pub time_placements_never_shown: usize,
+    /// Script-managed maps with placements here (each a `gta.ipl.<name>` axis), those on by default, and the
+    /// placements they govern.
+    pub ipl_axes: usize,
+    pub ipl_axes_on: usize,
+    pub ipl_placements: usize,
     /// Interior instances read, the entities placed in them, and their entity sets (not read yet).
     pub interiors: usize,
     pub interior_entities: usize,
@@ -89,7 +98,61 @@ struct MapRead {
     path: String,
     /// The live LOD parent map's path, when it has one.
     parent: Option<String>,
+    /// The script-managed map that governs it: itself, or the nearest of its LOD parent chain that is.
+    ipl: Option<String>,
     entities: Vec<(u32, EntityDef)>,
+}
+
+/// A map's name: its file name without the extension.
+fn map_name(path: &str) -> String {
+    let file = path.rsplit('\\').next().unwrap_or(path);
+    file.strip_suffix(".ymap").unwrap_or(file).to_string()
+}
+
+/// Streaming suffixes a map's name carries after its group's (`_strm_3`, `_long_0`, `_lod`): the group name.
+fn ipl_base(name: &str) -> &str {
+    const SUFFIXES: [&str; 9] = [
+        "_lod",
+        "_slod",
+        "_slod2",
+        "_strm",
+        "_long",
+        "_critical",
+        "_occl",
+        "_lodlights",
+        "_distantlights",
+    ];
+    let mut n = name;
+    for _ in 0..4 {
+        if let Some((head, tail)) = n.rsplit_once('_')
+            && !tail.is_empty()
+            && tail.bytes().all(|b| b.is_ascii_digit())
+        {
+            n = head;
+        }
+        match SUFFIXES.iter().find(|s| n.ends_with(*s)) {
+            Some(s) => n = &n[..n.len() - s.len()],
+            None => break,
+        }
+    }
+    n
+}
+
+/// Whether the game's start scripts load script-managed map `name`, and why. GTA's own answer is in its scripts,
+/// which are not read yet; this is the earlier skate exporter's rule set: North Yankton (`prologue*`) off, scenery a
+/// DLC patch split out (`*_original`) or shared between the original and its variant (`*_shared`) on, everything
+/// else off.
+pub fn ipl_default(name: &str) -> (bool, &'static str) {
+    let base = ipl_base(name);
+    if name.starts_with("prologue") {
+        (false, "North Yankton")
+    } else if base.ends_with("_original") {
+        (true, "original scenery split out by a DLC patch")
+    } else if base.ends_with("_shared") {
+        (true, "scenery shared by the original and a DLC variant")
+    } else {
+        (false, "script-managed: off until a script loads it")
+    }
 }
 
 fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::meta::Struct> {
@@ -101,8 +164,33 @@ fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::meta::Stru
 /// The live maps' entities whose pivot lies within the region and its reach.
 fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<MapRead>> {
     let mut out = Vec::new();
+    // every live map's name hash: whether it is script-managed, and its LOD parent's
+    let mut chain: BTreeMap<u32, (bool, u32, String)> = BTreeMap::new();
     for &f in set.tables.get("ymap").into_iter().flat_map(|t| t.values()) {
         let map = MapData::from_root(&decode(set, keys, f)?)?;
+        chain.insert(map.name, (map.flags & 1 != 0, map.parent, map_name(set.path(f))));
+        let ipl = {
+            let (mut at, mut found, mut guard) = (map.name, None, 0);
+            while let Some((scripted, parent, name)) = chain.get(&at).cloned().or_else(|| {
+                // a parent not seen yet: read its header from its file
+                let &pf = set.tables.get("ymap")?.get(&at)?;
+                let pm = MapData::from_root(&decode(set, keys, pf).ok()?).ok()?;
+                let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)));
+                chain.insert(at, e.clone());
+                Some(e)
+            }) {
+                if scripted {
+                    found = Some(name);
+                    break;
+                }
+                guard += 1;
+                if parent == 0 || guard > 16 {
+                    break;
+                }
+                at = parent;
+            }
+            found
+        };
         let [lo, hi] = map.entities_extents;
         if map.entities.is_empty() || !region.touches(lo, hi) {
             continue;
@@ -125,6 +213,7 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
                             .map(|&p| set.path(p).to_string())
                     })
                     .flatten(),
+                ipl,
                 entities,
             });
         }
@@ -198,6 +287,8 @@ pub fn entity_transform(e: &EntityDef) -> Transform {
 /// its definition, its transform in GTA's frame, and the map states it is live in.
 struct Placed {
     ymap: String,
+    /// The script-managed map governing it ([`MapRead::ipl`]).
+    ipl: Option<String>,
     index: u32,
     child: Option<u32>,
     lod_parent: Option<(String, u32)>,
@@ -273,6 +364,7 @@ pub fn read_region(
                 });
                 let entry = placed.entry((m.path.clone(), i)).or_insert_with(|| Placed {
                     ymap: m.path.clone(),
+                    ipl: m.ipl.clone(),
                     index: i,
                     child: None,
                     lod_parent,
@@ -311,8 +403,14 @@ pub fn read_region(
     // every entity, and the entities placed in interiors
     let mut all: Vec<Placed> = Vec::new();
     for p in placed.into_values() {
-        let (e, ymap, index, in_story, in_online) =
-            (p.def.clone(), p.ymap.clone(), p.index, p.story, p.online);
+        let (e, ymap, ipl, index, in_story, in_online) = (
+            p.def.clone(),
+            p.ymap.clone(),
+            p.ipl.clone(),
+            p.index,
+            p.story,
+            p.online,
+        );
         all.push(p);
         if e.kind != EntityKind::Interior {
             continue;
@@ -332,6 +430,7 @@ pub fn read_region(
             let t = compose(&frame, &entity_transform(ce));
             all.push(Placed {
                 ymap: ymap.clone(),
+                ipl: ipl.clone(),
                 index,
                 child: Some(ci as u32),
                 lod_parent: None,
@@ -344,8 +443,10 @@ pub fn read_region(
     }
     let mut prototypes = BTreeMap::new();
     let mut hour_axis: Option<primase_core::Entity> = None;
+    let mut ipl_axes: BTreeMap<String, primase_core::Entity> = BTreeMap::new();
     for Placed {
         ymap,
+        ipl,
         index,
         child,
         lod_parent,
@@ -432,6 +533,29 @@ pub fn read_region(
             report.time_placements += 1;
             report.time_placements_never_shown += usize::from(hours == 0);
         }
+        // a script-managed map's placements exist while its IPL is loaded
+        if let Some(name) = ipl {
+            let axis = *ipl_axes.entry(name.clone()).or_insert_with(|| {
+                let (on, why) = ipl_default(name);
+                report.ipl_axes += 1;
+                report.ipl_axes_on += usize::from(on);
+                let e = w.spawn();
+                w.insert(
+                    e,
+                    StateAxis {
+                        key: format!("gta.ipl.{name}"),
+                        domain: Domain::Bool,
+                        default: u32::from(on),
+                        scope: Scope::Global,
+                        class: "ipl".into(),
+                        source: format!("script-managed map {name} (CMapData flags bit 0); default: {why}"),
+                    },
+                );
+                e
+            });
+            literals.push(Literal { axis, values: 0b10 });
+            report.ipl_placements += 1;
+        }
         if let Some(c) = condition(literals) {
             w.insert(p, c);
         }
@@ -447,6 +571,21 @@ pub fn read_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipl_defaults_follow_the_group_name() {
+        assert_eq!(ipl_base("bh1_16_original_strm_3"), "bh1_16_original");
+        assert_eq!(ipl_base("bh1_16_original_lod"), "bh1_16_original");
+        assert_eq!(ipl_base("apa_stilt_ch2_04_ext1"), "apa_stilt_ch2_04_ext1");
+        assert!(ipl_default("ch1_02_original_strm_0").0);
+        assert!(ipl_default("cs1_shared").0);
+        assert!(!ipl_default("prologue01_lod").0);
+        assert!(!ipl_default("hei_showroom_closed").0);
+        assert_eq!(
+            map_name("x\\dlc.rpf\\hei_showroom_closed.ymap"),
+            "hei_showroom_closed"
+        );
+    }
 
     #[test]
     fn an_empty_hour_mask_never_holds_and_the_world_verifies() {
