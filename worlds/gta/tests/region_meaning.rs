@@ -97,6 +97,18 @@ fn region_placements_against_the_scene() {
     let (story, online) = archive_sets(&install, &keys, States::All).expect("archive sets");
     let (mut ours, report) = read_region(&story, online.as_ref(), &keys, &region).expect("region");
     println!("{report:?}");
+    let only_some = primase_testdata::real_data_value("PRIMASE_GTA_ONLY").is_some();
+    // ours as read, before state and selection: why a scene placement has no match
+    let read_index: Option<(World, BTreeMap<u32, Vec<primase_core::Entity>>)> = Some({
+        let mut by: BTreeMap<u32, Vec<primase_core::Entity>> = BTreeMap::new();
+        for (e, g) in ours.iter::<GtaEntity>() {
+            by.entry(g.archetype).or_default().push(e);
+        }
+        (ours.clone(), by)
+    });
+    // scene placements without a match, by why ours has none
+    let mut scene_only: BTreeMap<String, usize> = BTreeMap::new();
+    let mut ipl_on_in_scene: BTreeMap<String, usize> = BTreeMap::new();
     // the earlier exporter's region rules, as a pass
     let select = SelectRegion {
         min: region.min,
@@ -197,6 +209,79 @@ fn region_placements_against_the_scene() {
             .get(&(primase_hash::joaat(name.to_lowercase().as_bytes()), key(t)))
             .and_then(|v| v.iter().find(|x| !matched.contains(*x)))
         else {
+            if let Some((read, by)) = &read_index {
+                let archetype = primase_hash::joaat(name.to_lowercase().as_bytes());
+                let p = t.cols[3];
+                let nearest = by.get(&archetype).and_then(|v| {
+                    v.iter()
+                        .map(|&o| {
+                            let q = read.get::<Transform>(o).expect("transform").cols[3];
+                            let d = (0..3).map(|k| f64::from(q[k] - p[k]).powi(2)).sum::<f64>().sqrt();
+                            (d, o)
+                        })
+                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                });
+                // which state takes ours away at the gate's assignment (Online, hour 12, IPLs at their default), else
+                // the region rules
+                let why = match nearest {
+                    Some((d, o)) if d < 0.01 => {
+                        let fails: Vec<String> = read
+                            .get::<Condition>(o)
+                            .and_then(|c| c.0.first())
+                            .map(|cl| {
+                                cl.0.iter()
+                                    .filter_map(|l| {
+                                        let a = read.get::<StateAxis>(l.axis)?;
+                                        let v = match a.key.as_str() {
+                                            "gta.map" => 1,
+                                            "gta.hour" => 12,
+                                            _ => a.default,
+                                        };
+                                        (l.values & (1u64 << v) == 0).then(|| a.key.clone())
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if fails.iter().any(|k| k == "gta.map") {
+                            "a story-only map (GTA Online's map leaves it out)".to_string()
+                        } else if let Some(k) = fails.iter().find(|k| k.starts_with("gta.ipl.")) {
+                            *ipl_on_in_scene.entry(k.clone()).or_default() += 1;
+                            "a script-managed map off at start by ours, on in that exporter's".to_string()
+                        } else if fails.iter().any(|k| k == "gta.hour") {
+                            "a time archetype off at hour 12".to_string()
+                        } else {
+                            "left out by the region rules".to_string()
+                        }
+                    }
+                    Some(_) => "no placement of ours there".to_string(),
+                    None => "no placement of that archetype".to_string(),
+                };
+                *scene_only.entry(why).or_default() += 1;
+                match nearest {
+                    Some((d, o)) if only_some => {
+                        let g = read.get::<GtaEntity>(o).expect("entity");
+                        let axes: Vec<String> = read
+                            .get::<Condition>(o)
+                            .map(|c| {
+                                c.0.iter()
+                                    .flat_map(|cl| cl.0.iter())
+                                    .filter_map(|l| {
+                                        read.get::<StateAxis>(l.axis)
+                                            .map(|a| format!("{} {:#b}", a.key, l.values))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        println!(
+                            "      scene only {name}: nearest of ours as read {d:.3} m away, map {}, flags {:#x}, lod {}, \
+                             priority {}, conditions {axes:?}",
+                            g.ymap, g.flags, g.lod_level, g.priority_level
+                        );
+                    }
+                    None if only_some => println!("      scene only {name}: no placement of ours as read"),
+                    _ => {}
+                }
+            }
             unmatched.push(format!("{name} at {:?}", t.cols[3]));
             continue;
         };
@@ -261,9 +346,10 @@ fn region_placements_against_the_scene() {
     for u in unmatched.iter().take(15) {
         println!("    scene only: {u}");
     }
+    println!("scene-only placements, why: {scene_only:?}");
+    println!("script-managed maps on in that exporter's scene, off in ours: {ipl_on_in_scene:?}");
     // PRIMASE_GTA_ONLY (archetype names, comma separated): only those archetypes' placements, on both sides, from here
     // on (a look at one family of a large region; the gate's verdict then covers only them)
-    let only_some = primase_testdata::real_data_value("PRIMASE_GTA_ONLY").is_some();
     if let Some(only) = primase_testdata::real_data_value("PRIMASE_GTA_ONLY") {
         let names: std::collections::BTreeSet<u32> = only
             .to_string_lossy()
@@ -1215,7 +1301,22 @@ fn region_placements_against_the_scene() {
         !attrs.keys().any(|k| k.contains("differing")),
         "vertex attributes differ: {attrs:?}"
     );
-    assert!(unmatched.is_empty() && diffs.is_empty());
+    // scene placements ours has not: only where the game's state takes ours away (named: that exporter does not model
+    // GTA Online's map changes, and its start state for script-managed maps differs from ours, listed above)
+    let named_scene_only = |k: &str| {
+        matches!(
+            k,
+            "a story-only map (GTA Online's map leaves it out)"
+                | "a script-managed map off at start by ours, on in that exporter's"
+        )
+    };
+    let unnamed_scene_only: Vec<&String> = scene_only.keys().filter(|k| !named_scene_only(k)).collect();
+    assert!(
+        unnamed_scene_only.is_empty(),
+        "scene placements without a match: {unnamed_scene_only:?}"
+    );
+    assert_eq!(unmatched.len(), scene_only.values().sum::<usize>());
+    assert!(diffs.is_empty());
 }
 
 /// Whether scene texture `t` is our texture `o` in another encoding: the same size, and their first levels decoded
