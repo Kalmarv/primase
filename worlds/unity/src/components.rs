@@ -366,27 +366,35 @@ pub struct UnityLight {
     pub lux_at_distance: Option<f32>,
     pub area_size: [f32; 2],
     pub render_mode: i64,
+    pub baked: bool,
     pub culling_mask: u32,
     pub cookie: Option<UnityObject>,
 }
 
 impl Component for UnityLight {
     const NAME: &'static str = "unity.light";
+    /// 2: `baked`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
 }
 
-/// The scene's RenderSettings as far as they are read (`unity.render_settings`, a world resource): `sun`, the light
-/// entity `m_Sun` names, when it is one of the lights read (it shines); `None` when it names none or one that does not
-/// shine. `lower-unity-lights` makes it `core.environment`'s sun.
+/// The scene's RenderSettings as far as they are read, with the player's render pipeline (`unity.render_settings`, a
+/// world resource). `lower-unity-lights` chooses `core.environment`'s sun from them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct UnityRenderSettings {
+    /// The light entity `m_Sun` names, when it is one of the lights read (it shines); `None` when it names none or one
+    /// that does not shine.
     pub sun: Option<Entity>,
+    /// The player's render pipeline; `None` when the player has no GraphicsSettings.
+    pub pipeline: Option<crate::player::RenderPipeline>,
 }
 
 impl primase_core::Resource for UnityRenderSettings {
     const NAME: &'static str = "unity.render_settings";
+    /// 2: `pipeline`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

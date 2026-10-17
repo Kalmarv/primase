@@ -878,6 +878,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 lux_at_distance: l.lux_at_distance,
                 area_size: l.area_size,
                 render_mode: l.render_mode,
+                baked: l.baked,
                 culling_mask: l.culling_mask,
                 cookie: l.cookie.as_ref().map(UnityObject::from),
             },
@@ -886,7 +887,10 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     b.report.lights = lights.len();
     b.report.lights_off = off;
     b.report.sun_named = sun.is_some();
-    w.insert_resource(UnityRenderSettings { sun: sun_entity });
+    w.insert_resource(UnityRenderSettings {
+        sun: sun_entity,
+        pipeline: player.render_pipeline()?,
+    });
     b.report.renderers = renderers.len();
     b.report.tree_renderers = trees.len();
     b.report.prototypes = prototypes.len();

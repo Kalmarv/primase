@@ -162,15 +162,19 @@ fn lights_lower_to_core() {
     gate.assert_passed();
 }
 
-/// RenderSettings' sun against an independent reader (`PRIMASE_UNITY_SUN`: `m_Sun` as stored and, when it names a
-/// light, that light's `game_object` name and `light_type`), for the scan's level: the light we read as named, and
-/// the environment sun the lowering makes of it (none when it names none or a light that is not directional).
+/// The sun against an independent reader (`PRIMASE_UNITY_SUN`, for the scan's level: `m_Sun` as stored; `pipelines`,
+/// the script class of each quality level's render pipeline asset, `built-in` for none, sorted, each once; and
+/// `main_light`, the light URP's `GetBrightestDirectionalLightIndex` makes its main light among the shining directional
+/// lights, `rule` `named`, `brightest` or `none`, with its `path`, `path_id` and `baked`): the light RenderSettings
+/// names as we read it, the player's pipeline, and the environment sun the lowering makes: the named directional
+/// light, else under URP the brightest one unless it is fully baked, else none.
 #[test]
-fn render_settings_sun_matches_the_independent_reader() {
+fn the_sun_matches_the_independent_reader() {
     use primase_core::{Environment, Name, World};
-    use primase_unity::components::UnityRenderSettings;
+    use primase_unity::components::UnityLight;
     use primase_unity::level::read_level;
     use primase_unity::lower_lights::lower_unity_lights;
+    use primase_unity::player::{RenderPipeline, URP_ASSET};
     let (Some(data), Some(tpk), Some(scan), Some(oracle)) = (
         real_data("PRIMASE_UNITY_DATA"),
         real_data("PRIMASE_UNITY_TPK"),
@@ -187,32 +191,59 @@ fn render_settings_sun_matches_the_independent_reader() {
     )
     .unwrap();
     let level = scan["level"].as_str().unwrap();
+    assert_eq!(oracle["level"], level, "the oracle's level");
     let named = Scene::read(&player, level)
         .unwrap()
         .render_settings_sun(&player)
         .unwrap();
     let path_id = oracle["m_Sun"]["m_PathID"].as_i64().unwrap();
     assert_eq!(named.as_ref().map_or(0, |r| r.path_id), path_id, "m_Sun");
+    let pipelines: Vec<String> = oracle["pipelines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect();
+    let pipeline = match &pipelines[..] {
+        [p] if p == URP_ASSET => RenderPipeline::Universal,
+        [p] if p == "built-in" => RenderPipeline::BuiltIn,
+        _ => RenderPipeline::Other(pipelines.clone()),
+    };
+    assert_eq!(
+        player.render_pipeline().unwrap(),
+        Some(pipeline.clone()),
+        "pipeline"
+    );
     let mut w = World::new();
     let report = read_level(&player, level, &mut w).unwrap();
     assert_eq!(report.sun_named, path_id != 0);
-    lower_unity_lights(&mut w).unwrap();
-    let sun = w.resource::<UnityRenderSettings>().and_then(|r| r.sun);
-    let environment = w.resource::<Environment>().and_then(|e| e.sun);
-    println!("RenderSettings sun: m_PathID {path_id}; read {sun:?}; environment sun {environment:?}");
-    if path_id == 0 {
-        assert_eq!((sun, environment), (None, None));
-    } else if oracle["active"] == true && oracle["light_enabled"] == 1 {
-        let e = sun.expect("the named light shines");
+    let log = lower_unity_lights(&mut w).unwrap();
+    let sun = w.resource::<Environment>().and_then(|e| e.sun);
+    let main = &oracle["main_light"];
+    let expected = match main["rule"].as_str().unwrap() {
+        "named" => true,
+        "brightest" => pipeline == RenderPipeline::Universal && main["baked"] == false,
+        _ => false,
+    };
+    println!(
+        "pipeline {pipeline:?}; m_Sun {path_id}; URP main light {main}; environment sun {:?}; {:?}",
+        sun.map(|e| &w.get::<Name>(e).unwrap().0),
+        log.counts
+    );
+    if expected {
+        let e = sun.expect("an environment sun");
         assert!(
             w.get::<Name>(e)
                 .unwrap()
                 .0
-                .ends_with(oracle["game_object"].as_str().unwrap())
+                .ends_with(main["path"].as_str().unwrap())
         );
-        assert_eq!(environment.is_some(), oracle["light_type"] == 1);
+        assert_eq!(
+            w.get::<UnityLight>(e).unwrap().light.path_id,
+            main["path_id"].as_i64().unwrap()
+        );
     } else {
-        assert_eq!(sun, None, "a named light that does not shine is not read");
+        assert_eq!(sun, None);
     }
     assert!(w.verify_resources().is_empty());
 }

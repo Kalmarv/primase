@@ -684,6 +684,10 @@ impl Scene {
                         .unwrap_or(1.0),
                 ],
                 render_mode: int("m_RenderMode").unwrap_or(0),
+                baked: l.at(&["m_BakingOutput", "isBaked"]).is_some_and(flag_value)
+                    && l.at(&["m_BakingOutput", "lightmapBakeMode", "lightmapBakeType"])
+                        .and_then(Value::as_i64)
+                        == Some(2),
                 culling_mask: l
                     .at(&["m_CullingMask", "m_Bits"])
                     .and_then(Value::as_i64)
@@ -815,6 +819,8 @@ pub struct LightComponent {
     pub lux_at_distance: Option<f32>,
     pub area_size: [f32; 2],
     pub render_mode: i64,
+    /// Fully baked: `m_BakingOutput` says baked, as `Baked` (2), not mixed or realtime.
+    pub baked: bool,
     pub culling_mask: u32,
     pub cookie: Option<ObjRef>,
 }

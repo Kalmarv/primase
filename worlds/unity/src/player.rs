@@ -11,6 +11,22 @@ use crate::typetree::TypeTree;
 use crate::value::Value;
 use crate::{Error, Result, invalid};
 
+/// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
+pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
+
+/// The render pipeline a player draws with: GraphicsSettings' default pipeline asset (`m_CustomRenderPipeline`), or a
+/// quality level's own (`customRenderPipeline`) where it sets one. Which quality level runs is the user's choice, so
+/// the pipeline is known only when every level gives the same kind.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum RenderPipeline {
+    /// No pipeline asset for any quality level: Unity's built-in renderer.
+    BuiltIn,
+    /// A Universal Render Pipeline asset ([`URP_ASSET`]) for every quality level.
+    Universal,
+    /// Anything else, or a mix: each level's asset script class (`built-in` for none), sorted, each once.
+    Other(Vec<String>),
+}
+
 /// An object of the player: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjRef {
@@ -133,6 +149,84 @@ impl Player {
         let d = f.decode_with(o, &*self.tree(&r.file, f, o.class_id)?)?;
         let bytes = f.bytes(o);
         Ok((d.value, bytes[bytes.len() - d.rest..].to_vec()))
+    }
+
+    /// The player's [`RenderPipeline`], from `globalgamemanagers`' GraphicsSettings and QualitySettings; `None` when
+    /// the player has no GraphicsSettings.
+    pub fn render_pipeline(&self) -> Result<Option<RenderPipeline>> {
+        const FILE: &str = "globalgamemanagers";
+        let Some(f) = self.files.get(FILE) else {
+            return Ok(None);
+        };
+        let one = |class: &str| -> Result<Option<Value>> {
+            let mut found = None;
+            for o in &f.objects {
+                let r = ObjRef {
+                    file: FILE.into(),
+                    path_id: o.path_id,
+                };
+                if self.class_name(&r) == Some(class) {
+                    if found.is_some() {
+                        return Err(invalid(format!("{FILE}: more than one {class}")));
+                    }
+                    found = Some(self.decode(&r)?);
+                }
+            }
+            Ok(found)
+        };
+        let Some(graphics) = one("GraphicsSettings")? else {
+            return Ok(None);
+        };
+        // a pipeline asset's script class; `None` for no asset
+        let class = |pptr: Option<&Value>| -> Result<Option<String>> {
+            let Some(asset) = pptr.map(|p| self.resolve(FILE, p)).transpose()?.flatten() else {
+                return Ok(None);
+            };
+            let (base, _) = self.behaviour(&asset)?;
+            let script = base
+                .get("m_Script")
+                .map(|p| self.resolve(&asset.file, p))
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{}/{}: pipeline asset without a script",
+                        asset.file, asset.path_id
+                    ))
+                })?;
+            let s = self.decode(&script)?;
+            let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("");
+            Ok(Some(match field("m_Namespace") {
+                "" => field("m_ClassName").to_owned(),
+                ns => format!("{ns}.{}", field("m_ClassName")),
+            }))
+        };
+        let default = class(graphics.get("m_CustomRenderPipeline"))?;
+        let mut levels = Vec::new();
+        if let Some(Value::Array(crate::value::Array::Values(qs))) = one("QualitySettings")?
+            .as_ref()
+            .and_then(|q| q.get("m_QualitySettings"))
+        {
+            for q in qs {
+                levels.push(class(q.get("customRenderPipeline"))?.or_else(|| default.clone()));
+            }
+        }
+        if levels.is_empty() {
+            levels.push(default);
+        }
+        Ok(Some(if levels.iter().all(Option::is_none) {
+            RenderPipeline::BuiltIn
+        } else if levels.iter().all(|l| l.as_deref() == Some(URP_ASSET)) {
+            RenderPipeline::Universal
+        } else {
+            let mut names: Vec<String> = levels
+                .into_iter()
+                .map(|l| l.unwrap_or_else(|| "built-in".into()))
+                .collect();
+            names.sort();
+            names.dedup();
+            RenderPipeline::Other(names)
+        }))
     }
 
     /// The object a `PPtr` (`m_FileID`, `m_PathID`) found in `file` points at; `None` for a null pointer.
