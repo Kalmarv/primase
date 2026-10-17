@@ -20,6 +20,11 @@
 //!   bucket 0x39, bucket mask 0x3C; parameter infos: buffer, texture, other, sampler and parameter counts and a copy
 //!   count (8 bytes), then per parameter a name and a packed word (kind 2 bits; texture index or cbuffer index; offset
 //!   and length in the cbuffer, 12 bits each). The buffer pointers come `copy count` times over; the first copy is read.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::bounds::Bound;
 use crate::le;
 use crate::resource::Resource;
@@ -97,7 +102,10 @@ pub struct Element {
 
 impl Element {
     pub fn semantic(self) -> &'static str {
-        SEMANTICS[usize::from(self.slot)]
+        SEMANTICS
+            .get(usize::from(self.slot))
+            .copied()
+            .unwrap_or("an unknown slot")
     }
 }
 
@@ -120,9 +128,18 @@ impl Geometry {
     /// The bytes of one element across all vertices, vertex after vertex.
     pub fn element_bytes(&self, e: Element) -> Vec<u8> {
         let size = e.format.element_size().expect("checked on reading");
-        let (stride, off) = (usize::from(self.stride), e.offset as usize);
-        (0..self.vertex_count as usize)
-            .flat_map(|v| &self.vertices[v * stride + off..v * stride + off + size])
+        let (stride, off) = (
+            usize::from(self.stride),
+            usize::try_from(e.offset).unwrap_or(usize::MAX),
+        );
+        if stride == 0 {
+            return Vec::new();
+        }
+        // each vertex holds the element (checked on reading)
+        self.vertices
+            .chunks_exact(stride)
+            .filter_map(|v| v.get(off..off.checked_add(size)?))
+            .flatten()
             .copied()
             .collect()
     }
@@ -302,8 +319,7 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<Light
         "ydr" => read_lights(r, 0x5000_00B0),
         "yft" => read_lights(r, 0x5000_0110),
         "ydd" => {
-            let d = r.at(0x5000_0000, 0x40)?;
-            let hashes = pointer_list_u32(r, &d[0x20..0x30])?;
+            let hashes = pointer_list_u32(r, 0x5000_0020)?;
             let ptrs = pointer_list(r, 0x5000_0030)?;
             if hashes.len() != ptrs.len() {
                 return Err(err(
@@ -311,8 +327,8 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<Light
                     format!("{} name hashes for {} drawables", hashes.len(), ptrs.len()),
                 ));
             }
-            match hashes.iter().position(|&h| h == entry) {
-                Some(i) => read_lights(r, ptrs[i] + 0xB0),
+            match hashes.iter().zip(&ptrs).find(|&(&h, _)| h == entry) {
+                Some((_, &p)) => read_lights(r, offset(p, 0xB0)?),
                 None => Ok(Vec::new()),
             }
         }
@@ -331,7 +347,7 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let d = r.at(le::u64(h, 0)?, 168 * n)?;
+    let d = r.records(le::u64(h, 0)?, n, 168)?;
     d.chunks(168).map(LightAttr::read).collect()
 }
 
@@ -350,12 +366,12 @@ impl Skeleton {
         let count = usize::from(le::u16(s, 0x5E)?);
         let transforms = match le::u64(s, 0x30)? {
             0 => return Err(err(pointer, "a skeleton without bone transforms")),
-            p => r.at(p, 64 * count)?,
+            p => r.records(p, count, 64)?,
         };
         let parents = match le::u64(s, 0x38)? {
             0 => vec![-1; count],
             p => r
-                .at(p, 2 * count)?
+                .records(p, count, 2)?
                 .as_chunks::<2>()
                 .0
                 .iter()
@@ -368,19 +384,23 @@ impl Skeleton {
             .iter()
             .map(|m| {
                 // row-vector matrix M (p' = p M, translation in its fourth row): row i of ours is column i of M
-                let ([r0, r1, r2, r3], _) = m.as_chunks::<16>() else {
-                    unreachable!("64 bytes are four rows of 16")
-                };
-                let [r0, r1, r2, r3] = [r0, r1, r2, r3].map(le::vec4_of);
-                std::array::from_fn(|i| [r0[i], r1[i], r2[i], r3[i]])
+                let [r0, r1, r2, r3] = rows::<4, 64>(m, pointer)?;
+                Ok([
+                    [r0[0], r1[0], r2[0], r3[0]],
+                    [r0[1], r1[1], r2[1], r3[1]],
+                    [r0[2], r1[2], r2[2], r3[2]],
+                ])
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let parents = parents
             .iter()
             .map(|&p| match p {
                 -1 => Ok(None),
-                p if (0..count as i16).contains(&p) => Ok(Some(p as u16)),
-                p => Err(err(pointer, format!("bone parent {p} of {count} bones"))),
+                p => u16::try_from(p)
+                    .ok()
+                    .filter(|&q| usize::from(q) < count)
+                    .map(Some)
+                    .ok_or_else(|| err(pointer, format!("bone parent {p} of {count} bones"))),
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Skeleton { local, parents })
@@ -389,27 +409,31 @@ impl Skeleton {
     /// Each bone's transform into the drawable's space: its own, then its parents' up to the root.
     pub fn pose(&self) -> Vec<[[f32; 4]; 3]> {
         let apply = |a: &[[f32; 4]; 3], b: &[[f32; 4]; 3]| -> [[f32; 4]; 3] {
-            // a after b: rows of a times the 4 x 4 of b
-            std::array::from_fn(|i| {
-                std::array::from_fn(|j| {
-                    a[i][0] * b[0][j]
-                        + a[i][1] * b[1][j]
-                        + a[i][2] * b[2][j]
-                        + if j == 3 { a[i][3] } else { 0.0 }
-                })
+            // a after b: rows of a times the 4 x 4 of b (its fourth row (0, 0, 0, 1))
+            let [b0, b1, b2] = *b;
+            a.map(|[x, y, z, w]| {
+                let mut row = [0.0f32; 4];
+                for (((r, p), q), s) in row.iter_mut().zip(b0).zip(b1).zip(b2) {
+                    *r = x * p + y * q + z * s;
+                }
+                row[3] += w;
+                row
             })
         };
-        (0..self.local.len())
-            .map(|b| {
-                let mut t = self.local[b];
-                let mut p = self.parents[b];
-                let mut guard = 0;
+        self.local
+            .iter()
+            .zip(&self.parents)
+            .map(|(&own, &parent)| {
+                let (mut t, mut p) = (own, parent);
+                let mut guard = 0usize;
                 while let Some(q) = p
                     && guard < self.local.len()
+                    && let (Some(l), Some(&up)) =
+                        (self.local.get(usize::from(q)), self.parents.get(usize::from(q)))
                 {
-                    t = apply(&self.local[usize::from(q)], &t);
-                    p = self.parents[usize::from(q)];
-                    guard += 1;
+                    t = apply(l, &t);
+                    p = up;
+                    guard = guard.saturating_add(1);
                 }
                 t
             })
@@ -439,8 +463,8 @@ impl Drawable {
     pub fn read(r: &Resource, pointer: u64) -> Result<Drawable> {
         let d = r.at(pointer, 0xA8)?;
         let mut lods: [Vec<Model>; 4] = Default::default();
-        for (i, lod) in lods.iter_mut().enumerate() {
-            let p = le::u64(d, 0x50 + 8 * i)?;
+        for (lod, at) in lods.iter_mut().zip([0x50, 0x58, 0x60, 0x68]) {
+            let p = le::u64(d, at)?;
             if p != 0 {
                 *lod = read_models(r, p)?;
             }
@@ -483,7 +507,7 @@ impl Drawable {
     /// A gtaDrawable (a ydr's root, a ydd's entry): the drawable, its light list at 0xB0 and its bound at 0xC8.
     fn read_gta(r: &Resource, pointer: u64) -> Result<Drawable> {
         let mut d = Self::read(r, pointer)?;
-        d.lights = read_lights(r, pointer + 0xB0)?;
+        d.lights = read_lights(r, offset(pointer, 0xB0)?)?;
         d.bound = read_bound(r, le::u64(r.at(pointer, 0xD0)?, 0xC8)?)?;
         Ok(d)
     }
@@ -510,10 +534,23 @@ fn parameter_at(
     {
         return Err(format!(
             "parameter at {offset:#x} + {length} runs past its constant buffer ({:#x} bytes)",
-            next - start
+            next.abs_diff(start)
         ));
     }
     Ok(at)
+}
+
+/// `o` bytes past resource pointer `p`.
+fn offset(p: u64, o: u64) -> Result<u64> {
+    p.checked_add(o)
+        .ok_or_else(|| err(p, format!("{o:#x} past the address space")))
+}
+
+/// The `R` rows of four f32 that a record of `B` bytes holds (`B` = 16 `R`).
+fn rows<const R: usize, const B: usize>(m: &[u8; B], at: u64) -> Result<[[f32; 4]; R]> {
+    let rows = <&[[u8; 16]; R]>::try_from(m.as_chunks::<16>().0)
+        .map_err(|_| err(at, format!("a {B}-byte record is not {R} rows")))?;
+    Ok(rows.map(|r| le::vec4_of(&r)))
 }
 
 /// The bound at `p`, if any (`0`: none).
@@ -548,7 +585,7 @@ fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let p = r.at(le::u64(h, 0)?, 8 * n)?;
+    let p = r.records(le::u64(h, 0)?, n, 8)?;
     Ok(p.as_chunks::<8>()
         .0
         .iter()
@@ -568,27 +605,32 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
             let geoms = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x08)?, 8 * n)?
+                r.records(le::u64(m, 0x08)?, n, 8)?
             };
             let mapping = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x20)?, 2 * n)?
+                r.records(le::u64(m, 0x20)?, n, 2)?
             };
-            let boxes = if n > 1 { n + 1 } else { n };
+            // one box for one geometry; for more, the whole model's box first, then one per geometry
+            let first = usize::from(n > 1);
             let bounds = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x18)?, 32 * boxes)?
+                r.records(le::u64(m, 0x18)?, n.saturating_add(first), 32)?
             };
-            let geometries = (0..n)
-                .map(|i| {
-                    let b = if n > 1 { 32 * (i + 1) } else { 0 };
+            let geometries = geoms
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(mapping.as_chunks::<2>().0)
+                .zip(bounds.as_chunks::<32>().0.iter().skip(first))
+                .map(|((g, s), b)| {
                     read_geometry(
                         r,
-                        le::u64(geoms, 8 * i)?,
-                        le::u16(mapping, 2 * i)?,
-                        [le::vec4(bounds, b)?, le::vec4(bounds, b + 16)?],
+                        u64::from_le_bytes(*g),
+                        u16::from_le_bytes(*s),
+                        [le::vec4(b, 0)?, le::vec4(b, 16)?],
                     )
                 })
                 .collect::<Result<_>>()?;
@@ -604,7 +646,7 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
 fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Result<Geometry> {
     let g = r.at(p, 0x98)?;
     let index_count = le::u32(g, 0x58)?;
-    if u64::from(le::u32(g, 0x5C)?) * 3 != u64::from(index_count) || le::u16(g, 0x62)? != 3 {
+    if u64::from(le::u32(g, 0x5C)?).checked_mul(3) != Some(u64::from(index_count)) || le::u16(g, 0x62)? != 3 {
         return Err(err(
             p,
             format!("{index_count} indices, {} triangles", le::u32(g, 0x5C)?),
@@ -623,30 +665,38 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
     }
     let decl_ptr = le::u64(vb, 0x38)?;
     let decl = r.at(decl_ptr, 320)?;
+    // per slot: its offset (52 words), its stride (52 bytes), its format (52 bytes)
+    let table = |at: usize, len: usize| {
+        decl.get(at..at.saturating_add(len))
+            .ok_or_else(|| err(decl_ptr, "vertex declaration shorter than its tables"))
+    };
+    let (offsets, strides, formats) = (table(0, 208)?, table(208, 52)?, table(260, 52)?);
     let mut elements = Vec::new();
-    for slot in 0..52 {
-        let format = BufferFormat(decl[208 + 52 + slot]);
+    for ((((slot, offset), &slot_stride), &format), semantic) in (0u8..)
+        .zip(offsets.as_chunks::<4>().0)
+        .zip(strides)
+        .zip(formats)
+        .zip(SEMANTICS)
+    {
+        let format = BufferFormat(format);
         if format.0 == 0 {
             continue;
         }
-        let offset = le::u32(decl, 4 * slot)?;
-        let size = format.element_size().ok_or_else(|| {
-            err(
-                decl_ptr,
-                format!("{}: vertex format {:#x}", SEMANTICS[slot], format.0),
-            )
-        })?;
-        if u16::from(decl[208 + slot]) != stride || offset as usize + size > usize::from(stride) {
+        let offset = u32::from_le_bytes(*offset);
+        let size = format
+            .element_size()
+            .ok_or_else(|| err(decl_ptr, format!("{semantic}: vertex format {:#x}", format.0)))?;
+        let fits = usize::try_from(offset)
+            .ok()
+            .and_then(|o| o.checked_add(size))
+            .is_some_and(|end| end <= usize::from(stride));
+        if u16::from(slot_stride) != stride || !fits {
             return Err(err(
                 decl_ptr,
-                format!("{} at {offset} in a {stride}-byte vertex", SEMANTICS[slot]),
+                format!("{semantic} at {offset} in a {stride}-byte vertex"),
             ));
         }
-        elements.push(Element {
-            slot: slot as u8,
-            format,
-            offset,
-        });
+        elements.push(Element { slot, format, offset });
     }
     let packed = le::u64(decl, 312)?;
     if (packed >> 2) & 0xFF != u64::from(stride) || packed & 1 != 0 {
@@ -655,8 +705,9 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
             format!("declaration word {packed:#x} for a {stride}-byte vertex"),
         ));
     }
+    let n_vertices = usize::try_from(vertex_count).map_err(|_| err(vb_ptr, "vertex count"))?;
     let vertices = r
-        .at(le::u64(vb, 0x18)?, vertex_count as usize * usize::from(stride))?
+        .records(le::u64(vb, 0x18)?, n_vertices, usize::from(stride))?
         .to_vec();
     // index buffer
     let ib_ptr = le::u64(g, 0x38)?;
@@ -708,18 +759,21 @@ fn read_shader_group(r: &Resource, p: u64) -> Result<(Vec<Shader>, Option<Textur
     let ptrs = if n == 0 {
         &[][..]
     } else {
-        r.at(le::u64(g, 0x10)?, 8 * n)?
+        r.records(le::u64(g, 0x10)?, n, 8)?
     };
-    let shaders = (0..n)
-        .map(|i| read_shader(r, le::u64(ptrs, 8 * i)?))
+    let shaders = ptrs
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|p| read_shader(r, u64::from_le_bytes(*p)))
         .collect::<Result<_>>()?;
     Ok((shaders, textures))
 }
 
 fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
-    let s = r.at(p, 0x40)?;
+    let s = r.block::<0x40>(p)?;
     let infos_ptr = le::u64(s, 0x20)?;
-    let h = r.at(infos_ptr, 8)?;
+    let h = r.block::<8>(infos_ptr)?;
     let (n_buffers, n_textures, n_other, _n_samplers, n_params, copies) = (
         usize::from(h[0]),
         usize::from(h[1]),
@@ -731,12 +785,13 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     if h[5] != 0 || h[6] != 0 || copies == 0 {
         return Err(err(infos_ptr, format!("parameter info header {:02x?}", h)));
     }
-    let infos = r.at(infos_ptr + 8, 8 * n_params)?;
+    let infos = r.records(offset(infos_ptr, 8)?, n_params, 8)?;
     // constant buffers: the first copy's pointers (the next copy's first pointer ends the last buffer)
     let buffers: Vec<u64> = if n_buffers == 0 {
         Vec::new()
     } else {
-        let b = r.at(le::u64(s, 0x08)?, 8 * (n_buffers + 1).min(n_buffers * copies))?;
+        let n = n_buffers.saturating_add(1).min(n_buffers.saturating_mul(copies));
+        let b = r.records(le::u64(s, 0x08)?, n, 8)?;
         b.as_chunks::<8>()
             .0
             .iter()
@@ -746,7 +801,7 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     let texture_refs: Vec<u64> = if n_textures == 0 {
         Vec::new()
     } else {
-        let t = r.at(le::u64(s, 0x10)?, 8 * n_textures)?;
+        let t = r.records(le::u64(s, 0x10)?, n_textures, 8)?;
         t.as_chunks::<8>()
             .0
             .iter()
@@ -754,11 +809,15 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
             .collect()
     };
     let mut params = Vec::with_capacity(n_params);
-    for i in 0..n_params {
-        let (name, word) = (le::u32(infos, 8 * i)?, le::u32(infos, 8 * i + 4)?);
+    for info in infos.as_chunks::<8>().0 {
+        let [name, word] = le::u32x2_of(info);
+        // the packed word: kind (2 bits), then an 8-bit index (a 6-bit cbuffer index), a 12-bit offset and length
+        let [index8, ..] = (word >> 2).to_le_bytes();
+        let [o0, o1, ..] = (word >> 8).to_le_bytes();
+        let [l0, l1, ..] = (word >> 20).to_le_bytes();
         let value = match word & 3 {
             0 => {
-                let index = ((word >> 2) & 0xFF) as usize;
+                let index = usize::from(index8);
                 let ptr = *texture_refs
                     .get(index)
                     .ok_or_else(|| err(infos_ptr, format!("texture index {index} of {n_textures}")))?;
@@ -768,24 +827,30 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
                 })
             }
             1 => {
-                let index = ((word >> 2) & 0xFF) as u8;
+                let index = index8;
                 if usize::from(index) >= n_other {
                     return Err(err(infos_ptr, format!("other index {index} of {n_other}")));
                 }
                 ParamValue::Other(index)
             }
-            2 => ParamValue::Sampler(((word >> 2) & 0xFF) as u8),
+            2 => ParamValue::Sampler(index8),
             _ => {
-                let cb = ((word >> 2) & 0x3F) as usize;
-                let (offset, length) = (u64::from((word >> 8) & 0xFFF), ((word >> 20) & 0xFFF) as usize);
-                if cb >= n_buffers || length % 4 != 0 {
+                let cb = usize::from(index8 & 0x3F);
+                let (offset, length) = (
+                    u64::from(u16::from_le_bytes([o0, o1]) & 0xFFF),
+                    usize::from(u16::from_le_bytes([l0, l1]) & 0xFFF),
+                );
+                if cb >= n_buffers || length & 3 != 0 {
                     return Err(err(
                         infos_ptr,
                         format!("cbuffer {cb} of {n_buffers}, length {length}"),
                     ));
                 }
-                let at = parameter_at(buffers[cb], buffers.get(cb + 1).copied(), offset, length)
-                    .map_err(|e| err(infos_ptr, e))?;
+                let start = *buffers
+                    .get(cb)
+                    .ok_or_else(|| err(infos_ptr, format!("cbuffer {cb} of {}", buffers.len())))?;
+                let next = cb.checked_add(1).and_then(|c| buffers.get(c)).copied();
+                let at = parameter_at(start, next, offset, length).map_err(|e| err(infos_ptr, e))?;
                 let v = r.at(at, length)?;
                 ParamValue::Floats(
                     v.as_chunks::<4>()
@@ -847,24 +912,24 @@ impl Fragment {
                 ),
             ));
         }
-        let h = r.at(0x5000_0000, 0x130)?;
+        let h = r.block::<0x130>(0x5000_0000)?;
         let opt = |p: u64| -> Result<Option<Drawable>> {
             match p {
                 0 => Ok(None),
                 p => Drawable::read(r, p).map(Some),
             }
         };
-        let n = le::u32(h, 0x48)? as usize;
+        let n = usize::try_from(le::u32(h, 0x48)?).map_err(|_| err(0x48, "drawable count"))?;
         let mut extra = Vec::new();
         if n > 0 {
-            let ptrs = r.at(le::u64(h, 0x38)?, 8 * n)?;
-            let names = r.at(le::u64(h, 0x40)?, 8 * n)?;
-            for i in 0..n {
-                let name = match le::u64(names, 8 * i)? {
+            let ptrs = r.records(le::u64(h, 0x38)?, n, 8)?.as_chunks::<8>().0;
+            let names = r.records(le::u64(h, 0x40)?, n, 8)?.as_chunks::<8>().0;
+            for (p, name) in ptrs.iter().zip(names) {
+                let name = match u64::from_le_bytes(*name) {
                     0 => String::new(),
                     p => crate::texture::c_string(r, p)?,
                 };
-                if let Some(d) = opt(le::u64(ptrs, 8 * i)?)? {
+                if let Some(d) = opt(u64::from_le_bytes(*p))? {
                     extra.push((name, d));
                 }
             }
@@ -884,18 +949,14 @@ impl Fragment {
         let pose = match le::u64(h, 0xA8)? {
             0 => Vec::new(),
             p => {
-                let n = usize::from(r.at(p, 0x20)?[0x10]);
-                let rows = r.at(p + 0x20, 48 * n)?;
-                rows.as_chunks::<48>()
+                let n = usize::from(r.block::<0x20>(p)?[0x10]);
+                let bones = r.records(offset(p, 0x20)?, n, 48)?;
+                bones
+                    .as_chunks::<48>()
                     .0
                     .iter()
-                    .map(|b| {
-                        let ([x, y, z], _) = b.as_chunks::<16>() else {
-                            unreachable!("48 bytes are three rows of 16")
-                        };
-                        [x, y, z].map(le::vec4_of)
-                    })
-                    .collect()
+                    .map(|b| rows::<3, 48>(b, p))
+                    .collect::<Result<_>>()?
             }
         };
         let physics = match le::u64(h, 0xF0)? {
@@ -941,8 +1002,7 @@ impl DrawableDictionary {
                 ),
             ));
         }
-        let d = r.at(0x5000_0000, 0x40)?;
-        let hash_list = pointer_list_u32(r, &d[0x20..0x30])?;
+        let hash_list = pointer_list_u32(r, 0x5000_0020)?;
         let ptrs = pointer_list(r, 0x5000_0030)?;
         if hash_list.len() != ptrs.len() {
             return Err(err(
@@ -950,7 +1010,11 @@ impl DrawableDictionary {
                 format!("{} name hashes for {} drawables", hash_list.len(), ptrs.len()),
             ));
         }
-        if hash_list.windows(2).any(|w| w[0] >= w[1]) {
+        if hash_list
+            .iter()
+            .zip(hash_list.iter().skip(1))
+            .any(|(a, b)| a >= b)
+        {
             return Err(err(0, "name hashes not strictly ascending"));
         }
         let drawables = ptrs
@@ -965,12 +1029,16 @@ impl DrawableDictionary {
 
     /// The drawable of this name hash.
     pub fn get(&self, hash: u32) -> Option<&Drawable> {
-        self.hashes.binary_search(&hash).ok().map(|i| &self.drawables[i])
+        self.hashes
+            .binary_search(&hash)
+            .ok()
+            .and_then(|i| self.drawables.get(i))
     }
 }
 
-/// A simple list of u32 (pointer, count, capacity) given its 16 header bytes.
-fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
+/// A simple list of u32 (pointer, count, capacity) whose 16-byte header is at `at`.
+fn pointer_list_u32(r: &Resource, at: u64) -> Result<Vec<u32>> {
+    let h = r.block::<16>(at)?;
     let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
     if cap < count {
         return Err(err(0, format!("list count {count} over capacity {cap}")));
@@ -979,7 +1047,7 @@ fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let d = r.at(le::u64(h, 0)?, 4 * n)?;
+    let d = r.records(le::u64(h, 0)?, n, 4)?;
     Ok(d.as_chunks::<4>()
         .0
         .iter()
@@ -988,6 +1056,12 @@ fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     use super::*;
     use crate::resource::PageFlags;
@@ -1053,6 +1127,12 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod parameter_tests {
     use super::parameter_at;
 
