@@ -10,11 +10,12 @@ publish.workspace = true
 
 [features]
 default = []
-ktx2 = ["dep:basisu_c_sys", "dep:primase-image"]
+ktx2 = ["dep:basisu_c_sys", "dep:primase-image", "dep:primase-cache"]
 
 [dependencies]
 basisu_c_sys = { workspace = true, optional = true }
 primase-image = { workspace = true, optional = true }
+primase-cache = { workspace = true, optional = true }
 sha2.workspace = true
 meshopt.workspace = true
 primase-core.workspace = true

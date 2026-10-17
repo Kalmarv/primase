@@ -46,6 +46,12 @@ pub struct Options {
     /// KTX2 lowering: caps for images whose glTF name starts with a prefix; first match wins.
     #[cfg(feature = "ktx2")]
     pub texture_caps_by_name: Vec<(String, ktx2::TextureCaps)>,
+    /// KTX2 lowering: a disk cache of encoded images, kept across runs (`None`: encode every run).
+    #[cfg(feature = "ktx2")]
+    pub cache: Option<std::sync::Arc<primase_cache::Cache>>,
+    /// KTX2 lowering: encode on every cache hit as well and fail when the stored value differs.
+    #[cfg(feature = "ktx2")]
+    pub cache_verify: bool,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
@@ -79,6 +85,10 @@ impl Default for Options {
             texture_caps: ktx2::TextureCaps::default(),
             #[cfg(feature = "ktx2")]
             texture_caps_by_name: Vec::new(),
+            #[cfg(feature = "ktx2")]
+            cache: None,
+            #[cfg(feature = "ktx2")]
+            cache_verify: false,
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
@@ -523,7 +533,12 @@ pub fn plan_with_geometry(
         skipped: 0,
         without_mesh: 0,
         #[cfg(feature = "ktx2")]
-        textures: ktx2::TextureEncoder::new(options.texture_caps, options.texture_caps_by_name.clone())?,
+        textures: ktx2::TextureEncoder::new(
+            options.texture_caps,
+            options.texture_caps_by_name.clone(),
+            options.cache.clone(),
+            options.cache_verify,
+        )?,
     };
     for p in placements.into_values() {
         if p.transform.classify() == TransformKind::Degenerate {

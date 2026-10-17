@@ -13,6 +13,15 @@ pub use texture::{
 };
 use thiserror::Error;
 
+/// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
+/// any of them retires those entries. A test keeps the list equal to the `src` folder.
+pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
+    ("image/channels.rs", include_bytes!("channels.rs")),
+    ("image/lib.rs", include_bytes!("lib.rs")),
+    ("image/normals.rs", include_bytes!("normals.rs")),
+    ("image/texture.rs", include_bytes!("texture.rs")),
+];
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{path}: {source}")]

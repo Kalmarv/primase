@@ -14,6 +14,7 @@ use crate::{Error, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Role {
@@ -62,15 +63,26 @@ impl TextureCaps {
 }
 
 impl Role {
+    /// The role's name in disk cache keys.
+    fn key(self) -> &'static str {
+        match self {
+            Role::Colour => "colour",
+            Role::Normal => "normal",
+            Role::Mask => "mask",
+        }
+    }
     fn byte_cap(self) -> usize {
         if self == Self::Mask { 98_304 } else { 360_448 }
     }
 }
 
-/// Cache final compressed images across tiles, never decoded source pixels.
+/// Cache final compressed images across tiles, never decoded source pixels; and across runs in `disk`, when given.
 #[derive(Default)]
 pub(super) struct TextureEncoder {
     cache: BTreeMap<CacheKey, (Vec<u8>, Value)>,
+    disk: Option<Arc<primase_cache::Cache>>,
+    /// Encode on every disk hit as well and fail when the stored value differs (the cache's gate mode).
+    verify_disk: bool,
     caps: TextureCaps,
     caps_by_name: Vec<(String, TextureCaps)>,
 }
@@ -163,16 +175,47 @@ fn alpha_pixels(reference: &[u8], decoded: &[u8], policy: &AlphaPolicy) -> Resul
 }
 
 impl TextureEncoder {
-    pub(super) fn new(caps: TextureCaps, caps_by_name: Vec<(String, TextureCaps)>) -> Result<Self> {
+    pub(super) fn new(
+        caps: TextureCaps,
+        caps_by_name: Vec<(String, TextureCaps)>,
+        disk: Option<Arc<primase_cache::Cache>>,
+        verify_disk: bool,
+    ) -> Result<Self> {
         caps.check()?;
         for (_, caps) in &caps_by_name {
             caps.check()?;
         }
         Ok(Self {
             cache: BTreeMap::new(),
+            disk,
+            verify_disk,
             caps,
             caps_by_name,
         })
+    }
+
+    /// [`encode_image`] through the disk cache, when there is one.
+    fn encode_cached(&self, png: &[u8], key: &CacheKey) -> Result<(Vec<u8>, Value)> {
+        let (_, role, policy, cap) = key;
+        let Some(disk) = &self.disk else {
+            return encode_image(png, *role, policy, *cap);
+        };
+        let disk_key = disk_key(png, *role, policy, *cap);
+        if let Some(value) = disk.get(&disk_key)
+            && let Some(found) = unframe(&value)
+        {
+            if self.verify_disk && encode_image(png, *role, policy, *cap)? != found {
+                return Err(invalid(format!(
+                    "KTX2 cache entry {} differs from encoding its input again",
+                    disk_key.hex()
+                )));
+            }
+            return Ok(found);
+        }
+        let (encoded, metadata) = encode_image(png, *role, policy, *cap)?;
+        // a value that cannot be stored is still the right value; the cache counts the failure
+        let _ = disk.put(&disk_key, &frame(&encoded, &metadata)?);
+        Ok((encoded, metadata))
     }
 
     /// The caps for an image: the first name-prefix rule that matches, else the defaults.
@@ -311,74 +354,9 @@ impl TextureEncoder {
                 let digest: [u8; 32] = Sha256::digest(png).into();
                 let cap = self.caps_for(image["name"].as_str()).get(role);
                 let cache_key = (digest, role, alpha_policy, cap);
-                if let std::collections::btree_map::Entry::Vacant(entry) = self.cache.entry(cache_key.clone())
-                {
-                    let image = primase_image::read_png(png).map_err(invalid)?.image;
-                    let original_size = [image.width, image.height];
-                    let mut width = image.width;
-                    let mut height = image.height;
-                    let primase_image::Samples::U8(mut rgba) = image.samples else {
-                        return Err(invalid("web KTX2 requires RGBA8"));
-                    };
-                    let dimension = |v: u32| (1 << v.ilog2()).clamp(4, cap);
-                    let (w, h) = (dimension(width), dimension(height));
-                    let mut near_zero = 0;
-                    if width != w || height != h {
-                        if role == Role::Normal {
-                            let filtered = primase_image::resize_normals(
-                                &primase_image::Image {
-                                    width,
-                                    height,
-                                    samples: primase_image::Samples::U8(rgba),
-                                },
-                                w,
-                                h,
-                            )
-                            .map_err(invalid)?;
-                            near_zero = filtered.near_zero_to_flat;
-                            let primase_image::Samples::U8(pixels) = filtered.image.samples else {
-                                unreachable!()
-                            };
-                            (width, height, rgba) = (w, h, pixels);
-                        } else {
-                            (width, height, rgba) = resize(width, height, &rgba, role, w, h);
-                        }
-                    }
-                    let mut alpha_report = json!(null);
-                    let mut png_output = role == Role::Normal;
-                    let encoded = if png_output {
-                        png_rgba(width, height, &rgba)?
-                    } else {
-                        let compressed = loop {
-                            let encoded = encode_rgba8(width, height, &rgba, role == Role::Colour)?;
-                            if encoded.len() <= role.byte_cap() {
-                                break encoded;
-                            }
-                            if width == 4 && height == 4 {
-                                return Err(invalid("KTX2 exceeds byte cap"));
-                            }
-                            (width, height, rgba) = resize(
-                                width,
-                                height,
-                                &rgba,
-                                role,
-                                (width / 2).max(4),
-                                (height / 2).max(4),
-                            );
-                        };
-                        if role == Role::Colour {
-                            let (accepted, report) = alpha_quality(&compressed, &rgba, &cache_key.2)?;
-                            alpha_report = report;
-                            png_output = !accepted;
-                        }
-                        if png_output {
-                            png_rgba(width, height, &rgba)?
-                        } else {
-                            compressed
-                        }
-                    };
-                    let metadata = json!({"source_dimensions":original_size,"dimensions":[width,height],"role":format!("{role:?}").to_lowercase(),"max_dimension":cap,"max_bytes":if png_output { None } else { Some(role.byte_cap()) },"bytes":encoded.len(),"codec":if png_output { "PNG_RGBA8" } else { "UASTC_LDR_4x4_ZSTD" },"near_zero_cap_average_to_flat":near_zero,"alpha_quality":alpha_report});
-                    entry.insert((encoded, metadata));
+                if !self.cache.contains_key(&cache_key) {
+                    let encoded = self.encode_cached(png, &cache_key)?;
+                    self.cache.insert(cache_key.clone(), encoded);
                 }
                 let (encoded, metadata) = &self.cache[&cache_key];
                 while !bin.len().is_multiple_of(4) {
@@ -426,6 +404,132 @@ impl TextureEncoder {
         }
         Ok(primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?)
     }
+}
+
+/// What the disk cache keys KTX2 output by, besides the inputs: bumped by hand when the output's meaning changes in a
+/// way the sources below do not show.
+const CACHE_VERSION: u32 = 1;
+
+/// External crates whose code computes the output (the UASTC encoder and transcoder, PNG and its deflate stack), as
+/// they are in Cargo.lock; `encoders_match_the_lock` keeps this list true.
+const ENCODERS: &str = "adler2@2.0.1 basisu_c_sys@0.9.1 bitflags@2.13.2 cfg-if@1.0.5 crc32fast@1.5.2 fdeflate@0.3.7 \
+flate2@1.1.10 miniz_oxide@0.8.9 miniz_oxide@0.9.1 png@0.18.1 simd-adler32@0.3.10 zlib-rs@0.6.8";
+
+/// The hash of the code that computes KTX2 output: this module and primase-image.
+fn source_hash() -> &'static [u8; 32] {
+    static HASH: OnceLock<[u8; 32]> = OnceLock::new();
+    HASH.get_or_init(|| {
+        let mut files = vec![("web/ktx2.rs", include_bytes!("ktx2.rs").as_slice())];
+        files.extend(primase_image::CACHE_SOURCES.iter().copied());
+        primase_cache::source_hash(&files)
+    })
+}
+
+/// The disk cache key of one image's web form: everything [`encode_image`] reads, and what computes it.
+fn disk_key(png: &[u8], role: Role, policy: &AlphaPolicy, cap: u32) -> primase_cache::Key {
+    let mut k = primase_cache::KeyBuilder::new("web.ktx2")
+        .u32("version", CACHE_VERSION)
+        .bytes("sources", source_hash())
+        .str("encoders", ENCODERS)
+        .bytes("png", png)
+        .str("role", role.key())
+        .u32("cap", cap)
+        .bool("blend", policy.blend)
+        .u64("cutoffs", policy.cutoffs.len() as u64);
+    for (cutoff, factor) in &policy.cutoffs {
+        k = k.u32("cutoff", *cutoff).u32("factor", *factor);
+    }
+    k.finish()
+}
+
+/// A cached value: the metadata JSON's length (u64 LE), the JSON, the encoded image.
+fn frame(encoded: &[u8], metadata: &Value) -> Result<Vec<u8>> {
+    let json = serde_json::to_vec(metadata)?;
+    let mut out = Vec::with_capacity(8 + json.len() + encoded.len());
+    out.extend_from_slice(&(json.len() as u64).to_le_bytes());
+    out.extend_from_slice(&json);
+    out.extend_from_slice(encoded);
+    Ok(out)
+}
+
+/// [`frame`] undone; `None` for bytes it did not make (recomputed, never trusted).
+fn unframe(value: &[u8]) -> Option<(Vec<u8>, Value)> {
+    let n = u64::from_le_bytes(value.get(..8)?.try_into().ok()?);
+    let end = 8usize.checked_add(usize::try_from(n).ok()?)?;
+    let metadata = serde_json::from_slice(value.get(8..end)?).ok()?;
+    Some((value[end..].to_vec(), metadata))
+}
+
+/// One image's web form: the PNG decoded, reduced to the role's cap, encoded to UASTC (halving until it fits the
+/// role's byte cap) or kept as PNG where the encoding would lose too much alpha, with the metadata the tile records.
+/// Pure: the same PNG, role, policy and cap give the same bytes (what the disk cache relies on).
+fn encode_image(png: &[u8], role: Role, policy: &AlphaPolicy, cap: u32) -> Result<(Vec<u8>, Value)> {
+    let image = primase_image::read_png(png).map_err(invalid)?.image;
+    let original_size = [image.width, image.height];
+    let mut width = image.width;
+    let mut height = image.height;
+    let primase_image::Samples::U8(mut rgba) = image.samples else {
+        return Err(invalid("web KTX2 requires RGBA8"));
+    };
+    let dimension = |v: u32| (1 << v.ilog2()).clamp(4, cap);
+    let (w, h) = (dimension(width), dimension(height));
+    let mut near_zero = 0;
+    if width != w || height != h {
+        if role == Role::Normal {
+            let filtered = primase_image::resize_normals(
+                &primase_image::Image {
+                    width,
+                    height,
+                    samples: primase_image::Samples::U8(rgba),
+                },
+                w,
+                h,
+            )
+            .map_err(invalid)?;
+            near_zero = filtered.near_zero_to_flat;
+            let primase_image::Samples::U8(pixels) = filtered.image.samples else {
+                unreachable!()
+            };
+            (width, height, rgba) = (w, h, pixels);
+        } else {
+            (width, height, rgba) = resize(width, height, &rgba, role, w, h);
+        }
+    }
+    let mut alpha_report = json!(null);
+    let mut png_output = role == Role::Normal;
+    let encoded = if png_output {
+        png_rgba(width, height, &rgba)?
+    } else {
+        let compressed = loop {
+            let encoded = encode_rgba8(width, height, &rgba, role == Role::Colour)?;
+            if encoded.len() <= role.byte_cap() {
+                break encoded;
+            }
+            if width == 4 && height == 4 {
+                return Err(invalid("KTX2 exceeds byte cap"));
+            }
+            (width, height, rgba) = resize(
+                width,
+                height,
+                &rgba,
+                role,
+                (width / 2).max(4),
+                (height / 2).max(4),
+            );
+        };
+        if role == Role::Colour {
+            let (accepted, report) = alpha_quality(&compressed, &rgba, policy)?;
+            alpha_report = report;
+            png_output = !accepted;
+        }
+        if png_output {
+            png_rgba(width, height, &rgba)?
+        } else {
+            compressed
+        }
+    };
+    let metadata = json!({"source_dimensions":original_size,"dimensions":[width,height],"role":format!("{role:?}").to_lowercase(),"max_dimension":cap,"max_bytes":if png_output { None } else { Some(role.byte_cap()) },"bytes":encoded.len(),"codec":if png_output { "PNG_RGBA8" } else { "UASTC_LDR_4x4_ZSTD" },"near_zero_cap_average_to_flat":near_zero,"alpha_quality":alpha_report});
+    Ok((encoded, metadata))
 }
 
 // Integer-bin averaging includes every source texel, including odd edge rows.
@@ -520,6 +624,131 @@ pub fn encode_rgba8(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Result<
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// One PNG bound as colour, mask and normal: three encodings.
+    fn three_roles() -> Vec<u8> {
+        let pixels: Vec<u8> = (0..64 * 32 * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let png = primase_image::write_png(&primase_image::Image {
+            width: 64,
+            height: 32,
+            samples: primase_image::Samples::U8(pixels),
+        })
+        .unwrap();
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":png.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
+            "materials":[{"alphaMode":"MASK","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0}},"normalTexture":{"index":0}}]});
+        primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap()
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "test I/O: damages a cache entry"
+    )]
+    fn disk_cache_gives_the_bytes_encoding_gives() {
+        let dir = std::env::temp_dir().join(format!("primase-ktx2-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let input = three_roles();
+        let plain = TextureEncoder::default().apply(input.clone()).unwrap();
+        let run = || {
+            let cache = Arc::new(primase_cache::Cache::open(&dir, 1 << 30).unwrap());
+            let mut encoder =
+                TextureEncoder::new(TextureCaps::default(), Vec::new(), Some(cache.clone()), true).unwrap();
+            (encoder.apply(input.clone()).unwrap(), cache.stats())
+        };
+        let (cold, stats) = run();
+        assert_eq!(cold, plain);
+        assert_eq!((stats.hits, stats.misses, stats.written), (0, 3, 3));
+        let (warm, stats) = run();
+        assert_eq!(warm, plain);
+        assert_eq!((stats.hits, stats.misses), (3, 0));
+        // a damaged entry is recomputed, not used
+        let shard = std::fs::read_dir(dir.join("v1"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entry = std::fs::read_dir(shard).unwrap().next().unwrap().unwrap().path();
+        let mut bytes = std::fs::read(&entry).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x40;
+        std::fs::write(&entry, bytes).unwrap();
+        let (repaired, stats) = run();
+        assert_eq!(repaired, plain);
+        assert_eq!((stats.hits, stats.corrupt, stats.written), (2, 1, 1));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn disk_keys_follow_every_input() {
+        let policy = AlphaPolicy::default();
+        let k = disk_key(b"png", Role::Colour, &policy, 512);
+        assert_eq!(k, disk_key(b"png", Role::Colour, &policy, 512));
+        let blend = AlphaPolicy {
+            blend: true,
+            ..AlphaPolicy::default()
+        };
+        let cut = AlphaPolicy {
+            cutoffs: BTreeSet::from([(0.5f32.to_bits(), 1f32.to_bits())]),
+            ..AlphaPolicy::default()
+        };
+        for other in [
+            disk_key(b"pnh", Role::Colour, &policy, 512),
+            disk_key(b"png", Role::Mask, &policy, 512),
+            disk_key(b"png", Role::Colour, &policy, 256),
+            disk_key(b"png", Role::Colour, &blend, 512),
+            disk_key(b"png", Role::Colour, &cut, 512),
+        ] {
+            assert_ne!(other, k);
+        }
+    }
+
+    /// [`ENCODERS`] is basisu_c_sys and png with everything png depends on, at their Cargo.lock versions.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "test I/O: reads Cargo.lock")]
+    fn encoders_match_the_lock() {
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock")).unwrap();
+        let mut packages = BTreeMap::<String, (String, Vec<String>)>::new();
+        for block in lock.split("[[package]]").skip(1) {
+            let field = |name: &str| {
+                block
+                    .lines()
+                    .find_map(|l| l.strip_prefix(&format!("{name} = \"")))
+                    .map(|v| v.trim_end_matches('"').to_owned())
+            };
+            let (Some(name), Some(version)) = (field("name"), field("version")) else {
+                continue;
+            };
+            let deps = block
+                .split_once("dependencies = [")
+                .map(|(_, rest)| rest.split(']').next().unwrap())
+                .unwrap_or("")
+                .split(',')
+                .map(|d| d.trim().trim_matches('"').to_owned())
+                .filter(|d| !d.is_empty())
+                .collect();
+            packages.insert(format!("{name}@{version}"), (name, deps));
+        }
+        // a dependency is `name` or `name version` (when several versions are locked)
+        let resolve = |dep: &str| -> String {
+            match dep.split_once(' ') {
+                Some((n, v)) => format!("{n}@{v}"),
+                None => packages.iter().find(|(_, (n, _))| n == dep).unwrap().0.clone(),
+            }
+        };
+        let mut want = BTreeSet::from([resolve("basisu_c_sys")]);
+        let mut todo = vec![resolve("png")];
+        while let Some(p) = todo.pop() {
+            if want.insert(p.clone()) {
+                todo.extend(packages[&p].1.iter().map(|d| resolve(d)));
+            }
+        }
+        let have: BTreeSet<String> = ENCODERS.split_whitespace().map(str::to_owned).collect();
+        assert_eq!(have, want);
+    }
 
     #[test]
     fn specular_textures_are_a_mask_and_a_colour() {
@@ -625,7 +854,8 @@ mod tests {
             normal: 8,
             mask: 4,
         };
-        let mut encoder = TextureEncoder::new(TextureCaps::default(), vec![("bake_".into(), small)]).unwrap();
+        let mut encoder =
+            TextureEncoder::new(TextureCaps::default(), vec![("bake_".into(), small)], None, false).unwrap();
         let output = encoder.apply(input).unwrap();
         let doc: Value = serde_json::from_slice(primase_gltf::glb::parse(&output).unwrap().json).unwrap();
         let sizes: Vec<_> = doc["images"]
@@ -657,14 +887,18 @@ mod tests {
                     colour: 300,
                     ..TextureCaps::default()
                 },
-                Vec::new()
+                Vec::new(),
+                None,
+                false
             )
             .is_err()
         );
         assert!(
             TextureEncoder::new(
                 TextureCaps::default(),
-                vec![("x".into(), TextureCaps { mask: 2, ..small })]
+                vec![("x".into(), TextureCaps { mask: 2, ..small })],
+                None,
+                false
             )
             .is_err()
         );

@@ -779,6 +779,13 @@ name = "primase-bytes"
 version = "0.1.0"
 
 [[package]]
+name = "primase-cache"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "primase-cli"
 version = "0.1.0"
 dependencies = [
@@ -1032,6 +1039,7 @@ dependencies = [
  "basisu",
  "basisu_c_sys",
  "meshopt",
+ "primase-cache",
  "primase-core",
  "primase-gltf",
  "primase-image",

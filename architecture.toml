@@ -328,6 +328,16 @@ role = "toolkit I/O"
 reason = "opens the container files of a data folder the caller names"
 
 [[io]]
+file = "toolkit/cache/src/disk.rs"
+role = "toolkit I/O"
+reason = "reads, writes and trims entries in the cache folder the caller names"
+
+[[io]]
+file = "formats/web/src/ktx2.rs"
+role = "test I/O"
+reason = "the disk cache test damages an entry; the encoder list is checked against Cargo.lock"
+
+[[io]]
 file = "toolkit/compress/src/oodle.rs"
 role = "test I/O"
 reason = "real-data gates in unit tests"

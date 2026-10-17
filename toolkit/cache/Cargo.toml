@@ -1,0 +1,15 @@
+[package]
+name = "primase-cache"
+description = "Content-addressed disk cache for heavy pure steps: verified entries, safe across processes, size-capped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true
