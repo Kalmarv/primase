@@ -321,6 +321,10 @@ fn region_placements_against_the_scene() {
     };
     let mut geo: BTreeMap<&str, usize> = BTreeMap::new();
     let mut examples = Vec::new();
+    // per shader, the geometries differing and the scene triangles wound the other way, with examples
+    let mut differing_by_shader: BTreeMap<String, usize> = BTreeMap::new();
+    let mut wound_by_shader: BTreeMap<String, usize> = BTreeMap::new();
+    let mut wound_examples: Vec<String> = Vec::new();
     let mut attrs: BTreeMap<&str, usize> = BTreeMap::new();
     for (e, _) in theirs.iter::<SkatePrototype>() {
         let sp_parts: &[primase_skate_scene::Part] = theirs.get::<SkateParts>(e).map_or(&[], |p| &p.0);
@@ -374,6 +378,17 @@ fn region_placements_against_the_scene() {
                     for (k, n) in oriented(&their_mesh.primitives[pi]) {
                         if !ours_o.contains_key(&k) {
                             *geo.entry("scene triangles wound the other way").or_default() += n;
+                            let shader = sp_parts[pi]
+                                .source
+                                .as_ref()
+                                .and_then(|v| v["shader"].as_str())
+                                .unwrap_or("?");
+                            *wound_by_shader.entry(shader.to_string()).or_default() += n;
+                            if wound_examples.len() < 10
+                                && !wound_examples.iter().any(|x: &String| x.starts_with(&name))
+                            {
+                                wound_examples.push(format!("{name} {g:?} ({shader})"));
+                            }
                         }
                     }
                 }
@@ -566,6 +581,7 @@ fn region_placements_against_the_scene() {
                 *geo.entry("decal geometries lifted 12 mm along the drawn face (the exporter's decal lift, not a pass yet)").or_default() += 1;
             } else {
                 *geo.entry("geometries differing").or_default() += 1;
+                *differing_by_shader.entry(shader.to_string()).or_default() += 1;
                 if examples.len() < 10 {
                     examples.push(format!(
                         "{name} model {} geometry {} ({shader}): {missing} of {total} triangles",
@@ -580,6 +596,11 @@ fn region_placements_against_the_scene() {
     for x in &examples {
         println!("    differing: {x}");
     }
+    println!("geometries differing by shader: {differing_by_shader:?}");
+    println!("scene triangles wound the other way by shader: {wound_by_shader:?}");
+    for x in &wound_examples {
+        println!("    wound the other way: {x}");
+    }
     // textures: each scene texture's largest level is one of our textures' levels, and its smaller levels follow it
     // (that exporter passed DXT blocks through and may drop top levels to a size cap)
     let mut levels: BTreeMap<Vec<u8>, (primase_core::Entity, usize)> = BTreeMap::new();
@@ -589,11 +610,23 @@ fn region_placements_against_the_scene() {
         }
     }
     let mut tex: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut tex_examples: Vec<String> = Vec::new();
     for (_, tf) in theirs.iter::<primase_core::TextureFile>() {
         let bytes = std::fs::read(std::path::Path::new(&scene).join(&tf.path)).expect("scene texture");
         let t = primase_dds::read(&bytes).expect("dds");
         let class = match levels.get(&Sha256::digest(&t.levels[0]).to_vec()) {
-            None => "scene textures with no level of ours",
+            None => {
+                if tex_examples.len() < 12 {
+                    tex_examples.push(format!(
+                        "{} ({}x{}, {} levels)",
+                        tf.path.display(),
+                        t.width,
+                        t.height,
+                        t.levels.len()
+                    ));
+                }
+                "scene textures with no level of ours"
+            }
             Some(&(e, first)) => {
                 let ours_t = drawn.get::<primase_core::Texture>(e).expect("texture");
                 let rest = t
@@ -612,6 +645,9 @@ fn region_placements_against_the_scene() {
         *tex.entry(class).or_default() += 1;
     }
     println!("textures: {tex:?}");
+    for x in &tex_examples {
+        println!("    scene texture with no level of ours: {x}");
+    }
 
     // materials: the scene's lowered by lower-skate-pbr; each scene part's material against our primitive of the
     // same GTA geometry, by meaning
@@ -631,7 +667,8 @@ fn region_placements_against_the_scene() {
         }
     }
     let mut mat: BTreeMap<String, usize> = BTreeMap::new();
-    let mut mat_examples: Vec<String> = Vec::new();
+    let mut mat_examples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut mat_effects: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for (e, _) in theirs.iter::<SkatePrototype>() {
         let sp_parts: &[primase_skate_scene::Part] = theirs.get::<SkateParts>(e).map_or(&[], |p| &p.0);
         let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
@@ -715,8 +752,9 @@ fn region_placements_against_the_scene() {
                     *mat.entry("parts equal".into()).or_default() += 1;
                 }
                 for k in diffs {
-                    if !mat.contains_key(&k) {
-                        mat_examples.push(format!("{k}: e.g. {name} {g:?}"));
+                    let ex = mat_examples.entry(k.clone()).or_default();
+                    if ex.len() < 6 {
+                        ex.push(format!("{name} {g:?}"));
                     }
                     *mat.entry(k).or_default() += 1;
                 }
@@ -817,12 +855,10 @@ fn region_placements_against_the_scene() {
                     tp.double_sided, ours_p.double_sided
                 ));
             }
-            // fading by vertex alpha: a COLOR_0 alpha below opaque (gta-tint's colour alone is opaque)
-            let faded = match op.streams.get(&primase_core::Semantic::Color(0)) {
-                Some(primase_core::Stream::U8x4(c)) => c.iter().any(|c| c[3] < 255),
-                Some(primase_core::Stream::U16x4(c)) => c.iter().any(|c| c[3] < 65535),
-                _ => false,
-            };
+            // fading by vertex alpha: a COLOR_0 alpha below opaque (gta-tint's colour alone is opaque) at the scene
+            // part's vertices (that exporter splits a geometry into parts and gives a part vertex alpha only where
+            // one of its own vertices fades)
+            let faded = faded_at(&their_mesh.primitives[i], op);
             if sm.vertex_alpha.unwrap_or(false) != faded {
                 diffs.push(format!(
                     "vertex alpha: scene {}, ours {faded}",
@@ -844,9 +880,15 @@ fn region_placements_against_the_scene() {
                     .expect("shader");
                 let effect = primase_gta::shader_names::effect(s.name).unwrap_or("?");
                 for k in &diffs {
-                    if !mat.contains_key(k) {
-                        mat_examples.push(format!("{k}: e.g. {name} {g:?} ({effect} b{})", s.render_bucket));
+                    let ex = mat_examples.entry(k.clone()).or_default();
+                    if ex.len() < 6 {
+                        ex.push(format!("{name} {g:?} ({effect} b{})", s.render_bucket));
                     }
+                    *mat_effects
+                        .entry(k.clone())
+                        .or_default()
+                        .entry(effect.to_string())
+                        .or_default() += 1;
                 }
                 for k in diffs {
                     *mat.entry(k).or_default() += 1;
@@ -855,8 +897,11 @@ fn region_placements_against_the_scene() {
         }
     }
     println!("materials: {mat:?}");
-    for x in &mat_examples {
-        println!("    material: {x}");
+    for (k, x) in &mat_examples {
+        println!("    material: {k}: e.g. {}", x.join("; "));
+        if let Some(by) = mat_effects.get(k) {
+            println!("        by effect: {by:?}");
+        }
     }
     // named classes: choices of that exporter and its skate writer, not the game's
     let named = |k: &str| {
@@ -1025,6 +1070,45 @@ fn layered_diffs(
         (t, o) => diffs.push(format!("COLOR_1: scene {}, ours {}", t.is_some(), o.is_some())),
     }
     diffs
+}
+
+/// Whether `ours`' COLOR_0 alpha is below opaque at any vertex of `theirs`, matched by position (1 mm), else (a lifted
+/// decal) by UV0 (1e-4).
+fn faded_at(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> bool {
+    let alpha: Vec<bool> = match ours.streams.get(&primase_core::Semantic::Color(0)) {
+        Some(primase_core::Stream::U8x4(c)) => c.iter().map(|c| c[3] < 255).collect(),
+        Some(primase_core::Stream::U16x4(c)) => c.iter().map(|c| c[3] < 65535).collect(),
+        _ => return false,
+    };
+    let mm = |p: [f32; 3]| p.map(|v| (f64::from(v) * 1000.0).round() as i64);
+    let uv = |p: &primase_core::Primitive| match p.streams.get(&primase_core::Semantic::TexCoord(0)) {
+        Some(primase_core::Stream::F32x2(v)) => v
+            .iter()
+            .map(|t| t.map(|x| (f64::from(x) * 1e4).round() as i64))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let (Some(ours_pos), Some(their_pos)) = (ours.positions(), theirs.positions()) else {
+        return false;
+    };
+    let mut by_pos: BTreeMap<[i64; 3], bool> = BTreeMap::new();
+    let mut by_uv: BTreeMap<[i64; 2], bool> = BTreeMap::new();
+    for (k, (p, t)) in ours_pos
+        .iter()
+        .zip(uv(ours).into_iter().chain(std::iter::repeat([i64::MIN; 2])))
+        .enumerate()
+    {
+        *by_pos.entry(mm(*p)).or_default() |= alpha[k];
+        *by_uv.entry(t).or_default() |= alpha[k];
+    }
+    let their_uv = uv(theirs);
+    their_pos.iter().enumerate().any(|(k, p)| {
+        by_pos
+            .get(&mm(*p))
+            .or_else(|| their_uv.get(k).and_then(|t| by_uv.get(t)))
+            .copied()
+            .unwrap_or(false)
+    })
 }
 
 /// A triangle's UV0 corners (1e-4, sorted), as [`uv_tris`] keys it.
