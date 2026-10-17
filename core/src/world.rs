@@ -675,6 +675,35 @@ impl World {
         true
     }
 
+    /// Rebuild `e`'s mesh primitives: `f` returns the new primitives and, for each, the old primitive it comes from (a
+    /// source may repeat or be absent, as for [`World::remap_primitives`]). The new mesh and every per-primitive
+    /// component change together, or, when `f` fails or a component cannot follow, nothing does. The one way to change
+    /// a mesh's primitive list.
+    pub fn rebuild_primitives(
+        &mut self,
+        e: Entity,
+        f: impl FnOnce(&crate::Mesh) -> Result<(Vec<crate::Primitive>, Vec<usize>), String>,
+    ) -> Result<(), String> {
+        let mesh = self
+            .get::<crate::Mesh>(e)
+            .ok_or_else(|| format!("{e:?} has no core.mesh"))?;
+        let (primitives, from) = f(mesh)?;
+        if primitives.len() != from.len() {
+            return Err(format!(
+                "{} primitives with {} sources",
+                primitives.len(),
+                from.len()
+            ));
+        }
+        let old = mesh.primitives().len();
+        if let Some(&i) = from.iter().find(|&&i| i >= old) {
+            return Err(format!("source primitive {i} of {old}"));
+        }
+        self.remap_primitives(e, &from)?;
+        self.insert(e, crate::Mesh::new(primitives));
+        Ok(())
+    }
+
     pub fn is_alive(&self, e: Entity) -> bool {
         self.alive.contains(&e)
     }

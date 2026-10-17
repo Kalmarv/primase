@@ -397,9 +397,29 @@ impl Primitive {
 }
 
 /// A prototype's geometry in its own local space.
+///
+/// Its primitive list changes only through [`crate::World::rebuild_primitives`], which keeps every per-primitive
+/// component (material variants, dialect provenance) in step: a mesh is built whole ([`Mesh::new`]), read
+/// ([`Mesh::primitives`]) and edited primitive by primitive in place ([`Mesh::primitives_mut`], a slice: neither the
+/// count nor the order can change).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Mesh {
     pub primitives: Vec<Primitive>,
+}
+impl Mesh {
+    pub fn new(primitives: Vec<Primitive>) -> Self {
+        Mesh { primitives }
+    }
+    pub fn primitives(&self) -> &[Primitive] {
+        &self.primitives
+    }
+    /// The primitives, each editable in place.
+    pub fn primitives_mut(&mut self) -> &mut [Primitive] {
+        &mut self.primitives
+    }
+    pub fn into_primitives(self) -> Vec<Primitive> {
+        self.primitives
+    }
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
