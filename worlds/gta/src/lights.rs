@@ -9,8 +9,8 @@
 //! - kind: point; spot with cones from the record's inner and outer angles (degrees; the outer at most 89.5°);
 //!   capsule as a point (its length left out: approximated, counted);
 //! - colour: the sRGB bytes in linear light;
-//! - intensity: candela = intensity x 25 / (4 pi^2), the earlier exporter's calibration (its light energy scale 25
-//!   through the skate lights' watts policy), not measured: approximated;
+//! - intensity: the record's own intensity, as candela (core's unit): GTA states no unit for it, so reading it as
+//!   candela is approximated; a target that needs another scale applies it in its own pass;
 //! - range: falloff times the placement's scale (at least 0.5 m);
 //! - shadows unknown.
 //!
@@ -59,9 +59,6 @@ impl LowerGtaLights {
     }
 }
 
-/// GTA's intensity to candela (see the module documentation).
-const CANDELA_PER_INTENSITY: f64 = 25.0 / (4.0 * std::f64::consts::PI * std::f64::consts::PI);
-
 fn linear(c: u8) -> f32 {
     primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
 }
@@ -92,8 +89,8 @@ impl Pass for LowerGtaLights {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "intensity in candela by the earlier exporter's calibration (x 25 / 4 pi^2); capsules as points; a fragment's \
-         lights at their model-space position (bone poses not applied)"
+        "GTA's light intensity read as candela (it states no unit); capsules as points; a fragment's lights at their \
+         model-space position (bone poses not applied)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut made = Vec::new();
@@ -166,7 +163,7 @@ impl Pass for LowerGtaLights {
                 let light = Light {
                     kind,
                     color: l.colour.map(linear),
-                    intensity: (f64::from(l.intensity.max(0.0)) * CANDELA_PER_INTENSITY) as f32,
+                    intensity: l.intensity.max(0.0),
                     range: Some((l.falloff * scale).max(0.5)),
                     cast_shadows: None,
                 };
