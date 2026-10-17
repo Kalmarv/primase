@@ -20,14 +20,14 @@ use primase_skate_scene::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 
-const DEFAULT_PIPELINE: &str =
-    "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals";
+const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, bake-nonrigid";
 
 fn registry() -> PassRegistry {
     let mut reg = PassRegistry::new();
     primase_gltf::register(&mut reg);
     primase_skate_scene::lower::register(&mut reg);
     reg.register("select-lod", primase_core::select_lod);
+    primase_meshops::register(&mut reg);
     reg.register("drop-optional", primase_core::drop_optional);
     reg.register("load-textures", |o| {
         let mut p = LoadTextures::default();

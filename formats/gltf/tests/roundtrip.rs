@@ -1,6 +1,6 @@
 //! Writer gates: write the synthetic world, read the GLB back with our strict reader, compare everything with the
-//! world (geometry bit for bit, transforms bit for bit, baked shear against independent properties, materials,
-//! textures, extras, report counts); determinism; the Khronos validator when `PRIMASE_GLTF_VALIDATOR` is set.
+//! world (geometry bit for bit, transforms bit for bit, baked mirrors and shears against independent properties,
+//! materials, textures, extras, report counts); a non-rigid placement refused; determinism; the Khronos validator when `PRIMASE_GLTF_VALIDATOR` is set.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -75,14 +75,30 @@ fn round_trip_geometry_and_transforms() {
         gltf.read_mesh(i).unwrap();
     }
 
-    // Regular and mirrored: the transform exactly, the prototype's mesh shared, geometry bit-exact.
+    // Regular: the transform exactly, the prototype's mesh, geometry bit-exact.
     let regular = node_by_source(doc, "plac:0").unwrap();
-    let mirrored = node_by_source(doc, "plac:1").unwrap();
     assert_eq!(bits(&f32s(&regular["matrix"])), bits(&matrix_of(&b, b.regular)));
-    assert_eq!(bits(&f32s(&mirrored["matrix"])), bits(&matrix_of(&b, b.mirrored)));
-    assert_eq!(regular["mesh"], mirrored["mesh"]);
     assert_eq!(regular["name"], "rich placed");
-    assert_eq!(mirrored["name"], "rich");
+    // Mirrored (baked by bake-nonrigid in the fixture): the authored transform without its mirror, M F with F = x
+    // negated, drawing the prototype's mirror twin, which holds F of its geometry.
+    let mirrored = node_by_source(doc, "plac:1").unwrap();
+    let mut authored = b.authored[&b.mirrored];
+    authored.cols[0] = authored.cols[0].map(|x| -x);
+    assert_eq!(
+        b.world.get::<primase_core::Transform>(b.mirrored),
+        Some(&authored)
+    );
+    // the fixture's mirror is x negated alone, so M F is the identity: no transform on the node
+    assert_eq!(authored, primase_core::Transform::IDENTITY);
+    assert!(mirrored.get("matrix").is_none() && mirrored.get("translation").is_none());
+    assert_ne!(regular["mesh"], mirrored["mesh"]);
+    assert_eq!(mirrored["name"], "rich.mirrored");
+    let twin = gltf
+        .read_mesh(mirrored["mesh"].as_u64().unwrap() as usize)
+        .unwrap();
+    assert_eq!(twin.name.as_deref(), Some("rich.mirrored"));
+    let f = [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]];
+    check_baked(&twin.to_mesh(), rich, f, true);
     let m = gltf
         .read_mesh(regular["mesh"].as_u64().unwrap() as usize)
         .unwrap();
@@ -121,11 +137,12 @@ fn round_trip_geometry_and_transforms() {
     );
     assert_eq!(arr(doc, "materials")[mat_v]["alphaMode"], "BLEND");
 
-    // Sheared: baked, translation on the node.
+    // Sheared (baked by bake-nonrigid): only the translation on the node, drawing a copy with the authored 3x3 part
+    // applied.
     for (src, entity, mirrored) in [("plac:2", b.sheared, false), ("plac:3", b.sheared_mirrored, true)] {
         let node = node_by_source(doc, src).unwrap();
         assert!(node.get("matrix").is_none());
-        let tr = b.world.get::<primase_core::Transform>(entity).unwrap().cols;
+        let tr = b.authored[&entity].cols;
         match node.get("translation") {
             Some(t) => assert_eq!(bits(&f32s(t)), bits(&tr[3])),
             None => assert_eq!(tr[3], [0.0; 3]),
@@ -191,23 +208,38 @@ fn round_trip_geometry_and_transforms() {
     assert_eq!(f32s(&soup["translation"]), [100.0, 0.0, -50.0]);
 
     assert_eq!(report.placements, 8, "{report}");
-    assert_eq!(report.placements_mirrored, 1);
-    assert_eq!(report.placements_sheared_baked, 2);
     assert_eq!(report.placements_degenerate_skipped, 1);
     assert_eq!(report.placements_without_mesh, 1);
     assert_eq!(report.prototypes_unplaced, 1);
-    assert_eq!(report.meshes, 7, "rich, rich.v1, 2 baked, big, rail, terrain");
+    assert_eq!(
+        report.meshes, 8,
+        "rich, rich.v1, the mirror twin, 2 sheared copies, big, rail, terrain"
+    );
     assert_eq!(
         report.streams_skipped,
         BTreeMap::from([("JOINTS_0".to_owned(), 1)])
     );
     assert_eq!(
-        report.primitives_without_material, 5,
-        "rich's third primitive in 4 meshes, the rail"
+        report.primitives_without_material, 6,
+        "rich's third primitive in 5 meshes, the rail"
     );
     assert_eq!(report.primitives_texcoords_zero_filled, 1);
-    assert_eq!(report.triangles, 4 * 3 * 2 + 70_002 / 3 + 3 + 2);
+    assert_eq!(report.triangles, 5 * 3 * 2 + 70_002 / 3 + 3 + 2);
     println!("{report}");
+}
+
+#[test]
+fn a_non_rigid_placement_is_refused() {
+    let b = build(&scratch("nonrigid"));
+    for (e, kind) in [(b.mirrored, "mirrored"), (b.sheared, "sheared")] {
+        let mut w = b.world.clone();
+        w.insert(e, b.authored[&e]);
+        let err = write(&w, &options(&b)).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("a {kind} transform")) && err.contains("bake-nonrigid"),
+            "{err}"
+        );
+    }
 }
 
 /// The baked mesh of a sheared placement against properties that hold for any correct bake: positions are `L p`
@@ -456,7 +488,21 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
         .filter(|n| n.get("extensions").is_none())
         .collect();
     let names: Vec<&str> = roots.iter().map(|n| n["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["rich", "big", "rail", "terrain"]);
+    // the mirror twin and the sheared placements' copies bake-nonrigid made are prototypes of their own
+    let (s1, s2) = (b.sheared.index(), b.sheared_mirrored.index());
+    let copies = [format!("rich.baked.e{s1}"), format!("rich.baked.e{s2}")];
+    assert_eq!(
+        names,
+        [
+            "rich",
+            "big",
+            "rail",
+            "terrain",
+            "rich.mirrored",
+            &copies[0],
+            &copies[1]
+        ]
+    );
     for r in &roots {
         assert!(r.get("mesh").is_none());
         assert_eq!(r["extras"]["primase.collection"], r["name"]);
@@ -469,8 +515,8 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
             |i| &arr(doc, "nodes")[i.as_u64().unwrap() as usize]["extras"]["primase"]["core.source"]["value"],
         )
         .collect();
-    assert_eq!(rich_children, ["plac:0", "plac:1", "plac:2", "plac:3", "plac:5"]);
-    assert_eq!(report.group_nodes, 4);
+    assert_eq!(rich_children, ["plac:0", "plac:5"]);
+    assert_eq!(report.group_nodes, 7);
 
     let mut o = options(&b);
     o.group_by = GroupBy::Tile;

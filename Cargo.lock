@@ -878,6 +878,7 @@ dependencies = [
  "bytemuck",
  "primase-core",
  "primase-image",
+ "primase-meshops",
  "primase-skate-scene",
  "primase-testdata",
  "serde_json",

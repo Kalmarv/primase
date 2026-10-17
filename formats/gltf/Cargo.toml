@@ -17,6 +17,7 @@ sha2.workspace = true
 bytemuck.workspace = true
 
 [dev-dependencies]
+primase-meshops.workspace = true
 primase-testdata.workspace = true
 primase-skate-scene.workspace = true
 

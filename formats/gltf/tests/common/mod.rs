@@ -165,10 +165,13 @@ pub struct Built {
     pub degenerate: Entity,
     pub variant1: Entity,
     pub no_mesh: Entity,
+    /// The transforms the mirrored and sheared placements were authored with: `build` runs `bake-nonrigid`, as every
+    /// pipeline does before a writer, so the world holds their rigid remainders and baked geometry.
+    pub authored: std::collections::BTreeMap<Entity, Transform>,
 }
 
 /// The synthetic world: PNG and DDS texture files under `dir`, three kinds of material, four prototypes and
-/// placements of every transform kind.
+/// placements of every transform kind, the mirrored and sheared ones baked by `bake-nonrigid`.
 pub fn build(dir: &Path) -> Built {
     std::fs::create_dir_all(dir.join("textures")).unwrap();
     std::fs::write(
@@ -466,6 +469,23 @@ pub fn build(dir: &Path) -> Built {
         },
     );
 
+    let authored = [mirrored, sheared, sheared_mirrored]
+        .map(|e| (e, *w.get::<Transform>(e).unwrap()))
+        .into_iter()
+        .collect();
+    let log = primase_meshops::bake_nonrigid(&mut w);
+    assert_eq!(
+        log.counts.get("mirrored transforms made rigid"),
+        Some(&1),
+        "{:?}",
+        log.counts
+    );
+    assert_eq!(
+        log.counts.get("sheared transforms made rigid"),
+        Some(&2),
+        "{:?}",
+        log.counts
+    );
     Built {
         world: w,
         dir: dir.to_owned(),
@@ -489,5 +509,6 @@ pub fn build(dir: &Path) -> Built {
         degenerate,
         variant1,
         no_mesh,
+        authored,
     }
 }

@@ -4,12 +4,10 @@
 //! - **Prototypes** (entities with a [`Mesh`]) become glTF meshes shared by every placement that uses them with the
 //!   same resolved materials; a prototype placed with several [`MaterialVariants`] gets one mesh per distinct
 //!   material list, all of them sharing the same accessors.
-//! - **Placements** ([`Instance`] + [`Transform`]) become nodes. Regular and mirrored transforms are written as the
-//!   node's matrix, exactly (glTF allows a negative determinant and flips the winding itself). A **sheared**
-//!   transform has no TRS decomposition, which glTF requires of node matrices, so its linear part is **baked** into a
-//!   mesh of its own (positions, normals by the inverse transpose, tangents; winding reversed when it also
-//!   mirrors), computed in f64 and rounded once to f32; the node keeps only the translation. Degenerate transforms
-//!   are skipped and counted. An entity with a `Mesh` and a `Transform` but no `Instance` is placed as itself.
+//! - **Placements** ([`Instance`] + [`Transform`]) become nodes, the transform written as the node's matrix exactly.
+//!   Transforms must be rigid ([`TransformKind::Regular`]): a mirrored or sheared one is refused, since
+//!   `bake-nonrigid` (primase-meshops) moves an authored mirror or shear into geometry before writing. Degenerate
+//!   transforms are skipped and counted. An entity with a `Mesh` and a `Transform` but no `Instance` is placed as itself.
 //! - **Collections**: Blender 4.3's importer makes no collections (every object goes to the active collection;
 //!   nodes without a mesh become empties, children are parented). So groups are empty nodes, one per prototype or
 //!   per tile ([`GroupBy`]), with `"primase.collection": <name>` in their extras so a Blender-side script can turn
@@ -129,9 +127,6 @@ pub struct WriteReport {
     pub image_bytes: u64,
     /// Placements written as nodes (including self-placed and unplaced-at-origin ones).
     pub placements: u64,
-    pub placements_mirrored: u64,
-    /// Sheared placements baked into their own mesh.
-    pub placements_sheared_baked: u64,
     pub placements_degenerate_skipped: u64,
     /// Placements whose prototype has no `core.mesh` (nothing to draw).
     pub placements_without_mesh: u64,
@@ -176,11 +171,8 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(
             f,
-            "placements {}: mirrored {}, sheared baked {}, degenerate skipped {}, without mesh {}; prototypes \
-             unplaced {}",
+            "placements {}: degenerate skipped {}, without mesh {}; prototypes unplaced {}",
             self.placements,
-            self.placements_mirrored,
-            self.placements_sheared_baked,
             self.placements_degenerate_skipped,
             self.placements_without_mesh,
             self.prototypes_unplaced
@@ -635,20 +627,22 @@ impl Writer<'_> {
                 self.report.placements_degenerate_skipped += 1;
                 return Ok(None);
             }
-            TransformKind::Sheared => {
-                let mesh_index = self.baked_mesh(place, &from, mesh, &materials, kind)?;
-                node.insert("mesh".into(), json!(mesh_index));
-                if c[3] != [0.0; 3] {
-                    node.insert("translation".into(), f32s_value(&c[3]));
-                }
-                self.report.placements_sheared_baked += 1;
+            TransformKind::Mirrored | TransformKind::Sheared => {
+                return Err(Error::World {
+                    entity: place.entity,
+                    detail: format!(
+                        "a {} transform: the writer takes rigid placements; run bake-nonrigid first",
+                        if kind == TransformKind::Mirrored {
+                            "mirrored"
+                        } else {
+                            "sheared"
+                        }
+                    ),
+                });
             }
-            TransformKind::Regular | TransformKind::Mirrored => {
+            TransformKind::Regular => {
                 let mesh_index = self.shared_mesh(&from, mesh, materials, place.variant)?;
                 node.insert("mesh".into(), json!(mesh_index));
-                if kind == TransformKind::Mirrored {
-                    self.report.placements_mirrored += 1;
-                }
                 if c[..3] == Transform::IDENTITY.cols[..3] {
                     if c[3] != [0.0; 3] {
                         node.insert("translation".into(), f32s_value(&c[3]));
@@ -749,63 +743,6 @@ impl Writer<'_> {
         let index = self.push_mesh(from.extras_of, name, &accessors, &key.1, mesh)?;
         self.mesh_index.insert(key, index);
         Ok(index)
-    }
-
-    /// A mesh of the prototype with a sheared placement's linear part applied to its vertices.
-    fn baked_mesh(
-        &mut self,
-        place: &Place,
-        from: &MeshFrom,
-        mesh: &Mesh,
-        materials: &[Option<Entity>],
-        kind: TransformKind,
-    ) -> Result<usize> {
-        debug_assert_eq!(kind, TransformKind::Sheared);
-        let shared = self.prototype_accessors(from.src, mesh)?;
-        let lin = Linear::new(&place.transform);
-        let mut baked = Vec::with_capacity(mesh.primitives.len());
-        for (prim, acc) in mesh.primitives.iter().zip(&shared) {
-            let mut acc = acc.clone();
-            for (name, index) in &mut acc.attributes {
-                *index = match (name.as_str(), &prim.streams) {
-                    ("POSITION", s) => match s.get(&Semantic::Position) {
-                        Some(Stream::F32x3(p)) => {
-                            let p: Vec<[f32; 3]> = p.iter().map(|&v| lin.point(v)).collect();
-                            self.positions_accessor(&p)
-                        }
-                        _ => unreachable!("validated by prototype_accessors"),
-                    },
-                    ("NORMAL", s) => match s.get(&Semantic::Normal) {
-                        Some(Stream::F32x3(n)) => {
-                            let n: Vec<[f32; 3]> = n.iter().map(|&v| lin.normal(v)).collect();
-                            self.float_accessor(bytemuck::cast_slice(&n), n.len(), "VEC3", None)
-                        }
-                        _ => unreachable!("validated by prototype_accessors"),
-                    },
-                    ("TANGENT", s) => match s.get(&Semantic::Tangent) {
-                        Some(Stream::F32x4(t)) => {
-                            let t: Vec<[f32; 4]> = t.iter().map(|&v| lin.tangent(v)).collect();
-                            self.float_accessor(bytemuck::cast_slice(&t), t.len(), "VEC4", None)
-                        }
-                        _ => unreachable!("validated by prototype_accessors"),
-                    },
-                    _ => *index,
-                };
-            }
-            if lin.det < 0.0 && prim.topology == Topology::Triangles {
-                let mut idx: Vec<u32> = match &prim.indices {
-                    Some(i) => i.clone(),
-                    None => (0..prim.vertex_count() as u32).collect(),
-                };
-                for t in idx.as_chunks_mut::<3>().0 {
-                    t.swap(1, 2);
-                }
-                acc.indices = Some(self.indices_accessor(&idx, prim.vertex_count()));
-            }
-            baked.push(acc);
-        }
-        let name = format!("{}.baked.e{}", from.name, place.entity.index());
-        self.push_mesh(from.extras_of, name, &baked, materials, mesh)
     }
 
     fn push_mesh(
@@ -1525,64 +1462,6 @@ fn check_png(b: &[u8]) -> std::result::Result<(), String> {
         return Err(format!("PNG of {w}x{h}"));
     }
     Ok(())
-}
-
-/// A transform's linear part, for baking sheared placements. f64 throughout, rounded to f32 once per value.
-struct Linear {
-    c: [[f64; 3]; 3],
-    /// Columns of the inverse transpose times the determinant: `[c1 x c2, c2 x c0, c0 x c1]`.
-    cof: [[f64; 3]; 3],
-    det: f64,
-}
-
-impl Linear {
-    fn new(t: &Transform) -> Linear {
-        let c: [[f64; 3]; 3] = std::array::from_fn(|i| t.cols[i].map(f64::from));
-        let cof = [cross(c[1], c[2]), cross(c[2], c[0]), cross(c[0], c[1])];
-        let det = dot(c[0], cof[0]);
-        Linear { c, cof, det }
-    }
-
-    fn apply(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
-        std::array::from_fn(|r| m[0][r] * v[0] + m[1][r] * v[1] + m[2][r] * v[2])
-    }
-
-    fn point(&self, p: [f32; 3]) -> [f32; 3] {
-        Self::apply(&self.c, p.map(f64::from)).map(|x| x as f32)
-    }
-
-    /// `M^-T n`, normalized (the determinant's sign kept so normals stay outward under a mirror).
-    fn normal(&self, n: [f32; 3]) -> [f32; 3] {
-        let v = Self::apply(&self.cof, n.map(f64::from)).map(|x| x * self.det.signum());
-        normalized(v)
-    }
-
-    /// `M t` normalized; w (the bitangent sign) flips under a mirror.
-    fn tangent(&self, t: [f32; 4]) -> [f32; 4] {
-        let v = normalized(Self::apply(&self.c, [t[0], t[1], t[2]].map(f64::from)));
-        let w = if self.det < 0.0 { -t[3] } else { t[3] };
-        [v[0], v[1], v[2], w]
-    }
-}
-
-fn normalized(v: [f64; 3]) -> [f32; 3] {
-    let len = dot(v, v).sqrt();
-    if len == 0.0 {
-        return [0.0; 3];
-    }
-    v.map(|x| (x / len) as f32)
-}
-
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 /// A light's `KHR_lights_punctual` object without its name (defaults left out: white, intensity 1, no range; a
