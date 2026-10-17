@@ -150,7 +150,9 @@ PRIMASE_ALLOW_LIVE = '0'
 Resolution is the named environment variable if set (even if empty), then its entry in the `PRIMASE_DATA` file,
 then no value. There is no implicit file search. An environment override does not read the file. Partial files are
 normal: absent names print `SKIPPED` for path-based gates, including the configured file name, and return `None`.
-A resolved input path that does not exist also keeps the existing `SKIPPED`/`None` behavior. A named configuration
+A name that is set but whose path does not exist fails the gate: a configured input that is gone is never a skip.
+With `PRIMASE_REQUIRE_REAL_DATA = "1"` (environment or the `PRIMASE_DATA` file) an unset name fails too; merge gates
+for a crate run its real-data tests with it, so a skipped real-data test counts as a failure. A named configuration
 file that cannot be read, is invalid TOML, or contains any non-string value is a configuration error that fails the
 gate with the requested name and file path. Use TOML literal strings (single quotes) for Windows backslashes.
 

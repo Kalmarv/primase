@@ -83,28 +83,34 @@ pub fn real_data_value(name: &str) -> Option<OsString> {
     try_real_data_value(name).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// Resolve an existing real-data path. Missing names and nonexistent data paths print
-/// SKIPPED and return None. A named but unreadable or invalid configuration fails the gate.
-/// See CONTRIBUTING.md for the names and the optional local TOML file.
+/// Resolve an existing real-data path. A name that is not set prints SKIPPED and returns None,
+/// unless `PRIMASE_REQUIRE_REAL_DATA` is "1" (environment or the PRIMASE_DATA file), in which case
+/// a missing name fails the gate. A name that is set but whose path does not exist always fails
+/// the gate: a configured input that is gone is never a skip. A named but unreadable or invalid
+/// configuration also fails. See CONTRIBUTING.md for the names and the optional local TOML file.
 #[track_caller]
 pub fn real_data(name: &str) -> Option<PathBuf> {
     let found = lookup(name).unwrap_or_else(|error| panic!("{error}"));
-    existing_path(name, found)
+    let require = lookup(REQUIRE)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .value
+        .is_some_and(|value| value == "1");
+    existing_path(name, found, require).unwrap_or_else(|message| panic!("{message}"))
 }
 
-fn existing_path(name: &str, found: Lookup) -> Option<PathBuf> {
+const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
+
+fn existing_path(name: &str, found: Lookup, require: bool) -> Result<Option<PathBuf>, String> {
     match found.value.map(PathBuf::from) {
-        Some(path) if path.exists() => Some(path),
-        Some(path) => {
-            eprintln!("SKIPPED: {name}={} does not exist", path.display());
-            None
-        }
+        Some(path) if path.exists() => Ok(Some(path)),
+        Some(path) => Err(format!("{name}={} is set but does not exist", path.display())),
+        None if require => Err(format!("{name} is not set and {REQUIRE}=1")),
         None => {
             match found.file {
                 Some(file) => eprintln!("SKIPPED: {name} not set and not in {}", file.display()),
                 None => eprintln!("SKIPPED: {name} not set"),
             }
-            None
+            Ok(None)
         }
     }
 }
@@ -143,7 +149,7 @@ mod tests {
         let missing = from_file(text, "PRIMASE_OTHER").unwrap();
         assert!(missing.value.is_none());
         assert_eq!(missing.file, Some(PathBuf::from("local-data.toml")));
-        assert!(existing_path("PRIMASE_OTHER", missing).is_none());
+        assert_eq!(existing_path("PRIMASE_OTHER", missing, false), Ok(None));
         let absent = resolve("PRIMASE_TEST", |_| None, |_| panic!("no implicit config")).unwrap();
         assert!(absent.value.is_none());
         assert!(absent.file.is_none());
@@ -187,28 +193,41 @@ mod tests {
     fn path_existence_policy_is_independent_of_value_source() {
         let directory = std::env::temp_dir();
         for file in [None, Some(PathBuf::from("local-data.toml"))] {
-            assert_eq!(
-                existing_path(
-                    "PRIMASE_TEST",
-                    Lookup {
-                        value: Some(directory.clone().into_os_string()),
-                        file: file.clone()
-                    }
-                ),
-                Some(directory.clone())
-            );
-            // An existing regular file cannot have a child path.
-            let missing = std::env::current_exe().unwrap().join("nonexistent-child");
-            assert!(
-                existing_path(
+            for require in [false, true] {
+                assert_eq!(
+                    existing_path(
+                        "PRIMASE_TEST",
+                        Lookup {
+                            value: Some(directory.clone().into_os_string()),
+                            file: file.clone()
+                        },
+                        require
+                    ),
+                    Ok(Some(directory.clone()))
+                );
+                // An existing regular file cannot have a child path.
+                let missing = std::env::current_exe().unwrap().join("nonexistent-child");
+                let error = existing_path(
                     "PRIMASE_TEST",
                     Lookup {
                         value: Some(missing.into_os_string()),
-                        file
-                    }
+                        file: file.clone(),
+                    },
+                    require,
                 )
-                .is_none()
-            );
+                .unwrap_err();
+                assert!(error.contains("PRIMASE_TEST") && error.contains("does not exist"));
+            }
         }
+    }
+    #[test]
+    fn an_unset_name_skips_unless_real_data_is_required() {
+        let unset = || Lookup {
+            value: None,
+            file: None,
+        };
+        assert_eq!(existing_path("PRIMASE_TEST", unset(), false), Ok(None));
+        let error = existing_path("PRIMASE_TEST", unset(), true).unwrap_err();
+        assert!(error.contains("PRIMASE_TEST") && error.contains("PRIMASE_REQUIRE_REAL_DATA"));
     }
 }
