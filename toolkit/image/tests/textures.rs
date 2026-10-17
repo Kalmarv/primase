@@ -238,3 +238,15 @@ fn rebuild_blue_rounding_matches_reference_for_every_xy_pair() {
         "65536 XY pairs, {projected} projected, maximum encoded direction change {maximum_angle} degrees"
     );
 }
+
+/// A world without textures runs normalize-normals: nothing to convert, not a missing input.
+#[test]
+fn normalize_normals_runs_on_a_world_without_textures() {
+    let mut registry = pass::PassRegistry::new();
+    registry.register("normalize-normals", |_| Ok(Box::new(NormalizeNormals)));
+    let pipeline = registry.parse("normalize-normals").unwrap();
+    let manager = pass::PassManager::new(registry);
+    let mut w = World::new();
+    let mut report = pass::RunReport::default();
+    manager.run(&mut w, &pipeline, &mut report).unwrap();
+}

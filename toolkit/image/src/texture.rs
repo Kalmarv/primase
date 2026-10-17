@@ -223,9 +223,7 @@ impl Pass for NormalizeNormals {
     fn name(&self) -> &'static str {
         "normalize-normals"
     }
-    fn requires(&self) -> &[&'static str] {
-        &["core.texture"]
-    }
+    // no `requires`: a world without textures (a part of a conversion with none) has nothing to convert
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
     }
