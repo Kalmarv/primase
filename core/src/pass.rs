@@ -14,7 +14,8 @@
 //!   depth of what it provides and of what it requires that the world lacks), ties broken by priority, then by name.
 //!   No greedy rewriting and no rollback: the plan is an explicit textual pipeline (`load-meshes,
 //!   lower-skate-pbr{normals=rebuild}`), recorded in the [`RunReport`], and runs as written.
-//! - The verifier ([`Component::verify`] on every component plus the manager's world [`Validator`]s) runs after the
+//! - The verifier ([`Component::verify`] on every component, [`crate::Resource::verify`] on every resource, plus the
+//!   manager's world [`Validator`]s) runs after the
 //!   reader, after every pass and before the writer; its errors name the step and the entity.
 //!
 //! Everything is deterministic: passes, names and candidates are walked in sorted order.
@@ -506,6 +507,15 @@ impl PassManager {
                 message,
             })
             .collect();
+        failures.extend(
+            w.verify_resources()
+                .into_iter()
+                .map(|(r, message)| VerifyFailure {
+                    check: r.to_owned(),
+                    entity: None,
+                    message,
+                }),
+        );
         for v in &self.validators {
             failures.extend(v.check(w).into_iter().map(|(entity, message)| VerifyFailure {
                 check: v.name().to_owned(),

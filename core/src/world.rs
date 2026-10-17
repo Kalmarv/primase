@@ -67,7 +67,7 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     fn references(&self, _out: &mut Vec<Entity>) {}
 }
 
-/// A world resource: one value per world (the frame, a game's archive index, a run's options).
+/// A world resource: one value per world (the frame, a game's archive index, a run's options, the environment).
 pub trait Resource: Any + Clone + fmt::Debug + Send + Sync {
     const NAME: &'static str;
     const VERSION: u32 = 1;
@@ -76,6 +76,20 @@ pub trait Resource: Any + Clone + fmt::Debug + Send + Sync {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         Ok(None)
     }
+
+    /// The resource's own invariants in `w`; as [`Component::verify`], run by the pass manager's verifier.
+    fn verify(&self, _w: &World) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// The entities this resource refers to, appended to `out`. A resource holding entity references must declare
+    /// every one of them and implement [`Resource::retain_references`].
+    fn references(&self, _out: &mut Vec<Entity>) {}
+
+    /// Forget every reference to an entity `keep` refuses (set it to "none"). The world calls it whenever entities
+    /// leave it ([`World::despawn`], [`World::retain`], [`World::move_components`]) and on the copy a
+    /// [`World::subset`] or [`World::split_off`] part gets, so a resource never refers to an entity its world lacks.
+    fn retain_references(&mut self, _keep: &dyn Fn(Entity) -> bool) {}
 }
 
 /// One component (or resource) as JSON, with the schema version it is written with.
@@ -288,6 +302,9 @@ trait AnyResource: Any + Send + Sync {
     fn name(&self) -> &'static str;
     fn version(&self) -> u32;
     fn json(&self) -> Result<Option<serde_json::Value>, JsonError>;
+    fn verify(&self, w: &World) -> Result<(), String>;
+    fn references(&self, out: &mut Vec<Entity>);
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool);
     fn clone_box(&self) -> Box<dyn AnyResource>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -302,6 +319,22 @@ impl<T: Resource> AnyResource for T {
     }
     fn json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         self.to_json()
+    }
+    fn verify(&self, w: &World) -> Result<(), String> {
+        Resource::verify(self, w)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        Resource::references(self, out);
+    }
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        Resource::retain_references(self, keep);
+        let mut left = Vec::new();
+        Resource::references(self, &mut left);
+        debug_assert!(
+            left.into_iter().all(keep),
+            "{} keeps a reference it was told to forget",
+            T::NAME
+        );
     }
     fn clone_box(&self) -> Box<dyn AnyResource> {
         Box::new(self.clone())
@@ -363,6 +396,25 @@ impl World {
         Self::default()
     }
 
+    /// Every resource, copied, with its references to entities outside `alive` forgotten.
+    fn resources_for(&self, alive: &BTreeSet<Entity>) -> HashMap<TypeId, Box<dyn AnyResource>> {
+        self.resources
+            .iter()
+            .map(|(k, v)| {
+                let mut r = v.clone_box();
+                r.retain_references(&|e| alive.contains(&e));
+                (*k, r)
+            })
+            .collect()
+    }
+
+    /// Every resource forgets its references to the entities `gone` accepts.
+    fn forget_in_resources(&mut self, gone: impl Fn(Entity) -> bool) {
+        for r in self.resources.values_mut() {
+            r.retain_references(&|e| !gone(e));
+        }
+    }
+
     pub fn spawn(&mut self) -> Entity {
         let e = Entity(self.next);
         self.next = self.next.checked_add(1).expect("more than u32::MAX entities");
@@ -393,6 +445,7 @@ impl World {
         for col in self.opaque.values_mut() {
             col.remove(&e);
         }
+        self.forget_in_resources(|x| x == e);
         true
     }
 
@@ -412,6 +465,7 @@ impl World {
             }
         }
         self.alive.remove(&from);
+        self.forget_in_resources(|x| x == from);
         true
     }
 
@@ -460,11 +514,14 @@ impl World {
     }
 
     /// A world of only `keep`'s entities (those alive) with all their components, typed and opaque, under the
-    /// same ids, and every resource. Entities spawned in it get ids above every id of `self`.
+    /// same ids, and every resource (forgetting its references to entities left out). Entities spawned in it get ids
+    /// above every id of `self`.
     pub fn subset(&self, keep: &BTreeSet<Entity>) -> World {
+        let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
         World {
             next: self.next,
-            alive: self.alive.intersection(keep).copied().collect(),
+            resources: self.resources_for(&alive),
+            alive,
             columns: self
                 .columns
                 .iter()
@@ -476,14 +533,14 @@ impl World {
                 .iter()
                 .map(|(k, v)| (k.clone(), subset_of(v, keep)))
                 .collect(),
-            resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
             opaque_resources: self.opaque_resources.clone(),
         }
     }
 
     /// Move `keep`'s entities (those alive), with all their components, out into a world of their own: what
-    /// [`World::subset`] copies, without copying. The part has every resource (copied) and spawns ids above every
-    /// id of `self`, as a subset does; [`World::absorb`] moves it back.
+    /// [`World::subset`] copies, without copying. The part has every resource (copied, as a subset's) and spawns ids
+    /// above every id of `self`, as a subset does; [`World::absorb`] moves it back. This world's resources keep their
+    /// references to the moved entities, which come back with the part.
     pub fn split_off(&mut self, keep: &BTreeSet<Entity>) -> World {
         let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
         for e in &alive {
@@ -508,8 +565,8 @@ impl World {
                     (k.clone(), part)
                 })
                 .collect(),
+            resources: self.resources_for(&alive),
             alive,
-            resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
             opaque_resources: self.opaque_resources.clone(),
         }
     }
@@ -544,6 +601,7 @@ impl World {
     /// Despawn every entity outside `keep`: in place, what [`World::subset`] copies.
     pub fn retain(&mut self, keep: &BTreeSet<Entity>) {
         self.alive.retain(|e| keep.contains(e));
+        self.forget_in_resources(|e| !keep.contains(&e));
         for c in self.columns.values_mut() {
             c.retain(keep);
         }
@@ -692,6 +750,25 @@ impl World {
             .flat_map(|c| c.verify(self).into_iter().map(|(e, m)| (c.name(), e, m)))
             .collect();
         out.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        out
+    }
+
+    /// Every typed resource's [`Resource::verify`], and that each entity it refers to is alive: (resource name,
+    /// message) for each failure, by name.
+    pub fn verify_resources(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        let mut refs = Vec::new();
+        for r in self.resources.values() {
+            if let Err(m) = r.verify(self) {
+                out.push((r.name(), m));
+            }
+            refs.clear();
+            r.references(&mut refs);
+            if let Some(e) = refs.iter().find(|e| !self.alive.contains(e)) {
+                out.push((r.name(), format!("refers to {e:?}, which is not alive")));
+            }
+        }
+        out.sort();
         out
     }
 

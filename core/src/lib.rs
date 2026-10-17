@@ -3,6 +3,8 @@
 //! See `docs/DESIGN.md` §3-4 and CONTRIBUTING.md for the conventions every crate follows.
 
 pub mod components;
+mod environment;
+pub use environment::Environment;
 pub mod frame;
 pub mod gate;
 pub mod json;
