@@ -38,7 +38,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 
 | Field | Type and meaning |
 |---|---|
-| `format_version` | String `major.minor`, currently `"2.0"` |
+| `format_version` | String `major.minor`: `"2.1"` when the index has an `environment`, else `"2.0"` |
 | `version` | Legacy integer `1` |
 | `tile_size` | Positive number, nominal ground-cell side in metres |
 | `empty_tile_policy` | `"omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload"` |
@@ -46,6 +46,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `placements_without_mesh` | Count of placements without loaded render geometry |
 | `tiles` | Array of tile objects; deterministic order by `(col, row)`, then `cell` as `(level, x, y)` |
 | `images` | Array of `{file, bytes}`: every image file the tiles reference, ordered by `file` |
+| `environment` (optional, 2.1) | Object `{sun}`: the scene's environment as the source names it, scene-wide (see [Environment](#environment)); absent when the source names none |
 
 | Tile field | Type and meaning |
 |---|---|
@@ -198,6 +199,23 @@ local -Z. Light values follow `KHR_lights_punctual`: linear RGB `color`,
 unlimited), spot cone angles in radians from the axis. Bounds include light
 positions. Lights are illumination sources only; consumers may render a subset
 (for example the nearest few) and must ignore them without breaking geometry.
+
+## Environment
+
+2.1 adds the optional index field `environment`. Its `sun` is the directional light the source names as its sun,
+carried once for the whole scene in the index, not as a light node of a tile, so a consumer has it whichever tiles are
+loaded:
+
+| Field | Type and meaning |
+|---|---|
+| `name` | String, the light's name |
+| `color` | Three numbers, linear RGB (as `KHR_lights_punctual`) |
+| `intensity` | Number, illuminance in lux (as a `KHR_lights_punctual` directional light) |
+| `direction` | Three numbers, a unit vector in the index's world frame (metres, +X east, +Y up, -Z north): the way the light travels, its transform's local -Z |
+| `cast` (optional) | `"on"` or `"off"`: whether it casts shadows, as the shadow extras; absent: unknown |
+
+Other directional lights stay scene lights of the tile whose cell holds their position. An index without an
+environment is 2.0, unchanged. Ambient light, sky and fog are not carried.
 
 ## Shadows
 

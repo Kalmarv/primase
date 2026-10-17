@@ -153,6 +153,28 @@ pub struct Index {
     pub images: Vec<ImageFile>,
     pub skipped_degenerate: u64,
     pub placements_without_mesh: u64,
+    /// The scene's environment (`core.environment`), indexed scene-wide; absent when the scene names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<IndexEnvironment>,
+}
+/// The index's `environment`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct IndexEnvironment {
+    pub sun: IndexSun,
+}
+/// The scene's sun: a directional light, in the index's world frame.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct IndexSun {
+    pub name: String,
+    /// Linear RGB.
+    pub color: [f32; 3],
+    /// Lux.
+    pub intensity: f32,
+    /// Unit vector, the way the light travels (its transform's local -Z).
+    pub direction: [f32; 3],
+    /// `"on"` or `"off"`; absent: unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cast: Option<&'static str>,
 }
 #[derive(Clone, Debug)]
 pub struct TileSet {
@@ -332,6 +354,7 @@ pub struct TilePlan {
     options: Options,
     items: Vec<ViewerItem>,
     lights: Vec<PlannedLight>,
+    sun: Option<IndexSun>,
     placements: BTreeSet<Entity>,
     cells: BTreeMap<(i32, i32), Cell>,
     unsplit: Vec<Placement>,
@@ -362,6 +385,12 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
     if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
         return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
     }
+    if let Some((name, detail)) = world.verify_resources().into_iter().next() {
+        return Err(Error::Invalid(format!("{name}: {detail}")));
+    }
+    let sun_entity = world
+        .resource::<primase_core::Environment>()
+        .and_then(|env| env.sun);
     let mut placements = BTreeMap::new();
     for (e, i) in world.iter::<Instance>() {
         let t = world
@@ -406,6 +435,7 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         },
         items: options.viewer_items.clone(),
         lights: Vec::new(),
+        sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         placements: placements.keys().copied().collect(),
         cells: BTreeMap::new(),
         unsplit: Vec::new(),
@@ -446,6 +476,9 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         plan.cells.entry(key).or_default().items.push(i);
     }
     for (e, light) in world.iter::<primase_core::Light>() {
+        if Some(e) == sun_entity {
+            continue;
+        }
         let transform = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
         let key = coordinate(transform.cols[3].map(f64::from), options.tile_size)?;
         plan.cells.entry(key).or_default().lights.push(plan.lights.len());
@@ -458,6 +491,29 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         });
     }
     Ok(plan)
+}
+/// The index's record of the sun `e` (a directional `core.light`, checked by the resource's verify).
+fn sun(world: &World, e: Entity) -> Result<IndexSun> {
+    let light = world
+        .get::<primase_core::Light>(e)
+        .ok_or_else(|| Error::Invalid(format!("sun {e:?} has no core.light")))?;
+    let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+    let z = t.cols[2].map(f64::from);
+    let len = (z[0] * z[0] + z[1] * z[1] + z[2] * z[2]).sqrt();
+    if !(len.is_finite() && len > 0.0) {
+        return Err(Error::Invalid(format!(
+            "sun {e:?}: its transform has no direction"
+        )));
+    }
+    Ok(IndexSun {
+        name: world
+            .get::<Name>(e)
+            .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
+        color: light.color,
+        intensity: light.intensity,
+        direction: z.map(|v| (-v / len) as f32),
+        cast: light.cast_shadows.map(|c| if c { "on" } else { "off" }),
+    })
 }
 impl TilePlan {
     /// Placements filed by triangle centre that still wait for [`TilePlan::split`].
@@ -535,6 +591,8 @@ impl TilePlan {
         let Some(content) = self.cells.get(&cell).cloned() else {
             return Err(Error::Invalid(format!("cell {cell:?} is not planned")));
         };
+        // the environment is the index's, scene-wide: a cell does not carry it
+        world.remove_resource::<primase_core::Environment>();
         let closure = world.closure(self.roots(cell));
         if closure.len() != world.entity_count() {
             return Err(Error::Invalid(format!(
@@ -1058,7 +1116,8 @@ impl TilePlan {
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row, t.cell));
         Ok(Index {
-            format_version: "2.0",
+            // 2.1 adds the optional environment; an index without one stays 2.0
+            format_version: if self.sun.is_some() { "2.1" } else { "2.0" },
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
             tile_size: self.options.tile_size,
@@ -1070,6 +1129,7 @@ impl TilePlan {
                 .collect(),
             skipped_degenerate: self.skipped,
             placements_without_mesh: self.without_mesh,
+            environment: self.sun.map(|sun| IndexEnvironment { sun }),
         })
     }
 }
@@ -1104,6 +1164,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             images: Vec::new(),
             skipped_degenerate: 0,
             placements_without_mesh: 0,
+            environment: None,
         },
         files: BTreeMap::new(),
         images: BTreeMap::new(),

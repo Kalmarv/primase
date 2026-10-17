@@ -1142,3 +1142,90 @@ fn layered_materials_survive_tiling_and_compression() {
         );
     }
 }
+#[test]
+fn the_sun_is_indexed_scene_wide_and_bumps_the_minor_version() {
+    use primase_core::{Environment, Light, LightKind, Name};
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(proto, mesh());
+    let placement = w.spawn();
+    w.insert(
+        placement,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    w.insert(placement, Transform::IDENTITY);
+    let sun = w.spawn();
+    w.insert(
+        sun,
+        Light {
+            kind: LightKind::Directional,
+            color: [1.0, 0.9, 0.8],
+            intensity: 4.0,
+            range: None,
+            cast_shadows: Some(true),
+        },
+    );
+    w.insert(sun, Name("Sun".into()));
+    // pointing down and north: local -Z is (0, -1, -1) / sqrt 2; placed far from the geometry, in a cell of its own
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    w.insert(
+        sun,
+        Transform {
+            cols: [[1., 0., 0.], [0., h, -h], [0., h, h], [900.0, 50.0, -900.0]],
+        },
+    );
+    // without the environment the sun is a light of the cell holding its position
+    let set = write(&w, &plain()).unwrap();
+    assert_eq!(set.index.format_version, "2.0");
+    assert_eq!(set.index.tiles.iter().map(|t| t.lights).sum::<u64>(), 1);
+    assert!(
+        serde_json::to_value(&set.index)
+            .unwrap()
+            .get("environment")
+            .is_none()
+    );
+    w.insert_resource(Environment { sun: Some(sun) });
+    let set = write(&w, &plain()).unwrap();
+    assert_eq!(set.index.format_version, "2.1");
+    let index = serde_json::to_value(&set.index).unwrap();
+    let s = &index["environment"]["sun"];
+    assert_eq!(
+        (&s["name"], &s["intensity"], &s["cast"]),
+        (
+            &serde_json::json!("Sun"),
+            &serde_json::json!(4.0),
+            &serde_json::json!("on")
+        )
+    );
+    let d: Vec<f64> = s["direction"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    assert_eq!(d[0], 0.0);
+    assert!(
+        (d[1] + 0.5f64.sqrt()).abs() < 1e-6 && (d[2] + 0.5f64.sqrt()).abs() < 1e-6,
+        "{d:?}"
+    );
+    assert!((d.iter().map(|v| v * v).sum::<f64>() - 1.0).abs() < 1e-6);
+    // not also a tile light, and no tile carries the environment
+    assert_eq!(set.index.tiles.len(), 1);
+    assert_eq!(set.index.tiles[0].lights, 0);
+    for bytes in set.files.values() {
+        let doc: serde_json::Value =
+            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        assert!(!doc.to_string().contains("core.environment"));
+        assert!(
+            doc.get("extensions")
+                .is_none_or(|x| x.get("KHR_lights_punctual").is_none())
+        );
+    }
+    // a sun that is not a directional light is refused
+    w.get_mut::<Light>(sun).unwrap().kind = LightKind::Point;
+    let err = write(&w, &plain()).unwrap_err().to_string();
+    assert!(err.contains("not a directional core.light"), "{err}");
+}
