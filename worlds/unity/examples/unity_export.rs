@@ -83,6 +83,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(primase_unity::lower_collision::LowerUnityCollision),
         Box::new(primase_unity::lower_lights::LowerUnityLights),
         Box::new(primase_image::NormalizeNormals),
+        // last before the writers: authored mirrors and shears into geometry, so every placement is rigid
+        Box::new(primase_meshops::BakeNonrigid),
     ];
     let mut lowering = Vec::new();
     for p in passes {
