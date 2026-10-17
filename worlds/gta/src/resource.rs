@@ -104,6 +104,22 @@ impl Resource {
     }
 }
 
+impl Resource {
+    /// The `N` bytes at `pointer`, as an array: a record of known size, read by constant offsets.
+    pub fn block<const N: usize>(&self, pointer: u64) -> Result<&[u8; N]> {
+        <&[u8; N]>::try_from(self.at(pointer, N)?)
+            .map_err(|_| invalid("RSC7", pointer, format!("a block of {N} bytes")))
+    }
+
+    /// `n` records of `each` bytes at `pointer`, their total size checked.
+    pub fn records(&self, pointer: u64, n: usize, each: usize) -> Result<&[u8]> {
+        let len = n
+            .checked_mul(each)
+            .ok_or_else(|| invalid("RSC7", pointer, format!("{n} records of {each} bytes")))?;
+        self.at(pointer, len)
+    }
+}
+
 /// The 16-byte RSC7 header of a loose resource file: version, system flags, graphics flags.
 pub fn header(stored: &[u8]) -> Result<(u32, PageFlags, PageFlags)> {
     let h = stored

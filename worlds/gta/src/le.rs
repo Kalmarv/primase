@@ -1,5 +1,10 @@
 //! Little-endian reads at a byte offset, checked: bytes a file says are there and are not (an offset past the slice,
 //! an offset that does not fit) are the format's error, never a panic.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::{Result, invalid};
 
 /// The `N` bytes at `o`.
@@ -120,6 +125,11 @@ pub(crate) fn u16x8_of(c: &[u8; 16]) -> [u16; 8] {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     /// Reads inside the slice return its bytes; one byte past, or an offset that does not fit, is an error.
     #[test]

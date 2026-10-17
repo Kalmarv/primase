@@ -9,6 +9,11 @@
 //! 0xB8, vertex count 0xD0, polygon count 0xD4, materials 0xF0, polygon material indices 0x118, material count 0x120;
 //! a BVH's tree at 0x130 (not read). Composite (kind 10): children 0x70, their transforms 0x78 (4 columns of a vec3 and
 //! a word, 64 bytes), bounding boxes 0x88, flags 0x90 and 0x98 (8 bytes each), child count 0xA0.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::le;
 use crate::resource::Resource;
 use crate::{Result, invalid};
@@ -117,7 +122,7 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
     if depth > 8 {
         return Err(err(p, "composites nest deeper than 8"));
     }
-    let h = r.at(p, 0x70)?;
+    let h = r.block::<0x70>(p)?;
     let header = BoundHeader {
         kind: h[0x10],
         sphere_radius: le::f32(h, 0x14)?,
@@ -140,37 +145,33 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
 }
 
 fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
-    let g = r.at(p, 0x130)?;
+    let g = r.block::<0x130>(p)?;
     let (n_vertices, n_polygons) = (le::u32(g, 0xD0)? as usize, le::u32(g, 0xD4)? as usize);
     let quantum = le::vec3(g, 0x90)?;
     let centre = le::vec3(g, 0xA0)?;
     let vertices = if n_vertices == 0 {
         Vec::new()
     } else {
-        let v = r.at(le::u64(g, 0xB0)?, 6 * n_vertices)?;
+        let v = r.records(le::u64(g, 0xB0)?, n_vertices, 6)?;
+        let ([qx, qy, qz], [cx, cy, cz]) = (quantum, centre);
         v.as_chunks::<6>()
             .0
             .iter()
             .map(|c| {
-                let q = le::u16x3_of(c).map(|x| f32::from(x as i16));
-                std::array::from_fn(|i| q[i] * quantum[i] + centre[i])
+                let [x, y, z] = le::u16x3_of(c).map(|x| f32::from(x as i16));
+                [x * qx + cx, y * qy + cy, z * qz + cz]
             })
             .collect()
     };
     let vertex_colours = match le::u64(g, 0xB8)? {
         0 => None,
-        vp if n_vertices > 0 => Some(
-            r.at(vp, 4 * n_vertices)?
-                .chunks(4)
-                .map(|c| [c[0], c[1], c[2], c[3]])
-                .collect(),
-        ),
+        vp if n_vertices > 0 => Some(r.records(vp, n_vertices, 4)?.as_chunks::<4>().0.to_vec()),
         _ => None,
     };
     let polygons = if n_polygons == 0 {
         Vec::new()
     } else {
-        let d = r.at(le::u64(g, 0x88)?, 16 * n_polygons)?;
+        let d = r.records(le::u64(g, 0x88)?, n_polygons, 16)?;
         d.as_chunks::<16>()
             .0
             .iter()
@@ -182,7 +183,7 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let materials = match le::u64(g, 0xF0)? {
         0 => Vec::new(),
         mp => r
-            .at(mp, 8 * n_materials)?
+            .records(mp, n_materials, 8)?
             .as_chunks::<8>()
             .0
             .iter()
@@ -259,47 +260,56 @@ fn polygon(c: &[u8; 16], n_vertices: usize) -> std::result::Result<Polygon, Stri
 }
 
 fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
-    let h = r.at(p, 0xB0)?;
+    let h = r.block::<0xB0>(p)?;
     let n = usize::from(le::u16(h, 0xA0)?);
     if n == 0 {
         return Ok(Vec::new());
     }
-    let children = r.at(le::u64(h, 0x70)?, 8 * n)?;
-    let transforms = r.at(le::u64(h, 0x78)?, 64 * n)?;
-    let flags = match le::u64(h, 0x90)? {
-        0 => None,
-        f => Some(r.at(f, 8 * n)?),
+    let children = r.records(le::u64(h, 0x70)?, n, 8)?.as_chunks::<8>().0;
+    let transforms = r.records(le::u64(h, 0x78)?, n, 64)?.as_chunks::<64>().0;
+    // per child its flag words, as stored, or none
+    let words = |pointer: u64| -> Result<Vec<[u32; 2]>> {
+        Ok(match pointer {
+            0 => vec![[0, 0]; n],
+            f => r
+                .records(f, n, 8)?
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(le::u32x2_of)
+                .collect(),
+        })
     };
-    let flags_2 = match le::u64(h, 0x98)? {
-        0 => None,
-        f => Some(r.at(f, 8 * n)?),
-    };
+    let flags = words(le::u64(h, 0x90)?)?;
+    let flags_2 = words(le::u64(h, 0x98)?)?;
     let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let cp = le::u64(children, 8 * i)?;
+    for (((child, t), &flags), &flags_2) in children.iter().zip(transforms).zip(&flags).zip(&flags_2) {
+        let cp = u64::from_le_bytes(*child);
         if cp == 0 {
             continue;
         }
-        let t = &transforms[64 * i..64 * i + 64];
-        let word = |f: Option<&[u8]>| -> Result<[u32; 2]> {
-            f.map_or(Ok([0, 0]), |f| Ok([le::u32(f, 8 * i)?, le::u32(f, 8 * i + 4)?]))
+        let ([c0, c1, c2, c3], _) = t.as_chunks::<16>() else {
+            return Err(err(p, "a child transform of other than four columns"));
         };
         out.push(Child {
-            bound: Box::new(read(r, cp, depth + 1)?),
-            transform: [
-                le::vec3(t, 0)?,
-                le::vec3(t, 16)?,
-                le::vec3(t, 32)?,
-                le::vec3(t, 48)?,
-            ],
-            flags: word(flags)?,
-            flags_2: word(flags_2)?,
+            bound: Box::new(read(r, cp, depth.saturating_add(1))?),
+            transform: [c0, c1, c2, c3].map(|c| {
+                let [x, y, z, _] = le::vec4_of(c);
+                [x, y, z]
+            }),
+            flags,
+            flags_2,
         });
     }
     Ok(out)
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod polygon_tests {
     use super::*;
 
