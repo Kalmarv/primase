@@ -87,7 +87,8 @@ a list).
 A component type carries a schema version. Unknown components are carried through serialisation untouched unless their
 kind is marked **required**, in which case a reader that doesn't know it fails (glTF's `extensionsRequired`).
 **Lower and keep:** a lowering may keep its source component next to its result (the bake keeps
-`fromsoft.layered_material` beside `pbr.material`), and a writer marks the source `Carry` (glTF: `extras.primase`).
+`fromsoft.layered_material` beside `pbr.material`), and a writer marks the source `LowerAndCarry`: carried (glTF:
+`extras.primase`), and lowered too, so the planner runs the lowering.
 
 **On disk:** the world serialises as "core + named component tables" (v2, `docs/SPEC.md`): a small manifest plus
 little-endian binary tables, generalising the skate-scene v1 interchange format (a JSON manifest, binary tables and
@@ -103,13 +104,17 @@ reader's output, after every pass, before the writer; always on). A pass that de
 list every component a dropped placement or a discarded form may carry; a name a surviving entity lost must still be in
 `removes`, and the planner counts on `removes` alone. A writer declares a **target** (MLIR's conversion
 target): per component name `Legal`, `Dynamic` (a per-value check: texture format, TRS-decomposable transform),
-`Illegal` or `Carry` (written through untouched), and what it does with unknown names. Full conversion requires every
-name Legal or Carry; partial conversion keeps unknown names per the target.
+`Illegal`, `Carry` (written through untouched) or `LowerAndCarry` (carried, and lowered as well), and what it does
+with unknown names. Full conversion requires every name Legal or carried; partial conversion keeps unknown names per
+the target. A pass also declares what it **legalizes** (lowers), by default what it removes: a pass whose removals are
+side effects (the file link of a texture it rewrote) or that keeps its source says what it lowers.
 
 Pipelines are explicit lists in a text form (`load-texture-files,bake-fromsoft-layered{size=1024}`). The planner
-builds one by MLIR's legalization depth: for each illegal name, the pass chain of least depth that removes it with legal
-outputs (ties by priority, then name), plus the producers of what those passes require, ordered by data dependencies and
-checked by simulating the declarations. It fails naming the missing link ("no pass lowers `fromsoft.layered_material` to
+builds one by MLIR's legalization depth: for each name to lower, the pass chain of least depth that lowers it with
+legal outputs (ties by priority, then name), plus the producers of what those passes require, ordered by data
+dependencies (providers, then passes that modify a name, then those that read it as it is) and checked by simulating the
+declarations. An illegal name must be removed, a dynamic name's failing values removed or rewritten in place, a
+`LowerAndCarry` name only lowered. Passes are made with the caller's options, by pass name. It fails naming the missing link ("no pass lowers `fromsoft.layered_material` to
 anything `stl` accepts"). The chosen pipeline is printed and recorded in the report, so every run is reproducible as an
 explicit pipeline. No fixed-point rewriting, no backtracking.
 

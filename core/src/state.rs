@@ -461,7 +461,7 @@ impl Pass for ResolveState {
 mod tests {
     use super::*;
     use crate::components::Name;
-    use crate::pass::{Mode, PassManager, PassRegistry, Target};
+    use crate::pass::{Mode, PassManager, PassOptions, PassRegistry, Target};
 
     fn axis(w: &mut World, key: &str) -> Entity {
         let e = w.spawn();
@@ -955,7 +955,9 @@ mod tests {
         run(&mut c.w, "");
         let before = dump(&c.w);
         let m = PassManager::new(registry());
-        let report = m.convert(&mut c.w, &skate(), Mode::Partial).unwrap();
+        let report = m
+            .convert(&mut c.w, &skate(), Mode::Partial, &PassOptions::new())
+            .unwrap();
         assert_eq!(report.pipeline, "");
         assert_eq!(dump(&c.w), before);
     }
@@ -964,7 +966,9 @@ mod tests {
     fn planner_resolves_before_a_writer_that_cannot_toggle() {
         let mut c = castle();
         let m = PassManager::new(registry());
-        let report = m.convert(&mut c.w, &skate(), Mode::Partial).unwrap();
+        let report = m
+            .convert(&mut c.w, &skate(), Mode::Partial, &PassOptions::new())
+            .unwrap();
         assert_eq!(report.pipeline, "resolve-state");
         assert_eq!(names(&c.w), ["m003312_3802"]);
     }
