@@ -7,6 +7,7 @@ pub mod lights;
 pub mod normals;
 pub mod objects;
 pub mod pbr;
+mod shadows;
 pub mod states;
 mod textures;
 use crate::{
@@ -296,6 +297,10 @@ pub struct Report {
     pub blocker_placements: usize,
     pub blocker_triangles: usize,
     pub rigid_skinning: primase_core::pass::PassLog,
+    /// Selected placements' source shadow controls mapped to `core.shadows`
+    /// (units: placements). Counts contradictory cast/only controls left unknown
+    /// and names the renderer-specific controls kept only as `fromsoft.shadow_flags`.
+    pub shadows: primase_core::pass::PassLog,
     pub extras: extras::Report,
     pub collision: collision::Report,
     pub object_collision: objects::Report,
@@ -538,6 +543,7 @@ pub fn read_area(
         );
         world.insert(e, transform);
         world.insert(e, Source(format!("{area}:{name}")));
+        shadows::attach(&mut world, e, part.shadows, &mut report.shadows);
         world.insert(e, SkatePlacement::default());
         report.placements += 1;
     }

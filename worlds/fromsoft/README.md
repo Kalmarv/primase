@@ -162,6 +162,22 @@ independent reader. Its `entities.jsonl` has one record per map file: `path` and
 `entity_id` and `entity_group_ids` (8 integers). The gate (`tests/msb_entities.rs`) requires the same part count and
 names and exact values.
 
+Each part's six MSB shadow controls are kept raw in `msb::ShadowFlags`.
+`PRIMASE_FROMSOFT_SHADOW_ORACLE` is a folder holding one original `map.msb` and
+an independent reader's `shadows.json` (`sha256`, ordered `parts` with `name`
+and the six fields). The gate compares every part exactly. With
+`PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6` and `PRIMASE_FROMSOFT_SCENE` (for its
+region) it also reads area m11_01 and joins every selected placement by name.
+
+Area assembly attaches a selected placement's raw controls as
+`fromsoft.shadow_flags` and their common meaning as `core.shadows`. Cast and
+shadow-only map to Off, On and Only; receive maps directly; explicit false
+stays false. Shadow-only with casting disabled is contradictory: casting is
+left unknown and counted. Point-light, static and cascade controls have no
+common meaning and remain raw, with a named approximation. `Report::shadows`
+counts selected placements, not the source map's parts. State conditions keep
+or remove the placement with both sets of controls.
+
 ## Event scripts
 
 `emevd::Script::read` reads a decompressed `.emevd` in Sekiro's layout (64-bit little-endian, version 0xCD): events,
