@@ -1,8 +1,9 @@
 //! GTA V Enhanced shader effect names and parameter names, to name the hashes the files store.
 //!
-//! From CodeWalker's gen9 shader conversion list (MIT licence): names are facts, checked by census (every effect name
-//! hash and texture and constant buffer parameter name hash in the install's drawables resolves). A few parameters the list itself knows
-//! only by hash appear as `hash_XXXXXXXX`.
+//! The names are GTA V's own shader identifiers, taken from the gen9 shader conversion list of CodeWalker (by dexyfex,
+//! <https://github.com/dexyfex/CodeWalker>), with thanks. They are checked by census: every effect name hash and every
+//! texture and constant buffer parameter name hash in the install's drawables resolves. A few parameters that the list
+//! itself knows only by hash appear as `hash_XXXXXXXX`.
 
 /// Effect names (`normal_spec`, `decal_tnt`, ...).
 pub const EFFECTS: &[&str] = &[
