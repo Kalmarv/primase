@@ -205,15 +205,18 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     })
 }
 
-/// One 16-byte polygon; its kind is the low 3 bits of its first byte.
+/// One 16-byte polygon; its kind is the low 3 bits of its first byte. A triangle's vertex words carry a flag in their
+/// top bit (taken off); a sphere's, capsule's and cylinder's vertex indices are whole 16-bit words (as CodeWalker
+/// reads them).
 fn polygon(c: &[u8], n_vertices: usize) -> std::result::Result<Polygon, String> {
-    let v = |o: usize| -> std::result::Result<u16, String> {
-        let i = le::u16(c, o) & 0x7FFF;
+    let vertex = |i: u16| -> std::result::Result<u16, String> {
         if usize::from(i) >= n_vertices {
             return Err(format!("vertex {i} of {n_vertices}"));
         }
         Ok(i)
     };
+    let v = |o: usize| vertex(le::u16(c, o) & 0x7FFF);
+    let whole = |o: usize| vertex(le::u16(c, o));
     Ok(match c[0] & 7 {
         0 => {
             let raw = [4, 6, 8].map(|o| le::u16(c, o));
@@ -225,11 +228,11 @@ fn polygon(c: &[u8], n_vertices: usize) -> std::result::Result<Polygon, String> 
             }
         }
         1 => Polygon::Sphere {
-            centre: v(2)?,
+            centre: whole(2)?,
             radius: le::f32(c, 4),
         },
         2 => Polygon::Capsule {
-            ends: [v(2)?, v(8)?],
+            ends: [whole(2)?, whole(8)?],
             radius: le::f32(c, 4),
         },
         3 => {
@@ -240,7 +243,7 @@ fn polygon(c: &[u8], n_vertices: usize) -> std::result::Result<Polygon, String> 
             Polygon::Box { corners }
         }
         4 => Polygon::Cylinder {
-            ends: [v(2)?, v(8)?],
+            ends: [whole(2)?, whole(8)?],
             radius: le::f32(c, 4),
         },
         k => return Err(format!("polygon kind {k}")),
@@ -279,4 +282,53 @@ fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod polygon_tests {
+    use super::*;
+
+    /// A 16-byte polygon record: kind in the first byte, then 16-bit words at the given offsets, a radius at 4.
+    fn record(kind: u8, words: &[(usize, u16)], radius: f32) -> [u8; 16] {
+        let mut c = [0u8; 16];
+        c[4..8].copy_from_slice(&radius.to_le_bytes());
+        for &(o, w) in words {
+            c[o..o + 2].copy_from_slice(&w.to_le_bytes());
+        }
+        c[0] = (c[0] & !7) | kind;
+        c
+    }
+
+    /// Worked by hand: a sphere whose centre word is 0x8000 is vertex 32,768 of a bound with 32,769 vertices and no
+    /// vertex of a bound with one (not vertex 0); a capsule's and cylinder's ends likewise; a triangle's vertex word
+    /// 0x8001 is vertex 1 with its flag set.
+    #[test]
+    fn only_triangle_vertex_words_carry_a_flag() {
+        let sphere = record(1, &[(2, 0x8000)], 0.5);
+        assert_eq!(
+            polygon(&sphere, 32_769),
+            Ok(Polygon::Sphere {
+                centre: 0x8000,
+                radius: 0.5
+            })
+        );
+        assert!(polygon(&sphere, 1).is_err());
+        for kind in [2, 4] {
+            let tube = record(kind, &[(2, 0x8000), (8, 3)], 0.25);
+            assert!(polygon(&tube, 4).is_err(), "kind {kind}");
+            let ends = match polygon(&tube, 32_769).unwrap() {
+                Polygon::Capsule { ends, .. } | Polygon::Cylinder { ends, .. } => ends,
+                p => panic!("kind {kind}: {p:?}"),
+            };
+            assert_eq!(ends, [0x8000, 3]);
+        }
+        let triangle = record(0, &[(4, 0x8001), (6, 2), (8, 3)], 0.0);
+        match polygon(&triangle, 4).unwrap() {
+            Polygon::Triangle { vertices, flags, .. } => {
+                assert_eq!(vertices, [1, 2, 3]);
+                assert_eq!(flags, [1, 0, 0]);
+            }
+            p => panic!("{p:?}"),
+        }
+    }
 }
