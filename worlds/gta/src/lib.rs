@@ -34,6 +34,7 @@ pub mod shader_names;
 pub mod terrain;
 pub mod texture;
 pub mod tint;
+pub mod water;
 pub mod winding;
 mod xml;
 
@@ -92,6 +93,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     });
     reg.register("lower-gta-collision", |o| {
         Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
+    });
+    reg.register("lower-gta-water", |o| {
+        Ok(Box::new(water::LowerGtaWater::from_options(o)?))
     });
     reg.register("lower-gta-lights", |o| {
         Ok(Box::new(lights::LowerGtaLights::from_options(o)?))

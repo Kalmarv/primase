@@ -120,6 +120,7 @@ pub fn select_passes(s: &Selection) -> String {
     p.push_str(&format!(
         ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
+    p.push_str(&format!(", lower-gta-water{{x0={x0},y0={y0},x1={x1},y1={y1}}}"));
     p
 }
 
@@ -167,6 +168,8 @@ pub struct ReadReport {
     pub region: RegionReport,
     pub lights: LightsReport,
     pub bounds: BoundsReport,
+    /// The level's water data: water, calming and wave quads.
+    pub water: [usize; 3],
 }
 
 /// An opened install: its key material, both maps' archive sets and the texture dictionary parents of the map assets
@@ -220,8 +223,9 @@ impl GtaSource {
 
     /// Every entity of both maps within `reach` metres of `region` (`[x0, y0, x1, y1]`), with its prototype and its
     /// map-state and hour conditions ([`crate::region::read_region`]), each prototype's light records
-    /// ([`crate::assets::attach_lights`]) and the static map bounds meeting the region
-    /// ([`crate::collision::attach_map_bounds`]); no geometry or textures yet.
+    /// ([`crate::assets::attach_lights`]), the static map bounds meeting the region
+    /// ([`crate::collision::attach_map_bounds`]) and the level's water data ([`crate::water::read_water`], one
+    /// `gta.water` entity); no geometry or textures yet.
     pub fn read(&self, region: [f32; 4], reach: f32) -> Result<(World, ReadReport)> {
         let bounds_region = region;
         let (mut w, region) = read_region(
@@ -236,12 +240,17 @@ impl GtaSource {
         )?;
         let lights = attach_lights(&mut w, self.assets(), &self.keys)?;
         let bounds = attach_map_bounds(&mut w, self.assets(), &self.keys, bounds_region)?;
+        let water = crate::water::read_water(&self.assets().install, &self.keys)?;
+        let counts = [water.quads.len(), water.calming.len(), water.waves.len()];
+        let e = w.spawn();
+        w.insert(e, water);
         Ok((
             w,
             ReadReport {
                 region,
                 lights,
                 bounds,
+                water: counts,
             },
         ))
     }
@@ -269,7 +278,20 @@ pub const REACH: f32 = 600.0;
 /// A prototype's box before its geometry is loaded: its archetype's bounding box, in the core frame (metres, +Y up);
 /// `None` for an entity that is no GTA prototype.
 pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
-    let a = world.get::<GtaArchetype>(prototype)?;
+    let Some(a) = world.get::<GtaArchetype>(prototype) else {
+        // a prototype a pass made (a water surface): its mesh's box, already in the core frame
+        let mesh = world.get::<primase_core::Mesh>(prototype)?;
+        let mut b: Option<[[f64; 3]; 2]> = None;
+        for p in mesh.primitives.iter().filter_map(|p| p.positions()).flatten() {
+            let p = p.map(f64::from);
+            let [lo, hi] = b.get_or_insert([p, p]);
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        return b;
+    };
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)
     Some([[lo[0], lo[2], -hi[1]], [hi[0], hi[2], -lo[1]]])
