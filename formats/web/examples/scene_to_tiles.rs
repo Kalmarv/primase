@@ -7,8 +7,8 @@ use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Run
 use primase_core::{Entity, Instance, MeshFile, World};
 use primase_web::{Options, PIVOT_MARGIN};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain] [--camera <eye x,y,z>:<target x,y,z>]";
+use std::path::{Path, PathBuf};
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain] [--camera <eye x,y,z>:<target x,y,z>] [--cache <folder> [--cache-max-gib N] [--cache-verify]] (KTX2 encodings are kept in the cache folder, else in PRIMASE_CACHE when set, across runs)";
 
 /// `world`'s closure of `roots` with its meshes loaded, and (for rendering) its textures loaded and the materials
 /// lowered as the web writer requires.
@@ -56,6 +56,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     let mut max_priority: Option<u8> = None;
     let mut with_plain = true;
     let mut camera = None;
+    let (mut cache_dir, mut cache_max_gib, mut cache_verify) = (None::<PathBuf>, None::<u64>, false);
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -64,6 +65,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             "--no-budget" => budget = Some(None),
             // the plain comparison set is left out (a large scene's would not fit beside it)
             "--no-plain" => with_plain = false,
+            "--cache" => cache_dir = Some(args.next().ok_or(USAGE)?.into()),
+            "--cache-max-gib" => cache_max_gib = Some(args.next().ok_or(USAGE)?.parse()?),
+            "--cache-verify" => cache_verify = true,
             "--max-priority" => max_priority = Some(args.next().ok_or(USAGE)?.parse()?),
             // the index's starting view, world frame metres
             "--camera" => camera = Some(parse_camera(&args.next().ok_or(USAGE)?)?),
@@ -75,7 +79,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             _ => paths.push(arg),
         }
     }
-    if paths.len() != 2 || (!caps.is_empty() && !ktx2) {
+    if paths.len() != 2
+        || (!ktx2 && (!caps.is_empty() || cache_dir.is_some() || cache_max_gib.is_some() || cache_verify))
+    {
         return Err(USAGE.into());
     }
     let folder = Path::new(&paths[0]);
@@ -124,6 +130,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
                 .iter()
                 .map(|rule| texture_cap(rule))
                 .collect::<Result<_, _>>()?;
+            // --cache, else PRIMASE_CACHE when set and not empty, else no cache
+            let configured = cache_dir.or_else(|| {
+                std::env::var_os("PRIMASE_CACHE")
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+            });
+            if let Some(dir) = configured {
+                let max = cache_max_gib.map_or(primase_cache::DEFAULT_MAX_BYTES, |g| g << 30);
+                options.cache = Some(std::sync::Arc::new(primase_cache::Cache::open(&dir, max)?));
+                options.cache_verify = cache_verify;
+                println!("KTX2 cache: {} (cap {max} bytes)", dir.display());
+            }
         }
     }
     // viewer records: the writer takes the world's core.curve, core.marker and core.collision itself
@@ -214,6 +232,22 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         indexes.push(index);
     }
     support::write_entries(&proof.into_values().collect::<Vec<_>>(), output)?;
+    #[cfg(feature = "ktx2")]
+    if let Some(cache) = &sets[0].0.cache {
+        cache.trim()?;
+        let s = cache.stats();
+        println!(
+            "KTX2 cache: hits={} misses={} corrupt={} written={} ({} bytes) write_errors={} evicted={} ({} bytes)",
+            s.hits,
+            s.misses,
+            s.corrupt,
+            s.written,
+            s.written_bytes,
+            s.write_errors,
+            s.evicted,
+            s.evicted_bytes
+        );
+    }
     let index = &indexes[0];
     println!(
         "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={}{}",
