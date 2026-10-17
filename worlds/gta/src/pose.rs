@@ -3,8 +3,8 @@
 //! The reader keeps each primitive's pose as stored ([`GtaPoses`], rows in GTA's frame). The pass places the posed
 //! primitives' positions by the pose, turns their normals and tangents with it ([`Turn`]: as positions under a
 //! rotation, normals by the inverse transpose and tangents by the pose at their stored length otherwise, a mirror
-//! flipping the handedness; a pose with no inverse flattens the model, and its normals and tangents are left out), in
-//! GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with posing before it), and removes
+//! flipping the handedness and reversing the triangles; a pose with no inverse flattens the model, and its normals
+//! and tangents are left out), in GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with posing before it), and removes
 //! `gta.poses`. Every other GTA pass on meshes refuses a mesh still holding poses, so this one runs first.
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Mesh, Semantic, Stream, World};
@@ -26,7 +26,7 @@ pub enum Turn {
     /// A rotation (orthonormal, determinant 1): normals and tangents as positions, without the translation.
     Rigid,
     /// Any other invertible 3x3 part: normals by its inverse transpose (rows), tangents by it, both kept at their
-    /// stored length; a negative determinant (a mirror) flips the tangent's handedness.
+    /// stored length; a negative determinant (a mirror) flips the tangent's handedness and reverses the triangles.
     General {
         inverse_transpose: [[f64; 3]; 3],
         mirror: bool,
@@ -168,7 +168,22 @@ impl Pass for PoseFragments {
                 log.count("primitives posed", 1);
                 match t.turn {
                     Turn::Rigid => {}
-                    Turn::General { .. } => log.count("primitives posed by a pose that is not a rotation", 1),
+                    Turn::General { mirror, .. } => {
+                        log.count("primitives posed by a pose that is not a rotation", 1);
+                        if mirror {
+                            // a mirror turns every triangle over: reverse them so their fronts stay where they were
+                            let n = p.vertex_count() as u32;
+                            for tri in p
+                                .indices
+                                .get_or_insert_with(|| (0..n).collect())
+                                .as_chunks_mut::<3>()
+                                .0
+                            {
+                                tri.swap(1, 2);
+                            }
+                            log.count("primitives posed by a mirroring pose: triangles reversed", 1);
+                        }
+                    }
                     Turn::Singular => log.count(
                         "primitives posed flat (no inverse): normals and tangents left out",
                         1,
@@ -253,5 +268,74 @@ mod tests {
         assert_eq!(z.turn, Turn::Singular);
         assert_eq!(z.normal([0.0, 0.0, 1.0]), None);
         assert_eq!(z.tangent([1.0, 0.0, 0.0, 1.0]), None);
+    }
+
+    #[test]
+    fn a_mirroring_pose_keeps_fronts_facing_the_normals() {
+        use primase_core::{Primitive, Topology};
+        // a triangle facing +z in GTA's frame (counter-clockwise seen from above), its normals +z
+        let up = GTA.direction([0.0, 0.0, 1.0]);
+        let mut streams = std::collections::BTreeMap::new();
+        streams.insert(
+            Semantic::Position,
+            Stream::F32x3(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+                    .map(|p| GTA.point(p))
+                    .to_vec(),
+            ),
+        );
+        streams.insert(Semantic::Normal, Stream::F32x3(vec![up; 3]));
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(
+            e,
+            Mesh {
+                primitives: vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams,
+                    indices: Some(vec![0, 1, 2]),
+                    material: None,
+                }],
+            },
+        );
+        // mirrored in x: the triangle now lies the other way round, its normals still +z
+        w.insert(
+            e,
+            GtaPoses(vec![Some(pose([
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]))]),
+        );
+        let mut log = PassLog::default();
+        PoseFragments.run(&mut w, &mut log).expect("posed");
+        let p = &w.get::<Mesh>(e).expect("mesh").primitives[0];
+        assert_eq!(p.indices.as_deref(), Some(&[0, 2, 1][..]));
+        let Some(Stream::F32x3(v)) = p.streams.get(&Semantic::Position) else {
+            panic!("positions")
+        };
+        let Some(Stream::F32x3(n)) = p.streams.get(&Semantic::Normal) else {
+            panic!("normals")
+        };
+        let [a, b, c] = [0, 2, 1].map(|i| v[i]);
+        let (u, t) = (
+            [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+            [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+        );
+        let front = [
+            u[1] * t[2] - u[2] * t[1],
+            u[2] * t[0] - u[0] * t[2],
+            u[0] * t[1] - u[1] * t[0],
+        ];
+        assert!(
+            front[0] * n[0][0] + front[1] * n[0][1] + front[2] * n[0][2] > 0.0,
+            "{front:?} against {:?}",
+            n[0]
+        );
+        assert_eq!(
+            log.counts
+                .get("primitives posed by a mirroring pose: triangles reversed"),
+            Some(&1)
+        );
     }
 }
