@@ -12,6 +12,7 @@ primase-core.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
 primase-image.workspace = true
+primase-meshops.workspace = true
 primase-texcodec.workspace = true
 indexmap.workspace = true
 thiserror.workspace = true

@@ -889,6 +889,7 @@ dependencies = [
  "primase-gltf",
  "primase-hash",
  "primase-image",
+ "primase-meshops",
  "primase-skate-scene",
  "primase-testdata",
  "primase-texcodec",

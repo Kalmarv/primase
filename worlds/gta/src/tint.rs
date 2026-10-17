@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Component, Entity, Instance, JsonError, MaterialVariants, Mesh, Primitive, Semantic, Stream, Texture,
-    World,
+    Component, Entity, Instance, JsonError, MaterialVariants, Mesh, Semantic, Stream, Texture, World,
 };
+use primase_meshops::subset_primitive;
 use primase_texcodec::{Decoder, TexDecoder};
 use serde::Serialize;
 
@@ -46,7 +46,7 @@ impl Component for GtaTint {
     }
 }
 
-/// A decoded palette: width, height, RGBA8 rows top first.
+/// A decoded palette: width, height (both at least 1), RGBA8 rows top first.
 struct Palette {
     entity: Entity,
     width: u32,
@@ -55,14 +55,38 @@ struct Palette {
 }
 
 impl Palette {
+    /// The palette texture's first level, decoded; an error for a palette without texels.
+    fn decode(entity: Entity, t: &Texture) -> Result<Palette, String> {
+        let level = t
+            .levels
+            .first()
+            .ok_or_else(|| format!("palette {entity:?}: no levels"))?;
+        if t.width == 0 || t.height == 0 {
+            return Err(format!("palette {entity:?}: {} x {} texels", t.width, t.height));
+        }
+        let rgba = Decoder::default()
+            .decode_rgba8(t.format, t.width, t.height, level)
+            .map_err(|e| format!("palette: {e}"))?;
+        if rgba.len() as u64 != u64::from(t.width) * u64::from(t.height) * 4 {
+            return Err(format!("palette {entity:?}: decoded to {} bytes", rgba.len()));
+        }
+        Ok(Palette {
+            entity,
+            width: t.width,
+            height: t.height,
+            rgba,
+        })
+    }
+
     fn colour(&self, row: u32, column: u32) -> [u8; 3] {
-        let o = ((row.min(self.height - 1) * self.width + column) * 4) as usize;
+        let (row, column) = (row.min(self.height - 1) as usize, column as usize);
+        let o = (row * self.width as usize + column) * 4;
         [self.rgba[o], self.rgba[o + 1], self.rgba[o + 2]]
     }
 
     /// The column a vertex colour's blue byte selects: the shader samples at u = blue / 255.
     fn column(&self, blue: u8) -> u32 {
-        (u32::from(blue) * self.width / 255).min(self.width - 1)
+        (u64::from(blue) * u64::from(self.width) / 255).min(u64::from(self.width - 1)) as u32
     }
 }
 
@@ -102,21 +126,7 @@ impl Pass for GtaTintVariants {
                 continue;
             };
             let t = w.get::<Texture>(p).ok_or("palette is not a loaded texture")?;
-            let rgba = Decoder::default()
-                .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
-                .map_err(|e| format!("palette: {e}"))?;
-            palettes.insert(
-                m,
-                (
-                    Palette {
-                        entity: p,
-                        width: t.width,
-                        height: t.height,
-                        rgba,
-                    },
-                    column,
-                ),
-            );
+            palettes.insert(m, (Palette::decode(p, t)?, column));
         }
         // the tint rows each prototype is placed with
         let mut rows: BTreeMap<Entity, BTreeSet<u32>> = BTreeMap::new();
@@ -181,7 +191,15 @@ impl Pass for GtaTintVariants {
                     .unwrap_or_else(|| (0..p.vertex_count() as u32).collect());
                 let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
                 for t in idx.as_chunks::<3>().0 {
-                    let cols = t.map(|i| column_of[i as usize]);
+                    let mut cols = [0; 3];
+                    for (c, &i) in cols.iter_mut().zip(t) {
+                        *c = *column_of.get(i as usize).ok_or_else(|| {
+                            format!(
+                                "tinted primitive: index {i} of {} vertex colours",
+                                column_of.len()
+                            )
+                        })?;
+                    }
                     if cols[1] != cols[0] || cols[2] != cols[0] {
                         log.approximate("triangles whose vertices pick different palette columns", 1);
                     }
@@ -190,7 +208,7 @@ impl Pass for GtaTintVariants {
                 log.count("tinted primitives", 1);
                 log.count("primitives made, one per palette colour", groups.len() as u64);
                 for (c, tris) in groups {
-                    let mut q = subset(&p, &tris);
+                    let mut q = subset_primitive(&p, &tris).map_err(|e| format!("tinted primitive: {e}"))?;
                     let mut map = BTreeMap::new();
                     for &row in &used {
                         let colour = palette.colour(row, c);
@@ -244,38 +262,33 @@ impl Pass for GtaTintVariants {
     }
 }
 
-/// The primitive drawn by the triangles `tris` (indices into `p`'s vertices), over just the vertices they use, in
-/// first-use order.
-fn subset(p: &Primitive, tris: &[u32]) -> Primitive {
-    let mut new_index: BTreeMap<u32, u32> = BTreeMap::new();
-    let mut order = Vec::new();
-    let indices = tris
-        .iter()
-        .map(|&i| {
-            *new_index.entry(i).or_insert_with(|| {
-                order.push(i as usize);
-                order.len() as u32 - 1
-            })
-        })
-        .collect();
-    let streams = p
-        .streams
-        .iter()
-        .map(|(sem, s)| {
-            let s = match s {
-                Stream::F32x2(v) => Stream::F32x2(order.iter().map(|&i| v[i]).collect()),
-                Stream::F32x3(v) => Stream::F32x3(order.iter().map(|&i| v[i]).collect()),
-                Stream::F32x4(v) => Stream::F32x4(order.iter().map(|&i| v[i]).collect()),
-                Stream::U8x4(v) => Stream::U8x4(order.iter().map(|&i| v[i]).collect()),
-                Stream::U16x4(v) => Stream::U16x4(order.iter().map(|&i| v[i]).collect()),
-            };
-            (*sem, s)
-        })
-        .collect();
-    Primitive {
-        topology: p.topology,
-        streams,
-        indices: Some(indices),
-        material: p.material,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::texformat::TexFormat;
+    use primase_core::{ColorSpace, TexRole};
+
+    fn palette(width: u32, height: u32, levels: Vec<Vec<u8>>) -> Texture {
+        Texture {
+            width,
+            height,
+            format: TexFormat::Rgba8Unorm,
+            levels,
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        }
+    }
+
+    #[test]
+    fn palettes_without_texels_are_errors() {
+        let e = Entity::from_index(1);
+        assert!(Palette::decode(e, &palette(2, 0, vec![Vec::new()])).is_err());
+        assert!(Palette::decode(e, &palette(0, 2, vec![Vec::new()])).is_err());
+        assert!(Palette::decode(e, &palette(2, 2, Vec::new())).is_err());
+        let p = Palette::decode(e, &palette(2, 1, vec![vec![1, 2, 3, 4, 5, 6, 7, 8]])).expect("palette");
+        // a row past the last takes the last; blue 255 is the last column
+        assert_eq!(p.colour(9, p.column(255)), [5, 6, 7]);
+        assert_eq!(p.colour(0, p.column(0)), [1, 2, 3]);
     }
 }
