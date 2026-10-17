@@ -17,8 +17,10 @@
 //! - effects with nothing a surface material can draw: decals that only change the normal, specular, shadow or
 //!   ambient of what is under them, the dirt decal (a darkening mask), cables (lines widened by the camera distance in
 //!   the vertex shader), instanced grass batches and shell fur (both built in the vertex shader), the tree shadow
-//!   proxy (drawn into shadow maps only) and effects that are not world geometry (particles, clouds, sky, radar,
-//!   minimap, silhouettes, `albedo_alpha`).
+//!   proxy (drawn into shadow maps only), foam (`water_terrainfoam`, `water_riverfoam`: their pixel shaders write a
+//!   white surface whose opacity is foam textures scrolled by the engine's time, times engine-global factors, so no
+//!   value is the material's own) and effects that are not world geometry (particles, clouds, sky, radar, minimap,
+//!   silhouettes, `albedo_alpha`).
 
 /// How a shader's surface is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -58,6 +60,8 @@ pub enum Skip {
     Fur,
     /// `trees_shadow_proxy`: drawn into shadow maps only.
     ShadowProxy,
+    /// `water_terrainfoam`, `water_riverfoam`: white foam whose opacity the engine animates.
+    Foam,
     /// Particles, clouds, sky, radar, minimap, silhouettes, `albedo_alpha`.
     NotWorldGeometry,
 }
@@ -73,6 +77,7 @@ impl Skip {
             Skip::GrassBatch => "instanced grass batch",
             Skip::Fur => "shell fur",
             Skip::ShadowProxy => "tree shadow proxy (shadow maps only)",
+            Skip::Foam => "foam (white, its opacity animated by the engine)",
             Skip::NotWorldGeometry => "not world geometry",
         }
     }
@@ -140,6 +145,9 @@ pub fn classify(effect: &str, bucket: u8) -> ShaderClass {
     let class = if f.starts_with("terrain_cb") {
         Class::Terrain
     } else if f.starts_with("water") {
+        if matches!(f, "water_terrainfoam" | "water_riverfoam") {
+            skip = Some(Skip::Foam);
+        }
         Class::Water
     } else if f.starts_with("trees") {
         if f == "trees_shadow_proxy" {
@@ -251,5 +259,8 @@ mod tests {
             Some(Skip::NightOnlyGeometry)
         );
         assert_eq!(classify("decal_dirt", 2).skip, Some(Skip::DirtDecal));
+        assert_eq!(classify("water_terrainfoam", 2).skip, Some(Skip::Foam));
+        assert_eq!(classify("water_riverfoam", 2).skip, Some(Skip::Foam));
+        assert_eq!(classify("water_river", 6).skip, None);
     }
 }
