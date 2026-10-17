@@ -65,6 +65,26 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     /// The entities this component refers to (a prototype, materials, textures), appended to `out`: the edges
     /// [`World::closure`] follows. A component holding entity references must declare every one of them.
     fn references(&self, _out: &mut Vec<Entity>) {}
+
+    /// The component after its entity's mesh primitives were rebuilt, for a component that holds something per
+    /// primitive: new primitive `i` comes from old primitive `from[i]` (a source may repeat, when a primitive is
+    /// split, or be absent, when one is dropped). `None`: the component does not follow primitives (the default).
+    /// An index the component does not have is an error. [`World::remap_primitives`] calls it; [`remap_list`] does
+    /// the work for a list with one entry per primitive.
+    fn remap_primitives(&self, _from: &[usize]) -> Option<Result<Self, String>> {
+        None
+    }
+}
+
+/// `list` (one entry per primitive) for primitives rebuilt from `from` ([`Component::remap_primitives`]).
+pub fn remap_list<T: Clone>(list: &[T], from: &[usize]) -> Result<Vec<T>, String> {
+    from.iter()
+        .map(|&i| {
+            list.get(i)
+                .cloned()
+                .ok_or_else(|| format!("primitive {i} of {}", list.len()))
+        })
+        .collect()
 }
 
 /// A world resource: one value per world (the frame, a game's archive index, a run's options, the environment).
@@ -209,6 +229,11 @@ trait AnyColumn: Any + Send + Sync {
     fn absorb(&mut self, other: Box<dyn AnyColumn>);
     /// Move `from`'s value, if it has one, onto `to` (replacing `to`'s).
     fn move_entity(&mut self, from: Entity, to: Entity);
+    /// `e`'s value remapped to rebuilt primitives ([`Component::remap_primitives`]), not stored yet; `None` when `e`
+    /// has none or it does not follow primitives.
+    fn remapped(&self, e: Entity, from: &[usize]) -> Option<Result<Box<dyn Any + Send>, String>>;
+    /// Store a value [`AnyColumn::remapped`] made.
+    fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>);
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -281,6 +306,16 @@ impl<T: Component> AnyColumn for Column<T> {
         if let Some(v) = self.values.remove(&from) {
             self.values.insert(to, v);
         }
+    }
+    fn remapped(&self, e: Entity, from: &[usize]) -> Option<Result<Box<dyn Any + Send>, String>> {
+        let r = self.values.get(&e)?.remap_primitives(from)?;
+        Some(r.map(|v| Box::new(v) as Box<dyn Any + Send>))
+    }
+    fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>) {
+        let v = *(value as Box<dyn Any>)
+            .downcast::<T>()
+            .expect("a value remapped by this column");
+        self.values.insert(e, v);
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -478,6 +513,32 @@ impl World {
         self.alive.remove(&from);
         self.forget_in_resources(|x| x == from);
         true
+    }
+
+    /// Keep `e`'s per-primitive components in step with its rebuilt mesh: every typed component that follows
+    /// primitives ([`Component::remap_primitives`]) remapped by `from` (new primitive `i` from old `from[i]`). A pass
+    /// that splits, reorders or drops a mesh's primitives calls it once, so it need not know the dialects' components.
+    /// All or nothing: an error (an index a component does not have) names the component and changes nothing.
+    /// Opaque components are left as they are: per-primitive data must be typed to follow (the verifier catches the
+    /// rest).
+    pub fn remap_primitives(&mut self, e: Entity, from: &[usize]) -> Result<(), String> {
+        let mut done = Vec::new();
+        // by name, so the error reported is always the same one
+        let mut columns: Vec<_> = self.columns.iter().collect();
+        columns.sort_by_key(|(_, c)| c.name());
+        for (name, c) in columns {
+            match c.remapped(e, from) {
+                None => {}
+                Some(Ok(v)) => done.push((*name, v)),
+                Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
+            }
+        }
+        for (name, v) in done {
+            if let Some(c) = self.columns.get_mut(&name) {
+                c.put_remapped(e, v);
+            }
+        }
+        Ok(())
     }
 
     pub fn is_alive(&self, e: Entity) -> bool {

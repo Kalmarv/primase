@@ -582,6 +582,25 @@ fn markers_and_curves_are_core_facts_too() {
 }
 
 #[test]
+fn parts_follow_a_pass_that_rebuilds_the_primitives() {
+    let (mut w, _) = read(&fixture("remap_parts"));
+    let (proto, parts) = w
+        .iter::<scene::SkateParts>()
+        .find(|(_, p)| p.0.len() == 2)
+        .map(|(e, p)| (e, p.0.clone()))
+        .unwrap();
+    // the second primitive split in two ahead of the first
+    w.remap_primitives(proto, &[1, 1, 0]).unwrap();
+    let after = &w.get::<scene::SkateParts>(proto).unwrap().0;
+    assert_eq!(after, &vec![parts[1].clone(), parts[1].clone(), parts[0].clone()]);
+    let err = w.remap_primitives(proto, &[3]).unwrap_err();
+    assert!(
+        err.starts_with("core.material_variants: ") || err.starts_with("skate.parts: "),
+        "{err}"
+    );
+}
+
+#[test]
 fn edits_are_written() {
     let (mut w, _) = read(&fixture("edit_src"));
     // move a placement, give a light a new group and source, drop a prototype's placements' sources

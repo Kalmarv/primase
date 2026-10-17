@@ -731,6 +731,9 @@ impl Component for MaterialVariants {
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.0.iter().flat_map(|m| m.values().copied()));
     }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(crate::world::remap_list(&self.0, from).map(MaterialVariants))
+    }
 }
 
 /// A streaming or processing tile, `(col, row)` in the ground frame of whoever tiled it.

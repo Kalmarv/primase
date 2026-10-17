@@ -503,7 +503,6 @@ impl Component for SkateMaterial {
 shown!(
     SkateTexture = "skate.texture",
     SkatePrototype = "skate.prototype",
-    SkateParts = "skate.parts",
     SkateForm = "skate.form",
     SkatePlacement = "skate.placement",
     SkateCollision = "skate.collision",
@@ -512,6 +511,17 @@ shown!(
     SkateWater = "skate.water",
     SkateMarker = "skate.marker",
 );
+
+impl Component for SkateParts {
+    const NAME: &'static str = "skate.parts";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    /// One part per primitive: a primitive split or reordered by a pass keeps its part's provenance.
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(SkateParts))
+    }
+}
 
 impl Component for SkateSoup {
     const NAME: &'static str = "skate.soup";

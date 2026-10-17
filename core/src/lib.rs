@@ -29,5 +29,5 @@ pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
 pub use world::{
     Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Opaque, OpaqueData, Resource,
-    World,
+    World, remap_list,
 };
