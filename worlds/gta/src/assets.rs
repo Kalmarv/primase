@@ -89,7 +89,7 @@ struct Ctx<'a> {
 /// One vertex element as a core stream (frame converted).
 fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream)> {
     let bytes = g.element_bytes(e);
-    let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(|c| le::vec3(c, 0)).collect() };
+    let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(le::vec3_of).collect() };
     let fmt = e.format.0;
     Ok(match (e.slot, fmt) {
         (0, 0x06) => (
@@ -110,7 +110,7 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
                     .0
                     .iter()
                     .map(|c| {
-                        let v = le::vec4(c, 0);
+                        let v = le::vec4_of(c);
                         let d = GTA.direction([v[0], v[1], v[2]]);
                         [d[0], d[1], d[2], -v[3]]
                     })
@@ -122,14 +122,7 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
         (24..=27, 0x1C) => (Semantic::Color(e.slot - 24), Stream::U8x4(u8x4(&bytes))),
         (28..=51, 0x10) => (
             Semantic::TexCoord(e.slot - 28),
-            Stream::F32x2(
-                bytes
-                    .as_chunks::<8>()
-                    .0
-                    .iter()
-                    .map(|c| [le::f32(c, 0), le::f32(c, 4)])
-                    .collect(),
-            ),
+            Stream::F32x2(bytes.as_chunks::<8>().0.iter().map(le::f32x2_of).collect()),
         ),
         _ => {
             return Err(invalid(

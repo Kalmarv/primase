@@ -242,48 +242,48 @@ pub struct LightAttr {
 
 impl LightAttr {
     /// The record at the start of `d` (168 bytes).
-    fn read(d: &[u8]) -> LightAttr {
-        let b = |o: usize| d[o];
-        LightAttr {
-            position: le::vec3(d, 0x08),
-            colour: [b(0x18), b(0x19), b(0x1A)],
-            flashiness: b(0x1B),
-            intensity: le::f32(d, 0x1C),
-            flags: le::u32(d, 0x20),
-            bone_id: le::u16(d, 0x24),
-            kind: b(0x26),
-            group_id: b(0x27),
-            time_flags: le::u32(d, 0x28),
-            falloff: le::f32(d, 0x2C),
-            falloff_exponent: le::f32(d, 0x30),
-            culling_plane: le::vec4(d, 0x34),
-            shadow_blur: b(0x44),
-            volume_intensity: le::f32(d, 0x4C),
-            volume_size_scale: le::f32(d, 0x50),
-            volume_outer_colour: [b(0x54), b(0x55), b(0x56)],
-            light_hash: b(0x57),
-            volume_outer_intensity: le::f32(d, 0x58),
-            corona_size: le::f32(d, 0x5C),
-            volume_outer_exponent: le::f32(d, 0x60),
-            fade_distances: [b(0x64), b(0x65), b(0x66), b(0x67)],
-            shadow_near_clip: le::f32(d, 0x68),
-            corona_intensity: le::f32(d, 0x6C),
-            corona_z_bias: le::f32(d, 0x70),
-            direction: le::vec3(d, 0x74),
-            tangent: le::vec3(d, 0x80),
-            cone_inner_angle: le::f32(d, 0x8C),
-            cone_outer_angle: le::f32(d, 0x90),
-            extent: le::vec3(d, 0x94),
-            projected_texture_hash: le::u32(d, 0xA0),
+    fn read(d: &[u8]) -> Result<LightAttr> {
+        let b = |o: usize| le::u8(d, o);
+        Ok(LightAttr {
+            position: le::vec3(d, 0x08)?,
+            colour: [b(0x18)?, b(0x19)?, b(0x1A)?],
+            flashiness: b(0x1B)?,
+            intensity: le::f32(d, 0x1C)?,
+            flags: le::u32(d, 0x20)?,
+            bone_id: le::u16(d, 0x24)?,
+            kind: b(0x26)?,
+            group_id: b(0x27)?,
+            time_flags: le::u32(d, 0x28)?,
+            falloff: le::f32(d, 0x2C)?,
+            falloff_exponent: le::f32(d, 0x30)?,
+            culling_plane: le::vec4(d, 0x34)?,
+            shadow_blur: b(0x44)?,
+            volume_intensity: le::f32(d, 0x4C)?,
+            volume_size_scale: le::f32(d, 0x50)?,
+            volume_outer_colour: [b(0x54)?, b(0x55)?, b(0x56)?],
+            light_hash: b(0x57)?,
+            volume_outer_intensity: le::f32(d, 0x58)?,
+            corona_size: le::f32(d, 0x5C)?,
+            volume_outer_exponent: le::f32(d, 0x60)?,
+            fade_distances: [b(0x64)?, b(0x65)?, b(0x66)?, b(0x67)?],
+            shadow_near_clip: le::f32(d, 0x68)?,
+            corona_intensity: le::f32(d, 0x6C)?,
+            corona_z_bias: le::f32(d, 0x70)?,
+            direction: le::vec3(d, 0x74)?,
+            tangent: le::vec3(d, 0x80)?,
+            cone_inner_angle: le::f32(d, 0x8C)?,
+            cone_outer_angle: le::f32(d, 0x90)?,
+            extent: le::vec3(d, 0x94)?,
+            projected_texture_hash: le::u32(d, 0xA0)?,
             reserved: [
-                le::u32(d, 0x00),
-                le::u32(d, 0x04),
-                le::u32(d, 0x14),
-                u32::from(b(0x45)) | u32::from(le::u16(d, 0x46)) << 8,
-                le::u32(d, 0x48),
-                le::u32(d, 0xA4),
+                le::u32(d, 0x00)?,
+                le::u32(d, 0x04)?,
+                le::u32(d, 0x14)?,
+                u32::from(b(0x45)?) | u32::from(le::u16(d, 0x46)?) << 8,
+                le::u32(d, 0x48)?,
+                le::u32(d, 0xA4)?,
             ],
-        }
+        })
     }
 }
 
@@ -323,7 +323,7 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<Light
 /// The light records of a list (pointer, count, capacity) at `at`.
 fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     let h = r.at(at, 16)?;
-    let (count, cap) = (le::u16(h, 8), le::u16(h, 10));
+    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
     if cap < count {
         return Err(err(at, format!("light list count {count} over capacity {cap}")));
     }
@@ -331,8 +331,8 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let d = r.at(le::u64(h, 0), 168 * n)?;
-    Ok(d.chunks(168).map(LightAttr::read).collect())
+    let d = r.at(le::u64(h, 0)?, 168 * n)?;
+    d.chunks(168).map(LightAttr::read).collect()
 }
 
 /// A skeleton's bones: each one's transform in its parent's space and its parent.
@@ -347,12 +347,12 @@ pub struct Skeleton {
 impl Skeleton {
     fn read(r: &Resource, pointer: u64) -> Result<Skeleton> {
         let s = r.at(pointer, 0x70)?;
-        let count = usize::from(le::u16(s, 0x5E));
-        let transforms = match le::u64(s, 0x30) {
+        let count = usize::from(le::u16(s, 0x5E)?);
+        let transforms = match le::u64(s, 0x30)? {
             0 => return Err(err(pointer, "a skeleton without bone transforms")),
             p => r.at(p, 64 * count)?,
         };
-        let parents = match le::u64(s, 0x38) {
+        let parents = match le::u64(s, 0x38)? {
             0 => vec![-1; count],
             p => r
                 .at(p, 2 * count)?
@@ -368,8 +368,11 @@ impl Skeleton {
             .iter()
             .map(|m| {
                 // row-vector matrix M (p' = p M, translation in its fourth row): row i of ours is column i of M
-                let at = |row: usize, col: usize| le::f32(m, 16 * row + 4 * col);
-                std::array::from_fn(|i| [at(0, i), at(1, i), at(2, i), at(3, i)])
+                let ([r0, r1, r2, r3], _) = m.as_chunks::<16>() else {
+                    unreachable!("64 bytes are four rows of 16")
+                };
+                let [r0, r1, r2, r3] = [r0, r1, r2, r3].map(le::vec4_of);
+                std::array::from_fn(|i| [r0[i], r1[i], r2[i], r3[i]])
             })
             .collect();
         let parents = parents
@@ -437,38 +440,38 @@ impl Drawable {
         let d = r.at(pointer, 0xA8)?;
         let mut lods: [Vec<Model>; 4] = Default::default();
         for (i, lod) in lods.iter_mut().enumerate() {
-            let p = le::u64(d, 0x50 + 8 * i);
+            let p = le::u64(d, 0x50 + 8 * i)?;
             if p != 0 {
                 *lod = read_models(r, p)?;
             }
         }
-        let group = le::u64(d, 0x10);
+        let group = le::u64(d, 0x10)?;
         let (shaders, textures) = read_shader_group(r, group)?;
         // a drawable without a shader group (a fragment's extra drawables) uses its owner's shaders
         if group != 0 {
             check_shaders(pointer, &lods, shaders.len())?;
         }
         Ok(Drawable {
-            bounding_centre: le::vec3(d, 0x20),
-            bounding_radius: le::f32(d, 0x2C),
-            bbox_min: le::vec3(d, 0x30),
-            bbox_max: le::vec3(d, 0x40),
+            bounding_centre: le::vec3(d, 0x20)?,
+            bounding_radius: le::f32(d, 0x2C)?,
+            bbox_min: le::vec3(d, 0x30)?,
+            bbox_max: le::vec3(d, 0x40)?,
             lod_dist: [
-                le::f32(d, 0x70),
-                le::f32(d, 0x74),
-                le::f32(d, 0x78),
-                le::f32(d, 0x7C),
+                le::f32(d, 0x70)?,
+                le::f32(d, 0x74)?,
+                le::f32(d, 0x78)?,
+                le::f32(d, 0x7C)?,
             ],
             render_masks: [
-                le::u32(d, 0x80),
-                le::u32(d, 0x84),
-                le::u32(d, 0x88),
-                le::u32(d, 0x8C),
+                le::u32(d, 0x80)?,
+                le::u32(d, 0x84)?,
+                le::u32(d, 0x88)?,
+                le::u32(d, 0x8C)?,
             ],
             lods,
             shaders,
             textures,
-            skeleton: match le::u64(d, 0x18) {
+            skeleton: match le::u64(d, 0x18)? {
                 0 => None,
                 p => Some(Skeleton::read(r, p)?),
             },
@@ -481,7 +484,7 @@ impl Drawable {
     fn read_gta(r: &Resource, pointer: u64) -> Result<Drawable> {
         let mut d = Self::read(r, pointer)?;
         d.lights = read_lights(r, pointer + 0xB0)?;
-        d.bound = read_bound(r, le::u64(r.at(pointer, 0xD0)?, 0xC8))?;
+        d.bound = read_bound(r, le::u64(r.at(pointer, 0xD0)?, 0xC8)?)?;
         Ok(d)
     }
 }
@@ -537,7 +540,7 @@ fn check_shaders(at: u64, lods: &[Vec<Model>; 4], shaders: usize) -> Result<()> 
 /// A pointer list: pointer, count, capacity; the `count` pointers it holds.
 fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
     let h = r.at(at, 16)?;
-    let (count, cap) = (le::u16(h, 8), le::u16(h, 10));
+    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
     if cap < count {
         return Err(err(at, format!("list count {count} over capacity {cap}")));
     }
@@ -545,8 +548,12 @@ fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let p = r.at(le::u64(h, 0), 8 * n)?;
-    Ok((0..n).map(|i| le::u64(p, 8 * i)).collect())
+    let p = r.at(le::u64(h, 0)?, 8 * n)?;
+    Ok(p.as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .collect())
 }
 
 fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
@@ -554,40 +561,40 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
         .into_iter()
         .map(|p| {
             let m = r.at(p, 0x30)?;
-            let n = usize::from(le::u16(m, 0x10));
-            if le::u16(m, 0x12) != le::u16(m, 0x10) || le::u16(m, 0x2E) != le::u16(m, 0x10) {
+            let n = usize::from(le::u16(m, 0x10)?);
+            if le::u16(m, 0x12)? != le::u16(m, 0x10)? || le::u16(m, 0x2E)? != le::u16(m, 0x10)? {
                 return Err(err(p, "model geometry counts differ"));
             }
             let geoms = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x08), 8 * n)?
+                r.at(le::u64(m, 0x08)?, 8 * n)?
             };
             let mapping = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x20), 2 * n)?
+                r.at(le::u64(m, 0x20)?, 2 * n)?
             };
             let boxes = if n > 1 { n + 1 } else { n };
             let bounds = if n == 0 {
                 &[][..]
             } else {
-                r.at(le::u64(m, 0x18), 32 * boxes)?
+                r.at(le::u64(m, 0x18)?, 32 * boxes)?
             };
             let geometries = (0..n)
                 .map(|i| {
                     let b = if n > 1 { 32 * (i + 1) } else { 0 };
                     read_geometry(
                         r,
-                        le::u64(geoms, 8 * i),
-                        le::u16(mapping, 2 * i),
-                        [le::vec4(bounds, b), le::vec4(bounds, b + 16)],
+                        le::u64(geoms, 8 * i)?,
+                        le::u16(mapping, 2 * i)?,
+                        [le::vec4(bounds, b)?, le::vec4(bounds, b + 16)?],
                     )
                 })
                 .collect::<Result<_>>()?;
             Ok(Model {
-                skeleton_binding: le::u32(m, 0x28),
-                render_mask: le::u16(m, 0x2C),
+                skeleton_binding: le::u32(m, 0x28)?,
+                render_mask: le::u16(m, 0x2C)?,
                 geometries,
             })
         })
@@ -596,25 +603,25 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
 
 fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Result<Geometry> {
     let g = r.at(p, 0x98)?;
-    let index_count = le::u32(g, 0x58);
-    if u64::from(le::u32(g, 0x5C)) * 3 != u64::from(index_count) || le::u16(g, 0x62) != 3 {
+    let index_count = le::u32(g, 0x58)?;
+    if u64::from(le::u32(g, 0x5C)?) * 3 != u64::from(index_count) || le::u16(g, 0x62)? != 3 {
         return Err(err(
             p,
-            format!("{index_count} indices, {} triangles", le::u32(g, 0x5C)),
+            format!("{index_count} indices, {} triangles", le::u32(g, 0x5C)?),
         ));
     }
     // vertex buffer
-    let vb_ptr = le::u64(g, 0x18);
+    let vb_ptr = le::u64(g, 0x18)?;
     let vb = r.at(vb_ptr, 0x40)?;
-    let vertex_count = le::u32(vb, 0x08);
-    let stride = le::u16(vb, 0x0C);
-    if u32::from(le::u16(g, 0x60)) != vertex_count & 0xFFFF || le::u16(g, 0x70) != stride {
+    let vertex_count = le::u32(vb, 0x08)?;
+    let stride = le::u16(vb, 0x0C)?;
+    if u32::from(le::u16(g, 0x60)?) != vertex_count & 0xFFFF || le::u16(g, 0x70)? != stride {
         return Err(err(
             p,
             "geometry and vertex buffer disagree on vertex count or stride",
         ));
     }
-    let decl_ptr = le::u64(vb, 0x38);
+    let decl_ptr = le::u64(vb, 0x38)?;
     let decl = r.at(decl_ptr, 320)?;
     let mut elements = Vec::new();
     for slot in 0..52 {
@@ -622,7 +629,7 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         if format.0 == 0 {
             continue;
         }
-        let offset = le::u32(decl, 4 * slot);
+        let offset = le::u32(decl, 4 * slot)?;
         let size = format.element_size().ok_or_else(|| {
             err(
                 decl_ptr,
@@ -641,7 +648,7 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
             offset,
         });
     }
-    let packed = le::u64(decl, 312);
+    let packed = le::u64(decl, 312)?;
     if (packed >> 2) & 0xFF != u64::from(stride) || packed & 1 != 0 {
         return Err(err(
             decl_ptr,
@@ -649,23 +656,28 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         ));
     }
     let vertices = r
-        .at(le::u64(vb, 0x18), vertex_count as usize * usize::from(stride))?
+        .at(le::u64(vb, 0x18)?, vertex_count as usize * usize::from(stride))?
         .to_vec();
     // index buffer
-    let ib_ptr = le::u64(g, 0x38);
+    let ib_ptr = le::u64(g, 0x38)?;
     let ib = r.at(ib_ptr, 0x40)?;
-    if le::u32(ib, 0x08) != index_count || le::u16(ib, 0x0C) != 2 {
+    if le::u32(ib, 0x08)? != index_count || le::u16(ib, 0x0C)? != 2 {
         return Err(err(
             ib_ptr,
             format!(
                 "index buffer of {} indices of {} bytes",
-                le::u32(ib, 8),
-                le::u16(ib, 0x0C)
+                le::u32(ib, 8)?,
+                le::u16(ib, 0x0C)?
             ),
         ));
     }
-    let raw = r.at(le::u64(ib, 0x18), 2 * index_count as usize)?;
-    let indices: Vec<u16> = (0..index_count as usize).map(|i| le::u16(raw, 2 * i)).collect();
+    let raw = r.at(le::u64(ib, 0x18)?, 2 * index_count as usize)?;
+    let indices: Vec<u16> = raw
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
     if indices.iter().any(|&i| u32::from(i) >= vertex_count) {
         return Err(err(ib_ptr, "an index past the vertices"));
     }
@@ -685,28 +697,28 @@ fn read_shader_group(r: &Resource, p: u64) -> Result<(Vec<Shader>, Option<Textur
         return Ok((Vec::new(), None));
     }
     let g = r.at(p, 0x40)?;
-    let textures = match le::u64(g, 0x08) {
+    let textures = match le::u64(g, 0x08)? {
         0 => None,
         t => Some(TextureDictionary::read(r, t)?),
     };
-    let n = usize::from(le::u16(g, 0x18));
-    if le::u16(g, 0x1A) < le::u16(g, 0x18) {
+    let n = usize::from(le::u16(g, 0x18)?);
+    if le::u16(g, 0x1A)? < le::u16(g, 0x18)? {
         return Err(err(p, "shader count over capacity"));
     }
     let ptrs = if n == 0 {
         &[][..]
     } else {
-        r.at(le::u64(g, 0x10), 8 * n)?
+        r.at(le::u64(g, 0x10)?, 8 * n)?
     };
     let shaders = (0..n)
-        .map(|i| read_shader(r, le::u64(ptrs, 8 * i)))
+        .map(|i| read_shader(r, le::u64(ptrs, 8 * i)?))
         .collect::<Result<_>>()?;
     Ok((shaders, textures))
 }
 
 fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     let s = r.at(p, 0x40)?;
-    let infos_ptr = le::u64(s, 0x20);
+    let infos_ptr = le::u64(s, 0x20)?;
     let h = r.at(infos_ptr, 8)?;
     let (n_buffers, n_textures, n_other, _n_samplers, n_params, copies) = (
         usize::from(h[0]),
@@ -724,18 +736,26 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     let buffers: Vec<u64> = if n_buffers == 0 {
         Vec::new()
     } else {
-        let b = r.at(le::u64(s, 0x08), 8 * (n_buffers + 1).min(n_buffers * copies))?;
-        (0..b.len() / 8).map(|i| le::u64(b, 8 * i)).collect()
+        let b = r.at(le::u64(s, 0x08)?, 8 * (n_buffers + 1).min(n_buffers * copies))?;
+        b.as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| u64::from_le_bytes(*c))
+            .collect()
     };
     let texture_refs: Vec<u64> = if n_textures == 0 {
         Vec::new()
     } else {
-        let t = r.at(le::u64(s, 0x10), 8 * n_textures)?;
-        (0..n_textures).map(|i| le::u64(t, 8 * i)).collect()
+        let t = r.at(le::u64(s, 0x10)?, 8 * n_textures)?;
+        t.as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| u64::from_le_bytes(*c))
+            .collect()
     };
     let mut params = Vec::with_capacity(n_params);
     for i in 0..n_params {
-        let (name, word) = (le::u32(infos, 8 * i), le::u32(infos, 8 * i + 4));
+        let (name, word) = (le::u32(infos, 8 * i)?, le::u32(infos, 8 * i + 4)?);
         let value = match word & 3 {
             0 => {
                 let index = ((word >> 2) & 0xFF) as usize;
@@ -767,7 +787,13 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
                 let at = parameter_at(buffers[cb], buffers.get(cb + 1).copied(), offset, length)
                     .map_err(|e| err(infos_ptr, e))?;
                 let v = r.at(at, length)?;
-                ParamValue::Floats((0..length / 4).map(|j| le::f32(v, 4 * j)).collect())
+                ParamValue::Floats(
+                    v.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
+                        .collect(),
+                )
             }
         };
         params.push(Param {
@@ -777,10 +803,10 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
         });
     }
     Ok(Shader {
-        name: le::u32(s, 0x00),
-        preset: le::u32(s, 0x04),
+        name: le::u32(s, 0x00)?,
+        preset: le::u32(s, 0x04)?,
         render_bucket: s[0x39],
-        bucket_mask: le::u32(s, 0x3C),
+        bucket_mask: le::u32(s, 0x3C)?,
         params,
     })
 }
@@ -828,26 +854,26 @@ impl Fragment {
                 p => Drawable::read(r, p).map(Some),
             }
         };
-        let n = le::u32(h, 0x48) as usize;
+        let n = le::u32(h, 0x48)? as usize;
         let mut extra = Vec::new();
         if n > 0 {
-            let ptrs = r.at(le::u64(h, 0x38), 8 * n)?;
-            let names = r.at(le::u64(h, 0x40), 8 * n)?;
+            let ptrs = r.at(le::u64(h, 0x38)?, 8 * n)?;
+            let names = r.at(le::u64(h, 0x40)?, 8 * n)?;
             for i in 0..n {
-                let name = match le::u64(names, 8 * i) {
+                let name = match le::u64(names, 8 * i)? {
                     0 => String::new(),
                     p => crate::texture::c_string(r, p)?,
                 };
-                if let Some(d) = opt(le::u64(ptrs, 8 * i))? {
+                if let Some(d) = opt(le::u64(ptrs, 8 * i)?)? {
                     extra.push((name, d));
                 }
             }
         }
         // extra and cloth drawables without their own shaders use the main drawable's
-        let owner = le::u64(h, 0x30);
+        let owner = le::u64(h, 0x30)?;
         let mut drawable = opt(owner)?;
         if let Some(d) = &mut drawable {
-            d.bound = read_bound(r, le::u64(r.at(owner, 0xF8)?, 0xF0))?;
+            d.bound = read_bound(r, le::u64(r.at(owner, 0xF8)?, 0xF0)?)?;
         }
         let main_shaders = drawable.as_ref().map_or(0, |d| d.shaders.len());
         for (_, d) in &extra {
@@ -855,32 +881,39 @@ impl Fragment {
                 check_shaders(owner, &d.lods, main_shaders)?;
             }
         }
-        let pose = match le::u64(h, 0xA8) {
+        let pose = match le::u64(h, 0xA8)? {
             0 => Vec::new(),
             p => {
                 let n = usize::from(r.at(p, 0x20)?[0x10]);
                 let rows = r.at(p + 0x20, 48 * n)?;
-                (0..n)
-                    .map(|i| [0, 1, 2].map(|j| le::vec4(rows, 48 * i + 16 * j)))
+                rows.as_chunks::<48>()
+                    .0
+                    .iter()
+                    .map(|b| {
+                        let ([x, y, z], _) = b.as_chunks::<16>() else {
+                            unreachable!("48 bytes are three rows of 16")
+                        };
+                        [x, y, z].map(le::vec4_of)
+                    })
                     .collect()
             }
         };
-        let physics = match le::u64(h, 0xF0) {
+        let physics = match le::u64(h, 0xF0)? {
             0 => None,
-            group => match le::u64(r.at(group, 0x18)?, 0x10) {
+            group => match le::u64(r.at(group, 0x18)?, 0x10)? {
                 0 => None,
-                lod => read_bound(r, le::u64(r.at(lod, 0xF0)?, 0xE8))?,
+                lod => read_bound(r, le::u64(r.at(lod, 0xF0)?, 0xE8)?)?,
             },
         };
         Ok(Fragment {
             pose,
-            name: match le::u64(h, 0x58) {
+            name: match le::u64(h, 0x58)? {
                 0 => String::new(),
                 p => crate::texture::c_string(r, p)?,
             },
             drawable,
             extra,
-            cloth: opt(le::u64(h, 0xF8))?,
+            cloth: opt(le::u64(h, 0xF8)?)?,
             lights: read_lights(r, 0x5000_0110)?,
             physics,
         })
@@ -938,7 +971,7 @@ impl DrawableDictionary {
 
 /// A simple list of u32 (pointer, count, capacity) given its 16 header bytes.
 fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
-    let (count, cap) = (le::u16(h, 8), le::u16(h, 10));
+    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
     if cap < count {
         return Err(err(0, format!("list count {count} over capacity {cap}")));
     }
@@ -946,8 +979,12 @@ fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
     if n == 0 {
         return Ok(Vec::new());
     }
-    let d = r.at(le::u64(h, 0), 4 * n)?;
-    Ok((0..n).map(|i| le::u32(d, 4 * i)).collect())
+    let d = r.at(le::u64(h, 0)?, 4 * n)?;
+    Ok(d.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
+        .collect())
 }
 
 #[cfg(test)]

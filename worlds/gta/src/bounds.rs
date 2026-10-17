@@ -120,14 +120,14 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
     let h = r.at(p, 0x70)?;
     let header = BoundHeader {
         kind: h[0x10],
-        sphere_radius: le::f32(h, 0x14),
-        box_max: le::vec3(h, 0x20),
-        margin: le::f32(h, 0x2C),
-        box_min: le::vec3(h, 0x30),
-        box_centre: le::vec3(h, 0x40),
+        sphere_radius: le::f32(h, 0x14)?,
+        box_max: le::vec3(h, 0x20)?,
+        margin: le::f32(h, 0x2C)?,
+        box_min: le::vec3(h, 0x30)?,
+        box_centre: le::vec3(h, 0x40)?,
         material: [h[0x4C], h[0x4D], h[0x4E], h[0x4F]],
-        sphere_centre: le::vec3(h, 0x50),
-        volume: le::f32(h, 0x6C),
+        sphere_centre: le::vec3(h, 0x50)?,
+        volume: le::f32(h, 0x6C)?,
     };
     let contents = match header.kind {
         0 | 1 | 3 | 12 | 13 => Contents::Primitive,
@@ -141,21 +141,23 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
 
 fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let g = r.at(p, 0x130)?;
-    let (n_vertices, n_polygons) = (le::u32(g, 0xD0) as usize, le::u32(g, 0xD4) as usize);
-    let quantum = le::vec3(g, 0x90);
-    let centre = le::vec3(g, 0xA0);
+    let (n_vertices, n_polygons) = (le::u32(g, 0xD0)? as usize, le::u32(g, 0xD4)? as usize);
+    let quantum = le::vec3(g, 0x90)?;
+    let centre = le::vec3(g, 0xA0)?;
     let vertices = if n_vertices == 0 {
         Vec::new()
     } else {
-        let v = r.at(le::u64(g, 0xB0), 6 * n_vertices)?;
-        v.chunks(6)
+        let v = r.at(le::u64(g, 0xB0)?, 6 * n_vertices)?;
+        v.as_chunks::<6>()
+            .0
+            .iter()
             .map(|c| {
-                let q = [0, 2, 4].map(|o| f32::from(le::u16(c, o) as i16));
+                let q = le::u16x3_of(c).map(|x| f32::from(x as i16));
                 std::array::from_fn(|i| q[i] * quantum[i] + centre[i])
             })
             .collect()
     };
-    let vertex_colours = match le::u64(g, 0xB8) {
+    let vertex_colours = match le::u64(g, 0xB8)? {
         0 => None,
         vp if n_vertices > 0 => Some(
             r.at(vp, 4 * n_vertices)?
@@ -168,22 +170,26 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let polygons = if n_polygons == 0 {
         Vec::new()
     } else {
-        let d = r.at(le::u64(g, 0x88), 16 * n_polygons)?;
-        d.chunks(16)
+        let d = r.at(le::u64(g, 0x88)?, 16 * n_polygons)?;
+        d.as_chunks::<16>()
+            .0
+            .iter()
             .enumerate()
             .map(|(i, c)| polygon(c, n_vertices).map_err(|e| err(p, format!("polygon {i}: {e}"))))
             .collect::<Result<_>>()?
     };
     let n_materials = usize::from(g[0x120]);
-    let materials = match le::u64(g, 0xF0) {
+    let materials = match le::u64(g, 0xF0)? {
         0 => Vec::new(),
         mp => r
             .at(mp, 8 * n_materials)?
-            .chunks(8)
-            .map(|c| [le::u32(c, 0), le::u32(c, 4)])
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(le::u32x2_of)
             .collect(),
     };
-    let polygon_materials = match le::u64(g, 0x118) {
+    let polygon_materials = match le::u64(g, 0x118)? {
         0 => vec![0; n_polygons],
         ip if n_polygons > 0 => r.at(ip, n_polygons)?.to_vec(),
         _ => Vec::new(),
@@ -208,43 +214,45 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
 /// One 16-byte polygon; its kind is the low 3 bits of its first byte. A triangle's vertex words carry a flag in their
 /// top bit (taken off); a sphere's, capsule's and cylinder's vertex indices are whole 16-bit words (as CodeWalker
 /// reads them).
-fn polygon(c: &[u8], n_vertices: usize) -> std::result::Result<Polygon, String> {
+fn polygon(c: &[u8; 16], n_vertices: usize) -> std::result::Result<Polygon, String> {
+    // the record as eight little-endian words: word k at byte 2k
+    let w = le::u16x8_of(c);
+    let radius = f32::from_bits(u32::from(w[2]) | u32::from(w[3]) << 16);
     let vertex = |i: u16| -> std::result::Result<u16, String> {
         if usize::from(i) >= n_vertices {
             return Err(format!("vertex {i} of {n_vertices}"));
         }
         Ok(i)
     };
-    let v = |o: usize| vertex(le::u16(c, o) & 0x7FFF);
-    let whole = |o: usize| vertex(le::u16(c, o));
-    Ok(match c[0] & 7 {
+    let flagged = |x: u16| vertex(x & 0x7FFF);
+    Ok(match w[0] & 7 {
         0 => {
-            let raw = [4, 6, 8].map(|o| le::u16(c, o));
+            let raw = [w[2], w[3], w[4]];
             Polygon::Triangle {
-                vertices: [v(4)?, v(6)?, v(8)?],
+                vertices: [flagged(w[2])?, flagged(w[3])?, flagged(w[4])?],
                 flags: raw.map(|x| (x >> 15) as u8),
-                edges: [10, 12, 14].map(|o| le::u16(c, o) as i16),
-                area: f32::from_bits(le::u32(c, 0) & !7),
+                edges: [w[5], w[6], w[7]].map(|x| x as i16),
+                area: f32::from_bits((u32::from(w[0]) | u32::from(w[1]) << 16) & !7),
             }
         }
         1 => Polygon::Sphere {
-            centre: whole(2)?,
-            radius: le::f32(c, 4),
+            centre: vertex(w[1])?,
+            radius,
         },
         2 => Polygon::Capsule {
-            ends: [whole(2)?, whole(8)?],
-            radius: le::f32(c, 4),
+            ends: [vertex(w[1])?, vertex(w[4])?],
+            radius,
         },
         3 => {
-            let corners = [4, 6, 8, 10].map(|o| le::u16(c, o) as i16);
+            let corners = [w[2], w[3], w[4], w[5]].map(|x| x as i16);
             if corners.iter().any(|&i| i < 0 || i as usize >= n_vertices) {
                 return Err(format!("box corners {corners:?} of {n_vertices}"));
             }
             Polygon::Box { corners }
         }
         4 => Polygon::Cylinder {
-            ends: [whole(2)?, whole(8)?],
-            radius: le::f32(c, 4),
+            ends: [vertex(w[1])?, vertex(w[4])?],
+            radius,
         },
         k => return Err(format!("polygon kind {k}")),
     })
@@ -252,33 +260,40 @@ fn polygon(c: &[u8], n_vertices: usize) -> std::result::Result<Polygon, String> 
 
 fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
     let h = r.at(p, 0xB0)?;
-    let n = usize::from(le::u16(h, 0xA0));
+    let n = usize::from(le::u16(h, 0xA0)?);
     if n == 0 {
         return Ok(Vec::new());
     }
-    let children = r.at(le::u64(h, 0x70), 8 * n)?;
-    let transforms = r.at(le::u64(h, 0x78), 64 * n)?;
-    let flags = match le::u64(h, 0x90) {
+    let children = r.at(le::u64(h, 0x70)?, 8 * n)?;
+    let transforms = r.at(le::u64(h, 0x78)?, 64 * n)?;
+    let flags = match le::u64(h, 0x90)? {
         0 => None,
         f => Some(r.at(f, 8 * n)?),
     };
-    let flags_2 = match le::u64(h, 0x98) {
+    let flags_2 = match le::u64(h, 0x98)? {
         0 => None,
         f => Some(r.at(f, 8 * n)?),
     };
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
-        let cp = le::u64(children, 8 * i);
+        let cp = le::u64(children, 8 * i)?;
         if cp == 0 {
             continue;
         }
         let t = &transforms[64 * i..64 * i + 64];
-        let word = |f: Option<&[u8]>| f.map_or([0, 0], |f| [le::u32(f, 8 * i), le::u32(f, 8 * i + 4)]);
+        let word = |f: Option<&[u8]>| -> Result<[u32; 2]> {
+            f.map_or(Ok([0, 0]), |f| Ok([le::u32(f, 8 * i)?, le::u32(f, 8 * i + 4)?]))
+        };
         out.push(Child {
             bound: Box::new(read(r, cp, depth + 1)?),
-            transform: [0, 16, 32, 48].map(|o| le::vec3(t, o)),
-            flags: word(flags),
-            flags_2: word(flags_2),
+            transform: [
+                le::vec3(t, 0)?,
+                le::vec3(t, 16)?,
+                le::vec3(t, 32)?,
+                le::vec3(t, 48)?,
+            ],
+            flags: word(flags)?,
+            flags_2: word(flags_2)?,
         });
     }
     Ok(out)

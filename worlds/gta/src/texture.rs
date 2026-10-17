@@ -51,25 +51,25 @@ impl Texture {
     /// The 80-byte base at `pointer`: everything but the data.
     pub(crate) fn read_base(r: &Resource, pointer: u64) -> Result<(Texture, u64, u32, u32)> {
         let d = r.at(pointer, 0x50)?;
-        let name_ptr = le::u64(d, 0x28);
+        let name_ptr = le::u64(d, 0x28)?;
         let t = Texture {
             name: if name_ptr == 0 {
                 String::new()
             } else {
                 c_string(r, name_ptr)?
             },
-            width: le::u16(d, 0x18),
-            height: le::u16(d, 0x1A),
-            depth: le::u16(d, 0x1C),
+            width: le::u16(d, 0x18)?,
+            height: le::u16(d, 0x1A)?,
+            depth: le::u16(d, 0x1C)?,
             dimension: d[0x1E],
             format: BufferFormat(d[0x1F]),
             tile_mode: d[0x20],
             levels: d[0x22],
-            flags: le::u32(d, 0x10),
-            usage: le::u32(d, 0x40),
+            flags: le::u32(d, 0x10)?,
+            usage: le::u32(d, 0x40)?,
             data: Vec::new(),
         };
-        Ok((t, le::u64(d, 0x38), le::u32(d, 0x08), le::u32(d, 0x0C)))
+        Ok((t, le::u64(d, 0x38)?, le::u32(d, 0x08)?, le::u32(d, 0x0C)?))
     }
 
     /// The texture at `pointer`, with its data.
@@ -136,11 +136,11 @@ impl TextureDictionary {
     pub fn read(r: &Resource, pointer: u64) -> Result<TextureDictionary> {
         let d = r.at(pointer, 0x40)?;
         let list = |o: usize| -> Result<(u64, usize)> {
-            let (count, cap) = (le::u16(d, o + 8), le::u16(d, o + 10));
+            let (count, cap) = (le::u16(d, o + 8)?, le::u16(d, o + 10)?);
             if cap < count {
                 return Err(err(pointer, format!("list count {count} over capacity {cap}")));
             }
-            Ok((le::u64(d, o), usize::from(count)))
+            Ok((le::u64(d, o)?, usize::from(count)))
         };
         let (hash_ptr, n) = list(0x20)?;
         let (tex_ptr, m) = list(0x30)?;
@@ -151,7 +151,11 @@ impl TextureDictionary {
             Vec::new()
         } else {
             let h = r.at(hash_ptr, 4 * n)?;
-            (0..n).map(|i| le::u32(h, 4 * i)).collect()
+            h.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect()
         };
         if hashes.windows(2).any(|w| w[0] >= w[1]) {
             return Err(err(pointer, "name hashes not strictly ascending"));
@@ -160,7 +164,7 @@ impl TextureDictionary {
         if n > 0 {
             let p = r.at(tex_ptr, 8 * n)?;
             for (i, &hash) in hashes.iter().enumerate() {
-                let t = match le::u64(p, 8 * i) {
+                let t = match le::u64(p, 8 * i)? {
                     0 => None,
                     q => Some(Texture::read(r, q)?),
                 };

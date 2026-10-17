@@ -210,22 +210,26 @@ impl Meta {
     /// Reads the container: header, structure and enum descriptions, data blocks.
     pub fn read(r: &Resource) -> Result<Meta> {
         let h = r.at(0x5000_0000, 0x70)?;
-        if u32_at(h, 0x10) != HEADER_MAGIC || u16_at(h, 0x14) != HEADER_VERSION {
+        if u32_at(h, 0x10)? != HEADER_MAGIC || u16_at(h, 0x14)? != HEADER_VERSION {
             return Err(err(
                 0x10,
-                format!("header {:#x} {:#x}", u32_at(h, 0x10), u16_at(h, 0x14)),
+                format!("header {:#x} {:#x}", u32_at(h, 0x10)?, u16_at(h, 0x14)?),
             ));
         }
-        if h[0x16] > 1 || h[0x17] != 0 || u32_at(h, 0x18) != 0 || h[0x4E..0x70].iter().any(|&b| b != 0) {
+        if h[0x16] > 1 || h[0x17] != 0 || u32_at(h, 0x18)? != 0 || h[0x4E..0x70].iter().any(|&b| b != 0) {
             return Err(err(0x16, "reserved header bytes are not zero"));
         }
-        let root = u32_at(h, 0x1C) as usize;
-        let (struct_ptr, enum_ptr, block_ptr, name_ptr) =
-            (u64_at(h, 0x20), u64_at(h, 0x28), u64_at(h, 0x30), u64_at(h, 0x38));
+        let root = u32_at(h, 0x1C)? as usize;
+        let (struct_ptr, enum_ptr, block_ptr, name_ptr) = (
+            u64_at(h, 0x20)?,
+            u64_at(h, 0x28)?,
+            u64_at(h, 0x30)?,
+            u64_at(h, 0x38)?,
+        );
         let (n_structs, n_enums, n_blocks) = (
-            u16_at(h, 0x48) as usize,
-            u16_at(h, 0x4A) as usize,
-            u16_at(h, 0x4C) as usize,
+            u16_at(h, 0x48)? as usize,
+            u16_at(h, 0x4A)? as usize,
+            u16_at(h, 0x4C)? as usize,
         );
 
         let mut structs = BTreeMap::new();
@@ -233,13 +237,13 @@ impl Meta {
             let s = r.at(struct_ptr, 32 * n_structs)?;
             for i in 0..n_structs {
                 let d = &s[32 * i..32 * i + 32];
-                let (name, key, size) = (u32_at(d, 0), u32_at(d, 4), u32_at(d, 0x18));
-                let n = u16_at(d, 0x1E) as usize;
-                if u32_at(d, 0xC) != 0 || u16_at(d, 0x1C) != 0 {
+                let (name, key, size) = (u32_at(d, 0)?, u32_at(d, 4)?, u32_at(d, 0x18)?);
+                let n = u16_at(d, 0x1E)? as usize;
+                if u32_at(d, 0xC)? != 0 || u16_at(d, 0x1C)? != 0 {
                     return Err(err(struct_ptr, format!("structure {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.at(u64_at(d, 0x10), 16 * n)?
+                    r.at(u64_at(d, 0x10)?, 16 * n)?
                 } else {
                     &[][..]
                 };
@@ -253,12 +257,12 @@ impl Meta {
                         )
                     })?;
                     fields.push(Field {
-                        name: u32_at(f, 0),
-                        offset: u32_at(f, 4),
+                        name: u32_at(f, 0)?,
+                        offset: u32_at(f, 4)?,
                         kind,
                         byte9: f[9],
-                        ref_index: u16_at(f, 10) as i16,
-                        ref_key: u32_at(f, 12),
+                        ref_index: u16_at(f, 10)? as i16,
+                        ref_key: u32_at(f, 12)?,
                     });
                 }
                 if structs
@@ -283,17 +287,23 @@ impl Meta {
             let s = r.at(enum_ptr, 24 * n_enums)?;
             for i in 0..n_enums {
                 let d = &s[24 * i..24 * i + 24];
-                let (name, key, n) = (u32_at(d, 0), u32_at(d, 4), u32_at(d, 0x10) as usize);
-                if u32_at(d, 0x14) != 0 {
+                let (name, key, n) = (u32_at(d, 0)?, u32_at(d, 4)?, u32_at(d, 0x10)? as usize);
+                if u32_at(d, 0x14)? != 0 {
                     return Err(err(enum_ptr, format!("enum {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.at(u64_at(d, 8), 8 * n)?
+                    r.at(u64_at(d, 8)?, 8 * n)?
                 } else {
                     &[][..]
                 };
-                let values = (0..n)
-                    .map(|j| (u32_at(e, 8 * j), u32_at(e, 8 * j + 4) as i32))
+                let values = e
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| {
+                        let [k, v] = crate::le::u32x2_of(c);
+                        (k, v as i32)
+                    })
                     .collect();
                 if enums.insert(name, EnumInfo { name, key, values }).is_some() {
                     return Err(err(enum_ptr, format!("enum {name:#010x} described twice")));
@@ -305,14 +315,14 @@ impl Meta {
         let mut blocks = Vec::with_capacity(n_blocks);
         for i in 0..n_blocks {
             let d = &s[16 * i..16 * i + 16];
-            let len = u32_at(d, 4) as usize;
+            let len = u32_at(d, 4)? as usize;
             let data = if len > 0 {
-                r.at(u64_at(d, 8), len)?.to_vec()
+                r.at(u64_at(d, 8)?, len)?.to_vec()
             } else {
                 Vec::new()
             };
             blocks.push(Block {
-                name: u32_at(d, 0),
+                name: u32_at(d, 0)?,
                 data,
             });
         }
@@ -446,25 +456,25 @@ impl Meta {
                 },
                 Kind::I8 => Value::I8(v[0] as i8),
                 Kind::U8 => Value::U8(v[0]),
-                Kind::I16 => Value::I16(u16_at(v, 0) as i16),
-                Kind::U16 => Value::U16(u16_at(v, 0)),
-                Kind::I32 => Value::I32(u32_at(v, 0) as i32),
-                Kind::U32 => Value::U32(u32_at(v, 0)),
-                Kind::F32 => Value::F32(f32_at(v, 0)),
-                Kind::Vec3 => Value::Vec3([f32_at(v, 0), f32_at(v, 4), f32_at(v, 8)]),
-                Kind::Vec4 => Value::Vec4([f32_at(v, 0), f32_at(v, 4), f32_at(v, 8), f32_at(v, 12)]),
-                Kind::Hash => Value::Hash(u32_at(v, 0)),
+                Kind::I16 => Value::I16(u16_at(v, 0)? as i16),
+                Kind::U16 => Value::U16(u16_at(v, 0)?),
+                Kind::I32 => Value::I32(u32_at(v, 0)? as i32),
+                Kind::U32 => Value::U32(u32_at(v, 0)?),
+                Kind::F32 => Value::F32(f32_at(v, 0)?),
+                Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
+                Kind::Vec4 => Value::Vec4([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?, f32_at(v, 12)?]),
+                Kind::Hash => Value::Hash(u32_at(v, 0)?),
                 Kind::ByteEnum => Value::Enum {
                     enum_name: f.ref_key,
                     value: i32::from(v[0]),
                 },
                 Kind::ShortFlags => Value::Enum {
                     enum_name: f.ref_key,
-                    value: i32::from(u16_at(v, 0)),
+                    value: i32::from(u16_at(v, 0)?),
                 },
                 Kind::IntEnum | Kind::IntFlags1 | Kind::IntFlags2 => Value::Enum {
                     enum_name: f.ref_key,
-                    value: u32_at(v, 0) as i32,
+                    value: u32_at(v, 0)? as i32,
                 },
                 Kind::Chars => Value::Chars(v.iter().copied().take_while(|&b| b != 0).collect()),
                 Kind::Inline => {
@@ -477,7 +487,7 @@ impl Meta {
                     }
                     Value::Array(items)
                 }
-                Kind::DataBlock => match Self::unpack(u64_at(v, 0))? {
+                Kind::DataBlock => match Self::unpack(u64_at(v, 0)?)? {
                     None => Value::Data(Vec::new()),
                     Some((id, 0)) => {
                         let data = self.block(id)?.data.clone();
@@ -492,11 +502,11 @@ impl Meta {
                     }
                 },
                 Kind::CharPointer => {
-                    let (len, cap) = (u16_at(v, 8) as usize, u16_at(v, 10) as usize);
-                    if u32_at(v, 12) != 0 || cap < len {
+                    let (len, cap) = (u16_at(v, 8)? as usize, u16_at(v, 10)? as usize);
+                    if u32_at(v, 12)? != 0 || cap < len {
                         return Err(err((offset + o) as u64, "string length, capacity"));
                     }
-                    match Self::unpack(u64_at(v, 0))? {
+                    match Self::unpack(u64_at(v, 0)?)? {
                         None if len == 0 => Value::Str(None),
                         None => return Err(err((offset + o) as u64, "null string with a length")),
                         Some((id, off)) => {
@@ -517,21 +527,21 @@ impl Meta {
                         }
                     }
                 }
-                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, walk)?),
+                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
                 Kind::Structure => {
                     let si = self.struct_info(f.ref_key)?;
                     Value::Struct(self.decode_struct(block, offset + o, si, depth + 1, walk)?)
                 }
                 Kind::Array => {
                     let el = self.array_info(info, f)?;
-                    let (count, cap) = (u16_at(v, 8) as usize, u16_at(v, 10) as usize);
-                    if u32_at(v, 12) != 0 || cap < count {
+                    let (count, cap) = (u16_at(v, 8)? as usize, u16_at(v, 10)? as usize);
+                    if u32_at(v, 12)? != 0 || cap < count {
                         return Err(err(
                             (offset + o) as u64,
                             format!("array count {count}, capacity {cap}"),
                         ));
                     }
-                    Value::Array(self.decode_array(el, u64_at(v, 0), count, depth, walk)?)
+                    Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, walk)?)
                 }
             };
             fields.push((f.name, value));
@@ -582,14 +592,14 @@ impl Meta {
         Ok(match el.kind {
             Kind::U8 => Value::U8(v[0]),
             Kind::I8 => Value::I8(v[0] as i8),
-            Kind::U16 => Value::U16(u16_at(v, 0)),
-            Kind::I16 => Value::I16(u16_at(v, 0) as i16),
-            Kind::U32 => Value::U32(u32_at(v, 0)),
-            Kind::I32 => Value::I32(u32_at(v, 0) as i32),
-            Kind::F32 => Value::F32(f32_at(v, 0)),
-            Kind::Hash => Value::Hash(u32_at(v, 0)),
-            Kind::Vec3 => Value::Vec3([f32_at(v, 0), f32_at(v, 4), f32_at(v, 8)]),
-            Kind::Vec4 => Value::Vec4([f32_at(v, 0), f32_at(v, 4), f32_at(v, 8), f32_at(v, 12)]),
+            Kind::U16 => Value::U16(u16_at(v, 0)?),
+            Kind::I16 => Value::I16(u16_at(v, 0)? as i16),
+            Kind::U32 => Value::U32(u32_at(v, 0)?),
+            Kind::I32 => Value::I32(u32_at(v, 0)? as i32),
+            Kind::F32 => Value::F32(f32_at(v, 0)?),
+            Kind::Hash => Value::Hash(u32_at(v, 0)?),
+            Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
+            Kind::Vec4 => Value::Vec4([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?, f32_at(v, 12)?]),
             k => return Err(err(0, format!("inline array of {k:?}"))),
         })
     }
@@ -667,7 +677,7 @@ impl Meta {
                             walk,
                         )?)
                     }
-                    Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, walk)?),
+                    Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
                     _ => self.decode_inline(el, v)?,
                 });
                 off += es;
