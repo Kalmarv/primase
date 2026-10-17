@@ -59,6 +59,11 @@ pub struct UnityMesh {
 
 impl Component for UnityMesh {
     const NAME: &'static str = "unity.mesh";
+    /// Removed from a mapped copy (`bake-nonrigid`): it names the Unity mesh and submeshes the geometry was read
+    /// from, which the mapped geometry no longer is; `core.source` keeps the identity.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Drop
+    }
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -479,6 +484,13 @@ impl Component for UnityCollider {
     const NAME: &'static str = "unity.collider";
     /// 2: `active` left to the entity's state.
     const VERSION: u32 = 2;
+    /// Removed when its entity's local space is mapped (`bake-nonrigid`): its shape is the collider as stored,
+    /// relative to the stored transform, and no longer describes the entity once the transform's non-rigid part is
+    /// baked away. The `core.collision` soup `lower-unity-collision` made from it (with the physic material as its
+    /// surface) carries the geometry and is mapped; so `bake-nonrigid` runs after `lower-unity-collision`.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Drop
+    }
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
