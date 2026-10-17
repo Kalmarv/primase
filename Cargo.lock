@@ -833,6 +833,7 @@ dependencies = [
 name = "primase-dxbc"
 version = "0.1.0"
 dependencies = [
+ "primase-shader",
  "primase-testdata",
  "serde_json",
  "thiserror",
@@ -967,6 +968,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-shader"
+version = "0.1.0"
+dependencies = [
  "thiserror",
 ]
 

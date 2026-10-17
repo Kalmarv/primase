@@ -1,62 +1,7 @@
 //! SM5 RDEF and signature metadata; no material or binding policy.
 use crate::{Result, chunks, error};
+use primase_shader::{Buffer, Member, Reflection, Resource, Semantic, Type, Variable};
 
-#[derive(Clone, Debug)]
-pub struct Reflection {
-    pub buffers: Vec<Buffer>,
-    pub resources: Vec<Resource>,
-    pub inputs: Vec<Semantic>,
-    pub outputs: Vec<Semantic>,
-}
-#[derive(Clone, Debug)]
-pub struct Resource {
-    pub name: String,
-    pub kind: u32,
-    pub return_type: u32,
-    pub dimension: u32,
-    pub slot: u32,
-    pub count: u32,
-}
-#[derive(Clone, Debug)]
-pub struct Buffer {
-    pub name: String,
-    pub size: u32,
-    pub variables: Vec<Variable>,
-}
-#[derive(Clone, Debug)]
-pub struct Variable {
-    pub name: String,
-    pub offset: u32,
-    pub size: u32,
-    pub ty: Type,
-    pub default: Option<Vec<u8>>,
-}
-#[derive(Clone, Debug)]
-pub struct Type {
-    pub class: u16,
-    pub scalar: u16,
-    pub rows: u16,
-    pub columns: u16,
-    /// Zero means not an array, as in D3D reflection.
-    pub elements: u16,
-    pub members: Vec<Member>,
-}
-#[derive(Clone, Debug)]
-pub struct Member {
-    pub name: String,
-    pub offset: u32,
-    pub ty: Type,
-}
-#[derive(Clone, Debug)]
-pub struct Semantic {
-    pub name: String,
-    pub index: u32,
-    pub system_value: u32,
-    pub component_type: u32,
-    pub register: u32,
-    pub mask: u8,
-    pub used_mask: u8,
-}
 struct View<'a>(&'a [u8]);
 impl View<'_> {
     fn bytes(&self, at: usize, len: usize) -> Result<&[u8]> {
@@ -159,8 +104,9 @@ fn signature(bytes: &[u8]) -> Result<Vec<Semantic>> {
     }
     Ok(result)
 }
-impl Reflection {
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
+/// Read a container's RDEF resource and constant-buffer metadata and its ISGN/OSGN signatures.
+pub fn reflection(bytes: &[u8]) -> Result<Reflection> {
+    {
         let directory = chunks(bytes)?;
         let get = |tag: &[u8; 4]| -> Result<&[u8]> {
             let mut matching = directory.iter().filter(|c| &c.kind == tag);
@@ -238,7 +184,7 @@ impl Reflection {
                 variables,
             });
         }
-        Ok(Self {
+        Ok(Reflection {
             buffers,
             resources,
             inputs: signature(get(b"ISGN")?)?,

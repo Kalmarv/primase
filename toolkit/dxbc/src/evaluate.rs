@@ -1,29 +1,6 @@
 use crate::{Operand, Program, Register, Result, Selection, error};
+use primase_shader::{Execution, Sample, Sampler};
 
-/// An implicit-LOD sample request. The callback must choose and document its
-/// footprint, addressing, filtering and view transfer functions.
-#[derive(Clone, Copy, Debug)]
-pub struct Sample {
-    pub texture: u32,
-    pub sampler: u32,
-    pub uv: [f32; 2],
-}
-pub trait Sampler {
-    fn sample(&mut self, request: Sample) -> std::result::Result<[f32; 4], String>;
-}
-impl<F: FnMut(Sample) -> std::result::Result<[f32; 4], String>> Sampler for F {
-    fn sample(&mut self, request: Sample) -> std::result::Result<[f32; 4], String> {
-        self(request)
-    }
-}
-#[derive(Debug)]
-pub struct Execution {
-    pub outputs: Vec<[u32; 4]>,
-    /// Only lanes marked in this mask were written by the shader.
-    pub output_masks: Vec<u8>,
-    pub instructions: usize,
-    pub samples: usize,
-}
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RegisterValue {
     pub bits: [u32; 4],
@@ -150,11 +127,11 @@ impl Program {
     /// Evaluate a prevalidated program. Missing inputs/buffers and unwritten
     /// temporaries are errors; no partial output is returned. Sampling callbacks
     /// may already have run when a *runtime* binding error occurs.
-    pub fn execute(
+    pub fn execute<S: Sampler + ?Sized>(
         &self,
         inputs: &[[u32; 4]],
         buffers: &[(u32, &[[u32; 4]])],
-        sampler: &mut impl Sampler,
+        sampler: &mut S,
     ) -> Result<Execution> {
         self.execute_traced(inputs, buffers, sampler, &mut |_| {})
     }
@@ -162,11 +139,11 @@ impl Program {
     /// Evaluate with an observational callback after each non-ret instruction.
     /// The callback cannot mutate registers; no per-instruction snapshot allocation
     /// is needed unless the observer chooses to retain a copy.
-    pub fn execute_traced(
+    pub fn execute_traced<S: Sampler + ?Sized>(
         &self,
         inputs: &[[u32; 4]],
         buffers: &[(u32, &[[u32; 4]])],
-        sampler: &mut impl Sampler,
+        sampler: &mut S,
         trace: &mut impl FnMut(Trace<'_>),
     ) -> Result<Execution> {
         if inputs.len() < self.inputs {

@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use primase_dxbc::{Reflection, Type};
+use primase_dxbc::Type;
 use std::collections::BTreeMap;
 
 fn set(bytes: &mut [u8], at: usize, value: u32) {
@@ -60,7 +60,7 @@ fn rdef() -> Vec<u8> {
 #[test]
 fn checked_reflection_ranges_and_cycles() {
     let valid = rdef();
-    let r = Reflection::parse(&fixture(&valid)).unwrap();
+    let r = primase_dxbc::reflection(&fixture(&valid)).unwrap();
     assert_eq!(
         (r.buffers[0].name.as_str(), r.buffers[0].variables[0].ty.columns),
         ("B", 4)
@@ -68,7 +68,7 @@ fn checked_reflection_ranges_and_cycles() {
     let mut bad = valid.clone();
     set(&mut bad, 92, 17);
     assert!(
-        Reflection::parse(&fixture(&bad))
+        primase_dxbc::reflection(&fixture(&bad))
             .unwrap_err()
             .to_string()
             .contains("exceeds constant buffer")
@@ -80,19 +80,19 @@ fn checked_reflection_ranges_and_cycles() {
     set(&mut bad, 160, 174);
     set(&mut bad, 164, 124);
     assert!(
-        Reflection::parse(&fixture(&bad))
+        primase_dxbc::reflection(&fixture(&bad))
             .unwrap_err()
             .to_string()
             .contains("cyclic")
     );
     let mut bad = valid.clone();
     set(&mut bad, 100, 10000);
-    assert!(Reflection::parse(&fixture(&bad)).is_err());
+    assert!(primase_dxbc::reflection(&fixture(&bad)).is_err());
     let mut bad = valid.clone();
     set(&mut bad, 40, 31);
-    assert!(Reflection::parse(&fixture(&bad)).is_err());
+    assert!(primase_dxbc::reflection(&fixture(&bad)).is_err());
     for n in 0..valid.len() {
-        assert!(Reflection::parse(&fixture(&valid[..n])).is_err());
+        assert!(primase_dxbc::reflection(&fixture(&valid[..n])).is_err());
     }
 }
 
@@ -122,7 +122,8 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
             continue;
         }
         let j: serde_json::Value = serde_json::from_slice(&std::fs::read(oracle)?)?;
-        let r = Reflection::parse(&std::fs::read(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+        let r = primase_dxbc::reflection(&std::fs::read(&path)?)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         for (group, kind) in [("textures", 2), ("buffers", 0)] {
             for (name, value) in j[group].as_object().unwrap() {
                 let resource = r

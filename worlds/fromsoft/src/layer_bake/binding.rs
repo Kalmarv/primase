@@ -118,7 +118,7 @@ impl Prepared {
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
         let program = Program::parse(bytes).map_err(dxbc)?;
-        let reflection = Reflection::parse(bytes).map_err(dxbc)?;
+        let reflection = primase_dxbc::reflection(bytes).map_err(dxbc)?;
         let leaf = material
             .definition
             .shader

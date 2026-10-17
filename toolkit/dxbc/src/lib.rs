@@ -6,9 +6,12 @@ mod evaluate;
 mod opcodes;
 mod program;
 mod reflection;
-pub use evaluate::{Execution, RegisterValue, Sample, Sampler, Trace};
+pub use evaluate::{RegisterValue, Trace};
+pub use primase_shader::{
+    Buffer, Execution, Member, PixelShader, Reflection, Resource, Sample, Sampler, Semantic, Type, Variable,
+};
 pub use program::{Instruction, Operand, Program, Register, Selection};
-pub use reflection::{Buffer, Member, Reflection, Resource, Semantic, Type, Variable};
+pub use reflection::reflection;
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXBC at word {word}: {detail}")]
@@ -21,6 +24,53 @@ pub(crate) fn error(word: usize, detail: impl Into<String>) -> Error {
     Error {
         word,
         detail: detail.into(),
+    }
+}
+
+/// A parsed program with its container's reflection: the [`PixelShader`] a bytecode-independent caller evaluates.
+#[derive(Debug)]
+pub struct Shader {
+    pub program: Program,
+    pub reflection: Reflection,
+}
+impl Shader {
+    /// Parse a DXBC container's program and reflection.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        Ok(Self {
+            program: Program::parse(bytes)?,
+            reflection: reflection(bytes)?,
+        })
+    }
+}
+impl PixelShader for Shader {
+    fn reflection(&self) -> &Reflection {
+        &self.reflection
+    }
+    fn input_count(&self) -> usize {
+        self.program.input_count()
+    }
+    fn constant_buffers(&self) -> &[(u32, u32)] {
+        self.program.constant_buffers()
+    }
+    fn textures(&self) -> &[u32] {
+        self.program.textures()
+    }
+    fn samplers(&self) -> &[u32] {
+        self.program.samplers()
+    }
+    fn execute(
+        &self,
+        inputs: &[[u32; 4]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<Execution, primase_shader::Error> {
+        self.program
+            .execute(inputs, buffers, sampler)
+            .map_err(|e| primase_shader::Error {
+                bytecode: "DXBC",
+                at: e.word,
+                detail: e.detail,
+            })
     }
 }
 

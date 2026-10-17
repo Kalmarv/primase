@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+primase-shader.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
