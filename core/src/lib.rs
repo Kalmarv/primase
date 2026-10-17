@@ -17,6 +17,8 @@ mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};
 mod collider;
 pub use collider::{Collider, Diagonal, Heightfield, Shape};
+mod draw_order;
+pub use draw_order::{DrawLayer, DrawOrder};
 pub mod pass;
 pub mod pbr;
 pub mod print;

@@ -277,6 +277,35 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
 }
 
 #[test]
+fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
+    use primase_core::{DrawLayer, DrawOrder};
+    let mut w = world();
+    let plain = w
+        .iter::<Name>()
+        .find(|(_, n)| n.0 == "plain")
+        .map(|(e, _)| e)
+        .unwrap();
+    w.insert(
+        plain,
+        DrawOrder {
+            layer: DrawLayer::Decal,
+            queue: 2500,
+        },
+    );
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(log.counts["materials raised as decals (core.draw_order)"], 1);
+    let mats: BTreeMap<&str, &SkateMaterial> = w
+        .iter::<SkateMaterial>()
+        .map(|(_, m)| (m.key.as_str(), m))
+        .collect();
+    assert_eq!(mats["plain"].class, MaterialClass::Decal);
+    assert_eq!(mats["plain"].domain, Some(scene::Domain::Decal));
+    // without a draw order the class comes from the alpha mode, as before
+    assert_eq!(mats["rock"].class, MaterialClass::Cutout);
+    assert_eq!(mats["rock"].domain, None);
+}
+
+#[test]
 fn what_skate_cannot_take_is_refused() {
     // a surface with no skate surface
     let mut w = world();

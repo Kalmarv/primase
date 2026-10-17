@@ -265,6 +265,16 @@ Other directional lights stay scene lights of the tile whose cell holds their po
 
 Up is +Y. A consumer may start elsewhere (a view the user asked for); without a camera it frames the scene itself.
 
+## Draw order
+
+A material may carry `extras.primase["core.draw_order"]` = `{"version": 1, "value": {"layer", "queue"}}`: where
+its surfaces come in the source's draw sequence. `queue` is an integer across every layer, lower drawn first, on the
+conventional render-queue scale (opaque 2000, alpha tested 2450, transparent 3000, or the source's own values).
+Surfaces with the same queue draw in node order, then primitive order. `layer` is `opaque`, `cutout`, `decal` or
+`transparent`. A `decal` surface is drawn over the surface beneath it, coplanar or nearly so: a consumer offsets its
+depth towards the viewer and doesn't cast its shadow. Without the extra, a material draws by its alpha mode and is
+never a decal.
+
 ## Shadows
 
 What the source states about shadows is carried as glTF extras, `extras["primase.shadows"]`, an object with

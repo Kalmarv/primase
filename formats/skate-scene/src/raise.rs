@@ -268,11 +268,17 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // materials
     let mut taken = BTreeSet::new();
     for (e, m) in materials {
-        let (class, alpha, cutoff) = match m.alpha_mode {
+        let (mut class, alpha, cutoff) = match m.alpha_mode {
             PbrAlpha::Opaque => (MaterialClass::Opaque, AlphaMode::Opaque, None),
             PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(f32_decimal(cutoff))),
             PbrAlpha::Blend => (MaterialClass::Alpha, AlphaMode::Blend, None),
         };
+        // a surface the source draws over the one beneath it is skate's decal (its class and domain)
+        let decal = primase_core::DrawOrder::of(world, e).layer == primase_core::DrawLayer::Decal;
+        if decal {
+            class = MaterialClass::Decal;
+            log.count("materials raised as decals (core.draw_order)", 1);
+        }
         let rgb = [m.base_color[0], m.base_color[1], m.base_color[2]];
         let (base_color, tint) = match m.base_color_texture {
             None => (
@@ -314,7 +320,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 alpha: Some(alpha),
                 cutoff,
                 two_sided: Some(m.double_sided),
-                domain: None,
+                domain: decal.then_some(crate::components::Domain::Decal),
                 metallic: mask.is_none().then(|| f32_decimal(m.metallic)),
                 roughness: mask.is_none().then(|| f32_decimal(m.roughness)),
                 wrap: w.map(|w| wrap(w[0])),
