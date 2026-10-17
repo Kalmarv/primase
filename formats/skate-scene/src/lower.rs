@@ -66,6 +66,10 @@ impl Pass for LowerSkatePbr {
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
     }
+    /// It lowers skate materials and keeps them.
+    fn legalizes(&self) -> &[&'static str] {
+        &["skate.material"]
+    }
     fn approximates(&self) -> &'static str {
         "Studio MSK masks not loaded as RGBA8 or with inconsistent mip sizes left out; a material's scalar metallic and roughness ignored where its \
          MSK is bound; wrap clip written as clamp; normal maps still files in a non-glTF convention left out; vertex-alpha \
@@ -169,6 +173,10 @@ impl Pass for LowerSkateLights {
     }
     fn provides(&self) -> &[&'static str] {
         &["core.light", "core.transform"]
+    }
+    /// It lowers skate lights and keeps them.
+    fn legalizes(&self) -> &[&'static str] {
+        &["skate.light"]
     }
     fn approximates(&self) -> &'static str {
         "light energy as candela (Studio watts / 4 pi^2); time of day, radius, priority and group not lowered"

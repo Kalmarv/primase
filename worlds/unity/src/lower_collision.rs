@@ -253,6 +253,10 @@ impl Pass for LowerUnityCollision {
     fn provides(&self) -> &[&'static str] {
         &["core.collision", "core.surfaces"]
     }
+    /// It lowers Unity colliders and keeps them.
+    fn legalizes(&self) -> &[&'static str] {
+        &["unity.collider"]
+    }
     fn approximates(&self) -> &'static str {
         "spheres and capsules tessellated; one diagonal per terrain cell"
     }

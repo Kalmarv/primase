@@ -200,6 +200,10 @@ impl Pass for BakeTextureTransforms {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
+    /// It lowers texture transforms; the file links it removes no longer match the meshes.
+    fn legalizes(&self) -> &[&'static str] {
+        &["pbr.material"]
+    }
     fn approximates(&self) -> &'static str {
         "texture coordinates transformed once in f32"
     }

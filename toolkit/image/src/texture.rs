@@ -232,6 +232,10 @@ impl Pass for NormalizeNormals {
     fn removes(&self) -> &[&'static str] {
         &["core.texture_file"]
     }
+    /// It rewrites normal maps in place; the file links it removes no longer match the textures.
+    fn legalizes(&self) -> &[&'static str] {
+        &["core.texture"]
+    }
     fn approximates(&self) -> &'static str {
         "positive-hemisphere Z reconstruction; changed normal levels decoded to RGBA8"
     }

@@ -25,6 +25,10 @@ impl Pass for LowerLayeredPbr {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
+    /// It lowers layered materials and keeps them; the file links it removes no longer match the meshes.
+    fn legalizes(&self) -> &[&'static str] {
+        &["core.layered"]
+    }
     fn approximates(&self) -> &'static str {
         "strongest summed corner layer per triangle; no per-pixel blend, darkening or contour splitting"
     }

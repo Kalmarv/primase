@@ -440,6 +440,10 @@ impl Pass for LowerUnityPbr {
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
     }
+    /// It lowers Unity materials and keeps them.
+    fn legalizes(&self) -> &[&'static str] {
+        &["unity.material"]
+    }
     fn approximates(&self) -> &'static str {
         "shaders other than URP Lit by their base colour; maps re-encoded as RGBA8 metallic-roughness and occlusion; \
          blend modes, detail and parallax maps not represented"

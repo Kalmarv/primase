@@ -158,6 +158,10 @@ impl Pass for LowerUnityLights {
     fn provides(&self) -> &[&'static str] {
         &["core.light", "core.environment"]
     }
+    /// It lowers Unity lights and keeps them.
+    fn legalizes(&self) -> &[&'static str] {
+        &["unity.light"]
+    }
     fn approximates(&self) -> &'static str {
         "URP intensity taken as candela or lux; colour temperature not applied; area lights left out"
     }

@@ -171,6 +171,10 @@ impl Pass for SelectLod {
     fn modifies(&self) -> &[&'static str] {
         &[Mesh::NAME, MeshFile::NAME, MaterialVariants::NAME]
     }
+    /// It lowers the levels of detail; the meshes and variants it removes are the forms it discards.
+    fn legalizes(&self) -> &[&'static str] {
+        &[Lods::NAME]
+    }
     fn despawns_entities(&self) -> bool {
         true
     }
