@@ -14,6 +14,9 @@
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
+//! - `parse_modules_are_checked`: in the crates `architecture.toml` lists as `parse_crate`, every module that decodes
+//!   bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file says are
+//!   there and are not are its error, never a panic or a wrapped size.
 
 #![allow(clippy::unwrap_used)]
 
@@ -439,6 +442,40 @@ fn io_opt_ins_are_declared() {
         })
         .collect();
     assert_reconciled("I/O opt-ins", found, excused);
+}
+
+// ---- parse modules ----
+
+/// The inner attribute a parse module starts with, whitespace taken out.
+const DENY_PARSE: &str =
+    "#![deny(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation";
+
+/// Whether a module's code decodes bytes: it reads little-endian values (`from_le_bytes`, `from_be_bytes`, or the
+/// crate's `le::` reads).
+fn decodes_bytes(t: &[Tok]) -> bool {
+    t.iter().enumerate().any(|(i, tok)| {
+        ident(tok, "from_le_bytes")
+            || ident(tok, "from_be_bytes")
+            || (ident(tok, "le") && t.get(i + 1).is_some_and(|n| punct(n, ':')))
+    })
+}
+
+#[test]
+fn parse_modules_are_checked() {
+    let mut found = BTreeSet::new();
+    for c in entries("parse_crate") {
+        let path = &c["path"];
+        let files = rust_files(&root().join(path).join("src"));
+        assert!(!files.is_empty(), "parse_crate {path}: no sources");
+        for file in files {
+            let squeezed: String = read(&root().join(&file)).split_whitespace().collect();
+            if decodes_bytes(&code(&file)) && !squeezed.contains(DENY_PARSE) {
+                found.insert(file);
+            }
+        }
+    }
+    let excused = entries("parse").into_iter().map(|e| e["file"].clone()).collect();
+    assert_reconciled("parse modules", found, excused);
 }
 
 // ---- game and engine names ----
