@@ -1,18 +1,21 @@
-//! A Unity level end to end: read, lowered, written as one GLB and (with a surface map) as a skate scene.
+//! A Unity level end to end: read, lowered, written as one GLB, as web tiles and (with a surface map) as a skate scene.
 //!
-//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [<surface map JSON>]`. The surface
-//! map is an object of the game's surface names (its physic materials, `default` for none) onto skate surfaces; the
-//! skate scene is written only with one. Writes `<output>/<level>.glb`, and `<output>/skate/assets` with
-//! `<output>/skate/scene`; prints every pass's counts and approximations.
+//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--surfaces <map>]`.
+//! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2); with
+//! `--surfaces`, `<output>/skate/assets` and `<output>/skate/scene`. The surface map is an object of the game's surface
+//! names (its physic materials, `default` for none) onto skate surfaces. Prints every pass's counts and
+//! approximations.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use primase_core::World;
 use primase_core::pass::PassLog;
 use primase_unity::TypeTreePackage;
 use primase_unity::level::read_level;
 use primase_unity::player::Player;
+
+const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--surfaces <map>]";
 
 fn show(pass: &str, log: &PassLog) {
     println!("{pass}: {:?}", log.counts);
@@ -22,26 +25,31 @@ fn show(pass: &str, log: &PassLog) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if !(5..=6).contains(&args.len()) {
-        return Err(
-            "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [<surface map>]"
-                .into(),
-        );
+    let (mut paths, mut web, mut ktx2, mut surfaces) = (Vec::new(), false, false, None);
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--web" => web = true,
+            "--ktx2" => ktx2 = true,
+            "--surfaces" => surfaces = Some(PathBuf::from(args.next().ok_or(USAGE)?)),
+            _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
+            _ => paths.push(arg),
+        }
     }
-    let (data, tpk, level, out) = (
-        Path::new(&args[1]),
-        Path::new(&args[2]),
-        &args[3],
-        Path::new(&args[4]),
-    );
-    let player = Player::open(data, TypeTreePackage::parse(&std::fs::read(tpk)?)?)?;
+    let [data, tpk, level, out] = &paths[..] else {
+        return Err(USAGE.into());
+    };
+    if ktx2 && !web {
+        return Err(format!("--ktx2 needs --web; {USAGE}").into());
+    }
+    let out = Path::new(out);
+    let player = Player::open(Path::new(data), TypeTreePackage::parse(&std::fs::read(tpk)?)?)?;
     let mut w = World::new();
     let started = std::time::Instant::now();
     let report = read_level(&player, level, &mut w)?;
     println!(
         "read {level}: {} renderers ({} left out), {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
-         textures, {} terrains, {} lights, {} colliders ({} by trees)",
+         textures, {} terrains, {} lights ({} off, sun named: {}), {} colliders ({} by trees)",
         report.renderers,
         report.left_out,
         report.tree_renderers,
@@ -51,6 +59,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.textures,
         report.terrains,
         report.lights,
+        report.lights_off,
+        report.sun_named,
         report.colliders,
         report.tree_colliders
     );
@@ -92,7 +102,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &glb,
     )?;
     println!("glTF {}: {r:?}", glb.display());
-    let Some(map) = args.get(5) else { return Ok(()) };
+    if web {
+        let options = primase_web::Options {
+            ktx2,
+            ..Default::default()
+        };
+        let set = primase_web::write(&w, &options)?;
+        let folder = out.join("web");
+        set.write_to(&folder)?;
+        for o in &set.over_budget {
+            println!("over the budget: {} ({} bytes): {}", o.file, o.bytes, o.reason);
+        }
+        let tiles = &set.index.tiles;
+        println!(
+            "web {} (format {}): tiles={} triangles={} placements={} instanced={} lights={} collision records={} \
+             images={} sun={}",
+            folder.display(),
+            set.index.format_version,
+            tiles.len(),
+            tiles.iter().map(|t| t.triangles).sum::<u64>(),
+            tiles.iter().map(|t| t.placements).sum::<u64>(),
+            tiles.iter().map(|t| t.instanced_placements).sum::<u64>(),
+            tiles.iter().map(|t| t.lights).sum::<u64>(),
+            tiles
+                .iter()
+                .filter_map(|t| t.collision.as_ref())
+                .map(|c| c.records)
+                .sum::<usize>(),
+            set.index.images.len(),
+            set.index
+                .environment
+                .as_ref()
+                .map_or("none", |e| e.sun.name.as_str())
+        );
+    }
+    let Some(map) = surfaces else { return Ok(()) };
     let surfaces: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(map)?)?;
     show(
         "bake-texture-transforms",

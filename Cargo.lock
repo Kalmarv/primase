@@ -1009,6 +1009,7 @@ dependencies = [
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
+ "primase-web",
  "serde",
  "serde_json",
  "sha2",
