@@ -83,7 +83,8 @@ pub struct RegionReport {
     /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
     pub time_placements_never_shown: usize,
     /// Script-managed maps with placements here (each a `gta.ipl.<name>` axis), those on by default, and the
-    /// placements they govern.
+    /// placements they govern. Every axis's default is the earlier skate exporter's start-state rules
+    /// ([`crate::ipl::ipl_default`]), not read from the game's scripts: an approximation of the game's start state.
     pub ipl_axes: usize,
     pub ipl_axes_on: usize,
     pub ipl_placements: usize,
@@ -508,7 +509,10 @@ pub fn read_region(
                         default: u32::from(on),
                         scope: Scope::Global,
                         class: "ipl".into(),
-                        source: format!("script-managed map {name} (CMapData flags bit 0); default: {why}"),
+                        source: format!(
+                            "script-managed map {name} (CMapData flags bit 0); default by the earlier skate exporter's \
+                             start-state rules, not read from the game's scripts: {why}"
+                        ),
                     },
                 );
                 e
