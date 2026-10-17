@@ -246,6 +246,42 @@ fn a_core_world_becomes_a_scene() {
 }
 
 #[test]
+fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
+    use primase_core::SurfaceClass;
+    // every class but water has a standard surface
+    for c in SurfaceClass::ALL {
+        match scene::class_to_skate(c) {
+            Some(to) => assert!(scene::STANDARD_SURFACES.contains(&to), "{c:?} -> {to}"),
+            None => assert_eq!(c, SurfaceClass::Water),
+        }
+    }
+    let raised = |class, map: &[(&str, &str)]| {
+        let mut w = world();
+        w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
+        let r = scene::raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: "x".into(),
+                surfaces: map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect(),
+            },
+        );
+        r.map(|_| w.resource::<Surfaces>().unwrap().0[0].name.clone())
+            .map_err(|e| e.to_string())
+    };
+    assert_eq!(raised(Some(SurfaceClass::Snow), &[]).unwrap(), "earth");
+    // the caller's map of the name wins over the class
+    assert_eq!(
+        raised(Some(SurfaceClass::Snow), &[("Snow", "asphalt")]).unwrap(),
+        "asphalt"
+    );
+    let err = raised(Some(SurfaceClass::Water), &[]).unwrap_err();
+    assert!(
+        err.contains("Snow (class water: no solid skate surface)"),
+        "{err}"
+    );
+}
+
+#[test]
 fn what_skate_cannot_take_is_refused() {
     // a surface with no skate surface
     let mut w = world();

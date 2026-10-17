@@ -66,7 +66,7 @@ a list).
 | `Mesh` / `MeshFile`, `Instance`, `MaterialVariants` | shared geometry (vertex streams by semantic, primitives in draw order) or the file it is still in; placements instance it, picking per-variant materials |
 | `Light` | a punctual light as glTF's `KHR_lights_punctual` defines it: point, spot (cones) or directional, linear colour, intensity in candela (lux for directional), optional range, whether it casts shadows; placed by its transform, shining along its local -Z |
 | `Shadows` (`core.shadows`) | a placed entity's shadows: cast off, on or only (a shadow proxy, not drawn) and receive, each unknown when absent; cast overrides its materials' `cast_shadows` |
-| `Collision`, `Surfaces` (resource) | collision geometry placed like a mesh: a triangle soup in the entity's space, one surface per triangle, surfaces named in the world's table (game properties stay in dialects) |
+| `Collision`, `Surfaces` (resource) | collision geometry placed like a mesh: a triangle soup in the entity's space, one surface per triangle, surfaces named in the world's table (game properties stay in dialects), each with an optional `SurfaceClass` |
 | `Texture` | pixels or encoded blocks + `TexFormat`, colour space, role, normal convention (X in red/alpha, green up/down, Z stored/rebuilt) |
 | `LayeredMaterial` (`core.layered`) | one to four ordinary material references (null contributes black), per-layer UV selection and transform, and vertex-channel weights mapped after interpolation without renormalisation; blended normals are renormalised |
 | `Name`, `Source` | display name; provenance key (archetype, MSB part, asset path) for debugging and review links |
@@ -219,3 +219,14 @@ differential-tested against the tool it replaces.
 ## 8. Licence
 
 GPL-3.0-or-later for the whole workspace. Dependencies must be GPL-3-compatible.
+
+## Surface classes
+
+`core.surfaces` (VERSION 2) gives each surface its source name and an optional class from a closed vocabulary:
+`concrete`, `asphalt`, `stone`, `brick`, `tile`, `metal`, `wood`, `glass`, `plastic`, `rubber`, `fabric`, `grass`,
+`dirt`, `gravel`, `sand`, `mud`, `snow`, `ice`, `water` (swimmable or wading) and `other` (classified, nothing
+fits). A reader leaves the class unset; the source's lowering pass sets it from a named table of its own names and
+counts the names it does not map; a writer maps classes onto its target (the skate raise: `class_to_skate`). No game
+crate maps another game's surface names. Adding a class takes evidence that a source has such surfaces and a target
+treats them differently, its line here and a VERSION bump; writers match the enum without a wildcard, so each must map
+it before the workspace builds.

@@ -17,9 +17,10 @@
 //!   are named, counted losses in the returned log (per material, overlapping categories). Source PBR is retained;
 //! - every instanced `core.mesh`: a `skate.prototype` (`prototypes/<id>.glb`, a part per primitive); every placement
 //!   a default `skate.placement`;
-//! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces by the map the caller gives
-//!   (a game's physic materials onto the standard surfaces: never guessed); a name neither mapped nor a skate surface
-//!   is refused;
+//! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
+//!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]); a surface with
+//!   neither, whose name is no skate surface, is refused (never guessed), as is a water class (no solid skate
+//!   surface; skate water is a reader's outline, a named gap);
 //! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`];
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - the `skate.scene` resource, named by the caller.
@@ -35,7 +36,7 @@ use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, Wrap as PbrWrap};
 use primase_core::{
     ColorSpace, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, Name, NormalConvention,
-    NormalGreen, NormalZ, Surfaces, TexRole, Texture, Transform, World,
+    NormalGreen, NormalZ, SurfaceClass, Surfaces, TexRole, Texture, Transform, World,
 };
 
 use crate::components::{
@@ -54,6 +55,33 @@ pub struct RaiseOptions {
     pub name: String,
     /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`).
     pub surfaces: BTreeMap<String, String>,
+}
+
+/// CLASS_TO_SKATE: the skate surface of a surface class, the named policy of [`raise_skate`] (a target refinement such
+/// as `metal_grate` comes only from the caller's map). `None`: no solid skate surface (water).
+pub fn class_to_skate(class: SurfaceClass) -> Option<&'static str> {
+    Some(match class {
+        SurfaceClass::Concrete => "concrete",
+        SurfaceClass::Asphalt => "asphalt",
+        SurfaceClass::Stone => "marble",
+        SurfaceClass::Brick => "brick",
+        SurfaceClass::Tile => "roofing",
+        SurfaceClass::Metal => "metal",
+        SurfaceClass::Wood => "wood",
+        SurfaceClass::Glass => "glass",
+        SurfaceClass::Plastic => "plastic",
+        SurfaceClass::Rubber => "rubber",
+        SurfaceClass::Fabric => "default",
+        SurfaceClass::Grass => "grass",
+        SurfaceClass::Dirt => "earth",
+        SurfaceClass::Gravel => "gravel",
+        SurfaceClass::Sand => "sand",
+        SurfaceClass::Mud => "earth",
+        SurfaceClass::Snow => "earth",
+        SurfaceClass::Ice => "marble",
+        SurfaceClass::Water => return None,
+        SurfaceClass::Other => "default",
+    })
 }
 
 /// Studio watts for a light of `candela`: the Blender power `P` whose Cycles shading of a Lambertian surface,
@@ -109,16 +137,24 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             "{e:?} has levels of detail: choose one form first (select-lod)"
         )));
     }
-    // surfaces onto skate's
+    // surfaces onto skate's: the caller's map, else the class, else a name that is a skate surface already
     let mut surfaces = world.resource::<Surfaces>().cloned();
     if let Some(surfaces) = surfaces.as_mut() {
         let mut unmapped = Vec::new();
         for s in &mut surfaces.0 {
-            match options.surfaces.get(&s.name) {
-                Some(to) if STANDARD_SURFACES.contains(&to.as_str()) => s.name.clone_from(to),
-                Some(to) => unmapped.push(format!("{} -> {to} (not a skate surface)", s.name)),
-                None if STANDARD_SURFACES.contains(&s.name.as_str()) => {}
-                None => unmapped.push(s.name.clone()),
+            match (options.surfaces.get(&s.name), s.class) {
+                (Some(to), _) if STANDARD_SURFACES.contains(&to.as_str()) => s.name.clone_from(to),
+                (Some(to), _) => unmapped.push(format!("{} -> {to} (not a skate surface)", s.name)),
+                (None, Some(class)) => match class_to_skate(class) {
+                    Some(to) => s.name = to.to_owned(),
+                    None => unmapped.push(format!(
+                        "{} (class {}: no solid skate surface)",
+                        s.name,
+                        class.as_str()
+                    )),
+                },
+                (None, None) if STANDARD_SURFACES.contains(&s.name.as_str()) => {}
+                (None, None) => unmapped.push(s.name.clone()),
             }
         }
         if !unmapped.is_empty() {

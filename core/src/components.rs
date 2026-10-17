@@ -541,11 +541,114 @@ impl Component for Collision {
     }
 }
 
-/// A collision surface: what a triangle is made of, by name (a game's physic material, "Snow", "Ice"). Writers map the
-/// names onto their target's surfaces; a game's properties for it (friction, sound) stay in its dialect.
+/// A collision surface: what a triangle is made of. `name` is the source's own (a game's physic material, "Snow",
+/// "CONCRETE_POTHOLE"); `class` what it is generically, set by the source's lowering pass from a named table (a
+/// reader leaves it `None`). Writers map classes onto their target's surfaces; a game's properties for it (friction,
+/// sound) stay in its dialect.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Surface {
     pub name: String,
+    /// `None`: not classified (a writer that needs a class refuses it or counts it by a named policy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<SurfaceClass>,
+}
+
+impl Surface {
+    /// A surface by its source name, not classified.
+    pub fn new(name: impl Into<String>) -> Surface {
+        Surface {
+            name: name.into(),
+            class: None,
+        }
+    }
+}
+
+/// What a surface is made of, generically (its feel, sound and grip), for every source and target: each source's
+/// lowering pass maps its own names here and each writer maps these to its target, never one game's names to
+/// another's. `Other`: classified, and no class fits.
+///
+/// Closed on purpose: writers match it without a wildcard, so adding a class (with the evidence that a source has
+/// such surfaces and a target treats them differently, its line in docs/SPEC.md and a `core.surfaces` VERSION bump)
+/// fails to compile until every writer maps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceClass {
+    Concrete,
+    Asphalt,
+    Stone,
+    Brick,
+    Tile,
+    Metal,
+    Wood,
+    Glass,
+    Plastic,
+    Rubber,
+    Fabric,
+    Grass,
+    Dirt,
+    Gravel,
+    Sand,
+    Mud,
+    Snow,
+    Ice,
+    /// Swimmable or wading surfaces.
+    Water,
+    Other,
+}
+
+impl SurfaceClass {
+    pub const ALL: [SurfaceClass; 20] = [
+        SurfaceClass::Concrete,
+        SurfaceClass::Asphalt,
+        SurfaceClass::Stone,
+        SurfaceClass::Brick,
+        SurfaceClass::Tile,
+        SurfaceClass::Metal,
+        SurfaceClass::Wood,
+        SurfaceClass::Glass,
+        SurfaceClass::Plastic,
+        SurfaceClass::Rubber,
+        SurfaceClass::Fabric,
+        SurfaceClass::Grass,
+        SurfaceClass::Dirt,
+        SurfaceClass::Gravel,
+        SurfaceClass::Sand,
+        SurfaceClass::Mud,
+        SurfaceClass::Snow,
+        SurfaceClass::Ice,
+        SurfaceClass::Water,
+        SurfaceClass::Other,
+    ];
+
+    /// The lower-case word JSON shows.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SurfaceClass::Concrete => "concrete",
+            SurfaceClass::Asphalt => "asphalt",
+            SurfaceClass::Stone => "stone",
+            SurfaceClass::Brick => "brick",
+            SurfaceClass::Tile => "tile",
+            SurfaceClass::Metal => "metal",
+            SurfaceClass::Wood => "wood",
+            SurfaceClass::Glass => "glass",
+            SurfaceClass::Plastic => "plastic",
+            SurfaceClass::Rubber => "rubber",
+            SurfaceClass::Fabric => "fabric",
+            SurfaceClass::Grass => "grass",
+            SurfaceClass::Dirt => "dirt",
+            SurfaceClass::Gravel => "gravel",
+            SurfaceClass::Sand => "sand",
+            SurfaceClass::Mud => "mud",
+            SurfaceClass::Snow => "snow",
+            SurfaceClass::Ice => "ice",
+            SurfaceClass::Water => "water",
+            SurfaceClass::Other => "other",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<SurfaceClass> {
+        SurfaceClass::ALL.into_iter().find(|c| c.as_str() == word)
+    }
 }
 
 /// The world's collision surfaces, indexed by [`Collision::surfaces`].
@@ -566,9 +669,7 @@ impl Surfaces {
         let index = self.0.iter().position(|s| s.name == name).unwrap_or(self.0.len());
         let id = u16::try_from(index).map_err(|_| SurfaceIndexError { index })?;
         if index == self.0.len() {
-            self.0.push(Surface {
-                name: name.to_owned(),
-            });
+            self.0.push(Surface::new(name));
         }
         Ok(id)
     }
@@ -576,6 +677,8 @@ impl Surfaces {
 
 impl crate::world::Resource for Surfaces {
     const NAME: &'static str = "core.surfaces";
+    /// 2: each surface's optional `class`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -653,7 +756,7 @@ mod tests {
 
     #[test]
     fn surface_indices_check_the_u16_boundary_without_mutating_on_error() {
-        let mut surfaces = Surfaces((0..u16::MAX).map(|i| Surface { name: i.to_string() }).collect());
+        let mut surfaces = Surfaces((0..u16::MAX).map(|i| Surface::new(i.to_string())).collect());
         assert_eq!(surfaces.index("last"), Ok(u16::MAX));
         assert_eq!(surfaces.index("0"), Ok(0));
         assert_eq!(surfaces.index("last"), Ok(u16::MAX));
@@ -664,11 +767,28 @@ mod tests {
         );
         assert_eq!(surfaces, before);
         // The public vector can also contain an existing out-of-range entry.
-        surfaces.0.push(Surface {
-            name: "outside".into(),
-        });
+        surfaces.0.push(Surface::new("outside"));
         assert_eq!(surfaces.index("outside"), Err(SurfaceIndexError { index: 65536 }));
         assert_eq!(surfaces.index("0"), Ok(0));
+    }
+
+    #[test]
+    fn surface_classes_are_lower_case_words_shown_only_when_set() {
+        for c in SurfaceClass::ALL {
+            assert_eq!(SurfaceClass::parse(c.as_str()), Some(c));
+            assert_eq!(serde_json::to_value(c).unwrap(), json!(c.as_str()));
+        }
+        assert_eq!(SurfaceClass::parse("Concrete"), None);
+        let mut surfaces = Surfaces::default();
+        surfaces.index("Snow").unwrap();
+        surfaces.0.push(Surface {
+            name: "CONCRETE_POTHOLE".into(),
+            class: Some(SurfaceClass::Concrete),
+        });
+        assert_eq!(
+            crate::world::Resource::to_json(&surfaces).unwrap(),
+            Some(json!([{"name": "Snow"}, {"name": "CONCRETE_POTHOLE", "class": "concrete"}]))
+        );
     }
 
     #[test]
