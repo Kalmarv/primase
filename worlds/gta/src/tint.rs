@@ -124,6 +124,10 @@ fn tint_mesh(
         };
         let alpha: Vec<u16> = match p.streams.get(&Semantic::Color(0)) {
             Some(Stream::U8x4(c)) if c.len() == index.len() => {
+                // COLOR_0's red and green are GTA's per-vertex ambient occlusion: replaced by the tint here
+                if c.iter().any(|c| c[0] != 255 || c[1] != 255) {
+                    log.approximate("primitives with per-vertex ambient occlusion not carried", 1);
+                }
                 c.iter().map(|c| u16::from(c[3]) * 257).collect()
             }
             _ => vec![65535; index.len()],
@@ -158,6 +162,9 @@ impl Pass for GtaTintVariants {
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "core.instance"]
+    }
+    fn approximates(&self) -> &'static str {
+        "per-vertex ambient occlusion (vertex colour 0 red and green) replaced by the tint"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;

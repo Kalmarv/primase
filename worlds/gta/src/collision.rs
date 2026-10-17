@@ -49,14 +49,9 @@ pub fn ybn_detail(file_name: &str) -> Option<String> {
 
 impl Component for GtaBounds {
     const NAME: &'static str = "gta.bounds";
-    /// A summary: the file and the root bound's kind and box.
+    /// Bulk data (a bound's every vertex and polygon): not shown.
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(Some(serde_json::json!({
-            "path": self.path,
-            "detail": self.detail,
-            "kind": self.bound.header.kind,
-            "box": [self.bound.header.box_min, self.bound.header.box_max],
-        })))
+        Ok(None)
     }
 }
 
@@ -70,13 +65,9 @@ pub struct GtaEmbeddedBounds {
 
 impl Component for GtaEmbeddedBounds {
     const NAME: &'static str = "gta.embedded_bounds";
-    /// A summary: the file and the root bound's kind and box.
+    /// Bulk data (a bound's every vertex and polygon): not shown.
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(Some(serde_json::json!({
-            "path": self.path,
-            "kind": self.bound.header.kind,
-            "box": [self.bound.header.box_min, self.bound.header.box_max],
-        })))
+        Ok(None)
     }
 }
 
@@ -610,6 +601,7 @@ impl Soup {
                 (p[0][0] + p[1][0] + p[2][0]) / 3.0,
                 (p[0][1] + p[1][1] + p[2][1]) / 3.0,
             ]) {
+                log.count("collision triangles outside the region, left out", 1);
                 continue;
             }
             if p.iter().flatten().any(|v| !v.is_finite()) {
