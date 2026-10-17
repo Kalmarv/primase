@@ -404,7 +404,7 @@ impl Primitive {
 /// count nor the order can change).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Mesh {
-    pub primitives: Vec<Primitive>,
+    primitives: Vec<Primitive>,
 }
 impl Mesh {
     pub fn new(primitives: Vec<Primitive>) -> Self {

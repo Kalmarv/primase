@@ -21,6 +21,30 @@ Known exceptions are listed in `architecture.toml`, each with its reason and wha
 exception that no longer occurs, so fixing a violation means deleting its entry; adding one needs a reviewer's
 agreement.
 
+## Drift: shapes to refuse in review
+
+Changes drift towards one program's situation in recognisable shapes. Writers check their change against these, and
+reviewers refuse them.
+
+- **A reader that bakes, lowers or approximates.** The reader keeps the source's data; a named pass changes it
+  (Roles). Checked by the namespaces a reader declares.
+- **A flag or boolean added for one target's need.** If the fact is in the source (draw order, what draws over what,
+  a surface's material), the reader reads it into a generic core component every target can use. A target-shaped
+  switch doesn't land.
+- **A hand-kept name list where the data already says it.** Read the field (a sampler state, a shader class, a
+  surface id). A name list is acceptable only as a named, documented table from source names to core vocabulary, in
+  a pass, counting what it doesn't map.
+- **Game or target semantics in core or the toolkit.** Core holds generic facts; game names and target rules live
+  in that game's or target's crate. A core change carries evidence from two sources, or a written reason why one is
+  enough.
+- **A contract a pass may skip.** Counts, per-primitive data (`World::rebuild_primitives`), declarations (the pass
+  manager's checks). If a contract can be skipped, make it a compile or run error, not a convention.
+- **A home-made oracle.** Compare against the game, a third-party tool or hand-worked fixtures. A second
+  implementation of our own isn't evidence. A baseline of our own output detects changes; it doesn't check
+  correctness.
+- **A program-specific shortcut in the library.** A path, option or code branch that exists for one driver, scene
+  or machine stays in that driver: the library is composable by any program.
+
 ## Priorities: correct first, then fast
 
 1. Every piece lands with its gates passing: cross-checks against a second decoder or fixtures, the census over a
