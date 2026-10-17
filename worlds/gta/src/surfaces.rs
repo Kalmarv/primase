@@ -7,11 +7,11 @@
 //! hay, bushes, leaves and twigs are grass; cloth, carpets, leather, tarpaulin and soft tops are fabric; linoleum,
 //! laminate, fibreglass and polystyrene are plastic; perspex, screens and car glass are glass; water is water; the
 //! effect materials on metal (electrified, steam, flame, the water tower) and electric fences and barbed wire metal,
-//! the beer barrel wood, the pool table's felt and cushions fabric. Puddles (solid ground under a wet look), plaster,
-//! cardboard, paper, foam and the default material are classified other. The names with no surface a body stands on
-//! (body parts, the physics-only materials: no friction, balls, casters, the ped capsule and car void, dynamic cover
-//! bounds; liquids other than water, meat, the TEMP slots) are left unclassified and counted by name, as are names the
-//! table does not know.
+//! the beer barrel wood, the pool table's felt and cushions fabric. Puddles (solid ground under a wet look), the
+//! no-friction walls (solid, slippery: they keep a body off ledges), plaster, cardboard, paper, foam and the default
+//! material are classified other. The names with no surface a body stands on (body parts, the other physics-only
+//! materials: balls, casters, the ped capsule and car void, dynamic cover bounds; liquids other than water, meat, the
+//! TEMP slots) are left unclassified and counted by name, as are names the table does not know.
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
@@ -162,6 +162,7 @@ pub const GTA_SURFACE_CLASSES: &[(&str, SurfaceClass)] = &[
     ("CAR_GLASS_OPAQUE", Glass),
     ("WATER", Water),
     ("PUDDLE", Other),
+    ("PHYS_NO_FRICTION", Other),
     ("PLASTER_SOLID", Other),
     ("PLASTER_BRITTLE", Other),
     ("CARDBOARD_SHEET", Other),
