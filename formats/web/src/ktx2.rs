@@ -378,6 +378,23 @@ impl TextureEncoder {
                 let png = source
                     .get(start..start + len)
                     .ok_or_else(|| invalid("image range"))?;
+                if image["extras"]["primase.role"] == "data" {
+                    // numbers a shader reads exactly: kept as stored, whole and lossless, whatever slot binds them
+                    while !bin.len().is_multiple_of(4) {
+                        bin.push(0);
+                    }
+                    let index = images.len();
+                    let mut image = image.clone();
+                    image["bufferView"] = json!(views.len());
+                    image["extras"]["primase.web_texture"] =
+                        json!({"role": "data", "codec": "PNG_AS_STORED"});
+                    views.push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":png.len()}));
+                    bin.extend_from_slice(png);
+                    images.push(image);
+                    image_variants.insert(key, index);
+                    texture["source"] = json!(index);
+                    continue;
+                }
                 let digest: [u8; 32] = Sha256::digest(png).into();
                 let cap = self.caps_for(image["name"].as_str()).get(role);
                 let cache_key = (digest, role, alpha_policy, cap);
@@ -775,6 +792,45 @@ mod tests {
         }
         let have: BTreeSet<String> = ENCODERS.split_whitespace().map(str::to_owned).collect();
         assert_eq!(have, want);
+    }
+
+    #[test]
+    fn data_images_are_kept_as_stored() {
+        let pixels = [200, 180, 160, 17].repeat(4 * 4);
+        let png = primase_image::write_png(&primase_image::Image {
+            width: 4,
+            height: 4,
+            samples: primase_image::Samples::U8(pixels),
+        })
+        .unwrap();
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":png.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png","extras":{"primase.role":"data"}}],"textures":[{"source":0}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}]});
+        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let output = TextureEncoder::default().apply(bytes).unwrap();
+        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let doc: Value = serde_json::from_slice(chunks.json).unwrap();
+        let t = doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+            .as_u64()
+            .unwrap() as usize;
+        let image = doc["textures"][t]["source"].as_u64().unwrap() as usize;
+        assert_eq!(doc["images"][image]["mimeType"], "image/png");
+        assert_eq!(
+            doc["images"][image]["extras"]["primase.web_texture"]["role"],
+            "data"
+        );
+        let view = &doc["bufferViews"][doc["images"][image]["bufferView"].as_u64().unwrap() as usize];
+        let start = view["byteOffset"].as_u64().unwrap() as usize;
+        let bin = chunks.bin.unwrap();
+        assert_eq!(&bin[start..start + png.len()], &png[..], "the stored bytes");
+        assert!(
+            doc.get("extensionsUsed").is_none_or(|u| !u
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == "KHR_texture_basisu"))
+        );
     }
 
     #[test]

@@ -139,6 +139,10 @@ Quantization may move positions; bounds in the index describe pre-quantization
 geometry. Consumers comparing exact vertex bounds must allow the declared step
 transformed by each placement, plus floating-point transform error.
 
+A data image (`extras["primase.role"] = "data"`: a palette or lookup table a shader reads exactly) is always the
+stored PNG, at full size and never block-compressed, and its textures use a NEAREST sampler without mips. A
+consumer samples it as stored.
+
 Image files are PNG or KTX2 UASTC LDR 4x4 with Zstandard supercompression. KTX2 textures
 use `KHR_texture_basisu` and are transcoded to a supported GPU format. Colour
 textures use sRGB; normal and data textures are linear. The writer may retain

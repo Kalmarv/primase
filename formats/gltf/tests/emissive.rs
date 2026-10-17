@@ -77,3 +77,40 @@ fn a_negative_strength_is_invalid() {
     let w = world(f32::INFINITY);
     assert!(!w.verify_components().is_empty());
 }
+
+#[test]
+fn a_data_texture_is_sampled_nearest_and_its_image_marked_data() {
+    use primase_core::pbr::TextureRef;
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    let mut w = world(1.0);
+    let palette = w.spawn();
+    w.insert(
+        palette,
+        Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![10, 20, 30, 255, 40, 50, 60, 255]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Data,
+            normal: None,
+        },
+    );
+    let (m, _) = w
+        .iter::<PbrMaterial>()
+        .next()
+        .map(|(e, m)| (e, m.clone()))
+        .unwrap();
+    w.get_mut::<PbrMaterial>(m).unwrap().base_color_texture = Some(TextureRef::new(palette));
+    let doc = document(&w);
+    let t = &doc["textures"][0];
+    let sampler = &doc["samplers"][t["sampler"].as_u64().unwrap() as usize];
+    assert_eq!(
+        (sampler["magFilter"].as_u64(), sampler["minFilter"].as_u64()),
+        (Some(9728), Some(9728))
+    );
+    assert_eq!(
+        doc["images"][t["source"].as_u64().unwrap() as usize]["extras"]["primase.role"],
+        "data"
+    );
+}

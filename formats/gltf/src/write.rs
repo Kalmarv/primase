@@ -344,7 +344,8 @@ struct Writer<'w> {
     texture_index: BTreeMap<(Entity, [Wrap; 2]), usize>,
     image_of_entity: BTreeMap<Entity, Option<usize>>,
     image_by_hash: BTreeMap<[u8; 32], usize>,
-    sampler_index: BTreeMap<[Wrap; 2], usize>,
+    /// By wrap and whether the texture is data (sampled nearest, without mips).
+    sampler_index: BTreeMap<([Wrap; 2], bool), usize>,
     /// A written texture slot has a transform (`KHR_texture_transform` is used).
     texture_transform_used: bool,
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
@@ -1337,15 +1338,28 @@ impl Writer<'_> {
         let Some(image) = self.image(r.texture)? else {
             return Ok(None);
         };
+        let data = self
+            .world
+            .get::<Texture>(r.texture)
+            .is_some_and(|t| t.role == primase_core::TexRole::Data);
         let mut t = Map::new();
-        if r.wrap != [Wrap::Repeat; 2] {
+        if r.wrap != [Wrap::Repeat; 2] || data {
             let next = self.samplers.len();
-            let sampler = *self.sampler_index.entry(r.wrap).or_insert(next);
+            let sampler = *self.sampler_index.entry((r.wrap, data)).or_insert(next);
             if sampler == next {
-                self.samplers
-                    .push(json!({"wrapS": wrap_code(r.wrap[0]), "wrapT": wrap_code(r.wrap[1])}));
+                let mut s = json!({"wrapS": wrap_code(r.wrap[0]), "wrapT": wrap_code(r.wrap[1])});
+                if data {
+                    // data is read exactly: nearest, no mips (9728 NEAREST)
+                    s["magFilter"] = json!(9728);
+                    s["minFilter"] = json!(9728);
+                }
+                self.samplers.push(s);
             }
             t.insert("sampler".into(), json!(sampler));
+        }
+        if data {
+            // and must reach a consumer whole: no resizing or lossy coding of its image
+            self.images[image]["extras"]["primase.role"] = json!("data");
         }
         t.insert("source".into(), json!(image));
         t.insert("name".into(), Value::String(self.name_of(r.texture, "texture")));

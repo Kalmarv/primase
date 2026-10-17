@@ -493,6 +493,11 @@ pub enum TexRole {
     Normal,
     /// Packed scalar maps (metal/rough/AO/opacity, specular, ...): always linear.
     Mask,
+    /// Numbers or indices a shader reads exactly (a palette indexed per vertex, a lookup table): any filtering,
+    /// resizing or lossy coding changes what it means. The reader sets it from how the material binds the texture
+    /// (a point sampler without mips, or the slot's documented use); passes and writers that change texels keep it
+    /// whole and lossless.
+    Data,
     Other,
 }
 
