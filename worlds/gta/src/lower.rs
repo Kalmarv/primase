@@ -136,6 +136,34 @@ pub fn specular_texture(t: &Texture, mask: [f32; 3], power: Option<f32>) -> Resu
     })
 }
 
+/// The base texture of a `distance_map` shader (sign text), from its distance field `t` (every level): white with the
+/// field's red channel as alpha, which the material cuts at half, as the shader's smoothstep around 0.5 does.
+pub fn distance_texture(t: &Texture) -> Result<Texture, String> {
+    let mut levels = Vec::with_capacity(t.levels.len());
+    for (i, level) in t.levels.iter().enumerate() {
+        let (w, h) = ((t.width >> i).max(1), (t.height >> i).max(1));
+        let rgba = Decoder::default()
+            .decode_rgba8(t.format, w, h, level)
+            .map_err(|e| format!("distance map: {e}"))?;
+        levels.push(
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [255, 255, 255, p[0]])
+                .collect(),
+        );
+    }
+    Ok(Texture {
+        width: t.width,
+        height: t.height,
+        format: TexFormat::Rgba8Unorm,
+        levels,
+        color_space: ColorSpace::Srgb,
+        role: TexRole::Color,
+        normal: None,
+    })
+}
+
 /// A material's specular map, its intensity mask and its power, to derive a texture from ([`specular_texture`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpecularMap {
@@ -189,7 +217,8 @@ pub fn for_each_mesh(
 /// `lower-gta-pbr` (see the module documentation). A material:
 ///
 /// - base colour texture: `DiffuseTex` (else `PlateBgTex`, else `DiffuseTexture_layer0`), sRGB; without one, or when
-///   the lookup did not find it, grey [`GREY`]; water: the flat colour [`WATER`];
+///   the lookup did not find it, grey [`GREY`]; water: the flat colour [`WATER`]; `distance_map` (sign text): its
+///   `fillColor` with the distance field's red as alpha, cut at half ([`distance_texture`]);
 /// - alpha: opaque for opaque surfaces, tested at [`CUTOFF`] for cutouts and foliage, blended for alpha, decals, glass
 ///   and water;
 /// - two-sided for the shaders GTA draws from both sides (cloth);
@@ -281,6 +310,8 @@ impl Pass for LowerGtaPbr {
         }
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
+        // per distance field, its text texture
+        let mut fields: BTreeMap<Entity, Option<Entity>> = BTreeMap::new();
         // per specular map, mask and power (bits), its derived texture
         let mut derived: BTreeMap<(Entity, [u32; 3], Option<u32>), Option<Entity>> = BTreeMap::new();
         for (&e, c) in &classes {
@@ -292,7 +323,31 @@ impl Pass for LowerGtaPbr {
                 continue;
             }
             let s = w.get::<GtaShader>(e).expect("shader");
-            let (mut m, map) = self.material(s, c, log);
+            let (mut m, map, distance) = self.material(s, c, log);
+            if let Some(t) = distance {
+                let derived = match fields.get(&t) {
+                    Some(d) => *d,
+                    None => {
+                        let d = match w.get::<Texture>(t) {
+                            Some(tex) => {
+                                let d = distance_texture(tex)?;
+                                let name = w.get::<Name>(t).map(|n| format!("{}_text", n.0));
+                                let de = w.spawn();
+                                w.insert(de, d);
+                                if let Some(n) = name {
+                                    w.insert(de, Name(n));
+                                }
+                                log.count("distance-map text textures derived", 1);
+                                Some(de)
+                            }
+                            None => None,
+                        };
+                        fields.insert(t, d);
+                        d
+                    }
+                };
+                m.base_color_texture = derived.map(TextureRef::new);
+            }
             colour.extend(m.base_color_texture.map(|t| t.texture));
             if let Some(SpecularMap {
                 texture: t,
@@ -360,8 +415,9 @@ impl LowerGtaPbr {
         s: &GtaShader,
         c: &ShaderClass,
         log: &mut PassLog,
-    ) -> (PbrMaterial, Option<SpecularMap>) {
+    ) -> (PbrMaterial, Option<SpecularMap>, Option<Entity>) {
         let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
+        let mut distance = None;
         let mut m = PbrMaterial {
             metallic: 0.0,
             alpha_mode: match c.class {
@@ -372,7 +428,21 @@ impl LowerGtaPbr {
             double_sided: c.two_sided,
             ..PbrMaterial::default()
         };
-        if c.class == Class::Water {
+        if crate::shader_names::effect(s.name) == Some("distance_map") {
+            // sign text: `fillColor` (linear, written to the albedo as it is) where the distance field's red passes
+            // half
+            match param(s, "fillColor") {
+                Some(GtaParam::Floats(f)) if f.len() >= 3 && f[..3].iter().all(|v| v.is_finite()) => {
+                    m.base_color = [f[0], f[1], f[2], 1.0];
+                }
+                _ => log.count("distance maps without a fill colour: white", 1),
+            }
+            m.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+            match texture(s, "distanceMap") {
+                Some(Some(t)) => distance = Some(t),
+                _ => log.count("distance maps without their field: filled", 1),
+            }
+        } else if c.class == Class::Water {
             m.base_color = [
                 srgb(WATER[0]),
                 srgb(WATER[1]),
@@ -462,7 +532,7 @@ impl LowerGtaPbr {
         if matches!(texture(s, "BumpTex"), Some(Some(_))) {
             log.approximate("normal maps not lowered yet", 1);
         }
-        (m, map)
+        (m, map, distance)
     }
 }
 
@@ -559,6 +629,23 @@ mod tests {
         assert_eq!(exponent(501.0), 2058.0);
         assert_eq!(exponent(9000.0), exponent(512.0));
         assert!(roughness(512.0) < roughness(100.0));
+    }
+
+    #[test]
+    fn distance_texture_is_white_with_the_field_as_alpha() {
+        let t = Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![0, 9, 9, 9, 200, 1, 2, 3], vec![100, 0, 0, 0]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Other,
+            normal: None,
+        };
+        let d = super::distance_texture(&t).unwrap();
+        assert_eq!(d.levels[0], vec![255, 255, 255, 0, 255, 255, 255, 200]);
+        assert_eq!(d.levels[1], vec![255, 255, 255, 100]);
+        assert_eq!((d.role, d.color_space), (TexRole::Color, ColorSpace::Srgb));
     }
 
     #[test]
