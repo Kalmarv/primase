@@ -654,89 +654,58 @@ fn region_placements_against_the_scene() {
                 }
                 continue;
             }
-            // the exporter's decal lift: every scene triangle of a decal shader's geometry is one of ours, as stored
-            // or with each vertex moved 12 mm along its drawn face (the normalised sum of its triangles' face normals),
-            // within 0.2 mm
+            // the exporter's decal lift (its --decal-face-lift): each scene part (one of its buckets) lifts every vertex
+            // 12 mm along its drawn face there, the normalised sum of the face normals of the part's triangles touching
+            // it, in the drawn order, from the positions as read ([`replay_lift`])
             let shader = sp_parts[parts[0]]
                 .source
                 .as_ref()
                 .and_then(|v| v["shader"].as_str())
                 .unwrap_or("?");
-            let lifted = (shader.contains("decal") || shader == "distance_map.sps") && {
-                let grid = |c: [f64; 3]| c.map(|v| (v / 0.005).floor() as i64);
-                let mut cells: BTreeMap<[i64; 3], Vec<[[f64; 3]; 3]>> = BTreeMap::new();
-                // per vertex of the geometry as read, the sum of its triangles' (unnormalised) face normals,
-                // normalised: the drawn face
+            let lift = if shader.contains("decal") || shader == "distance_map.sps" {
                 let k = read_d
                     .sources
                     .iter()
                     .position(|s| *s == g)
                     .expect("the geometry as read");
                 let op = &read_mesh.primitives[k];
-                let pos = op.positions().expect("positions");
-                let idx = op.indices.as_ref().expect("indices");
-                let mut faces = vec![[0f64; 3]; pos.len()];
-                for t in idx.as_chunks::<3>().0 {
-                    let v = [0, 1, 2].map(|j| pos[t[j] as usize].map(f64::from));
-                    let n = cross(sub(v[1], v[0]), sub(v[2], v[0]));
-                    for &i in t {
-                        faces[i as usize] = add(faces[i as usize], n);
-                    }
-                }
-                let faces: Vec<[f64; 3]> = faces
+                let ours: Vec<[f64; 3]> = op
+                    .positions()
+                    .expect("positions")
                     .iter()
-                    .map(|n| {
-                        let l = dot(*n, *n).sqrt();
-                        if l > 0.0 { n.map(|x| x / l) } else { [0.0; 3] }
-                    })
+                    .map(|p| p.map(f64::from))
                     .collect();
-                for t in idx.as_chunks::<3>().0 {
-                    for side in [0.0, 0.012, -0.012] {
-                        let w = [0, 1, 2].map(|j| {
-                            let i = t[j] as usize;
-                            add(pos[i].map(f64::from), faces[i].map(|x| x * side))
-                        });
-                        cells.entry(grid(centroid(w))).or_default().push(w);
-                    }
-                }
-                let near = |a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]| {
-                    a.iter()
-                        .all(|p| b.iter().any(|q| dot(sub(*p, *q), sub(*p, *q)).sqrt() <= 2e-4))
-                };
-                parts.iter().all(|&i| {
-                    let tp = &their_mesh.primitives[i];
-                    let pos = tp.positions().expect("positions");
-                    tp.indices
-                        .as_ref()
-                        .expect("indices")
-                        .as_chunks::<3>()
-                        .0
-                        .iter()
-                        .all(|t| {
-                            let v = [0, 1, 2].map(|j| pos[t[j] as usize].map(f64::from));
-                            let c = grid(centroid(v));
-                            (-1..=1).any(|dx| {
-                                (-1..=1).any(|dy| {
-                                    (-1..=1).any(|dz| {
-                                        cells
-                                            .get(&[c[0] + dx, c[1] + dy, c[2] + dz])
-                                            .is_some_and(|l| l.iter().any(|w| near(&v, w)))
-                                    })
-                                })
-                            })
-                        })
-                })
-            };
-            if lifted {
-                *geo.entry("decal geometries lifted 12 mm along the drawn face (the exporter's decal lift, not a pass yet)").or_default() += 1;
+                let our_tris = triangles(op);
+                parts
+                    .iter()
+                    .map(|&i| {
+                        let r = replay_lift(&ours, &our_tris, &their_mesh.primitives[i]);
+                        if only_some && r != Lift::Exact {
+                            println!("      lift: {name} {g:?} part {i}: {r:?}");
+                        }
+                        r
+                    })
+                    .max()
+                    .unwrap_or(Lift::Exact)
             } else {
-                *geo.entry("geometries differing").or_default() += 1;
-                *differing_by_shader.entry(shader.to_string()).or_default() += 1;
-                if examples.len() < 10 {
-                    examples.push(format!(
-                        "{name} model {} geometry {} ({shader}): {missing} of {total} triangles",
-                        g[0], g[1]
-                    ));
+                Lift::Differs { corners_off: 0 }
+            };
+            match lift {
+                Lift::Exact => {
+                    *geo.entry("decal geometries lifted 12 mm along the drawn face (the exporter's decal lift, not a pass yet)").or_default() += 1;
+                }
+                Lift::Creases { .. } => {
+                    *geo.entry("decal geometries lifted 12 mm along the drawn face but at a few crease corners (that exporter's sums there mix faces)").or_default() += 1;
+                }
+                Lift::Differs { .. } => {
+                    *geo.entry("geometries differing").or_default() += 1;
+                    *differing_by_shader.entry(shader.to_string()).or_default() += 1;
+                    if differing_by_shader[shader] <= 3 {
+                        examples.push(format!(
+                            "{name} model {} geometry {} ({shader}): {missing} of {total} triangles",
+                            g[0], g[1]
+                        ));
+                    }
                 }
             }
         }
@@ -1145,10 +1114,27 @@ fn region_placements_against_the_scene() {
                                     tint.colours, tint.triangles, tint.palette_colours
                                 );
                             }
-                            diffs.push(if tint.palette_colours > 8 {
-                                "tint: that exporter's mean colour (more than 8 palette colours)".into()
-                            } else {
-                                "tint colour".into()
+                            let rule = exporter_tint(&read, oe, g, &their_mesh.primitives[i], om_e, *row);
+                            if only_some {
+                                let pal = read
+                                    .get::<primase_gta::components::GtaShader>(om_e)
+                                    .and_then(|s| primase_gta::lower::texture(s, "TintPaletteTex"))
+                                    .flatten()
+                                    .and_then(|t| read.get::<primase_core::Source>(t))
+                                    .map(|s| s.0.clone());
+                                println!("      tint rule {name} {g:?} row {row}: {rule:?}; palette {pal:?}");
+                            }
+                            diffs.push(match rule {
+                                Some(ExporterTint::Mean) => {
+                                    "tint: that exporter's mean colour (more than 8 palette colours)".into()
+                                }
+                                Some(ExporterTint::Bucket(c)) if c == want => {
+                                    "tint: that exporter's bucket colour (its columns grouped by colour in every row)".into()
+                                }
+                                _ if tint.palette_colours > 8 => {
+                                    "tint: that exporter's mean colour (more than 8 palette colours)".into()
+                                }
+                                _ => "tint colour".into(),
                             });
                             break;
                         }
@@ -1171,11 +1157,19 @@ fn region_placements_against_the_scene() {
                 let probed_opaque = tp.alpha_mode == primase_core::pbr::AlphaMode::Opaque
                     && sm.class != MaterialClass::Wood
                     && sm.base.is_some_and(|t| !exporter_sees_alpha(&theirs, t, &scene));
+                // that exporter alpha-tests a blended surface with a triangle over more than 256 texture repeats (its
+                // skate editor cuts blended triangles at every repeat)
+                let repeat_tested = tp.alpha_mode == (primase_core::pbr::AlphaMode::Mask { cutoff: 0.5 })
+                    && ours_p.alpha_mode == primase_core::pbr::AlphaMode::Blend
+                    && over_repeats(op);
                 diffs.push(if probed_opaque {
                     format!(
                         "alpha: scene {class} opaque, its texture without alpha by that exporter's probe; ours {:?}",
                         ours_p.alpha_mode
                     )
+                } else if repeat_tested {
+                    "alpha: that exporter's alpha test of a blended surface over more than 256 texture repeats; ours Blend"
+                        .into()
                 } else {
                     format!("alpha: scene {class} {:?}, ours {:?}", tp.alpha_mode, ours_p.alpha_mode)
                 });
@@ -1220,6 +1214,53 @@ fn region_placements_against_the_scene() {
                 });
                 diffs.push("distance_map: that exporter's flat opaque plate; ours the fill colour cut at the field's half".into());
             }
+            // that exporter's drawable copy: a same-named drawable the game's mounts never apply (or replace), whose
+            // geometry has the scene part's shader; what follows from the shader is that copy's
+            let scene_effect = src["shader"]
+                .as_str()
+                .map(|n| n.trim_end_matches(".sps").to_string());
+            if let (Some(want), Some(ours_effect)) = (&scene_effect, effect_name)
+                && want.as_str() != ours_effect
+                && let Some(s) = drawn.get::<primase_gta::components::GtaShader>(om_e)
+                && drawable_copy_with(&install, &keys, &s.drawable, g, want).is_some()
+            {
+                diffs.retain(|k| {
+                    !(k.starts_with("emissive:")
+                        || k.starts_with("alpha:")
+                        || k.starts_with("two-sided:")
+                        || k.starts_with("vertex alpha:"))
+                });
+                diffs.push(
+                    "shader: that exporter's copy of the drawable from an archive the game's mounts never apply or replace"
+                        .into(),
+                );
+            }
+            // that exporter's flat grey: a geometry whose diffuse texture it resolved to nothing gets its opaque grey
+            // material (and so no tint, no blend): where ours resolves none either, or where the copy of our
+            // dictionary the game never draws (the one that exporter read for its other textures) lacks the texture
+            let grey = sm.base.is_none()
+                && sm.base_color == Some([128, 128, 128, 255])
+                && sm.class == MaterialClass::Opaque;
+            if grey && !diffs.is_empty() {
+                let why = match ours_p.base_color_texture {
+                    None => Some(
+                        "base texture: that exporter's flat grey, where ours resolves no diffuse texture either",
+                    ),
+                    Some(o) if copy_without(&install, &keys, &drawn, o.texture).is_some() => Some(
+                        "base texture: that exporter's flat grey: the same-named dictionary the game's mounts replace or never mount lacks the texture",
+                    ),
+                    _ => None,
+                };
+                if let Some(why) = why {
+                    diffs.retain(|k| {
+                        !(k.starts_with("base texture: scene flat")
+                            || k.starts_with("base colour factor")
+                            || k.starts_with("alpha: scene opaque")
+                            || k.starts_with("tinted: scene false"))
+                    });
+                    diffs.push(why.into());
+                }
+            }
             if diffs.is_empty() {
                 *mat.entry("parts equal".into()).or_default() += 1;
             } else {
@@ -1227,6 +1268,12 @@ fn region_placements_against_the_scene() {
                     .get::<primase_gta::components::GtaShader>(om_e)
                     .expect("shader");
                 let effect = primase_gta::shader_names::effect(s.name).unwrap_or("?");
+                if only_some {
+                    println!(
+                        "      material debug {name} {g:?}: {diffs:?}; scene part {src}; scene {sm:?}; ours {effect} b{} {:?}",
+                        s.render_bucket, ours_p
+                    );
+                }
                 for k in &diffs {
                     let ex = mat_examples.entry(k.clone()).or_default();
                     if ex.len() < 6 {
@@ -1265,6 +1312,7 @@ fn region_placements_against_the_scene() {
                 // that exporter's wood class: a tree shader's texture with mean alpha 0.9 or more drawn opaque
                 | "alpha: scene wood Opaque, ours Mask { cutoff: 0.5 }"
                 | "tint: that exporter's mean colour (more than 8 palette colours)"
+                | "tint: that exporter's bucket colour (its columns grouped by colour in every row)"
                 // that exporter loads every archive it finds and every pack's own files: a same-named copy the game's
                 // mount data never mounts (patchday27ng's fwy_01.rpf) or replaces (a pack file under update.rpf's dlc_patch)
                 | "base texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
@@ -1275,6 +1323,10 @@ fn region_placements_against_the_scene() {
                 | "layer texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
                 | "layer texture: that exporter's alpha-only (A8) texture as white or grey"
                 | "layer texture: that exporter's re-encoding of ours (another format, its own levels)"
+                | "alpha: that exporter's alpha test of a blended surface over more than 256 texture repeats; ours Blend"
+                | "base texture: that exporter's flat grey, where ours resolves no diffuse texture either"
+                | "shader: that exporter's copy of the drawable from an archive the game's mounts never apply or replace"
+                | "base texture: that exporter's flat grey: the same-named dictionary the game's mounts replace or never mount lacks the texture"
                 // GTA cuts the sign text's distance field at half in its fill colour; that exporter read no field
                 | "distance_map: that exporter's flat opaque plate; ours the fill colour cut at the field's half"
                 // both approximate the lookup per vertex (gta-terrain-layers counts it)
@@ -1430,6 +1482,82 @@ fn replaced_copy(
                     .unwrap_or_default()
             };
             if textures.iter().any(|t| hit(t).is_some()) {
+                return Some(e.path.clone());
+            }
+        }
+    }
+    None
+}
+
+/// A copy of our texture `o`'s dictionary (a dictionary of the same file name) other than ours, the one the mount rules
+/// make live, that holds no texture of its name: that copy's path.
+fn copy_without(install: &Install, keys: &Keys, ours: &World, o: primase_core::Entity) -> Option<String> {
+    let source = &ours.get::<primase_core::Source>(o)?.0;
+    let (path, name) = source.rsplit_once('#')?;
+    let file = path.rsplit('\\').next()?;
+    let name = name.to_lowercase();
+    let suffix = format!("\\{file}");
+    for a in &install.archives {
+        for (i, e) in a.entries.iter().enumerate() {
+            if e.path == path || !e.path.ends_with(&suffix) {
+                continue;
+            }
+            let Ok(r) = a.resource(&mut std::fs::File::open(&a.file).ok()?, i, keys) else {
+                continue;
+            };
+            let names: Vec<String> = if file.ends_with(".ytd") {
+                primase_gta::texture::TextureDictionary::read_resource(&r)
+                    .map(|d| {
+                        d.textures
+                            .into_iter()
+                            .flatten()
+                            .map(|t| t.name.to_lowercase())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                primase_gta::drawable::Drawable::read_resource(&r)
+                    .ok()
+                    .and_then(|d| d.textures)
+                    .map(|d| {
+                        d.textures
+                            .into_iter()
+                            .flatten()
+                            .map(|t| t.name.to_lowercase())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            if !names.contains(&name) {
+                return Some(e.path.clone());
+            }
+        }
+    }
+    None
+}
+
+/// A copy of our drawable `ours` (a drawable of the same file name, at another path) whose geometry `g` (model, geometry
+/// of the finest level) has effect `want`: that copy's path.
+fn drawable_copy_with(install: &Install, keys: &Keys, ours: &str, g: [u32; 2], want: &str) -> Option<String> {
+    let file = ours.rsplit('\\').next()?;
+    let suffix = format!("\\{file}");
+    for a in &install.archives {
+        for (i, e) in a.entries.iter().enumerate() {
+            if e.path == ours || !e.path.ends_with(&suffix) {
+                continue;
+            }
+            let Ok(r) = a.resource(&mut std::fs::File::open(&a.file).ok()?, i, keys) else {
+                continue;
+            };
+            let Ok(d) = primase_gta::drawable::Drawable::read_resource(&r) else {
+                continue;
+            };
+            let effect = d.lods[0]
+                .get(g[0] as usize)
+                .and_then(|m| m.geometries.get(g[1] as usize))
+                .and_then(|geo| d.shaders.get(usize::from(geo.shader)))
+                .and_then(|s| primase_gta::shader_names::effect(s.name));
+            if effect == Some(want) {
                 return Some(e.path.clone());
             }
         }
@@ -1714,6 +1842,82 @@ fn corner_match(theirs: &primase_core::Primitive, ours: &primase_core::Primitive
 
 /// For a look at one tint difference: our palette's colours (sRGB bytes) in every row at the columns the scene part's
 /// triangles pick (their first vertex's COLOR_0 blue in the geometry as read), with how many triangles pick each.
+/// That exporter's tint for a scene part, from our geometry as read: the _tnt shaders' palette column of each triangle's
+/// first vertex (blue * width / 255), columns grouped by their colour in every row (quantised as it writes a tint);
+/// more than 8 groups give the geometry one mean colour, else each group its colour in the placed row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExporterTint {
+    Mean,
+    /// The scene part's group's colour (`None`: near-white, no tint).
+    Bucket(Option<[u8; 3]>),
+}
+
+fn exporter_tint(
+    read: &World,
+    proto: primase_core::Entity,
+    g: [u32; 2],
+    theirs: &primase_core::Primitive,
+    material: primase_core::Entity,
+    row: u32,
+) -> Option<ExporterTint> {
+    use primase_texcodec::TexDecoder;
+    let mesh = read.get::<Mesh>(proto)?;
+    let k = read
+        .get::<GtaSources>(proto)?
+        .sources
+        .iter()
+        .position(|s| *s == g)?;
+    let p = &mesh.primitives[k];
+    let s = read.get::<primase_gta::components::GtaShader>(material)?;
+    let pal = primase_gta::lower::texture(s, "TintPaletteTex")??;
+    let t = read.get::<primase_core::Texture>(pal)?;
+    let rgba = primase_texcodec::Decoder::default()
+        .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
+        .ok()?;
+    let (Some(primase_core::Stream::U8x4(c0)), Some(pos)) =
+        (p.streams.get(&primase_core::Semantic::Color(0)), p.positions())
+    else {
+        return None;
+    };
+    let colour = |r: u32, c: u32| {
+        let o = ((r * t.width + c) * 4) as usize;
+        quantised_tint([rgba[o], rgba[o + 1], rgba[o + 2]])
+    };
+    let column =
+        |v: u32| (u64::from(c0[v as usize][2]) * u64::from(t.width) / 255).min(u64::from(t.width - 1)) as u32;
+    let tris = triangles(p);
+    let used: BTreeSet<u32> = tris.iter().map(|t| column(t[0])).collect();
+    let mut group: BTreeMap<Vec<Option<[u8; 3]>>, u32> = BTreeMap::new();
+    let mut key: BTreeMap<u32, u32> = BTreeMap::new();
+    for &c in &used {
+        let sig: Vec<Option<[u8; 3]>> = (0..t.height).map(|r| colour(r, c)).collect();
+        let k = *group.entry(sig).or_insert(c);
+        key.insert(c, k);
+    }
+    if group.len() > 8 {
+        return Some(ExporterTint::Mean);
+    }
+    // the scene part's group: the most common among its triangles' first-vertex columns, its triangles matched to ours
+    let at = |v: [f32; 3]| v.map(|x| (f64::from(x) * 1e4).round() as i64);
+    let mut by_corners: BTreeMap<[[i64; 3]; 3], u32> = BTreeMap::new();
+    for tri in &tris {
+        let mut c = tri.map(|i| at(pos[i as usize]));
+        c.sort();
+        by_corners.insert(c, key[&column(tri[0])]);
+    }
+    let tp = theirs.positions()?;
+    let mut hist: BTreeMap<u32, usize> = BTreeMap::new();
+    for tri in triangles(theirs) {
+        let mut c = tri.map(|i| at(tp[i as usize]));
+        c.sort();
+        if let Some(&k) = by_corners.get(&c) {
+            *hist.entry(k).or_default() += 1;
+        }
+    }
+    let k = hist.into_iter().max_by_key(|&(_, n)| n)?.0;
+    Some(ExporterTint::Bucket(colour(row, k)))
+}
+
 fn tint_debug(
     read: &World,
     proto: primase_core::Entity,
@@ -1800,6 +2004,132 @@ fn tint_debug(
         println!("        column {c}: rows {rows:?}");
     }
 }
+
+/// Whether a triangle of `p` lies over more than 256 texture tiles (unit squares of TEXCOORD0 its uv box touches), as
+/// that exporter and its skate editor count them.
+fn over_repeats(p: &primase_core::Primitive) -> bool {
+    let Some(primase_core::Stream::F32x2(uv)) = p.streams.get(&primase_core::Semantic::TexCoord(0)) else {
+        return false;
+    };
+    triangles(p).iter().any(|t| {
+        let [a, b, c] = t.map(|i| uv[i as usize].map(f64::from));
+        let span = |x: [f64; 3]| {
+            let lo = (x[0].min(x[1]).min(x[2]) + 1e-5).floor();
+            let hi = ((x[0].max(x[1]).max(x[2]) - 1e-5).floor()).max(lo);
+            hi - lo + 1.0
+        };
+        span([a[0], b[0], c[0]]) * span([a[1], b[1], c[1]]) > 256.0
+    })
+}
+
+/// How a scene part's decal geometry relates to ours as read under that exporter's decal lift ([`replay_lift`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Lift {
+    /// Every corner within 0.2 mm of the replay.
+    Exact,
+    /// All but a few corners (at most 10, or 1 in 100) exact, those within 25 mm: creases, where that exporter's sum
+    /// mixes faces whose vertices ours keeps apart.
+    Creases { corners_off: usize },
+    /// Neither: corners off the replay (`usize::MAX`: a scene triangle with no source triangle of ours).
+    Differs { corners_off: usize },
+}
+
+/// Replays that exporter's decal lift (its --decal-face-lift) for one scene part `theirs` against our geometry as read
+/// (`ours`, `our_tris`). Each scene triangle is matched to the triangle of ours it came from: of those with every corner
+/// within 13 mm, the one nearest the scene triangle moved back 12 mm along its own face, either way (decal stacks put
+/// other layers of ours nearer the lifted triangle than its source). Our face normals are summed per vertex over the
+/// part in the scene triangles' order, and each vertex of ours is moved 12 mm along its normalised sum.
+fn replay_lift(ours: &[[f64; 3]], our_tris: &[[u32; 3]], theirs: &primase_core::Primitive) -> Lift {
+    let grid = |c: [f64; 3]| c.map(|v| (v / 0.025).floor() as i64);
+    let mut cells: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
+    for (n, t) in our_tris.iter().enumerate() {
+        cells
+            .entry(grid(centroid(t.map(|i| ours[i as usize]))))
+            .or_default()
+            .push(n);
+    }
+    let dist = |a: [f64; 3], b: [f64; 3]| dot(sub(a, b), sub(a, b)).sqrt();
+    let source = |s: &Tri| -> Option<[usize; 3]> {
+        let c = grid(centroid(*s));
+        let f = cross(sub(s[1], s[0]), sub(s[2], s[0]));
+        let f = f.map(|x| x * 0.012 / dot(f, f).sqrt());
+        let back = [s.map(|p| sub(p, f)), s.map(|p| add(p, f))];
+        let mut best: Option<(f64, [usize; 3])> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    for &n in cells
+                        .get(&[c[0] + dx, c[1] + dy, c[2] + dz])
+                        .into_iter()
+                        .flatten()
+                    {
+                        let t = our_tris[n].map(|i| i as usize);
+                        for m in [[0, 1, 2], [1, 2, 0], [2, 0, 1], [0, 2, 1], [2, 1, 0], [1, 0, 2]] {
+                            let v = m.map(|j| t[j]);
+                            let raw = (0..3).map(|j| dist(s[j], ours[v[j]])).fold(0.0, f64::max);
+                            let d = back
+                                .iter()
+                                .map(|u| (0..3).map(|j| dist(u[j], ours[v[j]])).fold(0.0, f64::max))
+                                .fold(f64::INFINITY, f64::min);
+                            if raw <= 0.013 && best.is_none_or(|(b, _)| d < b) {
+                                best = Some((d, v));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, v)| v)
+    };
+    let pos: Vec<[f64; 3]> = theirs
+        .positions()
+        .expect("positions")
+        .iter()
+        .map(|p| p.map(f64::from))
+        .collect();
+    let tris: Vec<Tri> = triangles(theirs)
+        .iter()
+        .map(|t| t.map(|k| pos[k as usize]))
+        .collect();
+    let Some(from) = tris.iter().map(source).collect::<Option<Vec<[usize; 3]>>>() else {
+        return Lift::Differs {
+            corners_off: usize::MAX,
+        };
+    };
+    let mut sums: BTreeMap<usize, [f64; 3]> = BTreeMap::new();
+    for v in &from {
+        let n = cross(sub(ours[v[1]], ours[v[0]]), sub(ours[v[2]], ours[v[0]]));
+        for &j in v {
+            let e = sums.entry(j).or_insert([0.0; 3]);
+            *e = add(*e, n);
+        }
+    }
+    // each corner's distance from the replay, lifting to one side
+    let off = |side: f64| -> Vec<f64> {
+        tris.iter()
+            .zip(&from)
+            .flat_map(|(s, v)| (0..3).map(move |j| (s[j], v[j])))
+            .map(|(s, j)| {
+                let n = sums[&j];
+                dist(s, add(ours[j], n.map(|x| x * side / dot(n, n).sqrt())))
+            })
+            .collect()
+    };
+    let (up, down) = (off(0.012), off(-0.012));
+    let count = |d: &[f64]| d.iter().filter(|&&x| x > 2e-4).count();
+    let d = if count(&up) <= count(&down) { up } else { down };
+    let corners_off = count(&d);
+    if corners_off == 0 {
+        Lift::Exact
+    } else if corners_off <= 10.max(d.len() / 100) && d.iter().all(|&x| x <= 0.025) {
+        Lift::Creases { corners_off }
+    } else {
+        Lift::Differs { corners_off }
+    }
+}
+
+/// A triangle's corners.
+type Tri = [[f64; 3]; 3];
 
 /// A scene part's tint as ours draws it ([`tint_at`]).
 #[derive(Default)]
