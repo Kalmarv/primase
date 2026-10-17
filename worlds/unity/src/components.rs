@@ -453,29 +453,32 @@ pub struct UnityPhysicMaterial {
     pub bounce_combine: i64,
 }
 
-/// A collider as Unity stores it, on an entity placed by its Transform: its shape, whether it collides (`active`:
-/// GameObject active and collider enabled; `trigger`s detect, they do not collide), its physic material and the
-/// Rigidbody on it or an ancestor (`Some(true)`: kinematic, it moves only when scripted).
+/// A collider as Unity stores it, on an entity placed by its Transform: its shape, whether it is a trigger (triggers
+/// detect, they do not collide), its physic material and the Rigidbody on it or an ancestor (`Some(true)`: kinematic,
+/// it moves only when scripted). Whether its GameObject is active and it is enabled is the entity's state
+/// (`core.condition`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityCollider {
     pub collider: UnityObject,
     pub layer: u32,
     pub shape: UnityColliderShape,
-    pub active: bool,
     pub trigger: bool,
     pub physic_material: Option<UnityPhysicMaterial>,
     pub rigidbody: Option<bool>,
 }
 
 impl UnityCollider {
-    /// Whether it is collision geometry: active, not a trigger, and not moved by physics (no Rigidbody, or kinematic).
+    /// Whether it is collision geometry when it exists: not a trigger, and not moved by physics (no Rigidbody, or
+    /// kinematic).
     pub fn collides(&self) -> bool {
-        self.active && !self.trigger && self.rigidbody != Some(false)
+        !self.trigger && self.rigidbody != Some(false)
     }
 }
 
 impl Component for UnityCollider {
     const NAME: &'static str = "unity.collider";
+    /// 2: `active` left to the entity's state.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

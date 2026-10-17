@@ -28,8 +28,12 @@
 //!   does this only when its asset's main light mode is per-pixel; the asset is a script object without a type tree,
 //!   not decoded, so that is assumed (counted as an approximation);
 //! - else (another pipeline, or none known) none, counted.
+//!
+//! Lights with a state condition (`core.condition`: off as stored) are not visible as stored, so neither named nor
+//! candidates; `resolve-state` before this pass leaves the same choice.
 
 use primase_core::pass::{Pass, PassLog};
+use primase_core::state::Condition;
 use primase_core::{Entity, Light, LightKind, World};
 use primase_image::srgb_to_linear;
 
@@ -101,12 +105,14 @@ fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
     let directional = |e: Entity| {
         w.get::<Light>(e)
             .is_some_and(|l| l.kind == LightKind::Directional)
+            && !w.has::<Condition>(e)
     };
     match settings.sun {
         Some(sun) if directional(sun) => {
             log.count("sun named by RenderSettings", 1);
             return Some(sun);
         }
+        Some(sun) if w.has::<Condition>(sun) => log.count("RenderSettings sun off as stored", 1),
         Some(_) => log.count("RenderSettings sun not a directional light", 1),
         None => {}
     }
@@ -301,6 +307,15 @@ mod tests {
             log.counts["no sun: no directional light brighter than 0 (URP)"],
             1
         );
+        // a brighter light that is off as stored is not a candidate, nor a named sun
+        let mut hidden = w.clone();
+        set_intensity(&mut hidden, a, 9.0);
+        hidden.insert(a, Condition(Vec::new()));
+        assert_eq!(environment_sun(&mut hidden).0, Some(b));
+        hidden.insert_resource(settings(Some(a), Some(RenderPipeline::Universal)));
+        let (found, log) = environment_sun(&mut hidden);
+        assert_eq!(found, Some(b));
+        assert_eq!(log.counts["RenderSettings sun off as stored"], 1);
         // a fully baked winner
         let mut baked = w.clone();
         let mut l = baked.get::<UnityLight>(b).unwrap().clone();

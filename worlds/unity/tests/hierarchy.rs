@@ -46,7 +46,30 @@ fn renderers_match_the_scan() {
     )
     .unwrap();
     let scene = Scene::read(&player, level).unwrap();
-    let (ours, skipped) = scene.renderers(&player).unwrap();
+    let (all, skipped) = scene.renderers(&player).unwrap();
+    // drawn as stored: no off flag, and not only in a coarser level of a LODGroup
+    let groups = scene.lod_groups_under(&player, None).unwrap();
+    let (mut zero, mut rest) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
+    );
+    for g in &groups {
+        for (i, level) in g.levels.iter().enumerate() {
+            for &pid in level {
+                if i == 0 {
+                    zero.insert(pid);
+                } else {
+                    rest.insert(pid);
+                }
+            }
+        }
+    }
+    let coarser = |r: &primase_unity::scene::Renderer| {
+        rest.contains(&r.renderer.path_id) && !zero.contains(&r.renderer.path_id)
+    };
+    let inactive = all.iter().filter(|r| !r.off.is_empty()).count() as u64;
+    let lod_rest = all.iter().filter(|r| r.off.is_empty() && coarser(r)).count() as u64;
+    let ours: Vec<_> = all.iter().filter(|r| r.off.is_empty() && !coarser(r)).collect();
     let theirs: Vec<&Json> = scan["instances"]
         .as_array()
         .unwrap()
@@ -89,23 +112,42 @@ fn renderers_match_the_scan() {
     let stats = &scan["stats"];
     println!("{records}\n{matrices}");
     println!(
-        "ours skipped: {skipped:?}; the scan's stats: inactive {}, LOD 1+ {}",
-        stats["renderer_inactive"], stats["renderer_lod1plus"]
+        "ours: {} renderers, {inactive} off as stored, {lod_rest} only in a coarser LOD level; skipped {skipped:?}; the          scan's stats: inactive {}, LOD 1+ {}",
+        all.len(),
+        stats["renderer_inactive"],
+        stats["renderer_lod1plus"]
     );
-    assert_eq!(
-        skipped.get("inactive or disabled").copied().unwrap_or(0),
-        stats["renderer_inactive"].as_u64().unwrap()
-    );
-    assert_eq!(
-        skipped.get("LOD 1+").copied().unwrap_or(0),
-        stats["renderer_lod1plus"].as_u64().unwrap()
-    );
+    assert_eq!(inactive, stats["renderer_inactive"].as_u64().unwrap());
+    assert_eq!(lod_rest, stats["renderer_lod1plus"].as_u64().unwrap());
     records.assert_passed();
     matrices.assert_passed();
 
     // into the world: each renderer an entity, its transform Unity's matrix (rounded once to f32) converted exactly
     let mut w = World::new();
     let rep = read_level(&player, level, &mut w).unwrap();
+    println!(
+        "read: {} renderers, axes {:?}, conditioned {:?}, LODGroups {:?}, {} LOD forms",
+        rep.renderers, rep.axes, rep.conditioned, rep.lod_groups, rep.lod_forms
+    );
+    // the level as stored: resolve-state with the defaults, LOD 0
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            &mut w,
+            &primase_core::pass::Pipeline {
+                passes: vec![
+                    Box::new(primase_core::state::ResolveState::default()),
+                    Box::new(primase_core::SelectLod {
+                        choice: primase_core::LodChoice::Finest,
+                    }),
+                ],
+            },
+            &mut run,
+        )
+        .unwrap();
+    for step in &run.steps {
+        println!("{}: {:?}", step.pass, step.log.counts);
+    }
     println!(
         "world: {} materials, {} textures, not decoded {:?}; not reproduced {:?}",
         rep.materials, rep.textures, rep.textures_not_decoded, rep.not_reproduced
@@ -201,7 +243,16 @@ world: {} renderer entities ({left_out} left out by unity-drawn), {} prototypes 
         slices.len(),
         rep.primitives
     );
-    assert_eq!(rep.prototypes, slices.len());
+    // the meshes or slices placed as stored (a mesh drawn both as a LODGroup's LOD 0 and alone has two prototypes)
+    let placed_slices: std::collections::BTreeSet<String> = w
+        .iter::<Instance>()
+        .map(|(_, i)| {
+            let m = w.get::<UnityMesh>(i.prototype).unwrap();
+            let sub = m.submeshes.map_or(Json::Null, |(a, b)| json!([a, b]));
+            format!("{} {}", json!([m.mesh.file, m.mesh.path_id]), sub)
+        })
+        .collect();
+    assert_eq!(placed_slices, slices);
     assert!(UNITY.flips_winding(), "Unity's frame mirrors");
     let geometry = world_meshes(&player, &w);
     println!("{geometry}");

@@ -100,7 +100,7 @@ fn colliders_match_the_scan() {
     // ours, colliding, by (path, type) in order
     let mut ours: BTreeMap<(String, &str), Vec<primase_core::Entity>> = BTreeMap::new();
     for (e, c) in w.iter::<UnityCollider>() {
-        if !c.active || c.trigger {
+        if w.has::<primase_core::state::Condition>(e) || c.trigger {
             continue;
         }
         let kind = match c.shape {
@@ -230,6 +230,7 @@ fn collision_matches_the_colliders() {
     .unwrap();
     let mut w = World::new();
     let rep = read_level(&player, scan["level"].as_str().unwrap(), &mut w).unwrap();
+    as_stored(&mut w);
     let log = lower_unity_collision(&mut w).unwrap();
     println!("collision lowering: {:?}; {:?}", log.counts, log.approximations);
     assert_eq!(w.verify_components(), Vec::new());
@@ -481,4 +482,23 @@ fn collision_matches_the_colliders() {
     println!("mesh colliders with no mesh set (no collision): {without_mesh}");
     assert_eq!(terrains, rep.terrains);
     gate.assert_passed();
+}
+
+/// The level as stored: `resolve-state` with the defaults, then LOD 0 of every prototype.
+fn as_stored(w: &mut primase_core::World) {
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            w,
+            &primase_core::pass::Pipeline {
+                passes: vec![
+                    Box::new(primase_core::state::ResolveState::default()),
+                    Box::new(primase_core::SelectLod {
+                        choice: primase_core::LodChoice::Finest,
+                    }),
+                ],
+            },
+            &mut run,
+        )
+        .unwrap();
 }

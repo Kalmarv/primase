@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = read_level(&player, level, &mut w)?;
     println!(
         "read {level}: {} renderers, {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
-         textures, {} terrains, {} lights ({} off, sun named: {}), {} colliders ({} by trees)",
+         textures, {} terrains, {} lights (sun named: {}), {} colliders ({} by trees); axes {:?}, conditioned {:?}, \n         LODGroups {:?}, {} LOD forms",
         report.renderers,
         report.tree_renderers,
         report.prototypes,
@@ -58,10 +58,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.textures,
         report.terrains,
         report.lights,
-        report.lights_off,
         report.sun_named,
         report.colliders,
-        report.tree_colliders
+        report.tree_colliders,
+        report.axes,
+        report.conditioned,
+        report.lod_groups,
+        report.lod_forms
     );
     println!(
         "not decoded {:?}; not reproduced {:?}",
@@ -69,6 +72,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the lowering, as a pipeline: each pass whose input the level has, verified after each
     let passes: Vec<Box<dyn Pass>> = vec![
+        // the level as stored: what is off stays off, LOD 0 draws
+        Box::new(primase_core::state::ResolveState::default()),
+        Box::new(primase_core::SelectLod {
+            choice: primase_core::LodChoice::Finest,
+        }),
         Box::new(primase_unity::drawn::UnityDrawn),
         Box::new(primase_unity::lower::LowerUnityPbr),
         Box::new(primase_unity::lower_terrain::LowerUnityTerrain),

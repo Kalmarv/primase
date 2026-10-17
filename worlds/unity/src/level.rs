@@ -1,4 +1,4 @@
-//! A Unity scene into the world: one entity per drawn mesh renderer (its world [`Transform`], an [`Instance`] of a
+//! A Unity scene into the world: one entity per mesh renderer (its world [`Transform`], an [`Instance`] of a
 //! prototype, its GameObject path as [`Name`], its [`Shadows`], the `unity.*` details), Unity's frame converted. The
 //! renderer's shadow casting mode is the cast (off, on, shadows only as only; two-sided as on, counted) and
 //! `m_ReceiveShadows` the receive. A prototype is a
@@ -9,6 +9,19 @@
 //! its variants ([`MaterialVariants`], [`Instance::variant`]). Submeshes beyond a renderer's materials are not drawn
 //! and materials beyond its submeshes draw the last one again (an extra pass): neither is reproduced, both counted.
 //!
+//! State is data. Each GameObject stored inactive and each component stored disabled on the way to a renderer,
+//! collider, light or terrain is a Bool [`StateAxis`] (default off; class `active`, key `unity.active.<file>.<path
+//! id>`, or `enabled`, `unity.enabled.<file>.<path id>`), and the entity's [`Condition`] is one clause: each of them
+//! on. Flags stored on are constants, not axes. `resolve-state` with the defaults keeps what Unity draws as stored.
+//!
+//! A LODGroup whose levels are one renderer each, every coarser one at LOD 0's world matrix (up to rounding: within 4
+//! f32 steps, counted) with LOD 0's state,
+//! shadows and layer and not static-batched, becomes one placement (LOD 0's) of a prototype with [`Lods`]: the coarser
+//! levels' meshes and materials are its forms (`detail` the level, no default: Unity picks by screen size), so a
+//! prototype is a mesh with the chain of its coarser forms. Any other LODGroup keeps every level as placements, each
+//! with a literal on the group's `unity.lod.<file>.<path id>` axis (its levels, default 0), so LOD 0 is what draws by
+//! default. A disabled LODGroup switches nothing off: its levels draw together, as in Unity.
+//!
 //! Every renderer is placed as stored. One whose material builds its geometry in the vertex shader from component
 //! data ([`procedural`]) draws a placeholder mesh; it carries its GameObject's MonoBehaviours as bytes
 //! ([`UnityBehaviours`]), which hold the shape. A mesh with no submesh that has indices draws nothing: its prototype
@@ -17,7 +30,10 @@
 use std::collections::BTreeMap;
 
 use primase_core::frame::{Axis, SourceFrame};
-use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Transform, World};
+use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
+use primase_core::{
+    Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Transform, World,
+};
 
 use crate::Result;
 use crate::components::{
@@ -30,7 +46,7 @@ use crate::material::{ShaderData, UnityMaterialData};
 use crate::mesh::UnityMeshData;
 use crate::player::{ObjRef, Player};
 use crate::scene::{ColliderComponent, ColliderShape};
-use crate::scene::{IDENTITY, Matrix, Renderer, Scene, Skipped};
+use crate::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, Scene, Skipped};
 use crate::terrain::{TerrainData, TerrainLayerData};
 use crate::texture::UnityTexture as UnityTextureData;
 use crate::value::Value;
@@ -102,8 +118,6 @@ pub struct LevelReport {
     pub textures: usize,
     pub terrains: usize,
     pub lights: usize,
-    /// Lights whose GameObject is inactive or that are disabled (not read).
-    pub lights_off: u64,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -112,8 +126,16 @@ pub struct LevelReport {
     pub colliders_not_colliding: BTreeMap<&'static str, u64>,
     /// Colliders placed by terrain trees.
     pub tree_colliders: usize,
-    /// Renderers placed by terrain trees (their prefab's drawn renderers, per tree).
+    /// Renderers placed by terrain trees (their prefab's renderers, per tree).
     pub tree_renderers: usize,
+    /// State axes made, by class (`active`, `enabled`, `lod`).
+    pub axes: BTreeMap<&'static str, u64>,
+    /// Entities with a state condition, by kind (`renderers`, `tree renderers`, `colliders`, `lights`, `terrains`).
+    pub conditioned: BTreeMap<&'static str, u64>,
+    /// LODGroups by how they are read.
+    pub lod_groups: BTreeMap<&'static str, u64>,
+    /// Forms made of coarser LOD levels.
+    pub lod_forms: usize,
     /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
     pub textures_not_decoded: BTreeMap<String, u64>,
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
@@ -122,11 +144,147 @@ pub struct LevelReport {
     pub skipped: Skipped,
 }
 
-/// A prototype being built: its entity, the submesh of each primitive, and the material lists of its variants.
+/// A prototype being built: its entity, the submesh of each primitive, the material lists of its variants, and
+/// whether its forms are made.
 struct Proto {
     entity: Entity,
     drawn: Vec<u32>,
     variants: Vec<Vec<Option<Entity>>>,
+    forms_made: bool,
+}
+
+/// A coarser LOD level folded into a prototype: its mesh and materials.
+type Form = (ObjRef, Vec<Option<ObjRef>>);
+
+/// A prototype's key: its mesh, its static-batch slice, the chain of its coarser forms.
+type ProtoKey = (ObjRef, Option<(u32, u32)>, Vec<Form>);
+
+/// What a renderer is in its scene's LODGroups.
+#[derive(Clone, Debug, Default)]
+struct Role {
+    /// LOD 0 of a folded group: the coarser levels, finest first.
+    forms: Vec<Form>,
+    /// A coarser level of a folded group (a form, not a placement).
+    folded: bool,
+    /// In a level above 0 of some group and in no level 0.
+    coarser_only: bool,
+    /// Groups kept as placements: the group, the mask of the levels it is in, the group's level count.
+    lod: Vec<(ObjRef, u64, usize)>,
+}
+
+/// Whether two world matrices are the same placement up to rounding: every entry within 4 f32 steps of its
+/// magnitude (at least 1). Sibling Transforms that compose to one pose differ by such rounding.
+fn close(a: &Matrix, b: &Matrix) -> bool {
+    let step = 4.0 * f64::from(f32::EPSILON);
+    (0..4).all(|i| (0..4).all(|j| (a[i][j] - b[i][j]).abs() <= step * b[i][j].abs().max(1.0)))
+}
+
+/// The roles of `renderers` (one scene's) in `groups` (see the module documentation), and the groups counted.
+fn lod_roles(
+    renderers: &[Renderer],
+    groups: &[LodGroup],
+    report: &mut LevelReport,
+) -> BTreeMap<ObjRef, Role> {
+    let by_pid: BTreeMap<i64, &Renderer> = renderers.iter().map(|r| (r.renderer.path_id, r)).collect();
+    let mut memberships: BTreeMap<i64, usize> = BTreeMap::new();
+    let (mut in_zero, mut in_rest) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
+    );
+    for g in groups {
+        for (i, level) in g.levels.iter().enumerate() {
+            for &pid in level {
+                *memberships.entry(pid).or_default() += 1;
+                if i == 0 {
+                    in_zero.insert(pid);
+                } else {
+                    in_rest.insert(pid);
+                }
+            }
+        }
+    }
+    let mut roles: BTreeMap<ObjRef, Role> = BTreeMap::new();
+    fn role<'a>(
+        roles: &'a mut BTreeMap<ObjRef, Role>,
+        by_pid: &BTreeMap<i64, &Renderer>,
+        pid: i64,
+    ) -> Option<&'a mut Role> {
+        by_pid
+            .get(&pid)
+            .map(|r| roles.entry(r.renderer.clone()).or_default())
+    }
+    for pid in in_rest.difference(&in_zero) {
+        if let Some(r) = role(&mut roles, &by_pid, *pid) {
+            r.coarser_only = true;
+        }
+    }
+    let mut count = |what: &'static str| *report.lod_groups.entry(what).or_default() += 1;
+    for g in groups {
+        if g.levels.len() < 2 {
+            count("one level (nothing to choose)");
+            continue;
+        }
+        if !g.enabled {
+            count("disabled (every level draws)");
+            continue;
+        }
+        let singles: Option<Vec<&Renderer>> = g
+            .levels
+            .iter()
+            .map(|l| match l[..] {
+                [pid] if memberships.get(&pid) == Some(&1) => by_pid.get(&pid).copied(),
+                _ => None,
+            })
+            .collect();
+        let fits = singles.as_ref().is_some_and(|rs| {
+            let r0 = rs[0];
+            r0.submeshes.is_none()
+                && rs[1..].iter().all(|r| {
+                    close(&r.world, &r0.world)
+                        && r.submeshes.is_none()
+                        && r.off == r0.off
+                        && r.cast_shadows == r0.cast_shadows
+                        && r.receive_shadows == r0.receive_shadows
+                        && r.layer == r0.layer
+                })
+        });
+        match singles {
+            Some(rs) if fits => {
+                count("folded into core.lods");
+                if rs[1..].iter().any(|r| r.world != rs[0].world) {
+                    count(
+                        "folded with a coarser level's matrix within 4 f32 steps of LOD 0's (LOD 0's taken)",
+                    );
+                }
+                let forms = rs[1..]
+                    .iter()
+                    .map(|r| (r.mesh.clone(), r.materials.clone()))
+                    .collect();
+                if let Some(r) = role(&mut roles, &by_pid, rs[0].renderer.path_id) {
+                    r.forms = forms;
+                }
+                for r in &rs[1..] {
+                    if let Some(r) = role(&mut roles, &by_pid, r.renderer.path_id) {
+                        r.folded = true;
+                    }
+                }
+            }
+            _ => {
+                count("kept as placements under a unity.lod axis");
+                for (i, level) in g.levels.iter().enumerate() {
+                    for &pid in level {
+                        if let Some(r) = role(&mut roles, &by_pid, pid) {
+                            match r.lod.iter_mut().find(|(group, ..)| *group == g.group) {
+                                Some(entry) => entry.1 |= 1 << i,
+                                None => r.lod.push((g.group.clone(), 1 << i, g.levels.len())),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    roles
 }
 
 struct Builder<'a> {
@@ -137,10 +295,99 @@ struct Builder<'a> {
     collider_meshes: BTreeMap<ObjRef, std::sync::Arc<ColliderMesh>>,
     physic_materials: BTreeMap<ObjRef, UnityPhysicMaterial>,
     shaders: BTreeMap<ObjRef, ShaderData>,
+    /// State axes by scene file and flag, and LOD axes by group (and tree instance).
+    axes: BTreeMap<(String, OffFlag), Entity>,
+    lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
     report: LevelReport,
 }
 
 impl Builder<'_> {
+    /// The literals of off flags of `scene`'s (each "on"), their axes made the first time; `path` names the object
+    /// the flags are on.
+    fn literals(&mut self, w: &mut World, scene: &Scene, off: &[OffFlag], path: &str) -> Vec<Literal> {
+        off.iter()
+            .map(|&flag| {
+                let key = (scene.file.clone(), flag);
+                let axis = match self.axes.get(&key) {
+                    Some(&e) => e,
+                    None => {
+                        let (class, pid, source) = match flag {
+                            OffFlag::Inactive(go) => (
+                                "active",
+                                go,
+                                format!(
+                                    "{} (GameObject stored inactive)",
+                                    scene.transform_of(go).map(|t| scene.path(t)).unwrap_or_default()
+                                ),
+                            ),
+                            OffFlag::Disabled(c) => {
+                                ("enabled", c, format!("{path} (component {c} stored disabled)"))
+                            }
+                        };
+                        let e = w.spawn();
+                        w.insert(
+                            e,
+                            StateAxis {
+                                key: format!("unity.{class}.{}.{pid}", scene.file),
+                                domain: Domain::Bool,
+                                default: 0,
+                                scope: Scope::Global,
+                                class: class.into(),
+                                source,
+                            },
+                        );
+                        *self.report.axes.entry(class).or_default() += 1;
+                        self.axes.insert(key, e);
+                        e
+                    }
+                };
+                Literal { axis, values: 0b10 }
+            })
+            .collect()
+    }
+
+    /// The literal of a LODGroup kept as placements: its axis (per tree instance for a tree's prefab), its levels.
+    fn lod_literal(
+        &mut self,
+        w: &mut World,
+        group: &ObjRef,
+        mask: u64,
+        levels: usize,
+        tree: Option<(Entity, usize)>,
+    ) -> Literal {
+        let key = (group.clone(), tree);
+        let axis = match self.lod_axes.get(&key) {
+            Some(&e) => e,
+            None => {
+                let e = w.spawn();
+                let at = tree.map_or(String::new(), |(t, i)| format!(".tree{}.{i}", t.index()));
+                w.insert(
+                    e,
+                    StateAxis {
+                        key: format!("unity.lod.{}.{}{at}", group.file, group.path_id),
+                        domain: Domain::Enum((0..levels).map(|i| format!("lod{i}")).collect()),
+                        default: 0,
+                        scope: Scope::Global,
+                        class: "lod".into(),
+                        source: format!("LODGroup {}/{}{at}", group.file, group.path_id),
+                    },
+                );
+                *self.report.axes.entry("lod").or_default() += 1;
+                self.lod_axes.insert(key, e);
+                e
+            }
+        };
+        Literal { axis, values: mask }
+    }
+
+    /// Put `literals` on `e` as its condition (none when empty), counted as `kind`.
+    fn condition(&mut self, w: &mut World, e: Entity, literals: Vec<Literal>, kind: &'static str) {
+        if !literals.is_empty() {
+            w.insert(e, Condition(vec![Clause(literals)]));
+            *self.report.conditioned.entry(kind).or_default() += 1;
+        }
+    }
+
     fn note(&mut self, what: &str, n: u64) {
         if n > 0 {
             *self.report.not_reproduced.entry(what.into()).or_default() += n;
@@ -263,14 +510,16 @@ impl Builder<'_> {
         Ok(e)
     }
 
-    /// The renderers terrain `t` places with its trees: per tree instance, its prototype prefab's drawn renderers
-    /// (LOD 0), each at T(terrain position + position x size) Ry(rotation) S(width, height, width) times its matrix
-    /// relative to the prefab's root; the root's own transform is not applied (counted when it is not the identity).
+    /// The renderers terrain `t` places with its trees: per tree instance, its prototype prefab's renderers, each at
+    /// T(terrain position + position x size) Ry(rotation) S(width, height, width) times its matrix relative to the
+    /// prefab's root; the root's own transform is not applied (counted when it is not the identity). The prefab
+    /// renderers' LODGroup roles go into `roles`.
     fn trees(
         &mut self,
         t: &crate::scene::TerrainComponent,
         td: &TerrainData,
         prefabs: &mut BTreeMap<String, Scene>,
+        roles: &mut BTreeMap<ObjRef, Role>,
     ) -> Result<Vec<(usize, Renderer)>> {
         let mut per_prototype = Vec::with_capacity(td.tree_prototypes.len());
         for p in &td.tree_prototypes {
@@ -291,6 +540,10 @@ impl Builder<'_> {
                 u64::from(!root_identity),
             );
             let (rs, _) = prefab.renderers_under(self.player, Some(p.path_id))?;
+            if !rs.iter().any(|r| roles.contains_key(&r.renderer)) {
+                let groups = prefab.lod_groups_under(self.player, Some(p.path_id))?;
+                roles.extend(lod_roles(&rs, &groups, &mut self.report));
+            }
             per_prototype.push(Some((prefab.path(root), rs)));
         }
         let size = td.size();
@@ -403,7 +656,7 @@ impl Builder<'_> {
             .as_ref()
             .map(|m| self.physic_material(m))
             .transpose()?;
-        let why = if !c.active {
+        let why = if !c.off.is_empty() {
             Some("inactive or disabled")
         } else if c.trigger {
             Some("trigger")
@@ -420,7 +673,6 @@ impl Builder<'_> {
             collider: UnityObject::from(&c.collider),
             layer: c.layer,
             shape,
-            active: c.active,
             trigger: c.trigger,
             physic_material,
             rigidbody: c.rigidbody,
@@ -543,26 +795,36 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         collider_meshes: BTreeMap::new(),
         physic_materials: BTreeMap::new(),
         shaders: BTreeMap::new(),
+        axes: BTreeMap::new(),
+        lod_axes: BTreeMap::new(),
         report: LevelReport {
             skipped,
             ..LevelReport::default()
         },
     };
+    let groups = scene.lod_groups_under(player, None)?;
+    let mut roles = lod_roles(&renderers, &groups, &mut b.report);
     // terrains, and the renderers of their trees
     let mut trees: Vec<((Entity, usize), Renderer)> = Vec::new();
     let mut tree_colliders: Vec<((Entity, usize), ColliderComponent)> = Vec::new();
+    let mut terrain_state: BTreeMap<Entity, (String, Vec<OffFlag>)> = BTreeMap::new();
+    // a disabled terrain collider makes no tree colliders: its flag joins their state
+    let mut terrain_collider_off: BTreeMap<Entity, Vec<OffFlag>> = BTreeMap::new();
     let mut prefabs: BTreeMap<String, Scene> = BTreeMap::new();
     for t in scene.terrains(player)? {
         let td = TerrainData::read(player, &t.data)?;
         let e = w.spawn();
         if t.draw_trees {
             trees.extend(
-                b.trees(&t, &td, &mut prefabs)?
+                b.trees(&t, &td, &mut prefabs, &mut roles)?
                     .into_iter()
                     .map(|(i, r)| ((e, i), r)),
             );
         }
-        if t.collider.as_ref().is_some_and(|c| c.enabled && c.tree_colliders) {
+        if let Some(c) = t.collider.as_ref().filter(|c| c.tree_colliders) {
+            if !c.enabled {
+                terrain_collider_off.insert(e, vec![OffFlag::Disabled(c.collider.path_id)]);
+            }
             tree_colliders.extend(
                 b.tree_colliders(&t, &td, &mut prefabs)?
                     .into_iter()
@@ -642,131 +904,231 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                     .collect(),
             },
         );
+        let literals = b.literals(w, &scene, &t.off, &t.path);
+        b.condition(w, e, literals, "terrains");
+        terrain_state.insert(e, (t.path.clone(), t.off.clone()));
         b.report.terrains += 1;
     }
-    let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
-    let mut prototypes: BTreeMap<(ObjRef, Option<(u32, u32)>), Proto> = BTreeMap::new();
-    let placed = renderers
+    // Renderers: those Unity draws as stored first, in the scene's order and then the trees', so the entities a
+    // pipeline keeps come in the order the reader always made them; then the coarser forms; then the others.
+    let role_of = |r: &Renderer| roles.get(&r.renderer).cloned().unwrap_or_default();
+    let placed: Vec<(Option<(Entity, usize)>, &Renderer)> = renderers
         .iter()
         .map(|r| (None, r))
-        .chain(trees.iter().map(|(of, r)| (Some(*of), r)));
-    for (tree, r) in placed {
-        let mut materials = Vec::with_capacity(r.materials.len());
-        for m in &r.materials {
-            materials.push(match m {
-                Some(m) => Some(b.material(w, m)?),
-                None => None,
-            });
-        }
-        // a procedural renderer's shape is in its GameObject's MonoBehaviours
-        let procedural_shape = materials
-            .iter()
-            .flatten()
-            .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.as_deref()))
-            .any(procedural);
-        let behaviours = if procedural_shape && tree.is_none() {
-            b.behaviours(&scene, r.game_object)?
-        } else {
-            Vec::new()
-        };
-        if !meshes.contains_key(&r.mesh) {
-            meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
-        }
-        let data = &meshes[&r.mesh];
-        let (first, count) = match r.submeshes {
-            Some((first, count)) => (first, count as usize),
-            None => (0, data.submeshes.len()),
-        };
-        let key = (r.mesh.clone(), r.submeshes);
-        if !prototypes.contains_key(&key) {
-            let (drawn, primitives): (Vec<u32>, Vec<_>) = data
-                .primitives(first as usize..first as usize + count)?
-                .into_iter()
-                .map(|(k, p)| (k as u32, p))
-                .unzip();
-            let e = w.spawn();
-            // a mesh with no submesh that has indices draws nothing: no core mesh
-            if !primitives.is_empty() {
-                b.report.primitives += primitives.len();
-                w.insert(e, Mesh { primitives });
+        .chain(trees.iter().map(|(of, r)| (Some(*of), r)))
+        .filter(|(_, r)| !role_of(r).folded)
+        .collect();
+    let drawn_as_stored = |tree: &Option<(Entity, usize)>, r: &Renderer| {
+        r.off.is_empty()
+            && !role_of(r).coarser_only
+            && tree.is_none_or(|(t, _)| terrain_state.get(&t).is_none_or(|(_, off)| off.is_empty()))
+    };
+    let (first, rest): (Vec<_>, Vec<_>) = placed.into_iter().partition(|(tree, r)| drawn_as_stored(tree, r));
+    let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
+    let mut prototypes: BTreeMap<ProtoKey, Proto> = BTreeMap::new();
+    for batch in [first, rest] {
+        for (tree, r) in batch {
+            let role = role_of(r);
+            let mut materials = Vec::with_capacity(r.materials.len());
+            for m in &r.materials {
+                materials.push(match m {
+                    Some(m) => Some(b.material(w, m)?),
+                    None => None,
+                });
             }
+            // a procedural renderer's shape is in its GameObject's MonoBehaviours
+            let procedural_shape = materials
+                .iter()
+                .flatten()
+                .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.as_deref()))
+                .any(procedural);
+            let behaviours = if procedural_shape && tree.is_none() {
+                b.behaviours(&scene, r.game_object)?
+            } else {
+                Vec::new()
+            };
+            if !meshes.contains_key(&r.mesh) {
+                meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
+            }
+            let data = &meshes[&r.mesh];
+            let (first, count) = match r.submeshes {
+                Some((first, count)) => (first, count as usize),
+                None => (0, data.submeshes.len()),
+            };
+            let key = (r.mesh.clone(), r.submeshes, role.forms.clone());
+            if !prototypes.contains_key(&key) {
+                let (drawn, primitives): (Vec<u32>, Vec<_>) = data
+                    .primitives(first as usize..first as usize + count)?
+                    .into_iter()
+                    .map(|(k, p)| (k as u32, p))
+                    .unzip();
+                let e = w.spawn();
+                // a mesh with no submesh that has indices draws nothing: no core mesh
+                if !primitives.is_empty() {
+                    b.report.primitives += primitives.len();
+                    w.insert(e, Mesh { primitives });
+                }
+                w.insert(
+                    e,
+                    UnityMesh {
+                        mesh: UnityObject::from(&r.mesh),
+                        submeshes: r.submeshes,
+                        drawn: drawn.clone(),
+                    },
+                );
+                prototypes.insert(
+                    key.clone(),
+                    Proto {
+                        entity: e,
+                        drawn,
+                        variants: Vec::new(),
+                        forms_made: key.2.is_empty(),
+                    },
+                );
+            }
+            let proto = prototypes.get_mut(&key).expect("inserted");
+            let variant = match proto.variants.iter().position(|v| *v == materials) {
+                Some(v) => v,
+                None => {
+                    proto.variants.push(materials.clone());
+                    proto.variants.len() - 1
+                }
+            };
+            let (entity, unmaterialed) = (
+                proto.entity,
+                proto
+                    .drawn
+                    .iter()
+                    .filter(|&&k| (k - first) as usize >= materials.len())
+                    .count() as u64,
+            );
+            b.note(
+                "renderer submeshes without a material (not drawn by Unity)",
+                unmaterialed,
+            );
+            b.note(
+                "renderer materials beyond the submeshes (an extra pass over the last)",
+                materials.len().saturating_sub(count) as u64,
+            );
+            let e = w.spawn();
+            w.insert(e, UNITY.transform(&transform_of(&r.world)));
             w.insert(
                 e,
-                UnityMesh {
-                    mesh: UnityObject::from(&r.mesh),
-                    submeshes: r.submeshes,
-                    drawn: drawn.clone(),
+                Instance {
+                    prototype: entity,
+                    variant: variant as u32,
                 },
             );
-            prototypes.insert(
-                key.clone(),
-                Proto {
-                    entity: e,
-                    drawn,
-                    variants: Vec::new(),
+            w.insert(e, Name(r.path.clone()));
+            w.insert(e, unity_renderer(r));
+            let cast = match r.cast_shadows {
+                0 => Some(ShadowCast::Off),
+                1 => Some(ShadowCast::On),
+                2 => {
+                    b.note("two-sided shadow casting written as casting", 1);
+                    Some(ShadowCast::On)
+                }
+                3 => Some(ShadowCast::Only),
+                _ => {
+                    b.note("renderers with an unknown shadow casting mode, cast unknown", 1);
+                    None
+                }
+            };
+            w.insert(
+                e,
+                Shadows {
+                    cast,
+                    receive: r.receive_shadows,
                 },
             );
+            // state: the terrain's for a tree, then the renderer's own (its scene: the level or the tree's prefab),
+            // then the LODGroups kept as placements
+            let mut literals = Vec::new();
+            if let Some((terrain, _)) = tree
+                && let Some((path, off)) = terrain_state.get(&terrain)
+            {
+                literals.extend(b.literals(w, &scene, off, path));
+            }
+            let own = prefabs
+                .get(&r.renderer.file)
+                .filter(|_| tree.is_some())
+                .unwrap_or(&scene);
+            literals.extend(b.literals(w, own, &r.off, &r.path));
+            for (group, mask, levels) in &role.lod {
+                literals.push(b.lod_literal(w, group, *mask, *levels, tree));
+            }
+            b.condition(
+                w,
+                e,
+                literals,
+                if tree.is_some() {
+                    "tree renderers"
+                } else {
+                    "renderers"
+                },
+            );
+            if let Some((terrain, tree)) = tree {
+                w.insert(e, UnityTreeInstance { terrain, tree });
+            }
+            if !behaviours.is_empty() {
+                w.insert(e, UnityBehaviours(behaviours));
+            }
         }
-        let proto = prototypes.get_mut(&key).expect("inserted");
-        let variant = match proto.variants.iter().position(|v| *v == materials) {
-            Some(v) => v,
-            None => {
-                proto.variants.push(materials.clone());
-                proto.variants.len() - 1
+        // the coarser forms of the prototypes made so far
+        for (key, p) in prototypes.iter_mut().filter(|(_, p)| !p.forms_made) {
+            p.forms_made = true;
+            let mut forms = Vec::with_capacity(key.2.len());
+            for (level, (mesh, mats)) in key.2.iter().enumerate() {
+                if !meshes.contains_key(mesh) {
+                    meshes.insert(mesh.clone(), UnityMeshData::read(player, mesh)?);
+                }
+                let data = &meshes[mesh];
+                let (drawn, mut primitives): (Vec<u32>, Vec<_>) = data
+                    .primitives(0..data.submeshes.len())?
+                    .into_iter()
+                    .map(|(k, p)| (k as u32, p))
+                    .unzip();
+                // material i draws submesh i
+                for (prim, &k) in primitives.iter_mut().zip(&drawn) {
+                    prim.material = match mats.get(k as usize).cloned().flatten() {
+                        Some(m) => Some(b.material(w, &m)?),
+                        None => None,
+                    };
+                }
+                let f = w.spawn();
+                if !primitives.is_empty() {
+                    w.insert(f, Mesh { primitives });
+                }
+                w.insert(
+                    f,
+                    UnityMesh {
+                        mesh: UnityObject::from(mesh),
+                        submeshes: None,
+                        drawn,
+                    },
+                );
+                forms.push(LodForm {
+                    detail: u8::try_from(level + 1).unwrap_or(u8::MAX),
+                    form: f,
+                });
             }
-        };
-        let (entity, unmaterialed) = (
-            proto.entity,
-            proto
-                .drawn
-                .iter()
-                .filter(|&&k| (k - first) as usize >= materials.len())
-                .count() as u64,
-        );
-        b.note(
-            "renderer submeshes without a material (not drawn by Unity)",
-            unmaterialed,
-        );
-        b.note(
-            "renderer materials beyond the submeshes (an extra pass over the last)",
-            materials.len().saturating_sub(count) as u64,
-        );
-        let e = w.spawn();
-        w.insert(e, UNITY.transform(&transform_of(&r.world)));
-        w.insert(
-            e,
-            Instance {
-                prototype: entity,
-                variant: variant as u32,
-            },
-        );
-        w.insert(e, Name(r.path.clone()));
-        w.insert(e, unity_renderer(r));
-        let cast = match r.cast_shadows {
-            0 => Some(ShadowCast::Off),
-            1 => Some(ShadowCast::On),
-            2 => {
-                b.note("two-sided shadow casting written as casting", 1);
-                Some(ShadowCast::On)
+            if w.has::<Mesh>(p.entity) {
+                b.report.lod_forms += forms.len();
+                w.insert(
+                    p.entity,
+                    Lods {
+                        detail: 0,
+                        forms,
+                        default: None,
+                    },
+                );
+            } else {
+                // core.lods needs a mesh on the prototype: the forms stay unused
+                b.note("LOD 0 meshes that draw nothing (coarser forms not attached)", 1);
+                for f in forms {
+                    w.despawn(f.form);
+                }
             }
-            3 => Some(ShadowCast::Only),
-            _ => {
-                b.note("renderers with an unknown shadow casting mode, cast unknown", 1);
-                None
-            }
-        };
-        w.insert(
-            e,
-            Shadows {
-                cast,
-                receive: r.receive_shadows,
-            },
-        );
-        if let Some((terrain, tree)) = tree {
-            w.insert(e, UnityTreeInstance { terrain, tree });
-        }
-        if !behaviours.is_empty() {
-            w.insert(e, UnityBehaviours(behaviours));
         }
     }
     // each primitive's material from variant 0, the other variants' where they differ
@@ -808,6 +1170,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         w.insert(e, Name(c.path.clone()));
         w.insert(e, UNITY.transform(&transform_of(&c.world)));
         w.insert(e, u);
+        let literals = b.literals(w, &scene, &c.off, &c.path);
+        b.condition(w, e, literals, "colliders");
     }
     for ((terrain, tree), c) in &tree_colliders {
         let u = b.collider(c)?;
@@ -822,9 +1186,19 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 tree: *tree,
             },
         );
+        // the terrain's state and its collider's, then the prefab collider's own
+        let mut literals = Vec::new();
+        if let Some((path, off)) = terrain_state.get(terrain) {
+            literals.extend(b.literals(w, &scene, off, path));
+            let collider_off = terrain_collider_off.get(terrain).map_or(&[][..], Vec::as_slice);
+            literals.extend(b.literals(w, &scene, collider_off, path));
+        }
+        let prefab = prefabs.get(&c.collider.file).unwrap_or(&scene);
+        literals.extend(b.literals(w, prefab, &c.off, &c.path));
+        b.condition(w, e, literals, "colliders");
         b.report.tree_colliders += 1;
     }
-    let (lights, off) = scene.lights(player)?;
+    let lights = scene.lights(player)?;
     let sun = scene.render_settings_sun(player)?;
     let mut sun_entity = None;
     for l in &lights {
@@ -856,16 +1230,112 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 cookie: l.cookie.as_ref().map(UnityObject::from),
             },
         );
+        let literals = b.literals(w, &scene, &l.off, &l.path);
+        b.condition(w, e, literals, "lights");
     }
     b.report.lights = lights.len();
-    b.report.lights_off = off;
     b.report.sun_named = sun.is_some();
     w.insert_resource(UnityRenderSettings {
         sun: sun_entity,
         pipeline: player.render_pipeline()?,
     });
-    b.report.renderers = renderers.len();
-    b.report.tree_renderers = trees.len();
+    b.report.renderers = renderers.iter().filter(|r| !role_of(r).folded).count();
+    b.report.tree_renderers = trees.iter().filter(|(_, r)| !role_of(r).folded).count();
     b.report.prototypes = prototypes.len();
     Ok(b.report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn obj(pid: i64) -> ObjRef {
+        ObjRef {
+            file: "level1".into(),
+            path_id: pid,
+        }
+    }
+
+    fn renderer(pid: i64, mesh: i64) -> Renderer {
+        Renderer {
+            renderer: obj(pid),
+            game_object: pid + 1000,
+            path: format!("r{pid}"),
+            layer: 0,
+            mesh: obj(mesh),
+            materials: vec![Some(obj(mesh + 500))],
+            world: IDENTITY,
+            submeshes: None,
+            cast_shadows: 1,
+            receive_shadows: Some(true),
+            off: Vec::new(),
+        }
+    }
+
+    fn group(pid: i64, levels: Vec<Vec<i64>>) -> LodGroup {
+        LodGroup {
+            group: obj(pid),
+            path: format!("g{pid}"),
+            enabled: true,
+            off: Vec::new(),
+            levels,
+        }
+    }
+
+    #[test]
+    fn lod_groups_fold_into_forms_only_when_every_level_matches_lod_0() {
+        let mut report = LevelReport::default();
+        // a fitting group: one renderer per level, same matrix, state, shadows and layer
+        let rs = vec![renderer(1, 10), renderer(2, 11), renderer(3, 12)];
+        let roles = lod_roles(&rs, &[group(100, vec![vec![1], vec![2], vec![3]])], &mut report);
+        assert_eq!(roles[&obj(1)].forms.len(), 2);
+        assert_eq!(roles[&obj(1)].forms[0].0, obj(11));
+        assert!(roles[&obj(2)].folded && roles[&obj(3)].folded);
+        assert!(roles[&obj(2)].coarser_only && !roles[&obj(1)].coarser_only);
+        assert_eq!(report.lod_groups["folded into core.lods"], 1);
+
+        // each mismatch keeps the levels as placements under the group's axis
+        let mismatches: [fn(&mut Renderer); 6] = [
+            |r| r.world[0][3] = 1.0,
+            |r| r.off = vec![OffFlag::Inactive(7)],
+            |r| r.cast_shadows = 0,
+            |r| r.receive_shadows = Some(false),
+            |r| r.layer = 3,
+            |r| r.submeshes = Some((0, 1)),
+        ];
+        for m in mismatches {
+            let mut report = LevelReport::default();
+            let mut rs = vec![renderer(1, 10), renderer(2, 11)];
+            m(&mut rs[1]);
+            let roles = lod_roles(&rs, &[group(100, vec![vec![1], vec![2]])], &mut report);
+            assert!(roles[&obj(1)].forms.is_empty() && !roles[&obj(2)].folded);
+            assert_eq!(roles[&obj(1)].lod, vec![(obj(100), 0b01, 2)]);
+            assert_eq!(roles[&obj(2)].lod, vec![(obj(100), 0b10, 2)]);
+            assert_eq!(report.lod_groups["kept as placements under a unity.lod axis"], 1);
+        }
+
+        // two renderers in a level, or a renderer in two levels: the axis, its mask the levels it is in
+        let mut report = LevelReport::default();
+        let rs = vec![renderer(1, 10), renderer(2, 11), renderer(3, 12)];
+        let roles = lod_roles(&rs, &[group(100, vec![vec![1, 3], vec![2, 3]])], &mut report);
+        assert_eq!(roles[&obj(3)].lod, vec![(obj(100), 0b11, 2)]);
+        assert!(!roles[&obj(3)].coarser_only);
+
+        // a disabled group and a one-level group choose nothing
+        let mut report = LevelReport::default();
+        let mut off = group(100, vec![vec![1], vec![2]]);
+        off.enabled = false;
+        let roles = lod_roles(
+            &[renderer(1, 10), renderer(2, 11), renderer(3, 12)],
+            &[off, group(101, vec![vec![3]])],
+            &mut report,
+        );
+        assert!(
+            roles
+                .values()
+                .all(|r| r.forms.is_empty() && !r.folded && r.lod.is_empty())
+        );
+        assert_eq!(report.lod_groups["disabled (every level draws)"], 1);
+        assert_eq!(report.lod_groups["one level (nothing to choose)"], 1);
+    }
 }

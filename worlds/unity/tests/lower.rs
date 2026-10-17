@@ -86,6 +86,7 @@ fn lowering_matches_the_port() {
     .unwrap();
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
+    as_stored(&mut w);
     let log = lower_unity_pbr(&mut w).unwrap();
     println!(
         "lowering: {:?}\napproximations: {:#?}",
@@ -279,6 +280,7 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     .unwrap();
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
+    as_stored(&mut w);
     lower_unity_pbr(&mut w).unwrap();
     let tiling = |m: &UnityMaterial, name: &str| {
         m.textures
@@ -309,4 +311,23 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     }
     println!("URP Lit slots: {slots}, through the base map's tiling; {own_differs} whose own tiling differs");
     assert!(slots > 0);
+}
+
+/// The level as stored: `resolve-state` with the defaults, then LOD 0 of every prototype.
+fn as_stored(w: &mut primase_core::World) {
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            w,
+            &primase_core::pass::Pipeline {
+                passes: vec![
+                    Box::new(primase_core::state::ResolveState::default()),
+                    Box::new(primase_core::SelectLod {
+                        choice: primase_core::LodChoice::Finest,
+                    }),
+                ],
+            },
+            &mut run,
+        )
+        .unwrap();
 }

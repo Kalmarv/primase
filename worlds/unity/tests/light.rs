@@ -36,7 +36,9 @@ fn lights_match_the_scan() {
     )
     .unwrap();
     let scene = Scene::read(&player, scan["level"].as_str().unwrap()).unwrap();
-    let (lights, off) = scene.lights(&player).unwrap();
+    let all = scene.lights(&player).unwrap();
+    let off = all.iter().filter(|l| !l.off.is_empty()).count();
+    let lights: Vec<_> = all.into_iter().filter(|l| l.off.is_empty()).collect();
     let (suns, others): (Vec<_>, Vec<_>) = lights.iter().partition(|l| l.kind == 1);
     let theirs = scan["lights"].as_array().unwrap();
     assert_eq!(others.len(), theirs.len(), "lights other than directional");
@@ -101,7 +103,7 @@ fn lights_lower_to_core() {
     println!("light lowering: {:?}; {:?}", log.counts, log.approximations);
     assert_eq!(w.verify_components(), Vec::new());
     let scene = Scene::read(&player, scan["level"].as_str().unwrap()).unwrap();
-    let (stored, _) = scene.lights(&player).unwrap();
+    let stored = scene.lights(&player).unwrap();
     let mut gate = GateReport::new(
         "lights lowered: kind, cones, colour, intensity, range, direction",
         Tolerance::Exact,

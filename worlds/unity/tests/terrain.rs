@@ -166,6 +166,7 @@ fn terrain_geometry_matches_the_port() {
     .unwrap();
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
+    as_stored(&mut w);
     let log = lower_unity_terrain(&mut w).unwrap();
     println!("terrain lowering: {:?}; {:?}", log.counts, log.approximations);
     let dir = Path::new(&dir);
@@ -423,6 +424,7 @@ fn trees_match_the_scan() {
     .unwrap();
     let mut w = World::new();
     let rep = read_level(&player, scan["level"].as_str().unwrap(), &mut w).unwrap();
+    as_stored(&mut w);
     let ours: BTreeMap<&str, primase_core::Entity> = w
         .iter::<UnityRenderer>()
         .filter_map(|(e, _)| {
@@ -436,7 +438,13 @@ fn trees_match_the_scan() {
         .iter()
         .filter(|i| i["src"] == "tree")
         .collect();
-    assert_eq!(rep.tree_renderers, theirs.len(), "tree renderers");
+    println!(
+        "tree renderers read: {} (conditioned {:?}); placed as stored: {}",
+        rep.tree_renderers,
+        rep.conditioned.get("tree renderers"),
+        ours.len()
+    );
+    assert_eq!(ours.len(), theirs.len(), "tree renderers placed as stored");
     let mut records = GateReport::new("trees: path, mesh, materials", Tolerance::Exact);
     let mut matrices = GateReport::new(
         "trees: world matrix (scan rounding + half an f32 step)",
@@ -491,4 +499,23 @@ fn trees_match_the_scan() {
     );
     records.assert_passed();
     matrices.assert_passed();
+}
+
+/// The level as stored: `resolve-state` with the defaults, then LOD 0 of every prototype.
+fn as_stored(w: &mut primase_core::World) {
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            w,
+            &primase_core::pass::Pipeline {
+                passes: vec![
+                    Box::new(primase_core::state::ResolveState::default()),
+                    Box::new(primase_core::SelectLod {
+                        choice: primase_core::LodChoice::Finest,
+                    }),
+                ],
+            },
+            &mut run,
+        )
+        .unwrap();
 }

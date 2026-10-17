@@ -1,13 +1,14 @@
-//! A scene's hierarchy: GameObjects, their Transforms (local TRS composed to world matrices in Unity's frame),
-//! whether each is active in the hierarchy, and the mesh renderers that are drawn.
+//! A scene's hierarchy: GameObjects, their Transforms (local TRS composed to world matrices in Unity's frame), and
+//! its mesh renderers, LODGroups, colliders, lights and terrains, each whatever its state.
 //!
-//! The rules, from the scene's own data: a renderer is drawn when its GameObject is active in the hierarchy and the
-//! renderer is enabled; of a LODGroup only the LOD 0 renderers are drawn; a static-batched renderer draws a slice of
-//! a combined mesh whose vertices are already in world space (its matrix is the identity). A RectTransform's local
-//! x and y come from its anchors (the stored position can be stale): the parent rect's minimum plus its size times
-//! the anchors interpolated at the pivot, plus the anchored position.
+//! State is data: each object carries its [`OffFlag`]s, the GameObjects on its Transform chain stored inactive and the
+//! component itself stored disabled; Unity draws or uses it when it has none. A LODGroup lists its levels' renderers
+//! ([`LodGroup`]); which level draws is Unity's choice by screen size. A static-batched renderer draws a slice of a
+//! combined mesh whose vertices are already in world space (its matrix is the identity). A RectTransform's local x
+//! and y come from its anchors (the stored position can be stale): the parent rect's minimum plus its size times the
+//! anchors interpolated at the pivot, plus the anchored position.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::player::{ObjRef, Player};
 use crate::value::{Array, Value};
@@ -122,6 +123,14 @@ pub struct GameObject {
     pub components: Vec<i64>,
 }
 
+/// A stored "off" between an object and being drawn or used: a GameObject on its Transform chain stored inactive
+/// (`m_IsActive`), or the component itself stored disabled (`m_Enabled`); path ids in the scene's file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OffFlag {
+    Inactive(i64),
+    Disabled(i64),
+}
+
 #[derive(Clone, Debug)]
 struct Node {
     game_object: i64,
@@ -129,7 +138,7 @@ struct Node {
     local: Matrix,
 }
 
-/// A mesh renderer that is drawn.
+/// A mesh renderer with a mesh, whatever its state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Renderer {
     pub renderer: ObjRef,
@@ -148,6 +157,19 @@ pub struct Renderer {
     pub cast_shadows: i64,
     /// `m_ReceiveShadows`, when stored.
     pub receive_shadows: Option<bool>,
+    /// What keeps it from being drawn; drawn when empty.
+    pub off: Vec<OffFlag>,
+}
+
+/// A LODGroup: its levels' renderers (path ids in the scene's file, a level's in stored order, null entries left out),
+/// finest first; whether the component is enabled (a disabled LODGroup switches no level off) and its own off flags.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LodGroup {
+    pub group: ObjRef,
+    pub path: String,
+    pub enabled: bool,
+    pub off: Vec<OffFlag>,
+    pub levels: Vec<Vec<i64>>,
 }
 
 /// What the scene reading skipped, by reason.
@@ -316,6 +338,28 @@ impl Scene {
         Ok(m)
     }
 
+    /// The off flags of a component on Transform `tp`'s GameObject: the GameObjects stored inactive from the root down,
+    /// then the component (`(path id, enabled)`) when it is stored disabled.
+    pub fn off_flags(&self, tp: i64, component: Option<(i64, bool)>) -> Vec<OffFlag> {
+        let mut out = Vec::new();
+        let mut t = tp;
+        for _ in 0..=self.nodes.len() {
+            let Some(n) = self.nodes.get(&t) else { break };
+            if !self.game_objects.get(&n.game_object).is_some_and(|g| g.active) {
+                out.push(OffFlag::Inactive(n.game_object));
+            }
+            if n.father == 0 {
+                break;
+            }
+            t = n.father;
+        }
+        out.reverse();
+        if let Some((c, false)) = component {
+            out.push(OffFlag::Disabled(c));
+        }
+        out
+    }
+
     /// Whether a Transform's GameObject and all its ancestors' are active.
     pub fn active(&self, tp: i64) -> bool {
         let mut t = tp;
@@ -381,12 +425,59 @@ impl Scene {
         )
     }
 
-    /// The drawn mesh renderers, in the order of the scene's object table, and what was skipped.
+    /// The mesh renderers, in the order of the scene's object table, and what was skipped (no transform, no
+    /// MeshFilter, no mesh).
     pub fn renderers(&self, player: &Player) -> Result<(Vec<Renderer>, Skipped)> {
         self.renderers_under(player, None)
     }
 
-    /// The drawn mesh renderers of the GameObject `root` and its descendants (a prefab's), their matrices relative to
+    /// The LODGroups of the GameObject `root` and its descendants (a prefab's), all of the file's with `None`, in the
+    /// order of the object table.
+    pub fn lod_groups_under(&self, player: &Player, root: Option<i64>) -> Result<Vec<LodGroup>> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let root_tp = root.and_then(|go| self.transform_of(go));
+        let mut out = Vec::new();
+        for o in f
+            .objects
+            .iter()
+            .filter(|o| player.class_name(&r(o.path_id)) == Some("LODGroup"))
+        {
+            let g = player.decode(&r(o.path_id))?;
+            let Some(tp) = self.transform_of(path_id(&g, "m_GameObject")?) else {
+                continue;
+            };
+            if root_tp.is_some_and(|root| self.relative_to(tp, root).is_none()) {
+                continue;
+            }
+            let enabled = flag(&g, "m_Enabled")?;
+            let mut levels = Vec::new();
+            for lod in values(&g, "m_LODs")? {
+                let mut level = Vec::new();
+                for x in values(lod, "renderers")? {
+                    let pid = path_id(x, "renderer")?;
+                    if pid != 0 {
+                        level.push(pid);
+                    }
+                }
+                levels.push(level);
+            }
+            out.push(LodGroup {
+                group: r(o.path_id),
+                path: self.path(tp),
+                enabled,
+                off: self.off_flags(tp, Some((o.path_id, enabled))),
+                levels,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The mesh renderers of the GameObject `root` and its descendants (a prefab's), their matrices relative to
     /// `root`; all of the file's with `None`.
     pub fn renderers_under(&self, player: &Player, root: Option<i64>) -> Result<(Vec<Renderer>, Skipped)> {
         let root_tp = match root {
@@ -403,23 +494,6 @@ impl Scene {
             path_id: pid,
         };
         let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
-        // LOD 1+ renderers (not also in some LOD 0)
-        let (mut keep, mut lod_rest) = (HashSet::new(), HashSet::new());
-        for o in f.objects.iter().filter(|o| class(o.path_id) == "LODGroup") {
-            let g = player.decode(&r(o.path_id))?;
-            for (i, lod) in values(&g, "m_LODs")?.iter().enumerate() {
-                for x in values(lod, "renderers")? {
-                    let pid = path_id(x, "renderer")?;
-                    if pid != 0 {
-                        if i == 0 {
-                            keep.insert(pid);
-                        } else {
-                            lod_rest.insert(pid);
-                        }
-                    }
-                }
-            }
-        }
         let mut out = Vec::new();
         let mut skipped = Skipped::new();
         for o in f.objects.iter().filter(|o| class(o.path_id) == "MeshRenderer") {
@@ -436,14 +510,7 @@ impl Scene {
                 },
                 None => None,
             };
-            if !self.active(tp) || !flag(&mr, "m_Enabled")? {
-                *skipped.entry("inactive or disabled").or_default() += 1;
-                continue;
-            }
-            if lod_rest.contains(&o.path_id) && !keep.contains(&o.path_id) {
-                *skipped.entry("LOD 1+").or_default() += 1;
-                continue;
-            }
+            let off = self.off_flags(tp, Some((o.path_id, flag(&mr, "m_Enabled")?)));
             let g = &self.game_objects[&go];
             let Some(&mf) = g.components.iter().find(|&&c| class(c) == "MeshFilter") else {
                 *skipped.entry("no MeshFilter").or_default() += 1;
@@ -489,6 +556,7 @@ impl Scene {
                 submeshes,
                 cast_shadows: mr.get("m_CastShadows").and_then(Value::as_i64).unwrap_or(1),
                 receive_shadows: mr.get("m_ReceiveShadows").and_then(Value::as_i64).map(|v| v != 0),
+                off,
             });
         }
         Ok((out, skipped))
@@ -588,7 +656,7 @@ impl Scene {
                 layer: self.game_objects.get(&go).map_or(0, |g| g.layer),
                 world,
                 shape,
-                active: self.active(tp) && flag(&c, "m_Enabled")?,
+                off: self.off_flags(tp, Some((o.path_id, flag(&c, "m_Enabled")?))),
                 trigger: c.get("m_IsTrigger").is_some_and(flag_value),
                 physic_material: match c.get("m_Material") {
                     Some(p) => player.resolve(file, p)?,
@@ -626,9 +694,8 @@ impl Scene {
         Ok(found.flatten())
     }
 
-    /// The lights that shine (GameObject active, Light enabled), in the order of the scene's object table, and how
-    /// many do not.
-    pub fn lights(&self, player: &Player) -> Result<(Vec<LightComponent>, u64)> {
+    /// The lights, whatever their state, in the order of the scene's object table.
+    pub fn lights(&self, player: &Player) -> Result<Vec<LightComponent>> {
         let file = self.file.as_str();
         let f = player.file(file)?;
         let r = |pid: i64| ObjRef {
@@ -636,16 +703,13 @@ impl Scene {
             path_id: pid,
         };
         let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
-        let (mut out, mut off) = (Vec::new(), 0);
+        let mut out = Vec::new();
         for o in f.objects.iter().filter(|o| class(o.path_id) == "Light") {
             let l = player.decode(&r(o.path_id))?;
             let Some(tp) = self.transform_of(path_id(&l, "m_GameObject")?) else {
                 continue;
             };
-            if !self.active(tp) || !flag(&l, "m_Enabled")? {
-                off += 1;
-                continue;
-            }
+            let off = self.off_flags(tp, Some((o.path_id, flag(&l, "m_Enabled")?)));
             let fl = |k: &str| l.get(k).and_then(Value::as_f32);
             let int = |k: &str| l.get(k).and_then(Value::as_i64);
             let c = l.get("m_Color").ok_or_else(|| invalid("light: no m_Color"))?;
@@ -696,12 +760,13 @@ impl Scene {
                     Some(p) => player.resolve(file, p)?,
                     None => None,
                 },
+                off,
             });
         }
-        Ok((out, off))
+        Ok(out)
     }
 
-    /// The drawn terrains (GameObject active, Terrain enabled), in the order of the scene's object table.
+    /// The terrains, whatever their state, in the order of the scene's object table.
     pub fn terrains(&self, player: &Player) -> Result<Vec<TerrainComponent>> {
         let file = self.file.as_str();
         let f = player.file(file)?;
@@ -715,9 +780,7 @@ impl Scene {
             let t = player.decode(&r(o.path_id))?;
             let go = path_id(&t, "m_GameObject")?;
             let Some(tp) = self.transform_of(go) else { continue };
-            if !self.active(tp) || !flag(&t, "m_Enabled")? {
-                continue;
-            }
+            let off = self.off_flags(tp, Some((o.path_id, flag(&t, "m_Enabled")?)));
             let pptr = |v: &Value, k: &str| -> Result<Option<ObjRef>> {
                 match v.get(k) {
                     Some(p) => player.resolve(file, p),
@@ -753,6 +816,7 @@ impl Scene {
                 draw_heightmap: flag(&t, "m_DrawHeightmap")?,
                 draw_trees: flag(&t, "m_DrawTreesAndFoliage")?,
                 collider,
+                off,
             });
         }
         Ok(out)
@@ -783,8 +847,8 @@ pub enum ColliderShape {
     },
 }
 
-/// A collider as stored: its shape, whether it collides at all (GameObject active, collider enabled, not a trigger),
-/// its physic material, and the Rigidbody on it or its nearest ancestor (`Some(true)`: kinematic).
+/// A collider as stored: its shape, its off flags, whether it is a trigger, its physic material, and the Rigidbody on
+/// it or its nearest ancestor (`Some(true)`: kinematic).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColliderComponent {
     pub collider: ObjRef,
@@ -792,7 +856,7 @@ pub struct ColliderComponent {
     pub layer: u32,
     pub world: Matrix,
     pub shape: ColliderShape,
-    pub active: bool,
+    pub off: Vec<OffFlag>,
     pub trigger: bool,
     pub physic_material: Option<ObjRef>,
     pub rigidbody: Option<bool>,
@@ -823,6 +887,8 @@ pub struct LightComponent {
     pub baked: bool,
     pub culling_mask: u32,
     pub cookie: Option<ObjRef>,
+    /// What keeps it from shining; shines when empty.
+    pub off: Vec<OffFlag>,
 }
 
 /// A terrain's collider: its own TerrainData (which may differ from the drawn one), physic material, tree colliders.
@@ -835,8 +901,8 @@ pub struct TerrainColliderComponent {
     pub tree_colliders: bool,
 }
 
-/// A drawn terrain: its GameObject's path and world matrix (a terrain is placed by its position only), its data,
-/// material and collider.
+/// A terrain, whatever its state: its GameObject's path and world matrix (a terrain is placed by its position only),
+/// its data, material, collider and off flags (drawn when empty).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerrainComponent {
     pub terrain: ObjRef,
@@ -847,4 +913,5 @@ pub struct TerrainComponent {
     pub draw_heightmap: bool,
     pub draw_trees: bool,
     pub collider: Option<TerrainColliderComponent>,
+    pub off: Vec<OffFlag>,
 }
