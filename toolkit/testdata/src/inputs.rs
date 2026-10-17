@@ -395,7 +395,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_FROMSOFT_RIGID_ORACLE",
         kind: Kind::Input,
         gate: true,
-        about: r#"independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs"#,
+        about: r#"a SoulsFormats dump of every placed model of an area in model space: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs"#,
         status: Status::Live,
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
     },

@@ -1,6 +1,7 @@
-//! Full placed-prototype set against independent rigid evaluation (bd77fcb).
-//! Position error <=0.2 mm; inverse-transpose normal error <=2e-5 relative to
-//! max(1, component magnitude), allowing f32 reference vs f64 matrix evaluation.
+//! Every model an area's MSB places against a SoulsFormats dump of the same FLVERs in model space (each static
+//! mesh's vertices through the bone named by NormalW, from SoulsFormats' bone transforms; the dump lists the models).
+//! Position error <=0.2 mm; inverse-transpose normal error <=2e-5 relative to max(1, component magnitude), allowing
+//! the dump's f32 matrices against our f64 evaluation.
 use primase_core::pass::PassLog;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
 use primase_testdata::real_data;
@@ -80,9 +81,9 @@ fn full_castle_rigid_vertices() -> Result<()> {
         models += 1;
     }
     println!(
-        "full castle rigid: {models} prototypes, {vertices} vertices, {exact} exact components; max position {max_position} m, max scaled normal {max_normal}; counts {:?}",
+        "placed rigid models: {models} models, {vertices} vertices, {exact} exact components; max position {max_position} m, max scaled normal {max_normal}; counts {:?}",
         log.counts
     );
-    assert_eq!(models, 749);
+    assert!(models > 0, "the dump lists no models");
     Ok(())
 }

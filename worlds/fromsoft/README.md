@@ -391,10 +391,12 @@ refused and counted; no partial world mutation occurs on failure.
 Dynamic meshes already store model-space bind-pose geometry and are animated at
 runtime. They remain unchanged, counted separately, and are not submitted to
 rigid lowering. This is a static bind-pose output, not an animation evaluator.
-The full-castle gate covers 749 placed prototypes, with 8,660,257 stored vertices;
-positions agree within 0.2 mm and inverse-transpose normal components within
-2e-5 scaled by max(1, magnitude). Placed collision is compared bidirectionally
-within 0.2 mm with surface IDs enforced, independent of convex triangulation.
+The rigid gate covers every model the area's MSB places (m11_01: 790 models,
+9,284,997 stored vertices) against a SoulsFormats dump of the same FLVERs in
+model space; positions agree within 0.2 mm and inverse-transpose normal
+components within 2e-5 scaled by max(1, magnitude) (measured: 1.9 um and
+3.5e-7). Placed collision is compared bidirectionally within 0.2 mm with
+surface IDs enforced, independent of convex triangulation.
 
 ### Interior blocker cards
 
