@@ -87,6 +87,9 @@ pub struct BlendOpacity(pub Vec<Option<Vec<f32>>>);
 
 impl Component for BlendOpacity {
     const NAME: &'static str = "reskate.blend_opacity";
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(BlendOpacity))
+    }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let mesh = w.get::<Mesh>(e).ok_or("blend opacity without core.mesh")?;
         if self.0.len() != mesh.primitives.len() {
@@ -434,7 +437,7 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
         use primase_core::{LayeredMaterial, MaterialVariants, MeshFile};
-        use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial, SkateParts};
+        use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial};
         use std::collections::BTreeMap;
         let layered: BTreeMap<Entity, LayeredMaterial> = world
             .iter::<LayeredMaterial>()
@@ -479,12 +482,6 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 .any(|p| p.material.is_some_and(|m| layered.contains_key(&m)))
             {
                 continue;
-            }
-            if world
-                .get::<SkateParts>(e)
-                .is_some_and(|p| p.0.len() != mesh.primitives.len())
-            {
-                return Err(format!("{e:?}: scene part metadata differs from primitives"));
             }
             let mut parts: Vec<PlannedPart> = Vec::new();
             for (i, p) in mesh.primitives.iter().enumerate() {
@@ -538,6 +535,19 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             }
             plans.push((e, parts));
         }
+        // ---- every per-primitive component of the lowered meshes follows its source primitive (World::
+        // remap_primitives): tried on a copy of those meshes first, so a refusal still changes nothing
+        let remaps: Vec<(Entity, Vec<usize>)> = plans
+            .iter()
+            .map(|(e, parts)| (*e, parts.iter().map(|(src, ..)| *src).collect()))
+            .collect();
+        let mut probe = world.subset(&remaps.iter().map(|(e, _)| *e).collect());
+        for (e, from) in &remaps {
+            probe
+                .remap_primitives(*e, from)
+                .map_err(|m| format!("{e:?}: {m}"))?;
+        }
+        drop(probe);
         for (name, n) in tally {
             log.count(name, n);
         }
@@ -617,38 +627,23 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             }
         }
         // ---- apply
-        for (entity, parts) in plans {
-            let old_parts = world.get::<SkateParts>(entity).cloned();
-            let old_variants = world.get::<MaterialVariants>(entity).cloned();
+        for ((entity, parts), (_, from)) in plans.into_iter().zip(remaps) {
             let mut mesh = Mesh::default();
             let mut opacity = Vec::new();
-            let mut new_parts = old_parts.as_ref().map(|_| SkateParts::default());
-            let mut variants = Vec::new();
-            for (src, mut prim, op, what) in parts {
+            for (_, mut prim, op, what) in parts {
                 if let Some(key) = what {
                     prim.material = Some(made[&key]);
                 }
                 mesh.primitives.push(prim);
                 opacity.push(op);
-                if let (Some(p), Some(old)) = (&mut new_parts, &old_parts) {
-                    // planning checked one part per source primitive
-                    p.0.push(old.0[src].clone());
-                }
-                if let Some(v) = &old_variants {
-                    variants.push(v.0.get(src).cloned().unwrap_or_default());
-                }
             }
-            let any = opacity.iter().any(Option::is_some);
+            world
+                .remap_primitives(entity, &from)
+                .expect("the same remap succeeded on the copy");
             world.insert(entity, mesh);
             world.remove::<MeshFile>(entity);
-            if any {
+            if opacity.iter().any(Option::is_some) {
                 world.insert(entity, BlendOpacity(opacity));
-            }
-            if let Some(p) = new_parts {
-                world.insert(entity, p);
-            }
-            if old_variants.is_some() {
-                world.insert(entity, MaterialVariants(variants));
             }
         }
         for m in layered.keys() {
@@ -1009,7 +1004,35 @@ mod tests {
 
     #[test]
     fn part_metadata_mismatch_refuses_all_changes() {
-        refused_unchanged(layered_world(true, Some(0)).0, "part metadata");
+        refused_unchanged(layered_world(true, Some(0)).0, "skate.parts");
+    }
+
+    /// A reader dialect's per-primitive data, as it types it.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Sources(Vec<&'static str>);
+    impl primase_core::Component for Sources {
+        const NAME: &'static str = "test.sources";
+        fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+            Some(primase_core::remap_list(&self.0, from).map(Sources))
+        }
+    }
+
+    #[test]
+    fn a_dialects_per_primitive_data_follows_the_overlays() {
+        let (mut world, _, mesh) = layered_world(true, Some(1));
+        world.insert(mesh, Sources(vec!["terrain"]));
+        LowerLayeredReskate::default()
+            .run(&mut world, &mut PassLog::default())
+            .unwrap();
+        // the base and its overlay both come from the source primitive
+        assert_eq!(
+            world.get::<Sources>(mesh),
+            Some(&Sources(vec!["terrain", "terrain"]))
+        );
+        // one entry short: refused, nothing changed
+        let (mut world, _, mesh) = layered_world(true, Some(1));
+        world.insert(mesh, Sources(Vec::new()));
+        refused_unchanged(world, "test.sources");
     }
 
     #[test]
