@@ -2,6 +2,11 @@
 //! content files). A UTF-8 byte order mark is skipped; the five predefined entities and character references are
 //! resolved; comments and the declaration are skipped; anything else unusual (a DOCTYPE, processing instructions,
 //! unknown entities, text beside the root) is an error.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
 
@@ -163,16 +168,19 @@ pub(crate) fn parse(bytes: &[u8], what: &str) -> Result<Element> {
             Event::Eof => break,
         }
     }
-    if !stack.is_empty() {
-        return Err(err(
-            what,
-            format!("<{}> is not closed", stack[stack.len() - 1].name),
-        ));
+    if let Some(open) = stack.last() {
+        return Err(err(what, format!("<{}> is not closed", open.name)));
     }
     root.ok_or_else(|| err(what, "no root element"))
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
 mod tests {
     use super::*;
 

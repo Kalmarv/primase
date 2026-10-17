@@ -5,6 +5,11 @@
 //! size, flags, width, height, depth, dimension, buffer format, tile mode, level count, name, data. The data is every
 //! level of every slice, largest first, each level whole blocks of the format; its size must equal the block count
 //! times the block size.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::le;
 use crate::resource::Resource;
 use crate::sga::BufferFormat;
@@ -34,8 +39,9 @@ fn err(at: u64, detail: impl ToString) -> crate::Error {
 /// A NUL-terminated name at a resource pointer.
 pub(crate) fn c_string(r: &Resource, pointer: u64) -> Result<String> {
     let mut s = Vec::new();
+    let mut at = pointer;
     loop {
-        let b = r.at(pointer + s.len() as u64, 1)?[0];
+        let [b] = *r.block::<1>(at)?;
         if b == 0 {
             break;
         }
@@ -43,6 +49,9 @@ pub(crate) fn c_string(r: &Resource, pointer: u64) -> Result<String> {
         if s.len() > 4096 {
             return Err(err(pointer, "name longer than 4096 bytes"));
         }
+        at = at
+            .checked_add(1)
+            .ok_or_else(|| err(pointer, "a name past the address space"))?;
     }
     String::from_utf8(s).map_err(|e| err(pointer, e))
 }
@@ -50,7 +59,7 @@ pub(crate) fn c_string(r: &Resource, pointer: u64) -> Result<String> {
 impl Texture {
     /// The 80-byte base at `pointer`: everything but the data.
     pub(crate) fn read_base(r: &Resource, pointer: u64) -> Result<(Texture, u64, u32, u32)> {
-        let d = r.at(pointer, 0x50)?;
+        let d = r.block::<0x50>(pointer)?;
         let name_ptr = le::u64(d, 0x28)?;
         let t = Texture {
             name: if name_ptr == 0 {
@@ -82,15 +91,17 @@ impl Texture {
         if t.levels == 0 || t.width == 0 || t.height == 0 || t.depth == 0 {
             return Err(err(pointer, format!("{}: empty size or no levels", t.name)));
         }
+        // levels of at most 2^16 texels a side, at most 255 of them: the sums and shifts are checked anyway
+        let too_big = || err(pointer, format!("{}: a size past the address space", t.name));
         let mut size = 0usize;
         for level in 0..u32::from(t.levels) {
-            size += format.level_size(
-                (u32::from(t.width) >> level).max(1),
-                (u32::from(t.height) >> level).max(1),
-            );
+            let side = |s: u16| u32::from(s).checked_shr(level).unwrap_or(0).max(1);
+            size = size
+                .checked_add(format.level_size(side(t.width), side(t.height)))
+                .ok_or_else(too_big)?;
         }
-        size *= usize::from(t.depth);
-        if size as u64 != u64::from(blocks) * u64::from(block_size) {
+        let size = size.checked_mul(usize::from(t.depth)).ok_or_else(too_big)?;
+        if u64::try_from(size).ok() != u64::from(blocks).checked_mul(u64::from(block_size)) {
             return Err(err(
                 pointer,
                 format!(
@@ -134,37 +145,38 @@ impl TextureDictionary {
 
     /// The dictionary at `pointer` (`0x5000_0000` for a ytd's root).
     pub fn read(r: &Resource, pointer: u64) -> Result<TextureDictionary> {
-        let d = r.at(pointer, 0x40)?;
-        let list = |o: usize| -> Result<(u64, usize)> {
-            let (count, cap) = (le::u16(d, o + 8)?, le::u16(d, o + 10)?);
+        let d = r.block::<0x40>(pointer)?;
+        // a pointer list's header: pointer, count, capacity
+        let list = |(at, count, cap): (usize, usize, usize)| -> Result<(u64, usize)> {
+            let (count, cap) = (le::u16(d, count)?, le::u16(d, cap)?);
             if cap < count {
                 return Err(err(pointer, format!("list count {count} over capacity {cap}")));
             }
-            Ok((le::u64(d, o)?, usize::from(count)))
+            Ok((le::u64(d, at)?, usize::from(count)))
         };
-        let (hash_ptr, n) = list(0x20)?;
-        let (tex_ptr, m) = list(0x30)?;
+        let (hash_ptr, n) = list((0x20, 0x28, 0x2A))?;
+        let (tex_ptr, m) = list((0x30, 0x38, 0x3A))?;
         if n != m {
             return Err(err(pointer, format!("{n} name hashes for {m} textures")));
         }
         let hashes: Vec<u32> = if n == 0 {
             Vec::new()
         } else {
-            let h = r.at(hash_ptr, 4 * n)?;
+            let h = r.records(hash_ptr, n, 4)?;
             h.as_chunks::<4>()
                 .0
                 .iter()
                 .map(|c| u32::from_le_bytes(*c))
                 .collect()
         };
-        if hashes.windows(2).any(|w| w[0] >= w[1]) {
+        if hashes.iter().zip(hashes.iter().skip(1)).any(|(a, b)| a >= b) {
             return Err(err(pointer, "name hashes not strictly ascending"));
         }
         let mut textures = Vec::with_capacity(n);
         if n > 0 {
-            let p = r.at(tex_ptr, 8 * n)?;
-            for (i, &hash) in hashes.iter().enumerate() {
-                let t = match le::u64(p, 8 * i)? {
+            let p = r.records(tex_ptr, n, 8)?.as_chunks::<8>().0;
+            for (&hash, q) in hashes.iter().zip(p) {
+                let t = match u64::from_le_bytes(*q) {
                     0 => None,
                     q => Some(Texture::read(r, q)?),
                 };

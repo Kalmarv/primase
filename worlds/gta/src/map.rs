@@ -4,6 +4,11 @@
 //! kind is an error. Values are kept as the files store them (flags, enums and hashes raw); what they mean is the
 //! passes' business. Parts the first milestone does not use (occluders, grass, lights, car generators, interiors'
 //! rooms and portals, extensions) stay in the META tree.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::meta::Struct;
 use crate::{Result, invalid};
 

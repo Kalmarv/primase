@@ -198,11 +198,6 @@ role = "reader I/O"
 reason = "the GTA reader loads drawables and textures"
 
 [[io]]
-file = "worlds/gta/src/gtxd.rs"
-role = "reader I/O"
-reason = "the GTA reader reads the texture parent table"
-
-[[io]]
 file = "worlds/gta/src/keys.rs"
 role = "reader I/O"
 reason = "the GTA reader reads the key files its caller names"

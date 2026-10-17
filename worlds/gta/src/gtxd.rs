@@ -5,10 +5,10 @@
 //! `gtxd.ymt` (RBF, in `levels/gta5/generic/gtxd.rpf`, which patch packs overlay), the live `mph4_gtxd.ymt`, and the
 //! packs' enabled `GTXD_PARENTING_DATA` files (XML), in that order. A child named again with another parent keeps its
 //! first parent; such conflicts are listed, not hidden.
-#![allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "reader I/O: reads the texture parent table from the install"
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
 )]
 use std::collections::BTreeMap;
 
@@ -84,8 +84,7 @@ impl TextureParents {
         let mut t = TextureParents::default();
         for (f, rbf) in files {
             let path = set.path(f).to_string();
-            let a = &set.install.archives[f.archive];
-            let bytes = a.binary(&mut std::fs::File::open(&a.file)?, f.entry, keys)?;
+            let bytes = set.install.binary(f, keys)?;
             let root = if rbf {
                 crate::rbf::parse(&bytes)?
             } else {
@@ -99,7 +98,11 @@ impl TextureParents {
                 match t.parents.get(&c) {
                     Some(&kept) if kept != p => t.conflicts.push(Conflict {
                         child: child.clone(),
-                        kept: t.names[&kept].clone(),
+                        kept: t
+                            .names
+                            .get(&kept)
+                            .cloned()
+                            .unwrap_or_else(|| format!("{kept:#010x}")),
                         other: parent.clone(),
                         source: path.clone(),
                     }),
