@@ -113,6 +113,10 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             plan.log
                 .approximate("PBR emissive radiance not representable in skate-scene", 1);
         }
+        if m.specular.is_some() {
+            plan.log
+                .approximate("PBR specular reflectance not representable in skate-scene", 1);
+        }
         let Some(slot) = m.metallic_roughness_texture.or(m.occlusion_texture) else {
             continue;
         };

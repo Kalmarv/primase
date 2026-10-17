@@ -211,6 +211,15 @@ impl TextureEncoder {
                     ("/normalTexture/index", Role::Normal),
                     ("/pbrMetallicRoughness/metallicRoughnessTexture/index", Role::Mask),
                     ("/occlusionTexture/index", Role::Mask),
+                    // KHR_materials_specular: the strength in A (linear), the colour sRGB
+                    (
+                        "/extensions/KHR_materials_specular/specularTexture/index",
+                        Role::Mask,
+                    ),
+                    (
+                        "/extensions/KHR_materials_specular/specularColorTexture/index",
+                        Role::Colour,
+                    ),
                 ] {
                     if let Some(binding) = material.pointer_mut(pointer) {
                         let original = binding.as_u64().ok_or_else(|| invalid("texture index"))? as usize;
@@ -511,6 +520,36 @@ pub fn encode_rgba8(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Result<
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn specular_textures_are_a_mask_and_a_colour() {
+        let pixels = [200, 180, 160, 17].repeat(4 * 4);
+        let png = primase_image::write_png(&primase_image::Image {
+            width: 4,
+            height: 4,
+            samples: primase_image::Samples::U8(pixels),
+        })
+        .unwrap();
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":png.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
+            "materials":[{"extensions":{"KHR_materials_specular":{
+                "specularTexture":{"index":0},"specularColorTexture":{"index":0}}}}]});
+        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let output = TextureEncoder::default().apply(bytes).unwrap();
+        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let doc: Value = serde_json::from_slice(chunks.json).unwrap();
+        let ext = &doc["materials"][0]["extensions"]["KHR_materials_specular"];
+        let role = |slot: &str| {
+            let t = ext[slot]["index"].as_u64().unwrap() as usize;
+            let image = doc["textures"][t]["extensions"]["KHR_texture_basisu"]["source"]
+                .as_u64()
+                .unwrap() as usize;
+            doc["images"][image]["extras"]["primase.web_texture"]["role"].clone()
+        };
+        assert_eq!(role("specularTexture"), "mask");
+        assert_eq!(role("specularColorTexture"), "colour");
+    }
 
     #[test]
     fn shared_image_roles_caps_and_geometry_preservation() {

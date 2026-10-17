@@ -121,9 +121,11 @@ level limit. Such tiles are written as they are; they still load.
 Interpret transforms, materials, texture coordinates and accessors according to
 glTF 2.0 and the declared extensions. Supported output extensions include
 `EXT_mesh_gpu_instancing`, `KHR_mesh_quantization`, `EXT_meshopt_compression`,
-`KHR_texture_transform`, `KHR_texture_basisu` and `KHR_materials_emissive_strength`
-(emission brighter than 1: a factor within 0-1 times its strength; used, never required). Read `extensionsRequired`;
-never silently ignore an unsupported required extension.
+`KHR_texture_transform`, `KHR_texture_basisu`, `KHR_materials_emissive_strength`
+(emission brighter than 1: a factor within 0-1 times its strength; used, never required) and
+`KHR_materials_specular` (the source's specular reflectance, written only when the source states it, also at the
+extension's defaults; used, never required: a consumer that ignores it draws glTF's default specular). Read
+`extensionsRequired`; never silently ignore an unsupported required extension.
 
 GPU instancing applies only to compatible placements. Mirrored transforms stay
 ordinary nodes so consumers can handle their winding correctly. Materials retain

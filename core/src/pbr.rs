@@ -105,6 +105,33 @@ pub enum AlphaMode {
     Blend,
 }
 
+/// Specular reflectance, exactly glTF's `KHR_materials_specular`: the dielectric part's F0 is
+/// `min(0.04 * color, 1) * factor` (glTF's default index of refraction, 1.5). Metals ignore it. What a game's own
+/// specular model means in these terms is its lowering pass's named approximation.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Specular {
+    /// 0-1 (`specularFactor`), multiplied into `texture`'s A channel.
+    pub factor: f32,
+    /// Linear: A the specular strength (`specularTexture`).
+    pub texture: Option<TextureRef>,
+    /// Linear RGB, each >= 0 (`specularColorFactor`), multiplied into `color_texture`.
+    pub color: [f32; 3],
+    /// sRGB colour (`specularColorTexture`).
+    pub color_texture: Option<TextureRef>,
+}
+
+impl Default for Specular {
+    /// The extension's defaults: factor 1, colour white, no textures.
+    fn default() -> Self {
+        Specular {
+            factor: 1.0,
+            texture: None,
+            color: [1.0; 3],
+            color_texture: None,
+        }
+    }
+}
+
 /// A baked metal-rough material (component `pbr.material`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PbrMaterial {
@@ -140,12 +167,14 @@ pub struct PbrMaterial {
     /// Surfaces drawn with it cast shadows; `None`: unknown (the renderer's default). A placement's
     /// [`crate::Shadows`] `cast` overrides it.
     pub cast_shadows: Option<bool>,
+    /// The source's specular reflectance; `None`: it says nothing (glTF's default, the extension not written).
+    pub specular: Option<Specular>,
 }
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
-    /// 2: `emissive_strength`; 3: `cast_shadows`.
-    const VERSION: u32 = 3;
+    /// 2: `emissive_strength`; 3: `cast_shadows`; 4: `specular`.
+    const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -155,6 +184,14 @@ impl Component for PbrMaterial {
                 "emissive strength {} is not finite and >= 0",
                 self.emissive_strength
             ));
+        }
+        if let Some(s) = &self.specular {
+            if !(s.factor.is_finite() && (0.0..=1.0).contains(&s.factor)) {
+                return Err(format!("specular factor {} is not in 0-1", s.factor));
+            }
+            if s.color.iter().any(|c| !c.is_finite() || *c < 0.0) {
+                return Err(format!("specular colour {:?} is not finite and >= 0", s.color));
+            }
         }
         Ok(())
     }
@@ -182,12 +219,14 @@ impl Default for PbrMaterial {
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
             cast_shadows: None,
+            specular: None,
         }
     }
 }
 
 impl PbrMaterial {
-    /// Every texture slot that is set, in glTF's order: base colour, metallic-roughness, normal, occlusion, emissive.
+    /// Every texture slot that is set, in glTF's order: base colour, metallic-roughness, normal, occlusion, emissive,
+    /// then the specular extension's strength and colour.
     pub fn textures(&self) -> impl Iterator<Item = TextureRef> {
         [
             self.base_color_texture,
@@ -195,6 +234,8 @@ impl PbrMaterial {
             self.normal_texture,
             self.occlusion_texture,
             self.emissive_texture,
+            self.specular.and_then(|s| s.texture),
+            self.specular.and_then(|s| s.color_texture),
         ]
         .into_iter()
         .flatten()

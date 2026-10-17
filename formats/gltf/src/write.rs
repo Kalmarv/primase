@@ -192,6 +192,7 @@ pub fn fallback_material() -> PbrMaterial {
 /// The extension a texture slot's [`UvTransform`] is written as.
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
+const SPECULAR: &str = "KHR_materials_specular";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
@@ -240,6 +241,7 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         sampler_index: BTreeMap::new(),
         texture_transform_used: false,
         emissive_strength_used: false,
+        specular_used: false,
         layered_weights: BTreeMap::new(),
     };
     let json = w.document()?;
@@ -314,6 +316,7 @@ struct Writer<'w> {
     texture_transform_used: bool,
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
     emissive_strength_used: bool,
+    specular_used: bool,
     /// Layered material entity -> the glTF attribute carrying its weights.
     layered_weights: BTreeMap<Entity, String>,
 }
@@ -412,6 +415,9 @@ impl Writer<'_> {
         }
         if self.emissive_strength_used {
             used.push(EMISSIVE_STRENGTH);
+        }
+        if self.specular_used {
+            used.push(SPECULAR);
         }
         if !self.layered_weights.is_empty() {
             used.push(LAYERED);
@@ -1016,13 +1022,32 @@ impl Writer<'_> {
         if pbr.emissive != [0.0; 3] {
             m.insert("emissiveFactor".into(), self.factors(e, &pbr.emissive)?);
         }
+        let mut extensions = Map::new();
         if pbr.emissive_strength != 1.0 {
             let strength = self.factors(e, &[pbr.emissive_strength])?[0].clone();
-            m.insert(
-                "extensions".into(),
-                json!({ EMISSIVE_STRENGTH: {"emissiveStrength": strength} }),
-            );
+            extensions.insert(EMISSIVE_STRENGTH.into(), json!({ "emissiveStrength": strength }));
             self.emissive_strength_used = true;
+        }
+        // a stated specular is written even at the extension's defaults: it is a fact, absence is not
+        if let Some(sp) = pbr.specular {
+            let mut k = Map::new();
+            if sp.factor != 1.0 {
+                k.insert("specularFactor".into(), self.factors(e, &[sp.factor])?[0].clone());
+            }
+            if let Some(t) = self.texture_info(sp.texture, &mut sets)? {
+                k.insert("specularTexture".into(), t);
+            }
+            if sp.color != [1.0; 3] {
+                k.insert("specularColorFactor".into(), self.factors(e, &sp.color)?);
+            }
+            if let Some(t) = self.texture_info(sp.color_texture, &mut sets)? {
+                k.insert("specularColorTexture".into(), t);
+            }
+            extensions.insert(SPECULAR.into(), Value::Object(k));
+            self.specular_used = true;
+        }
+        if !extensions.is_empty() {
+            m.insert("extensions".into(), Value::Object(extensions));
         }
         match pbr.alpha_mode {
             AlphaMode::Opaque => {}
