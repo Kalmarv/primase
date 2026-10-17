@@ -1289,3 +1289,204 @@ fn mirrored_collision_keeps_its_fronts() {
     assert!(ny > 0.0, "the front still faces up after the mirror: {ny}");
     assert_eq!(s.positions[1], [-1.0, 0.0, 0.0]);
 }
+
+/// The fixture with levels of detail: `wall_01` (mesh 0, two parts) also has mesh 1 at level 1 (one part with
+/// variants and a key of its own) and a level 3 that draws nothing, taking level 1 by default; `shared` has only a
+/// level of its own.
+fn lods_manifest() -> Value {
+    let mut m: Value = serde_json::from_str(MANIFEST).unwrap();
+    m["prototypes"][0]["lods"] = json!([
+        {"detail": 1, "mesh": 1, "parts": [{"material": null, "variants": {"0": "trim_red", "3": "glass"},
+            "source": "lod1", "extra": 2}], "note": "kept"},
+        {"detail": 3, "mesh": null, "parts": []}
+    ]);
+    m["prototypes"][0]["lod_default"] = json!(1);
+    m["prototypes"][1]["detail"] = json!(2);
+    m
+}
+
+#[test]
+fn levels_of_detail_round_trip_exactly_as_forms() {
+    use primase_core::{LodForm, Lods, MaterialVariants, MeshFile};
+    let input = lods_manifest();
+    let src = fixture_with("lods_src", &input.to_string(), |_| {});
+    let (w, rep) = read(&src);
+    assert_eq!(rep.tolerated.len(), 0, "{:?}", rep.tolerated);
+    // the forms come after every other entity: the rest keep the ids of the scene without them
+    let (plain, _) = read(&fixture("lods_plain"));
+    let ids = |w: &World| w.entities().take(plain.entity_count()).collect::<Vec<_>>();
+    assert_eq!(ids(&w), ids(&plain));
+    assert_eq!(w.entity_count(), plain.entity_count() + 2);
+    let protos: Vec<_> = w.iter::<SkatePrototype>().map(|(e, _)| e).collect();
+    let lods = w.get::<Lods>(protos[0]).unwrap();
+    let [coarse, nothing] = [lods.forms[0].form, lods.forms[1].form];
+    assert_eq!((lods.detail, lods.default, lods.forms.len()), (0, Some(1), 2));
+    assert_eq!(
+        lods.forms[1],
+        LodForm {
+            detail: 3,
+            form: nothing
+        }
+    );
+    let file = w.get::<MeshFile>(coarse).unwrap();
+    assert_eq!(
+        (file.mesh, &file.path),
+        (1, &w.get::<MeshFile>(protos[0]).unwrap().path)
+    );
+    assert_eq!(w.get::<MaterialVariants>(coarse).unwrap().0[0].len(), 2);
+    assert_eq!(
+        w.get::<scene::SkateParts>(coarse).unwrap().0[0].source,
+        Some(json!("lod1"))
+    );
+    assert_eq!(w.get::<scene::SkateForm>(coarse).unwrap().other["note"], "kept");
+    assert!(!w.has::<MeshFile>(nothing) && w.get::<scene::SkateParts>(nothing).unwrap().0.is_empty());
+    assert_eq!(
+        w.get::<Lods>(protos[1]).unwrap(),
+        &Lods {
+            detail: 2,
+            forms: vec![],
+            default: Some(0)
+        }
+    );
+    assert!(w.get::<Lods>(protos[2]).is_none());
+    assert_eq!(w.verify_components(), vec![]);
+    let out = tmp("lods_out");
+    std::fs::remove_dir(&out).unwrap();
+    scene::write(&w, &out).unwrap();
+    same_tree(&src, &out, ALL_FILES);
+    let c = compare_json(&input, &manifest(&out), 0);
+    assert!(c.differences.is_empty(), "{:?}", c.differences);
+    // a world whose levels of detail have no default form is refused: the format always names one
+    let mut none = w.clone();
+    none.get_mut::<Lods>(protos[0]).unwrap().default = None;
+    let err = scene::write(&none, &tmp("lods_no_default"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("without a default form"), "{err}");
+    // a prototype's closure keeps its forms with it
+    let keep = w.closure([protos[0]]);
+    assert!(keep.contains(&coarse) && keep.contains(&nothing));
+}
+
+#[test]
+fn a_selected_form_is_written_as_the_prototype() {
+    use primase_core::pass::{Pass, PassLog};
+    let src = fixture_with("lods_select", &lods_manifest().to_string(), |_| {});
+    let (mut w, _) = read(&src);
+    let mut log = PassLog::default();
+    primase_core::SelectLod::default().run(&mut w, &mut log).unwrap();
+    assert_eq!(log.counts["prototypes drawn with another form"], 1);
+    assert_eq!(log.counts["prototypes drawn with their own form"], 1);
+    assert_eq!(log.counts["forms left out"], 1);
+    let out = tmp("lods_select_out");
+    scene::write(&w, &out).unwrap();
+    let p = &manifest(&out)["prototypes"];
+    let want = lods_manifest()["prototypes"][0]["lods"][0]["parts"].clone();
+    assert_eq!((&p[0]["mesh"], &p[0]["parts"]), (&json!(1), &want));
+    assert!(p[0].get("lods").is_none() && p[0].get("lod_default").is_none());
+    assert!(p[1].get("detail").is_none());
+    // the finest instead: the prototypes as they are without levels of detail
+    let (mut w, _) = read(&src);
+    primase_core::SelectLod {
+        choice: primase_core::LodChoice::Finest,
+    }
+    .run(&mut w, &mut PassLog::default())
+    .unwrap();
+    let out = tmp("lods_finest_out");
+    scene::write(&w, &out).unwrap();
+    let want = serde_json::from_str::<Value>(MANIFEST).unwrap()["prototypes"].clone();
+    assert_eq!(manifest(&out)["prototypes"], want);
+}
+
+#[test]
+fn levels_of_detail_are_checked_as_the_validator_does() {
+    let with = |name: &str, edit: &dyn Fn(&mut Value)| {
+        let mut m = lods_manifest();
+        edit(&mut m);
+        fixture_with(name, &m.to_string(), |_| {})
+    };
+    type Case<'a> = (&'a str, &'a dyn Fn(&mut Value), &'a str);
+    let cases: [Case; 7] = [
+        (
+            "lods_no_glb",
+            &|m| m["prototypes"][2]["lods"] = json!([{"detail": 1, "mesh": 0, "parts": []}]),
+            "prototype 'empty': lods without a glb",
+        ),
+        (
+            "lods_default_range",
+            &|m| m["prototypes"][0]["lod_default"] = json!(3),
+            "prototype 'wall_01': lod_default 3 of 3 forms",
+        ),
+        (
+            "lods_default_negative",
+            &|m| m["prototypes"][1]["lod_default"] = json!(-1),
+            "prototype 'shared': lod_default -1 of 1 forms",
+        ),
+        (
+            "lods_null_mesh_parts",
+            &|m| m["prototypes"][0]["lods"][1]["parts"] = json!([{"material": "glass"}]),
+            "prototype 'wall_01': a lod without a mesh has parts",
+        ),
+        (
+            "lods_detail_range",
+            &|m| m["prototypes"][0]["lods"][0]["detail"] = json!(256),
+            "out of range",
+        ),
+        (
+            "lods_unknown_material",
+            &|m| m["prototypes"][0]["lods"][0]["parts"][0]["variants"]["0"] = json!("absent"),
+            "prototype 'wall_01': material 'absent' unknown",
+        ),
+        // the form taken by default needs a material for every variant placed (wall_01: 0 and 3)
+        (
+            "lods_default_variant",
+            &|m| m["prototypes"][0]["lods"][0]["parts"][0]["variants"] = json!({"0": "glass"}),
+            "prototype 'wall_01' part 0: no material for variant 3",
+        ),
+    ];
+    for (name, edit, want) in cases {
+        let err = read_err(&with(name, edit));
+        assert!(err.contains(want), "{name}: {err}");
+    }
+    // a form not taken by default is not checked for the variants placed, as by the validator
+    let dir = with("lods_other_variant", &|m| {
+        m["prototypes"][0]["lods"][0]["parts"][0]["variants"] = json!({"0": "glass"});
+        m["prototypes"][0]["lod_default"] = json!(0);
+    });
+    let (_, rep) = read(&dir);
+    assert_eq!(rep.tolerated["explicit \"lod_default\": 0 (written absent)"], 1);
+    // a default form that draws nothing: its placements draw nothing
+    let dir = with("lods_default_nothing", &|m| {
+        m["prototypes"][0]["lod_default"] = json!(2)
+    });
+    let (_, rep) = read(&dir);
+    assert!(
+        rep.warnings
+            .contains(&"prototype 'wall_01' has no geometry; its placements draw nothing".to_owned()),
+        "{:?}",
+        rep.warnings
+    );
+}
+
+#[test]
+fn levels_of_detail_defaults_are_tolerated_and_written_in_full() {
+    let mut m = lods_manifest();
+    m["prototypes"][0]["detail"] = json!(0);
+    m["prototypes"][0]["lods"][1] = json!({"parts": []});
+    m["prototypes"][1]["lods"] = json!([]);
+    let dir = fixture_with("lods_tolerated", &m.to_string(), |_| {});
+    let (w, rep) = read(&dir);
+    for t in [
+        "explicit \"detail\": 0 (written absent)",
+        "lod without \"detail\" (written 0)",
+        "lod without \"mesh\" (written null)",
+        "explicit empty \"lods\" (written absent)",
+    ] {
+        assert_eq!(rep.tolerated.get(t), Some(&1), "{t}: {:?}", rep.tolerated);
+    }
+    let out = tmp("lods_tolerated_out");
+    scene::write(&w, &out).unwrap();
+    let p = &manifest(&out)["prototypes"];
+    assert!(p[0].get("detail").is_none() && p[1].get("lods").is_none());
+    assert_eq!(p[0]["lods"][1], json!({"detail": 0, "mesh": null, "parts": []}));
+}

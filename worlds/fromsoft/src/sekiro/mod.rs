@@ -24,7 +24,7 @@ use primase_core::{
 };
 pub use primase_skate_scene::prepare_scene_assets;
 use primase_skate_scene::{
-    FileRef, MinHeight, Part, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
+    FileRef, MinHeight, Part, SkateParts, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -517,11 +517,11 @@ pub fn read_area(
                 key: None,
                 foliage: None,
                 ground: None,
-                parts,
                 collision: None,
                 other: Default::default(),
             },
         );
+        world.insert(e, SkateParts(parts));
         proto_entities.insert(key, e);
         report.prototypes += 1;
     }

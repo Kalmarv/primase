@@ -21,7 +21,7 @@ pub mod texture;
 
 use std::path::PathBuf;
 
-pub use build::{BuildOptions, BuildReport, build};
+pub use build::{BuildOptions, BuildReport, build, leave_out_optional, lod_choice, select_lod};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

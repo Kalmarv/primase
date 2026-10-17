@@ -66,7 +66,8 @@ a list).
 | `Texture` | pixels or encoded blocks + `TexFormat`, colour space, role, normal convention (X in red/alpha, green up/down, Z stored/rebuilt) |
 | `LayeredMaterial` (`core.layered`) | one to four ordinary material references (null contributes black), per-layer UV selection and transform, and vertex-channel weights mapped after interpolation without renormalisation; blended normals are renormalised |
 | `Name`, `Source` | display name; provenance key (archetype, MSB part, asset path) for debugging and review links |
-| `Priority` (`core.priority`) | authored placement optionality, 0 required through 255 most optional; preserved independently of consumer filtering; skate-scene stores 0-15 in PLAC bits 8-11 and rejects larger values |
+| `Priority` (`core.priority`) | authored placement optionality, 0 required through 255 most optional; preserved independently of consumer filtering; skate-scene stores 0-15 in PLAC bits 8-11 and rejects larger values; `drop-optional{max=N}` leaves out placements above N, only when a pipeline asks |
+| `Lods` (`core.lods`) | a prototype's levels of detail: its own mesh's level (0 finest), its other forms (each an entity holding what goes with that form's mesh: mesh or mesh file, variants, dialect parts; a form without a mesh draws nothing) and the source's default form (none when it authors none, as GTA's distance switching: `select-lod`'s default then takes the finest, counted); `select-lod{form=finest\|default\|N}` keeps one form (moving the form's components onto the prototype with `World::move_components`) and despawns the others; skate-scene writes it back, the glTF, web and ReSkate writers refuse it |
 | `Tile` | for streaming and chunked processing |
 | `StateAxis`, `Condition`, `StateOverride`, `StateAssignment` (resource) | world state (`core::state`): variables a level can be in (event flags, door states, IPL groups, active flags), when a placed entity exists (OR of ANDs over axis values) and what changes with the state (transform, material variant, prototype); `resolve-state` picks one state (option, else the resource, else defaults) for writers that cannot toggle, and leaves a world without state untouched |
 
@@ -93,7 +94,10 @@ GLB meshes) that existing front ends already write; `formats/skate-scene` reads 
 A pass has a stable name, options with a text form, and declares the component names it **requires**, **provides**,
 **removes** and **modifies** (changes in place), plus what it approximates. After each pass the manager checks that the
 names that appeared are within `provides` and those that vanished within `removes`, and runs the **verifier** (on the
-reader's output, after every pass, before the writer; always on). A writer declares a **target** (MLIR's conversion
+reader's output, after every pass, before the writer; always on). A pass that declares it **despawns entities**
+(`drop-optional`, `select-lod`) may also make a name vanish that only the entities it despawned held, so it need not
+list every component a dropped placement or a discarded form may carry; a name a surviving entity lost must still be in
+`removes`, and the planner counts on `removes` alone. A writer declares a **target** (MLIR's conversion
 target): per component name `Legal`, `Dynamic` (a per-value check: texture format, TRS-decomposable transform),
 `Illegal` or `Carry` (written through untouched), and what it does with unknown names. Full conversion requires every
 name Legal or Carry; partial conversion keeps unknown names per the target.

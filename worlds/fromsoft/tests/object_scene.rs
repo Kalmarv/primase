@@ -230,7 +230,6 @@ fn object_world(
                 key: None,
                 foliage: None,
                 ground: None,
-                parts: Vec::new(),
                 collision: None,
                 other: Default::default(),
             },

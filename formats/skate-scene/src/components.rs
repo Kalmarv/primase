@@ -1,13 +1,14 @@
 //! The `skate.*` dialect: what scene-interchange v1 carries beyond the core components.
 //!
 //! How a scene maps onto the world (entities in the manifest's order: textures, materials, prototypes, placements,
-//! collision soups, lights, grind curves, water, markers):
+//! collision soups, lights, grind curves, water, markers, then the prototypes' other levels of detail):
 //!
 //! | manifest | entity with |
 //! |---|---|
 //! | `textures.<key>` | [`SkateTexture`], `core.texture_file`, `core.name` (`name`), `core.source` |
 //! | `materials.<key>` | [`SkateMaterial`] (texture references are entities), `core.name` (`label`), `core.source` |
-//! | `prototypes[i]` | [`SkatePrototype`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, `core.collision` and [`crate::SkateRock`] (its collision) |
+//! | `prototypes[i]` | [`SkatePrototype`], [`SkateParts`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, `core.collision` and [`crate::SkateRock`] (its collision), `core.lods` (`detail`, `lods`, `lod_default`) |
+//! | `prototypes[i].lods[k]` | a form of `core.lods`: [`SkateParts`], `core.mesh_file` (the prototype's GLB; none for `"mesh": null`), `core.material_variants`, [`SkateForm`] (its other keys, when it has any) |
 //! | `PLAC` record | `core.transform`, `core.instance`, `core.tile` (flag 1), [`SkatePlacement`], `core.source` (`placement_sources`) |
 //! | `collision[i]` | [`SkateCollision`], `core.collision` and [`crate::SkateRock`] (soups' surfaces named in `core.surfaces`) |
 //! | `LGHT` record | [`SkateLight`], `core.source` (`light_sources`) |
@@ -273,9 +274,8 @@ pub struct SoupRef {
     pub other: Other,
 }
 
-/// One part per primitive of the prototype's mesh, in draw order. The part's material is
-/// `core.mesh_file.materials[i]` and its variants `core.material_variants[i]` (a prototype without geometry has no
-/// parts).
+/// One part of a mesh's primitive, in draw order (an element of [`SkateParts`]). The part's material is
+/// `core.mesh_file.materials[i]` and its variants `core.material_variants[i]`.
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
 pub struct Part {
     /// Provenance (a string, or GTA's `{shader, bucket, model, geometry}`).
@@ -285,7 +285,8 @@ pub struct Part {
     pub other: Other,
 }
 
-/// A prototype entry: a mesh in its own local space, placed any number of times.
+/// A prototype entry: a mesh in its own local space, placed any number of times. Its parts are [`SkateParts`], on
+/// the prototype and on each of its other forms (`core.lods`), as they go with the form's mesh.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SkatePrototype {
     /// Unique; placements refer to the prototype by its index in the list.
@@ -296,8 +297,18 @@ pub struct SkatePrototype {
     pub key: Option<u32>,
     pub foliage: Option<bool>,
     pub ground: Option<bool>,
-    pub parts: Vec<Part>,
     pub collision: Option<SoupRef>,
+    pub other: Other,
+}
+
+/// A mesh's parts (`skate.parts`): one per primitive, in draw order, on a prototype and on each of its other forms.
+/// A prototype without geometry and a form that draws nothing have none.
+#[derive(Clone, Debug, PartialEq, Default, Serialize)]
+pub struct SkateParts(pub Vec<Part>);
+
+/// The keys of a `lods` entry this crate does not model (`skate.form`, on the form; only when it has any).
+#[derive(Clone, Debug, PartialEq, Default, Serialize)]
+pub struct SkateForm {
     pub other: Other,
 }
 
@@ -447,6 +458,8 @@ impl Component for SkateMaterial {
 shown!(
     SkateTexture = "skate.texture",
     SkatePrototype = "skate.prototype",
+    SkateParts = "skate.parts",
+    SkateForm = "skate.form",
     SkatePlacement = "skate.placement",
     SkateCollision = "skate.collision",
     SkateLight = "skate.light",

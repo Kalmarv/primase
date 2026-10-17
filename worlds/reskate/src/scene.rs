@@ -13,8 +13,8 @@ use primase_core::{
 };
 use primase_skate_scene::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
-    SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkatePlacement, SkatePrototype, SkateScene,
-    SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
+    SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
+    SkateScene, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
 };
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -480,6 +480,11 @@ pub struct ScenePlacement {
 impl Scene {
     /// The scene a skate-scene reader attached to `w`, read from `dir`.
     pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
+        if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
+            return Err(Error::Scene(format!(
+                "prototype {entity:?} has levels of detail: choose one form first (select-lod)"
+            )));
+        }
         if let Some((entity, priority)) = world.iter::<primase_core::Priority>().find(|(_, p)| p.0 > 15) {
             return Err(Error::Scene(format!(
                 "placement {entity:?}: priority {} exceeds the skate range 0-15",
@@ -559,8 +564,9 @@ impl Scene {
             // legacy path), and one with both uses core.mesh (what the passes produced).
             let mesh = world.get::<Mesh>(e);
             let variants = world.get::<MaterialVariants>(e);
-            let parts: Vec<PartDef> = p
-                .parts
+            let parts: Vec<PartDef> = world
+                .get::<SkateParts>(e)
+                .map_or(&[][..], |parts| &parts.0[..])
                 .iter()
                 .enumerate()
                 .map(|(pi, part)| {

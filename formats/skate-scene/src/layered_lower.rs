@@ -1,5 +1,5 @@
 //! Explicit strongest-triangle approximation for PBR consumers of layered scenes.
-use crate::SkatePrototype;
+use crate::SkateParts;
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
 
@@ -20,7 +20,7 @@ impl Pass for LowerLayeredPbr {
         &["pbr.material"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "core.material_variants", "skate.prototype"]
+        &["core.mesh", "core.material_variants", "skate.parts"]
     }
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
@@ -37,27 +37,26 @@ impl Pass for LowerLayeredPbr {
             |world, sources| {
                 // Prepare every dialect update before the generic changes are applied.
                 for source in sources {
-                    if let Some(original) = world.get::<SkatePrototype>(source.entity) {
-                        if original.parts.len() != source.primitive_count {
+                    if let Some(original) = world.get::<SkateParts>(source.entity) {
+                        if original.0.len() != source.primitive_count {
                             return Err(primase_meshops::Error(
                                 "scene part metadata differs from primitives".into(),
                             ));
                         }
-                        let mut prototype = original.clone();
-                        prototype.parts = source
+                        let parts = source
                             .parts
                             .iter()
-                            .map(|part| original.parts[part.primitive].clone())
+                            .map(|part| original.0[part.primitive].clone())
                             .collect();
-                        prototypes.push((source.entity, prototype));
+                        prototypes.push((source.entity, SkateParts(parts)));
                     }
                 }
                 Ok(())
             },
         )
         .map_err(|e| e.to_string())?;
-        for (entity, prototype) in prototypes {
-            world.insert(entity, prototype);
+        for (entity, parts) in prototypes {
+            world.insert(entity, parts);
         }
         Ok(())
     }

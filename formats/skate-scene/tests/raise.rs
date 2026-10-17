@@ -221,9 +221,13 @@ fn a_core_world_becomes_a_scene() {
     scene::write(&w, &out).unwrap();
     let mut back = World::new();
     scene::read(&out, &mut back).unwrap();
-    let protos: Vec<&SkatePrototype> = back.iter::<SkatePrototype>().map(|(_, p)| p).collect();
+    let protos: Vec<(primase_core::Entity, &SkatePrototype)> = back.iter::<SkatePrototype>().collect();
     assert_eq!(
-        (protos.len(), protos[0].id.as_str(), protos[0].parts.len()),
+        (
+            protos.len(),
+            protos[0].1.id.as_str(),
+            back.get::<scene::SkateParts>(protos[0].0).unwrap().0.len()
+        ),
         (1, "boulder", 2)
     );
     assert_eq!(back.iter::<Instance>().count(), 1);

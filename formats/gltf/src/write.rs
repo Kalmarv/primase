@@ -33,6 +33,7 @@
 //!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
 //!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
 //!   dropped silently; a component whose view would lose a value (a non-finite float) is an error.
+//! - **Levels of detail** (`core.lods`) are refused: a pipeline chooses one form per prototype first (`select-lod`).
 //! - **Shadows**: what is known of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ..., "receive":
 //!   ...}`, each key only when known: a placement's `core.shadows` on its node (`cast` `"off"`, `"on"` or `"only"`,
 //!   a shadow proxy that is not drawn; `receive` a boolean), and a material's or light's `cast_shadows` on the
@@ -211,6 +212,12 @@ const CONSUMED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME
 
 /// Write the world as GLB bytes.
 pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteReport)> {
+    if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
+        return Err(Error::World {
+            entity,
+            detail: "levels of detail: choose one form per prototype first (select-lod)".into(),
+        });
+    }
     let mut w = Writer {
         world,
         options,

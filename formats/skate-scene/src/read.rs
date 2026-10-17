@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
-    Entity, Instance, MaterialVariants, MeshFile, Name, NormalGreen, NormalZ, Priority, Source, TextureFile,
-    Tile, Transform, World,
+    Entity, Instance, LodForm, Lods, MaterialVariants, MeshFile, Name, NormalGreen, NormalZ, Priority,
+    Source, TextureFile, Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -446,6 +446,7 @@ pub fn read(dir: &Path, w: &mut World) -> Result<ReadReport> {
         rep: &mut rep,
         w,
         surface_names: Vec::new(),
+        forms: Vec::new(),
     };
     r.read(&root)?;
     Ok(rep)
@@ -457,6 +458,8 @@ struct Reader<'a> {
     w: &'a mut World,
     /// The scene's surfaces by index (its list, or the standard ones).
     surface_names: Vec<String>,
+    /// Prototypes' levels of detail, read with the prototypes and spawned after everything else.
+    forms: Vec<PendingLods>,
 }
 
 impl Reader<'_> {
@@ -629,6 +632,7 @@ impl Reader<'_> {
             top.raw(k);
         }
         scene.other = top.other()?;
+        self.spawn_forms();
         self.w.insert_resource(scene);
         Ok(())
     }
@@ -924,62 +928,54 @@ impl Reader<'_> {
                 Some(c) => Some(self.soup_ref(c, &format!("{what} collision"), false)?),
             };
             let parts_j = o.raw("parts").ok_or_else(|| bad(format!("{what}: no parts")))?;
-            let rep = &mut *self.rep;
-            let mut parts = Vec::new();
-            let mut mats = Vec::new();
-            let mut variants = Vec::new();
-            for (pi, pe) in array(parts_j, &format!("{what} parts"))?.iter().enumerate() {
-                let mut po = Obj::new(pe, format!("{what} part {pi}"))?;
-                let material = match po.raw("material") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(m)) => Some(
-                        *materials
-                            .get(m)
-                            .ok_or_else(|| bad(format!("{what}: material '{m}' unknown")))?,
-                    ),
-                    Some(_) => return Err(bad(format!("{what} part {pi}: material is not a string"))),
-                };
-                let mut vmap = BTreeMap::new();
-                let has_variants = match po.take("variants", rep) {
-                    None => false,
-                    Some(Value::Object(vs)) => {
-                        for (vk, vv) in vs {
-                            let vi: u32 = vk
-                                .parse()
-                                .ok()
-                                .filter(|n: &u32| n.to_string() == *vk)
-                                .ok_or_else(|| bad(format!("{what}: variant '{vk}' is not a number")))?;
-                            let Value::String(mk) = vv else {
-                                return Err(bad(format!("{what}: variant '{vk}' is not a material key")));
-                            };
-                            let me = materials
-                                .get(mk)
-                                .ok_or_else(|| bad(format!("{what}: material '{mk}' unknown")))?;
-                            if self.w.has::<primase_core::LayeredMaterial>(*me) {
-                                return Err(bad(format!(
-                                    "{what}: layered material '{mk}' is not allowed as a variant"
-                                )));
-                            }
-                            vmap.insert(vi, *me);
-                        }
-                        true
-                    }
-                    Some(_) => return Err(bad(format!("{what} part {pi}: variants is not an object"))),
-                };
-                let source = po.take("source", rep).cloned();
-                mats.push(material);
-                variants.push((has_variants, vmap));
-                parts.push(Part {
-                    source,
-                    variants_key: has_variants,
-                    other: po.other()?,
-                });
-            }
-            if glb.is_none() && !parts.is_empty() {
+            let own = self.read_parts(parts_j, &what, materials)?;
+            if glb.is_none() && !own.parts.is_empty() {
                 return Err(bad(format!(
                     "{what}: parts on a prototype without geometry are not supported"
                 )));
             }
+            let rep = &mut *self.rep;
+            let detail = match o.take("detail", rep) {
+                None => 0,
+                Some(d) => {
+                    let d = int_of::<u8>(d, &format!("{what} detail"))?;
+                    if d == 0 {
+                        rep.tolerate("explicit \"detail\": 0 (written absent)");
+                    }
+                    d
+                }
+            };
+            let lods_j = o.take("lods", rep);
+            let default_j = o.take("lod_default", rep);
+            let mut forms = Vec::new();
+            if let Some(lods_j) = lods_j {
+                let list = array(lods_j, &format!("{what} lods"))?;
+                if glb.is_none() {
+                    return Err(bad(format!("{what}: lods without a glb")));
+                }
+                if list.is_empty() {
+                    self.rep.tolerate("explicit empty \"lods\" (written absent)");
+                }
+                for (k, le) in list.iter().enumerate() {
+                    forms.push(self.read_form(le, &format!("{what} lod {k}"), &what, materials)?);
+                }
+            }
+            let rep = &mut *self.rep;
+            let default = match default_j {
+                None => 0,
+                Some(d) => {
+                    let n = int_of::<i64>(d, &format!("{what} lod_default"))?;
+                    let count = forms.len() + 1;
+                    let n = usize::try_from(n)
+                        .ok()
+                        .filter(|&n| n < count)
+                        .ok_or_else(|| bad(format!("{what}: lod_default {n} of {count} forms")))?;
+                    if n == 0 {
+                        rep.tolerate("explicit \"lod_default\": 0 (written absent)");
+                    }
+                    n
+                }
+            };
             let source = source_string(&mut o, rep);
             let other = o.other()?;
             let p = self.w.spawn();
@@ -993,22 +989,11 @@ impl Reader<'_> {
                 }
                 None => None,
             };
-            let any_variants = variants.iter().any(|(h, _)| *h);
-            if let Some((_, path)) = &glb {
-                self.w.insert(
-                    p,
-                    MeshFile {
-                        path: path.clone(),
-                        mesh,
-                        materials: mats.clone(),
-                    },
-                );
-            }
-            if any_variants {
-                self.w.insert(
-                    p,
-                    MaterialVariants(variants.iter().map(|(_, m)| m.clone()).collect()),
-                );
+            match &glb {
+                Some((_, path)) => own.attach(self.w, p, path, mesh),
+                None => {
+                    self.w.insert(p, SkateParts(Vec::new()));
+                }
             }
             if let Some(n) = name {
                 self.w.insert(p, Name(n));
@@ -1016,28 +1001,171 @@ impl Reader<'_> {
             if let Some(s) = source {
                 self.w.insert(p, Source(s));
             }
+            // the validator checks the form a writer takes by default
+            let (has_glb, checked) = match default.checked_sub(1).map(|k| &forms[k]) {
+                None => (glb.is_some(), own),
+                Some(f) => (f.mesh.is_some(), f.parts.clone()),
+            };
+            out.push(Proto {
+                entity: p,
+                id: id.clone(),
+                has_glb,
+                materials: checked.materials,
+                variants: checked.variants,
+            });
+            if detail != 0 || !forms.is_empty() {
+                self.forms.push(PendingLods {
+                    prototype: p,
+                    detail,
+                    default,
+                    glb: glb.as_ref().map(|(_, path)| path.clone()).unwrap_or_default(),
+                    forms,
+                });
+            }
             self.w.insert(
                 p,
                 SkatePrototype {
-                    id: id.clone(),
+                    id,
                     glb: glb.map(|(f, _)| f),
                     key,
                     foliage,
                     ground,
-                    parts,
                     collision: soup,
                     other,
                 },
             );
-            out.push(Proto {
-                entity: p,
-                id,
-                has_glb: self.w.has::<MeshFile>(p),
-                materials: mats,
-                variants,
+        }
+        Ok(out)
+    }
+
+    /// A mesh's `parts` list: a prototype's (`what`) or one of its forms'.
+    fn read_parts(
+        &mut self,
+        parts_j: &Value,
+        what: &str,
+        materials: &BTreeMap<String, Entity>,
+    ) -> Result<ReadParts> {
+        let rep = &mut *self.rep;
+        let mut out = ReadParts::default();
+        for (pi, pe) in array(parts_j, &format!("{what} parts"))?.iter().enumerate() {
+            let mut po = Obj::new(pe, format!("{what} part {pi}"))?;
+            let material = match po.raw("material") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(m)) => Some(
+                    *materials
+                        .get(m)
+                        .ok_or_else(|| bad(format!("{what}: material '{m}' unknown")))?,
+                ),
+                Some(_) => return Err(bad(format!("{what} part {pi}: material is not a string"))),
+            };
+            let mut vmap = BTreeMap::new();
+            let has_variants = match po.take("variants", rep) {
+                None => false,
+                Some(Value::Object(vs)) => {
+                    for (vk, vv) in vs {
+                        let vi: u32 = vk
+                            .parse()
+                            .ok()
+                            .filter(|n: &u32| n.to_string() == *vk)
+                            .ok_or_else(|| bad(format!("{what}: variant '{vk}' is not a number")))?;
+                        let Value::String(mk) = vv else {
+                            return Err(bad(format!("{what}: variant '{vk}' is not a material key")));
+                        };
+                        let me = materials
+                            .get(mk)
+                            .ok_or_else(|| bad(format!("{what}: material '{mk}' unknown")))?;
+                        if self.w.has::<primase_core::LayeredMaterial>(*me) {
+                            return Err(bad(format!(
+                                "{what}: layered material '{mk}' is not allowed as a variant"
+                            )));
+                        }
+                        vmap.insert(vi, *me);
+                    }
+                    true
+                }
+                Some(_) => return Err(bad(format!("{what} part {pi}: variants is not an object"))),
+            };
+            let source = po.take("source", rep).cloned();
+            out.materials.push(material);
+            out.variants.push((has_variants, vmap));
+            out.parts.push(Part {
+                source,
+                variants_key: has_variants,
+                other: po.other()?,
             });
         }
         Ok(out)
+    }
+
+    /// One `lods` entry (`fwhat`) of prototype `what`: `{"detail": n, "mesh": k or null, "parts": [...]}`.
+    fn read_form(
+        &mut self,
+        le: &Value,
+        fwhat: &str,
+        what: &str,
+        materials: &BTreeMap<String, Entity>,
+    ) -> Result<PendingForm> {
+        let mut lo = Obj::new(le, fwhat)?;
+        let rep = &mut *self.rep;
+        let detail = match lo.raw("detail") {
+            None => {
+                rep.tolerate("lod without \"detail\" (written 0)");
+                0
+            }
+            Some(d) => int_of::<u8>(d, &format!("{fwhat} detail"))?,
+        };
+        let mesh = match lo.raw("mesh") {
+            None => {
+                rep.tolerate("lod without \"mesh\" (written null)");
+                None
+            }
+            Some(Value::Null) => None,
+            Some(m) => Some(int_of::<u32>(m, &format!("{fwhat} mesh"))?),
+        };
+        let parts_j = lo.raw("parts").ok_or_else(|| bad(format!("{fwhat}: no parts")))?;
+        let parts = self.read_parts(parts_j, what, materials)?;
+        if mesh.is_none() && !parts.parts.is_empty() {
+            return Err(bad(format!("{what}: a lod without a mesh has parts")));
+        }
+        Ok(PendingForm {
+            detail,
+            mesh,
+            parts,
+            other: lo.other()?,
+        })
+    }
+
+    /// The prototypes' other forms, each an entity after every other one (so the manifest's other entities keep the
+    /// ids they have in a scene without levels of detail), and their `core.lods`.
+    fn spawn_forms(&mut self) {
+        for l in std::mem::take(&mut self.forms) {
+            let mut forms = Vec::new();
+            for f in l.forms {
+                let e = self.w.spawn();
+                match f.mesh {
+                    Some(mesh) => f.parts.attach(self.w, e, &l.glb, mesh),
+                    None => {
+                        self.w.insert(e, SkateParts(Vec::new()));
+                    }
+                }
+                if !f.other.is_empty() {
+                    self.w.insert(e, SkateForm { other: f.other });
+                }
+                forms.push(LodForm {
+                    detail: f.detail,
+                    form: e,
+                });
+            }
+            self.w.insert(
+                l.prototype,
+                Lods {
+                    detail: l.detail,
+                    forms,
+                    // the format's default form is 0 when lod_default is absent: an authored default
+                    default: Some(l.default),
+                },
+            );
+        }
     }
 
     /// A soup reference (world `collision[i]` or a prototype's `collision`), its files checked.
@@ -1564,10 +1692,59 @@ fn source_string(o: &mut Obj, _rep: &mut ReadReport) -> Option<String> {
 }
 
 /// A prototype as the rest of the reader needs it.
+/// What the variant check needs of a prototype: the form a writer takes by default (`lod_default`).
 struct Proto {
     entity: Entity,
     id: String,
     has_glb: bool,
     materials: Vec<Option<Entity>>,
     variants: Vec<(bool, BTreeMap<u32, Entity>)>,
+}
+
+/// A `parts` list as read: the parts, each one's material, and its variants (whether it has a `variants` object).
+#[derive(Clone, Default)]
+struct ReadParts {
+    parts: Vec<Part>,
+    materials: Vec<Option<Entity>>,
+    variants: Vec<(bool, BTreeMap<u32, Entity>)>,
+}
+
+impl ReadParts {
+    /// The parts as mesh `mesh` of the GLB at `path`, on `e`: `skate.parts`, `core.mesh_file` and, when a part has
+    /// variants, `core.material_variants`.
+    fn attach(&self, w: &mut World, e: Entity, path: &Path, mesh: u32) {
+        w.insert(
+            e,
+            MeshFile {
+                path: path.to_owned(),
+                mesh,
+                materials: self.materials.clone(),
+            },
+        );
+        if self.variants.iter().any(|(h, _)| *h) {
+            w.insert(
+                e,
+                MaterialVariants(self.variants.iter().map(|(_, m)| m.clone()).collect()),
+            );
+        }
+        w.insert(e, SkateParts(self.parts.clone()));
+    }
+}
+
+/// A prototype's levels of detail as read, its forms not spawned yet.
+struct PendingLods {
+    prototype: Entity,
+    detail: u8,
+    default: usize,
+    /// The prototype's GLB, every form's mesh file.
+    glb: PathBuf,
+    forms: Vec<PendingForm>,
+}
+
+/// One `lods` entry as read.
+struct PendingForm {
+    detail: u8,
+    mesh: Option<u32>,
+    parts: ReadParts,
+    other: Other,
 }

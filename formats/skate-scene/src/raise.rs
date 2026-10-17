@@ -24,6 +24,8 @@
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - the `skate.scene` resource, named by the caller.
 //!
+//! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`).
+//!
 //! Then [`crate::prepare_scene_assets`] writes the GLBs and PNGs and [`crate::write`] the scene.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,7 +39,7 @@ use primase_core::{
 };
 
 use crate::components::{
-    AlphaMode, FileRef, MaterialClass, Other, Part, STANDARD_SURFACES, SkateLight, SkateMaterial,
+    AlphaMode, FileRef, MaterialClass, Other, Part, STANDARD_SURFACES, SkateLight, SkateMaterial, SkateParts,
     SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef, Wrap,
 };
 use crate::{Error, Result};
@@ -101,6 +103,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     let bad = |m: String| Error::Scene(format!("raise-skate: {m}"));
     if world.resource::<SkateScene>().is_some() {
         return Err(bad("the world is already a skate scene".into()));
+    }
+    if let Some((e, _)) = world.iter::<primase_core::Lods>().next() {
+        return Err(bad(format!(
+            "{e:?} has levels of detail: choose one form first (select-lod)"
+        )));
     }
     // surfaces onto skate's
     let mut surfaces = world.resource::<Surfaces>().cloned();
@@ -296,11 +303,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 key: None,
                 foliage: None,
                 ground: None,
-                parts: vec![Part::default(); parts],
                 collision: None,
                 other: Other::new(),
             },
         );
+        world.insert(p, SkateParts(vec![Part::default(); parts]));
         log.count("prototypes", 1);
     }
     let placements: Vec<Entity> = world.iter::<Instance>().map(|(e, _)| e).collect();

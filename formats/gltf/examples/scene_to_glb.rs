@@ -4,9 +4,10 @@
 //! `cargo run --release -p primase-gltf --example scene_to_glb -- <scene folder> <out.glb> [prototype|tile|none]
 //! [pipeline]`
 //!
-//! The default pipeline loads the prototypes' GLBs and the texture files, lowers `skate.material` to
-//! `pbr.material` (keeping the skate material, which goes to extras) and converts normal maps to glTF's convention:
-//! `load-mesh-files, load-textures, lower-skate-pbr, normalize-normals`. The world is verified after the reader and
+//! The default pipeline takes each prototype's finest level of detail, loads the prototypes' GLBs and the texture
+//! files, lowers `skate.material` to `pbr.material` (keeping the skate material, which goes to extras) and converts
+//! normal maps to glTF's convention:
+//! `select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals`. The world is verified after the reader and
 //! after every pass; the run report lists what each pass did and approximated.
 
 use std::path::PathBuf;
@@ -19,12 +20,15 @@ use primase_skate_scene::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 
-const DEFAULT_PIPELINE: &str = "load-mesh-files, load-textures, lower-skate-pbr, normalize-normals";
+const DEFAULT_PIPELINE: &str =
+    "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals";
 
 fn registry() -> PassRegistry {
     let mut reg = PassRegistry::new();
     primase_gltf::register(&mut reg);
     primase_skate_scene::lower::register(&mut reg);
+    reg.register("select-lod", primase_core::select_lod);
+    reg.register("drop-optional", primase_core::drop_optional);
     reg.register("load-textures", |o| {
         let mut p = LoadTextures::default();
         for (k, v) in o {

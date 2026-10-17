@@ -209,11 +209,11 @@ fn invalid_skate_metadata_refuses_all_changes() {
             key: None,
             foliage: None,
             ground: None,
-            parts: vec![],
             collision: None,
             other: Default::default(),
         },
     );
+    world.insert(mesh, primase_skate_scene::SkateParts(vec![]));
     let before = format!("{world:?}");
     let mut log = PassLog::default();
     assert!(

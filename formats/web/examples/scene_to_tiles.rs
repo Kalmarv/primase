@@ -3,14 +3,14 @@
 // a path of its own, so a test can include this driver as a module (formats/web/tests/scene_to_tiles.rs)
 #[path = "support/mod.rs"]
 mod support;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Entity, Instance, MeshFile, Name, Transform, World};
 use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
 use primase_web::{Options, TilePlan, ViewerItem};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget]";
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N]";
 
 /// A prototype file mesh's local box, from its POSITION accessors' `min` and `max` (glTF requires them), reading only
 /// the GLB's JSON chunk; `None` for a mesh without positions.
@@ -148,12 +148,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// beside it). Refuses a set that lost a scene light.
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index, Box<dyn std::error::Error>> {
     let (mut paths, mut ktx2, mut caps, mut budget) = (Vec::new(), false, Vec::new(), None);
+    let mut max_priority: Option<u8> = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ktx2" => ktx2 = true,
             "--texture-cap" => caps.push(args.next().ok_or(USAGE)?),
             "--no-budget" => budget = Some(None),
+            "--max-priority" => max_priority = Some(args.next().ok_or(USAGE)?.parse()?),
             "--budget-mib" => {
                 let mib: u64 = args.next().ok_or(USAGE)?.parse()?;
                 budget = Some(Some(mib * 1024 * 1024));
@@ -169,6 +171,22 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     let output = Path::new(&paths[1]);
     let mut world = World::new();
     primase_skate_scene::read(folder, &mut world)?;
+    // placements more optional than --max-priority are left out, only when asked; each prototype is drawn with its
+    // finest level of detail (the viewer does not choose between them yet)
+    let mut passes: Vec<Box<dyn Pass>> = Vec::new();
+    if let Some(max) = max_priority {
+        passes.push(Box::new(primase_core::DropOptional { max }));
+    }
+    passes.push(Box::new(primase_core::SelectLod {
+        choice: primase_core::LodChoice::Finest,
+    }));
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new()).run(&mut world, &Pipeline { passes }, &mut report)?;
+    for step in &report.steps {
+        if !step.log.counts.is_empty() {
+            println!("{}: {:?}", step.pass, step.log.counts);
+        }
+    }
     // lights are planned from the whole scene, like viewer records, not loaded per cell
     primase_skate_scene::LowerSkateLights.run(&mut world, &mut PassLog::default())?;
     let mut options = Options {

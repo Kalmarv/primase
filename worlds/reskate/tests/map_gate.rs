@@ -51,6 +51,10 @@
 //! comparing, our renamed textures are paired with the reference's by the sources they were made from, and our
 //! renamed materials by their name without the hash and their record (textures paired); every paired name is
 //! compared as the reference's, and the pairs are counted.
+//!
+//! Before building, the reference build's choices run as passes: `PRIMASE_RESKATE_LOD` (its `--lod`, default
+//! `default`) and `PRIMASE_RESKATE_MAX_PRIORITY` (its `--max-priority`, none when unset); the reference folders must
+//! be built with the same options.
 
 #![allow(clippy::unwrap_used)]
 
@@ -934,7 +938,7 @@ fn core_mesh_input_matches_the_file_input() {
         let scene = scenes.join(area);
         let build = |from_mesh: bool| -> PathBuf {
             let out_root = root.join(if from_mesh { "mesh" } else { "file" });
-            let o = BuildOptions {
+            let mut o = BuildOptions {
                 out_root: out_root.clone(),
                 tex_cap: 256,
                 tex_caps: caps.clone(),
@@ -949,6 +953,7 @@ fn core_mesh_input_matches_the_file_input() {
             }
             let mut w = World::new();
             primase_skate_scene::read(&scene, &mut w).unwrap();
+            o.scene_warnings = Some(choose(&mut w, &scene));
             if from_mesh {
                 let r = primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
                 println!(
@@ -1059,7 +1064,7 @@ fn rust_writer_matches_the_reference() {
     for area in &areas {
         let ref_dir = reference.join(area);
         let scene = scenes.join(area);
-        let o = BuildOptions {
+        let mut o = BuildOptions {
             out_root: out_root.clone(),
             tex_cap: 256,
             tex_caps: caps.clone(),
@@ -1074,6 +1079,7 @@ fn rust_writer_matches_the_reference() {
         }
         let mut w = World::new();
         primase_skate_scene::read(&scene, &mut w).unwrap();
+        o.scene_warnings = Some(choose(&mut w, &scene));
         let report = primase_reskate::build(&w, &scene, &o).unwrap();
         let renames = pair_names(&ref_dir, &out);
         renamed_textures += renames.textures;
@@ -1458,4 +1464,19 @@ fn real_normal_writer_images() {
             normal_files.len()
         );
     }
+}
+
+/// The reference build's `--lod` and `--max-priority` (`PRIMASE_RESKATE_LOD`, `PRIMASE_RESKATE_MAX_PRIORITY`) as
+/// passes, counted; the scene's warnings for [`BuildOptions::scene_warnings`].
+fn choose(w: &mut World, scene: &Path) -> Vec<String> {
+    let lod = std::env::var("PRIMASE_RESKATE_LOD").unwrap_or_else(|_| "default".into());
+    let max = std::env::var("PRIMASE_RESKATE_MAX_PRIORITY")
+        .ok()
+        .map(|v| v.parse().unwrap());
+    let lods = primase_reskate::select_lod(w, primase_reskate::lod_choice(&lod).unwrap()).unwrap();
+    let (warnings, dropped) = primase_reskate::leave_out_optional(w, scene, max).unwrap();
+    for step in lods.steps.iter().chain(&dropped.steps) {
+        println!("{}: {:?}", step.pass, step.log.counts);
+    }
+    warnings
 }

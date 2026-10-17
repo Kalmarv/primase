@@ -259,7 +259,7 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
         use primase_core::{LayeredMaterial, MaterialVariants, MeshFile};
-        use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial, SkatePrototype};
+        use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial, SkateParts};
         use std::collections::BTreeMap;
         let layered: BTreeMap<Entity, LayeredMaterial> = world
             .iter::<LayeredMaterial>()
@@ -305,8 +305,8 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 continue;
             }
             if world
-                .get::<SkatePrototype>(e)
-                .is_some_and(|p| p.parts.len() != mesh.primitives.len())
+                .get::<SkateParts>(e)
+                .is_some_and(|p| p.0.len() != mesh.primitives.len())
             {
                 return Err(format!("{e:?}: scene part metadata differs from primitives"));
             }
@@ -408,14 +408,11 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         }
         // ---- apply
         for (entity, parts) in plans {
-            let old_proto = world.get::<SkatePrototype>(entity).cloned();
+            let old_parts = world.get::<SkateParts>(entity).cloned();
             let old_variants = world.get::<MaterialVariants>(entity).cloned();
             let mut mesh = Mesh::default();
             let mut opacity = Vec::new();
-            let mut proto = old_proto.clone();
-            if let Some(p) = &mut proto {
-                p.parts.clear();
-            }
+            let mut new_parts = old_parts.as_ref().map(|_| SkateParts::default());
             let mut variants = Vec::new();
             for (src, mut prim, op, what) in parts {
                 if let Some(key) = what {
@@ -423,9 +420,9 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 }
                 mesh.primitives.push(prim);
                 opacity.push(op);
-                if let (Some(p), Some(old)) = (&mut proto, &old_proto) {
+                if let (Some(p), Some(old)) = (&mut new_parts, &old_parts) {
                     // planning checked one part per source primitive
-                    p.parts.push(old.parts[src].clone());
+                    p.0.push(old.0[src].clone());
                 }
                 if let Some(v) = &old_variants {
                     variants.push(v.0.get(src).cloned().unwrap_or_default());
@@ -437,7 +434,7 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             if any {
                 world.insert(entity, BlendOpacity(opacity));
             }
-            if let Some(p) = proto {
+            if let Some(p) = new_parts {
                 world.insert(entity, p);
             }
             if old_variants.is_some() {
@@ -586,7 +583,7 @@ mod tests {
 
     use primase_core::pass::{Pass, PassLog};
     use primase_core::{Layer, LayerWeights, LayeredMaterial, Primitive, Semantic, Stream, Topology};
-    use primase_skate_scene::{MaterialClass, SkateMaterial, SkatePrototype};
+    use primase_skate_scene::{MaterialClass, SkateMaterial, SkateParts, SkatePrototype};
     use std::collections::BTreeMap;
 
     /// A two-layer material on one triangle whose last vertex is half layer 1; the layered entity is a
@@ -647,11 +644,11 @@ mod tests {
                     key: None,
                     foliage: None,
                     ground: None,
-                    parts: vec![Default::default(); n],
                     collision: None,
                     other: Default::default(),
                 },
             );
+            world.insert(mesh, SkateParts(vec![Default::default(); n]));
         }
         (world, m, mesh)
     }
@@ -684,7 +681,7 @@ mod tests {
         assert!(!world.has::<LayeredMaterial>(m) && !world.has::<SkateMaterial>(m));
         let prims = &world.get::<Mesh>(mesh).unwrap().primitives;
         assert_eq!(prims.len(), 2);
-        assert_eq!(world.get::<SkatePrototype>(mesh).unwrap().parts.len(), 2);
+        assert_eq!(world.get::<SkateParts>(mesh).unwrap().0.len(), 2);
         let overlay = world.get::<SkateMaterial>(prims[1].material.unwrap()).unwrap();
         assert_eq!(
             (overlay.key.as_str(), overlay.class),

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
-    Collision, Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
+    Collision, Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
     Priority, Source, Texture, TextureFile, Tile, Transform, World,
 };
 
@@ -546,6 +546,48 @@ impl Writer<'_> {
         let mut proto_index: HashMap<Entity, u32> = HashMap::new();
         let mut protos = Vec::new();
         let proto_list: Vec<(Entity, &SkatePrototype)> = w.iter::<SkatePrototype>().collect();
+        // a mesh's `parts`: entity `e`'s skate.parts with the materials of its primitives and its variants
+        let parts_json = |e: Entity, mats: &[Option<Entity>], what: &str| -> Result<Value> {
+            let parts = w.get::<SkateParts>(e).map_or(&[][..], |p| &p.0[..]);
+            if mats.len() != parts.len() {
+                return Err(bad(format!(
+                    "{what}: {} parts, {} primitive materials",
+                    parts.len(),
+                    mats.len()
+                )));
+            }
+            let variants = w.get::<MaterialVariants>(e);
+            if variants.is_some_and(|v| v.0.len() != parts.len()) {
+                return Err(bad(format!(
+                    "{what}: material variants for a different number of parts"
+                )));
+            }
+            let mut out = Vec::new();
+            for (pi, (part, mat)) in parts.iter().zip(mats).enumerate() {
+                let mut po = ObjB::default();
+                po.put(
+                    "material",
+                    mat.map(|m| mkey(m, what)).transpose()?.unwrap_or(Value::Null),
+                );
+                let vm = variants.map(|v| &v.0[pi]);
+                if part.variants_key || vm.is_some_and(|m| !m.is_empty()) {
+                    let mut vo = ObjB::default();
+                    for (k, m) in vm.into_iter().flatten() {
+                        if w.has::<primase_core::LayeredMaterial>(*m) {
+                            return Err(bad(format!(
+                                "{what}: layered material is not allowed as a variant"
+                            )));
+                        }
+                        vo.put(&k.to_string(), mkey(*m, what)?);
+                    }
+                    po.put("variants", vo.done());
+                }
+                po.opt("source", part.source.as_ref(), Value::clone);
+                po.other(&part.other);
+                out.push(po.done());
+            }
+            Ok(Value::Array(out))
+        };
         for (i, (e, p)) in proto_list.into_iter().enumerate() {
             let what = format!("prototype '{}'", p.id);
             proto_index.insert(e, i as u32);
@@ -557,7 +599,7 @@ impl Writer<'_> {
             let mats: Vec<Option<Entity>> = match (&p.glb, mesh_file) {
                 (None, _) => {
                     o.put("glb", Value::Null);
-                    if !p.parts.is_empty() {
+                    if w.get::<SkateParts>(e).is_some_and(|parts| !parts.0.is_empty()) {
                         return Err(bad(format!("{what}: parts without geometry")));
                     }
                     Vec::new()
@@ -583,47 +625,11 @@ impl Writer<'_> {
                 }
                 (Some(_), None) => return Err(bad(format!("{what}: a glb but no core.mesh_file"))),
             };
-            if mats.len() != p.parts.len() {
-                return Err(bad(format!(
-                    "{what}: {} parts, {} primitive materials",
-                    p.parts.len(),
-                    mats.len()
-                )));
-            }
-            let variants = w.get::<MaterialVariants>(e);
-            if variants.is_some_and(|v| v.0.len() != p.parts.len()) {
-                return Err(bad(format!(
-                    "{what}: material variants for a different number of parts"
-                )));
-            }
+            let parts = parts_json(e, &mats, &what)?;
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.opt("foliage", p.foliage, Value::Bool);
             o.opt("ground", p.ground, Value::Bool);
-            let mut parts = Vec::new();
-            for (pi, (part, mat)) in p.parts.iter().zip(&mats).enumerate() {
-                let mut po = ObjB::default();
-                po.put(
-                    "material",
-                    mat.map(|m| mkey(m, &what)).transpose()?.unwrap_or(Value::Null),
-                );
-                let vm = variants.map(|v| &v.0[pi]);
-                if part.variants_key || vm.is_some_and(|m| !m.is_empty()) {
-                    let mut vo = ObjB::default();
-                    for (k, m) in vm.into_iter().flatten() {
-                        if w.has::<primase_core::LayeredMaterial>(*m) {
-                            return Err(bad(format!(
-                                "{what}: layered material is not allowed as a variant"
-                            )));
-                        }
-                        vo.put(&k.to_string(), mkey(*m, &what)?);
-                    }
-                    po.put("variants", vo.done());
-                }
-                po.opt("source", part.source.as_ref(), Value::clone);
-                po.other(&part.other);
-                parts.push(po.done());
-            }
-            o.put("parts", Value::Array(parts));
+            o.put("parts", parts);
             let soup = crate::collision::soup(w, e, Some(scene))
                 .map_err(|m| bad(format!("{what} collision: {m}")))?;
             match (&p.collision, soup.as_ref()) {
@@ -646,6 +652,54 @@ impl Writer<'_> {
                     return Err(bad(format!("{what}: a collision reference but no collision")));
                 }
                 (None, None) => {}
+            }
+            if let Some(lods) = w.get::<Lods>(e) {
+                primase_core::Component::verify(lods, e, w).map_err(|m| bad(format!("{what}: {m}")))?;
+                if lods.detail != 0 {
+                    o.put("detail", Value::from(lods.detail));
+                }
+                if !lods.forms.is_empty() {
+                    let Some(glb) = mesh_file.filter(|_| p.glb.is_some()) else {
+                        return Err(bad(format!("{what}: lods without a glb")));
+                    };
+                    let mut forms = Vec::new();
+                    for (k, f) in lods.forms.iter().enumerate() {
+                        let fwhat = format!("{what} lod {k}");
+                        let mut fo = ObjB::default();
+                        fo.put("detail", Value::from(f.detail));
+                        let mats = match w.get::<MeshFile>(f.form) {
+                            Some(fm) if fm.path != glb.path => {
+                                return Err(bad(format!("{fwhat}: its mesh is not in the prototype's glb")));
+                            }
+                            Some(fm) => {
+                                fo.put("mesh", Value::from(u64::from(fm.mesh)));
+                                fm.materials.clone()
+                            }
+                            None if w.has::<Mesh>(f.form) => {
+                                return Err(bad(format!("{fwhat}: its mesh changed (no core.mesh_file)")));
+                            }
+                            None => {
+                                fo.put("mesh", Value::Null);
+                                Vec::new()
+                            }
+                        };
+                        fo.put("parts", parts_json(f.form, &mats, &fwhat)?);
+                        if let Some(form) = w.get::<SkateForm>(f.form) {
+                            fo.other(&form.other);
+                        }
+                        forms.push(fo.done());
+                    }
+                    o.put("lods", Value::Array(forms));
+                }
+                match lods.default {
+                    None => {
+                        return Err(bad(format!(
+                            "{what}: levels of detail without a default form; a scene names one (lod_default), so choose it or one form (select-lod)"
+                        )));
+                    }
+                    Some(0) => {}
+                    Some(d) => o.put("lod_default", Value::from(d as u64)),
+                }
             }
             o.other(&p.other);
             protos.push(o.done());

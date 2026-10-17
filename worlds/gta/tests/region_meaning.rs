@@ -52,7 +52,9 @@ use primase_gta::terrain::GtaTerrainLayers;
 use primase_gta::tint::{GtaTint, GtaTintVariants};
 use primase_gta::winding::GtaWinding;
 use primase_gta::{Install, Keys};
-use primase_skate_scene::{LowerSkatePbr, MaterialClass, SkateMaterial, SkatePlacement, SkatePrototype};
+use primase_skate_scene::{
+    LowerSkatePbr, MaterialClass, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
+};
 use sha2::{Digest, Sha256};
 
 /// Position key: centimetres.
@@ -296,7 +298,8 @@ fn region_placements_against_the_scene() {
     let mut geo: BTreeMap<&str, usize> = BTreeMap::new();
     let mut examples = Vec::new();
     let mut attrs: BTreeMap<&str, usize> = BTreeMap::new();
-    for (e, sp) in theirs.iter::<SkatePrototype>() {
+    for (e, _) in theirs.iter::<SkatePrototype>() {
+        let sp_parts: &[primase_skate_scene::Part] = theirs.get::<SkateParts>(e).map_or(&[], |p| &p.0);
         let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
         let Some(&(ours_mesh, d, read_mesh, read_d)) =
             protos.get(&primase_hash::joaat(name.to_lowercase().as_bytes()))
@@ -309,7 +312,7 @@ fn region_placements_against_the_scene() {
             continue;
         };
         let mut groups: BTreeMap<[u32; 2], Vec<usize>> = BTreeMap::new();
-        for (i, part) in sp.parts.iter().enumerate() {
+        for (i, part) in sp_parts.iter().enumerate() {
             let src = part.source.as_ref().expect("part source");
             groups
                 .entry([
@@ -467,7 +470,7 @@ fn region_placements_against_the_scene() {
             // the exporter's decal lift: every scene triangle of a decal shader's geometry is one of ours, as stored
             // or with each vertex moved 12 mm along its drawn face (the normalised sum of its triangles' face normals),
             // within 0.2 mm
-            let shader = sp.parts[parts[0]]
+            let shader = sp_parts[parts[0]]
                 .source
                 .as_ref()
                 .and_then(|v| v["shader"].as_str())
@@ -598,7 +601,8 @@ fn region_placements_against_the_scene() {
         .collect();
     let mut mat: BTreeMap<String, usize> = BTreeMap::new();
     let mut mat_examples: Vec<String> = Vec::new();
-    for (e, sp) in theirs.iter::<SkatePrototype>() {
+    for (e, _) in theirs.iter::<SkatePrototype>() {
+        let sp_parts: &[primase_skate_scene::Part] = theirs.get::<SkateParts>(e).map_or(&[], |p| &p.0);
         let name = theirs.get::<Name>(e).map_or(String::new(), |n| n.0.clone());
         let (Some(&oe), Some(their_mesh)) = (
             by_name.get(&primase_hash::joaat(name.to_lowercase().as_bytes())),
@@ -610,7 +614,7 @@ fn region_placements_against_the_scene() {
             drawn.get::<GtaDrawable>(oe).expect("drawable"),
             drawn.get::<Mesh>(oe).expect("mesh"),
         );
-        for (i, part) in sp.parts.iter().enumerate() {
+        for (i, part) in sp_parts.iter().enumerate() {
             let src = part.source.as_ref().expect("part source");
             let g = [
                 src["model"].as_u64().expect("model") as u32,
