@@ -163,13 +163,18 @@ pub fn retain_primitives(
 }
 
 /// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms),
-/// with its sources.
+/// with its sources; an error for a mesh still holding `gta.poses` (`gta-pose-fragments` runs first).
 pub fn for_each_mesh(
     w: &mut World,
     mut f: impl FnMut(&mut Mesh, &mut Vec<[u32; 2]>) -> Result<(), String>,
 ) -> Result<(), String> {
     let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
     for e in holders {
+        if w.has::<crate::components::GtaPoses>(e) {
+            return Err(format!(
+                "{e:?}: a mesh still at its stored pose: gta-pose-fragments runs first"
+            ));
+        }
         let Some(mut mesh) = w.remove::<Mesh>(e) else {
             continue;
         };

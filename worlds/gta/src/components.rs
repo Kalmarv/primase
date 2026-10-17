@@ -224,6 +224,26 @@ impl Component for GtaSources {
     }
 }
 
+/// Per primitive of the entity's mesh, the pose its model is drawn at (a fragment's bone, rows `[x, y, z,
+/// translation]` in GTA's frame), `None` for models drawn as stored. `gta-pose-fragments` places them and removes this.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaPoses(pub Vec<Option<crate::pose::Pose>>);
+
+impl Component for GtaPoses {
+    const NAME: &'static str = "gta.poses";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    /// One pose per primitive of the entity's mesh.
+    fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
+        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
+        if n != self.0.len() {
+            return Err(format!("{n} primitives, {} poses", self.0.len()));
+        }
+        Ok(())
+    }
+}
+
 /// A prototype's light sources as its drawable or fragment stores them (model space), every record raw.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaLights(pub Vec<crate::drawable::LightAttr>);

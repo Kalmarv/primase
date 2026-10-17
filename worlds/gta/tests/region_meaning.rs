@@ -11,8 +11,8 @@
 //! entities of interiors are counted (which interiors that exporter placed came from its own interior table, not a
 //! pass here).
 //!
-//! Geometry and materials: the matched placements' drawables are attached ([`attach_assets`]), each prototype drawn at
-//! the level that exporter drew (`select-lod{form=1}`: the coarsest LOD at most medium, else the finest; its `--level 1`),
+//! Geometry and materials: the matched placements' drawables are attached ([`attach_assets`]) and posed
+//! (`gta-pose-fragments`), each prototype drawn at the level that exporter drew (`select-lod{form=1}`: the coarsest LOD at most medium, else the finest; its `--level 1`),
 //! the scene's prototypes at that exporter's choice (`select-lod`, its `lod_default`), and go through the GTA passes (`lower-gta-pbr`, `gta-winding`, `gta-tint`, `gta-terrain-layers`, `gta-vertex-colours`), so what is compared
 //! is the world once lowered. Per GTA geometry (the scene's parts carry their source model and geometry, ours
 //! `gta.sources`; either side may have split it), the scene's triangles are compared with ours by position
@@ -253,6 +253,11 @@ fn region_placements_against_the_scene() {
     let mut drawn = ours.subset(&ours.closure(matched.iter().copied()));
     let assets = attach_assets(&mut drawn, online.as_ref().expect("online"), &keys).expect("assets");
     println!("assets of the matched placements: {assets:?}");
+    // fragments' models at their bones' poses, as every other pass expects
+    let mut pose_log = primase_core::pass::PassLog::default();
+    primase_core::pass::Pass::run(&primase_gta::pose::PoseFragments, &mut drawn, &mut pose_log)
+        .expect("poses");
+    println!("gta-pose-fragments: {:?}", pose_log.counts);
     // the level that exporter drew (its --level 1): the coarsest LOD at most 1, else the finest
     let mut lod_log = primase_core::pass::PassLog::default();
     primase_core::pass::Pass::run(
@@ -265,8 +270,8 @@ fn region_placements_against_the_scene() {
     .expect("select-lod");
     println!("select-lod{{form=1}}: {:?}", lod_log.counts);
 
-    // the GTA passes: what the world says once lowered (the world as read kept for the decal lift check: no pass
-    // moves a position)
+    // the GTA passes: what the world says once lowered (the world as posed kept for the decal lift check: no later
+    // pass moves a position)
     let read = drawn.clone();
     let mut log = primase_core::pass::PassLog::default();
     for pass in [

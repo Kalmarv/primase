@@ -4,8 +4,9 @@
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
 //!   converted), 16-bit indices widened;
-//!   [`GtaSources`] (LOD 0, each primitive's model and geometry) and [`GtaDrawable`] with the drawable's box, sphere,
-//!   LOD distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
+//!   [`GtaSources`] (LOD 0, each primitive's model and geometry), [`GtaPoses`] when a model is drawn at its bone's
+//!   pose (a fragment's; `gta-pose-fragments` places it), and [`GtaDrawable`] with the drawable's box, sphere, LOD
+//!   distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
 //!   `core.lods` form of the prototype at its level (1 to 3): an unplaced entity with that LOD's `core.mesh` and
 //!   [`GtaSources`]. GTA draws by distance and authors no level of its own choice, so `core.lods` has no default
 //!   (`select-lod` then takes the high LOD, counted); a pipeline picks a level with `select-lod{form=N}`.
@@ -29,11 +30,12 @@ use primase_core::{
 use primase_core::{LodForm, Lods};
 
 use crate::archive_set::ArchiveSet;
-use crate::components::{GtaArchetype, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSources};
+use crate::components::{GtaArchetype, GtaDrawable, GtaLights, GtaParam, GtaPoses, GtaShader, GtaSources};
 use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights};
 use crate::gtxd::TextureParents;
 use crate::keys::Keys;
 use crate::le;
+use crate::pose::Pose;
 use crate::region::GTA;
 use crate::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
@@ -55,13 +57,8 @@ pub struct AssetReport {
     /// Of `drawables`, those that are a fragment's main drawable and a drawable dictionary's entry.
     pub fragments: usize,
     pub dictionary_entries: usize,
-    /// High-LOD models placed by their bone's pose (a fragment's models).
+    /// High-LOD models with a bone's pose to be drawn at (a fragment's models; `gta-pose-fragments` places them).
     pub posed_models: usize,
-    /// Of those, the ones whose pose is not a rotation (beyond 1e-4) but has an inverse: normals turned by its inverse
-    /// transpose, tangents by it, both kept at their stored length, handedness flipped by a mirror.
-    pub posed_models_not_rigid: usize,
-    /// Of those, the ones whose pose has no inverse (it flattens the model): normals and tangents left out.
-    pub posed_models_singular: usize,
     /// Prototypes whose archetype names no live file or entry.
     pub asset_missing: usize,
     /// Coarser LODs made `core.lods` forms.
@@ -84,168 +81,35 @@ struct Ctx<'a> {
     report: AssetReport,
 }
 
-/// A model's transform in GTA's frame: rows `[x, y, z, translation]`.
-type Pose = [[f32; 4]; 3];
-
-/// How far from orthonormal (the largest entry of `M M^T - I`, `M` a pose's 3x3 part) a pose may be and still turn
-/// normals and tangents as it turns positions: within it, `M`'s inverse transpose equals `M` to that order (an
-/// approximation). Every pose a model of the install uses is either within 1e-4 or singular (census).
-const RIGID: f64 = 1e-4;
-
-/// How a pose turns directions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Turn {
-    /// A rotation (orthonormal, determinant 1): normals and tangents as positions, without the translation.
-    Rigid,
-    /// Any other invertible 3x3 part: normals by its inverse transpose (rows), tangents by it, both kept at their
-    /// stored length; a negative determinant (a mirror) flips the tangent's handedness.
-    General {
-        inverse_transpose: [[f64; 3]; 3],
-        mirror: bool,
-    },
-    /// No inverse (determinant 0): the model is flattened, and its normals and tangents are not defined.
-    Singular,
-}
-
-/// A model's pose and how it turns directions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Placing {
-    pose: Pose,
-    turn: Turn,
-}
-
-impl Placing {
-    fn new(pose: Pose) -> Placing {
-        let m: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| f64::from(pose[i][j])));
-        // cofactors: C[i][j] = m[i+1][j+1] m[i+2][j+2] - m[i+1][j+2] m[i+2][j+1] (indices mod 3); M^-T = C / det
-        let c: [[f64; 3]; 3] = std::array::from_fn(|i| {
-            std::array::from_fn(|j| {
-                let (a, b, x, y) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
-                m[a][x] * m[b][y] - m[a][y] * m[b][x]
-            })
-        });
-        let det: f64 = (0..3).map(|j| m[0][j] * c[0][j]).sum();
-        let scale = m.iter().flatten().fold(0f64, |a, &v| a.max(v.abs()));
-        let orth = (0..3)
-            .flat_map(|i| (0..3).map(move |j| (i, j)))
-            .map(|(i, j)| {
-                ((0..3).map(|k| m[i][k] * m[j][k]).sum::<f64>() - f64::from(u8::from(i == j))).abs()
-            })
-            .fold(0f64, f64::max);
-        let turn = if !det.is_finite() || det.abs() <= 1e-9 * scale.powi(3) {
-            Turn::Singular
-        } else if det > 0.0 && orth <= RIGID {
-            Turn::Rigid
-        } else {
-            Turn::General {
-                inverse_transpose: c.map(|row| row.map(|v| v / det)),
-                mirror: det < 0.0,
-            }
-        };
-        Placing { pose, turn }
-    }
-
-    /// A position.
-    fn point(&self, v: [f32; 3]) -> [f32; 3] {
-        transform(&self.pose, v, 1.0)
-    }
-
-    /// A normal; `None` under a singular pose.
-    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
-        match self.turn {
-            Turn::Rigid => Some(transform(&self.pose, n, 0.0)),
-            Turn::General {
-                inverse_transpose, ..
-            } => Some(keep_length(n, inverse_transpose.map(|r| dot(r, n)))),
-            Turn::Singular => None,
-        }
-    }
-
-    /// A tangent with its handedness in w; `None` under a singular pose.
-    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
-        let xyz = [t[0], t[1], t[2]];
-        match self.turn {
-            Turn::Rigid => {
-                let d = transform(&self.pose, xyz, 0.0);
-                Some([d[0], d[1], d[2], t[3]])
-            }
-            Turn::General { mirror, .. } => {
-                let m = self
-                    .pose
-                    .map(|r| [f64::from(r[0]), f64::from(r[1]), f64::from(r[2])]);
-                let d = keep_length(xyz, m.map(|r| dot(r, xyz)));
-                Some([d[0], d[1], d[2], if mirror { -t[3] } else { t[3] }])
-            }
-            Turn::Singular => None,
-        }
-    }
-}
-
-fn dot(r: [f64; 3], v: [f32; 3]) -> f64 {
-    r[0] * f64::from(v[0]) + r[1] * f64::from(v[1]) + r[2] * f64::from(v[2])
-}
-
-/// `turned` scaled to the length of `stored` (as it is when it has no length).
-fn keep_length(stored: [f32; 3], turned: [f64; 3]) -> [f32; 3] {
-    let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    let (a, b) = (len(stored.map(f64::from)), len(turned));
-    let k = if b > 0.0 { a / b } else { 1.0 };
-    turned.map(|v| (v * k) as f32)
-}
-
-fn transform(r: &Pose, v: [f32; 3], w: f64) -> [f32; 3] {
-    r.map(|row| {
-        (f64::from(row[0]) * f64::from(v[0])
-            + f64::from(row[1]) * f64::from(v[1])
-            + f64::from(row[2]) * f64::from(v[2])
-            + f64::from(row[3]) * w) as f32
-    })
-}
-
-/// One vertex element as a core stream, placed by the model's pose when it has one; `None` for normals and tangents
-/// under a singular pose.
-fn stream(
-    g: &Geometry,
-    e: crate::drawable::Element,
-    t: Option<&Placing>,
-) -> Result<Option<(Semantic, Stream)>> {
+/// One vertex element as a core stream (frame converted).
+fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream)> {
     let bytes = g.element_bytes(e);
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(|c| le::vec3(c, 0)).collect() };
     let fmt = e.format.0;
-    Ok(Some(match (e.slot, fmt) {
+    Ok(match (e.slot, fmt) {
         (0, 0x06) => (
             Semantic::Position,
-            Stream::F32x3(
-                f3(&bytes)
-                    .into_iter()
-                    .map(|p| GTA.point(t.map_or(p, |t| t.point(p))))
-                    .collect(),
-            ),
+            Stream::F32x3(f3(&bytes).into_iter().map(|p| GTA.point(p)).collect()),
         ),
-        (4, 0x06) => {
-            let normals: Option<Vec<[f32; 3]>> = f3(&bytes)
-                .into_iter()
-                .map(|n| t.map_or(Some(n), |t| t.normal(n)).map(|n| GTA.direction(n)))
-                .collect();
-            let Some(normals) = normals else { return Ok(None) };
-            (Semantic::Normal, Stream::F32x3(normals))
-        }
-        (8, 0x02) => {
-            let tangents: Option<Vec<[f32; 4]>> = bytes
-                .as_chunks::<16>()
-                .0
-                .iter()
-                .map(|c| {
-                    let v = le::vec4(c, 0);
-                    t.map_or(Some(v), |t| t.tangent(v)).map(|v| {
+        (4, 0x06) => (
+            Semantic::Normal,
+            Stream::F32x3(f3(&bytes).into_iter().map(|n| GTA.direction(n)).collect()),
+        ),
+        (8, 0x02) => (
+            Semantic::Tangent,
+            Stream::F32x4(
+                bytes
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .map(|c| {
+                        let v = le::vec4(c, 0);
                         let d = GTA.direction([v[0], v[1], v[2]]);
                         [d[0], d[1], d[2], v[3]]
                     })
-                })
-                .collect();
-            let Some(tangents) = tangents else { return Ok(None) };
-            (Semantic::Tangent, Stream::F32x4(tangents))
-        }
+                    .collect(),
+            ),
+        ),
         (16, 0x1C) => (Semantic::Weights(0), Stream::U8x4(u8x4(&bytes))),
         (20, 0x1E) => (Semantic::Joints(0), Stream::U8x4(u8x4(&bytes))),
         (24..=27, 0x1C) => (Semantic::Color(e.slot - 24), Stream::U8x4(u8x4(&bytes))),
@@ -267,7 +131,7 @@ fn stream(
                 format!("{} in format {fmt:#x} has no core stream", e.semantic()),
             ));
         }
-    }))
+    })
 }
 
 fn u8x4(b: &[u8]) -> Vec<[u8; 4]> {
@@ -276,7 +140,7 @@ fn u8x4(b: &[u8]) -> Vec<[u8; 4]> {
 
 /// Each model's transform: its bone's pose (a fragment's), none for skinned models (bound to bone weights) or without a
 /// pose. As the game draws a fragment at rest; only for drawables with a skeleton.
-fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Placing>> {
+fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose>> {
     models
         .iter()
         .map(|m| {
@@ -287,7 +151,7 @@ fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Plac
             if !d.skeleton || skinned {
                 None
             } else {
-                pose.get(bone as usize).map(|&p| Placing::new(p))
+                pose.get(bone as usize).copied()
             }
         })
         .collect()
@@ -309,17 +173,14 @@ fn mesh(
     path: &str,
     models: &[Model],
     materials: &[Entity],
-    poses: &[Option<Placing>],
     non_finite: &mut BTreeMap<String, usize>,
 ) -> Result<Mesh> {
     let mut primitives = Vec::new();
-    for (m, pose) in models.iter().zip(poses) {
+    for m in models {
         for g in &m.geometries {
             let mut streams = BTreeMap::new();
             for &e in &g.elements {
-                let Some((sem, s)) = stream(g, e, pose.as_ref())? else {
-                    continue;
-                };
+                let (sem, s) = stream(g, e)?;
                 if !finite(&s) {
                     if sem == Semantic::Position {
                         return Err(invalid(
@@ -663,15 +524,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             materials.push(m);
             ctx.report.materials += 1;
         }
-        let poses: [Vec<Option<Placing>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
-        for p in poses[0].iter().flatten() {
-            ctx.report.posed_models += 1;
-            match p.turn {
-                Turn::Rigid => {}
-                Turn::General { .. } => ctx.report.posed_models_not_rigid += 1,
-                Turn::Singular => ctx.report.posed_models_singular += 1,
-            }
-        }
+        let poses: [Vec<Option<Pose>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
         // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the
         // others are its forms
         let mut forms = Vec::new();
@@ -679,13 +532,14 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             if lod > 0 && models.is_empty() {
                 continue;
             }
-            let m = mesh(
-                &path,
-                models,
-                &materials,
-                &poses[lod],
-                &mut ctx.report.non_finite_streams,
-            )?;
+            let m = mesh(&path, models, &materials, &mut ctx.report.non_finite_streams)?;
+            // per primitive its model's pose, for gta-pose-fragments
+            let posed = (models.iter().zip(&poses[lod]))
+                .flat_map(|(model, p)| std::iter::repeat_n(*p, model.geometries.len()))
+                .collect::<Vec<_>>();
+            if lod == 0 {
+                ctx.report.posed_models += poses[0].iter().flatten().count();
+            }
             let sources = GtaSources {
                 lod: lod as u8,
                 sources: (models.iter().enumerate())
@@ -706,6 +560,9 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             };
             w.insert(holder, m);
             w.insert(holder, sources);
+            if posed.iter().any(Option::is_some) {
+                w.insert(holder, GtaPoses(posed));
+            }
         }
         if !forms.is_empty() {
             w.insert(
@@ -730,56 +587,4 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
         ctx.report.drawables += 1;
     }
     Ok(ctx.report)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pose(m: [[f32; 3]; 3]) -> Pose {
-        m.map(|r| [r[0], r[1], r[2], 5.0])
-    }
-
-    #[test]
-    fn poses_turn_normals_by_their_inverse_transpose() {
-        // a rotation of 90 degrees about z: rigid, every direction turns as a position does
-        let r = Placing::new(pose([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert_eq!(r.turn, Turn::Rigid);
-        assert_eq!(r.normal([1.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0]));
-        assert_eq!(r.tangent([1.0, 0.0, 0.0, -1.0]), Some([0.0, 1.0, 0.0, -1.0]));
-        assert_eq!(r.point([0.0, 0.0, 0.0]), [5.0, 5.0, 5.0]);
-        // a shear: the normal stays perpendicular to the sheared surface's tangents, at its stored length
-        let s = Placing::new(pose([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert!(matches!(s.turn, Turn::General { mirror: false, .. }));
-        // the surface x = 0 (tangents y and z) leans to x = y: its normal becomes (1, -1, 0) / sqrt 2
-        let n = s.normal([1.0, 0.0, 0.0]).expect("normal");
-        let (t, u) = (
-            s.tangent([0.0, 1.0, 0.0, 1.0]).expect("tangent"),
-            s.tangent([0.0, 0.0, 1.0, 1.0]).expect("tangent"),
-        );
-        let h = std::f32::consts::FRAC_1_SQRT_2;
-        assert!(
-            (t[0] - h).abs() < 1e-6 && (t[1] - h).abs() < 1e-6 && t[2] == 0.0 && t[3] == 1.0,
-            "{t:?}"
-        );
-        let d = |a: [f32; 4]| f64::from(a[0] * n[0] + a[1] * n[1] + a[2] * n[2]);
-        assert!(
-            d(t).abs() < 1e-6 && d(u).abs() < 1e-6,
-            "{n:?} against {t:?} and {u:?}"
-        );
-        assert!(
-            (n[0] - h).abs() < 1e-6 && (n[1] + h).abs() < 1e-6 && n[2] == 0.0,
-            "{n:?}"
-        );
-        // a mirror flips the handedness
-        let m = Placing::new(pose([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert!(matches!(m.turn, Turn::General { mirror: true, .. }));
-        assert_eq!(m.tangent([0.0, 1.0, 0.0, 1.0]), Some([0.0, 1.0, 0.0, -1.0]));
-        assert_eq!(m.normal([1.0, 0.0, 0.0]), Some([-1.0, 0.0, 0.0]));
-        // no inverse: no normals or tangents
-        let z = Placing::new(pose([[0.0; 3]; 3]));
-        assert_eq!(z.turn, Turn::Singular);
-        assert_eq!(z.normal([0.0, 0.0, 1.0]), None);
-        assert_eq!(z.tangent([1.0, 0.0, 0.0, 1.0]), None);
-    }
 }
