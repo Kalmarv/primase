@@ -21,8 +21,9 @@ fn named_region(name: &str) -> Option<[f32; 4]> {
     REGIONS.iter().find(|(n, _)| *n == name).map(|(_, r)| *r)
 }
 
-/// The cli's selection, unless options say otherwise: entities read 600 m beyond the region (large pieces of the world
-/// reach in), placements smaller than 0.5 m left out (the earlier skate export's rules).
+/// The cli's selection, unless options say otherwise: GTA Online's map, entities read 600 m beyond the region (large
+/// pieces of the world reach in), placements smaller than 0.5 m left out (the earlier skate export's rules), interiors
+/// left out (the game draws an interior only from inside it).
 const REACH: f32 = 600.0;
 const MIN_SIZE: f32 = 0.5;
 
@@ -33,7 +34,8 @@ fn region_names() -> String {
 }
 
 /// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--map online|story] [--hour H] [--min-size M]
-/// [--max-priority N] [--interiors none|all] [--reach M]`; `--min-size` 0.5 and `--reach` 600 unless given.
+/// [--max-priority N] [--interiors none|all] [--reach M]`; `--map online`, `--min-size` 0.5, `--reach` 600 and
+/// `--interiors none` unless given.
 pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let mut interiors = false;
     let mut reach = REACH;
@@ -117,10 +119,9 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let (Some(install), Some(keys), Some(region)) = (dir, keys, region) else {
         return Err("gta: needs --gta, --keys and --region".into());
     };
-    let mut selection = Selection::new(region);
+    let mut selection = Selection::new(region, map);
     selection.reach = reach;
     selection.min_size = MIN_SIZE;
-    selection.map = map;
     selection.hour = hour;
     selection.interiors = interiors;
     if let Some(m) = min_size {

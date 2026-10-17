@@ -69,17 +69,17 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// The region `[x0, y0, x1, y1]` as GTA Online's map at the `gta.hour` axis's default hour: entities read only
-    /// inside it, every size and priority, interiors left out (the game draws an interior only from inside it).
-    pub fn new(region: [f32; 4]) -> Selection {
+    /// The region `[x0, y0, x1, y1]` of `map` as read: entities only inside it, at the `gta.hour` axis's default hour,
+    /// every size and priority, interiors kept.
+    pub fn new(region: [f32; 4], map: Map) -> Selection {
         Selection {
             region,
             reach: 0.0,
-            map: Map::Online,
+            map,
             hour: None,
             min_size: 0.0,
             max_priority: 3,
-            interiors: false,
+            interiors: true,
         }
     }
 }

@@ -43,9 +43,10 @@ fn every_named_region_through_the_gta_passes() {
         if only.as_deref().is_some_and(|o| o != *name) {
             continue;
         }
-        let mut selection = Selection::new(*region);
+        let mut selection = Selection::new(*region, Map::Online);
         selection.reach = 600.0;
         selection.min_size = 0.5;
+        selection.interiors = false;
         let (mut read, report) = source.read(*region, selection.reach).expect("region");
         println!("{name}: {:?}; {:?}", report.region, report.lights);
         let select = manager
