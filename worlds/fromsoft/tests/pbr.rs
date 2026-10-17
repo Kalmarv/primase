@@ -59,6 +59,8 @@ fn payload(rgba: &[u8]) -> Vec<u8> {
     .expect("valid synthetic DDS")
 }
 
+const UNKNOWN: &str = "metallic without source evidence lowered as dielectric 0";
+
 fn gx(words: &[u32]) -> flver::GxItem {
     flver::GxItem {
         id: *b"GXMD",
@@ -82,9 +84,13 @@ fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
             ("a".into(), payload(&[80, 90, 100, 255])),
             ("n".into(), payload(&[128, 128, 255, 255])),
         ]);
-        pbr::lower(&mut world, &bytes).unwrap();
+        let log = pbr::lower(&mut world, &bytes).unwrap();
         let p = world.get::<PbrMaterial>(e).unwrap().clone();
         assert_eq!(world.get::<materials::Material>(e).unwrap().gx, raw);
+        assert_eq!(
+            log.approximations.get(UNKNOWN).copied(),
+            (shader == "Unclassified").then_some(1)
+        );
         if shader != "Unclassified" {
             assert_eq!(p.metallic, 0.37);
             let t = world
@@ -94,7 +100,8 @@ fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
             pbr::lower(&mut world, &BTreeMap::new()).unwrap();
             assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &p);
         } else {
-            assert_eq!(p.metallic, PbrMaterial::default().metallic);
+            // No evidenced consumer for this family: dielectric, not glTF's 1.
+            assert_eq!(p.metallic, 0.);
         }
     }
 }
@@ -143,11 +150,9 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         m.normal = None;
         m.gx = records.clone();
         world.insert(e, m);
-        pbr::lower(&mut world, &BTreeMap::new()).unwrap();
-        assert_eq!(
-            world.get::<PbrMaterial>(e).unwrap().metallic,
-            PbrMaterial::default().metallic
-        );
+        let log = pbr::lower(&mut world, &BTreeMap::new()).unwrap();
+        assert_eq!(world.get::<PbrMaterial>(e).unwrap().metallic, 0.);
+        assert_eq!(log.approximations[UNKNOWN], 1);
         assert_eq!(world.get::<materials::Material>(e).unwrap().gx, records);
     }
 }
@@ -328,4 +333,46 @@ fn repeated_lowering_preserves_channels_factors_and_entity_count() {
         world.get::<Texture>(texture).unwrap().levels[0],
         [255, 13, 51, 255]
     );
+}
+
+#[test]
+fn metallic_without_source_evidence_is_counted_dielectric() {
+    let bytes = BTreeMap::from([
+        ("a".into(), payload(&[80, 90, 100, 255])),
+        ("n".into(), payload(&[128, 128, 255, 255])),
+    ]);
+    // A metal-map family without its map, a scalar family without GXMD, and an
+    // unclassified family: none has a traced metallic source.
+    for (shader, normal) in [
+        ("MetallicTex", true),
+        ("MetallicValue", true),
+        ("MetallicValue", false),
+        ("Unclassified", true),
+    ] {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source(shader);
+        m.bindings.remove("Texture2D_2_MetallicMap");
+        if !normal {
+            m.normal = None;
+        }
+        world.insert(e, m);
+        let log = pbr::lower(&mut world, &bytes).unwrap();
+        let p = world.get::<PbrMaterial>(e).unwrap();
+        let effective = match p.metallic_roughness_texture {
+            Some(r) => p.metallic * f32::from(world.get::<Texture>(r.texture).unwrap().levels[0][2]) / 255.,
+            None => p.metallic,
+        };
+        assert_eq!(effective, 0., "{shader} normal={normal}");
+        assert_eq!(log.approximations[UNKNOWN], 1, "{shader} normal={normal}");
+    }
+    // A traced map is evidence even when it samples zero, and is not counted.
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, source("MetallicTex"));
+    let mut traced = bytes.clone();
+    traced.insert("m".into(), payload(&[0, 0, 0, 255]));
+    let log = pbr::lower(&mut world, &traced).unwrap();
+    assert!(!log.approximations.contains_key(UNKNOWN));
+    assert_eq!(log.counts["metallic textures"], 1);
 }

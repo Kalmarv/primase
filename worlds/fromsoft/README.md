@@ -226,7 +226,9 @@ for the later shader-aware bake. The preview does not execute layered shaders.
 `Material::skate_material` resolves colour and normal roles independently into
 texture entities, with deterministic fallback colours for missing base data.
 Metallic and emissive source slots survive even when the target preview does
-not consume them. Material identity is chosen by the caller, independently of
+not consume them. `sekiro::pbr::lower` takes metallic only from a traced source
+constant or map; without either, a material is dielectric (metallic 0), not
+glTF's default of 1, and is counted as an approximation. Material identity is chosen by the caller, independently of
 any reference exporter's string formatting or key hashing.
 
 `PRIMASE_FROMSOFT_MATERIAL_ORACLE` supplies two independent outputs:

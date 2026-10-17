@@ -1,6 +1,8 @@
 //! Static source-material lowering. Unknown shader constants remain unknown and
 //! are counted; this is not a reconstruction of dynamic wetness or light banks.
 //! Source metadata stays attached. Existing baked PBR base/normal bindings win.
+//! A metallic value without a traced source constant or map is dielectric 0,
+//! never glTF's fully metallic default of 1, and every such material is counted.
 mod gx;
 use crate::{
     Result, invalid,
@@ -9,7 +11,7 @@ use crate::{
 };
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
-use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
 use primase_texcodec::TexDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,35 +26,10 @@ pub fn roughness(gloss: f32) -> Result<f32> {
     Ok(1.0 - 0.95 * gloss.sqrt())
 }
 
-/// Pack a baked linear gloss plane as glTF ORM. R/B are neutral multipliers;
-/// this function does not claim to have measured AO or metallic content.
-pub fn orm_from_gloss(width: u32, height: u32, gloss: &[f32]) -> Result<Texture> {
-    let n = (width as usize)
-        .checked_mul(height as usize)
-        .filter(|&n| n > 0)
-        .ok_or_else(|| invalid("Sekiro PBR", 0, "invalid gloss dimensions"))?;
-    if n != gloss.len() {
-        return Err(invalid("Sekiro PBR", 0, "gloss plane length mismatch"));
-    }
-    let mut rgba = Vec::new();
-    rgba.try_reserve_exact(
-        n.checked_mul(4)
-            .ok_or_else(|| invalid("Sekiro PBR", 0, "gloss size overflow"))?,
-    )
-    .map_err(|e| invalid("Sekiro PBR", 0, e))?;
-    for &g in gloss {
-        rgba.extend_from_slice(&[255, (roughness(g)? * 255.).round() as u8, 255, 255]);
-    }
-    Ok(Texture {
-        width,
-        height,
-        format: TexFormat::Rgba8Unorm,
-        levels: vec![rgba],
-        color_space: ColorSpace::Linear,
-        role: TexRole::Mask,
-        normal: None,
-    })
-}
+/// Metallic factor for a material with no traced source constant or map. The
+/// world these shaders draw is overwhelmingly non-metal; metal must be proven.
+pub(crate) const UNKNOWN_METALLIC: f32 = 0.;
+const UNKNOWN_METALLIC_LOSS: &str = "metallic without source evidence lowered as dielectric 0";
 
 fn simple(shader: &str) -> bool {
     matches!(
@@ -180,7 +157,13 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 "layered material requires explicit baked PBR bindings",
             ));
         }
-        let mut p = existing.unwrap_or_default();
+        // Only a fresh material lacks evidence; an existing factor came from a prior pass.
+        let fresh = existing.is_none();
+        let mut p = existing.unwrap_or(PbrMaterial {
+            metallic: UNKNOWN_METALLIC,
+            ..PbrMaterial::default()
+        });
+        let mut metal_map_used = false;
         let scalar = if !baked && p.metallic_roughness_texture.is_none() {
             gx::metallic(&m, &mut log)?
         } else {
@@ -283,17 +266,19 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 log.approximate("per-light gloss correction omitted", 1);
                 log.approximate("roughness quantized to UNORM8", 1);
                 if metal.is_some() {
+                    metal_map_used = true;
                     log.count("metallic textures", 1);
                     log.approximate("dielectric F0 0.03 represented by glTF 0.04", 1);
                     log.approximate("metal resampled at normal base-mip texel centers", 1);
-                } else if scalar.is_none() {
-                    log.approximate("runtime metallic constant unknown; retained target default", 1);
                 }
             } else {
                 log.approximate("missing normal gloss; retained target roughness", 1);
             }
         } else {
-            log.approximate("unclassified shader PBR; retained target factors", 1);
+            log.approximate("unclassified shader PBR; retained target roughness", 1);
+        }
+        if !baked && fresh && scalar.is_none() && !metal_map_used {
+            log.approximate(UNKNOWN_METALLIC_LOSS, 1);
         }
         if m.definition.is_none() {
             log.approximate("missing material definition", 1);
@@ -327,18 +312,5 @@ mod tests {
         for bad in [-0.01, 1.01, f32::NAN, f32::INFINITY] {
             assert!(roughness(bad).is_err());
         }
-    }
-    #[test]
-    fn gloss_pack_has_orm_channels_and_rejects_invalid_planes() {
-        let t = orm_from_gloss(3, 1, &[0., 0.25, 1.]).unwrap();
-        assert_eq!(
-            t.levels[0],
-            [255, 255, 255, 255, 255, 134, 255, 255, 255, 13, 255, 255]
-        );
-        assert_eq!(t.role, TexRole::Mask);
-        assert_eq!(t.color_space, ColorSpace::Linear);
-        assert!(orm_from_gloss(2, 2, &[0.; 3]).is_err());
-        assert!(orm_from_gloss(0, 1, &[]).is_err());
-        assert!(orm_from_gloss(1, 1, &[f32::NAN]).is_err());
     }
 }
