@@ -9,6 +9,7 @@ pub mod assets;
 pub mod bounds;
 pub mod collision;
 pub mod components;
+pub mod convert;
 pub mod drawable;
 pub mod gtxd;
 pub mod ipl;

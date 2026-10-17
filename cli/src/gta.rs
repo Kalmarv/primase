@@ -1,18 +1,11 @@
-//! `--from gta`: a region of a GTA V install ([`primase_gta::pipeline`]).
-use std::collections::BTreeSet;
+//! `--from gta`: a region of a GTA V install ([`primase_gta::convert::GtaReader`]); this module parses its options.
 use std::path::PathBuf;
 
-use primase_core::{Entity, World};
-use primase_gta::pipeline::{
-    DEFAULT_PASSES, GtaSource, Map, REACH, REGIONS, Selection, named_region, prototype_box, select_passes,
-};
+use primase_core::convert::Reader;
+use primase_gta::convert::{GtaOptions, GtaReader, map_named};
+use primase_gta::pipeline::{Map, REGIONS, Selection, named_region};
 
-use crate::convert::{Reader, Result};
-
-struct Gta {
-    source: GtaSource,
-    selection: Selection,
-}
+use crate::convert::Result;
 
 fn region_names() -> String {
     REGIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
@@ -58,11 +51,8 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
                 region = Some(r);
             }
             "--map" => {
-                map = match value()?.as_str() {
-                    "online" => Map::Online,
-                    "story" => Map::Story,
-                    m => return Err(format!("gta: --map {m}: online or story").into()),
-                }
+                let m = value()?;
+                map = map_named(m).ok_or_else(|| format!("gta: --map {m}: online or story"))?;
             }
             "--hour" => {
                 hour = Some(
@@ -95,7 +85,7 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
             _ => return Err(format!("gta: unknown option {a}").into()),
         }
     }
-    let (Some(dir), Some(keys), Some(region)) = (dir, keys, region) else {
+    let (Some(install), Some(keys), Some(region)) = (dir, keys, region) else {
         return Err("gta: needs --gta, --keys and --region".into());
     };
     let mut selection = Selection::new(region);
@@ -108,40 +98,9 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     if let Some(p) = max_priority {
         selection.max_priority = p;
     }
-    Ok(Box::new(Gta {
-        source: GtaSource::open(&dir, &keys, map)?,
+    Ok(Box::new(GtaReader::open(&GtaOptions {
+        install,
+        keys,
         selection,
-    }))
-}
-
-impl Reader for Gta {
-    fn read(&mut self) -> Result<World> {
-        let (w, report) = self.source.read(self.selection.region, REACH)?;
-        println!("gta region: {:?}", report.region);
-        println!("gta lights: {:?}", report.lights);
-        println!("gta bounds: {:?}", report.bounds);
-        Ok(w)
-    }
-    fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<World> {
-        let (w, report) = self.source.load(world, roots)?;
-        if !report.textures_not_found.is_empty() || report.asset_missing > 0 {
-            println!(
-                "gta assets: {} prototypes without a live file, textures not found {:?}",
-                report.asset_missing, report.textures_not_found
-            );
-        }
-        Ok(w)
-    }
-    fn emits(&self) -> &'static [&'static str] {
-        &["core", "gta"]
-    }
-    fn default_select(&self) -> String {
-        select_passes(&self.selection)
-    }
-    fn default_passes(&self) -> &'static str {
-        DEFAULT_PASSES
-    }
-    fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
-        prototype_box(world, prototype)
-    }
+    })?))
 }

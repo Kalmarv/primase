@@ -9,7 +9,9 @@ use primase_core::pass::Target;
 use primase_core::{Entity, Instance, World};
 use primase_web::{Options, TilePlan};
 
-use crate::convert::{Result, WriteReport, Writer};
+use primase_core::convert::{Report, Writer};
+
+use crate::convert::Result;
 
 /// The part [`Writer::next_part`] last gave.
 enum Asked {
@@ -27,7 +29,7 @@ struct Web {
     cells: Option<std::vec::IntoIter<(i32, i32)>>,
     asked: Option<Asked>,
     bytes: Vec<usize>,
-    report: WriteReport,
+    report: Report,
 }
 
 /// `[--ktx2] [--budget-mib N | --no-budget] [--plain]`
@@ -72,7 +74,7 @@ pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
         unsplit: Vec::new(),
         cells: None,
         asked: None,
-        report: WriteReport::new(),
+        report: Report::new(),
     }))
 }
 
@@ -137,7 +139,7 @@ impl Writer for Web {
         }
         Ok(())
     }
-    fn finish(self: Box<Self>) -> Result<WriteReport> {
+    fn finish(self: Box<Self>) -> Result<Report> {
         let Web {
             sets,
             plans,

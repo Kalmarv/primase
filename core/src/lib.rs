@@ -4,6 +4,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
+pub mod convert;
 mod environment;
 pub use environment::Environment;
 pub mod frame;
