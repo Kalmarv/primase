@@ -46,6 +46,8 @@ impl Component for Source {
 
 /// An affine 3x4 transform, column by column: the images of local +X, +Y, +Z, then the translation;
 /// `world = M * local`. f32 because every format we read and write stores f32 (byte-identical round trips).
+/// A transform composed of several (a hierarchy, an entity placed in another's space, a tile offset) is computed in
+/// f64 from the stored f32 values and each entry rounded once to f32, never rounded step by step.
 /// Shear and mirroring are allowed; [`Transform::classify`] flags them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Transform {
