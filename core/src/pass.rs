@@ -3,7 +3,9 @@
 //!
 //! - A [`Pass`] has a stable name, text options, and declares the component names it **requires**, **provides**,
 //!   **removes** and **modifies** (in place), plus what it approximates. After a pass runs, the names that actually
-//!   appeared and disappeared must be among those it declared.
+//!   appeared and disappeared must be among those it declared. A pass that declares it **despawns entities** (leaves
+//!   placements out, discards forms) may also make a name disappear that only despawned entities held: no
+//!   surviving entity lost it. The planner does not count on that; it plans by the declared removals alone.
 //! - A [`Target`] (a writer's declaration) gives each component name a [`Legality`]: legal, dynamic (a predicate on
 //!   the entity's value), illegal, or carried through untouched. [`Mode::Partial`] keeps names the target does not
 //!   list; [`Mode::Full`] requires every name to be legal or carried.
@@ -75,6 +77,13 @@ pub trait Pass: Send + Sync {
     /// Preference among passes of equal depth: higher first.
     fn priority(&self) -> i32 {
         0
+    }
+    /// Whether it despawns entities. If so, a component name it does not declare in [`Pass::removes`] may disappear
+    /// when every entity that held the name before the pass was despawned by it (a dropped placement's
+    /// `core.name`, a discarded form's dialect data); a name still held by a surviving entity before the pass must
+    /// be declared as ever. Added names are checked as for every pass.
+    fn despawns_entities(&self) -> bool {
+        false
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String>;
 }
@@ -527,6 +536,16 @@ impl PassManager {
                 }
             }
             let before: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
+            // who held each name a despawning pass may make disappear without declaring it
+            let holders: BTreeMap<&str, Vec<Entity>> = if p.despawns_entities() {
+                before
+                    .iter()
+                    .filter(|n| !p.removes().contains(&n.as_str()))
+                    .map(|n| (n.as_str(), w.entities_named(n)))
+                    .collect()
+            } else {
+                BTreeMap::new()
+            };
             let mut log = PassLog::default();
             p.run(w, &mut log).map_err(|message| Error::Pass {
                 pass: text.clone(),
@@ -535,13 +554,18 @@ impl PassManager {
             let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
             let added: Vec<String> = after.difference(&before).cloned().collect();
             let removed: Vec<String> = before.difference(&after).cloned().collect();
-            for (what, names, declared) in [
-                ("added", &added, p.provides()),
-                ("removed", &removed, p.removes()),
+            let despawned_with = |n: &str| {
+                holders
+                    .get(n)
+                    .is_some_and(|held| held.iter().all(|&e| !w.is_alive(e)))
+            };
+            for (what, names, declared, removal) in [
+                ("added", &added, p.provides(), false),
+                ("removed", &removed, p.removes(), true),
             ] {
                 let undeclared: Vec<String> = names
                     .iter()
-                    .filter(|n| !declared.contains(&n.as_str()))
+                    .filter(|n| !declared.contains(&n.as_str()) && !(removal && despawned_with(n)))
                     .cloned()
                     .collect();
                 if !undeclared.is_empty() {
@@ -1160,6 +1184,93 @@ mod tests {
             err.to_string(),
             "pass bake requires `toy.mesh`, which the world does not have"
         );
+    }
+
+    /// Despawns entities holding toy.layered; with `strip`, also takes toy.file off the entities it keeps.
+    struct Cull {
+        opted: bool,
+        strip: bool,
+    }
+    impl Pass for Cull {
+        fn name(&self) -> &'static str {
+            "cull"
+        }
+        fn despawns_entities(&self) -> bool {
+            self.opted
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            for e in w.iter::<Layered>().map(|(e, _)| e).collect::<Vec<_>>() {
+                w.despawn(e);
+                log.count("culled", 1);
+            }
+            if self.strip {
+                for e in w.iter::<File>().map(|(e, _)| e).collect::<Vec<_>>() {
+                    w.remove::<File>(e);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// One entity with toy.layered, toy.file and game.thing (culled), one with toy.mesh and toy.file (kept).
+    fn cull_world() -> World {
+        let mut w = world();
+        let kept = w.spawn();
+        w.insert(kept, Mesh(2));
+        w.insert(kept, File(2));
+        w
+    }
+
+    fn cull(opted: bool, strip: bool, w: &mut World) -> Result<RunReport> {
+        let mut report = RunReport::default();
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Cull { opted, strip })],
+        };
+        PassManager::new(PassRegistry::new()).run(w, &pipeline, &mut report)?;
+        Ok(report)
+    }
+
+    #[test]
+    fn a_despawning_pass_may_take_names_only_despawned_entities_held() {
+        // undeclared: a name gone with its entity is still an undeclared removal
+        let err = cull(false, false, &mut cull_world()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pass cull removed `[\"game.thing\", \"toy.layered\"]` without declaring it"
+        );
+        // declared: every holder despawned, so the names may go; the report keeps all of them
+        let mut w = cull_world();
+        let report = cull(true, false, &mut w).unwrap();
+        assert_eq!(report.steps[0].removed, ["game.thing", "toy.layered"]);
+        assert_eq!(w.component_names(), ["toy.file", "toy.mesh"]);
+        // a surviving entity that lost a name is not covered by despawning
+        let err = cull(true, true, &mut cull_world()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pass cull removed `[\"toy.file\"]` without declaring it"
+        );
+        // names it adds are checked as for any pass
+        struct Adds;
+        impl Pass for Adds {
+            fn name(&self) -> &'static str {
+                "adds"
+            }
+            fn despawns_entities(&self) -> bool {
+                true
+            }
+            fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                let e = w.spawn();
+                w.insert(e, Pbr(1));
+                Ok(())
+            }
+        }
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Adds)],
+        };
+        let err = PassManager::new(PassRegistry::new())
+            .run(&mut world(), &pipeline, &mut RunReport::default())
+            .unwrap_err();
+        assert!(matches!(err, Error::Undeclared { what: "added", .. }), "{err}");
     }
 
     #[test]

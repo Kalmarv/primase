@@ -191,6 +191,8 @@ trait AnyColumn: Any + Send + Sync {
     fn split_off_box(&mut self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn>;
     /// Move every value of `other`, a column of the same type, in.
     fn absorb(&mut self, other: Box<dyn AnyColumn>);
+    /// Move `from`'s value, if it has one, onto `to` (replacing `to`'s).
+    fn move_entity(&mut self, from: Entity, to: Entity);
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -253,6 +255,11 @@ impl<T: Component> AnyColumn for Column<T> {
             .downcast_mut::<Column<T>>()
             .expect("absorbing a column of the same type");
         self.values.append(&mut other.values);
+    }
+    fn move_entity(&mut self, from: Entity, to: Entity) {
+        if let Some(v) = self.values.remove(&from) {
+            self.values.insert(to, v);
+        }
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -389,6 +396,25 @@ impl World {
         true
     }
 
+    /// Every component of `from`, typed and opaque, moved onto `to`, replacing `to`'s of the same name (`to` keeps
+    /// the others), then `from` despawned: for a pass that swaps one form of an entity for another without knowing
+    /// its components (`select-lod`). False, and nothing changed, unless both are alive and differ.
+    pub fn move_components(&mut self, from: Entity, to: Entity) -> bool {
+        if from == to || !self.alive.contains(&from) || !self.alive.contains(&to) {
+            return false;
+        }
+        for c in self.columns.values_mut() {
+            c.move_entity(from, to);
+        }
+        for col in self.opaque.values_mut() {
+            if let Some(v) = col.remove(&from) {
+                col.insert(to, v);
+            }
+        }
+        self.alive.remove(&from);
+        true
+    }
+
     pub fn is_alive(&self, e: Entity) -> bool {
         self.alive.contains(&e)
     }
@@ -410,6 +436,27 @@ impl World {
             todo.append(&mut out);
         }
         seen
+    }
+
+    /// Every typed reference ([`Component::references`]) to an entity of `targets`: (component name, the entity holding
+    /// it, the entity referred to), sorted. Opaque components declare no references, as in [`World::closure`].
+    pub(crate) fn references_to(&self, targets: &BTreeSet<Entity>) -> Vec<(&'static str, Entity, Entity)> {
+        let mut edges = Vec::new();
+        let mut refs = Vec::new();
+        for c in self.columns.values() {
+            for source in c.entities() {
+                refs.clear();
+                c.references(source, &mut refs);
+                edges.extend(
+                    refs.iter()
+                        .filter(|r| targets.contains(r))
+                        .map(|&target| (c.name(), source, target)),
+                );
+            }
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        edges
     }
 
     /// A world of only `keep`'s entities (those alive) with all their components, typed and opaque, under the
@@ -879,6 +926,31 @@ mod tests {
             *b.get_mut(e).unwrap() = B("seven");
         }
         assert_eq!(w.get::<B>(e), Some(&B("seven")));
+    }
+
+    #[test]
+    fn move_components_replaces_by_name_and_keeps_the_rest() {
+        let mut w = World::new();
+        let from = w.spawn();
+        let to = w.spawn();
+        w.insert(from, A(9));
+        w.insert(to, A(1));
+        w.insert(to, B("kept"));
+        let opaque = Opaque {
+            version: 4,
+            data: OpaqueData::Bytes(vec![3, 2, 1]),
+        };
+        w.insert_opaque(from, "game.form", opaque.clone());
+        assert!(!w.move_components(from, from));
+        assert!(!w.move_components(from, Entity::from_index(999)));
+        assert_eq!(w.get::<A>(from), Some(&A(9)), "a refused move changes nothing");
+        assert!(w.move_components(from, to));
+        assert!(!w.is_alive(from));
+        assert_eq!(w.get::<A>(to), Some(&A(9)));
+        assert_eq!(w.get::<B>(to), Some(&B("kept")));
+        assert_eq!(w.get_opaque(to, "game.form"), Some(&opaque));
+        assert!(!w.move_components(from, to));
+        assert_ne!(w.spawn(), from, "the moved-from id is not reused");
     }
 
     #[test]
