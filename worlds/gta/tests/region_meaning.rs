@@ -3,8 +3,8 @@
 //! Oracle (`PRIMASE_GTA_SCENE`): a skate-scene folder whose manifest's `region` is `[x0, y0, x1, y1]` in GTA metres,
 //! exported from the same install with GTA Online's map; read with `primase-skate-scene`. Placements are matched by
 //! archetype (the joaat of the scene prototype's name) and position (1 cm); a match compares orientation and scale
-//! (1e-5 per transform column component), tint (the instance variant) and priority (flag bits 8-11 against
-//! `priorityLevel`). Before matching, ours are resolved to GTA Online's map at the default hour (`gta.hour` 12, the
+//! (1e-5 per transform column component), tint (the instance variant) and priority (the placement's flag bits 8-11,
+//! read as `core.priority`, against `priorityLevel`). Before matching, ours are resolved to GTA Online's map at the default hour (`gta.hour` 12, the
 //! hour that exporter fixed; hour 0 is checked against the time archetypes' masks: the placements that come and go must
 //! be exactly those the masks say) and go through `gta-select-region` with that exporter's minimum size (0.5 m). Scene
 //! placements without a match fail the gate, and so do placements of ours outside interiors the scene leaves out;
@@ -194,8 +194,9 @@ fn region_placements_against_the_scene() {
         {
             *diffs.entry("tint").or_default() += 1;
         }
-        let flags = theirs.get::<SkatePlacement>(e).expect("placement").unknown_flags;
-        if (flags >> 8) & 0xF != ge.priority_level as u32 {
+        // the placement's priority bits (flags 8-11), which the scene reader gives as core.priority (none: 0)
+        let priority = theirs.get::<primase_core::Priority>(e).map_or(0, |p| p.0);
+        if u32::from(priority) != ge.priority_level as u32 {
             *diffs.entry("priority").or_default() += 1;
         }
     }
