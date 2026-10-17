@@ -149,7 +149,8 @@ pub fn specular_texture(t: &Texture, mask: [f32; 3], power: Option<f32>) -> Resu
 }
 
 /// The base texture of a `distance_map` shader (sign text), from its distance field `t` (every level): white with the
-/// field's red channel as alpha, which the material cuts at half, as the shader's smoothstep around 0.5 does.
+/// field's red channel as alpha, which the material cuts at half (the shader blends a smoothstep band around 0.5:
+/// approximated).
 pub fn distance_texture(t: &Texture) -> Result<Texture, String> {
     let mut levels = Vec::with_capacity(t.levels.len());
     for (i, level) in t.levels.iter().enumerate() {
@@ -283,8 +284,9 @@ impl Pass for LowerGtaPbr {
         &["core.mesh"]
     }
     fn approximates(&self) -> &'static str {
-        "alpha tested at 0.5 (the game's reference is a render state); the Blinn-Phong lobe as GGX of the same \
-         highlight, dry (no wetness); detail maps not carried; water a blended flat colour"
+        "alpha tested at 0.5 (the game's reference is a render state); distance-map sign text cut at the field's \
+         half (the game blends a smoothstep band around it); the Blinn-Phong lobe as GGX of the same highlight, dry \
+         (no wetness); detail maps not carried; water a blended flat colour"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -488,7 +490,10 @@ impl LowerGtaPbr {
                 }
                 _ => log.count("distance maps without a fill colour: white", 1),
             }
+            // the shader blends a smoothstep band around the half; a cut there keeps the glyphs' shape, not their
+            // soft edge
             m.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+            log.approximate("distance-map sign text cut at the field's half, not blended", 1);
             match texture(s, "distanceMap") {
                 Some(Some(t)) => distance = Some(t),
                 _ => log.count("distance maps without their field: filled", 1),
