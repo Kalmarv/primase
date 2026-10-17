@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::pass::{Mode, PassManager, PassOptions, Pipeline, RunReport, Target};
 use crate::{Entity, World};
 
-pub type Error = Box<dyn std::error::Error>;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Labelled lines for the log: what a reader read or loaded, what a writer wrote.
