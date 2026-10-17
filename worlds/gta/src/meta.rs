@@ -9,7 +9,7 @@
 //!
 //! [`Meta::read`] checks the container; [`Meta::root`] decodes the root block's structure into a [`Struct`] tree,
 //! following every array and pointer by the descriptions, and fails on anything they do not account for.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::resource::Resource;
 use crate::{Result, invalid};
@@ -353,11 +353,19 @@ impl Meta {
         if (info.size as usize) > block.data.len() {
             return Err(err(0, "root block shorter than its structure"));
         }
-        let mut seen: Seen = self.blocks.iter().map(|b| vec![false; b.data.len()]).collect();
-        let root = self.decode_struct(self.root, 0, info, 0, &mut seen)?;
+        let bytes: usize = self.blocks.iter().map(|b| b.data.len()).sum();
+        let mut walk = Walk {
+            seen: self.blocks.iter().map(|b| vec![false; b.data.len()]).collect(),
+            reached: BTreeSet::new(),
+            budget: (MAX_DEPTH + 1).saturating_mul(bytes.saturating_add(1)),
+        };
+        let root = self.decode_struct(self.root, 0, info, 0, &mut walk)?;
         Ok((
             root,
-            seen.iter().map(|b| b.iter().filter(|&&x| !x).count()).collect(),
+            walk.seen
+                .iter()
+                .map(|b| b.iter().filter(|&&x| !x).count())
+                .collect(),
         ))
     }
 
@@ -387,11 +395,15 @@ impl Meta {
         offset: usize,
         info: &StructInfo,
         depth: usize,
-        seen: &mut Seen,
+        walk: &mut Walk,
     ) -> Result<Struct> {
-        if depth > 64 {
-            return Err(err(0, "structures nest deeper than 64"));
+        if depth > MAX_DEPTH {
+            return Err(err(0, format!("structures nest deeper than {MAX_DEPTH}")));
         }
+        walk.budget = walk
+            .budget
+            .checked_sub(1)
+            .ok_or_else(|| err(offset as u64, "more structures than the blocks can hold"))?;
         let data = &self.blocks[block].data;
         let end = offset + info.size as usize;
         if end > data.len() {
@@ -401,7 +413,7 @@ impl Meta {
             ));
         }
         let d = &data[offset..end];
-        seen[block][offset..end].fill(true);
+        walk.seen[block][offset..end].fill(true);
         let mut fields = Vec::with_capacity(info.fields.len());
         for f in &info.fields {
             if f.name == ARRAY_INFO {
@@ -411,10 +423,12 @@ impl Meta {
             let size = match f.kind {
                 Kind::Structure => self.struct_info(f.ref_key)?.size as usize,
                 Kind::Chars => f.ref_key as usize,
-                Kind::Inline => f.ref_key as usize * self.element_size(self.array_info(info, f)?)?,
+                Kind::Inline => (f.ref_key as usize)
+                    .checked_mul(self.element_size(self.array_info(info, f)?)?)
+                    .ok_or_else(|| err((offset + o) as u64, "inline array size overflows"))?,
                 k => k.size().expect("sized kind"),
             };
-            if o + size > d.len() {
+            if o.checked_add(size).is_none_or(|end| end > d.len()) {
                 return Err(err(
                     (offset + o) as u64,
                     format!(
@@ -466,8 +480,9 @@ impl Meta {
                 Kind::DataBlock => match Self::unpack(u64_at(v, 0))? {
                     None => Value::Data(Vec::new()),
                     Some((id, 0)) => {
-                        seen[id - 1].fill(true);
-                        Value::Data(self.block(id)?.data.clone())
+                        let data = self.block(id)?.data.clone();
+                        walk.seen[id - 1].fill(true);
+                        Value::Data(data)
                     }
                     Some((_, off)) => {
                         return Err(err(
@@ -497,15 +512,15 @@ impl Meta {
                                 .get(off..off + len)
                                 .ok_or_else(|| err((offset + o) as u64, "string runs past its block"))?;
                             let nul = usize::from(b.data.get(off + len) == Some(&0));
-                            seen[id - 1][off..off + len + nul].fill(true);
+                            walk.seen[id - 1][off..off + len + nul].fill(true);
                             Value::Str(Some(s.to_vec()))
                         }
                     }
                 }
-                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, seen)?),
+                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, walk)?),
                 Kind::Structure => {
                     let si = self.struct_info(f.ref_key)?;
-                    Value::Struct(self.decode_struct(block, offset + o, si, depth + 1, seen)?)
+                    Value::Struct(self.decode_struct(block, offset + o, si, depth + 1, walk)?)
                 }
                 Kind::Array => {
                     let el = self.array_info(info, f)?;
@@ -516,7 +531,7 @@ impl Meta {
                             format!("array count {count}, capacity {cap}"),
                         ));
                     }
-                    Value::Array(self.decode_array(el, u64_at(v, 0), count, depth, seen)?)
+                    Value::Array(self.decode_array(el, u64_at(v, 0), count, depth, walk)?)
                 }
             };
             fields.push((f.name, value));
@@ -544,10 +559,19 @@ impl Meta {
             })
     }
 
-    /// The size of one element of an array whose array-info field is `el`.
+    /// The size of one element of an array whose array-info field is `el`; never 0 (a structure described with size
+    /// 0 is no array element).
     fn element_size(&self, el: &Field) -> Result<usize> {
         Ok(match el.kind {
-            Kind::Structure => self.struct_info(el.ref_key)?.size as usize,
+            Kind::Structure => match self.struct_info(el.ref_key)?.size {
+                0 => {
+                    return Err(err(
+                        0,
+                        format!("array of {:#010x}, a structure of size 0", el.ref_key),
+                    ));
+                }
+                size => size as usize,
+            },
             Kind::Vec3 => 16,
             k => k.size().ok_or_else(|| err(0, format!("array of {k:?}")))?,
         })
@@ -571,7 +595,7 @@ impl Meta {
     }
 
     /// A structure pointer: the structure is the one its block holds.
-    fn follow(&self, pointer: u64, depth: usize, seen: &mut Seen) -> Result<Option<Struct>> {
+    fn follow(&self, pointer: u64, depth: usize, walk: &mut Walk) -> Result<Option<Struct>> {
         let Some((id, off)) = Self::unpack(pointer)? else {
             return Ok(None);
         };
@@ -583,7 +607,8 @@ impl Meta {
                 format!("pointer into the middle of a {:#010x}", info.name),
             ));
         }
-        Ok(Some(self.decode_struct(id - 1, off, info, depth + 1, seen)?))
+        walk.reach(id, off)?;
+        Ok(Some(self.decode_struct(id - 1, off, info, depth + 1, walk)?))
     }
 
     /// `count` elements starting at a packed pointer, continuing into following blocks of the same name.
@@ -593,7 +618,7 @@ impl Meta {
         pointer: u64,
         count: usize,
         depth: usize,
-        seen: &mut Seen,
+        walk: &mut Walk,
     ) -> Result<Vec<Value>> {
         if count == 0 {
             return Ok(Vec::new());
@@ -629,17 +654,20 @@ impl Meta {
             while off < b.data.len() && items.len() < count {
                 let v = &b.data[off..off + es];
                 if el.kind != Kind::Structure {
-                    seen[id - 1][off..off + es].fill(true);
+                    walk.seen[id - 1][off..off + es].fill(true);
                 }
                 items.push(match el.kind {
-                    Kind::Structure => Value::Struct(self.decode_struct(
-                        id - 1,
-                        off,
-                        self.struct_info(el.ref_key)?,
-                        depth + 1,
-                        seen,
-                    )?),
-                    Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, seen)?),
+                    Kind::Structure => {
+                        walk.reach(id, off)?;
+                        Value::Struct(self.decode_struct(
+                            id - 1,
+                            off,
+                            self.struct_info(el.ref_key)?,
+                            depth + 1,
+                            walk,
+                        )?)
+                    }
+                    Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0), depth, walk)?),
                     _ => self.decode_inline(el, v)?,
                 });
                 off += es;
@@ -651,8 +679,33 @@ impl Meta {
     }
 }
 
-/// Per block, which bytes a decoding reached.
-type Seen = Vec<Vec<bool>>;
+/// What a decoding reached: per block, which bytes; and where the structures that pointers and arrays lead to start.
+struct Walk {
+    seen: Vec<Vec<bool>>,
+    reached: BTreeSet<(usize, usize)>,
+    /// Structures left to decode. An embedded structure lies within its parent's bytes and pointers and arrays reach
+    /// a structure once, so a tree of non-empty structures decodes at most `MAX_DEPTH + 1` per byte of its blocks;
+    /// embedded fields that overlap could otherwise decode one exponentially often.
+    budget: usize,
+}
+
+/// How deep structures may nest (embedded, pointed at or array elements).
+const MAX_DEPTH: usize = 64;
+
+impl Walk {
+    /// Marks the structure a pointer or array element leads to (block id, offset). A structure is reached once: the
+    /// containers are trees, and one reached twice would be decoded again for every path to it (exponentially many
+    /// with nesting).
+    fn reach(&mut self, id: usize, offset: usize) -> Result<()> {
+        if !self.reached.insert((id, offset)) {
+            return Err(err(
+                offset as u64,
+                format!("the structure at offset {offset} of block {id} is reached twice"),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// The kind code of a primitive kind (the name of blocks of that primitive).
 fn el_code(k: Kind) -> u8 {
@@ -899,5 +952,140 @@ mod tests {
         // a fourth item would continue into the string block
         let m = Meta::read(&sample(4, b"hello\0")).expect("container");
         assert!(m.root().is_err());
+    }
+
+    /// A field description: name, offset, kind, reference index, reference key.
+    type F = (u32, u32, u8, i16, u32);
+
+    /// A container of these structure descriptions (name, size, fields) and blocks (name, bytes), the first block
+    /// the root.
+    fn container(structs: &[(u32, u32, Vec<F>)], blocks: &[(u32, Vec<u8>)]) -> Resource {
+        let mut d = vec![0u8; 0x100];
+        let at = |d: &mut Vec<u8>, bytes: &[u8]| -> u64 {
+            let o = d.len();
+            d.extend_from_slice(bytes);
+            d.resize(d.len().next_multiple_of(16), 0);
+            0x5000_0000 + o as u64
+        };
+        let mut descriptions = Vec::new();
+        for (name, size, fields) in structs {
+            let mut f = Vec::new();
+            for &(n, off, kind, index, key) in fields {
+                f.extend(n.to_le_bytes());
+                f.extend(off.to_le_bytes());
+                f.extend([kind, 0]);
+                f.extend(index.to_le_bytes());
+                f.extend(key.to_le_bytes());
+            }
+            let fp = if f.is_empty() { 0 } else { at(&mut d, &f) };
+            let mut s = [0u8; 32];
+            put(&mut s, 0, &name.to_le_bytes());
+            put(&mut s, 0x10, &fp.to_le_bytes());
+            put(&mut s, 0x18, &size.to_le_bytes());
+            put(&mut s, 0x1E, &(fields.len() as u16).to_le_bytes());
+            descriptions.extend(s);
+        }
+        let sp = at(&mut d, &descriptions);
+        let mut table = Vec::new();
+        for (name, bytes) in blocks {
+            let bp = at(&mut d, bytes);
+            table.extend(name.to_le_bytes());
+            table.extend((bytes.len() as u32).to_le_bytes());
+            table.extend(bp.to_le_bytes());
+        }
+        let bp = at(&mut d, &table);
+        put(&mut d, 0x10, &HEADER_MAGIC.to_le_bytes());
+        put(&mut d, 0x14, &HEADER_VERSION.to_le_bytes());
+        put(&mut d, 0x1C, &1u32.to_le_bytes());
+        put(&mut d, 0x20, &sp.to_le_bytes());
+        put(&mut d, 0x30, &bp.to_le_bytes());
+        put(&mut d, 0x48, &(structs.len() as u16).to_le_bytes());
+        put(&mut d, 0x4C, &(blocks.len() as u16).to_le_bytes());
+        d.resize(0x2000, 0);
+        Resource {
+            version: 2,
+            system: PageFlags((1 << 27) | 4),
+            graphics: PageFlags(0),
+            data: d,
+            zero_filled: 0,
+        }
+    }
+
+    /// An array field's 16 bytes: pointer, count, capacity.
+    fn array(pointer: u64, count: u16) -> Vec<u8> {
+        let mut v = pointer.to_le_bytes().to_vec();
+        v.extend(count.to_le_bytes());
+        v.extend(count.to_le_bytes());
+        v.extend([0; 4]);
+        v
+    }
+
+    #[test]
+    fn an_array_of_structures_of_size_zero_is_refused() {
+        let (root, item) = (joaat(b"Root"), joaat(b"Item"));
+        let fields = vec![(ARRAY_INFO, 0, 0x05, 0, item), (joaat(b"items"), 0, 0x52, 0, 0)];
+        let r = container(
+            &[(root, 16, fields), (item, 0, Vec::new())],
+            &[(root, array(2, 1)), (item, vec![0; 8])],
+        );
+        let m = Meta::read(&r).expect("container");
+        let e = m.root().expect_err("size 0");
+        assert!(e.to_string().contains("size 0"), "{e}");
+    }
+
+    #[test]
+    fn a_structure_reached_twice_is_refused() {
+        let (root, item) = (joaat(b"Root"), joaat(b"Item"));
+        let fields = |n: u32| vec![(n, 0, 0x21, 0, 0)];
+        // two arrays starting at the same element
+        let arrays = vec![
+            (ARRAY_INFO, 0, 0x05, 0, item),
+            (joaat(b"a"), 0, 0x52, 0, 0),
+            (joaat(b"b"), 16, 0x52, 0, 0),
+        ];
+        let r = container(
+            &[(root, 32, arrays), (item, 4, fields(joaat(b"v")))],
+            &[(root, [array(2, 1), array(2, 1)].concat()), (item, vec![0; 4])],
+        );
+        let e = Meta::read(&r).expect("container").root().expect_err("twice");
+        assert!(e.to_string().contains("reached twice"), "{e}");
+        // two pointers at the same structure
+        let pointers = vec![(joaat(b"p"), 0, 0x07, 0, 0), (joaat(b"q"), 8, 0x07, 0, 0)];
+        let r = container(
+            &[(root, 16, pointers), (item, 4, fields(joaat(b"v")))],
+            &[
+                (root, [2u64.to_le_bytes(), 2u64.to_le_bytes()].concat()),
+                (item, vec![0; 4]),
+            ],
+        );
+        let e = Meta::read(&r).expect("container").root().expect_err("twice");
+        assert!(e.to_string().contains("reached twice"), "{e}");
+        // one pointer decodes
+        let pointers = vec![(joaat(b"p"), 0, 0x07, 0, 0), (joaat(b"q"), 8, 0x07, 0, 0)];
+        let r = container(
+            &[(root, 16, pointers), (item, 4, fields(joaat(b"v")))],
+            &[
+                (root, [2u64.to_le_bytes(), 0u64.to_le_bytes()].concat()),
+                (item, vec![0; 4]),
+            ],
+        );
+        Meta::read(&r).expect("container").root().expect("one pointer");
+    }
+
+    #[test]
+    fn overlapping_embedded_structures_stop_at_the_budget() {
+        // S0 has a u32; each S(k+1) embeds S(k) twice at offset 0, so S40 would decode 2^40 structures
+        let name = |k: u32| joaat(format!("S{k}").as_bytes());
+        let mut structs = vec![(name(0), 4, vec![(joaat(b"v"), 0, 0x21, 0, 0)])];
+        for k in 1..=40 {
+            let f = vec![
+                (joaat(b"a"), 0, 0x05, 0, name(k - 1)),
+                (joaat(b"b"), 0, 0x05, 0, name(k - 1)),
+            ];
+            structs.push((name(k), 4, f));
+        }
+        let r = container(&structs, &[(name(40), vec![0; 4])]);
+        let e = Meta::read(&r).expect("container").root().expect_err("budget");
+        assert!(e.to_string().contains("more structures"), "{e}");
     }
 }
