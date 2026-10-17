@@ -120,6 +120,7 @@ pub fn select_passes(s: &Selection) -> String {
     p.push_str(&format!(
         ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
+    p.push_str(", lower-gta-surfaces");
     p.push_str(&format!(", lower-gta-water{{x0={x0},y0={y0},x1={x1},y1={y1}}}"));
     p
 }
