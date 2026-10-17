@@ -2,6 +2,8 @@
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod cap;
+pub use cap::{CapTextures, Capped, cap_texture, cap_textures};
 mod channels;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
 mod layers;
@@ -13,11 +15,13 @@ use std::io::Cursor;
 pub use texture::{
     LoadTextures, NormalizeNormals, TextureLoadReport, load_textures, normalize_normals, texture_level_png,
 };
+
 use thiserror::Error;
 
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
+    ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
