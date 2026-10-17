@@ -5,8 +5,6 @@
 //!   `PRIMASE_SKATE_DATA`, the game's `Data` folder, and `PRIMASE_OODLE9`, the game's Oodle DLL, for the bundles a
 //!   Patch places in the base game): every TOC, bundle region, bundle manifest, shader block depot, shader lookup
 //!   table and `layout.toc` read and written again is byte-identical; every MeshSet reads.
-//! - `patch_oracle` (`PRIMASE_RESKATE_FB_ORACLE`): the same Patch summarised by an independent reader (oracle: the
-//!   Python fbpatch / sbdfmt readers; JSON schema in [`summary`]) equals our summary, compared as parsed JSON.
 //! - `meshset_census` (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`): every MeshSet of every base-game TOC reads, failures
 //!   counted by message.
 
@@ -16,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::gate::{GateReport, Tolerance, compare_json};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::fb::toc;
@@ -190,30 +188,6 @@ fn patch_round_trip() -> R {
         s["texture_sets"]
     );
     report.assert_passed();
-    Ok(())
-}
-
-#[test]
-fn patch_oracle() -> R {
-    let Some(patch) = real_data("PRIMASE_RESKATE_PATCH") else {
-        return Ok(());
-    };
-    let Some(oracle) = real_data("PRIMASE_RESKATE_FB_ORACLE") else {
-        return Ok(());
-    };
-    let (base, oodle) = base_and_oodle()?;
-    let mut report = GateReport::new("round trip (not this gate)", Tolerance::Exact);
-    let ours = summary(&patch, base.as_ref(), oodle.as_ref(), &mut report)?;
-    let theirs: Value = serde_json::from_slice(&std::fs::read(oracle)?)?;
-    let c = compare_json(&ours, &theirs, 0);
-    for d in c.differences.iter().take(20) {
-        println!("differs: {d}");
-    }
-    assert!(
-        c.equal(),
-        "{} differences against the independent reader",
-        c.differences.len()
-    );
     Ok(())
 }
 

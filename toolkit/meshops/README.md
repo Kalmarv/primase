@@ -38,30 +38,6 @@ that the old oracle left unchanged are named deviations, checked instead against
 our unit-length contract. `cargo test -p primase-meshops -- --nocapture` reports
 these gates and invalid-input checks.
 
-## Optional real-data cases
-
-Set `PRIMASE_MESH_CASES` to a generated binary oracle bundle. The test skips when
-unset. A bundle is supplied by an independent reference implementation; it must
-not be checked into the repository when it contains external meshes.
-
-All fields are little-endian u32 or f32. A mesh consists of four arrays, each
-preceded by its scalar element count: positions (f32 triples), normals (f32
-triples), UVs (f32 pairs), indices (u32). Empty normal/UV arrays are allowed.
-The bundle starts with a mesh-case count. Each case stores its input mesh,
-operation count (five), and records of operation ID plus expected mesh:
-
-| ID | Operation |
-|---|---|
-| 0 | Flat normals |
-| 1 | Long-edge split at 16 units |
-| 2 | Transform with columns (-2,0,0), (.3,3,0), (.1,0,4), translation (1,2,3) |
-| 3 | Millimetre weld with XY origin (0,0) |
-| 4 | First-use vertex compaction |
-
-Stored channels and indices compare by bits; derived channels use the stated bound. The test reports source
-meshes, vertices, triangles and operation comparisons. Corpus selection and
-coverage belong in the external run report; this test makes no full-census claim.
-
 ## Synthetic fixture encoding
 
 `primitives.bin` starts with a case count, then records of kind (u32), radius

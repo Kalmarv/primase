@@ -180,13 +180,7 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_GTA_FILTER` | optional: only archives whose path contains this text |
 | `PRIMASE_SCENES_SEKIRO` | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
 | `PRIMASE_SCENE_FILTER` | optional: only scene folders whose path contains this text |
-| `PRIMASE_RESKATE_NORMAL_REF` | Reference map folders containing normal PNGs; `worlds/reskate/tests/map_gate.rs::real_normal_writer_images`. |
-| `PRIMASE_RESKATE_NORMAL_SCENES` | Matching scene folders for the normal-writer image differential; same schema as `PRIMASE_RESKATE_SCENES`. |
-| `PRIMASE_RESKATE_REF` | a folder of map folders written by the reference C# map writer, one per area (each holding a `map.json`) |
-| `PRIMASE_RESKATE_SCENES` | the skate-scene folders those maps were built from, one per area, named like the map folders |
-| `PRIMASE_RESKATE_CAPS` | optional: the per-texture size caps file the reference build used (`--tex-caps`) |
 | `PRIMASE_RESKATE_PATCH` | a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs` |
-| `PRIMASE_RESKATE_FB_ORACLE` | an independent reader's summary of that Patch (JSON; schema in `worlds/reskate/tests/postcompile_fb.rs`) |
 | `PRIMASE_SKATE_DATA` | the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only |
 | `PRIMASE_RESKATE_VBLEND_SPEC` | the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`) |
 | `PRIMASE_RESKATE_VBLEND_CHECK` | optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`) |
@@ -206,7 +200,6 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_OUT` | optional: where real-data tests write their outputs (default: the OS temporary directory) |
 | `PRIMASE_ALLOW_LIVE` | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
 | `PRIMASE_MAPS_GTA` | a root containing exported map folders with `textures/` PNG images |
-| `PRIMASE_MESH_CASES` | independent mesh-operation oracle bundle (binary contract in toolkit/meshops/README.md) |
 | `PRIMASE_SCENE_SKATE` | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable) |
 | `PRIMASE_GLTF_VALIDATOR` | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
 | `PRIMASE_OODLE5` | explicit trusted Oodle version-5 game DLL path |
