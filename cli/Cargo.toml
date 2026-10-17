@@ -11,6 +11,9 @@ publish.workspace = true
 [dependencies]
 primase-core.workspace = true
 
+[dev-dependencies]
+toml.workspace = true
+
 [lints]
 workspace = true
 

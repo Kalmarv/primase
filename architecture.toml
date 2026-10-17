@@ -1,0 +1,249 @@
+# Known exceptions to the role and layer rules (CONTRIBUTING.md, "Roles"), checked by cli/tests/architecture.rs.
+#
+# Every entry gives its reason; an exception that is to go says what removes it (`removed_when`). The test fails on a
+# violation not listed here and on an entry that no longer occurs, so fixing a violation means deleting its entry.
+
+# ---- crate dependencies ----
+
+[[dependency]]
+from = "worlds/fromsoft"
+to = "formats/skate-scene"
+section = "dependencies"
+reason = "the Sekiro area reader still attaches skate.* components and skate scene policy"
+removed_when = "the reader attaches core and fromsoft.* only, and skate shaping runs as passes"
+
+[[dependency]]
+from = "worlds/reskate"
+to = "formats/skate-scene"
+section = "dependencies"
+reason = "the ReSkate writer takes the skate.* dialect as its input"
+removed_when = "the writer takes core plus target components its own passes produce"
+
+[[dependency]]
+from = "worlds/reskate"
+to = "formats/gltf"
+section = "dependencies"
+reason = "the ReSkate writer and its post-compile step re-read prototype GLBs"
+removed_when = "meshes reach the writer as core.mesh through the reader's load step"
+
+# ---- game and engine names in core, toolkit and formats ----
+
+[[name]]
+crate = "formats/skate-scene"
+word = "skate"
+reason = "the interchange format is skate.'s; it owns the skate.* dialect"
+
+[[name]]
+crate = "formats/skate-scene"
+word = "studio"
+reason = "studio_watts: the light unit the format's consumer reads"
+
+[[name]]
+crate = "toolkit/frostbite"
+word = "frostbite"
+reason = "the engine's containers; one engine by design"
+
+[[name]]
+crate = "toolkit/hash"
+word = "fromsoft"
+reason = "fromsoft_path, one game's path hash framing"
+removed_when = "it moves into worlds/fromsoft, its only user"
+
+[[name]]
+crate = "toolkit/hash"
+word = "forza"
+reason = "forza_string, a hash with no user yet"
+removed_when = "it moves into the Forza reader when one exists, or is deleted"
+
+[[name]]
+crate = "toolkit/hash"
+word = "frostbite"
+reason = "frostbite_toc, the engine's TOC hash"
+removed_when = "it moves into toolkit/frostbite, its only user"
+
+# ---- composition without data logic (examples, bins, cli, pipelines) ----
+
+[[entry_point]]
+file = "formats/web/examples/scene_to_tiles.rs"
+what = "queries or edits world components"
+reason = "turns skate.* markers and grind curves into viewer items, and measures placements for the spanning rule"
+removed_when = "primase convert replaces the example (the rule moves into primase-web, the lowering into a pass)"
+
+[[entry_point]]
+file = "formats/web/examples/scene_to_tiles.rs"
+what = "reads a format itself"
+reason = "parses prototype GLB headers for their bounds"
+removed_when = "the reader supplies prototype bounds"
+
+[[entry_point]]
+file = "formats/web/examples/scene_to_tiles.rs"
+what = "runs a pass outside the pass manager"
+reason = "runs lower-skate-pbr and lower-skate-lights directly"
+removed_when = "primase convert replaces the example"
+
+[[entry_point]]
+file = "formats/web/examples/ktx2_audit.rs"
+what = "reads a format itself"
+reason = "an audit tool decoding written KTX2 files to measure them"
+removed_when = "it becomes a gate under formats/web/tests"
+
+[[entry_point]]
+file = "formats/web/examples/ktx2_compare.rs"
+what = "reads a format itself"
+reason = "an audit tool comparing written KTX2 files"
+removed_when = "it becomes a gate under formats/web/tests"
+
+[[entry_point]]
+file = "formats/web/examples/synthetic_tiles.rs"
+what = "queries or edits world components"
+reason = "builds a synthetic world to demonstrate the writer"
+removed_when = "the synthetic world comes from a library fixture function"
+
+# ---- passes registered, lowerings run as passes ----
+
+[[pass]]
+file = "core/src/lod.rs"
+what = "pass select-lod is not registered"
+reason = "core's passes are registered by each driver"
+removed_when = "the convert registry registers core's passes"
+
+[[pass]]
+file = "core/src/priority.rs"
+what = "pass drop-optional is not registered"
+reason = "core's passes are registered by each driver"
+removed_when = "the convert registry registers core's passes"
+
+[[pass]]
+file = "core/src/state.rs"
+what = "pass resolve-state is not registered"
+reason = "core's passes are registered by each driver"
+removed_when = "the convert registry registers core's passes"
+
+[[pass]]
+file = "toolkit/image/src/texture.rs"
+what = "pass load-textures is not registered"
+reason = "a loader written as a pass; loading is a reader's load step"
+removed_when = "texture loading is a reader function, not a pass"
+
+[[pass]]
+file = "toolkit/image/src/texture.rs"
+what = "pass normalize-normals is not registered"
+reason = "drivers register it by hand"
+removed_when = "toolkit/image exports register()"
+
+[[pass]]
+file = "toolkit/meshops/src/texcoords.rs"
+what = "pass bake-texture-transforms is not registered"
+reason = "drivers call it directly"
+removed_when = "toolkit/meshops exports register()"
+
+[[pass]]
+file = "worlds/fromsoft/src/rigid.rs"
+what = "pass fromsoft-apply-rigid-skinning is not registered"
+reason = "the area reader applies skinning itself, so nothing runs the pass"
+removed_when = "the reader keeps bone-space geometry and worlds/fromsoft registers the pass"
+
+[[pass]]
+file = "worlds/fromsoft/src/sekiro/normals.rs"
+what = "lower returns a PassLog but no pass of worlds/fromsoft runs it"
+reason = "consumer normal conversion is a function drivers call"
+removed_when = "it runs as a declared pass"
+
+[[pass]]
+file = "worlds/fromsoft/src/sekiro/pbr.rs"
+what = "lower returns a PassLog but no pass of worlds/fromsoft runs it"
+reason = "Sekiro material lowering is a function, not yet a pass"
+removed_when = "it runs as a declared pass"
+
+[[pass]]
+file = "formats/skate-scene/src/raise.rs"
+what = "raise_skate returns a PassLog but no pass of formats/skate-scene runs it"
+reason = "raise-skate is a function, not yet a declared pass"
+removed_when = "it runs as a declared pass"
+
+[[pass]]
+file = "worlds/gta/src/lower.rs"
+what = "pass gta-vertex-colours is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/gta/src/lower.rs"
+what = "pass lower-gta-pbr is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/gta/src/select.rs"
+what = "pass gta-select-region is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/gta/src/terrain.rs"
+what = "pass gta-terrain-layers is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/gta/src/tint.rs"
+what = "pass gta-tint is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/gta/src/winding.rs"
+what = "pass gta-winding is not registered"
+reason = "worlds/gta has no register() yet"
+removed_when = "worlds/gta exports register()"
+
+[[pass]]
+file = "worlds/reskate/src/layered.rs"
+what = "pass lower-layered-reskate is not registered"
+reason = "worlds/reskate has no register() yet"
+removed_when = "worlds/reskate exports register()"
+
+[[pass]]
+file = "worlds/unity/src/drawn.rs"
+what = "pass unity-drawn is not registered"
+reason = "worlds/unity has no register() yet"
+removed_when = "worlds/unity exports register()"
+
+[[pass]]
+file = "worlds/unity/src/lower.rs"
+what = "pass lower-unity-pbr is not registered"
+reason = "worlds/unity has no register() yet"
+removed_when = "worlds/unity exports register()"
+
+[[pass]]
+file = "worlds/unity/src/lower_collision.rs"
+what = "pass lower-unity-collision is not registered"
+reason = "worlds/unity has no register() yet"
+removed_when = "worlds/unity exports register()"
+
+[[pass]]
+file = "worlds/unity/src/lower_lights.rs"
+what = "pass lower-unity-lights is not registered"
+reason = "worlds/unity has no register() yet"
+removed_when = "worlds/unity exports register()"
+
+[[pass]]
+file = "worlds/unity/src/lower_terrain.rs"
+what = "pass lower-unity-terrain is not registered"
+reason = "worlds/unity has no register() yet"
+removed_when = "worlds/unity exports register()"
+
+# ---- writers take the world read-only ----
+
+[[writer]]
+file = "formats/skate-scene/src/assets.rs"
+what = "prepare_scene_assets takes &mut World"
+reason = "writes prototype GLBs and texture PNGs, then points the world at them, before write"
+removed_when = "write serializes in-memory meshes and textures itself"
+
+[[writer]]
+file = "formats/web/src/lib.rs"
+what = "write_cell takes &mut World"
+reason = "a cell's world is split off and absorbed while it is written"
+removed_when = "write_cell takes &World and a Selection"
+

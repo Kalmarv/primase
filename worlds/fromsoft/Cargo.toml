@@ -13,7 +13,6 @@ primase-dxbc.workspace = true
 primase-havok.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true
-primase-gltf.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 primase-skate-scene.workspace = true
@@ -28,6 +27,7 @@ thiserror.workspace = true
 aes.workspace = true
 num-bigint.workspace = true
 [dev-dependencies]
+primase-gltf.workspace = true
 primase-testdata.workspace = true
 sha2.workspace = true
 [lints]
