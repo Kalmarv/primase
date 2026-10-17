@@ -9,7 +9,7 @@
 //! - Script-managed maps (`CMapData` flags bit 0: the game streams them only when a script requests them, an IPL):
 //!   each is a global bool axis `gta.ipl.<map name>` (class `ipl`), and the placements of that map, and of maps whose
 //!   LOD parent chain reaches it, carry a condition on it. The default (whether the game's start scripts load it) is
-//!   [`ipl_default`].
+//!   [`crate::ipl::ipl_default`].
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
 //! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
@@ -107,52 +107,6 @@ struct MapRead {
 fn map_name(path: &str) -> String {
     let file = path.rsplit('\\').next().unwrap_or(path);
     file.strip_suffix(".ymap").unwrap_or(file).to_string()
-}
-
-/// Streaming suffixes a map's name carries after its group's (`_strm_3`, `_long_0`, `_lod`): the group name.
-fn ipl_base(name: &str) -> &str {
-    const SUFFIXES: [&str; 9] = [
-        "_lod",
-        "_slod",
-        "_slod2",
-        "_strm",
-        "_long",
-        "_critical",
-        "_occl",
-        "_lodlights",
-        "_distantlights",
-    ];
-    let mut n = name;
-    for _ in 0..4 {
-        if let Some((head, tail)) = n.rsplit_once('_')
-            && !tail.is_empty()
-            && tail.bytes().all(|b| b.is_ascii_digit())
-        {
-            n = head;
-        }
-        match SUFFIXES.iter().find(|s| n.ends_with(*s)) {
-            Some(s) => n = &n[..n.len() - s.len()],
-            None => break,
-        }
-    }
-    n
-}
-
-/// Whether the game's start scripts load script-managed map `name`, and why. GTA's own answer is in its scripts,
-/// which are not read yet; this is the earlier skate exporter's rule set: North Yankton (`prologue*`) off, scenery a
-/// DLC patch split out (`*_original`) or shared between the original and its variant (`*_shared`) on, everything
-/// else off.
-pub fn ipl_default(name: &str) -> (bool, &'static str) {
-    let base = ipl_base(name);
-    if name.starts_with("prologue") {
-        (false, "North Yankton")
-    } else if base.ends_with("_original") {
-        (true, "original scenery split out by a DLC patch")
-    } else if base.ends_with("_shared") {
-        (true, "scenery shared by the original and a DLC variant")
-    } else {
-        (false, "script-managed: off until a script loads it")
-    }
 }
 
 fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::meta::Struct> {
@@ -536,7 +490,7 @@ pub fn read_region(
         // a script-managed map's placements exist while its IPL is loaded
         if let Some(name) = ipl {
             let axis = *ipl_axes.entry(name.clone()).or_insert_with(|| {
-                let (on, why) = ipl_default(name);
+                let (on, why) = crate::ipl::ipl_default(name);
                 report.ipl_axes += 1;
                 report.ipl_axes_on += usize::from(on);
                 let e = w.spawn();
@@ -573,14 +527,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ipl_defaults_follow_the_group_name() {
-        assert_eq!(ipl_base("bh1_16_original_strm_3"), "bh1_16_original");
-        assert_eq!(ipl_base("bh1_16_original_lod"), "bh1_16_original");
-        assert_eq!(ipl_base("apa_stilt_ch2_04_ext1"), "apa_stilt_ch2_04_ext1");
-        assert!(ipl_default("ch1_02_original_strm_0").0);
-        assert!(ipl_default("cs1_shared").0);
-        assert!(!ipl_default("prologue01_lod").0);
-        assert!(!ipl_default("hei_showroom_closed").0);
+    fn map_names_are_file_stems() {
         assert_eq!(
             map_name("x\\dlc.rpf\\hei_showroom_closed.ymap"),
             "hei_showroom_closed"

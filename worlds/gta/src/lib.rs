@@ -11,6 +11,7 @@ pub mod collision;
 pub mod components;
 pub mod drawable;
 pub mod gtxd;
+pub mod ipl;
 mod key_hashes;
 pub mod keys;
 mod le;
