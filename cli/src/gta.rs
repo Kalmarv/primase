@@ -3,7 +3,28 @@ use std::path::PathBuf;
 
 use primase_core::convert::Reader;
 use primase_gta::convert::{GtaOptions, GtaReader, map_named};
-use primase_gta::pipeline::{Map, REGIONS, Selection, named_region};
+use primase_gta::pipeline::{Map, Selection};
+
+/// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
+/// on.
+/// - `legion`: Legion Square, a downtown plaza (the earlier skate export's gate region).
+/// - `vespucci`: Vespucci Beach from the skatepark (`vb_34_skate`, about -1374, -1396) along the boardwalk to Muscle
+///   Beach (`vb_34_musclebeach`, about -1205, -1572), with the sand to the water: sand, grass and pavement terrain
+///   blends, palms, decals and water edges.
+const REGIONS: &[(&str, [f32; 4])] = &[
+    ("legion", [95.0, -1034.0, 295.0, -834.0]),
+    ("vespucci", [-1500.0, -1650.0, -1150.0, -1330.0]),
+];
+
+/// The region named `name` in [`REGIONS`].
+fn named_region(name: &str) -> Option<[f32; 4]> {
+    REGIONS.iter().find(|(n, _)| *n == name).map(|(_, r)| *r)
+}
+
+/// The cli's selection, unless options say otherwise: entities read 600 m beyond the region (large pieces of the world
+/// reach in), placements smaller than 0.5 m left out (the earlier skate export's rules).
+const REACH: f32 = 600.0;
+const MIN_SIZE: f32 = 0.5;
 
 use crate::convert::Result;
 
@@ -12,9 +33,10 @@ fn region_names() -> String {
 }
 
 /// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--map online|story] [--hour H] [--min-size M]
-/// [--max-priority N] [--interiors none|all]`
+/// [--max-priority N] [--interiors none|all] [--reach M]`; `--min-size` 0.5 and `--reach` 600 unless given.
 pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let mut interiors = false;
+    let mut reach = REACH;
     let (mut dir, mut keys, mut region, mut map, mut hour, mut min_size, mut max_priority) =
         (None, None, None, Map::Online, None, None, None);
     let mut it = args.iter();
@@ -73,6 +95,13 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
             "--min-size" => {
                 min_size = Some(value()?.parse::<f32>().map_err(|_| "gta: --min-size is metres")?)
             }
+            "--reach" => {
+                reach = value()?
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|r| r.is_finite() && *r >= 0.0)
+                    .ok_or("gta: --reach is metres")?
+            }
             "--max-priority" => {
                 max_priority = Some(
                     value()?
@@ -89,6 +118,8 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
         return Err("gta: needs --gta, --keys and --region".into());
     };
     let mut selection = Selection::new(region);
+    selection.reach = reach;
+    selection.min_size = MIN_SIZE;
     selection.map = map;
     selection.hour = hour;
     selection.interiors = interiors;

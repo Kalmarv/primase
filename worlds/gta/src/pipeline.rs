@@ -27,22 +27,6 @@ use crate::{Install, Result};
 /// normal maps to glTF's convention.
 pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
 
-/// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
-/// on.
-/// - `legion`: Legion Square, a downtown plaza (the earlier skate export's gate region).
-/// - `vespucci`: Vespucci Beach from the skatepark (`vb_34_skate`, about -1374, -1396) along the boardwalk to Muscle
-///   Beach (`vb_34_musclebeach`, about -1205, -1572), with the sand to the water: sand, grass and pavement terrain
-///   blends, palms, decals and water edges.
-pub const REGIONS: &[(&str, [f32; 4])] = &[
-    ("legion", [95.0, -1034.0, 295.0, -834.0]),
-    ("vespucci", [-1500.0, -1650.0, -1150.0, -1330.0]),
-];
-
-/// The region named `name` in [`REGIONS`].
-pub fn named_region(name: &str) -> Option<[f32; 4]> {
-    REGIONS.iter().find(|(n, _)| *n == name).map(|(_, r)| *r)
-}
-
 /// Which of GTA's maps a conversion draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Map {
@@ -62,12 +46,15 @@ impl Map {
     }
 }
 
-/// What a conversion keeps of a read region: the map state, the hour, the region rules' minimum size, and whether
-/// entities placed in interiors stay.
+/// What a conversion keeps of a read region: how far outside it entities are read, the map state, the hour, the region
+/// rules' minimum size and maximum priority, and whether entities placed in interiors stay. Each is the composing
+/// program's choice; [`Selection::new`] keeps everything the region holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
     /// `[x0, y0, x1, y1]`, GTA ground coordinates.
     pub region: [f32; 4],
+    /// How far outside the region entities are read (metres), so large pieces of the world that reach in are seen.
+    pub reach: f32,
     pub map: Map,
     /// The hour time archetypes are resolved at; `None`: the `gta.hour` axis's default (12).
     pub hour: Option<u8>,
@@ -82,14 +69,15 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// The region `[x0, y0, x1, y1]` drawn as GTA Online's map at the default hour, with the earlier exporter's
-    /// minimum size (0.5 m), every priority, interiors left out.
+    /// The region `[x0, y0, x1, y1]` as GTA Online's map at the `gta.hour` axis's default hour: entities read only
+    /// inside it, every size and priority, interiors left out (the game draws an interior only from inside it).
     pub fn new(region: [f32; 4]) -> Selection {
         Selection {
             region,
+            reach: 0.0,
             map: Map::Online,
             hour: None,
-            min_size: 0.5,
+            min_size: 0.0,
             max_priority: 3,
             interiors: false,
         }
@@ -273,10 +261,6 @@ impl GtaSource {
         self.load(world, &roots)
     }
 }
-
-/// How far outside a region the reader reads entities, so large pieces of the world that reach in are seen (the
-/// earlier exporter's 600 m).
-pub const REACH: f32 = 600.0;
 
 /// A prototype's box before its geometry is loaded: its archetype's bounding box, in the core frame (metres, +Y up);
 /// `None` for an entity that is no GTA prototype.

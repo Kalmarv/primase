@@ -1,5 +1,5 @@
-//! The GTA pipeline on each named region ([`primase_gta::pipeline::REGIONS`]): the region read from the install, the
-//! default selection passes run (GTA Online's map, default hour, the region rules, interiors left out), every
+//! The GTA pipeline on each gate region ([`REGIONS`]): the region read from the install with 600 m of reach, the
+//! selection passes run (GTA Online's map, default hour, the region rules at 0.5 m, interiors left out), every
 //! placement loaded, and [`DEFAULT_PASSES`] run, as every writer gets it. The world must verify after the passes, every placement's prototype must have a drawable or be
 //! counted (no live file, or nothing a surface draws), and every material on a drawn primitive must be lowered
 //! (`pbr.material`, or a layered terrain material). The counts that review a region (tinted primitives and the
@@ -11,7 +11,14 @@
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
-use primase_gta::pipeline::{DEFAULT_PASSES, GtaSource, Map, REACH, REGIONS, Selection, select_passes};
+use primase_gta::pipeline::{DEFAULT_PASSES, GtaSource, Map, Selection, select_passes};
+
+/// The gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates: Legion Square, and Vespucci Beach from the
+/// skatepark along the boardwalk to Muscle Beach.
+const REGIONS: &[(&str, [f32; 4])] = &[
+    ("legion", [95.0, -1034.0, 295.0, -834.0]),
+    ("vespucci", [-1500.0, -1650.0, -1150.0, -1330.0]),
+];
 
 #[test]
 fn every_named_region_through_the_gta_passes() {
@@ -36,11 +43,14 @@ fn every_named_region_through_the_gta_passes() {
         if only.as_deref().is_some_and(|o| o != *name) {
             continue;
         }
-        let (mut read, report) = source.read(*region, REACH).expect("region");
+        let mut selection = Selection::new(*region);
+        selection.reach = 600.0;
+        selection.min_size = 0.5;
+        let (mut read, report) = source.read(*region, selection.reach).expect("region");
         println!("{name}: {:?}; {:?}", report.region, report.lights);
         let select = manager
             .registry
-            .parse(&select_passes(&Selection::new(*region)))
+            .parse(&select_passes(&selection))
             .expect("selection passes");
         let mut picked = RunReport::default();
         manager.run(&mut read, &select, &mut picked).expect("selection");
