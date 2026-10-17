@@ -150,7 +150,7 @@ fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose
                 (m.skeleton_binding >> 24) & 0xFF,
                 (m.skeleton_binding >> 8) & 0xFF != 0,
             );
-            if !d.skeleton || skinned {
+            if d.skeleton.is_none() || skinned {
                 None
             } else {
                 pose.get(bone as usize).copied()
@@ -525,6 +525,12 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             );
             materials.push(m);
             ctx.report.materials += 1;
+        }
+        // a drawable's models at their bones' rest pose (a fragment's own pose replaces it)
+        if pose.is_empty()
+            && let Some(s) = &d.skeleton
+        {
+            pose = s.pose();
         }
         let poses: [Vec<Option<Pose>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
         // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the

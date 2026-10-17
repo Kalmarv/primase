@@ -14,6 +14,8 @@
 //!   semantic slot (52: POSITION0-3, NORMAL0-3, TANGENT0-3, BINORMAL0-3, BLENDWEIGHT0-3, BLENDINDICES0-3, COLOR0-3,
 //!   TEXCOORD0-23) an offset, the stride, and a buffer format (0: absent); vertices interleave, in offset order;
 //! - index buffer (64): index count 0x08, index size 0x0C (2), indices 0x18;
+//! - skeleton (112): bone local transforms 0x30 (a 4 x 4 row-vector matrix per bone, its fourth column unused), parent
+//!   indices 0x38 (16-bit, -1 for a root), bone count 0x5E;
 //! - shader (64): name 0x00, preset 0x04, parameter buffers 0x08, texture references 0x10, parameter infos 0x20, render
 //!   bucket 0x39, bucket mask 0x3C; parameter infos: buffer, texture, other, sampler and parameter counts and a copy
 //!   count (8 bytes), then per parameter a name and a packed word (kind 2 bits; texture index or cbuffer index; offset
@@ -183,8 +185,8 @@ pub struct Drawable {
     pub shaders: Vec<Shader>,
     /// The shader group's embedded texture dictionary.
     pub textures: Option<TextureDictionary>,
-    /// Whether it has a skeleton (skeletons are not read yet).
-    pub skeleton: bool,
+    /// Its skeleton's bones, when it has one.
+    pub skeleton: Option<Skeleton>,
     /// Its light sources, in model space (a ydr's or ydd entry's own; a fragment's drawables carry none, the fragment
     /// does).
     pub lights: Vec<LightAttr>,
@@ -329,6 +331,85 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     Ok(d.chunks(168).map(LightAttr::read).collect())
 }
 
+/// A skeleton's bones: each one's transform in its parent's space and its parent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Skeleton {
+    /// Per bone, three rows `[x, y, z, translation]` of its transform into its parent's space.
+    pub local: Vec<[[f32; 4]; 3]>,
+    /// Per bone, its parent's index (`None` for a root).
+    pub parents: Vec<Option<u16>>,
+}
+
+impl Skeleton {
+    fn read(r: &Resource, pointer: u64) -> Result<Skeleton> {
+        let s = r.at(pointer, 0x70)?;
+        let count = usize::from(le::u16(s, 0x5E));
+        let transforms = match le::u64(s, 0x30) {
+            0 => return Err(err(pointer, "a skeleton without bone transforms")),
+            p => r.at(p, 64 * count)?,
+        };
+        let parents = match le::u64(s, 0x38) {
+            0 => vec![-1; count],
+            p => r
+                .at(p, 2 * count)?
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| i16::from_le_bytes(*b))
+                .collect(),
+        };
+        let local = transforms
+            .as_chunks::<64>()
+            .0
+            .iter()
+            .map(|m| {
+                // row-vector matrix M (p' = p M, translation in its fourth row): row i of ours is column i of M
+                let at = |row: usize, col: usize| le::f32(m, 16 * row + 4 * col);
+                std::array::from_fn(|i| [at(0, i), at(1, i), at(2, i), at(3, i)])
+            })
+            .collect();
+        let parents = parents
+            .iter()
+            .map(|&p| match p {
+                -1 => Ok(None),
+                p if (0..count as i16).contains(&p) => Ok(Some(p as u16)),
+                p => Err(err(pointer, format!("bone parent {p} of {count} bones"))),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Skeleton { local, parents })
+    }
+
+    /// Each bone's transform into the drawable's space: its own, then its parents' up to the root.
+    pub fn pose(&self) -> Vec<[[f32; 4]; 3]> {
+        let apply = |a: &[[f32; 4]; 3], b: &[[f32; 4]; 3]| -> [[f32; 4]; 3] {
+            // a after b: rows of a times the 4 x 4 of b
+            std::array::from_fn(|i| {
+                std::array::from_fn(|j| {
+                    a[i][0] * b[0][j]
+                        + a[i][1] * b[1][j]
+                        + a[i][2] * b[2][j]
+                        + if j == 3 { a[i][3] } else { 0.0 }
+                })
+            })
+        };
+        (0..self.local.len())
+            .map(|b| {
+                let mut t = self.local[b];
+                let mut p = self.parents[b];
+                let mut guard = 0;
+                while let Some(q) = p
+                    && guard < self.local.len()
+                {
+                    t = apply(&self.local[usize::from(q)], &t);
+                    p = self.parents[usize::from(q)];
+                    guard += 1;
+                }
+                t
+            })
+            .collect()
+    }
+}
+
 /// The resource version of Enhanced's drawables (ydr).
 pub const VERSION: u32 = 159;
 
@@ -383,7 +464,10 @@ impl Drawable {
             lods,
             shaders,
             textures,
-            skeleton: le::u64(d, 0x18) != 0,
+            skeleton: match le::u64(d, 0x18) {
+                0 => None,
+                p => Some(Skeleton::read(r, p)?),
+            },
             lights: Vec::new(),
         })
     }
@@ -814,6 +898,24 @@ fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
 mod tests {
     use super::*;
     use crate::resource::PageFlags;
+
+    /// A bone's pose is its own transform, then its parents' up to the root: a child turned a quarter about z and moved
+    /// 1 along its parent's x, under a root moved 10 along z, takes (1, 0, 0) to (1, 1, 10).
+    #[test]
+    fn bone_poses_compose_up_the_parent_chain() {
+        let s = Skeleton {
+            local: vec![
+                [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 10.0]],
+                [[0.0, -1.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+            ],
+            parents: vec![None, Some(0)],
+        };
+        let pose = s.pose();
+        let at = |m: &[[f32; 4]; 3], p: [f32; 3]| m.map(|r| r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3]);
+        assert_eq!(at(&pose[0], [0.0; 3]), [0.0, 0.0, 10.0]);
+        assert_eq!(at(&pose[1], [1.0, 0.0, 0.0]), [1.0, 1.0, 10.0]);
+        assert_eq!(at(&pose[1], [0.0, 1.0, 0.0]), [0.0, 0.0, 10.0]);
+    }
 
     /// 8 KiB of system pages, zero but for `writes` (offset, bytes).
     fn pages(version: u32, writes: &[(usize, &[u8])]) -> Resource {
