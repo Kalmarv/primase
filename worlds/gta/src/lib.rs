@@ -74,7 +74,7 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `lower-gta-collision{x0,y0,x1,y1}`, `lower-gta-embedded-collision`,
+/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1}`, `lower-gta-embedded-collision`,
 /// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}` and `lower-gta-water`.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
@@ -100,6 +100,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     });
     reg.register("gta-select-stand-ins", |o| {
         Ok(Box::new(select::SelectStandIns::from_options(o)?))
+    });
+    reg.register("gta-select-collision", |o| {
+        Ok(Box::new(collision::SelectCollision::from_options(o)?))
     });
     reg.register("lower-gta-embedded-collision", |o| {
         none(o, collision::LowerGtaEmbeddedCollision)

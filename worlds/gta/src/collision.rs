@@ -3,8 +3,11 @@
 //! with its geometry), and `lower-gta-collision` and `lower-gta-embedded-collision`, which make them `core.collision`.
 //!
 //! Which bounds: the live ybn files whose box meets the region (every live one is read for its box, as the game
-//! streams them by those boxes). The `hi@` and `ma@` copies (finer collision for weapons and vehicles) are left out:
-//! the plain bounds are what a body walks or rolls on.
+//! streams them by those boxes), each with its detail: the prefix of a file named `hi@...` or `ma@...` (the finer
+//! copies the game keeps for weapons and vehicles), none for the plain bounds a body walks or rolls on.
+//!
+//! `gta-select-collision{detail}`: the map bounds of the details asked for kept (`plain`, `hi`, `ma`, `;` between;
+//! `plain` unless given), the others despawned, counted per detail.
 //!
 //! `lower-gta-collision{x0,y0,x1,y1}`: every [`GtaBounds`] entity becomes an entity with an identity `core.transform`
 //! and a `core.collision` triangle soup in the core frame: geometry triangles as stored; boxes, spheres, capsules and
@@ -30,11 +33,18 @@ use crate::keys::Keys;
 use crate::region::GTA;
 use crate::{Result, invalid};
 
-/// One ybn's bound as stored (GTA's frame, metres, world space for map bounds), and its file.
+/// One ybn's bound as stored (GTA's frame, metres, world space for map bounds), its file and its detail.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct GtaBounds {
     pub path: String,
+    /// The file name's prefix before `@` (`hi`, `ma`: the game's finer copies), lowercase; `None` for plain bounds.
+    pub detail: Option<String>,
     pub bound: Bound,
+}
+
+/// A ybn file name's detail: what precedes an `@` in it, lowercase.
+pub fn ybn_detail(file_name: &str) -> Option<String> {
+    file_name.split_once('@').map(|(d, _)| d.to_ascii_lowercase())
 }
 
 impl Component for GtaBounds {
@@ -43,6 +53,7 @@ impl Component for GtaBounds {
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
         Ok(Some(serde_json::json!({
             "path": self.path,
+            "detail": self.detail,
             "kind": self.bound.header.kind,
             "box": [self.bound.header.box_min, self.bound.header.box_max],
         })))
@@ -103,16 +114,16 @@ pub fn material_names(text: &str) -> Result<Vec<String>> {
 /// What [`attach_map_bounds`] did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BoundsReport {
-    /// Live ybn files, the `hi@`/`ma@` copies among them left out, and those whose box meets the region (read).
+    /// Live ybn files, those whose box meets the region (read), and the `hi@`/`ma@` copies among those.
     pub ybn_live: usize,
-    pub ybn_finer_left_out: usize,
     pub ybn_read: usize,
+    pub ybn_finer_read: usize,
     pub material_names: usize,
 }
 
 /// The static map bounds whose box meets `region` (`[x0, y0, x1, y1]`, GTA ground coordinates), each as an entity
 /// with [`GtaBounds`], and the material names as the [`GtaMaterials`] resource (see the module documentation). Every
-/// live plain ybn is read for its box (in parallel); the game streams them by those boxes.
+/// live ybn is read for its box (in parallel); the game streams them by those boxes.
 pub fn attach_map_bounds(
     w: &mut World,
     set: &ArchiveSet,
@@ -127,8 +138,6 @@ pub fn attach_map_bounds(
         .flat_map(|t| t.values().copied())
         .collect();
     report.ybn_live = files.len();
-    files.retain(|f| !set.path(*f).rsplit('\\').next().unwrap_or("").contains('@'));
-    report.ybn_finer_left_out = report.ybn_live - files.len();
     files.sort();
     let [x0, y0, x1, y1] = region;
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -171,14 +180,13 @@ pub fn attach_map_bounds(
     found.sort_by_key(|(k, _)| *k);
     for (k, bound) in found {
         report.ybn_read += 1;
+        let path = set.path(files[k]).to_string();
+        let detail = ybn_detail(path.rsplit('\\').next().unwrap_or(&path));
+        if detail.is_some() {
+            report.ybn_finer_read += 1;
+        }
         let e = w.spawn();
-        w.insert(
-            e,
-            GtaBounds {
-                path: set.path(files[k]).to_string(),
-                bound,
-            },
-        );
+        w.insert(e, GtaBounds { path, detail, bound });
     }
     if let Some(f) = set.live("dat", "materials") {
         let bytes = set.install.binary(f, keys)?;
@@ -187,6 +195,66 @@ pub fn attach_map_bounds(
         w.insert_resource(GtaMaterials(names));
     }
     Ok(report)
+}
+
+/// `gta-select-collision` (see the module documentation).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectCollision {
+    /// The details kept: `None` for plain bounds, `Some("hi")`, `Some("ma")`.
+    pub details: std::collections::BTreeSet<Option<String>>,
+}
+
+impl SelectCollision {
+    pub fn from_options(o: &Options) -> std::result::Result<SelectCollision, String> {
+        for k in o.keys() {
+            if k != "detail" {
+                return Err(format!("unknown option {k}"));
+            }
+        }
+        let details = o
+            .get("detail")
+            .map_or("plain", String::as_str)
+            .split(';')
+            .map(|d| match d.trim() {
+                "plain" => Ok(None),
+                "" => Err("detail: empty".to_string()),
+                d => Ok(Some(d.to_ascii_lowercase())),
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(SelectCollision { details })
+    }
+}
+
+impl Pass for SelectCollision {
+    fn name(&self) -> &'static str {
+        "gta-select-collision"
+    }
+    fn options(&self) -> Options {
+        let mut o = Options::new();
+        let d: Vec<&str> = self
+            .details
+            .iter()
+            .map(|d| d.as_deref().unwrap_or("plain"))
+            .collect();
+        o.insert("detail".to_string(), d.join(";"));
+        o
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let mut drop = Vec::new();
+        for (e, b) in w.iter::<GtaBounds>() {
+            let name = b.detail.as_deref().unwrap_or("plain");
+            if self.details.contains(&b.detail) {
+                log.count(&format!("map bounds kept: {name}"), 1);
+            } else {
+                log.count(&format!("map bounds left out: {name}"), 1);
+                drop.push(e);
+            }
+        }
+        for e in drop {
+            w.despawn(e);
+        }
+        Ok(())
+    }
 }
 
 /// `lower-gta-collision` (see the module documentation).
@@ -912,5 +980,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A ybn's detail is its name's prefix before `@`; `gta-select-collision` keeps plain bounds unless asked for
+    /// others, and the details named.
+    #[test]
+    fn map_bounds_are_chosen_by_detail_in_a_pass() {
+        assert_eq!(ybn_detail("hi@cs1_08_3.ybn"), Some("hi".into()));
+        assert_eq!(ybn_detail("MA@x.ybn"), Some("ma".into()));
+        assert_eq!(ybn_detail("cs1_08_3.ybn"), None);
+        let mut w = World::new();
+        let mut spawn = |detail: Option<&str>| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                GtaBounds {
+                    path: "x.ybn".into(),
+                    detail: detail.map(str::to_string),
+                    bound: box_bound(),
+                },
+            );
+            e
+        };
+        let plain = spawn(None);
+        let hi = spawn(Some("hi"));
+        let ma = spawn(Some("ma"));
+        let mut log = PassLog::default();
+        SelectCollision::from_options(&Options::new())
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        let alive: Vec<Entity> = w.iter::<GtaBounds>().map(|(e, _)| e).collect();
+        assert_eq!(alive, vec![plain]);
+        assert_eq!(log.counts.get("map bounds left out: hi"), Some(&1));
+        let _ = (hi, ma);
+
+        let mut w2 = World::new();
+        for d in [None, Some("hi"), Some("ma")] {
+            let e = w2.spawn();
+            w2.insert(
+                e,
+                GtaBounds {
+                    path: "x.ybn".into(),
+                    detail: d.map(str::to_string),
+                    bound: box_bound(),
+                },
+            );
+        }
+        let mut o = Options::new();
+        o.insert("detail".into(), "plain;hi".into());
+        SelectCollision::from_options(&o)
+            .unwrap()
+            .run(&mut w2, &mut PassLog::default())
+            .unwrap();
+        let kept: Vec<Option<String>> = w2.iter::<GtaBounds>().map(|(_, b)| b.detail.clone()).collect();
+        assert_eq!(kept, vec![None, Some("hi".into())]);
     }
 }

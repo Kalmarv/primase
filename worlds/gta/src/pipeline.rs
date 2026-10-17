@@ -98,8 +98,8 @@ impl Selection {
 
 /// The selection as passes on the read world: `resolve-state` to the map state (and hour), `gta-select-region` with
 /// the region rules, unless interiors stay `gta-leave-out-interiors`, then `lower-gta-lights` for the placements kept
-/// (inside the region; given an hour, those on then) and `lower-gta-collision` for the map bounds (triangles inside the
-/// region).
+/// (inside the region; given an hour, those on then), `gta-select-collision` (the plain map bounds) and
+/// `lower-gta-collision` for them (triangles inside the region).
 pub fn select_passes(s: &Selection) -> String {
     let mut assign = format!("gta.map:{}", s.map.value());
     if let Some(h) = s.hour {
@@ -118,6 +118,7 @@ pub fn select_passes(s: &Selection) -> String {
     p.push_str(&format!(
         ", lower-gta-lights{{{hour}x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
+    p.push_str(", gta-select-collision");
     p.push_str(&format!(
         ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
