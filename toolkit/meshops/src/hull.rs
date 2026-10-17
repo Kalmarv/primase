@@ -1,6 +1,6 @@
 //! Convex hulls of point sets.
 use crate::{Error, Mesh, Result, finite};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A point on the integer grid.
 type G = [i64; 3];
@@ -99,9 +99,9 @@ pub fn convex_hull(points: &[[f32; 3]]) -> Result<Mesh> {
         return Err(flat());
     }
     let mut faces: Vec<Option<Face>> = Vec::new();
-    let mut edge_face: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut edge_face: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     let add =
-        |faces: &mut Vec<Option<Face>>, edge_face: &mut HashMap<(usize, usize), usize>, v: [usize; 3]| {
+        |faces: &mut Vec<Option<Face>>, edge_face: &mut BTreeMap<(usize, usize), usize>, v: [usize; 3]| {
             let id = faces.len();
             let face = Face {
                 v,
@@ -155,7 +155,7 @@ pub fn convex_hull(points: &[[f32; 3]]) -> Result<Mesh> {
             continue;
         };
         let mut visible = vec![start];
-        let mut seen = HashSet::from([start]);
+        let mut seen = BTreeSet::from([start]);
         let mut k = 0;
         while k < visible.len() {
             for (a, b) in faces[visible[k]].as_ref().expect("live").edges() {
