@@ -427,14 +427,15 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
         if !lights.is_empty() {
             report.prototypes_with_lights += 1;
             report.lights += lights.len();
-            w.insert(proto, GtaLights(lights));
+            let (records, bones) = lights.into_iter().map(|l| (l.light, l.bone)).unzip();
+            w.insert(proto, GtaLights { records, bones });
         }
     }
     Ok(report)
 }
 
 /// A prototype and the light records read for it.
-type ProtoLights = (Entity, Vec<crate::drawable::LightAttr>);
+type ProtoLights = (Entity, Vec<crate::drawable::BoneLight>);
 
 /// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
 enum Job {

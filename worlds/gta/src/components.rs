@@ -271,14 +271,34 @@ impl Component for GtaPoses {
     }
 }
 
-/// A prototype's light sources as its drawable or fragment stores them (model space), every record raw.
+/// A prototype's light sources as its drawable or fragment stores them, every record raw, each in the space of the bone
+/// its `bone_id` tags.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaLights(pub Vec<crate::drawable::LightAttr>);
+pub struct GtaLights {
+    pub records: Vec<crate::drawable::LightAttr>,
+    /// Per record, the pose of its bone (rows `[x, y, z, translation]` into the model's space, GTA's frame;
+    /// [`crate::drawable::BoneLight`]); `None`: the record is at its model-space position (no skeleton, or no bone has
+    /// its tag).
+    pub bones: Vec<Option<crate::pose::Pose>>,
+}
 
 impl Component for GtaLights {
     const NAME: &'static str = "gta.lights";
+    /// 2: each record's bone pose.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+    /// One bone pose (or none) per record.
+    fn verify(&self, _: Entity, _: &primase_core::World) -> Result<(), String> {
+        if self.records.len() != self.bones.len() {
+            return Err(format!(
+                "{} records, {} bone poses",
+                self.records.len(),
+                self.bones.len()
+            ));
+        }
+        Ok(())
     }
 }
 

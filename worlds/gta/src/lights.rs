@@ -4,8 +4,11 @@
 //! coordinates; the light's own position decides, as the earlier exporter did). Runs on the read world after the selection (map state and hour
 //! resolved, region rules applied), so each light belongs to a placement that is drawn.
 //!
-//! Per light: an entity with `core.transform` (the placement's transform times the light's model-space position, its
-//! local -Z along the light's direction, [`Transform::facing`]) and `core.light`:
+//! Per light: an entity with `core.transform` (the placement's transform times the light's position, its local -Z along
+//! the light's direction, [`Transform::facing`]) and `core.light`. A record's position and direction are in the space
+//! of the bone its `bone_id` tags, as CodeWalker places them: they are taken into the model's space by that bone's pose
+//! ([`GtaLights::bones`]), and left as stored when the drawable has no skeleton or no bone has the tag (counted).
+//! Then:
 //! - kind: point; spot with cones from the record's inner and outer angles (degrees; the outer at most 89.5°);
 //!   capsule as a point (its length left out: approximated, counted);
 //! - colour: the sRGB bytes in linear light;
@@ -14,12 +17,12 @@
 //! - range: falloff times the placement's scale (at least 0.5 m);
 //! - shadows unknown.
 //!
-//! An hour mask of zero means always on, as GTA does. A fragment's lights are placed by their model-space position:
-//! its bones' poses are not applied (gta-pose-fragments' job), counted when the bone is not the root.
+//! An hour mask of zero means always on, as GTA does.
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
 
 use crate::components::{GtaLight, GtaLights};
+use crate::pose::Pose;
 use crate::region::GTA;
 
 /// `lower-gta-lights` (see the module documentation).
@@ -59,6 +62,11 @@ impl LowerGtaLights {
     }
 }
 
+/// `v` taken by `pose` (rows `[x, y, z, translation]`), with its translation when `w` is 1.
+fn posed(pose: &Pose, v: [f32; 3], w: f32) -> [f32; 3] {
+    pose.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2] + r[3] * w)
+}
+
 fn linear(c: u8) -> f32 {
     primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
 }
@@ -89,8 +97,7 @@ impl Pass for LowerGtaLights {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "GTA's light intensity read as candela (it states no unit); capsules as points; a fragment's lights at their \
-         model-space position (bone poses not applied)"
+        "GTA's light intensity read as candela (it states no unit); capsules as points"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut made = Vec::new();
@@ -113,13 +120,26 @@ impl Pass for LowerGtaLights {
                 .get::<Name>(i.prototype)
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
-            for (k, l) in lights.0.iter().enumerate() {
+            for (k, (l, bone)) in lights.records.iter().zip(&lights.bones).enumerate() {
                 let hours = l.time_flags & 0x00FF_FFFF;
                 if self.hour.is_some_and(|h| hours != 0 && hours & (1 << h) == 0) {
                     log.count("lights off at this hour", 1);
                     continue;
                 }
-                let at = t.apply(GTA.point(l.position));
+                // into the model's space by the bone's pose
+                let (position, direction) = match bone {
+                    Some(b) => {
+                        log.count("lights placed by their bone's pose", 1);
+                        (posed(b, l.position, 1.0), posed(b, l.direction, 0.0))
+                    }
+                    None => {
+                        if l.bone_id != 0 {
+                            log.count("lights whose bone tag names no bone: placed as stored", 1);
+                        }
+                        (l.position, l.direction)
+                    }
+                };
+                let at = t.apply(GTA.point(position));
                 // core (x, y, z) is GTA (x, -z, y)
                 let (gx, gy) = (at[0], -at[2]);
                 if self
@@ -130,7 +150,7 @@ impl Pass for LowerGtaLights {
                     continue;
                 }
                 let dir = {
-                    let d = GTA.direction(l.direction);
+                    let d = GTA.direction(direction);
                     let m: [f32; 3] = std::array::from_fn(|r| (0..3).map(|c| t.cols[c][r] * d[c]).sum());
                     m
                 };
@@ -154,9 +174,6 @@ impl Pass for LowerGtaLights {
                         continue;
                     }
                 };
-                if l.bone_id != 0 {
-                    log.approximate("lights on a bone placed without its pose", 1);
-                }
                 let transform = Transform::facing(at, dir)
                     .or_else(|| Transform::facing(at, [0.0, -1.0, 0.0]))
                     .ok_or("no light basis")?;
@@ -191,5 +208,64 @@ impl Pass for LowerGtaLights {
             w.insert(e, Source(s));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{Pass, PassLog};
+    use primase_core::{Instance, Light, Transform, World};
+
+    use crate::components::GtaLights;
+    use crate::drawable::LightAttr;
+
+    /// A lamp's light 1 m above its head bone, which stands 6 m up the pole (GTA z): placed 7 m up, at core y 7, not
+    /// at the pole's base; a record whose tag names no bone stays at its stored position.
+    #[test]
+    fn a_light_is_placed_by_the_pose_of_its_bone() {
+        let mut w = World::new();
+        let proto = w.spawn();
+        let record = |bone_id| LightAttr {
+            position: [0.0, 0.0, 1.0],
+            direction: [0.0, 0.0, -1.0],
+            intensity: 1.0,
+            falloff: 10.0,
+            kind: 1,
+            bone_id,
+            ..LightAttr::default()
+        };
+        w.insert(
+            proto,
+            GtaLights {
+                records: vec![record(0x1234), record(0x9999)],
+                bones: vec![
+                    Some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 6.0]]),
+                    None,
+                ],
+            },
+        );
+        let placed = w.spawn();
+        w.insert(placed, Transform::IDENTITY);
+        w.insert(
+            placed,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let mut log = PassLog::default();
+        super::LowerGtaLights {
+            hour: None,
+            region: None,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
+        let mut heights: Vec<f32> = w
+            .iter::<Light>()
+            .map(|(e, _)| w.get::<Transform>(e).unwrap().cols[3][1])
+            .collect();
+        heights.sort_by(f32::total_cmp);
+        assert_eq!(heights, vec![1.0, 7.0]);
+        assert_eq!(log.counts.get("lights placed by their bone's pose"), Some(&1));
     }
 }
