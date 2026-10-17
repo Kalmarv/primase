@@ -698,6 +698,30 @@ fn region_placements_against_the_scene() {
                     *geo.entry("decal geometries lifted 12 mm along the drawn face but at a few crease corners (that exporter's sums there mix faces)").or_default() += 1;
                 }
                 Lift::Differs { .. } => {
+                    if only_some {
+                        // the scene part's first corners against the nearest vertex of ours, drawn and as read
+                        let near = |m: &Mesh, src: &GtaSources, c: [f64; 3]| {
+                            m.primitives
+                                .iter()
+                                .zip(&src.sources)
+                                .filter(|(_, s)| **s == g)
+                                .flat_map(|(p, _)| {
+                                    p.positions().unwrap_or(&[]).iter().map(|v| v.map(f64::from))
+                                })
+                                .map(|v| sub(c, v))
+                                .min_by(|x, y| dot(*x, *x).total_cmp(&dot(*y, *y)))
+                                .map(|d| d.map(|x| (x * 1e4).round() / 1e4))
+                        };
+                        let tp = &their_mesh.primitives[parts[0]];
+                        for c in tp.positions().unwrap_or(&[]).iter().take(3) {
+                            let c = c.map(f64::from);
+                            println!(
+                                "      geometry debug {name} {g:?} ({shader}): scene {c:?}, to ours drawn {:?}, as read {:?}",
+                                near(ours_mesh, d, c),
+                                near(read_mesh, read_d, c)
+                            );
+                        }
+                    }
                     *geo.entry("geometries differing").or_default() += 1;
                     *differing_by_shader.entry(shader.to_string()).or_default() += 1;
                     if differing_by_shader[shader] <= 3 {
@@ -737,6 +761,36 @@ fn region_placements_against_the_scene() {
             ours_by_name.entry(n.0.to_lowercase()).or_default().push(e);
         }
     }
+    // the scene textures its prototypes that we draw too use (their parts' materials, tint variants and layers)
+    let drawn_names: BTreeSet<u32> = drawn
+        .iter::<GtaArchetype>()
+        .filter(|(e, _)| drawn.has::<GtaDrawable>(*e))
+        .map(|(_, a)| a.name)
+        .collect();
+    let mut used: BTreeSet<primase_core::Entity> = BTreeSet::new();
+    for (e, _) in theirs.iter::<SkatePrototype>() {
+        let name = theirs
+            .get::<Name>(e)
+            .map_or(String::new(), |n| n.0.to_lowercase());
+        if !drawn_names.contains(&primase_hash::joaat(name.as_bytes())) {
+            continue;
+        }
+        let mut mats: Vec<primase_core::Entity> = theirs
+            .get::<Mesh>(e)
+            .map(|m| m.primitives.iter().filter_map(|p| p.material).collect())
+            .unwrap_or_default();
+        if let Some(v) = theirs.get::<primase_core::MaterialVariants>(e) {
+            mats.extend(v.0.iter().flat_map(|m| m.values().copied()));
+        }
+        while let Some(m) = mats.pop() {
+            if let Some(l) = theirs.get::<primase_core::LayeredMaterial>(m) {
+                mats.extend(l.layers.iter().flatten().map(|l| l.material));
+            }
+            if let Some(sm) = theirs.get::<SkateMaterial>(m) {
+                used.extend([sm.base, sm.normal, sm.mask].into_iter().flatten());
+            }
+        }
+    }
     for (te, tf) in theirs.iter::<primase_core::TextureFile>() {
         let bytes = std::fs::read(std::path::Path::new(&scene).join(&tf.path)).expect("scene texture");
         let t = primase_dds::read(&bytes).expect("dds");
@@ -760,11 +814,27 @@ fn region_placements_against_the_scene() {
             {
                 "scene textures: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
             }
+            // drawn only by the scene's prototypes we place nothing of (the scene-only placements)
+            None if !used.contains(&te) => "scene textures only its prototypes we draw none of use",
             None => {
                 if tex_examples.len() < 12 {
+                    let sizes: Vec<String> = named
+                        .iter()
+                        .filter_map(|&o| drawn.get::<primase_core::Texture>(o))
+                        .map(|o| {
+                            format!(
+                                "{}x{} {:?} {} levels",
+                                o.width,
+                                o.height,
+                                o.format,
+                                o.levels.len()
+                            )
+                        })
+                        .collect();
                     tex_examples.push(format!(
-                        "{} ({}x{}, {} levels)",
+                        "no level of ours: {} {:?} ({}x{}, {} levels); ours of that name: {sizes:?}",
                         tf.path.display(),
+                        theirs.get::<Name>(te).map(|n| n.0.clone()),
                         t.width,
                         t.height,
                         t.levels.len()
@@ -783,7 +853,29 @@ fn region_placements_against_the_scene() {
                     (true, 0) if t.levels.len() == ours_t.levels.len() => "scene textures identical",
                     (true, 0) => "scene textures identical, fewer smallest levels",
                     (true, _) => "scene textures identical from a smaller level (size cap)",
-                    (false, _) => "scene textures with differing smaller levels",
+                    (false, _) => {
+                        if tex_examples.len() < 24 {
+                            let at = t
+                                .levels
+                                .iter()
+                                .enumerate()
+                                .position(|(i, l)| ours_t.levels.get(first + i) != Some(l));
+                            tex_examples.push(format!(
+                                "differing smaller levels: {} {:?} ({}x{}, {} levels) against our level {first} of {}x{} {:?} \
+                                 ({} levels): first differing scene level {at:?}",
+                                tf.path.display(),
+                                theirs.get::<Name>(te).map(|n| n.0.clone()),
+                                t.width,
+                                t.height,
+                                t.levels.len(),
+                                ours_t.width,
+                                ours_t.height,
+                                ours_t.format,
+                                ours_t.levels.len()
+                            ));
+                        }
+                        "scene textures with differing smaller levels"
+                    }
                 }
             }
         };
@@ -791,7 +883,7 @@ fn region_placements_against_the_scene() {
     }
     println!("textures: {tex:?}");
     for x in &tex_examples {
-        println!("    scene texture with no level of ours: {x}");
+        println!("    scene texture {x}");
     }
 
     // materials: the scene's lowered by lower-skate-pbr; each scene part's material against our primitive of the
