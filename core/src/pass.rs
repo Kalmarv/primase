@@ -260,7 +260,9 @@ impl fmt::Display for Pipeline {
     }
 }
 
-fn pass_text(p: &dyn Pass) -> String {
+/// A pass with its options as pipeline text (`bake{size=512}`), as [`PassRegistry::parse`] reads it; what
+/// `core.provenance` records for the passes that derive an entity.
+pub fn pass_text(p: &dyn Pass) -> String {
     let opts = p.options();
     if opts.is_empty() {
         return p.name().to_owned();

@@ -204,6 +204,23 @@ consumer must not require any particular source dialect. `web.instances`
 preserves per-instance diagnostic identity where present. Viewer records never
 change glTF geometry or material semantics.
 
+## Provenance
+
+Where a reader recorded it, a tile says where its content came from. The scene's
+`extras.primase["web.origins"]` is `{"version":1,"value":[origin, ...]}`, one
+table per tile, each origin `{"archive"?: string, "file": string, "item"?: string}`
+in the source game's own naming (`file` inside `archive`; `item` the part of the
+file, such as a mesh or a model and geometry). Meshes, nodes, instances in
+`web.instances`, materials and textures may carry
+`extras.primase["web.provenance"]` with
+`{"version":1,"value":{"origins":[i, ...],"parts"?:[i, ...],"passes"?:[text, ...]}}`:
+`origins` are indices into the tile's table, `parts[k]` (meshes only) is the
+origin of the mesh's primitive `k`, and `passes` names, in order, the conversion
+passes that split, merged or baked the object. A picked primitive `k` of mesh `m`
+came from `web.origins.value[m.web.provenance.value.parts[k]]`. Both keys are
+diagnostics: consumers may ignore them. Tiles without provenance have neither
+key and are byte for byte what they were before provenance existed.
+
 ## Scene lights
 
 Scene lights (introduced in 1.1) are carried as before. Each light is a glTF node with `KHR_lights_punctual`

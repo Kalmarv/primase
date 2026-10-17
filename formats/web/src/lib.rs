@@ -11,6 +11,7 @@ mod compression;
 pub mod convert;
 mod images;
 mod instancing;
+mod provenance;
 mod spanning;
 pub use images::{IMAGE_DIR, ImageFiles};
 pub use spanning::{LocalBox, PIVOT_MARGIN, Spans, spanning};
@@ -1059,6 +1060,7 @@ impl TilePlan {
                     .collect();
                 let (bytes, instanced_placements) =
                     instancing::apply(bytes, &transforms, self.options.gpu_instancing)?;
+                let bytes = provenance::apply(bytes)?;
                 #[cfg(feature = "ktx2")]
                 let bytes = if self.options.ktx2 {
                     self.textures.apply(bytes)?

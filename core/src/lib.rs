@@ -18,6 +18,8 @@ pub use marker::{Curve, Marker, kind_is_valid};
 pub mod pass;
 pub mod pbr;
 pub mod print;
+pub mod provenance;
+pub use provenance::{Origin, Provenance};
 mod priority;
 pub use priority::{DropOptional, Priority, drop_optional};
 pub mod state;
