@@ -501,7 +501,8 @@ pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
     } else {
         return None;
     };
-    if sec.decl != sec.draw_decl {
+    // one stream each, unpadded: Float3 positions, the texture coordinates, the tangent frame
+    if sec.decl != sec.draw_decl || sec.decl.strides != [12, if blend { 8 } else { 4 }, 4] {
         return None;
     }
     let n = sec.vertices as usize;
@@ -1014,6 +1015,38 @@ mod tests {
         };
         assert!(check_values(&Target::Decal, 2, &v).is_ok());
         assert!(check_values(&Target::Decal, 3, &v).is_err());
+    }
+
+    /// A one-vertex section with Studio's surface elements (`uv`: Half2 or Half4) and the given stream strides.
+    fn studio_section(uv: u8, strides: Vec<u8>) -> meshset::Section {
+        let decl = meshset::Decl {
+            elements: studio_layout(uv).to_vec(),
+            strides,
+            bytes: [0; DECL_SIZE],
+        };
+        meshset::Section {
+            at: 0,
+            key: 1,
+            draw_decl: decl.clone(),
+            stride: decl.strides.iter().sum(),
+            decl,
+            flags: 0,
+            primitives: 0,
+            start_index: 0,
+            vertex_offset: 0,
+            vertices: 1,
+        }
+    }
+
+    #[test]
+    fn only_unpadded_studio_streams_are_surfaces() {
+        let geo = [0u8; 64];
+        assert!(surface(&studio_section(format::HALF2, vec![12, 4, 4]), &geo).is_some());
+        assert!(surface(&studio_section(format::HALF4, vec![12, 8, 4]), &geo).is_some());
+        // the elements match, but a stream is padded (or the Half4 stride paired with Half2): refused
+        assert!(surface(&studio_section(format::HALF2, vec![16, 4, 4]), &geo).is_none());
+        assert!(surface(&studio_section(format::HALF2, vec![12, 8, 4]), &geo).is_none());
+        assert!(surface(&studio_section(format::HALF4, vec![12, 8, 8]), &geo).is_none());
     }
 
     #[test]
