@@ -21,11 +21,11 @@ use crate::{Install, Result};
 
 /// The passes a loaded GTA world goes through before a writer, in order: each prototype's finest level of detail (a
 /// writer that draws chooses no level itself; the passes after it then have no discarded forms to lower), the embedded
-/// collision bounds of props as their prototypes' collision, fragments'
+/// collision bounds of props as their prototypes' collision (their surfaces classified), fragments'
 /// models at their bones' poses, shaders lowered to `pbr.material`, winding turned to the stored normals, tint palettes
 /// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning, water surfaces as meshes,
 /// normal maps to glTF's convention.
-pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, lower-gta-embedded-collision, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
+pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
 
 /// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
 /// on.

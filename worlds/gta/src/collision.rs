@@ -705,6 +705,24 @@ mod tests {
         e
     }
 
+    /// A box bound from GTA's (0, 0, 0) to (1, 2, 3), of material 1.
+    fn box_bound() -> Bound {
+        Bound {
+            header: BoundHeader {
+                kind: 3,
+                sphere_radius: 2.0,
+                sphere_centre: [0.5, 1.0, 1.5],
+                box_min: [0.0, 0.0, 0.0],
+                box_max: [1.0, 2.0, 3.0],
+                box_centre: [0.5, 1.0, 1.5],
+                margin: 0.04,
+                material: [1, 0, 0, 0],
+                volume: 6.0,
+            },
+            contents: Contents::Primitive,
+        }
+    }
+
     /// A prop's box bound (GTA's (0, 0, 0) to (1, 2, 3), material 1) becomes its prototype's collision in the core
     /// frame, every triangle of material 1's name; the placement with entity flag 4 is given a copy of the prototype
     /// without it, the other keeps the prototype.
@@ -718,20 +736,7 @@ mod tests {
             proto,
             GtaEmbeddedBounds {
                 path: "prop_bench.ydr".into(),
-                bound: Bound {
-                    header: BoundHeader {
-                        kind: 3,
-                        sphere_radius: 2.0,
-                        sphere_centre: [0.5, 1.0, 1.5],
-                        box_min: [0.0, 0.0, 0.0],
-                        box_max: [1.0, 2.0, 3.0],
-                        box_centre: [0.5, 1.0, 1.5],
-                        margin: 0.04,
-                        material: [1, 0, 0, 0],
-                        volume: 6.0,
-                    },
-                    contents: Contents::Primitive,
-                },
+                bound: box_bound(),
             },
         );
         let on = placement(&mut w, proto, 0);
@@ -775,5 +780,46 @@ mod tests {
             Some(&1)
         );
         assert_eq!(log.counts.get("prototypes copied without collision"), Some(&1));
+    }
+
+    /// The default passes classify the surfaces a loaded part's props bring: a prop of a material the map's surface
+    /// table lacks (METAL_SOLID_SMALL, the map's only surface concrete, classified at selection) is metal after the
+    /// default passes' collision and surface steps, in their order.
+    #[test]
+    fn surfaces_props_bring_are_classified_by_the_default_passes() {
+        let steps: Vec<&str> = crate::pipeline::DEFAULT_PASSES
+            .split(", ")
+            .map(|p| p.split('{').next().unwrap_or(p))
+            .filter(|n| ["lower-gta-embedded-collision", "lower-gta-surfaces"].contains(n))
+            .collect();
+        assert_eq!(steps, ["lower-gta-embedded-collision", "lower-gta-surfaces"]);
+        let mut reg = primase_core::pass::PassRegistry::new();
+        crate::register(&mut reg);
+        let pipeline = reg.parse(&steps.join(", ")).unwrap();
+
+        let mut w = World::new();
+        w.insert_resource(GtaMaterials(vec!["DEFAULT".into(), "METAL_SOLID_SMALL".into()]));
+        let mut concrete = primase_core::Surface::new("CONCRETE");
+        concrete.class = Some(primase_core::SurfaceClass::Concrete);
+        w.insert_resource(Surfaces(vec![concrete]));
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            GtaEmbeddedBounds {
+                path: "prop_bin.ydr".into(),
+                bound: box_bound(),
+            },
+        );
+        placement(&mut w, proto, 0);
+        let mut log = PassLog::default();
+        for p in &pipeline.passes {
+            p.run(&mut w, &mut log).unwrap();
+        }
+        let s = &w.resource::<Surfaces>().unwrap().0;
+        let metal = s
+            .iter()
+            .find(|s| s.name == "METAL_SOLID_SMALL")
+            .expect("the prop's surface");
+        assert_eq!(metal.class, Some(primase_core::SurfaceClass::Metal));
     }
 }
