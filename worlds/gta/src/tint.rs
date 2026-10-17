@@ -210,19 +210,11 @@ impl Pass for GtaTintVariants {
                 let target = if k == 0 {
                     proto
                 } else {
-                    let copy = w.spawn();
-                    w.copy_components(proto, copy);
-                    if let Some(mut lods) = w.get::<Lods>(copy).cloned() {
-                        for f in &mut lods.forms {
-                            let fc = w.spawn();
-                            w.copy_components(f.form, fc);
-                            copied_vertices += vertices(w.get::<Mesh>(fc));
-                            f.form = fc;
-                        }
-                        w.insert(copy, lods);
-                    }
+                    let copy = crate::components::copy_prototype(w, proto);
                     copies += 1;
-                    copied_vertices += vertices(w.get::<Mesh>(copy));
+                    for h in std::iter::once(copy).chain(forms(w, copy)) {
+                        copied_vertices += vertices(w.get::<Mesh>(h));
+                    }
                     for &e in placements {
                         w.get_mut::<Instance>(e).expect("instance").prototype = copy;
                     }

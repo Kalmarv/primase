@@ -1,5 +1,6 @@
-//! Static map collision: the reader's side ([`attach_map_bounds`]: the ybn bounds of the region's map archives, raw,
-//! with the material names they index) and `lower-gta-collision`, which makes them `core.collision`.
+//! Collision: the reader's side, raw ([`attach_map_bounds`]: the ybn bounds of the region's map archives, with the
+//! material names they index; [`GtaEmbeddedBounds`]: the bound a prototype's drawable or fragment embeds, attached
+//! with its geometry), and `lower-gta-collision` and `lower-gta-embedded-collision`, which make them `core.collision`.
 //!
 //! Which bounds: the live ybn files whose box meets the region (every live one is read for its box, as the game
 //! streams them by those boxes). The `hi@` and `ma@` copies (finer collision for weapons and vehicles) are left out:
@@ -11,11 +12,20 @@
 //! foliage (type flag bit 19) or river (bit 27) left out, as the earlier exporter did (counted). Each triangle's
 //! surface is its material's name in the install's material table (`materials.dat`), in the world's `Surfaces`.
 //! Given a region, only triangles whose centre lies in it are kept.
+//!
+//! `lower-gta-embedded-collision`: every prototype's [`GtaEmbeddedBounds`] becomes its `core.collision`, in its own
+//! space (its placements place it), lowered as above (no region: its placements were selected). A placement whose
+//! entity flags have bit 2 set (`4`: embedded collision disabled) draws without it: its prototype is copied once
+//! without collision for the placements that disable it (counted). A placed prop (a bench, a rail, a pole) collides
+//! by these bounds; the map's ybn bounds hold the static map's.
+use std::collections::BTreeMap;
+
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Collision, Component, Entity, JsonError, Surfaces, Transform, World};
+use primase_core::{Collision, Component, Entity, Instance, JsonError, Surfaces, Transform, World};
 
 use crate::archive_set::ArchiveSet;
 use crate::bounds::{Bound, Contents, Polygon, read_ybn};
+use crate::components::GtaEntity;
 use crate::keys::Keys;
 use crate::region::GTA;
 use crate::{Result, invalid};
@@ -38,6 +48,29 @@ impl Component for GtaBounds {
         })))
     }
 }
+
+/// The collision bound a prototype's asset embeds, as stored (GTA's frame, metres, the asset's own space): a
+/// fragment's first physics LOD's, or a drawable's own; and the asset's file.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GtaEmbeddedBounds {
+    pub path: String,
+    pub bound: Bound,
+}
+
+impl Component for GtaEmbeddedBounds {
+    const NAME: &'static str = "gta.embedded_bounds";
+    /// A summary: the file and the root bound's kind and box.
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "path": self.path,
+            "kind": self.bound.header.kind,
+            "box": [self.bound.header.box_min, self.bound.header.box_max],
+        })))
+    }
+}
+
+/// Entity flag bit 2: the placement does not collide by its asset's embedded bound.
+pub const EMBEDDED_COLLISION_DISABLED: u32 = 1 << 2;
 
 /// The install's collision material names (`materials.dat`), by material index.
 #[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize)]
@@ -471,6 +504,43 @@ impl Soup {
     }
 }
 
+impl Soup {
+    /// The soup's triangles whose centre `keep` accepts (GTA frame), in the core frame, each made of its material's
+    /// name in `names` (indexed into `surfaces`); triangles with values that are not finite left out (counted).
+    fn collision(
+        &self,
+        names: &[String],
+        surfaces: &mut Surfaces,
+        keep: impl Fn([f32; 2]) -> bool,
+        log: &mut PassLog,
+    ) -> std::result::Result<Collision, String> {
+        let mut c = Collision::default();
+        for (t, m) in self.triangles.iter().zip(&self.materials) {
+            let p = t.map(|i| self.positions[i as usize]);
+            if !keep([
+                (p[0][0] + p[1][0] + p[2][0]) / 3.0,
+                (p[0][1] + p[1][1] + p[2][1]) / 3.0,
+            ]) {
+                continue;
+            }
+            if p.iter().flatten().any(|v| !v.is_finite()) {
+                log.count("collision triangles with values that are not finite, left out", 1);
+                continue;
+            }
+            let name = names
+                .get(usize::from(*m))
+                .map_or_else(|| format!("material {m}"), String::clone);
+            let s = surfaces.index(&name).map_err(|e| e.to_string())?;
+            let base = c.positions.len() as u32;
+            c.positions.extend(p.iter().map(|q| GTA.point(*q)));
+            c.triangles.push([base, base + 1, base + 2]);
+            c.surfaces.push(s);
+        }
+        log.count("collision triangles", c.triangles.len() as u64);
+        Ok(c)
+    }
+}
+
 impl Pass for LowerGtaCollision {
     fn name(&self) -> &'static str {
         "lower-gta-collision"
@@ -497,37 +567,14 @@ impl Pass for LowerGtaCollision {
             .unwrap_or_default();
         let holders: Vec<Entity> = w.iter::<GtaBounds>().map(|(e, _)| e).collect();
         let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
+        let inside = |[x, y]: [f32; 2]| {
+            self.region
+                .is_none_or(|[x0, y0, x1, y1]| x >= x0 && x < x1 && y >= y0 && y < y1)
+        };
         for e in holders {
             let mut soup = Soup::default();
             soup.bound(&w.get::<GtaBounds>(e).expect("bounds").bound, &IDENTITY, log);
-            let mut c = Collision::default();
-            let mut kept = 0u64;
-            for (t, m) in soup.triangles.iter().zip(&soup.materials) {
-                let p = t.map(|i| soup.positions[i as usize]);
-                if let Some([x0, y0, x1, y1]) = self.region {
-                    let (cx, cy) = (
-                        (p[0][0] + p[1][0] + p[2][0]) / 3.0,
-                        (p[0][1] + p[1][1] + p[2][1]) / 3.0,
-                    );
-                    if !(cx >= x0 && cx < x1 && cy >= y0 && cy < y1) {
-                        continue;
-                    }
-                }
-                if p.iter().flatten().any(|v| !v.is_finite()) {
-                    log.count("collision triangles with values that are not finite, left out", 1);
-                    continue;
-                }
-                let name = names
-                    .get(usize::from(*m))
-                    .map_or_else(|| format!("material {m}"), String::clone);
-                let s = surfaces.index(&name).map_err(|e| e.to_string())?;
-                let base = c.positions.len() as u32;
-                c.positions.extend(p.iter().map(|q| GTA.point(*q)));
-                c.triangles.push([base, base + 1, base + 2]);
-                c.surfaces.push(s);
-                kept += 1;
-            }
-            log.count("collision triangles", kept);
+            let c = soup.collision(&names, &mut surfaces, inside, log)?;
             if c.triangles.is_empty() {
                 log.count("bounds with no triangle in the region", 1);
                 continue;
@@ -539,5 +586,194 @@ impl Pass for LowerGtaCollision {
             w.insert_resource(surfaces);
         }
         Ok(())
+    }
+}
+
+/// `lower-gta-embedded-collision` (see the module documentation).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LowerGtaEmbeddedCollision;
+
+impl Pass for LowerGtaEmbeddedCollision {
+    fn name(&self) -> &'static str {
+        "lower-gta-embedded-collision"
+    }
+    // no `requires`: it runs on every loaded part and leaves one without embedded bounds as it is
+    fn provides(&self) -> &[&'static str] {
+        &["core.collision", "core.surfaces"]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &["core.instance"]
+    }
+    fn approximates(&self) -> &'static str {
+        "boxes, spheres, capsules and cylinders tessellated; foliage and river volumes left out"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let holders: Vec<Entity> = w.iter::<GtaEmbeddedBounds>().map(|(e, _)| e).collect();
+        if holders.is_empty() {
+            return Ok(());
+        }
+        let names = w
+            .resource::<GtaMaterials>()
+            .map(|m| m.0.clone())
+            .unwrap_or_default();
+        let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
+        for e in holders {
+            let mut soup = Soup::default();
+            soup.bound(
+                &w.get::<GtaEmbeddedBounds>(e).expect("bounds").bound,
+                &IDENTITY,
+                log,
+            );
+            let c = soup.collision(&names, &mut surfaces, |_| true, log)?;
+            if c.triangles.is_empty() {
+                log.count("embedded bounds with no triangle", 1);
+                continue;
+            }
+            w.insert(e, c);
+            log.count("prototypes colliding by their embedded bound", 1);
+        }
+        if !surfaces.0.is_empty() {
+            w.insert_resource(surfaces);
+        }
+        // the placements that disable it use a copy of their prototype without it
+        let disabled: Vec<(Entity, Entity)> = w
+            .iter::<Instance>()
+            .filter(|(e, i)| {
+                w.has::<Collision>(i.prototype)
+                    && w.has::<GtaEmbeddedBounds>(i.prototype)
+                    && w.get::<GtaEntity>(*e)
+                        .is_some_and(|g| g.flags & EMBEDDED_COLLISION_DISABLED != 0)
+            })
+            .map(|(e, i)| (e, i.prototype))
+            .collect();
+        let mut copies: BTreeMap<Entity, Entity> = BTreeMap::new();
+        for (e, proto) in disabled {
+            let copy = match copies.get(&proto) {
+                Some(&c) => c,
+                None => {
+                    let c = crate::components::copy_prototype(w, proto);
+                    w.remove::<Collision>(c);
+                    w.remove::<GtaEmbeddedBounds>(c);
+                    copies.insert(proto, c);
+                    c
+                }
+            };
+            w.get_mut::<Instance>(e).expect("instance").prototype = copy;
+            log.count("placements with embedded collision disabled (entity flag 4)", 1);
+        }
+        log.count("prototypes copied without collision", copies.len() as u64);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bounds::BoundHeader;
+    use primase_core::Name;
+
+    fn placement(w: &mut World, prototype: Entity, flags: u32) -> Entity {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        w.insert(
+            e,
+            GtaEntity {
+                ymap: "m.ymap".into(),
+                index: 0,
+                interior: None,
+                lod_parent: None,
+                archetype: 0,
+                flags,
+                guid: 0,
+                parent_index: -1,
+                lod_dist: 100.0,
+                child_lod_dist: 0.0,
+                lod_level: 0,
+                num_children: 0,
+                priority_level: 0,
+                ambient_occlusion_multiplier: 255,
+                artificial_ambient_occlusion: 255,
+                tint_value: 0,
+            },
+        );
+        e
+    }
+
+    /// A prop's box bound (GTA's (0, 0, 0) to (1, 2, 3), material 1) becomes its prototype's collision in the core
+    /// frame, every triangle of material 1's name; the placement with entity flag 4 is given a copy of the prototype
+    /// without it, the other keeps the prototype.
+    #[test]
+    fn a_prototype_collides_by_its_embedded_bound_unless_its_placement_disables_it() {
+        let mut w = World::new();
+        w.insert_resource(GtaMaterials(vec!["DEFAULT".into(), "TARMAC".into()]));
+        let proto = w.spawn();
+        w.insert(proto, Name("prop_bench".into()));
+        w.insert(
+            proto,
+            GtaEmbeddedBounds {
+                path: "prop_bench.ydr".into(),
+                bound: Bound {
+                    header: BoundHeader {
+                        kind: 3,
+                        sphere_radius: 2.0,
+                        sphere_centre: [0.5, 1.0, 1.5],
+                        box_min: [0.0, 0.0, 0.0],
+                        box_max: [1.0, 2.0, 3.0],
+                        box_centre: [0.5, 1.0, 1.5],
+                        margin: 0.04,
+                        material: [1, 0, 0, 0],
+                        volume: 6.0,
+                    },
+                    contents: Contents::Primitive,
+                },
+            },
+        );
+        let on = placement(&mut w, proto, 0);
+        let off = placement(&mut w, proto, EMBEDDED_COLLISION_DISABLED | 1);
+        let mut log = PassLog::default();
+        LowerGtaEmbeddedCollision.run(&mut w, &mut log).unwrap();
+
+        let c = w.get::<Collision>(proto).expect("collision");
+        assert_eq!(c.triangles.len(), 12);
+        // GTA (x, y, z) is core (x, z, -y)
+        for axis in 0..3 {
+            let lo = c.positions.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
+            let hi = c
+                .positions
+                .iter()
+                .map(|p| p[axis])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(
+                [lo, hi],
+                [[0.0, 1.0], [0.0, 3.0], [-2.0, 0.0]][axis],
+                "axis {axis}"
+            );
+        }
+        let tarmac = w
+            .resource::<Surfaces>()
+            .unwrap()
+            .0
+            .iter()
+            .position(|s| s.name == "TARMAC");
+        assert!(c.surfaces.iter().all(|&s| Some(usize::from(s)) == tarmac));
+        assert!(!w.has::<Transform>(proto), "placed by its placements");
+
+        assert_eq!(w.get::<Instance>(on).unwrap().prototype, proto);
+        let copy = w.get::<Instance>(off).unwrap().prototype;
+        assert_ne!(copy, proto);
+        assert!(!w.has::<Collision>(copy) && !w.has::<GtaEmbeddedBounds>(copy));
+        assert_eq!(w.get::<Name>(copy), Some(&Name("prop_bench".into())));
+        assert_eq!(
+            log.counts
+                .get("placements with embedded collision disabled (entity flag 4)"),
+            Some(&1)
+        );
+        assert_eq!(log.counts.get("prototypes copied without collision"), Some(&1));
     }
 }

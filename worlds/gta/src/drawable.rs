@@ -20,6 +20,7 @@
 //!   bucket 0x39, bucket mask 0x3C; parameter infos: buffer, texture, other, sampler and parameter counts and a copy
 //!   count (8 bytes), then per parameter a name and a packed word (kind 2 bits; texture index or cbuffer index; offset
 //!   and length in the cbuffer, 12 bits each). The buffer pointers come `copy count` times over; the first copy is read.
+use crate::bounds::Bound;
 use crate::le;
 use crate::resource::Resource;
 use crate::sga::BufferFormat;
@@ -190,6 +191,9 @@ pub struct Drawable {
     /// Its light sources, in model space (a ydr's or ydd entry's own; a fragment's drawables carry none, the fragment
     /// does).
     pub lights: Vec<LightAttr>,
+    /// The collision bound it embeds, in model space: a gtaDrawable's (ydr root, ydd entry) at 0xC8, a fragment's
+    /// main drawable's at 0xF0.
+    pub bound: Option<Bound>,
 }
 
 /// One light source as a drawable or fragment stores it (`CLightAttr`, 168 bytes), every field as stored. Positions
@@ -469,14 +473,24 @@ impl Drawable {
                 p => Some(Skeleton::read(r, p)?),
             },
             lights: Vec::new(),
+            bound: None,
         })
     }
 
-    /// A gtaDrawable (a ydr's root, a ydd's entry): the drawable and its light list at 0xB0.
+    /// A gtaDrawable (a ydr's root, a ydd's entry): the drawable, its light list at 0xB0 and its bound at 0xC8.
     fn read_gta(r: &Resource, pointer: u64) -> Result<Drawable> {
         let mut d = Self::read(r, pointer)?;
         d.lights = read_lights(r, pointer + 0xB0)?;
+        d.bound = read_bound(r, le::u64(r.at(pointer, 0xD0)?, 0xC8))?;
         Ok(d)
+    }
+}
+
+/// The bound at `p`, if any (`0`: none).
+fn read_bound(r: &Resource, p: u64) -> Result<Option<Bound>> {
+    match p {
+        0 => Ok(None),
+        p => crate::bounds::read(r, p, 0).map(Some),
     }
 }
 
@@ -749,7 +763,8 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
 pub const FRAGMENT_VERSION: u32 = 171;
 
 /// A fragment (yft): its name, main drawable (the one the world draws), its extra drawables (by name; those without a
-/// shader group use the main drawable's shaders) and its cloth drawable. Physics, glass and bones are not read yet.
+/// shader group use the main drawable's shaders), its cloth drawable and the bound of its first physics LOD. The rest
+/// of its physics (groups, children's masses and joints), glass and bones are not read yet.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fragment {
     pub name: String,
@@ -760,13 +775,16 @@ pub struct Fragment {
     pub pose: Vec<[[f32; 4]; 3]>,
     /// The fragment's light sources (list at 0x110), in the space of their bones.
     pub lights: Vec<LightAttr>,
+    /// The bound of its first physics LOD, in the fragment's space: what the game collides the fragment with.
+    pub physics: Option<Bound>,
 }
 
 impl Fragment {
     /// A yft's fragment, after checking the resource is in Enhanced's layout. Layout: resource file header (16),
     /// bounding sphere 0x20, main drawable 0x30, extra drawables 0x38 with their names 0x40 and count 0x48, name
-    /// 0x58, bone pose 0xA8 (32-byte header with the count at 0x10, then 48 bytes per bone), cloth drawable 0xF8, light
-    /// list 0x110.
+    /// 0x58, bone pose 0xA8 (32-byte header with the count at 0x10, then 48 bytes per bone), physics LOD group 0xF0,
+    /// cloth drawable 0xF8, light list 0x110. The main drawable's bound is at 0xF0 of it; the physics LOD group holds
+    /// three LOD pointers from 0x10, a physics LOD its bound at 0xE8.
     pub fn read_resource(r: &Resource) -> Result<Fragment> {
         if r.version != FRAGMENT_VERSION {
             return Err(err(
@@ -801,7 +819,11 @@ impl Fragment {
         }
         // extra and cloth drawables without their own shaders use the main drawable's
         let owner = le::u64(h, 0x30);
-        let main_shaders = opt(owner)?.map_or(0, |d| d.shaders.len());
+        let mut drawable = opt(owner)?;
+        if let Some(d) = &mut drawable {
+            d.bound = read_bound(r, le::u64(r.at(owner, 0xF8)?, 0xF0))?;
+        }
+        let main_shaders = drawable.as_ref().map_or(0, |d| d.shaders.len());
         for (_, d) in &extra {
             if d.shaders.is_empty() {
                 check_shaders(owner, &d.lods, main_shaders)?;
@@ -817,16 +839,24 @@ impl Fragment {
                     .collect()
             }
         };
+        let physics = match le::u64(h, 0xF0) {
+            0 => None,
+            group => match le::u64(r.at(group, 0x18)?, 0x10) {
+                0 => None,
+                lod => read_bound(r, le::u64(r.at(lod, 0xF0)?, 0xE8))?,
+            },
+        };
         Ok(Fragment {
             pose,
             name: match le::u64(h, 0x58) {
                 0 => String::new(),
                 p => crate::texture::c_string(r, p)?,
             },
-            drawable: opt(le::u64(h, 0x30))?,
+            drawable,
             extra,
             cloth: opt(le::u64(h, 0xF8))?,
             lights: read_lights(r, 0x5000_0110)?,
+            physics,
         })
     }
 }

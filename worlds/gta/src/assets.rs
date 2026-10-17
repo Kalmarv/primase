@@ -10,6 +10,8 @@
 //!   `core.lods` form of the prototype at its level (1 to 3): an unplaced entity with that LOD's `core.mesh` and
 //!   [`GtaSources`]. GTA draws by distance and authors no level of its own choice, so `core.lods` has no default
 //!   (`select-lod` then takes the high LOD, counted); a pipeline picks a level with `select-lod{form=N}`.
+//! - [`GtaEmbeddedBounds`] when the asset embeds a collision bound: a fragment's first physics LOD's, else the
+//!   drawable's own (a ydr's; no drawable dictionary entry of the install has one).
 //! - A material per (drawable, shader) with [`GtaShader`]: every parameter by stored name, textures resolved the way
 //!   the game looks them up: the drawable's own dictionary, then the archetype's texture dictionary, then that
 //!   dictionary's parents ([`TextureParents`]), then the resident detail dictionary ([`RESIDENT`]).
@@ -30,6 +32,7 @@ use primase_core::{
 use primase_core::{LodForm, Lods};
 
 use crate::archive_set::ArchiveSet;
+use crate::collision::GtaEmbeddedBounds;
 use crate::components::{GtaArchetype, GtaDrawable, GtaLights, GtaParam, GtaPoses, GtaShader, GtaSources};
 use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights};
 use crate::gtxd::TextureParents;
@@ -63,6 +66,8 @@ pub struct AssetReport {
     pub asset_missing: usize,
     /// Coarser LODs made `core.lods` forms.
     pub lod_forms: usize,
+    /// Prototypes given their drawable's or fragment's collision bound ([`GtaEmbeddedBounds`]).
+    pub embedded_bounds: usize,
     /// Vertex streams left out because the file stores values that are not finite (NaN, infinity), by semantic: one
     /// per primitive of any LOD. Such a value is unknown, and core holds finite streams only.
     pub non_finite_streams: BTreeMap<String, usize>,
@@ -448,6 +453,8 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
         };
         let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
         let mut pose: Vec<Pose> = Vec::new();
+        // a fragment's physics bound (what it collides with); a drawable's own otherwise
+        let mut bound = None;
         let (path, d) = match a.asset_type {
             // a drawable
             2 => {
@@ -463,7 +470,8 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     ctx.report.asset_missing += 1;
                     continue;
                 };
-                let frag = Fragment::read_resource(&ctx.decode(f)?)?;
+                let mut frag = Fragment::read_resource(&ctx.decode(f)?)?;
+                bound = frag.physics.take();
                 let Some(d) = frag.drawable else {
                     ctx.report.asset_missing += 1;
                     continue;
@@ -491,6 +499,16 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             }
             _ => continue,
         };
+        if let Some(bound) = bound.or_else(|| d.bound.clone()) {
+            w.insert(
+                proto,
+                GtaEmbeddedBounds {
+                    path: path.clone(),
+                    bound,
+                },
+            );
+            ctx.report.embedded_bounds += 1;
+        }
         let mut materials = Vec::with_capacity(d.shaders.len());
         for (i, s) in d.shaders.iter().enumerate() {
             let mut params = Vec::with_capacity(s.params.len());

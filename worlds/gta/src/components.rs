@@ -9,10 +9,26 @@
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
-use primase_core::{Component, Entity, JsonError, Mesh};
+use primase_core::{Component, Entity, JsonError, Lods, Mesh, World};
 use serde::Serialize;
 
 use crate::map::{ArchetypeDef, EntityDef, EntityKind};
+
+/// A copy of prototype `proto` for some of its placements to use instead: every component copied, its `core.lods`
+/// forms copied with it (so a pass may change the copy's forms without touching the original's).
+pub(crate) fn copy_prototype(w: &mut World, proto: Entity) -> Entity {
+    let copy = w.spawn();
+    w.copy_components(proto, copy);
+    if let Some(mut lods) = w.get::<Lods>(copy).cloned() {
+        for f in &mut lods.forms {
+            let fc = w.spawn();
+            w.copy_components(f.form, fc);
+            f.form = fc;
+        }
+        w.insert(copy, lods);
+    }
+    copy
+}
 
 fn to_json<T: Serialize>(v: &T) -> Result<Option<serde_json::Value>, JsonError> {
     primase_core::json::to_value(v).map(Some)

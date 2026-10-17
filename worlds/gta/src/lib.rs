@@ -73,7 +73,8 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}` and `lower-gta-collision{x0,y0,x1,y1}`.
+/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `lower-gta-collision{x0,y0,x1,y1}`, `lower-gta-embedded-collision`,
+/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}` and `lower-gta-water`.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
     fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
@@ -95,6 +96,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     });
     reg.register("lower-gta-collision", |o| {
         Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
+    });
+    reg.register("lower-gta-embedded-collision", |o| {
+        none(o, collision::LowerGtaEmbeddedCollision)
     });
     reg.register("lower-gta-surfaces", |o| none(o, surfaces::LowerGtaSurfaces));
     reg.register("gta-select-water", |o| {
