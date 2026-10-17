@@ -322,7 +322,7 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
 fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Result<Geometry> {
     let g = r.at(p, 0x98)?;
     let index_count = le::u32(g, 0x58);
-    if le::u32(g, 0x5C) * 3 != index_count || le::u16(g, 0x62) != 3 {
+    if u64::from(le::u32(g, 0x5C)) * 3 != u64::from(index_count) || le::u16(g, 0x62) != 3 {
         return Err(err(
             p,
             format!("{index_count} indices, {} triangles", le::u32(g, 0x5C)),
@@ -548,7 +548,7 @@ impl Fragment {
             }
         };
         let n = le::u32(h, 0x48) as usize;
-        let mut extra = Vec::with_capacity(n);
+        let mut extra = Vec::new();
         if n > 0 {
             let ptrs = r.at(le::u64(h, 0x38), 8 * n)?;
             let names = r.at(le::u64(h, 0x40), 8 * n)?;
@@ -654,4 +654,51 @@ fn pointer_list_u32(r: &Resource, h: &[u8]) -> Result<Vec<u32>> {
     }
     let d = r.at(le::u64(h, 0), 4 * n)?;
     Ok((0..n).map(|i| le::u32(d, 4 * i)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resource::PageFlags;
+
+    /// 8 KiB of system pages, zero but for `writes` (offset, bytes).
+    fn pages(version: u32, writes: &[(usize, &[u8])]) -> Resource {
+        let mut data = vec![0u8; 0x2000];
+        for (o, b) in writes {
+            data[*o..*o + b.len()].copy_from_slice(b);
+        }
+        Resource {
+            version,
+            system: PageFlags((1 << 27) | 4),
+            graphics: PageFlags(0),
+            data,
+            zero_filled: 0,
+        }
+    }
+
+    #[test]
+    fn a_fragment_counting_more_extra_drawables_than_its_pages_hold_is_refused() {
+        let ptr = (0x5000_0200u64).to_le_bytes();
+        let r = pages(
+            FRAGMENT_VERSION,
+            &[(0x38, &ptr), (0x40, &ptr), (0x48, &u32::MAX.to_le_bytes())],
+        );
+        let e = Fragment::read_resource(&r).expect_err("count past the pages");
+        assert!(e.to_string().contains("run past the pages"), "{e}");
+    }
+
+    #[test]
+    fn a_triangle_count_whose_index_count_overflows_is_refused() {
+        // 0x5555_5556 triangles: three times that wraps to 2 in 32 bits
+        let r = pages(
+            VERSION,
+            &[
+                (0x58, &2u32.to_le_bytes()),
+                (0x5C, &0x5555_5556u32.to_le_bytes()),
+                (0x62, &3u16.to_le_bytes()),
+            ],
+        );
+        let e = read_geometry(&r, 0x5000_0000, 0, [[0.0; 4]; 2]).expect_err("overflow");
+        assert!(e.to_string().contains("1431655766 triangles"), "{e}");
+    }
 }
