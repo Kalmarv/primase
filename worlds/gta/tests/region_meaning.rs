@@ -874,15 +874,26 @@ fn region_placements_against_the_scene() {
                     (true, 0) => "scene textures identical, fewer smallest levels",
                     (true, _) => "scene textures identical from a smaller level (size cap)",
                     (false, _) => {
-                        if tex_examples.len() < 24 {
-                            let at = t
-                                .levels
-                                .iter()
-                                .enumerate()
-                                .position(|(i, l)| ours_t.levels.get(first + i) != Some(l));
-                            tex_examples.push(format!(
+                        // the first scene level that is not ours, and its size
+                        let at = t
+                            .levels
+                            .iter()
+                            .enumerate()
+                            .position(|(i, l)| ours_t.levels.get(first + i) != Some(l))
+                            .unwrap_or(0);
+                        let (w, h) = ((t.width >> at).max(1), (t.height >> at).max(1));
+                        if ours_t.levels.len() == 1 && first == 0 && at == 1 {
+                            // a single-level texture (a script render target's placeholder) that exporter gave levels
+                            // of its own
+                            "scene textures: that exporter's smaller levels of a single-level texture of ours"
+                        } else if w <= 8 && h <= 8 {
+                            // the same down to 16 texels a side; the 8 x 8 and smaller levels its own
+                            "scene textures: that exporter's own levels of 8 x 8 texels and smaller"
+                        } else {
+                            if tex_examples.len() < 24 {
+                                tex_examples.push(format!(
                                 "differing smaller levels: {} {:?} ({}x{}, {} levels) against our level {first} of {}x{} {:?} \
-                                 ({} levels): first differing scene level {at:?}",
+                                 ({} levels): first differing scene level {at}",
                                 tf.path.display(),
                                 theirs.get::<Name>(te).map(|n| n.0.clone()),
                                 t.width,
@@ -893,8 +904,9 @@ fn region_placements_against_the_scene() {
                                 ours_t.format,
                                 ours_t.levels.len()
                             ));
+                            }
+                            "scene textures with differing smaller levels"
                         }
-                        "scene textures with differing smaller levels"
                     }
                 }
             }
