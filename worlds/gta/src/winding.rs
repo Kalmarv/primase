@@ -57,7 +57,7 @@ impl Pass for GtaWinding {
         &["core.mesh", "gta.sources"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        for_each_mesh(w, |mesh, _| {
+        for_each_mesh(w, |mesh| {
             for p in &mut mesh.primitives {
                 match faces_away(p) {
                     None => log.count("primitives without normals, kept as stored", 1),
@@ -72,7 +72,7 @@ impl Pass for GtaWinding {
                     }
                 }
             }
-            Ok(())
+            Ok(None)
         })
     }
 }

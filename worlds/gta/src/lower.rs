@@ -184,29 +184,28 @@ struct SpecularMap {
     power: Option<f32>,
 }
 
-/// Keeps the primitives of `mesh` (and their sources) that `keep` accepts.
-pub fn retain_primitives(
-    mesh: &mut Mesh,
-    sources: &mut Vec<[u32; 2]>,
-    mut keep: impl FnMut(&Primitive) -> bool,
-) {
+/// Keeps the primitives of `mesh` that `keep` accepts: the old index of each kept one, for
+/// [`World::remap_primitives`] (`None` when every one is kept).
+pub fn retain_primitives(mesh: &mut Mesh, mut keep: impl FnMut(&Primitive) -> bool) -> Option<Vec<usize>> {
+    let mut from = Vec::with_capacity(mesh.primitives.len());
     let mut kept = Vec::with_capacity(mesh.primitives.len());
-    let mut kept_sources = Vec::with_capacity(sources.len());
-    for (p, s) in mesh.primitives.drain(..).zip(sources.drain(..)) {
+    let n = mesh.primitives.len();
+    for (i, p) in mesh.primitives.drain(..).enumerate() {
         if keep(&p) {
+            from.push(i);
             kept.push(p);
-            kept_sources.push(s);
         }
     }
     mesh.primitives = kept;
-    *sources = kept_sources;
+    (from.len() < n).then_some(from)
 }
 
-/// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms),
-/// with its sources; an error for a mesh still holding `gta.poses` (`gta-pose-fragments` runs first).
+/// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms);
+/// where `f` rebuilds the primitives it gives each one's old index, and the entity's per-primitive components follow
+/// ([`World::remap_primitives`]). An error for a mesh still holding `gta.poses` (`gta-pose-fragments` runs first).
 pub fn for_each_mesh(
     w: &mut World,
-    mut f: impl FnMut(&mut Mesh, &mut Vec<[u32; 2]>) -> Result<(), String>,
+    mut f: impl FnMut(&mut Mesh) -> Result<Option<Vec<usize>>, String>,
 ) -> Result<(), String> {
     let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
     for e in holders {
@@ -218,10 +217,11 @@ pub fn for_each_mesh(
         let Some(mut mesh) = w.remove::<Mesh>(e) else {
             continue;
         };
-        let mut s = w.remove::<GtaSources>(e).expect("sources");
-        f(&mut mesh, &mut s.sources)?;
+        let from = f(&mut mesh)?;
         w.insert(e, mesh);
-        w.insert(e, s);
+        if let Some(from) = from {
+            w.remap_primitives(e, &from)?;
+        }
     }
     Ok(())
 }
@@ -293,15 +293,14 @@ impl Pass for LowerGtaPbr {
             .filter_map(|(e, c)| c.skip.map(|s| (*e, s)))
             .filter(|(_, s)| !(self.night && *s == Skip::NightOnlyGeometry))
             .collect();
-        for_each_mesh(w, |mesh, sources| {
-            retain_primitives(mesh, sources, |p| {
+        for_each_mesh(w, |mesh| {
+            Ok(retain_primitives(mesh, |p| {
                 let skip = p.material.and_then(|m| dropped.get(&m));
                 if let Some(s) = skip {
                     log.count(&format!("primitives dropped: {}", s.reason()), 1);
                 }
                 skip.is_none()
-            });
-            Ok(())
+            }))
         })?;
         // a mesh whose every primitive was dropped draws nothing: no mesh (a prototype's own mesh stays while it has
         // other forms, which core.lods needs it for)
@@ -630,7 +629,7 @@ impl Pass for GtaVertexColours {
         let tinted: BTreeSet<Entity> = w
             .resource::<crate::tint::GtaTinted>()
             .map_or(BTreeSet::new(), |t| t.0.clone());
-        for_each_mesh(w, |mesh, _| {
+        for_each_mesh(w, |mesh| {
             for p in &mut mesh.primitives {
                 let Some(m) = p.material else { continue };
                 let Some(c) = classes.get(&m) else { continue };
@@ -674,7 +673,7 @@ impl Pass for GtaVertexColours {
                     log.count("COLOR_1 dropped", 1);
                 }
             }
-            Ok(())
+            Ok(None)
         })
     }
 }
@@ -780,6 +779,59 @@ mod tests {
         assert_ne!(normal, t);
         assert_eq!(w.get::<Texture>(t).unwrap().role, TexRole::Color);
         assert_eq!(w.get::<Texture>(normal).unwrap().role, TexRole::Normal);
+    }
+
+    /// A dropped primitive takes its source with it (gta.sources follows through World::remap_primitives).
+    #[test]
+    fn dropped_primitives_take_their_sources_along() {
+        use crate::components::{GtaShader, GtaSources};
+        use primase_core::pass::Pass;
+        let mut w = primase_core::World::new();
+        let shader = |w: &mut primase_core::World, effect: &[u8]| {
+            let m = w.spawn();
+            w.insert(
+                m,
+                GtaShader {
+                    drawable: "d".into(),
+                    index: 0,
+                    name: primase_hash::joaat(effect),
+                    preset: 0,
+                    render_bucket: 0,
+                    bucket_mask: 0,
+                    params: vec![],
+                },
+            );
+            m
+        };
+        let (cable, plain) = (shader(&mut w, b"cable"), shader(&mut w, b"default"));
+        let prim = |m| primase_core::Primitive {
+            topology: primase_core::Topology::Triangles,
+            streams: std::collections::BTreeMap::from([(
+                primase_core::Semantic::Position,
+                primase_core::Stream::F32x3(vec![[0.0; 3]; 3]),
+            )]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(m),
+        };
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            primase_core::Mesh {
+                primitives: vec![prim(cable), prim(plain)],
+            },
+        );
+        w.insert(
+            proto,
+            GtaSources {
+                lod: 0,
+                sources: vec![[0, 0], [0, 1]],
+            },
+        );
+        super::LowerGtaPbr::default()
+            .run(&mut w, &mut primase_core::pass::PassLog::default())
+            .unwrap();
+        assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives.len(), 1);
+        assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 1]]);
     }
 
     #[test]

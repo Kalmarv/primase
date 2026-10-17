@@ -214,6 +214,14 @@ impl Component for GtaSources {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(
+            primase_core::remap_list(&self.sources, from).map(|sources| GtaSources {
+                lod: self.lod,
+                sources,
+            }),
+        )
+    }
     /// One source per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
         let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
@@ -233,6 +241,9 @@ impl Component for GtaPoses {
     const NAME: &'static str = "gta.poses";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(GtaPoses))
     }
     /// One pose per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
