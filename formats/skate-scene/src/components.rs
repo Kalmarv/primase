@@ -447,6 +447,8 @@ macro_rules! shown {
 
 impl Component for SkateMaterial {
     const NAME: &'static str = "skate.material";
+    /// 2: `vertex_alpha` is a field of its own (in 1 it was carried in `other`).
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
