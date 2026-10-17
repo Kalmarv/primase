@@ -72,7 +72,8 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 }
 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
-/// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-leave-out-interiors`,
+/// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
+/// `gta-leave-out-interiors`,
 /// `lower-gta-lights{hour,x0,y0,x1,y1}`, `lower-gta-collision{x0,y0,x1,y1}`, `lower-gta-embedded-collision`,
 /// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}` and `lower-gta-water`.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
@@ -97,6 +98,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("lower-gta-collision", |o| {
         Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
     });
+    reg.register("gta-select-stand-ins", |o| {
+        Ok(Box::new(select::SelectStandIns::from_options(o)?))
+    });
     reg.register("lower-gta-embedded-collision", |o| {
         none(o, collision::LowerGtaEmbeddedCollision)
     });
@@ -111,4 +115,14 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("gta-leave-out-interiors", |o| {
         Ok(Box::new(pipeline::LeaveOutInteriors::from_options(o)?))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every pass registers: the registry makes each with no options, and a pass that refuses them panics there.
+    #[test]
+    fn every_pass_registers() {
+        let mut reg = primase_core::pass::PassRegistry::new();
+        super::register(&mut reg);
+    }
 }

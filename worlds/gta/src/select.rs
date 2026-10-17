@@ -263,3 +263,198 @@ impl Pass for SelectRegion {
         Ok(())
     }
 }
+
+/// `gta-select-stand-ins{levels,x0,y0,x1,y1}`: a far view of the map from GTA's own LOD stand-ins. Only the placements
+/// whose LOD level (`rage__eLodType`: 1 LOD, 2 SLOD1, 3 SLOD2, 4 SLOD3, 6 SLOD4) is one of `levels` (`2;3;4`, SLOD1
+/// to SLOD3, unless given) are kept,
+/// given a region only those whose pivot lies in it; every other placement is despawned (the real geometry, the
+/// other levels, interiors and what is placed in them), counted per level kept. The levels nest (a SLOD2 stands in
+/// for its SLOD1 children, which stand in for their LODs), so levels kept together overlap where both are placed: a
+/// pipeline picks the levels it draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectStandIns {
+    pub levels: BTreeSet<i32>,
+    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: the whole map read.
+    pub region: Option<[f32; 4]>,
+}
+
+impl SelectStandIns {
+    pub fn from_options(o: &Options) -> Result<SelectStandIns, String> {
+        for k in o.keys() {
+            if !["levels", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+                return Err(format!("unknown option {k}"));
+            }
+        }
+        let levels: BTreeSet<i32> = o
+            .get("levels")
+            .map_or("2;3;4", String::as_str)
+            .split(';')
+            .map(|v| match v.trim().parse() {
+                Ok(l @ (1..=4 | 6)) => Ok(l),
+                _ => Err(format!("levels: {v} is no stand-in level (1-4, 6)")),
+            })
+            .collect::<Result<_, _>>()?;
+        let num = |k: &str| -> Result<Option<f32>, String> {
+            o.get(k)
+                .map(|v| v.parse().map_err(|_| format!("{k}: not a number: {v}")))
+                .transpose()
+        };
+        let region = match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
+            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
+            [None, None, None, None] => None,
+            _ => return Err("x0, y0, x1 and y1 go together".into()),
+        };
+        Ok(SelectStandIns { levels, region })
+    }
+}
+
+impl Pass for SelectStandIns {
+    fn name(&self) -> &'static str {
+        "gta-select-stand-ins"
+    }
+    fn options(&self) -> Options {
+        let mut o = Options::new();
+        o.insert(
+            "levels".to_string(),
+            self.levels
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(";"),
+        );
+        if let Some([x0, y0, x1, y1]) = self.region {
+            for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
+                o.insert(k.to_string(), v.to_string());
+            }
+        }
+        o
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[GtaEntity::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let mut drop = Vec::new();
+        for (e, _) in w.iter::<Instance>() {
+            let Some(ge) = w.get::<GtaEntity>(e) else {
+                continue;
+            };
+            let reason = if ge.interior.is_some() {
+                Some("interior or placed in one")
+            } else if !self.levels.contains(&ge.lod_level) {
+                Some("not a stand-in of the levels kept")
+            } else if let Some([x0, y0, x1, y1]) = self.region {
+                let p = w
+                    .get::<Transform>(e)
+                    .ok_or("a placement without a transform")?
+                    .cols[3];
+                // core (x, y, z) is GTA (x, -z, y)
+                let (gx, gy) = (p[0], -p[2]);
+                (!(gx >= x0 && gx < x1 && gy >= y0 && gy < y1)).then_some("outside the region")
+            } else {
+                None
+            };
+            match reason {
+                Some(r) => {
+                    log.count(&format!("dropped: {r}"), 1);
+                    drop.push(e);
+                }
+                None => log.count(&format!("kept: level {}", ge.lod_level), 1),
+            }
+        }
+        for e in drop {
+            w.despawn(e);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stand_in_tests {
+    use super::*;
+
+    fn placed(w: &mut World, lod_level: i32, interior: Option<u32>, x: f32) -> Entity {
+        let proto = w.spawn();
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(
+            e,
+            Transform {
+                cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [x, 0.0, -5.0]],
+            },
+        );
+        w.insert(
+            e,
+            GtaEntity {
+                ymap: "m.ymap".into(),
+                index: 0,
+                interior,
+                lod_parent: None,
+                archetype: 0,
+                flags: 0,
+                guid: 0,
+                parent_index: -1,
+                lod_dist: 100.0,
+                child_lod_dist: 0.0,
+                lod_level,
+                num_children: 0,
+                priority_level: 0,
+                ambient_occlusion_multiplier: 255,
+                artificial_ambient_occlusion: 255,
+                tint_value: 0,
+            },
+        );
+        e
+    }
+
+    /// Of an HD, a LOD, a SLOD1, a SLOD2, a SLOD3 and a SLOD2 in an interior, `levels=2;3;4` keeps the three stand-ins
+    /// outside interiors; a region (x below 10, GTA y 5 is core z -5) keeps those whose pivot lies in it.
+    #[test]
+    fn only_the_stand_ins_of_the_levels_kept() {
+        let mut w = World::new();
+        let hd = placed(&mut w, 0, None, 1.0);
+        let lod = placed(&mut w, 1, None, 1.0);
+        let s1 = placed(&mut w, 2, None, 1.0);
+        let s2 = placed(&mut w, 3, None, 20.0);
+        let s3 = placed(&mut w, 4, None, 1.0);
+        let inner = placed(&mut w, 3, Some(4), 1.0);
+        let mut o = Options::new();
+        o.insert("levels".into(), "2;3;4".into());
+        let pass = SelectStandIns::from_options(&o).unwrap();
+        let mut log = PassLog::default();
+        pass.run(&mut w, &mut log).unwrap();
+        let alive: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        assert_eq!(alive, vec![s1, s2, s3]);
+        assert!(![hd, lod, inner].iter().any(|e| alive.contains(e)));
+        assert_eq!(log.counts.get("kept: level 3"), Some(&1));
+
+        for (k, v) in [("x0", "0"), ("y0", "0"), ("x1", "10"), ("y1", "10")] {
+            o.insert(k.into(), v.into());
+        }
+        let mut log = PassLog::default();
+        SelectStandIns::from_options(&o)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        let alive: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        assert_eq!(alive, vec![s1, s3]);
+        assert_eq!(log.counts.get("dropped: outside the region"), Some(&1));
+    }
+
+    /// Levels are stand-in levels; with none given, SLOD1 to SLOD3.
+    #[test]
+    fn levels_are_stand_in_levels() {
+        let mut o = Options::new();
+        o.insert("levels".into(), "0;2".into());
+        assert!(SelectStandIns::from_options(&o).is_err());
+        assert_eq!(
+            SelectStandIns::from_options(&Options::new()).unwrap().levels,
+            BTreeSet::from([2, 3, 4])
+        );
+    }
+}
