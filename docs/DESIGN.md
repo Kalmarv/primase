@@ -19,6 +19,10 @@ and writers ask for (section 3).
 
 ## 2. Principles
 
+0. **Roles.** Readers only read, passes transform, writers only write; core holds world facts and the pass
+   machinery, the toolkit shared mechanisms, the cli and pipelines compose. CONTRIBUTING.md ("Roles: read this
+   first") says what each may and may not do and which check enforces it. Without these roles the plumbing between
+   any input and any output stops being plumbing.
 1. **Small core, open edges.** The core fixes only what everyone must agree on: entities, transforms, meshes,
    textures, units/axes/handedness, colour space. Game- and target-specific meaning lives in namespaced components.
 2. **Readers attach what they know; writers declare what they need.** Nobody has to model everything.
@@ -148,8 +152,8 @@ across games become core or toolkit functions: the second time a game crate need
 (a codec, a container walk, a vertex decode, a transform convention, a hash), it moves to the toolkit with a gate and
 both games call it. A game crate ends up mostly composition: format specifics plus calls into the toolkit. Likewise a
 CLI is a few dozen lines of reader + passes + writer; if it needs more than piping, the missing piece belongs in a
-crate. Dependencies point down only (`cli -> worlds/formats -> toolkit -> core`); world crates never depend on each
-other. `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
+crate. Dependencies point down only (`cli -> pipelines -> worlds/formats -> toolkit -> core`); world crates never
+depend on each other or on formats, and formats depend on no format but `formats/gltf` (CONTRIBUTING.md). `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
 two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or go to Blender.
 
 **Scope of this repository.** It holds library crates, thin CLIs and small examples only. Applications that consume

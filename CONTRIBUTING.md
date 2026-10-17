@@ -2,6 +2,25 @@
 
 How the workspace is laid out and the rules every crate follows. The design is `docs/DESIGN.md`.
 
+## Roles: read this first
+
+There is one way through primase: **source -> reader -> passes -> writer**. Every piece of code is one of the roles
+below, and each rule is checked by the normal gates (`cargo clippy ... -D warnings`, `cargo test --workspace`).
+
+| role | may | may not | checked by |
+|---|---|---|---|
+| **reader** | read the source it is given; attach core components and its own dialect (`gta.*`, `fromsoft.*`); keep the source as authored (bone-space geometry with its skeleton and pose, every level of detail, every state); count what it tolerated; load the meshes and textures a world references, when asked (its load step) | lower, bake, approximate, apply poses, pick levels of detail or states, select what a target draws, shape for a target (another dialect's components, target units), read options from the environment | I/O only in modules that opt in as `reader I/O` (clippy); the namespaces a reader declares, checked by `primase convert` for registered readers |
+| **pass** | transform the world it is given: lower, bake, approximate, select, split, merge; declare what it requires, provides, removes and modifies; name and count every approximation | touch files, the environment or processes; run outside the pass manager | clippy's file/environment ban; every pass registered by name and every public lowering run by a pass (`cli/tests/architecture.rs`) |
+| **writer** | serialize what its target declares, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing the world; refuse the rest by name | lower, approximate, or select and merge what the world means for its target (a pass does that first), derive data a pass should own, read other files, change the world | writer entry points take `&World` (`cli/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
+| **core** | world facts, the store, frames, the pass machinery and its generic passes, gates | game or target names, renderer tuning, file access, dependencies on other crates | crate dependencies, game names, clippy's file ban (`cli/tests/architecture.rs`) |
+| **toolkit** | shared mechanisms that games supply data to | game branches, depending on formats or worlds | crate dependencies, game names |
+| **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf` | crate dependencies, game names |
+| **cli, pipelines, examples, scripts** | compose readers, passes, writers and `convert`, in any combination | data logic of their own: reimplementing a step, querying or editing world components, reading a format, running a pass past the manager | `cli/tests/architecture.rs` (`entry_points`) |
+
+Known exceptions are listed in `architecture.toml`, each with its reason and what removes it. The test fails on an
+exception that no longer occurs, so fixing a violation means deleting its entry; adding one needs a reviewer's
+agreement.
+
 ## Priorities: correct first, then fast
 
 1. Every piece lands with its gates passing: cross-checks against a second decoder or fixtures, the census over a
@@ -18,6 +37,7 @@ core/                 primase-core: world store, core components, TexFormat, fra
 toolkit/<name>/       primase-<name>: patterns games repeat (texcodec, dds, compress, hash, image, vertex, ...)
 worlds/<game>/        primase-<game>: one crate per game or engine (sekiro, gta, fh6, unity, reskate, ...)
 formats/<name>/       primase-<name>: file formats that are not one game's (skate-scene, gltf, usd, web, ...)
+pipelines/<name>/     primase-<name>: reusable compositions of readers, passes and writers (no data logic)
 cli/                  primase: thin compositions of readers + passes + writers
 ```
 
@@ -27,8 +47,10 @@ convention, a hash), it moves to the toolkit with a gate and both games call it.
 composition: its format specifics plus calls into the toolkit. Likewise a CLI that needs more than piping is missing a
 crate function.
 
-Dependencies point down only: `cli -> worlds/formats -> toolkit -> core`. A world or format crate never depends on
-another world crate; what two of them share belongs lower.
+Dependencies point down only: `cli -> pipelines -> worlds/formats -> toolkit -> core`. A world crate depends only on
+the toolkit and core: never on a format or another world. A format crate depends on the toolkit, core and
+`formats/gltf` (the container other formats embed) only. What two of them share belongs lower. Dev-dependencies may
+add format crates (round-trip gates) and `toolkit/testdata`, which is never a normal dependency.
 
 Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's world crate, or for
 `skate.*` (until `worlds/reskate` exists) `formats/skate-scene`. `pbr.*` lives in core.
