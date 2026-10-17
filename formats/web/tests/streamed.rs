@@ -170,3 +170,51 @@ fn nothing_to_draw_still_publishes_an_index() {
     assert!(out.join("tiles.json").is_file());
     let _ = std::fs::remove_dir_all(&out);
 }
+
+#[test]
+fn the_target_wants_a_cells_files_loaded_and_lods_chosen() {
+    use primase_core::pass::{Legality, Mode};
+    use primase_core::{Component, Lods, MeshFile, Opaque, OpaqueData, Texture, TextureFile};
+    let (mut w, placed) = world(&[(10., 2.)]);
+    let proto = w.get::<Instance>(placed[0]).unwrap().prototype;
+    w.insert(
+        proto,
+        MeshFile {
+            path: "a.glb".into(),
+            mesh: 0,
+            materials: vec![None],
+        },
+    );
+    let image = w.spawn();
+    w.insert(image, TextureFile { path: "a.png".into() });
+    w.insert_opaque(
+        placed[0],
+        "test.dialect",
+        Opaque {
+            version: 1,
+            data: OpaqueData::Json(serde_json::json!(1)),
+        },
+    );
+    let t = primase_web::target();
+    // the mesh is loaded beside its file; the texture is not
+    assert!(t.illegal_entities(&w, MeshFile::NAME, Mode::Full).is_empty());
+    assert_eq!(t.illegal_entities(&w, TextureFile::NAME, Mode::Full), [image]);
+    w.insert(
+        image,
+        Texture {
+            width: 1,
+            height: 1,
+            format: primase_core::TexFormat::R8Unorm,
+            levels: vec![vec![0]],
+            color_space: primase_core::ColorSpace::Linear,
+            role: primase_core::TexRole::Mask,
+            normal: None,
+        },
+    );
+    assert!(t.illegal_entities(&w, TextureFile::NAME, Mode::Full).is_empty());
+    w.remove::<Mesh>(proto);
+    assert_eq!(t.illegal_entities(&w, MeshFile::NAME, Mode::Full), [proto]);
+    // a dialect's component is carried; levels of detail are chosen first
+    assert!(t.illegal_entities(&w, "test.dialect", Mode::Full).is_empty());
+    assert!(matches!(t.legality(Lods::NAME), Some(Legality::Illegal)));
+}

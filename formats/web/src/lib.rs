@@ -389,6 +389,34 @@ impl std::fmt::Debug for TilePlan {
             .finish()
     }
 }
+/// What the writer accepts in the world it writes a cell from ([`TilePlan::write_cell`], after that cell's passes):
+/// the core and PBR components it interprets are legal; a `core.mesh_file` or `core.texture_file` only on an entity
+/// with the mesh or texture loaded; `core.lods` must be resolved first (`select-lod`). Every other name is carried
+/// (glTF extras). A material entity without `pbr.material` is written as the glTF fallback material and counted.
+pub fn target() -> primase_core::pass::Target {
+    use primase_core::{
+        Collision, Component, Curve, LayeredMaterial, Light, Lods, Marker, MeshFile, Shadows, Texture,
+        TextureFile, pbr::PbrMaterial,
+    };
+    primase_core::pass::Target::new("web")
+        .legal(Instance::NAME)
+        .legal(Transform::NAME)
+        .legal(Name::NAME)
+        .legal(Mesh::NAME)
+        .legal(MaterialVariants::NAME)
+        .legal(Shadows::NAME)
+        .legal(Light::NAME)
+        .legal(Collision::NAME)
+        .legal(Marker::NAME)
+        .legal(Curve::NAME)
+        .legal(PbrMaterial::NAME)
+        .legal(LayeredMaterial::NAME)
+        .legal(Texture::NAME)
+        .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
+        .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
+        .illegal(Lods::NAME)
+        .carry_unknown()
+}
 /// Plan `world`'s tiles. Geometry may still be in files; the world's collision and viewer records are read now.
 pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
     plan_with_geometry(world, options, &|_| false)

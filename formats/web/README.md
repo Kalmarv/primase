@@ -16,6 +16,8 @@ the index, and `Index::write_to` publishes `tiles.json` once every file it names
 is in place. `write` is that pipeline over an already prepared world. Each tile is
 written as a `primase_gltf::Selection` of the cell's world, which stays unchanged,
 so one loaded cell can be written by several plans (the example's plain set).
+`target()` declares what a cell's world may hold when it is written (a converter
+checks it after the cell's passes): its files loaded, levels of detail chosen.
 
 A reader that loads meshes only per cell plans with `plan_with_geometry`, saying
 which prototypes have geometry still to load; `spanning` finds, from prototype
