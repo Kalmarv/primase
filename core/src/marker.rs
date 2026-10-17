@@ -21,14 +21,23 @@ pub struct Marker {
     pub ground: Option<[f32; 2]>,
 }
 
-/// `core.curve`: an author-placed polyline in world space: a grind rail, a ledge, a coping, a path. Points in order,
-/// metres; `closed`: the last point joins the first.
+/// `core.curve`: an author-placed curve in world space: a grind rail, a ledge, a coping, a path, a chairlift's cable.
+/// Points in order, metres; `closed`: the last point joins the first. Without `tangents` it is the polyline through
+/// them; with them each pair of consecutive points is a cubic Bezier segment from a point by its out handle and the
+/// next point's in handle (Catmull-Rom, Hermite and auto tangents convert to these handles exactly). A consumer that
+/// needs a polyline runs `flatten-curves`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Curve {
     /// As [`Marker::kind`].
     pub kind: String,
     pub points: Vec<[f32; 3]>,
     pub closed: bool,
+    /// Each point's in and out handles, absolute positions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tangents: Option<Vec<[[f32; 3]; 2]>>,
+    /// Each point's up direction (a rail's or a cable car's roll), unit length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub up: Option<Vec<[f32; 3]>>,
 }
 
 /// A kind is a nonempty word of `a-z`, `0-9` and `_`. The known ones are listed in the format documentation; any
@@ -73,6 +82,8 @@ impl Component for Marker {
 
 impl Component for Curve {
     const NAME: &'static str = "core.curve";
+    /// 2: optional Bezier `tangents` and `up` per point.
+    const VERSION: u32 = 2;
     /// World space: not in any entity's local space.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -80,16 +91,38 @@ impl Component for Curve {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// A valid kind and at least two finite points.
+    /// A valid kind and at least two finite points; handles and up directions, when given, one per point and finite
+    /// (up directions of unit length within 1e-3).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         check_kind(&self.kind)?;
-        if self.points.len() < 2 {
-            return Err(format!("{} points; a curve has at least 2", self.points.len()));
+        let n = self.points.len();
+        if n < 2 {
+            return Err(format!("{n} points; a curve has at least 2"));
         }
-        match self.points.iter().position(|p| !p.iter().all(|v| v.is_finite())) {
-            Some(i) => Err(format!("point {i} {:?} is not finite", self.points[i])),
-            None => Ok(()),
+        if let Some(i) = self.points.iter().position(|p| !p.iter().all(|v| v.is_finite())) {
+            return Err(format!("point {i} {:?} is not finite", self.points[i]));
         }
+        if let Some(t) = &self.tangents {
+            if t.len() != n {
+                return Err(format!("{} tangent pairs for {n} points", t.len()));
+            }
+            if let Some(i) = t.iter().position(|h| !h.iter().flatten().all(|v| v.is_finite())) {
+                return Err(format!("point {i}'s handles {:?} are not finite", t[i]));
+            }
+        }
+        if let Some(up) = &self.up {
+            if up.len() != n {
+                return Err(format!("{} up directions for {n} points", up.len()));
+            }
+            let unit = |u: &[f32; 3]| {
+                let l = u.iter().map(|v| v * v).sum::<f32>().sqrt();
+                l.is_finite() && (l - 1.0).abs() <= 1e-3
+            };
+            if let Some(i) = up.iter().position(|u| !unit(u)) {
+                return Err(format!("point {i}'s up {:?} is not a unit direction", up[i]));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -183,6 +216,8 @@ mod tests {
             kind: "rail".into(),
             points,
             closed: false,
+            tangents: None,
+            up: None,
         };
         let good = w.spawn();
         w.insert(good, curve(vec![[0.; 3], [1., 0., 0.]]));

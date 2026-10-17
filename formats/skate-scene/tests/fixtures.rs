@@ -559,11 +559,15 @@ fn markers_and_curves_are_core_facts_too() {
                 kind: "coping".into(),
                 points: vec![[0., 1., 0.], [1., 1., 0.]],
                 closed: true,
+                tangents: None,
+                up: None,
             },
             Curve {
                 kind: "rail".into(),
                 points: vec![[2., 1., 0.], [3., 1., 1.], [4., 1., 2.]],
                 closed: false,
+                tangents: None,
+                up: None,
             },
         ]
     );

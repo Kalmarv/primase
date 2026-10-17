@@ -473,6 +473,8 @@ impl SkateGrindCurve {
             },
             points: self.points.clone(),
             closed: self.closed,
+            tangents: None,
+            up: None,
         }
     }
 }

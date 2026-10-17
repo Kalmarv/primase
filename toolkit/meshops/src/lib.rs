@@ -11,7 +11,15 @@ pub use layered_plan::{
 };
 mod hull;
 mod nonrigid;
-pub use nonrigid::{BakeNonrigid, bake_nonrigid, register};
+pub use nonrigid::{BakeNonrigid, bake_nonrigid};
+mod parametric;
+pub use parametric::{FlattenCurves, TessellateColliders};
+
+/// Register this crate's passes.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    nonrigid::register(reg);
+    parametric::register(reg);
+}
 mod primitive;
 mod texcoords;
 pub mod vector;

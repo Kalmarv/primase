@@ -102,12 +102,6 @@ reason = "a loader written as a pass; loading is a reader's load step"
 removed_when = "texture loading is a reader function, not a pass"
 
 [[pass]]
-file = "toolkit/meshops/src/texcoords.rs"
-what = "pass bake-texture-transforms is not registered"
-reason = "drivers call it directly"
-removed_when = "toolkit/meshops exports register()"
-
-[[pass]]
 file = "worlds/fromsoft/src/rigid.rs"
 what = "pass fromsoft-apply-rigid-skinning is not registered"
 reason = "the area reader applies skinning itself, so nothing runs the pass"

@@ -421,7 +421,8 @@ impl std::fmt::Debug for TilePlan {
 }
 /// What the writer accepts in the world it writes a cell from ([`TilePlan::write_cell`], after that cell's passes):
 /// the core and PBR components it interprets are legal; a `core.mesh_file` or `core.texture_file` only on an entity
-/// with the mesh or texture loaded; `core.lods` must be resolved first (`select-lod`). Every other name is carried
+/// with the mesh or texture loaded; a `core.curve` only as a polyline (`flatten-curves` first); `core.lods` and
+/// `core.collider` must be lowered first (`select-lod`, `tessellate-colliders`). Every other name is carried
 /// (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
 /// into geometry. A material entity without `pbr.material` is written as the glTF fallback material and counted.
 pub fn target() -> primase_core::pass::Target {
@@ -447,7 +448,10 @@ pub fn target() -> primase_core::pass::Target {
         .legal(Texture::NAME)
         .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
         .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
+        // viewer records draw polylines; collision is drawn from its triangles
+        .dynamic_typed::<Curve>(|c| c.tangents.is_none())
         .illegal(Lods::NAME)
+        .illegal(primase_core::Collider::NAME)
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files; the world's collision and viewer records are read now.
@@ -650,6 +654,12 @@ fn core_items(
         Ok(())
     };
     for (e, c) in world.iter::<Curve>() {
+        if c.tangents.is_some() {
+            return Err(json_error(
+                e,
+                "a Bezier curve: viewer records are polylines (flatten-curves first)".into(),
+            ));
+        }
         let first = c
             .points
             .first()

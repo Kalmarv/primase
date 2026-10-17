@@ -425,6 +425,8 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
             kind: "rail".into(),
             points: vec![[5., 1., -5.], [6., 1., -5.]],
             closed: false,
+            tangents: None,
+            up: None,
         },
     );
     w.insert(rail, Name("rail a".into()));

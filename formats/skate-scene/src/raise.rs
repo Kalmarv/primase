@@ -25,7 +25,8 @@
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - the `skate.scene` resource, named by the caller.
 //!
-//! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`).
+//! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`); so is
+//! one with collision shapes (`core.collider`): they become triangles first (`tessellate-colliders`).
 //!
 //! Then [`crate::prepare_scene_assets`] writes the GLBs and PNGs and [`crate::write`] the scene.
 
@@ -135,6 +136,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     if let Some((e, _)) = world.iter::<primase_core::Lods>().next() {
         return Err(bad(format!(
             "{e:?} has levels of detail: choose one form first (select-lod)"
+        )));
+    }
+    if let Some((e, _)) = world.iter::<primase_core::Collider>().next() {
+        return Err(bad(format!(
+            "{e:?} has a collision shape: skate collides with triangles (tessellate-colliders first)"
         )));
     }
     // surfaces onto skate's: the caller's map, else the class, else a name that is a skate surface already
