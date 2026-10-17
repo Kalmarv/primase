@@ -640,6 +640,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                 bounding_sphere: (d.bounding_centre, d.bounding_radius),
                 lod_dist: d.lod_dist,
                 render_masks: d.render_masks,
+                model_masks: std::array::from_fn(|i| d.lods[i].iter().map(|m| m.render_mask).collect()),
             },
         );
         ctx.report.drawables += 1;

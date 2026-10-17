@@ -30,7 +30,7 @@ use primase_core::{
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
-use crate::components::{GtaParam, GtaShader, GtaSources};
+use crate::components::{GtaDrawable, GtaParam, GtaShader, GtaSources};
 use crate::shader_class::{Class, ShaderClass, Skip, classify};
 
 /// The alpha-test reference cutouts and foliage are given.
@@ -274,6 +274,66 @@ pub fn retain_primitives(mesh: &mut Mesh, mut keep: impl FnMut(&Primitive) -> bo
     (from.len() < n).then_some(from)
 }
 
+/// The render mask bit of GTA's visible pass: a model whose mask lacks it is drawn only in other passes (shadows,
+/// reflections), as trees' shadow-casting models are (census of every live drawable).
+pub const VISIBLE_PASS: u16 = 1;
+
+/// Drops the primitives of models GTA does not draw in its visible pass (their model's render mask, from the
+/// prototype's [`GtaDrawable`], lacks [`VISIBLE_PASS`]), counted; their sources follow ([`World::remap_primitives`]).
+/// A mesh whose drawable or model is not known is left as it is.
+pub fn drop_hidden_models(w: &mut World, log: &mut PassLog) -> Result<(), String> {
+    // per mesh holder, its LOD's model masks: the prototype's own (LOD 0) and its forms'
+    let mut masks: BTreeMap<Entity, Vec<u16>> = BTreeMap::new();
+    for (proto, d) in w.iter::<GtaDrawable>() {
+        let mut holders = vec![proto];
+        if let Some(l) = w.get::<Lods>(proto) {
+            holders.extend(l.forms.iter().map(|f| f.form));
+        }
+        for h in holders {
+            if let Some(s) = w.get::<GtaSources>(h) {
+                masks.insert(h, d.model_masks[usize::from(s.lod.min(3))].clone());
+            }
+        }
+    }
+    for (h, m) in masks {
+        let Some(sources) = w.get::<GtaSources>(h) else {
+            continue;
+        };
+        let keep: Vec<bool> = sources
+            .sources
+            .iter()
+            .map(|[model, _]| m.get(*model as usize).is_none_or(|k| k & VISIBLE_PASS != 0))
+            .collect();
+        if keep.iter().all(|k| *k) {
+            continue;
+        }
+        let Some(mut mesh) = w.remove::<Mesh>(h) else {
+            continue;
+        };
+        let n = mesh.primitives().len();
+        if n != keep.len() {
+            w.insert(h, mesh);
+            return Err(format!("{h:?}: {n} primitives, {} sources", keep.len()));
+        }
+        let mut k = keep.iter();
+        let from = retain_primitives(&mut mesh, |_| {
+            let kept = k.next().copied().unwrap_or(true);
+            if !kept {
+                log.count(
+                    "primitives dropped: model not drawn in the visible pass (render mask)",
+                    1,
+                );
+            }
+            kept
+        });
+        w.insert(h, mesh);
+        if let Some(from) = from {
+            w.remap_primitives(h, &from)?;
+        }
+    }
+    Ok(())
+}
+
 /// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms);
 /// where `f` rebuilds the primitives it gives each one's old index, and the entity's per-primitive components follow
 /// ([`World::remap_primitives`]). An error for a mesh still holding `gta.poses` (`gta-pose-fragments` runs first).
@@ -365,6 +425,7 @@ impl Pass for LowerGtaPbr {
          transform; per-vertex emission (vertex colour blue) per triangle, in 16 levels"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        drop_hidden_models(w, log)?;
         let classes = classes(w)?;
         let dropped: BTreeMap<Entity, Skip> = classes
             .iter()
@@ -1142,6 +1203,52 @@ mod tests {
         assert_eq!(
             log.approximations
                 .get("UV animation transforms with shear left out"),
+            Some(&1)
+        );
+    }
+
+    /// A tree's two models, the visible one (mask 0xfd) and its shadow model (0xe2, no visible-pass bit): the shadow
+    /// model's primitive is dropped, its source with it.
+    #[test]
+    fn models_outside_the_visible_pass_are_dropped() {
+        use crate::components::{GtaDrawable, GtaSources};
+        let mut w = primase_core::World::new();
+        let prim = || primase_core::Primitive {
+            topology: primase_core::Topology::Triangles,
+            streams: std::collections::BTreeMap::from([(
+                primase_core::Semantic::Position,
+                primase_core::Stream::F32x3(vec![[0.0; 3]; 3]),
+            )]),
+            indices: Some(vec![0, 1, 2]),
+            material: None,
+        };
+        let proto = w.spawn();
+        w.insert(proto, primase_core::Mesh::new(vec![prim(), prim()]));
+        w.insert(
+            proto,
+            GtaSources {
+                lod: 0,
+                sources: vec![[0, 0], [1, 0]],
+            },
+        );
+        w.insert(
+            proto,
+            GtaDrawable {
+                path: "d".into(),
+                bbox: [[0.0; 3]; 2],
+                bounding_sphere: ([0.0; 3], 0.0),
+                lod_dist: [0.0; 4],
+                render_masks: [0; 4],
+                model_masks: [vec![0xfd, 0xe2], vec![], vec![], vec![]],
+            },
+        );
+        let mut log = primase_core::pass::PassLog::default();
+        super::drop_hidden_models(&mut w, &mut log).unwrap();
+        assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives().len(), 1);
+        assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 0]]);
+        assert_eq!(
+            log.counts
+                .get("primitives dropped: model not drawn in the visible pass (render mask)"),
             Some(&1)
         );
     }

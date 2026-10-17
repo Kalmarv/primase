@@ -204,12 +204,15 @@ pub struct GtaDrawable {
     pub bounding_sphere: ([f32; 3], f32),
     pub lod_dist: [f32; 4],
     pub render_masks: [u32; 4],
+    /// Per LOD, each model's render mask as stored (model 0x2C), in model order: the passes a model is drawn in (bit
+    /// 0 the visible pass; see `lower-gta-pbr`).
+    pub model_masks: [Vec<u16>; 4],
 }
 
 impl Component for GtaDrawable {
     const NAME: &'static str = "gta.drawable";
-    /// 2: the meshes' sources and the coarser LODs moved to [`GtaSources`] and `core.lods`.
-    const VERSION: u32 = 2;
+    /// 2: the meshes' sources and the coarser LODs moved to [`GtaSources`] and `core.lods`; 3: `model_masks`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
