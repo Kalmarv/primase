@@ -37,18 +37,31 @@ impl LayeredPbrPlan {
         self.policy
     }
 
+    /// Per changed mesh, the source primitive of each output primitive (World::remap_primitives' `from`).
+    fn remaps(&self) -> Vec<(Entity, Vec<usize>)> {
+        self.plans
+            .iter()
+            .map(|(e, parts)| (*e, parts.iter().map(|(source, ..)| *source).collect()))
+            .collect()
+    }
+
     /// Apply a fully validated plan, privately called by lower_layered_pbr.
     /// Its immutable validation callback cannot change the world between planning and application.
-    /// The plan neither reads nor changes dialect components.
+    /// Every per-primitive component of a changed mesh follows its source primitive (World::remap_primitives),
+    /// tried on a copy before (lower_layered_pbr); the plan reads no dialect component itself.
     /// Materials are spawned in sorted source/slot order; per-slot triangle counts are logged.
     fn apply(self, world: &mut World, log: &mut PassLog) {
+        let remaps = self.remaps();
         let mut materials = BTreeMap::new();
         for (key, pbr) in self.replacements {
             let entity = world.spawn();
             world.insert(entity, pbr);
             materials.insert(key, entity);
         }
-        for (entity, parts) in self.plans {
+        for ((entity, parts), (_, from)) in self.plans.into_iter().zip(remaps) {
+            world
+                .remap_primitives(entity, &from)
+                .expect("the same remap succeeded on the copy");
             let mut mesh = Mesh::default();
             let mut variants = Vec::new();
             for (_source, key, mut part, variant) in parts {
@@ -253,6 +266,16 @@ pub fn lower_layered_pbr(
 ) -> Result<()> {
     let plan = plan_layered_pbr(world, policy)?;
     validate(world, plan.sources())?;
+    // every per-primitive component of the changed meshes follows its source primitive: tried on a copy of those
+    // meshes first, so a refusal (a component that does not have a source index) still changes nothing
+    let remaps = plan.remaps();
+    let mut probe = world.subset(&remaps.iter().map(|(e, _)| *e).collect());
+    for (e, from) in &remaps {
+        probe
+            .remap_primitives(*e, from)
+            .map_err(|m| Error(format!("{e:?}: {m}")))?;
+    }
+    drop(probe);
     plan.apply(world, log);
     Ok(())
 }

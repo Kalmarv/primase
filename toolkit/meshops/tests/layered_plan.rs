@@ -1,8 +1,8 @@
 use primase_core::pass::PassLog;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Layer, LayerWeights, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Primitive, Semantic, Stream,
-    Topology, WeightMapping, World,
+    Component, Layer, LayerWeights, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Primitive, Semantic,
+    Stream, Topology, WeightMapping, World, remap_list,
 };
 use primase_meshops::{SelectionPolicy, plan_layered_pbr};
 use std::collections::BTreeMap;
@@ -190,4 +190,50 @@ fn empty_split_still_prunes_the_replaced_host() {
     assert!(!world.entities().any(|e| e == host));
     assert!(world.get::<Mesh>(entity).unwrap().primitives.is_empty());
     assert_eq!(world.closure([entity]).len(), world.entity_count());
+}
+
+/// A dialect's per-primitive data (a reader's source of each primitive), as it types it.
+#[derive(Clone, Debug, PartialEq)]
+struct Sources(Vec<&'static str>);
+impl Component for Sources {
+    const NAME: &'static str = "test.sources";
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(remap_list(&self.0, from).map(Sources))
+    }
+    fn verify(&self, entity: primase_core::Entity, world: &World) -> Result<(), String> {
+        let n = world.get::<Mesh>(entity).map_or(0, |m| m.primitives.len());
+        if self.0.len() != n {
+            return Err(format!("{} sources for {n} primitives", self.0.len()));
+        }
+        Ok(())
+    }
+}
+
+/// Worked by hand: the fixture's one primitive, its two triangles choosing layers 0 and 1, becomes two primitives
+/// from source 0: a dialect's per-primitive component follows (["a"] to ["a", "a"]) and the world verifies.
+#[test]
+fn a_split_carries_every_per_primitive_component() {
+    let (mut world, entity) = fixture();
+    world.insert(entity, Sources(vec!["a"]));
+    let mut log = PassLog::default();
+    primase_meshops::lower_layered_pbr(&mut world, SelectionPolicy::CoreWeights, &mut log, |_, _| Ok(()))
+        .unwrap();
+    assert_eq!(world.get::<Mesh>(entity).unwrap().primitives.len(), 2);
+    assert_eq!(world.get::<Sources>(entity), Some(&Sources(vec!["a", "a"])));
+    assert_eq!(world.verify_components(), vec![]);
+}
+
+/// A per-primitive component that does not have the source index refuses the split, and nothing changes.
+#[test]
+fn a_component_that_cannot_follow_refuses_the_split_unchanged() {
+    let (mut world, entity) = fixture();
+    world.insert(entity, Sources(vec![]));
+    let before = format!("{world:?}");
+    let mut log = PassLog::default();
+    let e =
+        primase_meshops::lower_layered_pbr(&mut world, SelectionPolicy::CoreWeights, &mut log, |_, _| Ok(()))
+            .unwrap_err();
+    assert!(e.0.contains("test.sources"), "{}", e.0);
+    assert_eq!(format!("{world:?}"), before);
+    assert!(log.counts.is_empty());
 }
