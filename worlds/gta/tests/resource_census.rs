@@ -30,6 +30,8 @@ struct Tally {
     unnamed: BTreeMap<String, u64>,
     /// Shaders by their preset word.
     presets: BTreeMap<u32, u64>,
+    /// Light records by kind, and the checks on them (non-finite values, reserved words not zero).
+    lights: BTreeMap<String, u64>,
     other_layout: BTreeMap<(String, u32), u64>,
     failures: BTreeMap<String, (u64, Vec<String>)>,
 }
@@ -81,10 +83,12 @@ fn every_drawable_and_texture_dictionary_reads() {
                                 other_layout = Some(r.version);
                                 return Ok(());
                             }
+                            let mut lights = Vec::new();
                             let drawables: Vec<Drawable> = match ext {
                                 "ydr" => vec![Drawable::read_resource(&r)?],
                                 "yft" => {
                                     let f = Fragment::read_resource(&r)?;
+                                    lights.extend(f.lights);
                                     f.drawable
                                         .into_iter()
                                         .chain(f.extra.into_iter().map(|(_, d)| d))
@@ -93,6 +97,31 @@ fn every_drawable_and_texture_dictionary_reads() {
                                 "ydd" => DrawableDictionary::read_resource(&r)?.drawables,
                                 _ => Vec::new(),
                             };
+                            lights.extend(drawables.iter().flat_map(|d| d.lights.iter().cloned()));
+                            for l in &lights {
+                                let kind = match l.kind {
+                                    1 => "point".to_string(),
+                                    2 => "spot".to_string(),
+                                    4 => "capsule".to_string(),
+                                    k => format!("kind {k}"),
+                                };
+                                *local.lights.entry(format!("{ext}: {kind}")).or_default() += 1;
+                                let floats = l
+                                    .position
+                                    .iter()
+                                    .chain(&l.direction)
+                                    .chain(&l.tangent)
+                                    .chain(&l.extent);
+                                if !floats.chain([&l.intensity, &l.falloff]).all(|v| v.is_finite()) {
+                                    *local.lights.entry("not finite".into()).or_default() += 1;
+                                }
+                                if l.reserved.iter().any(|&w| w != 0) {
+                                    *local
+                                        .lights
+                                        .entry(format!("reserved words {:x?}", l.reserved))
+                                        .or_default() += 1;
+                                }
+                            }
                             let mut dicts: Vec<TextureDictionary> = Vec::new();
                             for d in drawables {
                                 for sh in &d.shaders {
@@ -157,6 +186,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                         for (k, v) in local.presets {
                             *t.presets.entry(k).or_default() += v;
                         }
+                        for (k, v) in local.lights {
+                            *t.lights.entry(k).or_default() += v;
+                        }
                         if let Some(v) = other_layout {
                             *t.other_layout.entry((ext.to_string(), v)).or_default() += 1;
                         }
@@ -195,6 +227,7 @@ fn every_drawable_and_texture_dictionary_reads() {
     println!("not read, another version's layout: {:?}", t.other_layout);
     println!("unnamed shader names: {:?}", t.unnamed);
     println!("shaders by preset word: {:x?}", t.presets);
+    println!("light records: {:?}", t.lights);
     println!("vertex formats (semantic, code): {:?}", t.vertex_formats);
     println!("texture formats (code): {:?}", t.texture_formats);
     for (msg, (n, paths)) in &t.failures {
@@ -202,4 +235,10 @@ fn every_drawable_and_texture_dictionary_reads() {
     }
     assert!(t.failures.is_empty(), "{} failure kinds", t.failures.len());
     assert!(t.unnamed.is_empty(), "shader names without a name");
+    assert!(
+        t.lights
+            .keys()
+            .all(|k| k.ends_with(": point") || k.ends_with(": spot") || k.ends_with(": capsule")),
+        "light records outside the known kinds, not finite, or with reserved words set"
+    );
 }

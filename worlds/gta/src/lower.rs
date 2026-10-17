@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{
-    ColorSpace, Entity, LayeredMaterial, Mesh, Primitive, Semantic, Stream, TexRole, Texture, World,
+    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Primitive, Semantic, Stream, TexRole, Texture, World,
 };
 
 use crate::components::{GtaParam, GtaShader, GtaSources};
@@ -156,6 +156,10 @@ impl Pass for LowerGtaPbr {
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "gta.sources", "core.texture"]
     }
+    /// The meshes left with no primitive.
+    fn removes(&self) -> &[&'static str] {
+        &["core.mesh"]
+    }
     fn approximates(&self) -> &'static str {
         "alpha tested at 0.5 (the game's reference is a render state); specular intensity not carried (metal-rough \
          has no specular factor); normal and specular maps not lowered yet; water a blended flat colour"
@@ -177,6 +181,21 @@ impl Pass for LowerGtaPbr {
             });
             Ok(())
         })?;
+        // a mesh whose every primitive was dropped draws nothing: no mesh (a prototype's own mesh stays while it has
+        // other forms, which core.lods needs it for)
+        let emptied: Vec<Entity> = w
+            .iter::<Mesh>()
+            .filter(|(e, m)| m.primitives.is_empty() && w.has::<GtaSources>(*e))
+            .map(|(e, _)| e)
+            .filter(|e| w.get::<Lods>(*e).is_none_or(|l| l.forms.is_empty()))
+            .collect();
+        log.count(
+            "meshes left without primitives, removed (draw nothing)",
+            emptied.len() as u64,
+        );
+        for e in emptied {
+            w.remove::<Mesh>(e);
+        }
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
         for (&e, c) in &classes {
@@ -277,7 +296,8 @@ impl LowerGtaPbr {
 
 /// `gta-vertex-colours` (see the module documentation): on a primitive whose shader fades by vertex alpha
 /// ([`ShaderClass::vertex_alpha`]) and is blended (alpha, decal, glass), with some vertex alpha below 255, COLOR_0
-/// becomes (255, 255, 255, alpha); elsewhere it is dropped. COLOR_1 stays on primitives drawn with a layered material
+/// becomes (255, 255, 255, alpha); elsewhere it is dropped, except where `gta-tint` wrote the tint into it (kept,
+/// its alpha only where it fades). COLOR_1 stays on primitives drawn with a layered material
 /// (its layer weights) and is dropped elsewhere. Terrain primitives whose material is neither layered nor lowered are
 /// left as they are (`gta-terrain-layers` has not run). Counted: primitives whose COLOR_0 red or green (GTA's per-vertex ambient
 /// occlusion) is not all 255, which no PBR channel carries.
@@ -301,6 +321,9 @@ impl Pass for GtaVertexColours {
         let classes = classes(w)?;
         let layered: BTreeSet<Entity> = w.iter::<LayeredMaterial>().map(|(e, _)| e).collect();
         let lowered: BTreeSet<Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
+        let tinted: BTreeSet<Entity> = w
+            .resource::<crate::tint::GtaTinted>()
+            .map_or(BTreeSet::new(), |t| t.0.clone());
         for_each_mesh(w, |mesh, _| {
             for p in &mut mesh.primitives {
                 let Some(m) = p.material else { continue };
@@ -324,6 +347,19 @@ impl Pass for GtaVertexColours {
                         } else {
                             log.count("COLOR_0 dropped", 1);
                         }
+                    }
+                    // gta-tint's colour: kept, with the alpha only where it fades the surface
+                    Some(Stream::U16x4(mut v)) if tinted.contains(&m) => {
+                        let fades = c.vertex_alpha
+                            && matches!(c.class, Class::Alpha | Class::Decal | Class::Glass)
+                            && v.iter().any(|c| c[3] < 65535);
+                        if !fades {
+                            for c in &mut v {
+                                c[3] = 65535;
+                            }
+                        }
+                        p.streams.insert(Semantic::Color(0), Stream::U16x4(v));
+                        log.count("COLOR_0 kept as the tint", 1);
                     }
                     Some(_) => return Err("COLOR_0 not a u8 x 4 stream".into()),
                     None => {}

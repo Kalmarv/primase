@@ -29,8 +29,8 @@ use primase_core::{
 use primase_core::{LodForm, Lods};
 
 use crate::archive_set::ArchiveSet;
-use crate::components::{GtaArchetype, GtaDrawable, GtaParam, GtaShader, GtaSources};
-use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue};
+use crate::components::{GtaArchetype, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSources};
+use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights};
 use crate::gtxd::TextureParents;
 use crate::keys::Keys;
 use crate::le;
@@ -74,7 +74,7 @@ pub struct AssetReport {
 struct Ctx<'a> {
     set: &'a ArchiveSet,
     keys: &'a Keys,
-    parents: TextureParents,
+    parents: &'a TextureParents,
     /// Texture dictionaries by name hash (`None`: no live ytd of that name).
     dicts: BTreeMap<u32, Option<(String, TextureDictionary)>>,
     /// Texture entities by (dictionary key, texture name hash).
@@ -446,10 +446,133 @@ impl Ctx<'_> {
 
 /// Loads drawables and textures for every prototype a placement uses.
 pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<AssetReport> {
+    attach(w, set, keys, &TextureParents::read(set, keys)?)
+}
+
+/// What [`attach_lights`] did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LightsReport {
+    /// Prototypes whose drawable or fragment was read for its lights.
+    pub prototypes_read: usize,
+    /// Of those, the ones with lights, and their light records.
+    pub prototypes_with_lights: usize,
+    pub lights: usize,
+    /// Prototypes whose archetype names no live file or entry.
+    pub asset_missing: usize,
+}
+
+/// The light records ([`GtaLights`]) of every prototype in `w`, read from its live drawable, fragment or drawable
+/// dictionary entry without its geometry or textures. A writer that plans lights before it loads geometry (the web
+/// writer plans scene-wide) has them from the read world.
+pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<LightsReport> {
+    let mut report = LightsReport::default();
+    let decode = |f: crate::archive_set::FileRef| -> Result<crate::resource::Resource> {
+        let a = &set.install.archives[f.archive];
+        a.resource(&mut File::open(&a.file)?, f.entry, keys)
+    };
+    let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
+    // per prototype the file to read and, for a dictionary entry, its name; dictionaries are read once, below
+    let mut files: Vec<(Entity, &'static str, crate::archive_set::FileRef)> = Vec::new();
+    let mut entries: BTreeMap<u32, (crate::archive_set::FileRef, Vec<(Entity, u32)>)> = BTreeMap::new();
+    for (proto, a) in w.iter::<GtaArchetype>() {
+        match a.asset_type {
+            2 | 1 => {
+                let ext = if a.asset_type == 2 { "ydr" } else { "yft" };
+                match live(ext, a.asset_name) {
+                    Some(f) => files.push((proto, ext, f)),
+                    None => report.asset_missing += 1,
+                }
+            }
+            3 => match live("ydd", a.drawable_dictionary) {
+                Some(f) => entries
+                    .entry(a.drawable_dictionary)
+                    .or_insert_with(|| (f, Vec::new()))
+                    .1
+                    .push((proto, a.asset_name)),
+                None => report.asset_missing += 1,
+            },
+            _ => {}
+        }
+    }
+    // the reads are independent: spread them over the cores
+    let jobs: Vec<Job> = files
+        .into_iter()
+        .map(|(p, ext, f)| Job::One(p, ext, f))
+        .chain(entries.into_values().map(|(f, e)| Job::Dictionary(f, e)))
+        .collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let results: Vec<Result<Vec<ProtoLights>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| -> Result<Vec<ProtoLights>> {
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(job) = jobs.get(i) else { break };
+                        match job {
+                            Job::One(p, ext, f) => out.push((*p, resource_lights(&decode(*f)?, ext, 0)?)),
+                            Job::Dictionary(f, protos) => {
+                                let r = decode(*f)?;
+                                for (p, name) in protos {
+                                    out.push((*p, resource_lights(&r, "ydd", *name)?));
+                                }
+                            }
+                        }
+                    }
+                    Ok(out)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(invalid("lights", 0, "a reading thread panicked")))
+            })
+            .collect()
+    });
+    let mut all = Vec::new();
+    for r in results {
+        all.extend(r?);
+    }
+    all.sort_by_key(|(e, _)| *e);
+    for (proto, lights) in all {
+        report.prototypes_read += 1;
+        if !lights.is_empty() {
+            report.prototypes_with_lights += 1;
+            report.lights += lights.len();
+            w.insert(proto, GtaLights(lights));
+        }
+    }
+    Ok(report)
+}
+
+/// A prototype and the light records read for it.
+type ProtoLights = (Entity, Vec<crate::drawable::LightAttr>);
+
+/// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
+enum Job {
+    One(Entity, &'static str, crate::archive_set::FileRef),
+    Dictionary(crate::archive_set::FileRef, Vec<(Entity, u32)>),
+}
+
+/// [`attach_assets`] with the texture dictionary parents already read ([`TextureParents::read`]): a driver that loads a
+/// large region cell by cell reads them once.
+pub fn attach_assets_with(
+    w: &mut World,
+    set: &ArchiveSet,
+    keys: &Keys,
+    parents: &TextureParents,
+) -> Result<AssetReport> {
+    attach(w, set, keys, parents)
+}
+
+fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents) -> Result<AssetReport> {
     let mut ctx = Ctx {
         set,
         keys,
-        parents: TextureParents::read(set, keys)?,
+        parents,
         dicts: BTreeMap::new(),
         textures: BTreeMap::new(),
         ydds: BTreeMap::new(),

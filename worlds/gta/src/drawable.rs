@@ -185,6 +185,148 @@ pub struct Drawable {
     pub textures: Option<TextureDictionary>,
     /// Whether it has a skeleton (skeletons are not read yet).
     pub skeleton: bool,
+    /// Its light sources, in model space (a ydr's or ydd entry's own; a fragment's drawables carry none, the fragment
+    /// does).
+    pub lights: Vec<LightAttr>,
+}
+
+/// One light source as a drawable or fragment stores it (`CLightAttr`, 168 bytes), every field as stored. Positions
+/// and directions are in the model's space (a fragment's light by `bone_id`'s bone); colours are sRGB bytes.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LightAttr {
+    pub position: [f32; 3],
+    pub colour: [u8; 3],
+    pub flashiness: u8,
+    pub intensity: f32,
+    pub flags: u32,
+    pub bone_id: u16,
+    /// 1 point, 2 spot, 4 capsule.
+    pub kind: u8,
+    pub group_id: u8,
+    /// The hours it is on: bit h for hour h (the low 24 bits), higher bits as stored.
+    pub time_flags: u32,
+    pub falloff: f32,
+    pub falloff_exponent: f32,
+    /// Culling plane normal and offset.
+    pub culling_plane: [f32; 4],
+    pub shadow_blur: u8,
+    pub volume_intensity: f32,
+    pub volume_size_scale: f32,
+    pub volume_outer_colour: [u8; 3],
+    pub light_hash: u8,
+    pub volume_outer_intensity: f32,
+    pub corona_size: f32,
+    pub volume_outer_exponent: f32,
+    /// Light, shadow, specular and volumetric fade distances.
+    pub fade_distances: [u8; 4],
+    pub shadow_near_clip: f32,
+    pub corona_intensity: f32,
+    pub corona_z_bias: f32,
+    pub direction: [f32; 3],
+    pub tangent: [f32; 3],
+    pub cone_inner_angle: f32,
+    pub cone_outer_angle: f32,
+    /// A capsule's extent.
+    pub extent: [f32; 3],
+    pub projected_texture_hash: u32,
+    /// The words community tools know as always zero (0x00, 0x04, 0x14, 0x48, 0xA4) and the bytes at 0x45..0x48,
+    /// kept to see whether they ever are not.
+    pub reserved: [u32; 6],
+}
+
+impl LightAttr {
+    /// The record at the start of `d` (168 bytes).
+    fn read(d: &[u8]) -> LightAttr {
+        let b = |o: usize| d[o];
+        LightAttr {
+            position: le::vec3(d, 0x08),
+            colour: [b(0x18), b(0x19), b(0x1A)],
+            flashiness: b(0x1B),
+            intensity: le::f32(d, 0x1C),
+            flags: le::u32(d, 0x20),
+            bone_id: le::u16(d, 0x24),
+            kind: b(0x26),
+            group_id: b(0x27),
+            time_flags: le::u32(d, 0x28),
+            falloff: le::f32(d, 0x2C),
+            falloff_exponent: le::f32(d, 0x30),
+            culling_plane: le::vec4(d, 0x34),
+            shadow_blur: b(0x44),
+            volume_intensity: le::f32(d, 0x4C),
+            volume_size_scale: le::f32(d, 0x50),
+            volume_outer_colour: [b(0x54), b(0x55), b(0x56)],
+            light_hash: b(0x57),
+            volume_outer_intensity: le::f32(d, 0x58),
+            corona_size: le::f32(d, 0x5C),
+            volume_outer_exponent: le::f32(d, 0x60),
+            fade_distances: [b(0x64), b(0x65), b(0x66), b(0x67)],
+            shadow_near_clip: le::f32(d, 0x68),
+            corona_intensity: le::f32(d, 0x6C),
+            corona_z_bias: le::f32(d, 0x70),
+            direction: le::vec3(d, 0x74),
+            tangent: le::vec3(d, 0x80),
+            cone_inner_angle: le::f32(d, 0x8C),
+            cone_outer_angle: le::f32(d, 0x90),
+            extent: le::vec3(d, 0x94),
+            projected_texture_hash: le::u32(d, 0xA0),
+            reserved: [
+                le::u32(d, 0x00),
+                le::u32(d, 0x04),
+                le::u32(d, 0x14),
+                u32::from(b(0x45)) | u32::from(le::u16(d, 0x46)) << 8,
+                le::u32(d, 0x48),
+                le::u32(d, 0xA4),
+            ],
+        }
+    }
+}
+
+/// The light records of a resource's root without reading its drawables: a ydr's (list at 0xB0 of its gtaDrawable), a
+/// yft's (the fragment's list at 0x110), or a ydd entry's (`entry`: the name hash), after checking the resource's
+/// layout version. `kind`: `ydr`, `yft` or `ydd`.
+pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<LightAttr>> {
+    let want = if kind == "yft" { FRAGMENT_VERSION } else { VERSION };
+    if r.version != want {
+        return Err(err(
+            0,
+            format!("{kind}: resource version {}, Enhanced's is {want}", r.version),
+        ));
+    }
+    match kind {
+        "ydr" => read_lights(r, 0x5000_00B0),
+        "yft" => read_lights(r, 0x5000_0110),
+        "ydd" => {
+            let d = r.at(0x5000_0000, 0x40)?;
+            let hashes = pointer_list_u32(r, &d[0x20..0x30])?;
+            let ptrs = pointer_list(r, 0x5000_0030)?;
+            if hashes.len() != ptrs.len() {
+                return Err(err(
+                    0,
+                    format!("{} name hashes for {} drawables", hashes.len(), ptrs.len()),
+                ));
+            }
+            match hashes.iter().position(|&h| h == entry) {
+                Some(i) => read_lights(r, ptrs[i] + 0xB0),
+                None => Ok(Vec::new()),
+            }
+        }
+        _ => Err(err(0, format!("lights of a {kind}"))),
+    }
+}
+
+/// The light records of a list (pointer, count, capacity) at `at`.
+fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
+    let h = r.at(at, 16)?;
+    let (count, cap) = (le::u16(h, 8), le::u16(h, 10));
+    if cap < count {
+        return Err(err(at, format!("light list count {count} over capacity {cap}")));
+    }
+    let n = usize::from(count);
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let d = r.at(le::u64(h, 0), 168 * n)?;
+    Ok(d.chunks(168).map(LightAttr::read).collect())
 }
 
 /// The resource version of Enhanced's drawables (ydr).
@@ -202,7 +344,7 @@ impl Drawable {
                 ),
             ));
         }
-        Self::read(r, 0x5000_0000)
+        Self::read_gta(r, 0x5000_0000)
     }
 
     /// The drawable at `pointer` (`0x5000_0000` for a ydr's root).
@@ -242,7 +384,15 @@ impl Drawable {
             shaders,
             textures,
             skeleton: le::u64(d, 0x18) != 0,
+            lights: Vec::new(),
         })
+    }
+
+    /// A gtaDrawable (a ydr's root, a ydd's entry): the drawable and its light list at 0xB0.
+    fn read_gta(r: &Resource, pointer: u64) -> Result<Drawable> {
+        let mut d = Self::read(r, pointer)?;
+        d.lights = read_lights(r, pointer + 0xB0)?;
+        Ok(d)
     }
 }
 
@@ -524,12 +674,15 @@ pub struct Fragment {
     pub cloth: Option<Drawable>,
     /// The bones' pose, by bone index: three rows `[x, y, z, translation]` (`world = row . (p, 1)`).
     pub pose: Vec<[[f32; 4]; 3]>,
+    /// The fragment's light sources (list at 0x110), in the space of their bones.
+    pub lights: Vec<LightAttr>,
 }
 
 impl Fragment {
     /// A yft's fragment, after checking the resource is in Enhanced's layout. Layout: resource file header (16),
     /// bounding sphere 0x20, main drawable 0x30, extra drawables 0x38 with their names 0x40 and count 0x48, name
-    /// 0x58, bone pose 0xA8 (32-byte header with the count at 0x10, then 48 bytes per bone), cloth drawable 0xF8.
+    /// 0x58, bone pose 0xA8 (32-byte header with the count at 0x10, then 48 bytes per bone), cloth drawable 0xF8, light
+    /// list 0x110.
     pub fn read_resource(r: &Resource) -> Result<Fragment> {
         if r.version != FRAGMENT_VERSION {
             return Err(err(
@@ -589,6 +742,7 @@ impl Fragment {
             drawable: opt(le::u64(h, 0x30))?,
             extra,
             cloth: opt(le::u64(h, 0xF8))?,
+            lights: read_lights(r, 0x5000_0110)?,
         })
     }
 }
@@ -628,7 +782,7 @@ impl DrawableDictionary {
         }
         let drawables = ptrs
             .into_iter()
-            .map(|p| Drawable::read(r, p))
+            .map(|p| Drawable::read_gta(r, p))
             .collect::<Result<_>>()?;
         Ok(DrawableDictionary {
             hashes: hash_list,

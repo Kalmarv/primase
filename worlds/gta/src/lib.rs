@@ -6,17 +6,21 @@
 
 pub mod archive_set;
 pub mod assets;
+pub mod bounds;
+pub mod collision;
 pub mod components;
 pub mod drawable;
 pub mod gtxd;
 mod key_hashes;
 pub mod keys;
 mod le;
+pub mod lights;
 pub mod lower;
 pub mod map;
 pub mod meta;
 pub mod mount;
 pub mod ng;
+pub mod pipeline;
 mod rbf;
 pub mod region;
 pub mod resource;
@@ -60,4 +64,36 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
         offset,
         detail: detail.to_string(),
     }
+}
+
+/// Registers the GTA passes by name: `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
+/// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-leave-out-interiors`,
+/// `lower-gta-lights{hour,x0,y0,x1,y1}` and `lower-gta-collision{x0,y0,x1,y1}`.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    use primase_core::pass::{Options, Pass};
+    fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
+        match o.keys().next() {
+            Some(k) => Err(format!("unknown option {k}")),
+            None => Ok(Box::new(pass)),
+        }
+    }
+    reg.register("lower-gta-pbr", |o| {
+        Ok(Box::new(lower::LowerGtaPbr::from_options(o)?))
+    });
+    reg.register("gta-winding", |o| none(o, winding::GtaWinding));
+    reg.register("gta-tint", |o| none(o, tint::GtaTintVariants));
+    reg.register("gta-terrain-layers", |o| none(o, terrain::GtaTerrainLayers));
+    reg.register("gta-vertex-colours", |o| none(o, lower::GtaVertexColours));
+    reg.register("gta-select-region", |o| {
+        Ok(Box::new(select::SelectRegion::from_options(o)?))
+    });
+    reg.register("lower-gta-collision", |o| {
+        Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
+    });
+    reg.register("lower-gta-lights", |o| {
+        Ok(Box::new(lights::LowerGtaLights::from_options(o)?))
+    });
+    reg.register("gta-leave-out-interiors", |o| {
+        Ok(Box::new(pipeline::LeaveOutInteriors::from_options(o)?))
+    });
 }

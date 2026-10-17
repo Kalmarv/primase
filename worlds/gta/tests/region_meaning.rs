@@ -28,9 +28,11 @@
 //!
 //! Materials: the scene's are lowered by `lower-skate-pbr`. Each scene part is compared with our primitive of its
 //! geometry holding most of its triangles (by position; for a lifted decal by UV0 with the centroid within 2 cm), by
-//! meaning: base texture (its first level), flat base colour, alpha mode, sidedness, vertex alpha (COLOR_0 present),
-//! emission; a tinted part per tint row its placements use, the palette colour as that exporter quantised it (4 bits
-//! per channel, near-white none); a layered part by slot (null, or texture, alpha and sidedness), weights and every
+//! meaning: base texture (its first level), flat base colour, alpha mode, sidedness, vertex alpha (a COLOR_0 alpha
+//! below opaque: gta-tint's colour alone is opaque), emission; a tinted part per tint row its placements use, the
+//! palette colour as that exporter quantised it (4 bits per channel, near-white none) against ours at the first vertex
+//! of each of its triangles (that exporter coloured a triangle by its first vertex's column), the most common; a
+//! layered part by slot (null, or texture, alpha and sidedness), weights and every
 //! vertex's COLOR_1 (one step of 1/255). Roughness and metallic are the skate writer's class defaults on the scene's
 //! side and are not compared. Named classes, choices of that exporter or its skate writer: cutouts and foliage drawn
 //! two-sided (GTA's effect records turn culling off for cloth alone), foliage cut off at 0.33, its wood class drawn
@@ -38,7 +40,7 @@
 //! colour for a geometry with more than 8 palette colours. Any other difference fails the gate.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::Mesh;
 use primase_core::pbr::PbrMaterial;
@@ -610,11 +612,19 @@ fn region_placements_against_the_scene() {
     // same GTA geometry, by meaning
     let mut slog = primase_core::pass::PassLog::default();
     primase_core::pass::Pass::run(&LowerSkatePbr, &mut theirs, &mut slog).expect("lower-skate-pbr");
-    let by_name: BTreeMap<u32, primase_core::Entity> = drawn
-        .iter::<GtaArchetype>()
-        .filter(|(e, _)| drawn.has::<GtaDrawable>(*e))
-        .map(|(e, a)| (a.name, e))
-        .collect();
+    // per archetype our prototype (the first: gta-tint's copies for further tint rows come after), and per tint row
+    // the prototype drawn with it
+    let mut by_name: BTreeMap<u32, primase_core::Entity> = BTreeMap::new();
+    let mut by_row: BTreeMap<(u32, u32), primase_core::Entity> = BTreeMap::new();
+    for (e, a) in drawn.iter::<GtaArchetype>() {
+        if !drawn.has::<GtaDrawable>(e) {
+            continue;
+        }
+        by_name.entry(a.name).or_insert(e);
+        if let Some(t) = drawn.get::<GtaTint>(e) {
+            by_row.insert((a.name, t.row), e);
+        }
+    }
     let mut mat: BTreeMap<String, usize> = BTreeMap::new();
     let mut mat_examples: Vec<String> = Vec::new();
     for (e, _) in theirs.iter::<SkatePrototype>() {
@@ -728,38 +738,40 @@ fn region_placements_against_the_scene() {
                 )),
             }
             // tint: per tint row the scene placed, its colour against ours as that exporter quantised it (4 bits per
-            // channel, near-white none); a geometry with more than 8 palette colours it gave one mean colour
+            // channel, near-white none): ours is gta-tint's per-vertex colour, the most common at the scene part's
+            // vertices on our prototype of that row; a geometry with more than 8 palette colours it gave one mean
+            // colour
             let their_rows = theirs
                 .get::<primase_core::MaterialVariants>(e)
                 .and_then(|v| v.0.get(i))
                 .filter(|m| !m.is_empty());
-            let our_rows = drawn
-                .get::<primase_core::MaterialVariants>(oe)
-                .and_then(|v| v.0.get(at))
-                .filter(|m| !m.is_empty());
-            match (their_rows, our_rows) {
-                (Some(tv), Some(ov)) => {
+            let tinted = drawn
+                .resource::<primase_gta::tint::GtaTinted>()
+                .is_some_and(|t| t.0.contains(&om_e));
+            let archetype = primase_hash::joaat(name.to_lowercase().as_bytes());
+            match (their_rows, tinted) {
+                (Some(tv), true) => {
                     *mat.entry("tinted parts".into()).or_default() += 1;
                     for (row, tm) in tv {
                         let want = theirs.get::<SkateMaterial>(*tm).expect("skate material").tint;
-                        let Some(om_r) = ov.get(row) else {
-                            diffs.push("tint row missing".into());
-                            continue;
-                        };
-                        let got = drawn
-                            .get::<GtaTint>(*om_r)
-                            .map(|t| t.colour)
-                            .and_then(quantised_tint);
+                        let ours_e = by_row.get(&(archetype, *row)).copied().unwrap_or(oe);
+                        let tint = drawn
+                            .get::<Mesh>(ours_e)
+                            .and_then(|m| m.primitives.get(at))
+                            .map_or_else(Default::default, |op| tint_at(&their_mesh.primitives[i], op));
+                        let got = tint
+                            .colours
+                            .iter()
+                            .max_by_key(|&(_, n)| n)
+                            .and_then(|(c, _)| quantised_tint(*c));
                         if want != got {
-                            if cands.len() <= 8 {
+                            if tint.palette_colours <= 8 {
                                 println!(
-                                    "      tint {name} {g:?} row {row}: scene {want:?}, ours {:?} ({:?}), {} pieces",
-                                    got,
-                                    drawn.get::<GtaTint>(*om_r),
-                                    cands.len()
+                                    "      tint {name} {g:?} row {row}: scene {want:?}, ours {got:?} of {:?} ({} scene                                      triangles, {} palette colours)",
+                                    tint.colours, tint.triangles, tint.palette_colours
                                 );
                             }
-                            diffs.push(if cands.len() > 8 {
+                            diffs.push(if tint.palette_colours > 8 {
                                 "tint: that exporter's mean colour (more than 8 palette colours)".into()
                             } else {
                                 "tint colour".into()
@@ -768,7 +780,7 @@ fn region_placements_against_the_scene() {
                         }
                     }
                 }
-                (None, None) => {
+                (None, false) => {
                     if tp
                         .base_color
                         .iter()
@@ -778,7 +790,7 @@ fn region_placements_against_the_scene() {
                         diffs.push(format!("base colour factor ({class})"));
                     }
                 }
-                (t, o) => diffs.push(format!("tinted: scene {}, ours {}", t.is_some(), o.is_some())),
+                (t, o) => diffs.push(format!("tinted: scene {}, ours {o}", t.is_some())),
             }
             if tp.alpha_mode != ours_p.alpha_mode {
                 // that exporter drew a surface opaque when its probe found the texture without alpha
@@ -800,7 +812,12 @@ fn region_placements_against_the_scene() {
                     tp.double_sided, ours_p.double_sided
                 ));
             }
-            let faded = op.streams.contains_key(&primase_core::Semantic::Color(0));
+            // fading by vertex alpha: a COLOR_0 alpha below opaque (gta-tint's colour alone is opaque)
+            let faded = match op.streams.get(&primase_core::Semantic::Color(0)) {
+                Some(primase_core::Stream::U8x4(c)) => c.iter().any(|c| c[3] < 255),
+                Some(primase_core::Stream::U16x4(c)) => c.iter().any(|c| c[3] < 65535),
+                _ => false,
+            };
             if sm.vertex_alpha.unwrap_or(false) != faded {
                 diffs.push(format!(
                     "vertex alpha: scene {}, ours {faded}",
@@ -1003,6 +1020,81 @@ fn layered_diffs(
         (t, o) => diffs.push(format!("COLOR_1: scene {}, ours {}", t.is_some(), o.is_some())),
     }
     diffs
+}
+
+/// A triangle's UV0 corners (1e-4, sorted), as [`uv_tris`] keys it.
+type UvCorners = [[i64; 2]; 3];
+
+/// A scene part's tint as ours draws it ([`tint_at`]).
+#[derive(Default)]
+struct PartTint {
+    /// Per scene triangle matched, gta-tint's colour (sRGB bytes) at the first vertex of our triangle: that exporter
+    /// coloured a triangle by its first vertex's palette column. Counted.
+    colours: BTreeMap<[u8; 3], usize>,
+    /// The scene part's triangles, and the palette colours of our whole primitive (by its triangles' first vertices).
+    triangles: usize,
+    palette_colours: usize,
+}
+
+/// `theirs`' tint on `ours` (gta-tint's 16-bit linear COLOR_0): its triangles matched to ours by corner positions,
+/// else (a lifted decal) by UV corners with the centroid within 2 cm.
+fn tint_at(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> PartTint {
+    let mut out = PartTint::default();
+    let Some(primase_core::Stream::U16x4(c)) = ours.streams.get(&primase_core::Semantic::Color(0)) else {
+        return out;
+    };
+    let srgb =
+        |v: u32| [0, 1, 2].map(|j| primase_image::linear_to_srgb8(f64::from(c[v as usize][j]) / 65535.0));
+    let corners = |p: &primase_core::Primitive| -> Vec<[[i64; 3]; 3]> {
+        let pos = p.positions().expect("positions");
+        triangles(p)
+            .iter()
+            .map(|t| {
+                let mut k = t.map(|i| pos[i as usize].map(|v| (f64::from(v) * 1e4).round() as i64));
+                k.sort();
+                k
+            })
+            .collect()
+    };
+    let ours_tris = triangles(ours);
+    let by_corners: BTreeMap<[[i64; 3]; 3], u32> = corners(ours)
+        .into_iter()
+        .zip(ours_tris.iter().map(|t| t[0]))
+        .collect();
+    // per UV corners, our triangles' centroids and first vertices
+    let mut by_uv: BTreeMap<UvCorners, Vec<([f64; 3], u32)>> = BTreeMap::new();
+    for ((uv, centre), t) in uv_tris(ours).into_iter().zip(&ours_tris) {
+        by_uv.entry(uv).or_default().push((centre, t[0]));
+    }
+    out.palette_colours = ours_tris
+        .iter()
+        .map(|t| srgb(t[0]))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let their_uv = uv_tris(theirs);
+    for (k, key) in corners(theirs).into_iter().enumerate() {
+        out.triangles += 1;
+        let first = by_corners.get(&key).copied().or_else(|| {
+            let (uv, centre) = their_uv.get(k)?;
+            by_uv
+                .get(uv)?
+                .iter()
+                .find_map(|(o, v)| (dot(sub(*o, *centre), sub(*o, *centre)) <= 0.02 * 0.02).then_some(*v))
+        });
+        if let Some(v) = first {
+            *out.colours.entry(srgb(v)).or_default() += 1;
+        }
+    }
+    out
+}
+
+/// A primitive's triangles' indices, in order.
+fn triangles(p: &primase_core::Primitive) -> Vec<[u32; 3]> {
+    let idx: Vec<u32> = p
+        .indices
+        .clone()
+        .unwrap_or_else(|| (0..p.vertex_count() as u32).collect());
+    idx.as_chunks::<3>().0.to_vec()
 }
 
 /// A palette colour as that exporter wrote it as a material tint: 4 bits per channel (low bits 8), near-white none.

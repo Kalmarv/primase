@@ -1,40 +1,33 @@
-//! `gta-tint`: GTA's tint palettes as material variants.
+//! `gta-tint`: GTA's tint palettes, as the game draws them.
 //!
 //! A `_tnt` shader's vertex shader colours every vertex from its palette texture (`TintPaletteTex`, point sampled):
 //! the column at u = vertex colour blue / 255 (the second vertex colour's for three tree effects,
-//! [`crate::shader_class::TintColumn`]), the row the entity's tint. A tinted primitive becomes one primitive per
-//! palette colour it uses, each with a material per tint row its placements use: its `pbr.material` with the base
-//! colour factor multiplied by the palette colour (sRGB bytes, multiplied in linear light), in `core.material_variants`
-//! under the row; the primitive's own material is row 0's. Columns that give the same colour in every row share one
-//! primitive. A triangle goes with its first vertex's column. Placements of a prototype with variants get their tint as
-//! their variant (a tint past the palette's last row takes the last, as the shader's clamped sampling does).
+//! [`crate::shader_class::TintColumn`]), the row the entity's tint (a tint past the palette's last row takes the last,
+//! as the shader's clamped sampling does), and the colour multiplies the surface; across a triangle it is interpolated
+//! between its vertices. The pass writes that colour into each tinted primitive's COLOR_0 (linear RGB as 16-bit
+//! normalised, which glTF multiplies into the base colour; the alpha kept), per tint row: a prototype whose placements
+//! use more than one row gets a copy per further row ([`World::copy_components`], its `core.lods` forms copied with
+//! it), its placements moved to their row's prototype, and every tinted prototype says its row in a `gta.tint`. The
+//! size this costs (prototypes and vertices copied) is counted.
 //!
-//! Every drawable mesh is tinted: a prototype's own and each of its `core.lods` forms, each with its own
-//! `core.material_variants` (rows from the placements of the prototype it belongs to), so a form `select-lod` draws keeps
-//! its variants. Runs after `lower-gta-pbr` (it tints that pass's materials) and before `gta-vertex-colours` (it reads
-//! the blue channel that pass drops). Variant materials carry the shader's `gta.shader` and a `gta.tint`.
+//! Runs after `lower-gta-pbr` and before `gta-vertex-colours`: it reads the blue channel that pass drops, and that pass
+//! keeps the colour written here (the `gta.tinted` resource lists the materials whose primitives it wrote).
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{
-    Component, Entity, Instance, JsonError, Lods, MaterialVariants, Mesh, Semantic, Stream, Texture, World,
-};
-use primase_meshops::subset_primitive;
+use primase_core::{Component, Entity, Instance, JsonError, Lods, Mesh, Semantic, Stream, Texture, World};
 use primase_texcodec::{Decoder, TexDecoder};
 use serde::Serialize;
 
-use crate::components::{GtaEntity, GtaShader, GtaSources};
+use crate::components::{GtaEntity, GtaShader};
 use crate::lower::{classes, texture};
 use crate::shader_class::TintColumn;
 
-/// A variant material's tint: the palette texture, row and column, and the colour (sRGB bytes).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// The tint row a tinted prototype is drawn with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GtaTint {
-    pub palette: Entity,
     pub row: u32,
-    pub column: u32,
-    pub colour: [u8; 3],
 }
 
 impl Component for GtaTint {
@@ -42,14 +35,22 @@ impl Component for GtaTint {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
-    fn references(&self, out: &mut Vec<Entity>) {
-        out.push(self.palette);
+}
+
+/// The materials whose primitives `gta-tint` wrote the palette colour into (their COLOR_0 is a tint, not GTA's
+/// ambient occlusion and palette index).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GtaTinted(pub BTreeSet<Entity>);
+
+impl primase_core::Resource for GtaTinted {
+    const NAME: &'static str = "gta.tinted";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
     }
 }
 
 /// A decoded palette: width, height (both at least 1), RGBA8 rows top first.
 struct Palette {
-    entity: Entity,
     width: u32,
     height: u32,
     rgba: Vec<u8>,
@@ -72,7 +73,6 @@ impl Palette {
             return Err(format!("palette {entity:?}: decoded to {} bytes", rgba.len()));
         }
         Ok(Palette {
-            entity,
             width: t.width,
             height: t.height,
             rgba,
@@ -95,21 +95,69 @@ impl Palette {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GtaTintVariants;
 
+/// sRGB byte to linear, as 16-bit normalised.
+fn linear16(c: u8) -> u16 {
+    (primase_image::srgb_to_linear(f64::from(c) / 255.0) * 65535.0).round() as u16
+}
+
+/// `mesh`'s tinted primitives coloured for `row`.
+fn tint_mesh(
+    mesh: &mut Mesh,
+    row: u32,
+    palettes: &BTreeMap<Entity, (Palette, TintColumn)>,
+    log: &mut PassLog,
+) {
+    for p in &mut mesh.primitives {
+        let Some((palette, column)) = p.material.and_then(|m| palettes.get(&m)) else {
+            continue;
+        };
+        let semantic = match column {
+            TintColumn::Color0 => Semantic::Color(0),
+            TintColumn::Color1 => Semantic::Color(1),
+        };
+        let Some(Stream::U8x4(index)) = p.streams.get(&semantic) else {
+            log.count(
+                "tinted primitives without their palette column's vertex colour: untinted",
+                1,
+            );
+            continue;
+        };
+        let alpha: Vec<u16> = match p.streams.get(&Semantic::Color(0)) {
+            Some(Stream::U8x4(c)) if c.len() == index.len() => {
+                c.iter().map(|c| u16::from(c[3]) * 257).collect()
+            }
+            _ => vec![65535; index.len()],
+        };
+        let colours: Vec<[u16; 4]> = index
+            .iter()
+            .zip(&alpha)
+            .map(|(c, &a)| {
+                let [r, g, b] = palette.colour(row, palette.column(c[2]));
+                [linear16(r), linear16(g), linear16(b), a]
+            })
+            .collect();
+        p.streams.insert(Semantic::Color(0), Stream::U16x4(colours));
+        log.count("tinted primitives", 1);
+    }
+}
+
+fn vertices(m: Option<&Mesh>) -> u64 {
+    m.map_or(0, |m| m.primitives.iter().map(|p| p.vertex_count() as u64).sum())
+}
+
 impl Pass for GtaTintVariants {
     fn name(&self) -> &'static str {
         "gta-tint"
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.sources", "pbr.material"]
+        // not pbr.material: a world without lowered materials (a cell whose shaders all draw nothing) is left as it is
+        &["gta.shader", "gta.sources"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["core.material_variants", "gta.tint", "pbr.material", "gta.shader"]
+        &["gta.tint"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.sources", "core.instance"]
-    }
-    fn approximates(&self) -> &'static str {
-        "a triangle whose vertices pick different palette columns is coloured by its first vertex's"
+        &["core.mesh", "core.instance"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -128,143 +176,73 @@ impl Pass for GtaTintVariants {
             let t = w.get::<Texture>(p).ok_or("palette is not a loaded texture")?;
             palettes.insert(m, (Palette::decode(p, t)?, column));
         }
-        // the tint rows each prototype is placed with
-        let mut rows: BTreeMap<Entity, BTreeSet<u32>> = BTreeMap::new();
+        if palettes.is_empty() {
+            return Ok(());
+        }
+        // per prototype, its placements by tint row
+        let mut rows: BTreeMap<Entity, BTreeMap<u32, Vec<Entity>>> = BTreeMap::new();
         for (e, i) in w.iter::<Instance>() {
             let tint = w.get::<GtaEntity>(e).map_or(0, |g| g.tint_value);
-            rows.entry(i.prototype).or_default().insert(tint);
+            rows.entry(i.prototype)
+                .or_default()
+                .entry(tint)
+                .or_default()
+                .push(e);
         }
-        let mut made: BTreeMap<(Entity, u32, u32), Entity> = BTreeMap::new();
-        let mut tinted_prototypes = BTreeSet::new();
-        // every drawable mesh, with the prototype it belongs to (itself, or the prototype whose form it is)
-        let mut owner: BTreeMap<Entity, Entity> = BTreeMap::new();
-        for (p, l) in w.iter::<Lods>() {
-            owner.extend(l.forms.iter().map(|f| (f.form, p)));
-        }
-        let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
-        for e in holders {
-            let proto = owner.get(&e).copied().unwrap_or(e);
-            let Some(mesh) = w.get::<Mesh>(e) else { continue };
-            if !mesh
-                .primitives
-                .iter()
-                .any(|p| p.material.is_some_and(|m| palettes.contains_key(&m)))
-            {
+        let tinted_mesh = |w: &World, e: Entity| {
+            w.get::<Mesh>(e).is_some_and(|m| {
+                m.primitives
+                    .iter()
+                    .any(|p| p.material.is_some_and(|m| palettes.contains_key(&m)))
+            })
+        };
+        let (mut copies, mut copied_vertices) = (0u64, 0u64);
+        for (proto, by_row) in rows {
+            let forms = |w: &World, e: Entity| -> Vec<Entity> {
+                w.get::<Lods>(e)
+                    .map_or(Vec::new(), |l| l.forms.iter().map(|f| f.form).collect())
+            };
+            if !tinted_mesh(w, proto) && !forms(w, proto).iter().any(|&f| tinted_mesh(w, f)) {
                 continue;
             }
-            let mut mesh = w.remove::<Mesh>(e).expect("mesh");
-            let mut d = w.remove::<GtaSources>(e).expect("sources");
-            let mut variants = w.remove::<MaterialVariants>(e).unwrap_or_default().0;
-            variants.resize(mesh.primitives.len(), BTreeMap::new());
-            let used: BTreeSet<u32> = rows
-                .get(&proto)
-                .into_iter()
-                .flatten()
-                .copied()
-                .chain([0])
-                .collect();
-            let (mut prims, mut sources, mut vars) = (Vec::new(), Vec::new(), Vec::new());
-            for ((p, s), v) in mesh.primitives.drain(..).zip(d.sources.drain(..)).zip(variants) {
-                let Some((palette, column)) = p.material.and_then(|m| palettes.get(&m)) else {
-                    prims.push(p);
-                    sources.push(s);
-                    vars.push(v);
-                    continue;
-                };
-                let base = p.material.expect("material");
-                let semantic = match column {
-                    TintColumn::Color0 => Semantic::Color(0),
-                    TintColumn::Color1 => Semantic::Color(1),
-                };
-                let Some(Stream::U8x4(colours)) = p.streams.get(&semantic) else {
-                    log.count(
-                        "tinted primitives without their palette column's vertex colour: untinted",
-                        1,
-                    );
-                    prims.push(p);
-                    sources.push(s);
-                    vars.push(v);
-                    continue;
-                };
-                // columns with the same colour in every row are one
-                let signature =
-                    |c: u32| -> Vec<[u8; 3]> { (0..palette.height).map(|r| palette.colour(r, c)).collect() };
-                let mut first_of: BTreeMap<Vec<[u8; 3]>, u32> = BTreeMap::new();
-                let mut key = |c: u32| *first_of.entry(signature(c)).or_insert(c);
-                let column_of: Vec<u32> = colours.iter().map(|c| palette.column(c[2])).collect();
-                let idx: Vec<u32> = p
-                    .indices
-                    .clone()
-                    .unwrap_or_else(|| (0..p.vertex_count() as u32).collect());
-                let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-                for t in idx.as_chunks::<3>().0 {
-                    let mut cols = [0; 3];
-                    for (c, &i) in cols.iter_mut().zip(t) {
-                        *c = *column_of.get(i as usize).ok_or_else(|| {
-                            format!(
-                                "tinted primitive: index {i} of {} vertex colours",
-                                column_of.len()
-                            )
-                        })?;
+            for (k, (&row, placements)) in by_row.iter().enumerate() {
+                // the first row keeps the prototype; every further row gets a copy, its forms copied with it
+                let target = if k == 0 {
+                    proto
+                } else {
+                    let copy = w.spawn();
+                    w.copy_components(proto, copy);
+                    if let Some(mut lods) = w.get::<Lods>(copy).cloned() {
+                        for f in &mut lods.forms {
+                            let fc = w.spawn();
+                            w.copy_components(f.form, fc);
+                            copied_vertices += vertices(w.get::<Mesh>(fc));
+                            f.form = fc;
+                        }
+                        w.insert(copy, lods);
                     }
-                    if cols[1] != cols[0] || cols[2] != cols[0] {
-                        log.approximate("triangles whose vertices pick different palette columns", 1);
+                    copies += 1;
+                    copied_vertices += vertices(w.get::<Mesh>(copy));
+                    for &e in placements {
+                        w.get_mut::<Instance>(e).expect("instance").prototype = copy;
                     }
-                    groups.entry(key(cols[0])).or_default().extend_from_slice(t);
+                    copy
+                };
+                for h in std::iter::once(target).chain(forms(w, target)) {
+                    if let Some(mut mesh) = w.remove::<Mesh>(h) {
+                        tint_mesh(&mut mesh, row, &palettes, log);
+                        w.insert(h, mesh);
+                    }
                 }
-                log.count("tinted primitives", 1);
-                log.count("primitives made, one per palette colour", groups.len() as u64);
-                for (c, tris) in groups {
-                    let mut q = subset_primitive(&p, &tris).map_err(|e| format!("tinted primitive: {e}"))?;
-                    let mut map = BTreeMap::new();
-                    for &row in &used {
-                        let colour = palette.colour(row, c);
-                        let row_key = row.min(palette.height - 1);
-                        let m = *made.entry((base, row_key, c)).or_insert_with(|| {
-                            let mut pbr = w.get::<PbrMaterial>(base).expect("pbr").clone();
-                            for (f, b) in pbr.base_color.iter_mut().zip(colour) {
-                                *f *= primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
-                            }
-                            let shader = w.get::<GtaShader>(base).expect("shader").clone();
-                            let m = w.spawn();
-                            w.insert(m, pbr);
-                            w.insert(m, shader);
-                            w.insert(
-                                m,
-                                GtaTint {
-                                    palette: palette.entity,
-                                    row: row_key,
-                                    column: c,
-                                    colour,
-                                },
-                            );
-                            m
-                        });
-                        map.insert(row, m);
-                    }
-                    q.material = map.get(&0).copied();
-                    prims.push(q);
-                    sources.push(s);
-                    vars.push(map);
-                }
+                w.insert(target, GtaTint { row });
+                log.count("tinted prototypes (one per tint row)", 1);
             }
-            mesh.primitives = prims;
-            d.sources = sources;
-            w.insert(e, mesh);
-            w.insert(e, d);
-            w.insert(e, MaterialVariants(vars));
-            tinted_prototypes.insert(proto);
         }
-        log.count("variant materials", made.len() as u64);
-        let placements: Vec<(Entity, u32)> = w
-            .iter::<Instance>()
-            .filter(|(_, i)| tinted_prototypes.contains(&i.prototype))
-            .map(|(e, _)| (e, w.get::<GtaEntity>(e).map_or(0, |g| g.tint_value)))
-            .collect();
-        for (e, tint) in placements {
-            w.get_mut::<Instance>(e).expect("instance").variant = tint;
-            log.count("placements given their tint as variant", 1);
-        }
+        log.count("prototypes copied for a further tint row", copies);
+        log.count("vertices copied for a further tint row", copied_vertices);
+        let mut tinted = w.remove_resource::<GtaTinted>().unwrap_or_default();
+        tinted.0.extend(palettes.keys().copied());
+        w.insert_resource(tinted);
         Ok(())
     }
 }

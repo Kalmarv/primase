@@ -156,42 +156,6 @@ reason = "raise-skate is a function, not yet a declared pass"
 removed_when = "it runs as a declared pass"
 
 [[pass]]
-file = "worlds/gta/src/lower.rs"
-what = "pass gta-vertex-colours is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
-file = "worlds/gta/src/lower.rs"
-what = "pass lower-gta-pbr is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
-file = "worlds/gta/src/select.rs"
-what = "pass gta-select-region is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
-file = "worlds/gta/src/terrain.rs"
-what = "pass gta-terrain-layers is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
-file = "worlds/gta/src/tint.rs"
-what = "pass gta-tint is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
-file = "worlds/gta/src/winding.rs"
-what = "pass gta-winding is not registered"
-reason = "worlds/gta has no register() yet"
-removed_when = "worlds/gta exports register()"
-
-[[pass]]
 file = "worlds/reskate/src/layered.rs"
 what = "pass lower-layered-reskate is not registered"
 reason = "worlds/reskate has no register() yet"
@@ -256,6 +220,11 @@ reason = "the GTA reader opens the install's archives"
 file = "worlds/gta/src/assets.rs"
 role = "reader I/O"
 reason = "the GTA reader loads drawables and textures"
+
+[[io]]
+file = "worlds/gta/src/collision.rs"
+role = "reader I/O"
+reason = "the GTA reader reads the map's collision files"
 
 [[io]]
 file = "worlds/gta/src/gtxd.rs"

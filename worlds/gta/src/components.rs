@@ -223,3 +223,26 @@ impl Component for GtaSources {
         Ok(())
     }
 }
+
+/// A prototype's light sources as its drawable or fragment stores them (model space), every record raw.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaLights(pub Vec<crate::drawable::LightAttr>);
+
+impl Component for GtaLights {
+    const NAME: &'static str = "gta.lights";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// A placed light's record as its drawable or fragment stores it (on the entity `lower-gta-lights` made for it): its
+/// hours, flashiness, volume and corona fields stay here for writers that use them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaLight(pub crate::drawable::LightAttr);
+
+impl Component for GtaLight {
+    const NAME: &'static str = "gta.light";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
