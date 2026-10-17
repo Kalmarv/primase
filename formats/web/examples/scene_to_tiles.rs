@@ -1,20 +1,20 @@
-//! Export a scene folder as web tiles and (unless `--no-plain`) a plain comparison set, one cell at a time: each cell's closure of the
-//! scene is loaded, lowered and written, then dropped, so memory holds one cell and the index.
+//! Export a scene folder as web tiles and (unless `--no-plain`) a plain comparison set, one cell at a time: each
+//! cell's closure of the scene is loaded, lowered and written, then dropped, so memory holds one cell and the index.
 // a path of its own, so a test can include this driver as a module (formats/web/tests/scene_to_tiles.rs)
 #[path = "support/mod.rs"]
 mod support;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::{Entity, Instance, MeshFile, Name, Transform, World};
+use primase_core::{Entity, Instance, MeshFile, Name, World};
 use primase_skate_scene::{SkateGrindCurve, SkateMarker, SkatePlacement};
-use primase_web::{Options, TilePlan, ViewerItem};
-use std::collections::BTreeMap;
+use primase_web::{LocalBox, Options, PIVOT_MARGIN, ViewerItem};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain]";
 
 /// A prototype file mesh's local box, from its POSITION accessors' `min` and `max` (glTF requires them), reading only
 /// the GLB's JSON chunk; `None` for a mesh without positions.
-fn local_box(folder: &Path, f: &MeshFile) -> Result<Option<[[f64; 3]; 2]>, Box<dyn std::error::Error>> {
+fn local_box(folder: &Path, f: &MeshFile) -> Result<Option<LocalBox>, Box<dyn std::error::Error>> {
     let path = folder.join(&f.path);
     let mut file = std::fs::File::open(&path)?;
     let mut head = [0u8; 20];
@@ -42,93 +42,15 @@ fn local_box(folder: &Path, f: &MeshFile) -> Result<Option<[[f64; 3]; 2]>, Box<d
     Ok(b[0][0].is_finite().then_some(b))
 }
 
-/// How far a pivot may lie outside its placement's own world-space box before the pivot is taken to say nothing about
-/// where the geometry is.
-const PIVOT_MARGIN: f64 = 1.0;
-
-/// Placements whose pivot does not locate their geometry, to be filed by triangle centre, and the counts behind them.
-#[derive(Default)]
-struct Spans {
-    /// (a) or (b): the placements to split.
-    marked: Vec<Entity>,
-    measured: usize,
-    /// Any part of the world box in another cell than another part (the broad rule, reported only).
-    straddling: usize,
-    /// (a) The world box's extent on a ground axis exceeds the cell size.
-    wider_than_a_cell: usize,
-    /// (b) The pivot lies more than [`PIVOT_MARGIN`] outside the world box (geometry in world space, placed at the
-    /// origin).
-    pivot_outside: usize,
-}
-
-/// Placements whose world-space geometry box, from their prototype GLB's POSITION bounds through their transform, is
-/// wider than a cell on a ground axis, or does not contain their pivot: pivot filing would give one cell all of a
-/// model placed at the origin with world-space vertices. A small prop across a cell edge meets neither and keeps its
-/// pivot filing and instancing.
-fn spanning(world: &World, folder: &Path, tile_size: f64) -> Result<Spans, Box<dyn std::error::Error>> {
-    let axes = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]].map(primase_core::frame::ground);
-    let ground = |p: [f64; 3]| -> [f64; 2] {
-        std::array::from_fn(|k| (0..3).map(|i| p[i] * axes[i][k] as f64).sum::<f64>())
-    };
-    let mut boxes = BTreeMap::<(PathBuf, u32), Option<[[f64; 3]; 2]>>::new();
-    let mut spans = Spans::default();
-    for (e, i) in world.iter::<Instance>() {
-        let (Some(f), Some(t)) = (world.get::<MeshFile>(i.prototype), world.get::<Transform>(e)) else {
-            continue;
-        };
-        let key = (f.path.clone(), f.mesh);
-        let b = match boxes.get(&key) {
-            Some(b) => *b,
-            None => {
-                let b = local_box(folder, f)?;
-                boxes.insert(key, b);
-                b
-            }
-        };
-        let Some(b) = b else { continue };
-        spans.measured += 1;
-        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        let (mut glo, mut ghi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for corner in 0..8 {
-            let local: [f64; 3] = std::array::from_fn(|k| b[(corner >> k) & 1][k]);
-            let p: [f64; 3] = std::array::from_fn(|r| {
-                f64::from(t.cols[3][r]) + (0..3).map(|c| f64::from(t.cols[c][r]) * local[c]).sum::<f64>()
-            });
-            let g = ground(p);
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
-            for k in 0..2 {
-                glo[k] = glo[k].min(g[k]);
-                ghi[k] = ghi[k].max(g[k]);
-            }
-        }
-        let cells = |v: f64| (v / tile_size).floor();
-        if (0..2).any(|k| cells(glo[k]) != cells(ghi[k])) {
-            spans.straddling += 1;
-        }
-        let wide = (0..2).any(|k| ghi[k] - glo[k] > tile_size);
-        let pivot = t.cols[3].map(f64::from);
-        let outside = (0..3).any(|k| pivot[k] < lo[k] - PIVOT_MARGIN || pivot[k] > hi[k] + PIVOT_MARGIN);
-        spans.wider_than_a_cell += usize::from(wide);
-        spans.pivot_outside += usize::from(outside);
-        if wide || outside {
-            spans.marked.push(e);
-        }
-    }
-    Ok(spans)
-}
-
-/// `world`'s closure of `roots` with its meshes loaded, and (`render`) its textures loaded and the materials lowered
-/// as the web writer requires.
+/// `world`'s closure of `roots` with its meshes loaded, and (for rendering) its textures loaded and the materials
+/// lowered as the web writer requires.
 fn prepare(
     world: &World,
-    roots: impl IntoIterator<Item = Entity>,
+    roots: &BTreeSet<Entity>,
     folder: &Path,
     render: bool,
 ) -> Result<World, Box<dyn std::error::Error>> {
-    let mut w = world.subset(&world.closure(roots));
+    let mut w = world.subset(&world.closure(roots.iter().copied()));
     primase_gltf::load_mesh_files(&mut w, folder)?;
     if render {
         primase_image::load_textures(&mut w, folder)?;
@@ -190,8 +112,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             println!("{}: {:?}", step.pass, step.log.counts);
         }
     }
-    // lights are planned from the whole scene, like viewer records, not loaded per cell
+    // lights are planned from the whole scene, like viewer records, not loaded per cell; every scene light must be
+    // lowered (the writer then checks each planned light reaches a tile)
     primase_skate_scene::LowerSkateLights.run(&mut world, &mut PassLog::default())?;
+    let (scene_lights, lowered) = (
+        world.iter::<primase_skate_scene::SkateLight>().count(),
+        world.iter::<primase_core::Light>().count(),
+    );
+    if lowered != scene_lights {
+        return Err(format!("{lowered} lights lowered of the scene's {scene_lights}").into());
+    }
     let mut options = Options {
         base_dir: folder.into(),
         ..Default::default()
@@ -213,22 +143,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         .iter::<SkatePlacement>()
         .filter_map(|(e, p)| p.split_by_tile.then_some(e))
         .collect();
-    // a placement whose pivot does not locate its geometry is filed by triangle centre
-    let spans = spanning(&world, folder, options.tile_size)?;
-    let marked = spans
-        .marked
-        .iter()
-        .filter(|e| options.split_by_tile.insert(**e))
-        .count();
-    println!(
-        "placements filed by triangle centre as their pivot does not locate them: {marked} (wider than a cell {}, pivot over {PIVOT_MARGIN} m outside their box {}, either {}, already split by the scene {}; straddling a cell edge {}; of {} measured)",
-        spans.wider_than_a_cell,
-        spans.pivot_outside,
-        spans.marked.len(),
-        spans.marked.len() - marked,
-        spans.straddling,
-        spans.measured
-    );
     let name = |e| {
         world
             .get::<Name>(e)
@@ -270,25 +184,60 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         ktx2: false,
         ..options.clone()
     };
-    let plain_output = output.join("plain");
-    let mut plans: Vec<(TilePlan, &Path)> = vec![(primase_web::plan(&world, &options)?, output)];
+    let mut sets = vec![(options, output.to_path_buf())];
     if with_plain {
-        plans.push((primase_web::plan(&world, &plain_options)?, &plain_output));
+        sets.push((plain_options, output.join("plain")));
     }
+    // plan: prototype boxes from the GLB headers, placements whose pivot does not locate them filed by triangle centre
+    let mut boxes = BTreeMap::new();
+    for (_, i) in world.iter::<Instance>() {
+        if let std::collections::btree_map::Entry::Vacant(v) = boxes.entry(i.prototype) {
+            v.insert(match world.get::<MeshFile>(i.prototype) {
+                Some(f) => local_box(folder, f)?,
+                None => None,
+            });
+        }
+    }
+    let spans = primase_web::spanning(&world, sets[0].0.tile_size, |p| {
+        Ok(boxes.get(&p).copied().flatten())
+    })?;
+    let mut plans = Vec::new();
+    let mut marked = 0;
+    for (k, (options, out)) in sets.iter().enumerate() {
+        let mut options = options.clone();
+        let before = options.split_by_tile.len();
+        options.split_by_tile.extend(spans.marked.iter().copied());
+        if k == 0 {
+            marked = options.split_by_tile.len() - before;
+        }
+        let geometry = |p: Entity| boxes.get(&p).is_some_and(Option::is_some);
+        plans.push((primase_web::plan_with_geometry(&world, &options, &geometry)?, out));
+    }
+    println!(
+        "placements filed by triangle centre as their pivot does not locate them: {marked} (wider than a cell {}, pivot over {PIVOT_MARGIN} m outside their box {}, either {}, already split by the scene {}; straddling a cell edge {}; of {} measured)",
+        spans.wider_than_a_cell,
+        spans.pivot_outside,
+        spans.marked.len(),
+        spans.marked.len() - marked,
+        spans.straddling,
+        spans.measured
+    );
     for e in plans[0].0.unsplit() {
-        let w = prepare(&world, [e], folder, false)?;
+        let proto = world.get::<Instance>(e).map_or(e, |i| i.prototype);
+        let w = prepare(&world, &BTreeSet::from([e, proto]), folder, false)?;
         for (plan, _) in &mut plans {
             plan.split(&w, e)?;
         }
     }
-    let (mut proof, mut bytes) = (BTreeMap::new(), [0usize; 2]);
+    // each cell loaded once, written by every set, dropped
+    let (mut proof, mut bytes) = (BTreeMap::new(), vec![0usize; plans.len()]);
     for cell in plans[0].0.cells() {
-        let mut w = prepare(&world, plans[0].0.roots(cell), folder, true)?;
-        for (i, (plan, out)) in plans.iter_mut().enumerate() {
-            for tile in plan.write_cell(cell, &mut w)? {
+        let w = prepare(&world, &plans[0].0.roots(cell), folder, true)?;
+        for (k, (plan, out)) in plans.iter_mut().enumerate() {
+            for tile in plan.write_cell(cell, &w)? {
                 tile.write_to(out)?;
-                bytes[i] += tile.bytes.len();
-                if i == 0 {
+                bytes[k] += tile.bytes.len();
+                if k == 0 {
                     proof.insert(
                         (tile.info.col, tile.info.row, tile.info.cell),
                         support::tile_proof(&tile.info.file, &tile.bytes)?,
@@ -313,18 +262,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         indexes.push(index);
     }
     support::write_entries(&proof.into_values().collect::<Vec<_>>(), output)?;
-    // every light the scene has (all lowered above, or the lowering failed) is written into its cell's tile
-    let lights = world.iter::<primase_skate_scene::SkateLight>().count() as u64;
-    for (index, out) in indexes.iter().zip([output, plain_output.as_path()]) {
-        let written = index.tiles.iter().map(|t| t.lights).sum::<u64>();
-        if written != lights {
-            return Err(format!(
-                "{}: {written} lights written of the scene's {lights}",
-                out.display()
-            )
-            .into());
-        }
-    }
     let index = &indexes[0];
     println!(
         "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={}{}",
@@ -332,7 +269,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         index.tiles.iter().map(|t| t.triangles).sum::<u64>(),
         index.tiles.iter().map(|t| t.placements).sum::<u64>(),
         index.tiles.iter().map(|t| t.instanced_placements).sum::<u64>(),
-        options.viewer_items.len(),
+        sets[0].0.viewer_items.len(),
         index.tiles.iter().map(|t| t.lights).sum::<u64>(),
         bytes[0],
         if with_plain {

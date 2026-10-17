@@ -82,6 +82,7 @@ fn main() -> Result<(), BoxError> {
         base_dir: folder.clone(),
         include_unplaced: false,
         scene_name: Some(scene_name),
+        selection: None,
     };
     let written = write_file(&world, &options, &out)?;
     println!(

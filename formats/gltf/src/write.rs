@@ -81,10 +81,36 @@ pub struct WriteOptions {
     pub group_by: GroupBy,
     /// Relative `core.texture_file` paths are taken from here.
     pub base_dir: PathBuf,
-    /// Also write prototypes that nothing places, at the origin.
+    /// Also write prototypes that nothing places, at the origin (not with a [`Selection`]).
     pub include_unplaced: bool,
     /// The glTF scene's name.
     pub scene_name: Option<String>,
+    /// Write only part of the world (a tile of it); `None`: everything.
+    pub selection: Option<Selection>,
+}
+
+/// What to write of the world a tiled writer is given, without changing it: only these placements (instances or
+/// self-placed meshes), each drawn with its prototype's mesh or a piece of its own and with extra node extras; only
+/// these lights; the scene's extras without the omitted resources. The materials and textures written are those the
+/// written meshes use, as always.
+#[derive(Clone, Debug, Default)]
+pub struct Selection {
+    pub placements: BTreeMap<Entity, Selected>,
+    pub lights: BTreeSet<Entity>,
+    /// Resources the scene's extras leave out (a writer that carries them elsewhere).
+    pub omit_resources: BTreeSet<String>,
+}
+
+/// One selected placement.
+#[derive(Clone, Debug, Default)]
+pub struct Selected {
+    /// A mesh of its own instead of its prototype's (the triangles of it a tile holds), with the name its glTF mesh
+    /// is given. Its primitives' materials are final (no variants apply) and none of the prototype's components is
+    /// written with it.
+    pub piece: Option<(Mesh, String)>,
+    /// Extra entries of the node's `extras.primase`: (name, schema version, value), placed among the placement's own
+    /// components in name order.
+    pub extras: Vec<(String, u32, Value)>,
 }
 
 /// What the writer did, with counts of everything it skipped or approximated.
@@ -274,6 +300,20 @@ struct Place {
     transform: Transform,
 }
 
+/// A written mesh's source: its geometry, its glTF name, and the entity whose components go to its extras.
+struct MeshFrom {
+    src: Src,
+    name: String,
+    extras_of: Option<Entity>,
+}
+
+/// Where a written mesh's geometry comes from: a prototype's mesh, or a selected placement's own piece.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Src {
+    Prototype(Entity),
+    Piece(Entity),
+}
+
 /// Group a placement belongs to; the derived order is the order of the group nodes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum GroupKey {
@@ -302,8 +342,8 @@ struct Writer<'w> {
     textures: Vec<Value>,
     samplers: Vec<Value>,
     images: Vec<Value>,
-    proto_accessors: BTreeMap<Entity, Vec<PrimAccessors>>,
-    mesh_index: BTreeMap<(Entity, Vec<Option<Entity>>), usize>,
+    proto_accessors: BTreeMap<Src, Vec<PrimAccessors>>,
+    mesh_index: BTreeMap<(Src, Vec<Option<Entity>>), usize>,
     /// Material entity -> glTF index and the texture coordinate sets its written texture slots sample.
     material_index: BTreeMap<Entity, (usize, BTreeSet<u8>)>,
     /// Vertex count -> a zero-filled VEC2 accessor (texture coordinates a primitive lacks).
@@ -342,6 +382,14 @@ impl Writer<'_> {
         let mut lights = Vec::new();
         let world = self.world;
         for (e, l) in world.iter::<Light>() {
+            if self
+                .options
+                .selection
+                .as_ref()
+                .is_some_and(|s| !s.lights.contains(&e))
+            {
+                continue;
+            }
             let mut node = Map::new();
             node.insert("name".into(), Value::String(self.name_of(e, "light")));
             if let Some(t) = world.get::<Transform>(e)
@@ -396,10 +444,13 @@ impl Writer<'_> {
             scene.insert("name".into(), Value::String(name.clone()));
         }
         scene.insert("nodes".into(), json!(roots));
-        let resources = self.world.resources_json().map_err(|e| Error::Invalid {
+        let mut resources = self.world.resources_json().map_err(|e| Error::Invalid {
             item: format!("resource {}", e.component),
             detail: e.message,
         })?;
+        if let Some(s) = &self.options.selection {
+            resources.retain(|r| !s.omit_resources.contains(r.name));
+        }
         if let Some(extras) = self.primase_extras(resources, &[]) {
             scene.insert("extras".into(), extras);
         }
@@ -456,9 +507,14 @@ impl Writer<'_> {
     /// prototypes nothing places.
     fn places(&mut self) -> Result<Vec<Place>> {
         let world = self.world;
+        let selection = self.options.selection.as_ref();
+        let chosen = |e: Entity| selection.is_none_or(|s| s.placements.contains_key(&e));
         let mut places = Vec::new();
         let mut placed = BTreeSet::new();
         for (e, inst) in world.iter::<Instance>() {
+            if !chosen(e) {
+                continue;
+            }
             let transform = *world.get::<Transform>(e).ok_or_else(|| Error::World {
                 entity: e,
                 detail: "placement without core.transform".into(),
@@ -476,15 +532,17 @@ impl Writer<'_> {
                 continue;
             }
             if let Some(&transform) = world.get::<Transform>(e) {
-                places.push(Place {
-                    entity: e,
-                    prototype: e,
-                    variant: 0,
-                    transform,
-                });
+                if chosen(e) {
+                    places.push(Place {
+                        entity: e,
+                        prototype: e,
+                        variant: 0,
+                        transform,
+                    });
+                }
             } else if !placed.contains(&e) {
                 self.report.prototypes_unplaced += 1;
-                if self.options.include_unplaced {
+                if self.options.include_unplaced && selection.is_none() {
                     places.push(Place {
                         entity: e,
                         prototype: e,
@@ -495,6 +553,18 @@ impl Writer<'_> {
             }
         }
         places.sort_by_key(|p| p.entity);
+        if let Some(s) = selection
+            && s.placements.len() != places.len()
+            && let Some(&e) = s
+                .placements
+                .keys()
+                .find(|e| places.binary_search_by_key(*e, |p| p.entity).is_err())
+        {
+            return Err(Error::World {
+                entity: e,
+                detail: "selected, but not a placement (an instance or a placed mesh)".into(),
+            });
+        }
         Ok(places)
     }
 
@@ -518,16 +588,45 @@ impl Writer<'_> {
 
     fn placement_node(&mut self, place: &Place) -> Result<Option<Value>> {
         let world = self.world;
-        let Some(mesh) = world.get::<Mesh>(place.prototype) else {
-            self.report.placements_without_mesh += 1;
-            return Ok(None);
+        let options = self.options;
+        let selected = options
+            .selection
+            .as_ref()
+            .and_then(|s| s.placements.get(&place.entity));
+        let (mesh, from) = match selected.and_then(|s| s.piece.as_ref()) {
+            // a piece: its own geometry, its own name, none of the prototype's components
+            Some((mesh, name)) => (
+                mesh,
+                MeshFrom {
+                    src: Src::Piece(place.entity),
+                    name: name.clone(),
+                    extras_of: None,
+                },
+            ),
+            None => {
+                let Some(mesh) = world.get::<Mesh>(place.prototype) else {
+                    self.report.placements_without_mesh += 1;
+                    return Ok(None);
+                };
+                (
+                    mesh,
+                    MeshFrom {
+                        src: Src::Prototype(place.prototype),
+                        name: self.name_of(place.prototype, "prototype"),
+                        extras_of: Some(place.prototype),
+                    },
+                )
+            }
         };
         let kind = place.transform.classify();
-        let materials = self.resolve_materials(place, mesh)?;
+        let materials = match from.src {
+            Src::Piece(_) => mesh.primitives.iter().map(|p| p.material).collect(),
+            Src::Prototype(_) => self.resolve_materials(place, mesh)?,
+        };
         let mut node = Map::new();
         let name = match world.get::<Name>(place.entity) {
             Some(Name(n)) => n.clone(),
-            None => self.name_of(place.prototype, "prototype"),
+            None => from.name.clone(),
         };
         node.insert("name".into(), Value::String(name));
         let c = place.transform.cols;
@@ -537,7 +636,7 @@ impl Writer<'_> {
                 return Ok(None);
             }
             TransformKind::Sheared => {
-                let mesh_index = self.baked_mesh(place, mesh, &materials, kind)?;
+                let mesh_index = self.baked_mesh(place, &from, mesh, &materials, kind)?;
                 node.insert("mesh".into(), json!(mesh_index));
                 if c[3] != [0.0; 3] {
                     node.insert("translation".into(), f32s_value(&c[3]));
@@ -545,7 +644,7 @@ impl Writer<'_> {
                 self.report.placements_sheared_baked += 1;
             }
             TransformKind::Regular | TransformKind::Mirrored => {
-                let mesh_index = self.shared_mesh(place.prototype, mesh, materials, place.variant)?;
+                let mesh_index = self.shared_mesh(&from, mesh, materials, place.variant)?;
                 node.insert("mesh".into(), json!(mesh_index));
                 if kind == TransformKind::Mirrored {
                     self.report.placements_mirrored += 1;
@@ -569,7 +668,22 @@ impl Writer<'_> {
                 }
             }
         }
-        let extras = self.extras(place.entity, CONSUMED_PLACEMENT)?;
+        let extras = match selected.filter(|s| !s.extras.is_empty()) {
+            None => self.extras(place.entity, CONSUMED_PLACEMENT)?,
+            Some(s) => {
+                let mut shown = world.components_json(place.entity).map_err(|err| Error::World {
+                    entity: place.entity,
+                    detail: err.to_string(),
+                })?;
+                shown.extend(s.extras.iter().map(|(name, version, value)| ComponentJson {
+                    name: name.as_str(),
+                    version: *version,
+                    value: Some(value.clone()),
+                }));
+                shown.sort_by(|a, b| a.name.cmp(b.name));
+                self.primase_extras(shown, CONSUMED_PLACEMENT)
+            }
+        };
         let shadows = self
             .world
             .get::<Shadows>(place.entity)
@@ -614,25 +728,25 @@ impl Writer<'_> {
             .collect())
     }
 
-    /// The glTF mesh of a prototype with these materials, made on first use.
+    /// The glTF mesh of a prototype (or a piece) with these materials, made on first use.
     fn shared_mesh(
         &mut self,
-        prototype: Entity,
+        from: &MeshFrom,
         mesh: &Mesh,
         materials: Vec<Option<Entity>>,
         variant: u32,
     ) -> Result<usize> {
-        let key = (prototype, materials);
+        let key = (from.src, materials);
         if let Some(&i) = self.mesh_index.get(&key) {
             return Ok(i);
         }
-        let accessors = self.prototype_accessors(prototype, mesh)?;
+        let accessors = self.prototype_accessors(from.src, mesh)?;
         let base: Vec<Option<Entity>> = mesh.primitives.iter().map(|p| p.material).collect();
-        let mut name = self.name_of(prototype, "prototype");
+        let mut name = from.name.clone();
         if key.1 != base {
             name = format!("{name}.v{variant}");
         }
-        let index = self.push_mesh(prototype, name, &accessors, &key.1, mesh)?;
+        let index = self.push_mesh(from.extras_of, name, &accessors, &key.1, mesh)?;
         self.mesh_index.insert(key, index);
         Ok(index)
     }
@@ -641,12 +755,13 @@ impl Writer<'_> {
     fn baked_mesh(
         &mut self,
         place: &Place,
+        from: &MeshFrom,
         mesh: &Mesh,
         materials: &[Option<Entity>],
         kind: TransformKind,
     ) -> Result<usize> {
         debug_assert_eq!(kind, TransformKind::Sheared);
-        let shared = self.prototype_accessors(place.prototype, mesh)?;
+        let shared = self.prototype_accessors(from.src, mesh)?;
         let lin = Linear::new(&place.transform);
         let mut baked = Vec::with_capacity(mesh.primitives.len());
         for (prim, acc) in mesh.primitives.iter().zip(&shared) {
@@ -689,17 +804,13 @@ impl Writer<'_> {
             }
             baked.push(acc);
         }
-        let name = format!(
-            "{}.baked.e{}",
-            self.name_of(place.prototype, "prototype"),
-            place.entity.index()
-        );
-        self.push_mesh(place.prototype, name, &baked, materials, mesh)
+        let name = format!("{}.baked.e{}", from.name, place.entity.index());
+        self.push_mesh(from.extras_of, name, &baked, materials, mesh)
     }
 
     fn push_mesh(
         &mut self,
-        prototype: Entity,
+        extras_of: Option<Entity>,
         name: String,
         accessors: &[PrimAccessors],
         materials: &[Option<Entity>],
@@ -762,7 +873,9 @@ impl Writer<'_> {
         let mut m = Map::new();
         m.insert("name".into(), Value::String(name));
         m.insert("primitives".into(), Value::Array(prims));
-        if let Some(extras) = self.extras(prototype, CONSUMED_PROTOTYPE)? {
+        if let Some(e) = extras_of
+            && let Some(extras) = self.extras(e, CONSUMED_PROTOTYPE)?
+        {
             m.insert("extras".into(), extras);
         }
         self.meshes.push(Value::Object(m));
@@ -771,10 +884,11 @@ impl Writer<'_> {
     }
 
     /// Accessors of every primitive of a prototype, written once and shared by all its meshes.
-    fn prototype_accessors(&mut self, prototype: Entity, mesh: &Mesh) -> Result<Vec<PrimAccessors>> {
-        if let Some(a) = self.proto_accessors.get(&prototype) {
+    fn prototype_accessors(&mut self, src: Src, mesh: &Mesh) -> Result<Vec<PrimAccessors>> {
+        if let Some(a) = self.proto_accessors.get(&src) {
             return Ok(a.clone());
         }
+        let (Src::Prototype(prototype) | Src::Piece(prototype)) = src;
         if mesh.primitives.is_empty() {
             return Err(Error::World {
                 entity: prototype,
@@ -789,7 +903,7 @@ impl Writer<'_> {
             })?;
             out.push(a);
         }
-        self.proto_accessors.insert(prototype, out.clone());
+        self.proto_accessors.insert(src, out.clone());
         Ok(out)
     }
 

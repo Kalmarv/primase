@@ -241,12 +241,6 @@ what = "prepare_scene_assets takes &mut World"
 reason = "writes prototype GLBs and texture PNGs, then points the world at them, before write"
 removed_when = "write serializes in-memory meshes and textures itself"
 
-[[writer]]
-file = "formats/web/src/lib.rs"
-what = "write_cell takes &mut World"
-reason = "a cell's world is split off and absorbed while it is written"
-removed_when = "write_cell takes &World and a Selection"
-
 # ---- file, environment and process access (clippy.toml), by module role ----
 
 [[io]]

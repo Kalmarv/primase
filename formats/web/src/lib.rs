@@ -10,7 +10,9 @@ mod collision;
 mod compression;
 mod images;
 mod instancing;
+mod spanning;
 pub use images::{IMAGE_DIR, ImageFiles};
+pub use spanning::{LocalBox, PIVOT_MARGIN, Spans, spanning};
 #[cfg(feature = "ktx2")]
 pub mod ktx2;
 use std::{
@@ -362,7 +364,6 @@ pub struct TilePlan {
     items: Vec<ViewerItem>,
     lights: Vec<PlannedLight>,
     sun: Option<IndexSun>,
-    placements: BTreeSet<Entity>,
     cells: BTreeMap<(i32, i32), Cell>,
     unsplit: Vec<Placement>,
     written: BTreeSet<(i32, i32)>,
@@ -386,6 +387,23 @@ impl std::fmt::Debug for TilePlan {
 }
 /// Plan `world`'s tiles. Geometry may still be in files; the world's collision and viewer records are read now.
 pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
+    plan_with_geometry(world, options, &|_| false)
+}
+
+/// No mesh in the world or the cell world: neither a loaded one nor a file to load.
+fn meshless(world: &World, prototype: Entity) -> bool {
+    !world.has::<Mesh>(prototype) && !world.has::<primase_core::MeshFile>(prototype)
+}
+
+/// [`plan`] for a world whose geometry its cells will load (a reader that loads assets per cell): `geometry` says
+/// which prototypes have geometry before it is loaded (they have a box, see [`spanning`]). A placement is planned
+/// when its prototype has a mesh, a mesh file or `geometry`; one whose cell then loads no mesh counts as a placement
+/// without mesh ([`TilePlan::write_cell`], [`TilePlan::split`]).
+pub fn plan_with_geometry(
+    world: &World,
+    options: &Options,
+    geometry: &dyn Fn(Entity) -> bool,
+) -> Result<TilePlan> {
     if !options.tile_size.is_finite() || options.tile_size <= 0. {
         return Err(Error::Invalid("tile size must be finite and positive".into()));
     }
@@ -443,7 +461,6 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
         items: options.viewer_items.clone(),
         lights: Vec::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
-        placements: placements.keys().copied().collect(),
         cells: BTreeMap::new(),
         unsplit: Vec::new(),
         written: BTreeSet::new(),
@@ -460,7 +477,7 @@ pub fn plan(world: &World, options: &Options) -> Result<TilePlan> {
             plan.skipped += 1;
             continue;
         }
-        if !world.has::<Mesh>(p.prototype) && !world.has::<primase_core::MeshFile>(p.prototype) {
+        if meshless(world, p.prototype) && !geometry(p.prototype) {
             plan.without_mesh += 1;
             continue;
         }
@@ -528,7 +545,8 @@ impl TilePlan {
         self.unsplit.iter().map(|p| p.entity).collect()
     }
     /// File the triangles of placement `e` (one of [`TilePlan::unsplit`]) by their transformed centres. `world`
-    /// holds its prototype's mesh loaded.
+    /// holds its prototype's mesh loaded; a prototype that turned out to have no mesh (none loaded and no file) is
+    /// counted as a placement without mesh, as at planning.
     pub fn split(&mut self, world: &World, e: Entity) -> Result<()> {
         let i = self
             .unsplit
@@ -536,6 +554,10 @@ impl TilePlan {
             .position(|p| p.entity == e)
             .ok_or_else(|| Error::Invalid(format!("{e:?} is not a placement waiting to be split")))?;
         let p = self.unsplit.remove(i);
+        if meshless(world, p.prototype) {
+            self.without_mesh += 1;
+            return Ok(());
+        }
         let mesh = loaded(world, p.prototype)?;
         validate_mesh(mesh)?;
         let mut parts = BTreeMap::<(i32, i32), Vec<(usize, Vec<u32>)>>::new();
@@ -583,10 +605,10 @@ impl TilePlan {
             .collect()
     }
     /// Write cell `cell` from `world`: exactly the closure of its [`TilePlan::roots`], meshes and textures loaded and
-    /// materials lowered. Each tile is written from its own entities moved out of `world` ([`World::split_off`])
-    /// and moved back, so nothing is copied; `world` is left as it was (on success) for another plan to write the
-    /// same cell. Returns its tiles (none for a cell with nothing to draw or show).
-    pub fn write_cell(&mut self, cell: (i32, i32), world: &mut World) -> Result<Vec<WrittenTile>> {
+    /// materials lowered. The writer only reads it: each tile is a selection of the world's placements (and of the
+    /// triangles of those filed by triangle centre), so the same world can be written by another plan (a plain set).
+    /// Returns its tiles (none for a cell with nothing to draw or show).
+    pub fn write_cell(&mut self, cell: (i32, i32), world: &World) -> Result<Vec<WrittenTile>> {
         if !self.unsplit.is_empty() {
             return Err(Error::Invalid(
                 "split every placement filed by triangle centre before writing".into(),
@@ -595,11 +617,9 @@ impl TilePlan {
         if !self.written.insert(cell) {
             return Err(Error::Invalid(format!("cell {cell:?} written twice")));
         }
-        let Some(content) = self.cells.get(&cell).cloned() else {
+        let Some(mut content) = self.cells.get(&cell).cloned() else {
             return Err(Error::Invalid(format!("cell {cell:?} is not planned")));
         };
-        // the environment is the index's, scene-wide: a cell does not carry it
-        world.remove_resource::<primase_core::Environment>();
         let closure = world.closure(self.roots(cell));
         if closure.len() != world.entity_count() {
             return Err(Error::Invalid(format!(
@@ -611,6 +631,10 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
+        // a prototype whose cell loaded no mesh (planned from a world that loads per cell): counted as at planning
+        let before = content.placements.len();
+        content.placements.retain(|p| !meshless(world, p.prototype));
+        self.without_mesh += (before - content.placements.len()) as u64;
         let mut out = Vec::new();
         self.emit(cell, None, world, content, false, &mut out)?;
         Ok(out)
@@ -627,22 +651,14 @@ impl TilePlan {
         &mut self,
         cell: (i32, i32),
         sub: Option<Subcell>,
-        world: &mut World,
+        world: &World,
         content: Cell,
         over: bool,
         out: &mut Vec<WrittenTile>,
     ) -> Result<()> {
         let level = sub.map_or(0, |s| s.level);
         if !over {
-            let roots: BTreeSet<Entity> = content
-                .placements
-                .iter()
-                .flat_map(|p| [p.entity, p.prototype])
-                .collect();
-            let mut part = world.split_off(&world.closure(roots));
-            let built = self.tile(cell, sub, &mut part, &content);
-            world.absorb(part);
-            let Some(tile) = built? else {
+            let Some(tile) = self.tile(cell, sub, world, &content)? else {
                 return Ok(());
             };
             let largest = tile
@@ -760,19 +776,28 @@ impl TilePlan {
         }
         Ok(out)
     }
-    /// One tile of `content` from `w`, the closure of its placements.
+    /// One tile of `content` from `w`: the tile's placements written as a [`primase_gltf::Selection`] of the world
+    /// (a placement filed by triangle centre as a piece of its own: those of its triangles the tile holds), which
+    /// leaves the world unchanged.
     fn tile(
         &mut self,
         (col, row): (i32, i32),
         sub: Option<Subcell>,
-        w: &mut World,
+        w: &World,
         content: &Cell,
     ) -> Result<Option<WrittenTile>> {
-        let mut meshes = Vec::with_capacity(content.placements.len());
+        let mut selection = primase_gltf::Selection {
+            // the environment is the index's, scene-wide: a tile does not carry it
+            omit_resources: [<primase_core::Environment as primase_core::Resource>::NAME.to_owned()].into(),
+            ..Default::default()
+        };
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        let mut triangles = 0;
         for p in &content.placements {
             let mesh = loaded(w, p.prototype)?;
             validate_mesh(mesh)?;
-            meshes.push(match &p.triangles {
+            let piece = match &p.triangles {
                 None => None,
                 Some(parts) => {
                     let variants = w.get::<MaterialVariants>(p.prototype);
@@ -798,26 +823,9 @@ impl TilePlan {
                     }
                     Some(chunk)
                 }
-            });
-        }
-        // only this tile's placements are placed while it is written; the others' are put back after
-        let mut saved = Vec::new();
-        for e in self
-            .placements
-            .iter()
-            .copied()
-            .filter(|&e| w.is_alive(e))
-            .collect::<Vec<_>>()
-        {
-            saved.push((e, w.remove::<Instance>(e), w.remove::<Transform>(e)));
-        }
-        let mut spawned = Vec::new();
-        let mut min = [f64::INFINITY; 3];
-        let mut max = [f64::NEG_INFINITY; 3];
-        let mut triangles = 0;
-        for (p, chunk) in content.placements.iter().zip(meshes) {
-            let mesh = chunk.as_ref().map_or_else(|| loaded(w, p.prototype), Ok)?;
-            for prim in &mesh.primitives {
+            };
+            let drawn = piece.as_ref().unwrap_or(mesh);
+            for prim in &drawn.primitives {
                 let pos = prim
                     .positions()
                     .ok_or_else(|| Error::Invalid("missing positions".into()))?;
@@ -833,35 +841,17 @@ impl TilePlan {
                     }
                 }
             }
-            let proto = if let Some(mesh) = chunk {
-                let e = w.spawn();
-                spawned.push(e);
-                w.insert(e, mesh);
-                if let Some(n) = w.get::<Name>(p.prototype).cloned() {
-                    w.insert(e, n);
-                }
-                e
-            } else {
-                p.prototype
-            };
-            w.insert(
+            let name = w
+                .get::<Name>(p.prototype)
+                .map_or_else(|| format!("prototype_e{}", p.prototype.index()), |n| n.0.clone());
+            selection.placements.insert(
                 p.entity,
-                Instance {
-                    prototype: proto,
-                    variant: p.variant,
-                },
-            );
-            w.insert(p.entity, p.transform);
-            w.insert_opaque(
-                p.entity,
-                "web.placement_key",
-                primase_core::Opaque {
-                    version: 1,
-                    data: primase_core::OpaqueData::Json(serde_json::json!(p.entity.index())),
+                primase_gltf::Selected {
+                    piece: piece.map(|m| (m, name)),
+                    extras: vec![("web.placement_key".into(), 1, serde_json::json!(p.entity.index()))],
                 },
             );
         }
-        let written: &World = w;
         let render = if triangles == 0 {
             Ok(None)
         } else {
@@ -870,10 +860,11 @@ impl TilePlan {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
                 let (bytes, report) = primase_gltf::write(
-                    written,
+                    w,
                     &primase_gltf::WriteOptions {
                         group_by: primase_gltf::GroupBy::None,
                         base_dir: self.options.base_dir.clone(),
+                        selection: Some(selection),
                         ..Default::default()
                     },
                 )?;
@@ -923,22 +914,6 @@ impl TilePlan {
                 .map(|info| (info, bytes, files)))
             })()
         };
-        for p in &content.placements {
-            w.remove::<Instance>(p.entity);
-            w.remove::<Transform>(p.entity);
-            w.remove_opaque(p.entity, "web.placement_key");
-        }
-        for e in spawned {
-            w.despawn(e);
-        }
-        for (e, instance, transform) in saved {
-            if let Some(i) = instance {
-                w.insert(e, i);
-            }
-            if let Some(t) = transform {
-                w.insert(e, t);
-            }
-        }
         let (render, files) = match render? {
             Some((info, bytes, files)) => (Some((info, bytes)), files),
             None => (None, Vec::new()),
@@ -1120,6 +1095,14 @@ impl TilePlan {
                 "cell {cell:?} was planned but not written"
             )));
         }
+        // every planned scene light reaches a tile
+        let written: u64 = self.tiles.iter().map(|t| t.lights).sum();
+        if written != self.lights.len() as u64 {
+            return Err(Error::Invalid(format!(
+                "{written} scene lights written of {} planned",
+                self.lights.len()
+            )));
+        }
         let mut tiles = self.tiles;
         tiles.sort_by_key(|t| (t.col, t.row, t.cell));
         Ok(Index {
@@ -1178,8 +1161,8 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         over_budget: Vec::new(),
     };
     for cell in plan.cells() {
-        let mut w = world.subset(&world.closure(plan.roots(cell)));
-        for tile in plan.write_cell(cell, &mut w)? {
+        let w = world.subset(&world.closure(plan.roots(cell)));
+        for tile in plan.write_cell(cell, &w)? {
             set.files.insert(tile.info.file.clone(), tile.bytes);
             set.images.extend(tile.images);
             if let Some((name, bytes)) = tile.collision {
@@ -1229,6 +1212,10 @@ impl Index {
                 )));
             }
         }
+        std::fs::create_dir_all(folder).map_err(|source| Error::Io {
+            path: folder.to_owned(),
+            source,
+        })?;
         let path = folder.join("tiles.json");
         std::fs::write(&path, serde_json::to_vec_pretty(self)?).map_err(|source| Error::Io { path, source })
     }
