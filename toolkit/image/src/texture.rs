@@ -217,6 +217,132 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
     }
     Ok(log)
 }
+/// Bake every `pbr.material`'s normal scale into its normal map ([`crate::scale_normal`], glTF's rule) and set the
+/// scale to 1, for targets without a normal strength. The normal maps must be in glTF's convention
+/// (`normalize-normals` first). Each stored level is decoded to RGBA8; alpha and colour space stay. A texture every
+/// binding uses at one scale is baked in place; one bound at several scales gets a baked copy per scale other than 1
+/// (named `<name>~normal<scale>`), the bindings repointed. Every check runs before the world changes.
+pub fn bake_normal_scale(world: &mut World) -> Result<PassLog> {
+    use primase_core::Name;
+    use primase_core::pbr::PbrMaterial;
+    let mut log = PassLog::default();
+    // per normal texture, the scales its bindings use (by bits: a scale is a number, not a value to compare loosely)
+    let mut scales = BTreeMap::<Entity, BTreeMap<u32, f32>>::new();
+    for (_, m) in world.iter::<PbrMaterial>() {
+        if let Some(r) = m.normal_texture {
+            if !m.normal_scale.is_finite() {
+                return Err(Error::Invalid(format!(
+                    "normal scale {} of texture {:?} is not finite",
+                    m.normal_scale, r.texture
+                )));
+            }
+            scales
+                .entry(r.texture)
+                .or_default()
+                .insert(m.normal_scale.to_bits(), m.normal_scale);
+        }
+    }
+    // (texture, scale) -> the baked texture's entity (None: in place)
+    let mut baked = BTreeMap::<(Entity, u32), Texture>::new();
+    for (&t, by_bits) in &scales {
+        for (&bits, &scale) in by_bits {
+            if scale == 1.0 {
+                continue;
+            }
+            let tex = world.get::<Texture>(t).ok_or_else(|| {
+                Error::Invalid(format!("normal texture {t:?} has no pixels (load it first)"))
+            })?;
+            if tex.normal != Some(NormalConvention::GLTF) {
+                return Err(Error::Invalid(format!(
+                    "normal texture {t:?} is not in glTF's convention: run normalize-normals first"
+                )));
+            }
+            let mut levels = Vec::with_capacity(tex.levels.len());
+            for i in 0..tex.levels.len() {
+                let (w, h) = level_dimensions(tex, i)?;
+                let mut rgba = Decoder::default().decode_rgba8(tex.format, w, h, &tex.levels[i])?;
+                for p in rgba.as_chunks_mut::<4>().0 {
+                    if crate::scale_normal(p, scale) {
+                        log.count("zero normals made flat", 1);
+                    }
+                }
+                levels.push(rgba);
+            }
+            if tex.format != TexFormat::Rgba8Unorm {
+                log.approximate("normal levels decoded to RGBA8", tex.levels.len() as u64);
+            }
+            let mut out = tex.clone();
+            out.format = TexFormat::Rgba8Unorm;
+            out.levels = levels;
+            baked.insert((t, bits), out);
+        }
+    }
+    // apply: in place where a texture has one scale, else a copy per scale
+    let mut target = BTreeMap::<(Entity, u32), Entity>::new();
+    for ((t, bits), tex) in baked {
+        let e = if scales[&t].len() == 1 {
+            t
+        } else {
+            let e = world.spawn();
+            let name = world
+                .get::<Name>(t)
+                .map_or_else(|| format!("{t:?}"), |n| n.0.clone());
+            world.insert(e, Name(format!("{name}~normal{}", f32::from_bits(bits))));
+            log.count("normal textures copied for a second scale", 1);
+            e
+        };
+        world.insert(e, tex);
+        world.remove::<TextureFile>(e);
+        target.insert((t, bits), e);
+        log.count("normal textures baked", 1);
+    }
+    let materials: Vec<Entity> = world.iter::<PbrMaterial>().map(|(e, _)| e).collect();
+    for e in materials {
+        let m = world.get_mut::<PbrMaterial>(e).expect("listed");
+        let Some(r) = m.normal_texture.as_mut() else {
+            continue;
+        };
+        if let Some(&to) = target.get(&(r.texture, m.normal_scale.to_bits())) {
+            r.texture = to;
+            m.normal_scale = 1.0;
+            log.count("materials with a baked normal scale", 1);
+        }
+    }
+    Ok(log)
+}
+
+/// `bake-normal-scale`: [`bake_normal_scale`] as a pass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BakeNormalScale;
+impl Pass for BakeNormalScale {
+    fn name(&self) -> &'static str {
+        "bake-normal-scale"
+    }
+    // no `requires`: a world without normal maps has nothing to bake
+    fn provides(&self) -> &[&'static str] {
+        &["core.texture", "core.name"]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &["core.texture", "pbr.material"]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &["core.texture_file"]
+    }
+    fn approximates(&self) -> &'static str {
+        "baked normal levels decoded to RGBA8"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let r = bake_normal_scale(world).map_err(|e| e.to_string())?;
+        for (k, n) in r.counts {
+            log.count(&k, n);
+        }
+        for (k, n) in r.approximations {
+            log.approximate(&k, n);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NormalizeNormals;
 impl Pass for NormalizeNormals {

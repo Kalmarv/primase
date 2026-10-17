@@ -84,3 +84,71 @@ fn z_is_rebuilt_inside_the_disk_and_xy_projected_outside_it() {
     // x = y = -1: projected to -1/sqrt(2) each, 37.344 -> 37
     assert_eq!(rebuilt([0, 0]), ([37, 37, 128, 200], true));
 }
+
+/// Worked by hand: (191, 128, 221) decodes to (0.49804, 0.00392, 0.73333); at scale 2, (0.99608, 0.00784, 0.73333),
+/// length 1.23694, normalised (0.80528, 0.00634, 0.59286), encoded (230.17, 128.31, 203.09) -> (230, 128, 203). Scale 0
+/// leaves only Z: (0, 0, 1) -> (128, 128, 255) (127.5 rounds to even).
+#[test]
+fn a_normal_scale_scales_x_and_y_then_normalises() {
+    let mut p = [191, 128, 221, 77];
+    assert!(!primase_image::scale_normal(&mut p, 2.0));
+    assert_eq!(p, [230, 128, 203, 77]);
+    let mut p = [191, 128, 221, 77];
+    primase_image::scale_normal(&mut p, 0.0);
+    assert_eq!(p, [128, 128, 255, 77]);
+}
+
+/// A normal map bound at scales 2 and 1 gets a baked copy for 2 (the scale-1 binding keeps the original); one bound
+/// only at 2 is baked in place; every baked binding's scale becomes 1.
+#[test]
+fn normal_scales_are_baked_into_copies_or_in_place() {
+    use primase_core::pbr::{PbrMaterial, TextureRef};
+    use primase_core::{ColorSpace, Name, NormalConvention, TexFormat, TexRole, Texture, World};
+    let normal = || Texture {
+        width: 1,
+        height: 1,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![vec![191, 128, 221, 255]],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Normal,
+        normal: Some(NormalConvention::GLTF),
+    };
+    let mut w = World::new();
+    let shared = w.spawn();
+    w.insert(shared, Name("shared".into()));
+    w.insert(shared, normal());
+    let own = w.spawn();
+    w.insert(own, normal());
+    let mut material = |t, scale| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            PbrMaterial {
+                normal_texture: Some(TextureRef::new(t)),
+                normal_scale: scale,
+                ..PbrMaterial::default()
+            },
+        );
+        e
+    };
+    let a = material(shared, 2.0);
+    let b = material(shared, 1.0);
+    let c = material(own, 2.0);
+    let log = primase_image::bake_normal_scale(&mut w).unwrap();
+    assert_eq!(log.counts["normal textures baked"], 2);
+    assert_eq!(log.counts["normal textures copied for a second scale"], 1);
+    let pbr = |e| w.get::<PbrMaterial>(e).unwrap().clone();
+    let (ma, mb, mc) = (pbr(a), pbr(b), pbr(c));
+    assert_eq!(
+        (mb.normal_texture.unwrap().texture, mb.normal_scale),
+        (shared, 1.0)
+    );
+    assert_eq!(w.get::<Texture>(shared).unwrap().levels[0], [191, 128, 221, 255]);
+    let copy = ma.normal_texture.unwrap().texture;
+    assert_ne!(copy, shared);
+    assert_eq!(ma.normal_scale, 1.0);
+    assert_eq!(w.get::<Texture>(copy).unwrap().levels[0], [230, 128, 203, 255]);
+    assert_eq!(w.get::<Name>(copy).unwrap().0, "shared~normal2");
+    assert_eq!((mc.normal_texture.unwrap().texture, mc.normal_scale), (own, 1.0));
+    assert_eq!(w.get::<Texture>(own).unwrap().levels[0], [230, 128, 203, 255]);
+}

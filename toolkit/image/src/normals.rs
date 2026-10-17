@@ -24,6 +24,25 @@ pub fn rebuild_normal_z(pixel: &mut [u8; 4]) -> bool {
     projected
 }
 
+/// Scale a tangent-space normal's X and Y as glTF's `normalTexture.scale` does: the decoded vector
+/// `(2 * byte / 255 - 1)` times `(scale, scale, 1)`, normalised (a zero vector becomes +Z), re-encoded with nearest,
+/// ties-even rounding; alpha untouched. Returns whether the vector was zero.
+pub fn scale_normal(pixel: &mut [u8; 4], scale: f32) -> bool {
+    let decode = |b: u8| f64::from(b) / 127.5 - 1.;
+    let s = f64::from(scale);
+    let v = [decode(pixel[0]) * s, decode(pixel[1]) * s, decode(pixel[2])];
+    let length = v.iter().map(|c| c * c).sum::<f64>().sqrt();
+    let encode = |c: f64| ((c * 0.5 + 0.5) * 255.).round_ties_even() as u8;
+    if length == 0. || !length.is_finite() {
+        pixel[..3].copy_from_slice(&[encode(0.), encode(0.), encode(1.)]);
+        return true;
+    }
+    for c in 0..3 {
+        pixel[c] = encode(v[c] / length);
+    }
+    false
+}
+
 /// Vector-filtered image and the number of ambiguous averages replaced by +Z.
 #[derive(Debug)]
 pub struct NormalFilter {
