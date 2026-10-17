@@ -11,7 +11,8 @@
 //!   are the ones named `<stem>___section_...` (a map not written by the writer may not follow this);
 //! - Studio tessellates and re-wraps those surfaces (about five times the triangles), so section vertices are not the
 //!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
-//!   primitive, as a half float, occurs in its key's sections;
+//!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
+//!   vertices), as a half float, occurs in its key's sections;
 //! - a primitive resolves to the one key, among the vertex-blend keys of its GLB's MeshSets, whose sections contain
 //!   all of its weights other than 0 and 1 (those are not distinctive).
 //!
@@ -190,7 +191,8 @@ fn distinctive(bits: u16) -> bool {
     !matches!(bits, 0x0000 | 0x8000 | 0x3c00)
 }
 
-/// The `_RESKATE_BLEND` weights of `primitive` of the map GLB at `path`.
+/// The `_RESKATE_BLEND` weights of the vertices `primitive` of the map GLB at `path` draws (all of them without
+/// indices), in vertex order.
 fn glb_weights(path: &Path, primitive: usize) -> Result<Vec<f32>> {
     let bytes = std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -225,11 +227,57 @@ fn glb_weights(path: &Path, primitive: usize) -> Result<Vec<f32>> {
     let int = |k: &str| usize::try_from(a[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
     let span = primase_bytes::checked_span(int("byteOffset")?, int("count")?, 4, data.len())
         .map_err(|e| past(e.to_string()))?;
-    let d = &data[span];
-    Ok(d.as_chunks::<4>()
+    let weights: Vec<f32> = data[span]
+        .as_chunks::<4>()
         .0
         .iter()
         .map(|c| f32::from_le_bytes(*c))
+        .collect();
+    // Studio compiles only the vertices the primitive's triangles use; a lowered overlay shares its source
+    // primitive's vertices, and the unused ones may carry weights of other triangles
+    let Some(ix) = j["meshes"][0]["primitives"][primitive]["indices"].as_u64() else {
+        return Ok(weights);
+    };
+    let ia = &j["accessors"][ix as usize];
+    let size = match ia["componentType"].as_u64() {
+        Some(5121) => 1,
+        Some(5123) => 2,
+        Some(5125) => 4,
+        _ => {
+            return Err(fail(format!(
+                "primitive {primitive}: indices are not unsigned integers"
+            )));
+        }
+    };
+    let iview = ia["bufferView"]
+        .as_u64()
+        .ok_or_else(|| fail("indices have no buffer view".into()))? as usize;
+    if j["bufferViews"][iview].get("byteStride").is_some() {
+        return Err(fail("indices are interleaved".into()));
+    }
+    let idata = g.buffer_view(iview).map_err(|e| fail(e.to_string()))?;
+    let iint = |k: &str| usize::try_from(ia[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
+    let ispan = primase_bytes::checked_span(iint("byteOffset")?, iint("count")?, size, idata.len())
+        .map_err(|e| fail(format!("indices run past their buffer view: {e}")))?;
+    let mut used = vec![false; weights.len()];
+    for c in idata[ispan].chunks_exact(size) {
+        let i = match size {
+            1 => usize::from(c[0]),
+            2 => usize::from(u16::from_le_bytes([c[0], c[1]])),
+            _ => u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as usize,
+        };
+        *used.get_mut(i).ok_or_else(|| {
+            fail(format!(
+                "primitive {primitive}: index {i} past its {} vertices",
+                weights.len()
+            ))
+        })? = true;
+    }
+    Ok(weights
+        .into_iter()
+        .zip(used)
+        .filter(|(_, u)| *u)
+        .map(|(w, _)| w)
         .collect())
 }
 
@@ -637,6 +685,44 @@ mod tests {
         let e = glb_weights(&huge, 0).unwrap_err().to_string();
         assert!(e.contains("runs past its buffer view"), "{e}");
         for p in [ok, two, huge] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// A GLB whose primitive has four weights and the u16 indices `idx`.
+    fn indexed_glb(name: &str, idx: &[u16]) -> std::path::PathBuf {
+        let mesh = serde_json::json!({"primitives": [{"attributes": {"_RESKATE_BLEND": 0}, "indices": 1}]});
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 16 + 2 * idx.len()}],
+            "bufferViews": [{"buffer": 0, "byteLength": 16}, {"buffer": 0, "byteOffset": 16, "byteLength": 2 * idx.len()}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR"},
+                {"bufferView": 1, "componentType": 5123, "count": idx.len(), "type": "SCALAR"},
+            ],
+            "meshes": [mesh],
+        });
+        let mut bin: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        bin.extend(idx.iter().flat_map(|i| i.to_le_bytes()));
+        let bytes = primase_gltf::glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
+        let path = std::env::temp_dir().join(format!("vbrecord-{name}-{}.glb", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn only_the_vertices_a_primitive_draws_give_its_weights() {
+        // vertex 2 is not drawn (an overlay sharing its source primitive's vertices): its weight is not the
+        // primitive's, since Studio compiles only drawn vertices
+        let p = indexed_glb("idx", &[0, 1, 3]);
+        assert_eq!(glb_weights(&p, 0).unwrap(), vec![0.1, 0.2, 0.4]);
+        let bad = indexed_glb("idx-bad", &[0, 1, 7]);
+        let e = glb_weights(&bad, 0).unwrap_err().to_string();
+        assert!(e.contains("index 7 past its 4 vertices"), "{e}");
+        for p in [p, bad] {
             let _ = std::fs::remove_file(p);
         }
     }

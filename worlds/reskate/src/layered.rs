@@ -15,6 +15,16 @@
 //! is above zero. The game's decal fades through a mask-shaped dissolve rather than linear alpha, and weights are
 //! evaluated per vertex then interpolated (the core blend interpolates channels, then evaluates): both are named
 //! approximations of the lowering pass, not of this arithmetic.
+//!
+//! The chain needs the overlays drawn in slot order, and the game does not draw a surface's overlapping decal
+//! sections in their section order (measured: three coplanar overlays in all six section orders gave four
+//! different results, matching neither section nor material-key order, the same from every view). Where two or
+//! more overlays overlap, the mix can therefore differ from the blend; it stays smooth. The default,
+//! [`OverlayLimit::All`], draws every layer. [`OverlayLimit::One`] gives a triangle at most one overlay instead: the
+//! strongest other layer (by the summed corner weights of slots `>= 1`, and of the black remainder where the
+//! weights sum below one), drawn over the base with opacity `w_k / (w_0 + w_k)` (0/0 = 0), the two-layer blend
+//! renormalised, and counts the triangles that lose a layer. Its overlays never overlap, but neighbouring triangles
+//! that keep different layers meet in hard edges (measured in game), so it is not the default.
 
 use primase_core::{Component, Entity, Mesh, World};
 use serde::Serialize;
@@ -92,12 +102,29 @@ pub struct OverlayPart {
     pub opacity: Vec<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OverlayCounts {
     /// Vertices whose weights summed above one and were scaled down.
     pub clamped_vertices: usize,
     /// Vertices whose weights summed below one (the darkening overlay draws there).
     pub darkening_vertices: usize,
+    /// Triangles where more than one overlay draws ([`OverlayLimit::All`]: where their draw order matters) or would
+    /// draw ([`OverlayLimit::One`]: only the strongest is kept).
+    pub overlapping_triangles: usize,
+    /// Their area, in the primitive's units squared.
+    pub overlapping_area: f64,
+}
+
+/// How many overlays a triangle may get.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverlayLimit {
+    /// Every layer, in slot order: the exact lerp chain where the game draws the overlays in that order (it does not
+    /// always: see the module doc).
+    #[default]
+    All,
+    /// At most one: the strongest other layer over the base, renormalised; order-free, but neighbouring triangles
+    /// that keep different layers meet in hard edges.
+    One,
 }
 
 /// Weight sums within this of one count as one (f32 rounding of the evaluated mapping, a few ulp).
@@ -137,39 +164,124 @@ pub fn opacities(
 }
 
 /// The overlays of a triangle primitive: slot overlays in slot order, then the darkening overlay; each with the
-/// triangles where some corner's written opacity is above zero (none: the overlay is left out).
+/// triangles where some corner's written opacity is above zero (none: the overlay is left out). With
+/// [`OverlayLimit::One`] each triangle keeps only its strongest overlay, with the two-layer opacities (see the
+/// module doc); `positions` give the area of the triangles that lose one.
 pub fn overlay_parts(
     weights: &[[f32; 4]],
     slots: usize,
     indices: &[u32],
+    positions: &[[f32; 3]],
+    limit: OverlayLimit,
     counts: &mut OverlayCounts,
 ) -> Vec<OverlayPart> {
     let (over, dark) = opacities(weights, slots, counts);
-    let layers = over
-        .into_iter()
-        .enumerate()
-        .map(|(i, o)| (OverlayLayer::Slot(i + 1), o))
-        .chain(std::iter::once((OverlayLayer::Darkening, dark)));
-    let mut out = Vec::new();
-    for (layer, opacity) in layers {
-        let drawn = |i: u32| decal_opacity(opacity[i as usize])[0] > 0;
-        let tris: Vec<u32> = indices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .filter(|t| t.iter().any(|&i| drawn(i)))
-            .flatten()
-            .copied()
+    let layers: Vec<(OverlayLayer, Vec<f32>)> = match limit {
+        OverlayLimit::All => over
+            .into_iter()
+            .enumerate()
+            .map(|(i, o)| (OverlayLayer::Slot(i + 1), o))
+            .chain(std::iter::once((OverlayLayer::Darkening, dark.clone())))
+            .collect(),
+        OverlayLimit::One => pair_opacities(weights, slots, &dark),
+    };
+    let tris = indices.as_chunks::<3>().0;
+    let mut keep = vec![vec![false; tris.len()]; layers.len()];
+    for (t, tri) in tris.iter().enumerate() {
+        let visible: Vec<usize> = (0..layers.len())
+            .filter(|&k| tri.iter().any(|&i| decal_opacity(layers[k].1[i as usize])[0] > 0))
             .collect();
-        if !tris.is_empty() {
+        match limit {
+            OverlayLimit::All => visible.iter().for_each(|&k| keep[k][t] = true),
+            OverlayLimit::One => {
+                let strength = |k: usize| -> f64 {
+                    tri.iter()
+                        .map(|&i| f64::from(layer_weight(weights[i as usize], slots, &dark, i, layers[k].0)))
+                        .sum()
+                };
+                // strongest first; ties to the earlier layer (lower slot, the darkening last)
+                if let Some(&best) = visible
+                    .iter()
+                    .min_by(|&&x, &&y| strength(y).total_cmp(&strength(x)).then(x.cmp(&y)))
+                {
+                    keep[best][t] = true;
+                }
+            }
+        }
+        if visible.len() > 1 {
+            counts.overlapping_triangles += 1;
+            counts.overlapping_area += area(positions, tri);
+        }
+    }
+    let mut out = Vec::new();
+    for ((layer, opacity), keep) in layers.into_iter().zip(keep) {
+        let indices: Vec<u32> = tris
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .flat_map(|(t, _)| *t)
+            .collect();
+        if !indices.is_empty() {
             out.push(OverlayPart {
                 layer,
-                indices: tris,
+                indices,
                 opacity,
             });
         }
     }
     out
+}
+
+/// The weight of `layer` at vertex `i`: a slot's weight scaled as in [`opacities`], the darkening's the black
+/// remainder `1 - s` (its chain opacity, `dark[i]`).
+fn layer_weight(w: [f32; 4], slots: usize, dark: &[f32], i: u32, layer: OverlayLayer) -> f32 {
+    match layer {
+        OverlayLayer::Slot(k) => {
+            let s: f64 = w[..slots].iter().map(|&x| f64::from(x.max(0.0))).sum();
+            let x = f64::from(w[k].max(0.0));
+            (if s > 1.0 { x / s } else { x }) as f32
+        }
+        OverlayLayer::Darkening => dark[i as usize],
+    }
+}
+
+/// Per-vertex two-layer opacities for [`OverlayLimit::One`]: each slot `k >= 1`, then the black remainder, over the
+/// base alone: `w_k / (w_0 + w_k)` (0/0 = 0).
+fn pair_opacities(weights: &[[f32; 4]], slots: usize, dark: &[f32]) -> Vec<(OverlayLayer, Vec<f32>)> {
+    (1..slots)
+        .map(OverlayLayer::Slot)
+        .chain(std::iter::once(OverlayLayer::Darkening))
+        .map(|layer| {
+            let o = (0..weights.len())
+                .map(|v| {
+                    let i = v as u32;
+                    let base = f64::from(layer_weight(weights[v], slots, dark, i, OverlayLayer::Slot(0)));
+                    let own = f64::from(layer_weight(weights[v], slots, dark, i, layer));
+                    if base + own > 0.0 {
+                        (own / (base + own)) as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            (layer, o)
+        })
+        .collect()
+}
+
+/// A triangle's area.
+fn area(p: &[[f32; 3]], t: &[u32; 3]) -> f64 {
+    let [a, b, c] = t.map(|i| p[i as usize].map(f64::from));
+    let (u, v) = (
+        [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+        [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+    );
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
 }
 
 fn weights_of(
@@ -236,7 +348,10 @@ type PlannedPart = (
 /// [`BlendOpacity`]. The layered materials themselves are removed. The ReSkate writer emits the overlays with
 /// Studio's `vertex_blend`, and the post-compile stage moves them onto the stock decal row.
 #[derive(Debug, Default)]
-pub struct LowerLayeredReskate;
+pub struct LowerLayeredReskate {
+    /// How many overlays a triangle may get (default [`OverlayLimit::All`]).
+    pub overlays: OverlayLimit,
+}
 
 impl primase_core::pass::Pass for LowerLayeredReskate {
     fn name(&self) -> &'static str {
@@ -255,7 +370,14 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         &["core.layered"]
     }
     fn approximates(&self) -> &'static str {
-        "decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
+        match self.overlays {
+            OverlayLimit::One => {
+                "at most one overlay per triangle: the strongest other layer over the base, renormalised (triangles and area that lose a layer are counted; neighbouring triangles that keep different layers meet in hard edges); decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
+            }
+            OverlayLimit::All => {
+                "where overlays overlap the game does not draw them in slot order, so the mix there can differ from the blend; decal overlays fade through the game's mask-shaped dissolve, not linear alpha; layer weights are evaluated per vertex and interpolated (the blend interpolates channels, then evaluates)"
+            }
+        }
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
         use primase_core::{LayeredMaterial, MaterialVariants, MeshFile};
@@ -295,6 +417,7 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         let mut plans: Vec<(Entity, Vec<PlannedPart>)> = Vec::new();
         let mut counts = OverlayCounts::default();
         let mut tally: BTreeMap<&'static str, u64> = BTreeMap::new();
+        let (mut base_area, mut overlay_area) = (0f64, 0f64);
         for (e, mesh) in world.iter::<Mesh>() {
             let variants = world.get::<MaterialVariants>(e);
             if !mesh
@@ -323,6 +446,10 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                     return Err("a layered primitive is not triangles".into());
                 }
                 let w = weights_of(p, l)?;
+                let positions = match p.streams.get(&primase_core::Semantic::Position) {
+                    Some(primase_core::Stream::F32x3(v)) => v.clone(),
+                    _ => return Err("a layered primitive has no float3 positions".into()),
+                };
                 let idx = p
                     .indices
                     .clone()
@@ -331,10 +458,23 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 base.indices = Some(idx.clone());
                 parts.push((i, base, None, Some((m, None))));
                 *tally.entry("layered base triangles").or_default() += (idx.len() / 3) as u64;
-                for o in overlay_parts(&w, l.layers.len(), &idx, &mut counts) {
+                base_area += idx
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|t| area(&positions, t))
+                    .sum::<f64>();
+                for o in overlay_parts(&w, l.layers.len(), &idx, &positions, self.overlays, &mut counts) {
                     let mut q = p.clone();
                     q.indices = Some(o.indices.clone());
                     let n = (o.indices.len() / 3) as u64;
+                    overlay_area += o
+                        .indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .map(|t| area(&positions, t))
+                        .sum::<f64>();
                     *tally.entry("overlay primitives").or_default() += 1;
                     *tally.entry("overlay triangles").or_default() += n;
                     if o.layer == OverlayLayer::Darkening {
@@ -356,6 +496,23 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             "vertices with weights below one (darkened)",
             counts.darkening_vertices as u64,
         );
+        log.count("layered base area (m2)", base_area.round() as u64);
+        log.count(
+            "overlay area (m2, summed over overlays)",
+            overlay_area.round() as u64,
+        );
+        let (tris, area) = match self.overlays {
+            OverlayLimit::All => (
+                "triangles with overlapping overlays",
+                "area with overlapping overlays (m2)",
+            ),
+            OverlayLimit::One => (
+                "triangles limited to one overlay",
+                "area limited to one overlay (m2)",
+            ),
+        };
+        log.count(tris, counts.overlapping_triangles as u64);
+        log.count(area, counts.overlapping_area.round() as u64);
         // ---- materials: base = slot 0's material (black when null), overlays = decal copies
         let mut made: BTreeMap<(Entity, Option<OverlayLayer>), Entity> = BTreeMap::new();
         for (_, parts) in &plans {
@@ -573,12 +730,93 @@ mod tests {
             [0.5, 0.5, 0.0, 0.0],
         ];
         let mut c = OverlayCounts::default();
-        let parts = overlay_parts(&w, 2, &[0, 1, 2, 1, 2, 3], &mut c);
+        let pos = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+        let parts = overlay_parts(&w, 2, &[0, 1, 2, 1, 2, 3], &pos, OverlayLimit::All, &mut c);
         assert_eq!(parts.len(), 1);
         assert_eq!(
             (parts[0].layer, parts[0].indices.clone()),
             (OverlayLayer::Slot(1), vec![1, 2, 3])
         );
+    }
+
+    const TRI: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+
+    #[test]
+    fn one_overlay_per_triangle_keeps_the_strongest_renormalised_and_counts() {
+        let w = [[0.5, 0.3, 0.2, 0.0]; 3];
+        let mut c = OverlayCounts::default();
+        let parts = overlay_parts(&w, 3, &[0, 1, 2], &TRI, OverlayLimit::One, &mut c);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].layer, OverlayLayer::Slot(1));
+        assert!(parts[0].opacity.iter().all(|&a| (a - 0.3 / 0.8).abs() < 1e-6));
+        assert_eq!(c.overlapping_triangles, 1);
+        assert!((c.overlapping_area - 0.5).abs() < 1e-9);
+        // the same triangle with every layer: two overlays drawn over each other, counted as overlapping
+        let mut c = OverlayCounts::default();
+        assert_eq!(
+            overlay_parts(&w, 3, &[0, 1, 2], &TRI, OverlayLimit::All, &mut c).len(),
+            2
+        );
+        assert_eq!(c.overlapping_triangles, 1);
+    }
+
+    #[test]
+    fn overlays_of_neighbouring_triangles_may_differ_but_never_overlap() {
+        // slot 1 strongest on the first triangle, slot 2 on the second
+        let w = [
+            [0.5, 0.4, 0.1, 0.0],
+            [0.5, 0.25, 0.25, 0.0],
+            [0.5, 0.25, 0.25, 0.0],
+            [0.5, 0.1, 0.4, 0.0],
+        ];
+        let pos = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+        let mut c = OverlayCounts::default();
+        let parts = overlay_parts(&w, 3, &[0, 1, 2, 1, 2, 3], &pos, OverlayLimit::One, &mut c);
+        let got: Vec<(OverlayLayer, Vec<u32>)> = parts.iter().map(|p| (p.layer, p.indices.clone())).collect();
+        assert_eq!(
+            got,
+            [
+                (OverlayLayer::Slot(1), vec![0, 1, 2]),
+                (OverlayLayer::Slot(2), vec![1, 2, 3])
+            ]
+        );
+        assert_eq!(c.overlapping_triangles, 2);
+    }
+
+    #[test]
+    fn two_layer_surfaces_are_the_same_with_one_or_all() {
+        let mut seed = 3u64;
+        for _ in 0..500 {
+            let w: Vec<[f32; 4]> = (0..3)
+                .map(|_| {
+                    let a = lcg(&mut seed) as f32;
+                    [a, 1.0 - a, 0.0, 0.0]
+                })
+                .collect();
+            let (mut c1, mut c2) = (OverlayCounts::default(), OverlayCounts::default());
+            let one = overlay_parts(&w, 2, &[0, 1, 2], &TRI, OverlayLimit::One, &mut c1);
+            let all = overlay_parts(&w, 2, &[0, 1, 2], &TRI, OverlayLimit::All, &mut c2);
+            assert_eq!(one.len(), all.len());
+            for (a, b) in one.iter().zip(&all) {
+                assert_eq!((a.layer, &a.indices), (b.layer, &b.indices));
+                for (x, y) in a.opacity.iter().zip(&b.opacity) {
+                    assert!((x - y).abs() < 1e-6, "{x} vs {y}");
+                }
+            }
+            assert_eq!(c1.overlapping_triangles, 0);
+        }
+    }
+
+    #[test]
+    fn the_black_remainder_competes_as_a_layer() {
+        // weights sum to 0.4: black (0.6) is the strongest other layer, over the base 0.3 -> 0.6 / 0.9
+        let w = [[0.3, 0.1, 0.0, 0.0]; 3];
+        let mut c = OverlayCounts::default();
+        let parts = overlay_parts(&w, 2, &[0, 1, 2], &TRI, OverlayLimit::One, &mut c);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].layer, OverlayLayer::Darkening);
+        assert!((parts[0].opacity[0] - 0.6 / 0.9).abs() < 1e-6);
+        assert_eq!((c.overlapping_triangles, c.darkening_vertices), (1, 3));
     }
 
     use primase_core::pass::{Pass, PassLog};
@@ -656,7 +894,9 @@ mod tests {
     fn refused_unchanged(mut world: World, want: &str) {
         let before = format!("{world:?}");
         let mut log = PassLog::default();
-        let err = LowerLayeredReskate.run(&mut world, &mut log).unwrap_err();
+        let err = LowerLayeredReskate::default()
+            .run(&mut world, &mut log)
+            .unwrap_err();
         assert!(err.contains(want), "{err}");
         assert_eq!(format!("{world:?}"), before);
         assert!(log.counts.is_empty(), "{:?}", log.counts);
@@ -676,7 +916,7 @@ mod tests {
     fn lowering_draws_the_base_then_the_overlay_and_a_second_run_is_a_noop() {
         let (mut world, m, mesh) = layered_world(true, Some(1));
         let mut log = PassLog::default();
-        LowerLayeredReskate.run(&mut world, &mut log).unwrap();
+        LowerLayeredReskate::default().run(&mut world, &mut log).unwrap();
         assert_eq!(log.counts["overlay primitives"], 1);
         assert!(!world.has::<LayeredMaterial>(m) && !world.has::<SkateMaterial>(m));
         let prims = &world.get::<Mesh>(mesh).unwrap().primitives;
@@ -696,7 +936,9 @@ mod tests {
         assert_eq!(op[1].as_deref(), Some(&[0.0, 0.0, 0.5][..]));
         let before = format!("{world:?}");
         let mut again = PassLog::default();
-        LowerLayeredReskate.run(&mut world, &mut again).unwrap();
+        LowerLayeredReskate::default()
+            .run(&mut world, &mut again)
+            .unwrap();
         assert!(again.counts.is_empty());
         assert_eq!(format!("{world:?}"), before);
     }

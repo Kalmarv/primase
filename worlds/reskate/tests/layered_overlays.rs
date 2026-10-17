@@ -13,9 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::{LayeredMaterial, World};
+use primase_core::{LayeredMaterial, Mesh, World};
 use primase_reskate::BuildOptions;
-use primase_reskate::layered::LowerLayeredReskate;
+use primase_reskate::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
 use serde_json::Value;
 
 fn scenes(root: &Path) -> Vec<PathBuf> {
@@ -57,6 +57,31 @@ fn floats(json: &Value, bin: &[u8], accessor: usize) -> Vec<f32> {
         .collect()
 }
 
+/// After lowering: (overlay triangles that another overlay of the same base also draws, all overlay triangles). A
+/// base's overlays are the primitives with opacities after it.
+fn overlaps(w: &World) -> (usize, usize) {
+    let (mut shared, mut total) = (0, 0);
+    for (e, mesh) in w.iter::<Mesh>() {
+        let Some(op) = w.get::<BlendOpacity>(e) else {
+            continue;
+        };
+        let mut seen: BTreeSet<[u32; 3]> = BTreeSet::new();
+        for (p, o) in mesh.primitives.iter().zip(&op.0) {
+            if o.is_none() {
+                seen.clear();
+                continue;
+            }
+            for t in p.indices.as_deref().unwrap().as_chunks::<3>().0 {
+                let mut k = *t;
+                k.sort_unstable();
+                shared += usize::from(!seen.insert(k));
+                total += 1;
+            }
+        }
+    }
+    (shared, total)
+}
+
 #[test]
 fn layered_scenes_build_with_vertex_blend_overlays() {
     let Some(root) = primase_testdata::real_data("PRIMASE_SCENES_GTA") else {
@@ -86,11 +111,36 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             "{}: {refused}",
             scene.display()
         );
+        // OverlayLimit::One (not the default) on a second copy: a base's overlays share no triangle, and the
+        // overlapping area it counts is the default's
+        let mut one = World::new();
+        primase_skate_scene::read(&scene, &mut one).unwrap();
+        primase_gltf::load_mesh_files(&mut one, &scene).unwrap();
+        let mut one_log = PassLog::default();
+        LowerLayeredReskate {
+            overlays: OverlayLimit::One,
+        }
+        .run(&mut one, &mut one_log)
+        .unwrap();
+        println!(
+            "{} with one overlay per triangle: {:?}",
+            scene.display(),
+            one_log.counts
+        );
+        let (shared, overlay_tris) = overlaps(&one);
+        assert_eq!(shared, 0, "{}: triangles with two overlays", scene.display());
+        assert_eq!(overlay_tris as u64, one_log.counts["overlay triangles"]);
+        // the default draws every layer
         primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
         let mut log = PassLog::default();
-        LowerLayeredReskate.run(&mut w, &mut log).unwrap();
+        LowerLayeredReskate::default().run(&mut w, &mut log).unwrap();
         assert_eq!(w.iter::<LayeredMaterial>().count(), 0);
         println!("{}: {:?}", scene.display(), log.counts);
+        assert_eq!(
+            log.counts["area with overlapping overlays (m2)"],
+            one_log.counts["area limited to one overlay (m2)"]
+        );
+        assert_eq!(overlaps(&w).1 as u64, log.counts["overlay triangles"]);
         let report = primase_reskate::build(&w, &scene, &o).unwrap();
         let out = report.out_dir;
         let map: Value = serde_json::from_slice(&std::fs::read(out.join("map.json")).unwrap()).unwrap();
