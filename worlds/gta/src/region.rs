@@ -26,7 +26,7 @@ use std::fs::File;
 
 use primase_core::frame::SourceFrame;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
-use primase_core::{Instance, Name, Source, Transform, World};
+use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
 use crate::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::components::{GtaArchetype, GtaEntity};
@@ -418,6 +418,8 @@ pub fn read_region(
             let p = w.spawn();
             w.insert(p, GtaArchetype::new(ytyp, a));
             w.insert(p, Source(ytyp.clone()));
+            let archetype = format!("archetype {:#010x}", a.name);
+            w.insert(p, Provenance::new(crate::assets::origin(ytyp, Some(&archetype))));
             let name = story
                 .tables
                 .get("ydr")
@@ -442,10 +444,14 @@ pub fn read_region(
             None => {
                 w.insert(p, GtaEntity::new(ymap, *index, None, lod_parent.clone(), e));
                 w.insert(p, Source(format!("{ymap}#{index}")));
+                let item = format!("entity {index}");
+                w.insert(p, Provenance::new(crate::assets::origin(ymap, Some(&item))));
             }
             Some(c) => {
                 w.insert(p, GtaEntity::new(ymap, *c, Some(*index), None, e));
                 w.insert(p, Source(format!("{ymap}#{index}/{c}")));
+                let item = format!("entity {index} child {c}");
+                w.insert(p, Provenance::new(crate::assets::origin(ymap, Some(&item))));
                 report.interior_entities += 1;
             }
         }

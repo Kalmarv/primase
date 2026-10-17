@@ -29,7 +29,7 @@ use primase_core::{
     Entity, Instance, Mesh, Name, Primitive, Semantic, Source, Stream, TexRole, Texture as CoreTexture,
     Topology, World,
 };
-use primase_core::{LodForm, Lods};
+use primase_core::{LodForm, Lods, Origin, Provenance};
 
 use crate::archive_set::ArchiveSet;
 use crate::collision::GtaEmbeddedBounds;
@@ -259,6 +259,7 @@ impl Ctx<'_> {
         );
         w.insert(e, Name(t.name.clone()));
         w.insert(e, Source(format!("{source}#{}", t.name)));
+        w.insert(e, Provenance::new(origin(source, Some(&t.name))));
         self.textures.insert(key, e);
         self.report.textures += 1;
         Ok(e)
@@ -303,6 +304,29 @@ impl Ctx<'_> {
             .or_default() += 1;
         Ok(None)
     }
+}
+
+/// A drawable's levels of detail as CodeWalker names them.
+const LOD_NAMES: [&str; 4] = ["high", "med", "low", "vlow"];
+
+/// The provenance origin of `item` in the install file at `path`, as the archive set names it: the archive chain up
+/// to the last `\` (`x64i.rpf\levels\...\dt1_03.rpf`), then the file; a dictionary entry's `#<hash>` suffix
+/// becomes the start of the item.
+pub(crate) fn origin(path: &str, item: Option<&str>) -> Origin {
+    let (file, entry) = match path.split_once('#') {
+        Some((f, e)) => (f, Some(e)),
+        None => (path, None),
+    };
+    let (archive, name) = match file.rsplit_once('\\') {
+        Some((a, n)) => (Some(a), n),
+        None => (None, file),
+    };
+    let item = match (entry, item) {
+        (Some(e), Some(i)) => Some(format!("entry {e} {i}")),
+        (Some(e), None) => Some(format!("entry {e}")),
+        (None, i) => i.map(str::to_owned),
+    };
+    Origin::new(archive, name, item.as_deref())
 }
 
 /// Loads drawables and textures for every prototype a placement uses.
@@ -534,6 +558,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     params,
                 },
             );
+            w.insert(m, Provenance::new(origin(&path, Some(&format!("shader {i}")))));
             materials.push(m);
             ctx.report.materials += 1;
         }
@@ -577,8 +602,21 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                 ctx.report.lod_forms += 1;
                 f
             };
+            // the prototype keeps what the map said of it (its archetype); a form is its drawable's alone
+            let mut provenance = if lod == 0 {
+                w.get::<Provenance>(holder).cloned().unwrap_or_default()
+            } else {
+                Provenance::default()
+            };
+            for (i, model) in models.iter().enumerate() {
+                for g in 0..model.geometries.len() {
+                    let item = format!("{} model {i} geometry {g}", LOD_NAMES[lod]);
+                    provenance.push_part(origin(&path, Some(&item)));
+                }
+            }
             w.insert(holder, m);
             w.insert(holder, sources);
+            w.insert(holder, provenance);
             if posed.iter().any(Option::is_some) {
                 w.insert(holder, GtaPoses(posed));
             }
@@ -610,10 +648,36 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
 
 #[cfg(test)]
 mod tests {
-    use super::stream;
+    use super::{origin, stream};
     use crate::drawable::{Element, Geometry};
     use crate::sga::BufferFormat;
     use primase_core::{Semantic, Stream};
+
+    /// An install path splits into its archive chain and file; a dictionary entry's hash leads the item.
+    #[test]
+    fn origins_name_the_archive_file_and_item() {
+        let o = origin(
+            r"x64i.rpf\levels\gta5\_citye\downtown_01\dt1_03.rpf\dt1_03_build.ydr",
+            Some("high model 0 geometry 2"),
+        );
+        assert_eq!(
+            o.archive.as_deref(),
+            Some(r"x64i.rpf\levels\gta5\_citye\downtown_01\dt1_03.rpf")
+        );
+        assert_eq!(&*o.file, "dt1_03_build.ydr");
+        assert_eq!(o.item.as_deref(), Some("high model 0 geometry 2"));
+        let d = origin(r"a.rpf\props.ydd#0x1234abcd", Some("high model 1 geometry 0"));
+        assert_eq!(
+            (d.archive.as_deref(), &*d.file, d.item.as_deref()),
+            (
+                Some("a.rpf"),
+                "props.ydd",
+                Some("entry 0x1234abcd high model 1 geometry 0")
+            )
+        );
+        let bare = origin("loose.ytd", None);
+        assert_eq!((bare.archive, &*bare.file, bare.item), (None, "loose.ytd", None));
+    }
 
     /// GTA's binormal is cross(T, N) * w and glTF's bitangent cross(N, T) * w: the tangent's w is negated, its
     /// direction turned into glTF's frame like normals.

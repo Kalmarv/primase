@@ -21,7 +21,7 @@
 //! saturate of a missing input gives). Tinted terrain (`*_tnt`) is layered without its tint, counted.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, pass_text};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::{
     ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Semantic, Stream, TexRole, Texture,
@@ -102,7 +102,7 @@ impl Pass for GtaTerrainLayers {
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
-        &["core.layered", "pbr.material"]
+        &["core.layered", "pbr.material", "core.provenance"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "gta.sources", "core.texture"]
@@ -216,6 +216,10 @@ impl Pass for GtaTerrainLayers {
                         ..PbrMaterial::default()
                     },
                 );
+                // a layer material is made from the terrain material and the layer's texture
+                if let Some(p) = primase_core::provenance::derive(w, &[m, t], &pass_text(self)) {
+                    w.insert(e, p);
+                }
                 layers.push(Some(Layer {
                     material: e,
                     texcoord: None,
