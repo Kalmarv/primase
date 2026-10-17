@@ -26,6 +26,7 @@ pub fn registry() -> PassRegistry {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(primase_image::NormalizeNormals)),
     });
+    primase_meshops::register(&mut r);
     primase_gta::register(&mut r);
     r
 }
@@ -114,4 +115,15 @@ pub fn run(args: &[String]) -> Result<()> {
     let report = convert(reader.as_mut(), writer, &manager, &select, &passes)?;
     print(&report);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every library pass a conversion may name or plan is registered (bake-nonrigid lowers non-rigid transforms for
+    /// writers that take rigid ones).
+    #[test]
+    fn the_registry_knows_bake_nonrigid() {
+        let p = super::registry().parse("bake-nonrigid").expect("registered");
+        assert_eq!(p.to_string(), "bake-nonrigid");
+    }
 }

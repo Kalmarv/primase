@@ -17,6 +17,7 @@ ktx2 = ["primase-web/ktx2"]
 primase-core.workspace = true
 primase-gta.workspace = true
 primase-image.workspace = true
+primase-meshops.workspace = true
 primase-web.workspace = true
 
 [dev-dependencies]

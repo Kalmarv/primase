@@ -792,6 +792,7 @@ dependencies = [
  "primase-core",
  "primase-gta",
  "primase-image",
+ "primase-meshops",
  "primase-web",
  "toml",
 ]
