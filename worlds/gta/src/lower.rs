@@ -15,7 +15,7 @@ use primase_core::{
     ColorSpace, Entity, LayeredMaterial, Mesh, Primitive, Semantic, Stream, TexRole, Texture, World,
 };
 
-use crate::components::{GtaDrawable, GtaParam, GtaShader};
+use crate::components::{GtaParam, GtaShader, GtaSources};
 use crate::shader_class::{Class, ShaderClass, Skip, classify};
 
 /// The alpha-test reference cutouts and foliage are given.
@@ -88,22 +88,21 @@ pub fn retain_primitives(
     *sources = kept_sources;
 }
 
-/// Calls `f` on every mesh of every drawable (the high LOD's `core.mesh` and the coarser LODs), with its sources.
+/// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms),
+/// with its sources.
 pub fn for_each_mesh(
     w: &mut World,
     mut f: impl FnMut(&mut Mesh, &mut Vec<[u32; 2]>) -> Result<(), String>,
 ) -> Result<(), String> {
-    let drawables: Vec<Entity> = w.iter::<GtaDrawable>().map(|(e, _)| e).collect();
-    for e in drawables {
-        let mut d = w.remove::<GtaDrawable>(e).expect("drawable");
-        if let Some(mut mesh) = w.remove::<Mesh>(e) {
-            f(&mut mesh, &mut d.sources[0])?;
-            w.insert(e, mesh);
-        }
-        for (mesh, sources) in d.coarser_mut() {
-            f(mesh, sources)?;
-        }
-        w.insert(e, d);
+    let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
+    for e in holders {
+        let Some(mut mesh) = w.remove::<Mesh>(e) else {
+            continue;
+        };
+        let mut s = w.remove::<GtaSources>(e).expect("sources");
+        f(&mut mesh, &mut s.sources)?;
+        w.insert(e, mesh);
+        w.insert(e, s);
     }
     Ok(())
 }
@@ -149,13 +148,13 @@ impl Pass for LowerGtaPbr {
         o
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.drawable"]
+        &["gta.shader", "gta.sources"]
     }
     fn provides(&self) -> &[&'static str] {
         &["pbr.material"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.drawable", "core.texture"]
+        &["core.mesh", "gta.sources", "core.texture"]
     }
     fn approximates(&self) -> &'static str {
         "alpha tested at 0.5 (the game's reference is a render state); specular intensity not carried (metal-rough \
@@ -290,10 +289,10 @@ impl Pass for GtaVertexColours {
         "gta-vertex-colours"
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.drawable"]
+        &["gta.shader", "gta.sources"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.drawable"]
+        &["core.mesh", "gta.sources"]
     }
     fn approximates(&self) -> &'static str {
         "per-vertex ambient occlusion (vertex colour 0 red and green) not carried"

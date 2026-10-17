@@ -9,21 +9,22 @@
 //! primitive. A triangle goes with its first vertex's column. Placements of a prototype with variants get their tint as
 //! their variant (a tint past the palette's last row takes the last, as the shader's clamped sampling does).
 //!
-//! Runs after `lower-gta-pbr` (it tints that pass's materials) and before `gta-vertex-colours` (it reads the blue
-//! channel that pass drops). Variant materials carry the shader's `gta.shader` and a `gta.tint`. The coarser LOD meshes
-//! (`gta.drawable`, until core has alternative LOD meshes) are not tinted.
+//! Every drawable mesh is tinted: a prototype's own and each of its `core.lods` forms, each with its own
+//! `core.material_variants` (rows from the placements of the prototype it belongs to), so a form `select-lod` draws keeps
+//! its variants. Runs after `lower-gta-pbr` (it tints that pass's materials) and before `gta-vertex-colours` (it reads
+//! the blue channel that pass drops). Variant materials carry the shader's `gta.shader` and a `gta.tint`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Component, Entity, Instance, JsonError, MaterialVariants, Mesh, Semantic, Stream, Texture, World,
+    Component, Entity, Instance, JsonError, Lods, MaterialVariants, Mesh, Semantic, Stream, Texture, World,
 };
 use primase_meshops::subset_primitive;
 use primase_texcodec::{Decoder, TexDecoder};
 use serde::Serialize;
 
-use crate::components::{GtaDrawable, GtaEntity, GtaShader};
+use crate::components::{GtaEntity, GtaShader, GtaSources};
 use crate::lower::{classes, texture};
 use crate::shader_class::TintColumn;
 
@@ -99,17 +100,16 @@ impl Pass for GtaTintVariants {
         "gta-tint"
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.drawable", "pbr.material"]
+        &["gta.shader", "gta.sources", "pbr.material"]
     }
     fn provides(&self) -> &[&'static str] {
         &["core.material_variants", "gta.tint", "pbr.material", "gta.shader"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.drawable", "core.instance"]
+        &["core.mesh", "gta.sources", "core.instance"]
     }
     fn approximates(&self) -> &'static str {
-        "a triangle whose vertices pick different palette columns is coloured by its first vertex's; coarser LODs not \
-         tinted"
+        "a triangle whose vertices pick different palette columns is coloured by its first vertex's"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -136,8 +136,14 @@ impl Pass for GtaTintVariants {
         }
         let mut made: BTreeMap<(Entity, u32, u32), Entity> = BTreeMap::new();
         let mut tinted_prototypes = BTreeSet::new();
-        let prototypes: Vec<Entity> = w.iter::<GtaDrawable>().map(|(e, _)| e).collect();
-        for e in prototypes {
+        // every drawable mesh, with the prototype it belongs to (itself, or the prototype whose form it is)
+        let mut owner: BTreeMap<Entity, Entity> = BTreeMap::new();
+        for (p, l) in w.iter::<Lods>() {
+            owner.extend(l.forms.iter().map(|f| (f.form, p)));
+        }
+        let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
+        for e in holders {
+            let proto = owner.get(&e).copied().unwrap_or(e);
             let Some(mesh) = w.get::<Mesh>(e) else { continue };
             if !mesh
                 .primitives
@@ -147,17 +153,18 @@ impl Pass for GtaTintVariants {
                 continue;
             }
             let mut mesh = w.remove::<Mesh>(e).expect("mesh");
-            let mut d = w.remove::<GtaDrawable>(e).expect("drawable");
+            let mut d = w.remove::<GtaSources>(e).expect("sources");
             let mut variants = w.remove::<MaterialVariants>(e).unwrap_or_default().0;
             variants.resize(mesh.primitives.len(), BTreeMap::new());
-            let used: BTreeSet<u32> = rows.get(&e).into_iter().flatten().copied().chain([0]).collect();
+            let used: BTreeSet<u32> = rows
+                .get(&proto)
+                .into_iter()
+                .flatten()
+                .copied()
+                .chain([0])
+                .collect();
             let (mut prims, mut sources, mut vars) = (Vec::new(), Vec::new(), Vec::new());
-            for ((p, s), v) in mesh
-                .primitives
-                .drain(..)
-                .zip(d.sources[0].drain(..))
-                .zip(variants)
-            {
+            for ((p, s), v) in mesh.primitives.drain(..).zip(d.sources.drain(..)).zip(variants) {
                 let Some((palette, column)) = p.material.and_then(|m| palettes.get(&m)) else {
                     prims.push(p);
                     sources.push(s);
@@ -242,11 +249,11 @@ impl Pass for GtaTintVariants {
                 }
             }
             mesh.primitives = prims;
-            d.sources[0] = sources;
+            d.sources = sources;
             w.insert(e, mesh);
             w.insert(e, d);
             w.insert(e, MaterialVariants(vars));
-            tinted_prototypes.insert(e);
+            tinted_prototypes.insert(proto);
         }
         log.count("variant materials", made.len() as u64);
         let placements: Vec<(Entity, u32)> = w

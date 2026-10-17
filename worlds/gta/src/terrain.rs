@@ -95,13 +95,13 @@ impl Pass for GtaTerrainLayers {
         "gta-terrain-layers"
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.drawable"]
+        &["gta.shader", "gta.sources"]
     }
     fn provides(&self) -> &[&'static str] {
         &["core.layered", "pbr.material"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.drawable", "core.texture"]
+        &["core.mesh", "gta.sources", "core.texture"]
     }
     fn approximates(&self) -> &'static str {
         "lookup-blended terrain weighed per vertex (the lookup sampled at each vertex); terrain tint not applied"

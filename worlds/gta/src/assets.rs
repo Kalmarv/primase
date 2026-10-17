@@ -4,8 +4,11 @@
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
 //!   converted), 16-bit indices widened;
-//!   [`GtaDrawable`] with the drawable's box and sphere as stored and the coarser LODs as meshes (until core has a
-//!   representation for alternative LOD meshes).
+//!   [`GtaSources`] (LOD 0, each primitive's model and geometry) and [`GtaDrawable`] with the drawable's box, sphere,
+//!   LOD distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
+//!   `core.lods` form of the prototype at its level (1 to 3): an unplaced entity with that LOD's `core.mesh` and
+//!   [`GtaSources`]. GTA draws by distance and authors no level of its own choice, so `core.lods` has no default
+//!   (`select-lod` then takes the high LOD, counted); a pipeline picks a level with `select-lod{form=N}`.
 //! - A material per (drawable, shader) with [`GtaShader`]: every parameter by stored name, textures resolved the way
 //!   the game looks them up: the drawable's own dictionary, then the archetype's texture dictionary, then that
 //!   dictionary's parents ([`TextureParents`]), then the resident detail dictionary ([`RESIDENT`]).
@@ -18,9 +21,10 @@ use primase_core::{
     Entity, Instance, Mesh, Name, Primitive, Semantic, Source, Stream, TexRole, Texture as CoreTexture,
     Topology, World,
 };
+use primase_core::{LodForm, Lods};
 
 use crate::archive_set::ArchiveSet;
-use crate::components::{GtaArchetype, GtaDrawable, GtaParam, GtaShader};
+use crate::components::{GtaArchetype, GtaDrawable, GtaParam, GtaShader, GtaSources};
 use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue};
 use crate::gtxd::TextureParents;
 use crate::keys::Keys;
@@ -55,6 +59,8 @@ pub struct AssetReport {
     pub posed_models_singular: usize,
     /// Prototypes whose archetype names no live file or entry.
     pub asset_missing: usize,
+    /// Coarser LODs made `core.lods` forms.
+    pub lod_forms: usize,
     /// Vertex streams left out because the file stores values that are not finite (NaN, infinity), by semantic: one
     /// per primitive of any LOD. Such a value is unknown, and core holds finite streams only.
     pub non_finite_streams: BTreeMap<String, usize>,
@@ -538,30 +544,51 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
                 Turn::Singular => ctx.report.posed_models_singular += 1,
             }
         }
-        let high = mesh(
-            &path,
-            &d.lods[0],
-            &materials,
-            &poses[0],
-            &mut ctx.report.non_finite_streams,
-        )?;
-        ctx.report.geometries += high.primitives.len();
-        w.insert(proto, high);
-        let mut lod = |i: usize| -> Result<Option<Mesh>> {
-            if d.lods[i].is_empty() {
-                Ok(None)
-            } else {
-                mesh(
-                    &path,
-                    &d.lods[i],
-                    &materials,
-                    &poses[i],
-                    &mut ctx.report.non_finite_streams,
-                )
-                .map(Some)
+        // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the
+        // others are its forms
+        let mut forms = Vec::new();
+        for (lod, models) in d.lods.iter().enumerate() {
+            if lod > 0 && models.is_empty() {
+                continue;
             }
-        };
-        let lods = [lod(1)?, lod(2)?, lod(3)?];
+            let m = mesh(
+                &path,
+                models,
+                &materials,
+                &poses[lod],
+                &mut ctx.report.non_finite_streams,
+            )?;
+            let sources = GtaSources {
+                lod: lod as u8,
+                sources: (models.iter().enumerate())
+                    .flat_map(|(i, model)| (0..model.geometries.len() as u32).map(move |g| [i as u32, g]))
+                    .collect(),
+            };
+            let holder = if lod == 0 {
+                ctx.report.geometries += m.primitives.len();
+                proto
+            } else {
+                let f = w.spawn();
+                forms.push(LodForm {
+                    detail: lod as u8,
+                    form: f,
+                });
+                ctx.report.lod_forms += 1;
+                f
+            };
+            w.insert(holder, m);
+            w.insert(holder, sources);
+        }
+        if !forms.is_empty() {
+            w.insert(
+                proto,
+                Lods {
+                    detail: 0,
+                    forms,
+                    default: None,
+                },
+            );
+        }
         w.insert(
             proto,
             GtaDrawable {
@@ -570,12 +597,6 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
                 bounding_sphere: (d.bounding_centre, d.bounding_radius),
                 lod_dist: d.lod_dist,
                 render_masks: d.render_masks,
-                sources: std::array::from_fn(|i| {
-                    (d.lods[i].iter().enumerate())
-                        .flat_map(|(m, model)| (0..model.geometries.len() as u32).map(move |g| [m as u32, g]))
-                        .collect()
-                }),
-                lods,
             },
         );
         ctx.report.drawables += 1;

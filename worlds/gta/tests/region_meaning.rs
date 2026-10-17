@@ -11,10 +11,11 @@
 //! entities of interiors are counted (which interiors that exporter placed came from its own interior table, not a
 //! pass here).
 //!
-//! Geometry and materials: the matched placements' drawables are attached ([`attach_assets`]) and go through the GTA
-//! passes (`lower-gta-pbr`, `gta-winding`, `gta-tint`, `gta-terrain-layers`, `gta-vertex-colours`), so what is compared
+//! Geometry and materials: the matched placements' drawables are attached ([`attach_assets`]), each prototype drawn at
+//! the level that exporter drew (`select-lod{form=1}`: the coarsest LOD at most medium, else the finest; its `--level 1`),
+//! the scene's prototypes at that exporter's choice (`select-lod`, its `lod_default`), and go through the GTA passes (`lower-gta-pbr`, `gta-winding`, `gta-tint`, `gta-terrain-layers`, `gta-vertex-colours`), so what is compared
 //! is the world once lowered. Per GTA geometry (the scene's parts carry their source model and geometry, ours
-//! `gta.drawable`'s sources; either side may have split it), the scene's triangles are compared with ours by position
+//! `gta.sources`; either side may have split it), the scene's triangles are compared with ours by position
 //! (0.1 mm, winding-agnostic), then every scene triangle of an identical geometry must be wound as ours. Named class:
 //! decal shaders' geometry the exporter lifted 12 mm along each vertex's drawn face (the normalised sum of its
 //! triangles' face normals in the geometry as read; its `--decal-face-lift`), matched within 0.2 mm; not a pass yet.
@@ -44,7 +45,7 @@ use primase_core::pbr::PbrMaterial;
 use primase_core::state::{Condition, ResolveState, StateAxis};
 use primase_core::{Instance, Name, Transform, World};
 use primase_gta::assets::attach_assets;
-use primase_gta::components::{GtaArchetype, GtaDrawable, GtaEntity};
+use primase_gta::components::{GtaArchetype, GtaDrawable, GtaEntity, GtaSources};
 use primase_gta::lower::{GtaVertexColours, LowerGtaPbr};
 use primase_gta::region::{Region, States, archive_sets, read_region};
 use primase_gta::select::SelectRegion;
@@ -150,6 +151,11 @@ fn region_placements_against_the_scene() {
 
     let mut theirs = World::new();
     primase_skate_scene::read(std::path::Path::new(&scene), &mut theirs).expect("scene");
+    // the scene drawn at its own choice of level (its lod_default, which that exporter's --level 1 chose)
+    let mut scene_lod = primase_core::pass::PassLog::default();
+    primase_core::pass::Pass::run(&primase_core::SelectLod::default(), &mut theirs, &mut scene_lod)
+        .expect("scene select-lod");
+    println!("scene select-lod: {:?}", scene_lod.counts);
 
     // ours, resolved to GTA Online's map at hour 12
     let mut index: BTreeMap<(u32, [i64; 3]), Vec<primase_core::Entity>> = BTreeMap::new();
@@ -245,6 +251,17 @@ fn region_placements_against_the_scene() {
     let mut drawn = ours.subset(&ours.closure(matched.iter().copied()));
     let assets = attach_assets(&mut drawn, online.as_ref().expect("online"), &keys).expect("assets");
     println!("assets of the matched placements: {assets:?}");
+    // the level that exporter drew (its --level 1): the coarsest LOD at most 1, else the finest
+    let mut lod_log = primase_core::pass::PassLog::default();
+    primase_core::pass::Pass::run(
+        &primase_core::SelectLod {
+            choice: primase_core::LodChoice::AtMost(1),
+        },
+        &mut drawn,
+        &mut lod_log,
+    )
+    .expect("select-lod");
+    println!("select-lod{{form=1}}: {:?}", lod_log.counts);
 
     // the GTA passes: what the world says once lowered (the world as read kept for the decal lift check: no pass
     // moves a position)
@@ -274,14 +291,14 @@ fn region_placements_against_the_scene() {
     // from it), by rounded positions, winding-agnostic; then the winding
     primase_gltf::load_mesh_files(&mut theirs, std::path::Path::new(&scene)).expect("scene meshes");
     // per archetype: our mesh and drawable once lowered, and as read
-    type Proto<'a> = (&'a Mesh, &'a GtaDrawable, &'a Mesh, &'a GtaDrawable);
+    type Proto<'a> = (&'a Mesh, &'a GtaSources, &'a Mesh, &'a GtaSources);
     let mut protos: BTreeMap<u32, Proto> = BTreeMap::new();
     for (e, a) in drawn.iter::<GtaArchetype>() {
         if let (Some(m), Some(d), Some(r), Some(rd)) = (
             drawn.get::<Mesh>(e),
-            drawn.get::<GtaDrawable>(e),
+            drawn.get::<GtaSources>(e),
             read.get::<Mesh>(e),
-            read.get::<GtaDrawable>(e),
+            read.get::<GtaSources>(e),
         ) {
             protos.insert(a.name, (m, d, r, rd));
         }
@@ -324,9 +341,7 @@ fn region_placements_against_the_scene() {
         }
         *geo.entry("prototypes compared").or_default() += 1;
         for (g, parts) in groups {
-            let ats: Vec<usize> = (0..d.sources[0].len())
-                .filter(|&k| d.sources[0][k] == g)
-                .collect();
+            let ats: Vec<usize> = (0..d.sources.len()).filter(|&k| d.sources[k] == g).collect();
             let ours_t = tris(ours_mesh, &ats);
             let theirs_t = tris(their_mesh, &parts);
             *geo.entry("geometries compared").or_default() += 1;
@@ -480,7 +495,8 @@ fn region_placements_against_the_scene() {
                 let mut cells: BTreeMap<[i64; 3], Vec<[[f64; 3]; 3]>> = BTreeMap::new();
                 // per vertex of the geometry as read, the sum of its triangles' (unnormalised) face normals,
                 // normalised: the drawn face
-                let k = read_d.sources[0]
+                let k = read_d
+                    .sources
                     .iter()
                     .position(|s| *s == g)
                     .expect("the geometry as read");
@@ -611,7 +627,7 @@ fn region_placements_against_the_scene() {
             continue;
         };
         let (d, om) = (
-            drawn.get::<GtaDrawable>(oe).expect("drawable"),
+            drawn.get::<GtaSources>(oe).expect("sources"),
             drawn.get::<Mesh>(oe).expect("mesh"),
         );
         for (i, part) in sp_parts.iter().enumerate() {
@@ -621,9 +637,7 @@ fn region_placements_against_the_scene() {
                 src["geometry"].as_u64().expect("geometry") as u32,
             ];
             *mat.entry("scene parts".into()).or_default() += 1;
-            let cands: Vec<usize> = (0..d.sources[0].len())
-                .filter(|&k| d.sources[0][k] == g)
-                .collect();
+            let cands: Vec<usize> = (0..d.sources.len()).filter(|&k| d.sources[k] == g).collect();
             if cands.is_empty() {
                 *mat.entry("scene parts whose geometry we dropped".into())
                     .or_default() += 1;

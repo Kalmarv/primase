@@ -52,10 +52,10 @@ impl Pass for GtaWinding {
         "gta-winding"
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.drawable"]
+        &["gta.sources"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.drawable"]
+        &["core.mesh", "gta.sources"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         for_each_mesh(w, |mesh, _| {

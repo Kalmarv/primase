@@ -4,7 +4,8 @@
 //! | entity | components |
 //! |---|---|
 //! | placement | `core.transform`, `core.instance`, [`GtaEntity`], `core.condition` when it exists in one map state only |
-//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` (the drawable's high LOD), [`GtaDrawable`] |
+//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` and [`GtaSources`] (the drawable's high LOD), [`GtaDrawable`], `core.lods` |
+//! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), unplaced |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
@@ -176,64 +177,49 @@ impl Component for GtaShader {
     }
 }
 
-/// What a drawable says beyond its high LOD mesh: its file, its box and bounding sphere (GTA's frame, as stored), LOD
-/// distances and render masks, and its coarser LODs (medium, low, very low), until core has a representation for
-/// alternative LOD meshes.
-#[derive(Clone, Debug, PartialEq)]
+/// What a drawable says beyond its meshes: its file, its box and bounding sphere (GTA's frame, as stored), and per LOD
+/// (high, medium, low, very low) the distance it is drawn to and its render mask. On the prototype; the meshes are the
+/// prototype's own (the high LOD) and its `core.lods` forms (the coarser LODs that have models), each with its
+/// [`GtaSources`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaDrawable {
     pub path: String,
     pub bbox: [[f32; 3]; 2],
     pub bounding_sphere: ([f32; 3], f32),
     pub lod_dist: [f32; 4],
     pub render_masks: [u32; 4],
-    /// Per LOD (high, medium, low, very low), each primitive's GTA model and geometry (the index within its model),
-    /// in the order of that LOD's mesh (the high LOD's is the entity's `core.mesh`). The reader makes a primitive per
-    /// geometry, in order; passes that drop or split primitives keep this in step.
-    pub sources: [Vec<[u32; 2]>; 4],
-    pub lods: [Option<Mesh>; 3],
-}
-
-impl GtaDrawable {
-    /// The meshes of the LODs below the high one, each with its primitives' sources.
-    pub fn coarser_mut(&mut self) -> impl Iterator<Item = (&mut Mesh, &mut Vec<[u32; 2]>)> {
-        self.lods
-            .iter_mut()
-            .zip(self.sources[1..].iter_mut())
-            .filter_map(|(m, s)| m.as_mut().map(|m| (m, s)))
-    }
 }
 
 impl Component for GtaDrawable {
     const NAME: &'static str = "gta.drawable";
+    /// 2: the meshes' sources and the coarser LODs moved to [`GtaSources`] and `core.lods`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
-        Ok(Some(serde_json::json!({
-            "path": self.path,
-            "bbox": self.bbox,
-            "bounding_sphere": self.bounding_sphere,
-            "lod_dist": self.lod_dist,
-            "render_masks": self.render_masks,
-            "sources": self.sources,
-            "lods": self.lods.iter().map(|m| m.as_ref().map(|m| m.primitives.len())).collect::<Vec<_>>(),
-        })))
+        to_json(self)
     }
-    /// Every LOD's sources in step with its mesh.
+}
+
+/// Which drawable LOD a mesh is (0 high, 1 medium, 2 low, 3 very low) and, for each of its primitives in order, the GTA
+/// model and geometry (the index within its model) it came from. On every entity holding a drawable's mesh: the
+/// prototype (the high LOD) and each of its LOD forms. The reader makes a primitive per geometry, in order; passes that
+/// drop or split primitives keep this in step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaSources {
+    pub lod: u8,
+    pub sources: Vec<[u32; 2]>,
+}
+
+impl Component for GtaSources {
+    const NAME: &'static str = "gta.sources";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    /// One source per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
-        let high = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
-        let counts = std::iter::once(high).chain(
-            self.lods
-                .iter()
-                .map(|m| m.as_ref().map_or(0, |m| m.primitives.len())),
-        );
-        for (lod, (n, s)) in counts.zip(&self.sources).enumerate() {
-            if n != s.len() {
-                return Err(format!("LOD {lod}: {n} primitives, {} sources", s.len()));
-            }
+        let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives.len());
+        if n != self.sources.len() {
+            return Err(format!("{n} primitives, {} sources", self.sources.len()));
         }
         Ok(())
-    }
-    fn references(&self, out: &mut Vec<Entity>) {
-        for m in self.lods.iter().flatten() {
-            out.extend(m.primitives.iter().filter_map(|p| p.material));
-        }
     }
 }
