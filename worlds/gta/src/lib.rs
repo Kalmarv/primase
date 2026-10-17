@@ -96,9 +96,10 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
     });
     reg.register("lower-gta-surfaces", |o| none(o, surfaces::LowerGtaSurfaces));
-    reg.register("lower-gta-water", |o| {
-        Ok(Box::new(water::LowerGtaWater::from_options(o)?))
+    reg.register("gta-select-water", |o| {
+        Ok(Box::new(water::SelectGtaWater::from_options(o)?))
     });
+    reg.register("lower-gta-water", |o| none(o, water::LowerGtaWater));
     reg.register("lower-gta-lights", |o| {
         Ok(Box::new(lights::LowerGtaLights::from_options(o)?))
     });

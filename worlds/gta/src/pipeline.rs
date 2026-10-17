@@ -22,9 +22,9 @@ use crate::{Install, Result};
 /// The passes a loaded GTA world goes through before a writer, in order: each prototype's finest level of detail (a
 /// writer that draws chooses no level itself; the passes after it then have no discarded forms to lower), fragments'
 /// models at their bones' poses, shaders lowered to `pbr.material`, winding turned to the stored normals, tint palettes
-/// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning, normal maps to glTF's
-/// convention.
-pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, normalize-normals";
+/// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning, water surfaces as meshes,
+/// normal maps to glTF's convention.
+pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
 
 /// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
 /// on.
@@ -121,7 +121,7 @@ pub fn select_passes(s: &Selection) -> String {
         ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
     p.push_str(", lower-gta-surfaces");
-    p.push_str(&format!(", lower-gta-water{{x0={x0},y0={y0},x1={x1},y1={y1}}}"));
+    p.push_str(&format!(", gta-select-water{{x0={x0},y0={y0},x1={x1},y1={y1}}}"));
     p
 }
 
@@ -280,18 +280,8 @@ pub const REACH: f32 = 600.0;
 /// `None` for an entity that is no GTA prototype.
 pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
     let Some(a) = world.get::<GtaArchetype>(prototype) else {
-        // a prototype a pass made (a water surface): its mesh's box, already in the core frame
-        let mesh = world.get::<primase_core::Mesh>(prototype)?;
-        let mut b: Option<[[f64; 3]; 2]> = None;
-        for p in mesh.primitives.iter().filter_map(|p| p.positions()).flatten() {
-            let p = p.map(f64::from);
-            let [lo, hi] = b.get_or_insert([p, p]);
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
-        }
-        return b;
+        // a water surface: its outline's box
+        return world.get::<crate::water::GtaWaterSurface>(prototype)?.bounds();
     };
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)
