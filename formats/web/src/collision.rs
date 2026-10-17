@@ -1,5 +1,5 @@
 use crate::{Error, Result, ViewerItem};
-use primase_core::{Collision, Entity, Instance, Name, Surfaces, Transform, World};
+use primase_core::{Collision, Entity, Instance, Name, Surfaces, Transform, TransformKind, World};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,13 +70,13 @@ fn items(world: &World, only: Option<&BTreeSet<Entity>>) -> Result<Vec<ViewerIte
             )],
         };
         for (at, t) in by {
+            if matches!(t.classify(), TransformKind::Mirrored | TransformKind::Sheared) {
+                return Err(Error::Invalid(format!(
+                    "collision of {at:?}: a non-rigid transform; run bake-nonrigid first"
+                )));
+            }
             let positions: Vec<[f32; 3]> = c.positions.iter().map(|&p| t.apply(p)).collect();
-            // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
-            let triangles: Vec<[u32; 3]> = if t.determinant() < 0.0 {
-                c.triangles.iter().map(|&[a, b, d]| [a, d, b]).collect()
-            } else {
-                c.triangles.clone()
-            };
+            let triangles = c.triangles.clone();
             items.push(ViewerItem {
                 name: name(at),
                 kind: "collision".into(),

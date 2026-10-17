@@ -420,7 +420,8 @@ impl std::fmt::Debug for TilePlan {
 /// What the writer accepts in the world it writes a cell from ([`TilePlan::write_cell`], after that cell's passes):
 /// the core and PBR components it interprets are legal; a `core.mesh_file` or `core.texture_file` only on an entity
 /// with the mesh or texture loaded; `core.lods` must be resolved first (`select-lod`). Every other name is carried
-/// (glTF extras). A material entity without `pbr.material` is written as the glTF fallback material and counted.
+/// (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
+/// into geometry. A material entity without `pbr.material` is written as the glTF fallback material and counted.
 pub fn target() -> primase_core::pass::Target {
     use primase_core::{
         Collision, Component, Curve, LayeredMaterial, Light, Lods, Marker, MeshFile, Shadows, Texture,
@@ -428,7 +429,9 @@ pub fn target() -> primase_core::pass::Target {
     };
     primase_core::pass::Target::new("web")
         .legal(Instance::NAME)
-        .legal(Transform::NAME)
+        .dynamic_typed::<Transform>(|t| {
+            matches!(t.classify(), TransformKind::Regular | TransformKind::Degenerate)
+        })
         .legal(Name::NAME)
         .legal(Mesh::NAME)
         .legal(MaterialVariants::NAME)
@@ -549,9 +552,18 @@ pub fn plan_with_geometry(
         )?,
     };
     for p in placements.into_values() {
-        if p.transform.classify() == TransformKind::Degenerate {
-            plan.skipped += 1;
-            continue;
+        match p.transform.classify() {
+            TransformKind::Degenerate => {
+                plan.skipped += 1;
+                continue;
+            }
+            TransformKind::Mirrored | TransformKind::Sheared => {
+                return Err(Error::Invalid(format!(
+                    "placement {:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first",
+                    p.entity
+                )));
+            }
+            TransformKind::Regular => {}
         }
         if meshless(world, p.prototype) && !geometry(p.prototype) {
             plan.without_mesh += 1;

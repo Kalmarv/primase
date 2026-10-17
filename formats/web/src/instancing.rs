@@ -1,5 +1,5 @@
 use crate::{Error, Result, require_extension};
-use primase_core::{Transform, TransformKind};
+use primase_core::Transform;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 const EXT: &str = "EXT_mesh_gpu_instancing";
@@ -9,10 +9,9 @@ struct Trs {
     rotation: [f32; 4],
     scale: [f32; 3],
 }
+/// `t` as translation, rotation and scale; `None` when the rotation does not rebuild `t` (to 1e-6). Placements reach
+/// the writer rigid (`bake-nonrigid`), so `t` is regular.
 fn decompose(t: Transform) -> Option<Trs> {
-    if t.classify() != TransformKind::Regular {
-        return None;
-    }
     let scale: [f64; 3] = std::array::from_fn(|i| {
         t.cols[i]
             .iter()
