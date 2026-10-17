@@ -143,9 +143,19 @@ impl Install {
     /// A binary file's contents by path; `None` when there is no such file.
     pub fn read(&self, path: &str, keys: &Keys) -> Result<Option<Vec<u8>>> {
         let Some(r) = self.file(path) else { return Ok(None) };
-        let a = &self.archives[r.archive];
-        let mut f = File::open(&a.file)?;
-        a.binary(&mut f, r.entry, keys).map(Some)
+        self.binary(r, keys).map(Some)
+    }
+
+    /// A binary file's contents.
+    pub fn binary(&self, f: FileRef, keys: &Keys) -> Result<Vec<u8>> {
+        let a = &self.archives[f.archive];
+        a.binary(&mut File::open(&a.file)?, f.entry, keys)
+    }
+
+    /// A resource file (RSC7), decoded.
+    pub fn resource(&self, f: FileRef, keys: &Keys) -> Result<crate::resource::Resource> {
+        let a = &self.archives[f.archive];
+        a.resource(&mut File::open(&a.file)?, f.entry, keys)
     }
 }
 

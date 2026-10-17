@@ -11,13 +11,6 @@
 //! foliage (type flag bit 19) or river (bit 27) left out, as the earlier exporter did (counted). Each triangle's
 //! surface is its material's name in the install's material table (`materials.dat`), in the world's `Surfaces`.
 //! Given a region, only triangles whose centre lies in it are kept.
-#![allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "reader I/O: reads the map's collision files from the install"
-)]
-use std::fs::File;
-
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Component, Entity, JsonError, Surfaces, Transform, World};
 
@@ -108,8 +101,7 @@ pub fn attach_map_bounds(
     let next = std::sync::atomic::AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let read = |f: crate::archive_set::FileRef| -> Result<Option<Bound>> {
-        let a = &set.install.archives[f.archive];
-        let r = a.resource(&mut File::open(&a.file)?, f.entry, keys)?;
+        let r = set.install.resource(f, keys)?;
         let bound = read_ybn(&r)?;
         let (lo, hi) = (bound.header.box_min, bound.header.box_max);
         let meets = hi[0] >= x0 && lo[0] <= x1 && hi[1] >= y0 && lo[1] <= y1;
@@ -156,8 +148,7 @@ pub fn attach_map_bounds(
         );
     }
     if let Some(f) = set.live("dat", "materials") {
-        let a = &set.install.archives[f.archive];
-        let bytes = a.binary(&mut File::open(&a.file)?, f.entry, keys)?;
+        let bytes = set.install.binary(f, keys)?;
         let names = material_names(&String::from_utf8_lossy(&bytes))?;
         report.material_names = names.len();
         w.insert_resource(GtaMaterials(names));
