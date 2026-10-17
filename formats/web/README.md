@@ -17,7 +17,11 @@ is in place. `write` is that pipeline over an already prepared world. Each tile 
 written as a `primase_gltf::Selection` of the cell's world, which stays unchanged,
 so one loaded cell can be written by several plans (the example's plain set).
 `target()` declares what a cell's world may hold when it is written (a converter
-checks it after the cell's passes): its files loaded, levels of detail chosen.
+checks it after the cell's passes): its files loaded, levels of detail chosen,
+transforms rigid. `plan` refuses a mirrored or sheared placement: `bake-nonrigid`
+(primase-meshops) moves an authored mirror or shear into geometry, which needs the
+prototype's geometry loaded, so a streamed scene with one loads that prototype and
+runs the pass before planning (no real scene converted so far has one).
 
 A reader that loads meshes only per cell plans with `plan_with_geometry`, saying
 which prototypes have geometry still to load; `spanning` finds, from prototype
