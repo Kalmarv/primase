@@ -485,7 +485,7 @@ impl Pass for LowerGtaCollision {
         o
     }
     fn provides(&self) -> &[&'static str] {
-        &["core.collision", "core.transform"]
+        &["core.collision", "core.transform", "core.surfaces"]
     }
     fn approximates(&self) -> &'static str {
         "boxes, spheres, capsules and cylinders tessellated; foliage and river volumes left out"

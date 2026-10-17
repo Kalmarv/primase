@@ -154,7 +154,7 @@ impl Pass for GtaTintVariants {
         &["gta.shader", "gta.sources"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["gta.tint"]
+        &["gta.tint", "gta.tinted"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "core.instance"]
