@@ -12,7 +12,7 @@
     reason = "writer I/O: writes the scene folder and copies the files it references"
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
@@ -187,14 +187,14 @@ fn file_object(path: &str, sha256: &str) -> Value {
 /// A string list that keeps the order it was read in and appends new strings.
 struct StrTable {
     list: Vec<String>,
-    index: HashMap<String, u32>,
+    index: BTreeMap<String, u32>,
     appended: bool,
 }
 
 impl StrTable {
     fn new(read: Option<&Vec<String>>) -> StrTable {
         let list = read.cloned().unwrap_or_default();
-        let mut index = HashMap::new();
+        let mut index = BTreeMap::new();
         for (i, s) in list.iter().enumerate() {
             index.entry(s.clone()).or_insert(i as u32);
         }
@@ -436,7 +436,7 @@ impl Writer<'_> {
         put("stats", scene.stats.as_ref().cloned());
 
         // textures
-        let mut tex_key: HashMap<Entity, String> = HashMap::new();
+        let mut tex_key: BTreeMap<Entity, String> = BTreeMap::new();
         let mut textures = ObjB::default();
         for (e, t) in w.iter::<SkateTexture>() {
             let src = w
@@ -485,7 +485,7 @@ impl Writer<'_> {
         }
 
         // materials
-        let mut mat_key: HashMap<Entity, String> = HashMap::new();
+        let mut mat_key: BTreeMap<Entity, String> = BTreeMap::new();
         let mut materials = ObjB::default();
         for (e, m) in w.iter::<SkateMaterial>() {
             let tref = |te: Option<Entity>, role: &str| -> Result<Option<Value>> {
@@ -548,7 +548,7 @@ impl Writer<'_> {
         };
 
         // prototypes
-        let mut proto_index: HashMap<Entity, u32> = HashMap::new();
+        let mut proto_index: BTreeMap<Entity, u32> = BTreeMap::new();
         let mut protos = Vec::new();
         let proto_list: Vec<(Entity, &SkatePrototype)> = w.iter::<SkatePrototype>().collect();
         // a mesh's `parts`: entity `e`'s skate.parts with the materials of its primitives and its variants

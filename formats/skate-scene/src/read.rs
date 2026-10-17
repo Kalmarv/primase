@@ -9,7 +9,7 @@
     reason = "reader I/O: reads the scene folder"
 )]
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
@@ -70,7 +70,7 @@ fn kind(v: &Value) -> &'static str {
 struct Obj<'a> {
     what: String,
     map: &'a Map<String, Value>,
-    used: HashSet<&'a str>,
+    used: BTreeSet<&'a str>,
 }
 
 impl<'a> Obj<'a> {
@@ -80,7 +80,7 @@ impl<'a> Obj<'a> {
             Value::Object(map) => Ok(Obj {
                 what,
                 map,
-                used: HashSet::new(),
+                used: BTreeSet::new(),
             }),
             other => Err(bad(format!(
                 "{what}: {} where an object was expected",
@@ -651,7 +651,7 @@ impl Reader<'_> {
         let Value::Object(kv) = v else {
             return Err(bad("textures: not an object"));
         };
-        let mut names: HashSet<String> = HashSet::new();
+        let mut names: BTreeSet<String> = BTreeSet::new();
         for (key, e) in kv {
             let what = format!("texture '{key}'");
             let rep = &mut *self.rep;
@@ -760,7 +760,7 @@ impl Reader<'_> {
             let Value::Object(kv) = v else {
                 return Err(bad("materials: not an object"));
             };
-            let mut lower: HashSet<String> = HashSet::new();
+            let mut lower: BTreeSet<String> = BTreeSet::new();
             for (key, e) in kv {
                 if !lower.insert(key.to_lowercase()) {
                     return Err(bad(format!(
@@ -885,7 +885,7 @@ impl Reader<'_> {
     ) -> Result<Vec<Proto>> {
         let mut out = Vec::new();
         let Some(v) = v else { return Ok(out) };
-        let mut ids: HashSet<String> = HashSet::new();
+        let mut ids: BTreeSet<String> = BTreeSet::new();
         let mut keys: BTreeMap<u32, String> = BTreeMap::new();
         for e in array(v, "prototypes")? {
             let i = out.len();
