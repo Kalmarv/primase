@@ -790,6 +790,8 @@ name = "primase-cli"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-gta",
+ "primase-web",
  "toml",
 ]
 
