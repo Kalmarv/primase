@@ -799,7 +799,8 @@ impl PassManager {
     }
 
     /// Choose the passes that take the world to what `target` accepts (see the module docs), in run order, each made
-    /// with its options in `options`.
+    /// with its options in `options`. A dynamic check is decided on the values the world has: values a planned pass
+    /// produces are checked by [`PassManager::convert`], which plans again for those the target refuses.
     pub fn plan(
         &self,
         w: &World,
@@ -808,6 +809,22 @@ impl PassManager {
         options: &PassOptions,
         report: &mut RunReport,
     ) -> Result<Pipeline> {
+        self.plan_round(w, target, mode, options, &BTreeSet::new(), report)
+            .map(|(pipeline, _)| pipeline)
+    }
+
+    /// [`PassManager::plan`] for one round of a conversion: carried-and-lowered names in `lowered_before` were lowered
+    /// by an earlier round and need no lowering again unless a pass of this round provides more of them. Returns the
+    /// pipeline and the carried-and-lowered names lowered once it has run.
+    fn plan_round(
+        &self,
+        w: &World,
+        target: &Target,
+        mode: Mode,
+        options: &PassOptions,
+        lowered_before: &BTreeSet<String>,
+        report: &mut RunReport,
+    ) -> Result<(Pipeline, BTreeSet<String>)> {
         let passes = self.registry.instances(options)?;
         let present: BTreeSet<&str> = w.component_names().into_iter().collect();
         let resources: BTreeSet<&str> = w.resource_names().into_iter().collect();
@@ -928,13 +945,20 @@ impl PassManager {
             }
         };
 
-        let mut chosen: BTreeSet<usize> = BTreeSet::new();
-        let mut todo: Vec<(&str, bool)> = present
+        // the names the world has that must be lowered
+        let roots: Vec<&str> = present
             .iter()
-            .rev()
-            .filter(|n| need(n) != Need::Nothing)
-            .map(|&n| (n, true))
+            .copied()
+            .filter(|&n| match need(n) {
+                Need::Nothing => false,
+                Need::Lower => !lowered_before.contains(n),
+                Need::Remove | Need::Fix => true,
+            })
             .collect();
+        let mut chosen: BTreeSet<usize> = BTreeSet::new();
+        // the obligations that made a choice, in choice order
+        let mut choices: Vec<(&str, bool)> = Vec::new();
+        let mut todo: Vec<(&str, bool)> = roots.iter().rev().map(|&n| (n, true)).collect();
         while let Some((name, lowering_it)) = todo.pop() {
             if chosen.iter().any(|&i| serves(i, name, lowering_it)) {
                 continue;
@@ -947,11 +971,7 @@ impl PassManager {
                 });
             };
             let p = passes[i].as_ref();
-            report.plan.push(PlanChoice {
-                name: name.to_owned(),
-                pass: pass_text(p),
-                depth: depth_as(i, name, lowering_it),
-            });
+            choices.push((name, lowering_it));
             chosen.insert(i);
             for &r in p.requires().iter().rev() {
                 if !have(r) {
@@ -965,11 +985,79 @@ impl PassManager {
             }
         }
 
+        // what a set of passes must provide or lower: the roots, the requirements the world lacks, and what they
+        // provide that is not settled
+        let obligations = |set: &BTreeSet<usize>| -> BTreeSet<(&str, bool)> {
+            let mut out: BTreeSet<(&str, bool)> = roots.iter().map(|&n| (n, true)).collect();
+            for &i in set {
+                let p = passes[i].as_ref();
+                out.extend(p.requires().iter().filter(|&&r| !have(r)).map(|&r| (r, false)));
+                out.extend(
+                    p.provides()
+                        .iter()
+                        .filter(|&&n| !settled(p, n))
+                        .map(|&n| (n, true)),
+                );
+            }
+            out
+        };
+        let covered = |set: &BTreeSet<usize>| {
+            obligations(set)
+                .iter()
+                .all(|&(n, lowering_it)| set.iter().any(|&i| serves(i, n, lowering_it)))
+        };
+        // a chosen pass whose work the others cover is left out, the least preferred first, until none is
+        // redundant (a pass chosen for one name may turn out to be covered by one chosen later for another)
+        loop {
+            let mut worst_first: Vec<usize> = chosen.iter().copied().collect();
+            worst_first.sort_by_key(|&i| (cost[i], -passes[i].priority(), passes[i].name()));
+            worst_first.reverse();
+            let redundant = worst_first.into_iter().find(|&i| {
+                let mut rest = chosen.clone();
+                rest.remove(&i);
+                covered(&rest)
+            });
+            match redundant {
+                Some(i) => {
+                    chosen.remove(&i);
+                }
+                None => break,
+            }
+        }
+        // why each pass is in the plan: the obligations that made a choice, each with the pass that meets it now
+        let left_to_meet = obligations(&chosen);
+        for (name, lowering_it) in choices {
+            if !left_to_meet.contains(&(name, lowering_it)) {
+                continue;
+            }
+            let by = chosen
+                .iter()
+                .copied()
+                .filter(|&i| serves(i, name, lowering_it))
+                .min_by_key(|&i| {
+                    (
+                        depth_as(i, name, lowering_it),
+                        -passes[i].priority(),
+                        passes[i].name(),
+                    )
+                })
+                .expect("every obligation is met");
+            report.plan.push(PlanChoice {
+                name: name.to_owned(),
+                pass: pass_text(passes[by].as_ref()),
+                depth: depth_as(by, name, lowering_it),
+            });
+        }
+
         let order = order_passes(&passes, &chosen)?;
         // check the order by simulating the declarations: what is required is there, what must go has gone, and
         // what must be lowered was lowered after the last pass that provided more of it
         let mut names = present.clone();
-        let mut lowered: BTreeSet<&str> = BTreeSet::new();
+        let mut lowered: BTreeSet<&str> = present
+            .iter()
+            .copied()
+            .filter(|n| lowered_before.contains(*n))
+            .collect();
         for &i in &order {
             let p = passes[i].as_ref();
             if let Some(r) = p
@@ -1023,7 +1111,12 @@ impl PassManager {
         };
         report.target = target.name.clone();
         report.pipeline = pipeline.to_string();
-        Ok(pipeline)
+        let lowered = lowered
+            .into_iter()
+            .filter(|n| need(n) == Need::Lower)
+            .map(str::to_owned)
+            .collect();
+        Ok((pipeline, lowered))
     }
 
     /// The missing link behind a failed plan, for the error message.
@@ -1074,7 +1167,10 @@ impl PassManager {
 
     /// Plan (with `options` for the passes it chooses), run and check: verify the reader's world, run the planned
     /// pipeline (verifying after every pass), then check that the target accepts every component and verify once more
-    /// before the writer.
+    /// before the writer. A dynamic check sees values only once they exist: while the target refuses values the
+    /// pipeline produced, convert plans again on the world as it is and runs that too. A round that plans a pipeline
+    /// an earlier round ran makes no progress, and the refused values are an error. The report holds every round: its
+    /// pipeline is what ran, in order.
     pub fn convert(
         &self,
         w: &mut World,
@@ -1096,17 +1192,41 @@ impl PassManager {
     ) -> Result<RunReport> {
         self.verify(w, "the reader")?;
         let mut report = RunReport::default();
-        let pipeline = self.plan(w, target, mode, options, &mut report)?;
-        self.run_instrumented(w, &pipeline, &mut report, instrument)?;
-        for name in w.component_names() {
-            let bad = target.illegal_entities(w, name, mode);
-            if !bad.is_empty() {
-                return Err(Error::Illegal {
-                    target: target.name.clone(),
-                    name: name.to_owned(),
-                    entities: bad.into_iter().take(10).collect(),
-                });
+        let mut ran: Vec<String> = Vec::new();
+        let mut lowered = BTreeSet::new();
+        let mut used: BTreeSet<String> = BTreeSet::new();
+        let refused = |w: &World| {
+            w.component_names()
+                .into_iter()
+                .map(|name| (name.to_owned(), target.illegal_entities(w, name, mode)))
+                .find(|(_, bad)| !bad.is_empty())
+        };
+        loop {
+            let mut round = RunReport::default();
+            let (pipeline, now_lowered) = self.plan_round(w, target, mode, options, &lowered, &mut round)?;
+            let text = pipeline.to_string();
+            // a round planning a pipeline an earlier round ran makes no progress (and rounds cannot cycle)
+            if pipeline.passes.is_empty() || ran.contains(&text) {
+                break;
             }
+            used.extend(pipeline.passes.iter().map(|p| p.name().to_owned()));
+            report.plan.extend(round.plan);
+            self.run_instrumented(w, &pipeline, &mut report, instrument)?;
+            ran.push(text);
+            lowered = now_lowered;
+            if refused(w).is_none() {
+                break;
+            }
+        }
+        report.target = target.name.clone();
+        report.pipeline = ran.join(", ");
+        report.unused_options = options.keys().filter(|n| !used.contains(*n)).cloned().collect();
+        if let Some((name, bad)) = refused(w) {
+            return Err(Error::Illegal {
+                target: target.name.clone(),
+                name,
+                entities: bad.into_iter().take(10).collect(),
+            });
         }
         self.verify(w, &format!("the pipeline, before {}", target.name))?;
         Ok(report)
@@ -1116,19 +1236,29 @@ impl PassManager {
 /// Run order of the chosen passes. A pass reads the names it requires and those it legalizes but keeps. For each
 /// name: a pass that provides it runs before one that reads, removes or modifies it; one that modifies it (without
 /// providing it) runs before one that takes it as it is (reads or removes it, neither providing nor modifying it); one
-/// that reads it runs before one that only removes it (neither providing nor modifying it). Ties by name.
+/// that reads it runs before one that only removes it (neither providing nor modifying it). Between two passes that
+/// both provide a name, its edge is weak: it gives way to any edge the other way (two passes that each add to and read
+/// one name have no order between them). Ties by name.
 fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Vec<usize>> {
     let ids: Vec<usize> = chosen.iter().copied().collect();
-    let before = |a: usize, b: usize| -> bool {
+    let reads = |p: &dyn Pass, n: &&str| {
+        p.requires().contains(n) || (p.legalizes().contains(n) && !p.removes().contains(n))
+    };
+    let uses = |p: &dyn Pass, n: &&str| reads(p, n) || p.removes().contains(n) || p.modifies().contains(n);
+    // a provider of a name before a pass that uses it and provides it too
+    let weak = |a: usize, b: usize| -> bool {
         let (pa, pb) = (passes[a].as_ref(), passes[b].as_ref());
-        let reads = |p: &dyn Pass, n: &&str| {
-            p.requires().contains(n) || (p.legalizes().contains(n) && !p.removes().contains(n))
-        };
+        pa.provides()
+            .iter()
+            .any(|n| uses(pb, n) && pb.provides().contains(n))
+    };
+    let strong = |a: usize, b: usize| -> bool {
+        let (pa, pb) = (passes[a].as_ref(), passes[b].as_ref());
         // neither provides nor modifies: what it reads or removes is the value as it is
         let as_is = |p: &dyn Pass, n: &&str| !p.provides().contains(n) && !p.modifies().contains(n);
         pa.provides()
             .iter()
-            .any(|n| reads(pb, n) || pb.removes().contains(n) || pb.modifies().contains(n))
+            .any(|n| uses(pb, n) && !pb.provides().contains(n))
             || pa.modifies().iter().any(|n| {
                 !pa.provides().contains(n) && as_is(pb, n) && (reads(pb, n) || pb.removes().contains(n))
             })
@@ -1138,6 +1268,7 @@ fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Ve
                 .chain(pa.legalizes())
                 .any(|n| reads(pa, n) && pb.removes().contains(n) && as_is(pb, n))
     };
+    let before = |a: usize, b: usize| strong(a, b) || (weak(a, b) && !strong(b, a) && !weak(b, a));
     let mut indeg: BTreeMap<usize, usize> = ids.iter().map(|&i| (i, 0)).collect();
     for &a in &ids {
         for &b in &ids {
@@ -2154,6 +2285,230 @@ mod tests {
         };
         let weld = decl("z-weld", &["toy.mesh"], &[], &[], &["toy.mesh"]);
         assert_eq!(order(vec![keep, weld]), ["z-weld", "a-keep"]);
+    }
+
+    #[test]
+    fn values_a_planned_pass_produces_are_lowered_after_it() {
+        // load makes Mesh(3) from File(3); the target wants even meshes: only once the mesh exists does the check
+        // see it, so convert plans again on the world the first pipeline produced
+        let mut r = PassRegistry::new();
+        r.register("load", load);
+        r.register("evens", |_| Ok(Box::new(Evens { legalizes: true })));
+        let m = PassManager::new(r);
+        let t = Target::new("even")
+            .illegal("toy.file")
+            .dynamic_typed::<Mesh>(|m| m.0 % 2 == 0);
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, File(3));
+        let report = m.convert(&mut w, &t, Mode::Partial, &PassOptions::new()).unwrap();
+        assert_eq!(report.pipeline, "load, evens");
+        assert_eq!(w.get::<Mesh>(e), Some(&Mesh(4)));
+        // a produced value the check accepts needs no second round
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, File(2));
+        let report = m.convert(&mut w, &t, Mode::Partial, &PassOptions::new()).unwrap();
+        assert_eq!(report.pipeline, "load");
+        // a produced value no pass can fix is refused after the round that made it
+        let mut r = PassRegistry::new();
+        r.register("load", load);
+        let err = PassManager::new(r)
+            .convert(&mut w_with_file(5), &t, Mode::Partial, &PassOptions::new())
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::NoLowering { ref name, .. } if name == "toy.mesh"),
+            "{err}"
+        );
+    }
+
+    fn w_with_file(n: u32) -> World {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, File(n));
+        w
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Ta;
+    impl Component for Ta {
+        const NAME: &'static str = "toy.a";
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct Tb;
+    impl Component for Tb {
+        const NAME: &'static str = "toy.b";
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    struct Tx(u32);
+    impl Component for Tx {
+        const NAME: &'static str = "toy.x";
+    }
+
+    /// Removes toy.a (and toy.b with `both`); with `requires`, requires what it removes.
+    struct Strip {
+        name: &'static str,
+        both: bool,
+        requires: bool,
+    }
+    impl Pass for Strip {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn requires(&self) -> &[&'static str] {
+            match (self.requires, self.both) {
+                (false, _) => &[],
+                (true, false) => &["toy.a"],
+                (true, true) => &["toy.a", "toy.b"],
+            }
+        }
+        fn removes(&self) -> &[&'static str] {
+            if self.both {
+                &["toy.a", "toy.b"]
+            } else {
+                &["toy.a"]
+            }
+        }
+        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            for e in w.entities().collect::<Vec<_>>() {
+                w.remove::<Ta>(e);
+                if self.both {
+                    w.remove::<Tb>(e);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn ab_world() -> World {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Ta);
+        w.insert(e, Tb);
+        w
+    }
+
+    #[test]
+    fn a_chosen_pass_another_choice_covers_is_left_out() {
+        let t = Target::new("t").illegal("toy.a").illegal("toy.b");
+        for requires in [false, true] {
+            let mut r = PassRegistry::new();
+            // name order chooses a-only for toy.a first; z-both, chosen for toy.b, also takes toy.a
+            r.register("a-only", if requires { strip_a_req } else { strip_a });
+            r.register("z-both", if requires { strip_both_req } else { strip_both });
+            let mut w = ab_world();
+            let report = PassManager::new(r)
+                .convert(&mut w, &t, Mode::Partial, &PassOptions::new())
+                .unwrap();
+            assert_eq!(report.pipeline, "z-both", "requires {requires}");
+            assert!(
+                report.plan.iter().all(|c| c.pass == "z-both"),
+                "{:?}",
+                report.plan
+            );
+            assert!(w.component_names().is_empty());
+        }
+    }
+    fn strip_a(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
+        Ok(Box::new(Strip {
+            name: "a-only",
+            both: false,
+            requires: false,
+        }))
+    }
+    fn strip_a_req(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
+        Ok(Box::new(Strip {
+            name: "a-only",
+            both: false,
+            requires: true,
+        }))
+    }
+    fn strip_both(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
+        Ok(Box::new(Strip {
+            name: "z-both",
+            both: true,
+            requires: false,
+        }))
+    }
+    fn strip_both_req(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
+        Ok(Box::new(Strip {
+            name: "z-both",
+            both: true,
+            requires: true,
+        }))
+    }
+
+    /// Requires toy.x, removes its letter (toy.a or toy.b) and adds one to every toy.x, which it provides and
+    /// modifies.
+    struct Bump {
+        name: &'static str,
+        b: bool,
+    }
+    impl Pass for Bump {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn requires(&self) -> &[&'static str] {
+            &["toy.x"]
+        }
+        fn provides(&self) -> &[&'static str] {
+            &["toy.x"]
+        }
+        fn modifies(&self) -> &[&'static str] {
+            &["toy.x"]
+        }
+        fn removes(&self) -> &[&'static str] {
+            if self.b { &["toy.b"] } else { &["toy.a"] }
+        }
+        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            for e in w.entities().collect::<Vec<_>>() {
+                if self.b {
+                    w.remove::<Tb>(e);
+                } else {
+                    w.remove::<Ta>(e);
+                }
+            }
+            if let Some(mut c) = w.column_mut::<Tx>() {
+                for (_, x) in c.iter_mut() {
+                    x.0 += 1;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn two_passes_that_provide_and_modify_one_name_do_not_form_a_cycle() {
+        let t = Target::new("t").illegal("toy.a").illegal("toy.b").legal("toy.x");
+        let bump_a: PassFactory = |_| {
+            Ok(Box::new(Bump {
+                name: "bump-a",
+                b: false,
+            }))
+        };
+        let bump_b: PassFactory = |_| {
+            Ok(Box::new(Bump {
+                name: "bump-b",
+                b: true,
+            }))
+        };
+        for order in [
+            [("bump-a", bump_a), ("bump-b", bump_b)],
+            [("bump-b", bump_b), ("bump-a", bump_a)],
+        ] {
+            let mut r = PassRegistry::new();
+            for (name, f) in order {
+                r.register(name, f);
+            }
+            let mut w = ab_world();
+            let e = w.entities().next().unwrap();
+            w.insert(e, Tx(0));
+            let report = PassManager::new(r)
+                .convert(&mut w, &t, Mode::Partial, &PassOptions::new())
+                .unwrap();
+            assert_eq!(report.pipeline, "bump-a, bump-b");
+            assert_eq!(w.get::<Tx>(e), Some(&Tx(2)));
+        }
     }
 
     #[test]

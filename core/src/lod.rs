@@ -74,7 +74,8 @@ impl Component for Lods {
         out.extend(self.forms.iter().map(|f| f.form));
     }
     /// `default`, when there is one, one of the forms; with other forms, on an entity with a mesh; each form another
-    /// entity (alive: the world checks every reference), listed once, not placed and without forms of its own.
+    /// alive entity, listed once, not placed and without forms of its own. [`SelectLod`] checks it before it changes
+    /// anything, so it checks liveness itself, beside the world's check of every reference.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         if let Some(d) = self.default
             && d > self.forms.len()
@@ -86,8 +87,8 @@ impl Component for Lods {
         }
         let mut seen = BTreeSet::new();
         for f in &self.forms {
-            if f.form == e {
-                return Err(format!("form {:?} is the entity itself", f.form));
+            if f.form == e || !w.is_alive(f.form) {
+                return Err(format!("form {:?} is not another alive entity", f.form));
             }
             if !seen.insert(f.form) {
                 return Err(format!("form {:?} is listed twice", f.form));
@@ -298,6 +299,24 @@ mod tests {
     }
 
     #[test]
+    fn select_lod_refuses_a_dead_form_before_it_changes_anything() {
+        // run, unlike convert, does not verify its input: the pass checks its forms itself
+        let (mut w, proto, forms) = world();
+        w.despawn(forms[0]);
+        let m = manager();
+        let err = m
+            .run(
+                &mut w,
+                &m.registry.parse("select-lod").unwrap(),
+                &mut RunReport::default(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("not another alive entity"), "{err}");
+        assert!(w.has::<Mesh>(proto), "the prototype keeps its geometry");
+        assert!(w.has::<Lods>(proto) && w.is_alive(forms[1]));
+    }
+
+    #[test]
     fn lods_verify_and_keep_their_forms_in_closures_and_subsets() {
         let (w, proto, forms) = world();
         assert_eq!(w.verify_components(), vec![]);
@@ -490,6 +509,6 @@ mod tests {
         let gone = failure(&|w, _, forms| {
             w.despawn(forms[1]);
         });
-        assert!(gone[0].contains("which is not alive"), "{gone:?}");
+        assert!(gone[0].contains("not another alive entity"), "{gone:?}");
     }
 }
