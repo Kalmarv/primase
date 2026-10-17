@@ -446,6 +446,15 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         if layered.is_empty() {
             return Ok(());
         }
+        if let Some(e) = layered
+            .iter()
+            .find(|(_, l)| l.weights.per_pixel())
+            .map(|(e, _)| e)
+        {
+            return Err(format!(
+                "{e:?}: per-pixel weight channels or the over composition: skate blends by vertex weights                  (bake-layer-channels first)"
+            ));
+        }
         for (e, f) in world.iter::<MeshFile>() {
             if !world.has::<Mesh>(e) && f.materials.iter().flatten().any(|m| layered.contains_key(m)) {
                 return Err("load layered meshes into core.mesh before lower-layered-reskate".into());
@@ -943,10 +952,7 @@ mod tests {
             m,
             LayeredMaterial {
                 layers,
-                weights: LayerWeights {
-                    attribute: Semantic::Color(1),
-                    mapping: WeightMapping::Identity,
-                },
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
             },
         );
         if keyed {

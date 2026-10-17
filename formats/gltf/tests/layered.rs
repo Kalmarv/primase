@@ -68,10 +68,7 @@ fn world(weights: Option<Semantic>, mapping: WeightMapping, layers: usize) -> (W
         host,
         LayeredMaterial {
             layers: stack,
-            weights: LayerWeights {
-                attribute: weights.unwrap_or(Semantic::Color(1)),
-                mapping,
-            },
+            weights: LayerWeights::new(weights.unwrap_or(Semantic::Color(1)), mapping),
         },
     );
     let mut streams = BTreeMap::from([(
@@ -192,10 +189,7 @@ fn identity_mapping_needs_no_fourth_slot_and_all_null_hosts_are_black() {
         host,
         LayeredMaterial {
             layers: vec![None],
-            weights: LayerWeights {
-                attribute: Semantic::Color(1),
-                mapping: WeightMapping::Identity,
-            },
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
     let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
@@ -216,4 +210,81 @@ fn missing_weights_are_counted_and_other_semantics_refused() {
     let (w, _) = world(Some(Semantic::Normal), WeightMapping::Identity, 2);
     let error = write(&w, &WriteOptions::default()).unwrap_err().to_string();
     assert!(error.contains("COLOR_n"), "{error}");
+}
+
+#[test]
+fn per_pixel_channels_and_over_are_version_2() {
+    use primase_core::layered::{Channel, Composition, Source};
+    use primase_core::pbr::TextureRef;
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    let (mut w, host) = world(None, WeightMapping::Identity, 2);
+    let mask = w.spawn();
+    w.insert(mask, Name("mask".into()));
+    w.insert(
+        mask,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 128, 0, 255]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Mask,
+            normal: None,
+        },
+    );
+    let v = Source::Vertex {
+        semantic: Semantic::Color(1),
+        channel: 2,
+    };
+    let m = Source::Mask {
+        texture: TextureRef {
+            texcoord: 1,
+            ..TextureRef::new(mask)
+        },
+        channels: [0.5, 0.5, 0.0, 0.0],
+        bias: -0.25,
+    };
+    let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+    l.weights.channels = Some(vec![
+        Channel::Source(v.clone()),
+        Channel::Threshold {
+            v,
+            m,
+            k: [0.0, 2.0, -2.0, 2.0],
+        },
+    ]);
+    l.weights.composition = Composition::Over;
+    w.insert(host, l);
+    let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
+    let doc = document(&bytes);
+    let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
+    assert_eq!(ext["version"], 2);
+    assert_eq!(ext["composition"], "over");
+    let channels = &ext["weights"]["channels"];
+    assert_eq!(
+        channels[0],
+        serde_json::json!({"source": {"vertex": {"attribute": "COLOR_1", "channel": 2}}})
+    );
+    let t = &channels[1]["threshold"];
+    assert_eq!(t["k"], serde_json::json!([0.0, 2.0, -2.0, 2.0]));
+    assert_eq!(
+        t["m"]["mask"]["channels"],
+        serde_json::json!([0.5, 0.5, 0.0, 0.0])
+    );
+    assert_eq!(t["m"]["mask"]["bias"], -0.25);
+    assert_eq!(t["m"]["mask"]["texture"]["texCoord"], 1);
+    let index = t["m"]["mask"]["texture"]["index"].as_u64().unwrap() as usize;
+    assert!(
+        doc["textures"][index].is_object(),
+        "the mask is a texture of the file"
+    );
+    // without channels and summed: version 1 as before (no version key)
+    let (w, _) = world(None, WeightMapping::Identity, 2);
+    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
+    assert!(
+        ext.get("version").is_none()
+            && ext.get("composition").is_none()
+            && ext["weights"].get("channels").is_none()
+    );
 }

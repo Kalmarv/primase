@@ -96,10 +96,7 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
                 }),
                 None,
             ],
-            weights: LayerWeights {
-                attribute: Semantic::Color(1),
-                mapping: WeightMapping::Identity,
-            },
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
     let mesh = world.spawn();
@@ -180,10 +177,7 @@ fn invalid_skate_metadata_refuses_all_changes() {
         layered,
         LayeredMaterial {
             layers: vec![None],
-            weights: LayerWeights {
-                attribute: Semantic::Color(1),
-                mapping: WeightMapping::Identity,
-            },
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
     let mesh = world.spawn();
@@ -256,10 +250,7 @@ fn lowering_prunes_only_unreachable_replaced_dependencies() {
                         })
                     })
                     .collect(),
-                weights: LayerWeights {
-                    attribute: Semantic::Color(1),
-                    mapping: WeightMapping::Identity,
-                },
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
             },
         );
         let primitive = Primitive {

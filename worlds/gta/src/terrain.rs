@@ -231,10 +231,7 @@ impl Pass for GtaTerrainLayers {
                 m,
                 LayeredMaterial {
                     layers,
-                    weights: LayerWeights {
-                        attribute: Semantic::Color(1),
-                        mapping: WeightMapping::RgbProduct4,
-                    },
+                    weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
                 },
             );
             log.count("terrain materials layered", 1);

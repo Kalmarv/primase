@@ -248,6 +248,28 @@ impl TextureEncoder {
                     .as_f64()
                     .unwrap_or(1.) as f32;
                 let cutoff = material["alphaCutoff"].as_f64().unwrap_or(0.5) as f32;
+                // PRIMASE_layered_material version 2: every mask a weight channel samples is linear data
+                let mut masks = Vec::new();
+                let channels = "/extensions/PRIMASE_layered_material/weights/channels";
+                for (i, c) in material
+                    .pointer(channels)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    for (form, parts) in [
+                        ("source", &[""][..]),
+                        ("lerp", &["/a", "/b", "/t"][..]),
+                        ("threshold", &["/v", "/m"][..]),
+                    ] {
+                        if c.get(form).is_some() {
+                            for part in parts {
+                                masks.push(format!("{channels}/{i}/{form}{part}/mask/texture/index"));
+                            }
+                        }
+                    }
+                }
                 for (pointer, role) in [
                     ("/pbrMetallicRoughness/baseColorTexture/index", Role::Colour),
                     ("/emissiveTexture/index", Role::Colour),
@@ -263,7 +285,12 @@ impl TextureEncoder {
                         "/extensions/KHR_materials_specular/specularColorTexture/index",
                         Role::Colour,
                     ),
-                ] {
+                ]
+                .map(|(p, r)| (p.to_owned(), r))
+                .into_iter()
+                .chain(masks.into_iter().map(|p| (p, Role::Mask)))
+                {
+                    let pointer = pointer.as_str();
                     if let Some(binding) = material.pointer_mut(pointer) {
                         let original = binding.as_u64().ok_or_else(|| invalid("texture index"))? as usize;
                         let index = *texture_variants.entry((original, role)).or_insert_with(|| {
@@ -778,6 +805,43 @@ mod tests {
         };
         assert_eq!(role("specularTexture"), "mask");
         assert_eq!(role("specularColorTexture"), "colour");
+    }
+
+    #[test]
+    fn layer_channel_masks_are_masks() {
+        let pixels = [200, 180, 160, 17].repeat(4 * 4);
+        let png = primase_image::write_png(&primase_image::Image {
+            width: 4,
+            height: 4,
+            samples: primase_image::Samples::U8(pixels),
+        })
+        .unwrap();
+        let mask = json!({"mask":{"texture":{"index":0},"channels":[1,0,0,0],"bias":0}});
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":png.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},
+                "extensions":{"PRIMASE_layered_material":{"version":2,"weights":{"attribute":"COLOR_1",
+                "mapping":"identity","channels":[{"source":mask},{"threshold":{"v":{"vertex":{"attribute":"COLOR_0",
+                "channel":0}},"m":mask,"k":[0,1,1,0]}}]},"layers":[{"material":0},{"material":0}]}}}]});
+        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let output = TextureEncoder::default().apply(bytes).unwrap();
+        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let doc: Value = serde_json::from_slice(chunks.json).unwrap();
+        let role = |pointer: &str| {
+            let t = doc["materials"][0].pointer(pointer).unwrap().as_u64().unwrap() as usize;
+            let image = doc["textures"][t]["extensions"]["KHR_texture_basisu"]["source"]
+                .as_u64()
+                .unwrap() as usize;
+            doc["images"][image]["extras"]["primase.web_texture"]["role"].clone()
+        };
+        let channels = "/extensions/PRIMASE_layered_material/weights/channels";
+        assert_eq!(role("/pbrMetallicRoughness/baseColorTexture/index"), "colour");
+        assert_eq!(role(&format!("{channels}/0/source/mask/texture/index")), "mask");
+        assert_eq!(
+            role(&format!("{channels}/1/threshold/m/mask/texture/index")),
+            "mask"
+        );
     }
 
     #[test]

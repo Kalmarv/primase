@@ -314,6 +314,35 @@ interpolated vertex channel. It is a glTF material carrying the vendor extension
   weight attribute renders as the host.
 - Layer materials are written once, like any material; their images are shared with every other user.
 
+### Version 2: per-pixel channels and the over composition
+
+An extension object with `"version": 2` (absent: 1) has per-pixel weight channels, the over composition, or both.
+A consumer that only implements version 1 must not evaluate it as version 1. It draws the host, as a consumer that
+ignores the extension does.
+
+```json
+"extensions": {"PRIMASE_layered_material": {"version": 2,
+  "weights": {"attribute": "COLOR_1", "mapping": "identity", "channels": [
+    {"source": {"vertex": {"attribute": "COLOR_0", "channel": 3}}},
+    {"threshold": {"v": {"vertex": {"attribute": "TEXCOORD_5", "channel": 1}},
+                   "m": {"mask": {"texture": {"index": 3, "texCoord": 2}, "channels": [0.5, 0.5, 0, 0], "bias": -0.1}},
+                   "k": [0, 2, -2, 2]}}]},
+  "composition": "over",
+  "layers": [{"material": 4}, {"material": 5}]}}
+```
+
+- `weights.channels` has one entry per input of the mapping (`identity`: one per slot; `rgb_product_4`: three). The
+  entries replace the attribute's channels, and `attribute` is then unused. Each entry is one of:
+  - `source`: a value.
+  - `lerp`: `a + (b - a) * t` of three values.
+  - `threshold`: `saturate(k0 + k1 v + k2 m + k3 v m)` of two values `v`, `m`.
+- A value is either `vertex`, channel `channel` (0 to 3) of the interpolated attribute `COLOR_n` or `TEXCOORD_n`
+  (normalised unsigned data as 0 to 1; a missing third channel is 0, a missing fourth 1), or `mask`,
+  `dot(sample.rgba, channels) + bias` of a texture sampled per pixel. `texture` is a glTF texture info (`index`,
+  `texCoord`, `KHR_texture_transform`); the sample is the texture's linear data, never sRGB-decoded.
+- `composition` `over` (absent: `sum`): colour starts as slot 0, then `lerp(colour, layer[i], weight[i])` for each
+  later slot in order. That equals the sum with weights `w_i * prod_{j>i}(1 - w_j)` (slot 0 at full weight).
+
 ## Synthetic conformance fixture
 
 `cargo run -p primase-web --features ktx2 --example synthetic_tiles -- <output>`

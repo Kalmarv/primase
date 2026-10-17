@@ -1,3 +1,5 @@
+use primase_core::layered::{Channel, Composition, Source, mask_value, over_as_sum};
+use primase_core::pbr::TextureRef;
 use primase_core::{Component, Layer, LayerWeights, LayeredMaterial, Semantic, WeightMapping, World};
 
 #[test]
@@ -30,10 +32,7 @@ fn verifies_null_slots_references_and_nonrecursive_materials() {
             None,
             None,
         ],
-        weights: LayerWeights {
-            attribute: Semantic::Color(1),
-            mapping: WeightMapping::RgbProduct4,
-        },
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
     };
     assert!(material.verify(entity, &world).is_ok());
     world.insert(entity, material.clone());
@@ -59,4 +58,100 @@ fn verifies_null_slots_references_and_nonrecursive_materials() {
     assert!(material.verify(entity, &world).is_ok());
     material.layers.clear();
     assert!(material.verify(entity, &world).is_err());
+}
+
+/// Worked by hand: Sekiro's threshold k = (0, s, -s, s) with s = 2 at v = 0.5, m = 0.25 is 1 - 0.5 + 0.25 = 0.75;
+/// past 1 it saturates; a lerp of 0.2 to 0.6 at 0.25 is 0.3; a mask of rgba (1, 0.5, 0, 0) by (0.5, 0.5, 0, 0) and
+/// bias -0.1 is 0.65; over with slot weights (_, 0.5, 0.25) sums as (0.375, 0.375, 0.25).
+#[test]
+fn channels_evaluate_by_hand() {
+    let v = Source::Vertex {
+        semantic: Semantic::Color(0),
+        channel: 0,
+    };
+    let t = Channel::Threshold {
+        v: v.clone(),
+        m: v.clone(),
+        k: [0., 2., -2., 2.],
+    };
+    assert_eq!(t.evaluate(&[0.5, 0.25]), 0.75);
+    assert_eq!(t.evaluate(&[1.0, 0.0]), 1.0);
+    let l = Channel::Lerp {
+        a: v.clone(),
+        b: v.clone(),
+        t: v,
+    };
+    assert!((l.evaluate(&[0.2, 0.6, 0.25]) - 0.3).abs() < 1e-7);
+    assert!((mask_value([0.5, 0.5, 0., 0.], -0.1, [1., 0.5, 0., 0.]) - 0.65).abs() < 1e-7);
+    assert_eq!(over_as_sum([0., 0.5, 0.25, 0.], 3), [0.375, 0.375, 0.25, 0.]);
+}
+
+#[test]
+fn channels_match_the_mapping_and_their_masks_are_references() {
+    let mut world = World::default();
+    let (a, b, mask, e) = (world.spawn(), world.spawn(), world.spawn(), world.spawn());
+    let layer = |m| {
+        Some(Layer {
+            material: m,
+            texcoord: None,
+            transform: None,
+        })
+    };
+    let masked = Channel::Source(Source::Mask {
+        texture: TextureRef::new(mask),
+        channels: [1., 0., 0., 0.],
+        bias: 0.,
+    });
+    let mut material = LayeredMaterial {
+        layers: vec![layer(a), layer(b)],
+        weights: LayerWeights {
+            channels: Some(vec![masked.clone(), masked.clone()]),
+            composition: Composition::Over,
+            ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+        },
+    };
+    assert!(material.weights.per_pixel());
+    assert_eq!(material.verify(e, &world), Ok(()));
+    world.insert(e, material.clone());
+    assert!(
+        world.closure([e]).contains(&mask),
+        "a mask is part of its material"
+    );
+    // one channel for two slots
+    material.weights.channels = Some(vec![masked.clone()]);
+    assert_eq!(
+        material.verify(e, &world),
+        Err("1 channels for a mapping of 2".into())
+    );
+    // a vertex channel past alpha, a threshold that is not finite
+    let past = Channel::Source(Source::Vertex {
+        semantic: Semantic::Color(0),
+        channel: 4,
+    });
+    material.weights.channels = Some(vec![masked.clone(), past]);
+    assert_eq!(
+        material.verify(e, &world),
+        Err("channel 1: vertex channel 4 past 3".into())
+    );
+    let v = Source::Vertex {
+        semantic: Semantic::Color(0),
+        channel: 0,
+    };
+    let nan = Channel::Threshold {
+        v: v.clone(),
+        m: v,
+        k: [f32::NAN, 0., 0., 0.],
+    };
+    material.weights.channels = Some(vec![masked, nan]);
+    assert!(material.verify(e, &world).unwrap_err().contains("not finite"));
+    // a mask that is gone
+    world.despawn(mask);
+    assert!(
+        world
+            .get::<LayeredMaterial>(e)
+            .unwrap()
+            .verify(e, &world)
+            .unwrap_err()
+            .contains("not alive")
+    );
 }

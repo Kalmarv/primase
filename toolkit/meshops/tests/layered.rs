@@ -6,10 +6,7 @@ fn varying_red_intentionally_changes_the_triangle_choice() {
     let channels = vec![[1., 0., 0., 1.], [1., 0., 0., 1.], [0., 1., 1., 1.]];
     let material = LayeredMaterial {
         layers: vec![None; 4],
-        weights: LayerWeights {
-            attribute: Semantic::Color(1),
-            mapping: WeightMapping::RgbProduct4,
-        },
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
     };
     let full_sum = channels.iter().fold([0.; 4], |sum, &v| {
         let w = material.weights.mapping.evaluate(v);
@@ -76,10 +73,7 @@ fn triangle_selection_omits_darkening_preserves_streams_and_counts_null_slots() 
     };
     let material = LayeredMaterial {
         layers: vec![None; 4],
-        weights: LayerWeights {
-            attribute: Semantic::Color(1),
-            mapping: WeightMapping::RgbProduct4,
-        },
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
     };
     let out = primase_meshops::strongest_layer_parts(
         &p,
@@ -120,10 +114,7 @@ fn identity_vec3_has_alpha_one_and_ties_choose_first() {
     };
     let material = LayeredMaterial {
         layers: vec![None; 4],
-        weights: LayerWeights {
-            attribute: Semantic::Color(1),
-            mapping: WeightMapping::Identity,
-        },
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
     };
     assert_eq!(
         primase_meshops::strongest_layer_parts(
@@ -147,4 +138,33 @@ fn identity_vec3_has_alpha_one_and_ties_choose_first() {
             .0,
         0
     );
+}
+
+#[test]
+fn per_pixel_weights_are_refused_by_the_vertex_weight_lowering() {
+    let mut material = LayeredMaterial {
+        layers: vec![None; 4],
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
+    };
+    material.weights.composition = primase_core::layered::Composition::Over;
+    let primitive = Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([
+            (
+                Semantic::Position,
+                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+            ),
+            (Semantic::Color(1), Stream::F32x4(vec![[0.; 4]; 3])),
+        ]),
+        indices: None,
+        material: None,
+    };
+    let err = primase_meshops::strongest_layer_parts(
+        &primitive,
+        &material,
+        primase_meshops::SelectionPolicy::CoreWeights,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("bake-layer-channels"), "{err}");
 }

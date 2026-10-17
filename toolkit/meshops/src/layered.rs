@@ -28,6 +28,12 @@ pub fn strongest_layer_parts(
     if material.weights.mapping == WeightMapping::RgbProduct4 && material.layers.len() != 4 {
         return Err(Error("rgb_product_4 requires four slots".into()));
     }
+    if material.weights.per_pixel() {
+        return Err(Error(
+            "per-pixel weight channels or the over composition: bake them to vertex weights first (bake-layer-channels)"
+                .into(),
+        ));
+    }
     let count = p
         .positions()
         .ok_or_else(|| Error("missing positions".into()))?

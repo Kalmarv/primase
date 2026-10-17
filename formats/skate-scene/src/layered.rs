@@ -97,7 +97,7 @@ pub(crate) fn read(
     };
     let component = LayeredMaterial {
         layers: decoded,
-        weights: LayerWeights { attribute, mapping },
+        weights: LayerWeights::new(attribute, mapping),
     };
     component.verify(entity, world).map_err(bad)?;
     world.insert(entity, component);

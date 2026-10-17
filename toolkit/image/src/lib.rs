@@ -4,6 +4,8 @@
 
 mod channels;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
+mod layers;
+pub use layers::{BakeLayerChannels, register};
 mod normals;
 mod texture;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals};
@@ -17,6 +19,7 @@ use thiserror::Error;
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/channels.rs", include_bytes!("channels.rs")),
+    ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
     ("image/normals.rs", include_bytes!("normals.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),

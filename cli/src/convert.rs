@@ -22,10 +22,8 @@ pub fn registry() -> PassRegistry {
     r.register("select-lod", primase_core::select_lod);
     r.register("drop-optional", primase_core::drop_optional);
     r.register("resolve-state", primase_core::state::resolve_state);
-    r.register("normalize-normals", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(primase_image::NormalizeNormals)),
-    });
+    // normalize-normals and bake-layer-channels
+    primase_image::register(&mut r);
     primase_meshops::register(&mut r);
     primase_gta::register(&mut r);
     r

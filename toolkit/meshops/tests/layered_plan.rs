@@ -23,10 +23,7 @@ fn fixture() -> (World, primase_core::Entity) {
                 }),
                 None,
             ],
-            weights: LayerWeights {
-                attribute: Semantic::Color(1),
-                mapping: WeightMapping::Identity,
-            },
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
     let entity = world.spawn();

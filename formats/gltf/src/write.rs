@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
@@ -1230,6 +1231,16 @@ impl Writer<'_> {
             WeightMapping::Identity => "identity",
             WeightMapping::RgbProduct4 => "rgb_product_4",
         };
+        let mut weights = Map::new();
+        weights.insert("attribute".into(), json!(attribute));
+        weights.insert("mapping".into(), json!(mapping));
+        if let Some(channels) = &layered.weights.channels {
+            let mut out = Vec::with_capacity(channels.len());
+            for c in channels {
+                out.push(self.layer_channel(e, c, &mut sets)?);
+            }
+            weights.insert("channels".into(), Value::Array(out));
+        }
         let mut host = match first {
             Some(i) => match &self.materials[i] {
                 Value::Object(m) => m.clone(),
@@ -1250,10 +1261,17 @@ impl Writer<'_> {
         if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
             host.insert("extras".into(), extras);
         }
-        host.insert(
-            "extensions".into(),
-            json!({ LAYERED: {"weights": {"attribute": attribute, "mapping": mapping}, "layers": layers} }),
-        );
+        let mut ext = Map::new();
+        // version 2: per-pixel channels or the over composition; a version 1 consumer must not draw it as version 1
+        if layered.weights.per_pixel() {
+            ext.insert("version".into(), json!(2));
+        }
+        ext.insert("weights".into(), Value::Object(weights));
+        if layered.weights.composition == Composition::Over {
+            ext.insert("composition".into(), json!("over"));
+        }
+        ext.insert("layers".into(), Value::Array(layers));
+        host.insert("extensions".into(), json!({ LAYERED: Value::Object(ext) }));
         self.materials.push(Value::Object(host));
         self.report.materials += 1;
         self.report.layered_materials += 1;
@@ -1261,6 +1279,54 @@ impl Writer<'_> {
         self.material_index.insert(e, (i, sets.clone()));
         self.layered_weights.insert(e, attribute);
         Ok((i, sets))
+    }
+
+    /// A per-pixel weight channel as `PRIMASE_layered_material` writes it.
+    fn layer_channel(&mut self, e: Entity, c: &Channel, sets: &mut BTreeSet<u8>) -> Result<Value> {
+        let mut source = |s: &Source| -> Result<Value> {
+            Ok(match s {
+                Source::Vertex { semantic, channel } => {
+                    let attribute = match semantic {
+                        Semantic::Color(n) => format!("COLOR_{n}"),
+                        Semantic::TexCoord(n) => format!("TEXCOORD_{n}"),
+                        other => {
+                            return Err(Error::World {
+                                entity: e,
+                                detail: format!(
+                                    "a weight channel reads {other:?}: COLOR_n or TEXCOORD_n only"
+                                ),
+                            });
+                        }
+                    };
+                    json!({"vertex": {"attribute": attribute, "channel": channel}})
+                }
+                Source::Mask {
+                    texture,
+                    channels,
+                    bias,
+                } => {
+                    let info = self
+                        .texture_info(Some(*texture), sets)?
+                        .ok_or_else(|| Error::World {
+                            entity: e,
+                            detail: format!("mask texture {:?} could not be written", texture.texture),
+                        })?;
+                    json!({"mask": {
+                        "texture": info,
+                        "channels": self.factors(e, channels)?,
+                        "bias": self.factors(e, &[*bias])?[0].clone(),
+                    }})
+                }
+            })
+        };
+        Ok(match c {
+            Channel::Source(s) => json!({"source": source(s)?}),
+            Channel::Lerp { a, b, t } => json!({"lerp": {"a": source(a)?, "b": source(b)?, "t": source(t)?}}),
+            Channel::Threshold { v, m, k } => {
+                let (v, m) = (source(v)?, source(m)?);
+                json!({"threshold": {"v": v, "m": m, "k": self.factors(e, k)?}})
+            }
+        })
     }
 
     fn texture(&mut self, r: TextureRef) -> Result<Option<usize>> {

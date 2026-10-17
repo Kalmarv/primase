@@ -1172,10 +1172,7 @@ fn layered_materials_survive_tiling_and_compression() {
             host,
             LayeredMaterial {
                 layers,
-                weights: LayerWeights {
-                    attribute: Semantic::Color(1),
-                    mapping: WeightMapping::RgbProduct4,
-                },
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
             },
         );
         let proto = w.spawn();

@@ -525,6 +525,14 @@ impl Writer<'_> {
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&m.other);
             if m.class == MaterialClass::Layered {
+                if w.get::<primase_core::LayeredMaterial>(e)
+                    .is_some_and(|l| l.weights.per_pixel())
+                {
+                    return Err(bad(format!(
+                        "material '{}': per-pixel weight channels have no skate-scene form (bake-layer-channels first)",
+                        m.key
+                    )));
+                }
                 let (layers, weights) = crate::layered::write(w, e)?;
                 o.put("layers", layers);
                 o.put("weights", weights);

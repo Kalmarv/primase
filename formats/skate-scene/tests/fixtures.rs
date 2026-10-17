@@ -375,10 +375,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
                 texcoord: None,
                 transform: None,
             })],
-            weights: LayerWeights {
-                attribute: Semantic::Color(1),
-                mapping: WeightMapping::Identity,
-            },
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
     let prototype = world.spawn();
