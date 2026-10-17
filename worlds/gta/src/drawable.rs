@@ -486,6 +486,33 @@ impl Drawable {
     }
 }
 
+/// Where a constant buffer parameter's `length` bytes start: `offset` past its buffer's pointer `start`, inside the
+/// buffer when the next buffer's pointer `next` lies after it (the buffers' order is not assumed: a next buffer
+/// stored before this one bounds nothing; the resource bounds every read). Addresses that do not fit are refused.
+fn parameter_at(
+    start: u64,
+    next: Option<u64>,
+    offset: u64,
+    length: usize,
+) -> std::result::Result<u64, String> {
+    let at = start
+        .checked_add(offset)
+        .ok_or("parameter address past the address space")?;
+    let end = at
+        .checked_add(length as u64)
+        .ok_or("parameter end past the address space")?;
+    if let Some(next) = next
+        && next > start
+        && end > next
+    {
+        return Err(format!(
+            "parameter at {offset:#x} + {length} runs past its constant buffer ({:#x} bytes)",
+            next - start
+        ));
+    }
+    Ok(at)
+}
+
 /// The bound at `p`, if any (`0`: none).
 fn read_bound(r: &Resource, p: u64) -> Result<Option<Bound>> {
     match p {
@@ -737,10 +764,9 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
                         format!("cbuffer {cb} of {n_buffers}, length {length}"),
                     ));
                 }
-                if buffers.len() > cb + 1 && offset + length as u64 > buffers[cb + 1] - buffers[cb] {
-                    return Err(err(infos_ptr, "parameter runs past its constant buffer"));
-                }
-                let v = r.at(buffers[cb] + offset, length)?;
+                let at = parameter_at(buffers[cb], buffers.get(cb + 1).copied(), offset, length)
+                    .map_err(|e| err(infos_ptr, e))?;
+                let v = r.at(at, length)?;
                 ParamValue::Floats((0..length / 4).map(|j| le::f32(v, 4 * j)).collect())
             }
         };
@@ -986,5 +1012,29 @@ mod tests {
         );
         let e = read_geometry(&r, 0x5000_0000, 0, [[0.0; 4]; 2]).expect_err("overflow");
         assert!(e.to_string().contains("1431655766 triangles"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod parameter_tests {
+    use super::parameter_at;
+
+    /// Worked by hand: in a buffer at 0x5000_0100 whose neighbour starts at 0x5000_0200 (0x100 bytes), a parameter at
+    /// 0xF0 + 16 ends at its edge and one at 0xF0 + 20 runs past it; with the neighbour stored first (0x5000_0100 after
+    /// 0x5000_0200), there is no edge to check and nothing to underflow; an address past the u64 range is refused.
+    #[test]
+    fn parameters_stay_in_their_buffer_without_overflow() {
+        assert_eq!(
+            parameter_at(0x5000_0100, Some(0x5000_0200), 0xF0, 16),
+            Ok(0x5000_01F0)
+        );
+        assert!(parameter_at(0x5000_0100, Some(0x5000_0200), 0xF0, 20).is_err());
+        assert_eq!(
+            parameter_at(0x5000_0200, Some(0x5000_0100), 0, 4),
+            Ok(0x5000_0200)
+        );
+        assert_eq!(parameter_at(0x5000_0200, None, 8, 4), Ok(0x5000_0208));
+        assert!(parameter_at(u64::MAX - 2, None, 1, 4).is_err());
+        assert!(parameter_at(u64::MAX, None, 1, 4).is_err());
     }
 }
