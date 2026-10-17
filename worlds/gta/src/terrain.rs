@@ -99,9 +99,8 @@ impl Pass for GtaTerrainLayers {
     fn name(&self) -> &'static str {
         "gta-terrain-layers"
     }
-    fn requires(&self) -> &[&'static str] {
-        &["gta.shader", "gta.sources"]
-    }
+    // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
+    // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
         &["core.layered", "pbr.material"]
     }

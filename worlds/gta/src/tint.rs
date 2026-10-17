@@ -149,10 +149,8 @@ impl Pass for GtaTintVariants {
     fn name(&self) -> &'static str {
         "gta-tint"
     }
-    fn requires(&self) -> &[&'static str] {
-        // not pbr.material: a world without lowered materials (a cell whose shaders all draw nothing) is left as it is
-        &["gta.shader", "gta.sources"]
-    }
+    // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
+    // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
         &["gta.tint", "gta.tinted"]
     }

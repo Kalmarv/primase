@@ -51,9 +51,8 @@ impl Pass for GtaWinding {
     fn name(&self) -> &'static str {
         "gta-winding"
     }
-    fn requires(&self) -> &[&'static str] {
-        &["gta.sources"]
-    }
+    // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
+    // surface, a cell whose shaders all draw nothing) as it is
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "gta.sources"]
     }

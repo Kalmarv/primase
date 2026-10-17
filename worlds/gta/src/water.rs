@@ -407,9 +407,8 @@ impl Pass for LowerGtaWater {
     fn name(&self) -> &'static str {
         "lower-gta-water"
     }
-    fn requires(&self) -> &[&'static str] {
-        &["gta.water_surface"]
-    }
+    // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
+    // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
         &["core.mesh", "pbr.material", "core.name"]
     }
