@@ -25,8 +25,8 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 /// A triangle placed in two cells, a point light beside each and one in a cell with nothing else (a metadata-only
-/// tile), as a skate scene folder.
-fn scene() -> PathBuf {
+/// tile), as a skate scene folder named `name` (one per test: tests run in parallel).
+fn scene(name: &str) -> PathBuf {
     let mut w = World::new();
     let m = w.spawn();
     w.insert(m, Name("plain".into()));
@@ -101,15 +101,15 @@ fn scene() -> PathBuf {
         },
     )
     .unwrap();
-    primase_skate_scene::prepare_scene_assets(&mut w, &tmp("assets")).unwrap();
-    let dir = tmp("scene");
+    primase_skate_scene::prepare_scene_assets(&mut w, &tmp(&format!("{name}_assets"))).unwrap();
+    let dir = tmp(name);
     primase_skate_scene::write(&w, &dir).unwrap();
     dir
 }
 
 #[test]
 fn every_scene_light_reaches_its_tile() {
-    let folder = scene();
+    let folder = scene("scene");
     let out = tmp("tiles");
     let index = driver::run([folder.display().to_string(), out.display().to_string()]).unwrap();
     let lights = |tiles: &[primase_web::TileInfo]| tiles.iter().map(|t| t.lights).sum::<u64>();
@@ -131,5 +131,31 @@ fn every_scene_light_reaches_its_tile() {
             .map(|t| t["lights"].as_u64().unwrap_or(0))
             .sum();
         assert_eq!(n, 3, "{}", set.display());
+    }
+}
+
+#[test]
+fn no_plain_writes_only_the_tile_set() {
+    let folder = scene("scene_no_plain");
+    let out = tmp("tiles_no_plain");
+    let with = tmp("tiles_with_plain");
+    let index = driver::run([
+        folder.display().to_string(),
+        out.display().to_string(),
+        "--no-plain".into(),
+    ])
+    .unwrap();
+    driver::run([folder.display().to_string(), with.display().to_string()]).unwrap();
+    assert!(!out.join("plain").exists());
+    // the tile set itself is the same with or without the plain set beside it
+    assert_eq!(
+        std::fs::read(out.join("tiles.json")).unwrap(),
+        std::fs::read(with.join("tiles.json")).unwrap()
+    );
+    for t in &index.tiles {
+        assert_eq!(
+            std::fs::read(out.join(&t.file)).unwrap(),
+            std::fs::read(with.join(&t.file)).unwrap()
+        );
     }
 }

@@ -1,4 +1,4 @@
-//! Export a scene folder as web tiles and a plain comparison set, one cell at a time: each cell's closure of the
+//! Export a scene folder as web tiles and (unless `--no-plain`) a plain comparison set, one cell at a time: each cell's closure of the
 //! scene is loaded, lowered and written, then dropped, so memory holds one cell and the index.
 // a path of its own, so a test can include this driver as a module (formats/web/tests/scene_to_tiles.rs)
 #[path = "support/mod.rs"]
@@ -10,7 +10,7 @@ use primase_web::{Options, TilePlan, ViewerItem};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N]";
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain]";
 
 /// A prototype file mesh's local box, from its POSITION accessors' `min` and `max` (glTF requires them), reading only
 /// the GLB's JSON chunk; `None` for a mesh without positions.
@@ -149,12 +149,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index, Box<dyn std::error::Error>> {
     let (mut paths, mut ktx2, mut caps, mut budget) = (Vec::new(), false, Vec::new(), None);
     let mut max_priority: Option<u8> = None;
+    let mut with_plain = true;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ktx2" => ktx2 = true,
             "--texture-cap" => caps.push(args.next().ok_or(USAGE)?),
             "--no-budget" => budget = Some(None),
+            // the plain comparison set is left out (a large scene's would not fit beside it)
+            "--no-plain" => with_plain = false,
             "--max-priority" => max_priority = Some(args.next().ok_or(USAGE)?.parse()?),
             "--budget-mib" => {
                 let mib: u64 = args.next().ok_or(USAGE)?.parse()?;
@@ -268,10 +271,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         ..options.clone()
     };
     let plain_output = output.join("plain");
-    let mut plans: Vec<(TilePlan, &Path)> = vec![
-        (primase_web::plan(&world, &options)?, output),
-        (primase_web::plan(&world, &plain_options)?, &plain_output),
-    ];
+    let mut plans: Vec<(TilePlan, &Path)> = vec![(primase_web::plan(&world, &options)?, output)];
+    if with_plain {
+        plans.push((primase_web::plan(&world, &plain_options)?, &plain_output));
+    }
     for e in plans[0].0.unsplit() {
         let w = prepare(&world, [e], folder, false)?;
         for (plan, _) in &mut plans {
@@ -324,7 +327,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     }
     let index = &indexes[0];
     println!(
-        "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={} plain_bytes={}",
+        "tiles={} triangles={} placements={} instanced={} viewer_items={} lights={} bytes={}{}",
         index.tiles.len(),
         index.tiles.iter().map(|t| t.triangles).sum::<u64>(),
         index.tiles.iter().map(|t| t.placements).sum::<u64>(),
@@ -332,7 +335,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
         options.viewer_items.len(),
         index.tiles.iter().map(|t| t.lights).sum::<u64>(),
         bytes[0],
-        bytes[1]
+        if with_plain {
+            format!(" plain_bytes={}", bytes[1])
+        } else {
+            String::new()
+        }
     );
     Ok(indexes.swap_remove(0))
 }
