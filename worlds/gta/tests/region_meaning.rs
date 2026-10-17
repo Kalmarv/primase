@@ -17,8 +17,11 @@
 //! is the world once lowered. Per GTA geometry (the scene's parts carry their source model and geometry, ours
 //! `gta.sources`; either side may have split it), the scene's triangles are compared with ours by position
 //! (0.1 mm, winding-agnostic), then every scene triangle of an identical geometry must be wound as ours. Named class:
-//! decal shaders' geometry the exporter lifted 12 mm along each vertex's drawn face (the normalised sum of its
-//! triangles' face normals in the geometry as read; its `--decal-face-lift`), matched within 0.2 mm; not a pass yet.
+//! decal shaders' (and distance_map's, which that exporter classes a decal) geometry the exporter lifted 12 mm along
+//! each vertex's drawn face (the normalised sum of its triangles' face normals in the geometry as read; its
+//! `--decal-face-lift`), matched within 0.2 mm; not a pass yet.
+//! Named class: a geometry whose triangles' facing against its stored normals sums to exactly zero leaves the winding
+//! undecided; ours keeps the game's order, that exporter's float sum may flip it.
 //! Any other difference fails the gate. On identical geometries every scene vertex must have one of ours at its
 //! position with its UV0 (1e-5), its normal (1e-4, against ours normalised: stored normals are quantised; named: a
 //! stored zero normal the exporter writes up, and where none is stored the exporter's face normals, checked), and,
@@ -117,6 +120,15 @@ fn region_placements_against_the_scene() {
             c.0.iter()
                 .filter(|l| l.axis == map_axis)
                 .all(|l| l.values & 2 != 0);
+        // and every other axis (a script-managed map's IPL) at its default
+        let others =
+            c.0.iter()
+                .filter(|l| l.axis != map_axis && l.axis != hour_axis)
+                .all(|l| {
+                    ours.get::<StateAxis>(l.axis)
+                        .is_some_and(|a| l.values & (1u64 << a.default) != 0)
+                });
+        let online = online && others;
         if let Some(h) = c.0.iter().find(|l| l.axis == hour_axis)
             && online
         {
@@ -249,6 +261,37 @@ fn region_placements_against_the_scene() {
     for u in unmatched.iter().take(15) {
         println!("    scene only: {u}");
     }
+    // PRIMASE_GTA_ONLY (archetype names, comma separated): only those archetypes' placements, on both sides, from here
+    // on (a look at one family of a large region; the gate's verdict then covers only them)
+    let only_some = primase_testdata::real_data_value("PRIMASE_GTA_ONLY").is_some();
+    if let Some(only) = primase_testdata::real_data_value("PRIMASE_GTA_ONLY") {
+        let names: std::collections::BTreeSet<u32> = only
+            .to_string_lossy()
+            .split(',')
+            .map(|n| primase_hash::joaat(n.trim().to_lowercase().as_bytes()))
+            .collect();
+        matched.retain(|e| {
+            let p = ours.get::<Instance>(*e).expect("instance").prototype;
+            ours.get::<GtaArchetype>(p)
+                .is_some_and(|a| names.contains(&a.name))
+        });
+        let keep: Vec<primase_core::Entity> = theirs
+            .iter::<Instance>()
+            .filter(|(_, i)| {
+                theirs
+                    .get::<Name>(i.prototype)
+                    .is_some_and(|n| names.contains(&primase_hash::joaat(n.0.to_lowercase().as_bytes())))
+            })
+            .map(|(e, _)| e)
+            .collect();
+        theirs = theirs.subset(&theirs.closure(keep));
+        println!(
+            "only {} archetypes: {} placements of ours, {} of the scene",
+            names.len(),
+            matched.len(),
+            theirs.iter::<Instance>().count()
+        );
+    }
     // the matched placements' drawables and textures
     let mut drawn = ours.subset(&ours.closure(matched.iter().copied()));
     let assets = attach_assets(&mut drawn, online.as_ref().expect("online"), &keys).expect("assets");
@@ -374,9 +417,21 @@ fn region_placements_against_the_scene() {
                 for &k in &ats {
                     ours_o.extend(oriented(&ours_mesh.primitives[k]));
                 }
+                // a geometry whose triangles' facing against the stored normals sums to zero is undecided: ours keeps
+                // the game's order, that exporter's float sum may have flipped it
+                let undecided = {
+                    let k = read_d
+                        .sources
+                        .iter()
+                        .position(|s| *s == g)
+                        .expect("the geometry as read");
+                    facing(&read_mesh.primitives[k]).0 == 0.0
+                };
                 for &pi in &parts {
                     for (k, n) in oriented(&their_mesh.primitives[pi]) {
-                        if !ours_o.contains_key(&k) {
+                        if !ours_o.contains_key(&k) && undecided {
+                            *geo.entry("scene triangles wound the other way on geometries their normals leave undecided (facing sum 0)").or_default() += n;
+                        } else if !ours_o.contains_key(&k) {
                             *geo.entry("scene triangles wound the other way").or_default() += n;
                             let shader = sp_parts[pi]
                                 .source
@@ -387,7 +442,16 @@ fn region_placements_against_the_scene() {
                             if wound_examples.len() < 10
                                 && !wound_examples.iter().any(|x: &String| x.starts_with(&name))
                             {
-                                wound_examples.push(format!("{name} {g:?} ({shader})"));
+                                let k = read_d
+                                    .sources
+                                    .iter()
+                                    .position(|s| *s == g)
+                                    .expect("the geometry as read");
+                                let (sum, size) = facing(&read_mesh.primitives[k]);
+                                wound_examples.push(format!(
+                                    "{name} {g:?} ({shader}): facing sum {sum:.3e} of {size:.3e} ({:.2e})",
+                                    sum / size.max(f64::MIN_POSITIVE)
+                                ));
                             }
                         }
                     }
@@ -512,7 +576,7 @@ fn region_placements_against_the_scene() {
                 .as_ref()
                 .and_then(|v| v["shader"].as_str())
                 .unwrap_or("?");
-            let lifted = shader.contains("decal") && {
+            let lifted = (shader.contains("decal") || shader == "distance_map.sps") && {
                 let grid = |c: [f64; 3]| c.map(|v| (v / 0.005).floor() as i64);
                 let mut cells: BTreeMap<[i64; 3], Vec<[[f64; 3]; 3]>> = BTreeMap::new();
                 // per vertex of the geometry as read, the sum of its triangles' (unnormalised) face normals,
@@ -611,10 +675,36 @@ fn region_placements_against_the_scene() {
     }
     let mut tex: BTreeMap<&str, usize> = BTreeMap::new();
     let mut tex_examples: Vec<String> = Vec::new();
-    for (_, tf) in theirs.iter::<primase_core::TextureFile>() {
+    // our textures by name, for a scene texture with no level of ours: that exporter's copy of the same name
+    let mut ours_by_name: BTreeMap<String, Vec<primase_core::Entity>> = BTreeMap::new();
+    for (e, _) in drawn.iter::<primase_core::Texture>() {
+        if let Some(n) = drawn.get::<Name>(e) {
+            ours_by_name.entry(n.0.to_lowercase()).or_default().push(e);
+        }
+    }
+    for (te, tf) in theirs.iter::<primase_core::TextureFile>() {
         let bytes = std::fs::read(std::path::Path::new(&scene).join(&tf.path)).expect("scene texture");
         let t = primase_dds::read(&bytes).expect("dds");
-        let class = match levels.get(&Sha256::digest(&t.levels[0]).to_vec()) {
+        let named = theirs
+            .get::<Name>(te)
+            .map(|n| n.0.split('~').next().unwrap_or("").to_lowercase())
+            .and_then(|n| ours_by_name.get(&n))
+            .cloned()
+            .unwrap_or_default();
+        let digest = Sha256::digest(&t.levels[0]).to_vec();
+        let class = match levels.get(&digest) {
+            None if named.iter().any(|&o| white_alpha(&theirs, te, &drawn, o, &scene)) => {
+                "scene textures: that exporter's alpha-only (A8) texture as white or grey"
+            }
+            None if named.iter().any(|&o| same_pixels(&theirs, te, &drawn, o, &scene)) => {
+                "scene textures: that exporter's re-encoding of ours (another format, its own levels)"
+            }
+            None if named
+                .iter()
+                .any(|&o| replaced_copy(&install, &keys, &drawn, o, &digest).is_some()) =>
+            {
+                "scene textures: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
+            }
             None => {
                 if tex_examples.len() < 12 {
                     tex_examples.push(format!(
@@ -747,14 +837,46 @@ fn region_placements_against_the_scene() {
             let om_e = op.material.expect("our material");
             if sm.class == MaterialClass::Layered {
                 *mat.entry("layered parts".into()).or_default() += 1;
-                let diffs = layered_diffs(&theirs, tm, &their_mesh.primitives[i], &drawn, om_e, op, &scene);
+                let diffs = layered_diffs(
+                    &theirs,
+                    tm,
+                    &their_mesh.primitives[i],
+                    &drawn,
+                    om_e,
+                    op,
+                    &scene,
+                    &install,
+                    &keys,
+                    only_some,
+                );
+                // the lookup-blended terrains weigh their layers per pixel from a lookup texture; both sides sample it
+                // per vertex (an approximation each), and their samplings differ
+                let effect = drawn
+                    .get::<primase_gta::components::GtaShader>(om_e)
+                    .and_then(|s| primase_gta::shader_names::effect(s.name))
+                    .unwrap_or("?");
+                let lookup = !matches!(
+                    primase_gta::terrain::weights_of(effect),
+                    primase_gta::terrain::Weights::VertexColour
+                );
+                let diffs: Vec<String> = diffs
+                    .into_iter()
+                    .map(|k| {
+                        if lookup && k == "layer weights (COLOR_1) differing at vertices" {
+                            "layer weights: lookup-blended terrain, each side's per-vertex sampling of the game's per-pixel lookup"
+                                .into()
+                        } else {
+                            k
+                        }
+                    })
+                    .collect();
                 if diffs.is_empty() {
                     *mat.entry("parts equal".into()).or_default() += 1;
                 }
                 for k in diffs {
                     let ex = mat_examples.entry(k.clone()).or_default();
                     if ex.len() < 6 {
-                        ex.push(format!("{name} {g:?}"));
+                        ex.push(format!("{name} {g:?} ({effect})"));
                     }
                     *mat.entry(k).or_default() += 1;
                 }
@@ -769,7 +891,105 @@ fn region_placements_against_the_scene() {
             let mut diffs: Vec<String> = Vec::new();
             match (sm.base, ours_p.base_color_texture) {
                 (Some(t), Some(o)) => {
-                    if !same_texture(&theirs, t, &drawn, o.texture, &scene) {
+                    if !same_texture(&theirs, t, &drawn, o.texture, &scene)
+                        && replaced_copy(
+                            &install,
+                            &keys,
+                            &drawn,
+                            o.texture,
+                            &scene_texture_digest(&theirs, t, &scene),
+                        )
+                        .is_some()
+                    {
+                        diffs.push(
+                            "base texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
+                                .into(),
+                        );
+                    } else if !same_texture(&theirs, t, &drawn, o.texture, &scene)
+                        && white_alpha(&theirs, t, &drawn, o.texture, &scene)
+                    {
+                        diffs.push(
+                            "base texture: that exporter's alpha-only (A8) texture as white or grey".into(),
+                        );
+                    } else if !same_texture(&theirs, t, &drawn, o.texture, &scene)
+                        && same_pixels(&theirs, t, &drawn, o.texture, &scene)
+                    {
+                        diffs.push("base texture: that exporter's re-encoding of ours (another format, its own levels)".into());
+                    } else if !same_texture(&theirs, t, &drawn, o.texture, &scene) {
+                        if only_some {
+                            let tf = theirs
+                                .get::<primase_core::TextureFile>(t)
+                                .map(|f| f.path.display().to_string());
+                            let ot = drawn.get::<primase_core::Texture>(o.texture);
+                            println!(
+                                "      base texture {name} {g:?}: scene {tf:?} ({:?}), ours {:?} {:?} {:?}",
+                                theirs.get::<Name>(t).map(|n| n.0.clone()),
+                                drawn.get::<Name>(o.texture).map(|n| n.0.clone()),
+                                drawn.get::<primase_core::Source>(o.texture).map(|n| n.0.clone()),
+                                ot.map(|t| (t.width, t.height, t.levels.len()))
+                            );
+                            if let (Some(tf), Some(ot)) = (theirs.get::<primase_core::TextureFile>(t), ot)
+                                && let Ok(st) =
+                                    primase_dds::read(&std::fs::read(scene.join(&tf.path)).expect("scene"))
+                            {
+                                use primase_texcodec::TexDecoder;
+                                let d = primase_texcodec::Decoder::default();
+                                let a = d.decode_rgba8(st.format, st.width, st.height, &st.levels[0]);
+                                let b = d.decode_rgba8(ot.format, ot.width, ot.height, &ot.levels[0]);
+                                let stats = match (&a, &b) {
+                                    (Ok(a), Ok(b)) if a.len() == b.len() => {
+                                        let max = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max();
+                                        let mean = a
+                                            .iter()
+                                            .zip(b)
+                                            .map(|(x, y)| f64::from(x.abs_diff(*y)))
+                                            .sum::<f64>()
+                                            / a.len() as f64;
+                                        let alpha = a
+                                            .iter()
+                                            .zip(b)
+                                            .skip(3)
+                                            .step_by(4)
+                                            .map(|(x, y)| x.abs_diff(*y))
+                                            .max();
+                                        let rgb_white =
+                                            a.as_chunks::<4>().0.iter().all(|p| p[..3] == [255; 3]);
+                                        let grey = a
+                                            .as_chunks::<4>()
+                                            .0
+                                            .iter()
+                                            .zip(b.as_chunks::<4>().0)
+                                            .map(|(x, y)| x[0].abs_diff(y[3]).max(x[1].abs_diff(y[3])))
+                                            .max();
+                                        let scene_alpha: std::collections::BTreeSet<u8> =
+                                            a.iter().skip(3).step_by(4).copied().collect();
+                                        println!(
+                                            "        scene rgb against our alpha: max {grey:?}; scene alpha values {}",
+                                            scene_alpha.len()
+                                        );
+                                        format!(
+                                            "max {max:?}, mean {mean:.2}, alpha max {alpha:?}, scene rgb all white \
+                                             {rgb_white}; scene first texels {:?}, ours {:?}",
+                                            &a[..8],
+                                            &b[..8]
+                                        )
+                                    }
+                                    _ => format!(
+                                        "decode {:?} / {:?}",
+                                        a.as_ref().map(|v| v.len()),
+                                        b.as_ref().map(|v| v.len())
+                                    ),
+                                };
+                                println!(
+                                    "        formats scene {:?} {}x{} {} levels, ours {:?}: {stats}",
+                                    st.format,
+                                    st.width,
+                                    st.height,
+                                    st.levels.len(),
+                                    ot.format
+                                );
+                            }
+                        }
                         diffs.push("base texture".into());
                     }
                 }
@@ -798,6 +1018,27 @@ fn region_placements_against_the_scene() {
                     for (row, tm) in tv {
                         let want = theirs.get::<SkateMaterial>(*tm).expect("skate material").tint;
                         let ours_e = by_row.get(&(archetype, *row)).copied().unwrap_or(oe);
+                        if only_some {
+                            let rows: Vec<u32> =
+                                by_row.keys().filter(|k| k.0 == archetype).map(|k| k.1).collect();
+                            let placed: std::collections::BTreeSet<(u32, u64)> = drawn
+                                .iter::<Instance>()
+                                .filter(|(_, i)| {
+                                    drawn
+                                        .get::<GtaArchetype>(i.prototype)
+                                        .is_some_and(|a| a.name == archetype)
+                                })
+                                .map(|(e, i)| {
+                                    (
+                                        drawn.get::<GtaEntity>(e).map_or(0, |g| g.tint_value),
+                                        u64::from(i.variant),
+                                    )
+                                })
+                                .collect();
+                            println!(
+                                "      tint rows {name}: scene row {row}; our rows {rows:?}; our placements (tint, variant) {placed:?}"
+                            );
+                        }
                         let tint = drawn
                             .get::<Mesh>(ours_e)
                             .and_then(|m| m.primitives.get(at))
@@ -808,9 +1049,13 @@ fn region_placements_against_the_scene() {
                             .max_by_key(|&(_, n)| n)
                             .and_then(|(c, _)| quantised_tint(*c));
                         if want != got {
+                            if only_some {
+                                tint_debug(&read, oe, g, &their_mesh.primitives[i], om_e, *row);
+                                println!("      scene material: {:?}", theirs.get::<SkateMaterial>(*tm));
+                            }
                             if tint.palette_colours <= 8 {
                                 println!(
-                                    "      tint {name} {g:?} row {row}: scene {want:?}, ours {got:?} of {:?} ({} scene                                      triangles, {} palette colours)",
+                                    "      tint {name} {g:?} row {row}: scene {want:?}, ours {got:?} of {:?} ({} scene triangles, {} palette colours)",
                                     tint.colours, tint.triangles, tint.palette_colours
                                 );
                             }
@@ -917,6 +1162,18 @@ fn region_placements_against_the_scene() {
                 // that exporter's wood class: a tree shader's texture with mean alpha 0.9 or more drawn opaque
                 | "alpha: scene wood Opaque, ours Mask { cutoff: 0.5 }"
                 | "tint: that exporter's mean colour (more than 8 palette colours)"
+                // that exporter loads every archive it finds and every pack's own files: a same-named copy the game's
+                // mount data never mounts (patchday27ng's fwy_01.rpf) or replaces (a pack file under update.rpf's dlc_patch)
+                | "base texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
+                // that exporter wrote some formats decoded and uncompressed, with smaller levels of its own
+                | "base texture: that exporter's re-encoding of ours (another format, its own levels)"
+                // D3D samples an A8 texture as (0, 0, 0, a); that exporter wrote it as (255, 255, 255, a) or (a, a, a, 255)
+                | "base texture: that exporter's alpha-only (A8) texture as white or grey"
+                | "layer texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
+                | "layer texture: that exporter's alpha-only (A8) texture as white or grey"
+                | "layer texture: that exporter's re-encoding of ours (another format, its own levels)"
+                // both approximate the lookup per vertex (gta-terrain-layers counts it)
+                | "layer weights: lookup-blended terrain, each side's per-vertex sampling of the game's per-pixel lookup"
         ) || k.contains("opaque, its texture without alpha by that exporter's probe")
     };
     let unnamed: Vec<&String> = mat.keys().filter(|k| !named(k)).collect();
@@ -940,6 +1197,124 @@ fn region_placements_against_the_scene() {
         "vertex attributes differ: {attrs:?}"
     );
     assert!(unmatched.is_empty() && diffs.is_empty());
+}
+
+/// Whether scene texture `t` is our texture `o` in another encoding: the same size, and their first levels decoded
+/// agree within 4 of 255 per channel (that exporter decoded some formats and wrote them uncompressed, with its own
+/// smaller levels).
+fn same_pixels(
+    theirs: &World,
+    t: primase_core::Entity,
+    ours: &World,
+    o: primase_core::Entity,
+    scene: &std::path::Path,
+) -> bool {
+    use primase_texcodec::TexDecoder;
+    let tf = theirs.get::<primase_core::TextureFile>(t).expect("scene texture");
+    let Ok(st) = primase_dds::read(&std::fs::read(scene.join(&tf.path)).expect("scene texture")) else {
+        return false;
+    };
+    let Some(ot) = ours.get::<primase_core::Texture>(o) else {
+        return false;
+    };
+    if (st.width, st.height) != (ot.width, ot.height) {
+        return false;
+    }
+    let d = primase_texcodec::Decoder::default();
+    let (Ok(a), Ok(b)) = (
+        d.decode_rgba8(st.format, st.width, st.height, &st.levels[0]),
+        d.decode_rgba8(ot.format, ot.width, ot.height, &ot.levels[0]),
+    ) else {
+        return false;
+    };
+    a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 4)
+}
+
+/// Whether scene texture `t` is our alpha-only texture `o` (A8) as white with its alpha or as opaque grey: D3D samples
+/// A8 as black (0, 0, 0, a), that exporter wrote it as (255, 255, 255, a) or (a, a, a, 255). Same size, within 4 of
+/// 255.
+fn white_alpha(
+    theirs: &World,
+    t: primase_core::Entity,
+    ours: &World,
+    o: primase_core::Entity,
+    scene: &std::path::Path,
+) -> bool {
+    use primase_texcodec::TexDecoder;
+    let Some(ot) = ours.get::<primase_core::Texture>(o) else {
+        return false;
+    };
+    if ot.format != primase_core::TexFormat::A8Unorm {
+        return false;
+    }
+    let tf = theirs.get::<primase_core::TextureFile>(t).expect("scene texture");
+    let Ok(st) = primase_dds::read(&std::fs::read(scene.join(&tf.path)).expect("scene texture")) else {
+        return false;
+    };
+    if (st.width, st.height) != (ot.width, ot.height) {
+        return false;
+    }
+    let d = primase_texcodec::Decoder::default();
+    let (Ok(a), Ok(b)) = (
+        d.decode_rgba8(st.format, st.width, st.height, &st.levels[0]),
+        d.decode_rgba8(ot.format, ot.width, ot.height, &ot.levels[0]),
+    ) else {
+        return false;
+    };
+    let pairs = || a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0);
+    a.len() == b.len()
+        && (pairs().all(|(x, y)| x[..3] == [255; 3] && x[3].abs_diff(y[3]) <= 4)
+            || pairs().all(|(x, y)| x[3] == 255 && x[..3].iter().all(|c| c.abs_diff(y[3]) <= 4)))
+}
+
+/// A copy of our texture `o` (same texture name, in a dictionary of the same file name) other than ours, the one the
+/// mount rules make live, whose first level has digest `want`: that copy's path. The game never draws it (an archive no
+/// pack mounts, or a pack file its title-update patch replaces).
+fn replaced_copy(
+    install: &Install,
+    keys: &Keys,
+    ours: &World,
+    o: primase_core::Entity,
+    want: &[u8],
+) -> Option<String> {
+    let source = &ours.get::<primase_core::Source>(o)?.0;
+    let (path, name) = source.rsplit_once('#')?;
+    let file = path.rsplit('\\').next()?;
+    let name = name.to_lowercase();
+    let suffix = format!("\\{file}");
+    let hit = |t: &primase_gta::texture::Texture| {
+        let (format, _) = t.format.texture()?;
+        let n = format.level_size(u32::from(t.width), u32::from(t.height));
+        (t.name.to_lowercase() == name
+            && t.data.len() >= n
+            && Sha256::digest(&t.data[..n]).as_slice() == want)
+            .then_some(())
+    };
+    for a in &install.archives {
+        for (i, e) in a.entries.iter().enumerate() {
+            if e.path == path || !e.path.ends_with(&suffix) {
+                continue;
+            }
+            let Ok(r) = a.resource(&mut std::fs::File::open(&a.file).ok()?, i, keys) else {
+                continue;
+            };
+            let textures: Vec<primase_gta::texture::Texture> = if file.ends_with(".ytd") {
+                primase_gta::texture::TextureDictionary::read_resource(&r)
+                    .map(|d| d.textures.into_iter().flatten().collect())
+                    .unwrap_or_default()
+            } else {
+                primase_gta::drawable::Drawable::read_resource(&r)
+                    .ok()
+                    .and_then(|d| d.textures)
+                    .map(|d| d.textures.into_iter().flatten().collect())
+                    .unwrap_or_default()
+            };
+            if textures.iter().any(|t| hit(t).is_some()) {
+                return Some(e.path.clone());
+            }
+        }
+    }
+    None
 }
 
 /// The first level of a scene texture file, by digest.
@@ -987,6 +1362,7 @@ fn same_texture(
 /// A scene layered part against our primitive: the slots (null, or a layer whose base texture, alpha, sidedness and
 /// texture coordinates agree), the weights, and every scene vertex's COLOR_1 against ours at its position (within one
 /// step of 1/255).
+#[allow(clippy::too_many_arguments)]
 fn layered_diffs(
     theirs: &World,
     tm: primase_core::Entity,
@@ -995,6 +1371,9 @@ fn layered_diffs(
     om: primase_core::Entity,
     op: &primase_core::Primitive,
     scene: &std::path::Path,
+    install: &Install,
+    keys: &Keys,
+    debug: bool,
 ) -> Vec<String> {
     use primase_core::{LayeredMaterial, Semantic, Stream};
     let mut diffs = Vec::new();
@@ -1020,7 +1399,32 @@ fn layered_diffs(
                 );
                 match (sm.base, opbr.base_color_texture) {
                     (Some(t), Some(o)) if same_texture(theirs, t, ours, o.texture, scene) => {}
-                    _ => diffs.push(format!("layer {k} texture")),
+                    (Some(t), Some(o))
+                        if replaced_copy(install, keys, ours, o.texture, &scene_texture_digest(theirs, t, scene))
+                            .is_some() =>
+                    {
+                        diffs.push(
+                            "layer texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
+                                .into(),
+                        )
+                    }
+                    (Some(t), Some(o)) if white_alpha(theirs, t, ours, o.texture, scene) => {
+                        diffs.push("layer texture: that exporter's alpha-only (A8) texture as white or grey".into())
+                    }
+                    (Some(t), Some(o)) if same_pixels(theirs, t, ours, o.texture, scene) => diffs.push(
+                        "layer texture: that exporter's re-encoding of ours (another format, its own levels)".into(),
+                    ),
+                    (t, o) => {
+                        if debug {
+                            println!(
+                                "      layer {k} texture: scene {:?}, ours {:?} {:?}",
+                                t.and_then(|t| theirs.get::<Name>(t)).map(|n| n.0.clone()),
+                                o.and_then(|o| ours.get::<Name>(o.texture)).map(|n| n.0.clone()),
+                                o.and_then(|o| ours.get::<primase_core::Source>(o.texture)).map(|n| n.0.clone())
+                            );
+                        }
+                        diffs.push(format!("layer {k} texture"))
+                    }
                 }
                 if tpbr.alpha_mode != opbr.alpha_mode || tpbr.double_sided != opbr.double_sided {
                     diffs.push(format!("layer {k} alpha or sidedness"));
@@ -1064,6 +1468,28 @@ fn layered_diffs(
                 })
                 .count();
             if off > 0 {
+                if debug {
+                    let pos = tp.positions().expect("positions");
+                    let first = (0..pos.len()).find(|&vi| {
+                        !at.get(&key(pos[vi])).is_some_and(|c| {
+                            c.iter().any(|&c| {
+                                t[vi]
+                                    .iter()
+                                    .zip(&o[c])
+                                    .all(|(a, b)| (a - b).abs() <= 1.0 / 255.0 + 1e-6)
+                            })
+                        })
+                    });
+                    if let Some(vi) = first {
+                        println!(
+                            "      layer weights: {off} of {} scene vertices off; e.g. scene {:?}, ours {:?}",
+                            pos.len(),
+                            t[vi],
+                            at.get(&key(pos[vi]))
+                                .map(|c| c.iter().map(|&c| o[c]).collect::<Vec<_>>())
+                        );
+                    }
+                }
                 diffs.push("layer weights (COLOR_1) differing at vertices".into());
             }
         }
@@ -1072,61 +1498,202 @@ fn layered_diffs(
     diffs
 }
 
-/// Whether `ours`' COLOR_0 alpha is below opaque at any vertex of `theirs`, matched by position (1 mm), else (a lifted
-/// decal) by UV0 (1e-4).
+/// Whether `ours`' COLOR_0 alpha is below opaque at a corner of any of `theirs`' triangles ([`corner_match`]).
 fn faded_at(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> bool {
     let alpha: Vec<bool> = match ours.streams.get(&primase_core::Semantic::Color(0)) {
         Some(primase_core::Stream::U8x4(c)) => c.iter().map(|c| c[3] < 255).collect(),
         Some(primase_core::Stream::U16x4(c)) => c.iter().map(|c| c[3] < 65535).collect(),
         _ => return false,
     };
-    let mm = |p: [f32; 3]| p.map(|v| (f64::from(v) * 1000.0).round() as i64);
-    let uv = |p: &primase_core::Primitive| match p.streams.get(&primase_core::Semantic::TexCoord(0)) {
-        Some(primase_core::Stream::F32x2(v)) => v
-            .iter()
-            .map(|t| t.map(|x| (f64::from(x) * 1e4).round() as i64))
-            .collect(),
-        _ => Vec::new(),
-    };
-    let (Some(ours_pos), Some(their_pos)) = (ours.positions(), theirs.positions()) else {
-        return false;
-    };
-    let mut by_pos: BTreeMap<[i64; 3], bool> = BTreeMap::new();
-    let mut by_uv: BTreeMap<[i64; 2], bool> = BTreeMap::new();
-    for (k, (p, t)) in ours_pos
+    corner_match(theirs, ours)
         .iter()
-        .zip(uv(ours).into_iter().chain(std::iter::repeat([i64::MIN; 2])))
-        .enumerate()
-    {
-        *by_pos.entry(mm(*p)).or_default() |= alpha[k];
-        *by_uv.entry(t).or_default() |= alpha[k];
-    }
-    let their_uv = uv(theirs);
-    their_pos.iter().enumerate().any(|(k, p)| {
-        by_pos
-            .get(&mm(*p))
-            .or_else(|| their_uv.get(k).and_then(|t| by_uv.get(t)))
-            .copied()
-            .unwrap_or(false)
-    })
+        .flatten()
+        .any(|m| m.iter().any(|&v| alpha[v as usize]))
 }
 
-/// A triangle's UV0 corners (1e-4, sorted), as [`uv_tris`] keys it.
-type UvCorners = [[i64; 2]; 3];
+/// For each triangle of `theirs` (in order), our vertices at its corners, in its corner order: our triangle with the
+/// same corner positions (0.1 mm), else (a decal that exporter lifted) the triangle of ours with the nearest centroid
+/// whose corners each lie within 2 cm of one of its corners. `None` where none qualifies.
+fn corner_match(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> Vec<Option<[u32; 3]>> {
+    let key = |v: [f32; 3]| v.map(|x| (f64::from(x) * 1e4).round() as i64);
+    let (Some(ours_pos), Some(their_pos)) = (ours.positions(), theirs.positions()) else {
+        return Vec::new();
+    };
+    let f = |v: [f32; 3]| v.map(f64::from);
+    let ours_tris = triangles(ours);
+    let mut exact: BTreeMap<[[i64; 3]; 3], usize> = BTreeMap::new();
+    let mut cells: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
+    let cell = |c: [f64; 3]| c.map(|v| (v / 0.02).floor() as i64);
+    for (n, t) in ours_tris.iter().enumerate() {
+        let mut k = t.map(|i| key(ours_pos[i as usize]));
+        k.sort();
+        exact.insert(k, n);
+        cells
+            .entry(cell(centroid(t.map(|i| f(ours_pos[i as usize])))))
+            .or_default()
+            .push(n);
+    }
+    let near = |a: [f64; 3], b: [f64; 3]| dot(sub(a, b), sub(a, b)) <= 0.02 * 0.02;
+    triangles(theirs)
+        .into_iter()
+        .map(|t| {
+            let mut k = t.map(|i| key(their_pos[i as usize]));
+            k.sort();
+            if let Some(&n) = exact.get(&k) {
+                let ot = ours_tris[n];
+                return Some(t.map(|i| {
+                    let at = key(their_pos[i as usize]);
+                    ot.iter()
+                        .copied()
+                        .find(|&v| key(ours_pos[v as usize]) == at)
+                        .unwrap_or(ot[0])
+                }));
+            }
+            let corners = t.map(|i| f(their_pos[i as usize]));
+            let c = centroid(corners);
+            let base = cell(c);
+            let mut best: Option<(f64, [u32; 3])> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let Some(list) = cells.get(&[base[0] + dx, base[1] + dy, base[2] + dz]) else {
+                            continue;
+                        };
+                        for &n in list {
+                            let ot = ours_tris[n];
+                            let oc = centroid(ot.map(|i| f(ours_pos[i as usize])));
+                            if !near(oc, c) {
+                                continue;
+                            }
+                            let m = corners.map(|p| {
+                                ot.iter()
+                                    .copied()
+                                    .filter(|&v| near(f(ours_pos[v as usize]), p))
+                                    .min_by(|&a, &b| {
+                                        let da = sub(f(ours_pos[a as usize]), p);
+                                        let db = sub(f(ours_pos[b as usize]), p);
+                                        dot(da, da).total_cmp(&dot(db, db))
+                                    })
+                            });
+                            let [Some(a), Some(b), Some(d)] = m else { continue };
+                            if a == b || b == d || a == d {
+                                continue;
+                            }
+                            let dist = dot(sub(oc, c), sub(oc, c));
+                            if best.is_none_or(|(bd, _)| dist < bd) {
+                                best = Some((dist, [a, b, d]));
+                            }
+                        }
+                    }
+                }
+            }
+            best.map(|(_, m)| m)
+        })
+        .collect()
+}
+
+/// For a look at one tint difference: our palette's colours (sRGB bytes) in every row at the columns the scene part's
+/// triangles pick (their first vertex's COLOR_0 blue in the geometry as read), with how many triangles pick each.
+fn tint_debug(
+    read: &World,
+    proto: primase_core::Entity,
+    g: [u32; 2],
+    theirs: &primase_core::Primitive,
+    material: primase_core::Entity,
+    row: u32,
+) {
+    use primase_texcodec::TexDecoder;
+    let (Some(mesh), Some(sources)) = (read.get::<Mesh>(proto), read.get::<GtaSources>(proto)) else {
+        return;
+    };
+    let Some(k) = sources.sources.iter().position(|s| *s == g) else {
+        return;
+    };
+    let p = &mesh.primitives[k];
+    let s = read
+        .get::<primase_gta::components::GtaShader>(material)
+        .expect("shader");
+    let Some(Some(pal)) = primase_gta::lower::texture(s, "TintPaletteTex") else {
+        println!("      tint debug: no palette");
+        return;
+    };
+    let t = read.get::<primase_core::Texture>(pal).expect("palette texture");
+    let rgba = primase_texcodec::Decoder::default()
+        .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
+        .expect("palette");
+    let (Some(primase_core::Stream::U8x4(c0)), Some(pos)) =
+        (p.streams.get(&primase_core::Semantic::Color(0)), p.positions())
+    else {
+        println!("      tint debug: no COLOR_0");
+        return;
+    };
+    // our triangles by corner positions (1e-4), their first vertex's column
+    let key = |v: [f32; 3]| v.map(|x| (f64::from(x) * 1e4).round() as i64);
+    let mut cols: BTreeMap<[[i64; 3]; 3], u32> = BTreeMap::new();
+    for tri in p.indices.as_ref().expect("indices").as_chunks::<3>().0 {
+        let mut k = tri.map(|i| key(pos[i as usize]));
+        k.sort();
+        let blue = u64::from(c0[tri[0] as usize][2]);
+        cols.insert(
+            k,
+            (blue * u64::from(t.width) / 255).min(u64::from(t.width - 1)) as u32,
+        );
+    }
+    let tp = theirs.positions().expect("positions");
+    let mut hist: BTreeMap<u32, usize> = BTreeMap::new();
+    for tri in theirs.indices.as_ref().expect("indices").as_chunks::<3>().0 {
+        let mut k = tri.map(|i| key(tp[i as usize]));
+        k.sort();
+        if let Some(&c) = cols.get(&k) {
+            *hist.entry(c).or_default() += 1;
+        }
+    }
+    println!(
+        "      tint debug: palette {}x{} {:?}, row {row}, columns picked {hist:?}",
+        t.width, t.height, t.format
+    );
+    if hist.is_empty() {
+        let uv =
+            |p: &primase_core::Primitive, i: usize| match p.streams.get(&primase_core::Semantic::TexCoord(0))
+            {
+                Some(primase_core::Stream::F32x2(v)) => v.get(i).copied(),
+                _ => None,
+            };
+        for i in 0..3 {
+            println!(
+                "        ours v{i} {:?} uv {:?} | scene v{i} {:?} uv {:?}",
+                pos.get(i),
+                uv(p, i),
+                tp.get(i),
+                uv(theirs, i)
+            );
+        }
+        println!("        ours {} vertices, scene part {}", pos.len(), tp.len());
+    }
+    for &c in hist.keys() {
+        let rows: Vec<[u8; 3]> = (0..t.height)
+            .map(|y| {
+                let o = ((y * t.width + c) * 4) as usize;
+                [rgba[o], rgba[o + 1], rgba[o + 2]]
+            })
+            .collect();
+        println!("        column {c}: rows {rows:?}");
+    }
+}
 
 /// A scene part's tint as ours draws it ([`tint_at`]).
 #[derive(Default)]
 struct PartTint {
-    /// Per scene triangle matched, gta-tint's colour (sRGB bytes) at the first vertex of our triangle: that exporter
-    /// coloured a triangle by its first vertex's palette column. Counted.
+    /// Per scene triangle matched, gta-tint's colour (sRGB bytes) at the scene triangle's first corner (in its own
+    /// order: where winding differs, ours may start elsewhere): that exporter coloured a triangle by its first
+    /// vertex's palette column. Counted.
     colours: BTreeMap<[u8; 3], usize>,
     /// The scene part's triangles, and the palette colours of our whole primitive (by its triangles' first vertices).
     triangles: usize,
     palette_colours: usize,
 }
 
-/// `theirs`' tint on `ours` (gta-tint's 16-bit linear COLOR_0): its triangles matched to ours by corner positions,
-/// else (a lifted decal) by UV corners with the centroid within 2 cm.
+/// `theirs`' tint on `ours` (gta-tint's 16-bit linear COLOR_0), its triangles matched to ours ([`corner_match`]).
 fn tint_at(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> PartTint {
     let mut out = PartTint::default();
     let Some(primase_core::Stream::U16x4(c)) = ours.streams.get(&primase_core::Semantic::Color(0)) else {
@@ -1134,47 +1701,39 @@ fn tint_at(theirs: &primase_core::Primitive, ours: &primase_core::Primitive) -> 
     };
     let srgb =
         |v: u32| [0, 1, 2].map(|j| primase_image::linear_to_srgb8(f64::from(c[v as usize][j]) / 65535.0));
-    let corners = |p: &primase_core::Primitive| -> Vec<[[i64; 3]; 3]> {
-        let pos = p.positions().expect("positions");
-        triangles(p)
-            .iter()
-            .map(|t| {
-                let mut k = t.map(|i| pos[i as usize].map(|v| (f64::from(v) * 1e4).round() as i64));
-                k.sort();
-                k
-            })
-            .collect()
-    };
-    let ours_tris = triangles(ours);
-    let by_corners: BTreeMap<[[i64; 3]; 3], u32> = corners(ours)
-        .into_iter()
-        .zip(ours_tris.iter().map(|t| t[0]))
-        .collect();
-    // per UV corners, our triangles' centroids and first vertices
-    let mut by_uv: BTreeMap<UvCorners, Vec<([f64; 3], u32)>> = BTreeMap::new();
-    for ((uv, centre), t) in uv_tris(ours).into_iter().zip(&ours_tris) {
-        by_uv.entry(uv).or_default().push((centre, t[0]));
-    }
-    out.palette_colours = ours_tris
+    out.palette_colours = triangles(ours)
         .iter()
         .map(|t| srgb(t[0]))
         .collect::<BTreeSet<_>>()
         .len();
-    let their_uv = uv_tris(theirs);
-    for (k, key) in corners(theirs).into_iter().enumerate() {
+    for m in corner_match(theirs, ours) {
         out.triangles += 1;
-        let first = by_corners.get(&key).copied().or_else(|| {
-            let (uv, centre) = their_uv.get(k)?;
-            by_uv
-                .get(uv)?
-                .iter()
-                .find_map(|(o, v)| (dot(sub(*o, *centre), sub(*o, *centre)) <= 0.02 * 0.02).then_some(*v))
-        });
-        if let Some(v) = first {
-            *out.colours.entry(srgb(v)).or_default() += 1;
+        if let Some(m) = m {
+            *out.colours.entry(srgb(m[0])).or_default() += 1;
         }
     }
     out
+}
+
+/// The geometry's facing against its stored normals, as gta-winding sums it (each face normal, unnormalised, dotted
+/// with the sum of its corners' normals), and the sum of the terms' magnitudes: how decisive the winding choice is.
+fn facing(p: &primase_core::Primitive) -> (f64, f64) {
+    let (Some(primase_core::Stream::F32x3(n)), Some(pos)) =
+        (p.streams.get(&primase_core::Semantic::Normal), p.positions())
+    else {
+        return (0.0, 0.0);
+    };
+    let f = |v: [f32; 3]| v.map(f64::from);
+    let (mut sum, mut size) = (0.0, 0.0);
+    for t in triangles(p) {
+        let [a, b, c] = t.map(|i| f(pos[i as usize]));
+        let face = cross(sub(b, a), sub(c, a));
+        let m = add(add(f(n[t[0] as usize]), f(n[t[1] as usize])), f(n[t[2] as usize]));
+        let d = dot(face, m);
+        sum += d;
+        size += d.abs();
+    }
+    (sum, size)
 }
 
 /// A primitive's triangles' indices, in order.
