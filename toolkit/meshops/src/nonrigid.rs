@@ -14,9 +14,10 @@
 //!   the placement's entity index.
 //! - **Regular** and **degenerate** transforms are left as they are (a writer skips a degenerate one).
 //!
-//! It runs after every lowering and before the writers: a dialect component that describes geometry as stored
-//! (relative to the stored transform) is dropped from a mapped entity, so the lowering that turns it into core
-//! geometry (`lower-unity-collision` for `unity.collider`) must have run.
+//! It runs after a reader's own lowerings and before raising to a target dialect (`raise-skate`) and the writers: a
+//! dialect component that describes geometry as stored (relative to the stored transform) is dropped from a mapped
+//! entity, so the lowering that turns it into core geometry (`lower-unity-collision` for `unity.collider`) must have
+//! run; a target dialect's components (`skate.*`) say nothing yet of how they follow, so they would stop the bake.
 //!
 //! Mapping is all or nothing per entity: when a component cannot follow ([`primase_core::Linearity::Unsupported`]),
 //! or a prototype's geometry is still in a file, the placement is left as it was and counted by what stopped it.
