@@ -840,6 +840,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-dxil"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "primase-shader",
+ "primase-testdata",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-fromsoft"
 version = "0.1.0"
 dependencies = [

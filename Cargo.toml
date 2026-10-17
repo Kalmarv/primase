@@ -14,6 +14,7 @@ members = [
     "toolkit/havok",
     "toolkit/dxbc",
     "toolkit/shader",
+    "toolkit/dxil",
     "toolkit/frostbite",
     "toolkit/cache",
     "formats/skate-scene",
@@ -63,6 +64,7 @@ primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-shader = { path = "toolkit/shader" }
+primase-dxil = { path = "toolkit/dxil" }
 primase-frostbite = { path = "toolkit/frostbite" }
 primase-skate-scene = { path = "formats/skate-scene" }
 primase-gltf = { path = "formats/gltf" }
