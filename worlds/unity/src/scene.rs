@@ -8,7 +8,7 @@
 //! and y come from its anchors (the stored position can be stale): the parent rect's minimum plus its size times the
 //! anchors interpolated at the pivot, plus the anchored position.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::player::{ObjRef, Player};
 use crate::value::{Array, Value};
@@ -178,11 +178,11 @@ pub type Skipped = std::collections::BTreeMap<&'static str, u64>;
 #[derive(Debug)]
 pub struct Scene {
     pub file: String,
-    pub game_objects: HashMap<i64, GameObject>,
-    nodes: HashMap<i64, Node>,
+    pub game_objects: BTreeMap<i64, GameObject>,
+    nodes: BTreeMap<i64, Node>,
     /// GameObject -> its Transform.
-    transform_of: HashMap<i64, i64>,
-    world: std::sync::Mutex<HashMap<i64, Matrix>>,
+    transform_of: BTreeMap<i64, i64>,
+    world: std::sync::Mutex<BTreeMap<i64, Matrix>>,
 }
 
 impl Scene {
@@ -195,9 +195,9 @@ impl Scene {
         };
         let name_of =
             |o: &crate::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
-        let mut nodes = HashMap::new();
-        let mut rects: HashMap<i64, Value> = HashMap::new();
-        let mut game_objects = HashMap::new();
+        let mut nodes = BTreeMap::new();
+        let mut rects: BTreeMap<i64, Value> = BTreeMap::new();
+        let mut game_objects = BTreeMap::new();
         for o in &f.objects {
             match name_of(o) {
                 "Transform" | "RectTransform" => {
@@ -240,12 +240,12 @@ impl Scene {
             }
         }
         // RectTransforms: local x, y from the anchors
-        let mut sizes: HashMap<i64, ([f64; 2], [f64; 2])> = HashMap::new();
+        let mut sizes: BTreeMap<i64, ([f64; 2], [f64; 2])> = BTreeMap::new();
         fn rect_size(
             tp: i64,
-            rects: &HashMap<i64, Value>,
-            nodes: &HashMap<i64, Node>,
-            sizes: &mut HashMap<i64, ([f64; 2], [f64; 2])>,
+            rects: &BTreeMap<i64, Value>,
+            nodes: &BTreeMap<i64, Node>,
+            sizes: &mut BTreeMap<i64, ([f64; 2], [f64; 2])>,
             depth: u32,
         ) -> Result<([f64; 2], [f64; 2])> {
             if let Some(s) = sizes.get(&tp) {
@@ -305,7 +305,7 @@ impl Scene {
             game_objects,
             nodes,
             transform_of,
-            world: std::sync::Mutex::new(HashMap::new()),
+            world: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
 

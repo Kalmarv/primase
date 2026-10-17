@@ -9,7 +9,7 @@
 //! Only versions verified against real data are read; others are refused, as are embedded type trees (player
 //! builds strip them; decode with a [`TypeTreePackage`] instead).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::tpk::TypeTreePackage;
 use crate::typetree::TypeTree;
@@ -82,7 +82,7 @@ pub struct SerializedFile {
     pub ref_types: Vec<SerializedType>,
     pub user_information: String,
     data: Vec<u8>,
-    by_path_id: HashMap<i64, usize>,
+    by_path_id: BTreeMap<i64, usize>,
 }
 
 fn hash(r: &mut Reader) -> Result<[u8; 16]> {
@@ -219,7 +219,7 @@ impl SerializedFile {
                 r.pos
             )));
         }
-        let mut by_path_id = HashMap::with_capacity(objects.len());
+        let mut by_path_id = BTreeMap::new();
         for (i, o) in objects.iter().enumerate() {
             if by_path_id.insert(o.path_id, i).is_some() {
                 return Err(invalid(format!("path id {} twice", o.path_id)));

@@ -3,7 +3,7 @@
 //! Brotli packages are refused: re-pack them uncompressed).
 
 use primase_compress::{Decompressor, Lz4};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::typetree::{Node, TypeTree};
@@ -35,7 +35,7 @@ struct PackedNode {
 #[derive(Clone, Debug)]
 pub struct TypeTreePackage {
     /// Per class id, the class from each listed version on (`None`: absent from that version).
-    classes: HashMap<i32, Vec<(UnityVersion, Option<Class>)>>,
+    classes: BTreeMap<i32, Vec<(UnityVersion, Option<Class>)>>,
     nodes: Vec<PackedNode>,
     strings: Vec<Arc<str>>,
 }
@@ -115,7 +115,7 @@ impl TypeTreePackage {
         let _created = r.i64()?;
         let versions = count(&mut r, "version")?;
         r.take(versions * 8)?;
-        let mut classes = HashMap::new();
+        let mut classes = BTreeMap::new();
         for _ in 0..count(&mut r, "class")? {
             let id = r.i32()?;
             let mut entries = Vec::new();

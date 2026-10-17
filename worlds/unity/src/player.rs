@@ -6,7 +6,7 @@
     reason = "reader I/O: reads the player's data folder"
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -47,7 +47,7 @@ pub struct Player {
     /// The folder each file is in (its streamed resources are beside it).
     pub folders: BTreeMap<String, PathBuf>,
     package: TypeTreePackage,
-    trees: Mutex<HashMap<(String, i32), std::sync::Arc<TypeTree>>>,
+    trees: Mutex<BTreeMap<(String, i32), std::sync::Arc<TypeTree>>>,
 }
 
 fn file_key(path: &str) -> String {
@@ -90,7 +90,7 @@ impl Player {
             files,
             folders,
             package,
-            trees: Mutex::new(HashMap::new()),
+            trees: Mutex::new(BTreeMap::new()),
         })
     }
 
