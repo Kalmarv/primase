@@ -11,5 +11,10 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 
+[dev-dependencies]
+# The implementations, to evaluate one fixture through each bytecode (a dev-dependency cycle cargo allows).
+primase-dxbc.workspace = true
+primase-dxil.workspace = true
+
 [lints]
 workspace = true

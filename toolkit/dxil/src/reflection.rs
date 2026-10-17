@@ -396,11 +396,17 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                         .into_iter()
                         .zip(elements)
                         .map(|((name, offset), e)| {
+                            let ty = d3d_type(source, e, 0)?;
+                            // The bitcode states no size; D3D reflection's is the packed size.
+                            let size = ty
+                                .packed_words()
+                                .and_then(|w| w.checked_mul(4))
+                                .ok_or_else(|| error(0, format!("constant {name} has no packed size")))?;
                             Ok(Variable {
                                 name,
                                 offset,
-                                size: 0,
-                                ty: d3d_type(source, e, 0)?,
+                                size,
+                                ty,
                                 default: None,
                             })
                         })

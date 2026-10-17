@@ -9,6 +9,9 @@
 //! transfer policy.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod evaluate;
+pub use evaluate::{Constants, Evaluation, Field, Grid, Image, Input, Lane, Layout, Texture, evaluate};
+
 /// An implicit-LOD sample request of a 2D texture.
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
@@ -83,6 +86,29 @@ pub struct Type {
     /// Zero means not an array, as in D3D reflection.
     pub elements: u16,
     pub members: Vec<Member>,
+}
+impl Type {
+    /// 32-bit words the type occupies in a constant buffer under D3D packing: each matrix row (row-major) or column
+    /// (column-major), array element and struct starts a four-word register, and the last one takes only its own
+    /// words. None for object types (class 4 and above, except structs) and for overflow.
+    pub fn packed_words(&self) -> Option<u32> {
+        let (rows, columns) = (u32::from(self.rows.max(1)), u32::from(self.columns.max(1)));
+        let one = match self.class {
+            0 | 1 => rows.checked_mul(columns)?,
+            2 => (rows - 1).checked_mul(4)?.checked_add(columns)?,
+            3 => (columns - 1).checked_mul(4)?.checked_add(rows)?,
+            5 => self.members.iter().try_fold(0u32, |end, m| {
+                Some(end.max(m.offset.div_ceil(4).checked_add(m.ty.packed_words()?)?))
+            })?,
+            _ => return None,
+        };
+        match u32::from(self.elements) {
+            0 => Some(one),
+            n => (n - 1)
+                .checked_mul(one.div_ceil(4).checked_mul(4)?)?
+                .checked_add(one),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Member {

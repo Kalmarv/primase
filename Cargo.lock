@@ -986,6 +986,8 @@ dependencies = [
 name = "primase-shader"
 version = "0.1.0"
 dependencies = [
+ "primase-dxbc",
+ "primase-dxil",
  "thiserror",
 ]
 
