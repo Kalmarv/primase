@@ -63,6 +63,10 @@ impl Lods {
 
 impl Component for Lods {
     const NAME: &'static str = "core.lods";
+    /// The forms are entities of their own (a pass mapping a prototype maps its forms itself).
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

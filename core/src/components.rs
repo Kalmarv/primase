@@ -28,6 +28,10 @@ use crate::world::{Component, Entity};
 pub struct Name(pub String);
 impl Component for Name {
     const NAME: &'static str = "core.name";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -39,6 +43,10 @@ impl Component for Name {
 pub struct Source(pub String);
 impl Component for Source {
     const NAME: &'static str = "core.source";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -55,6 +63,10 @@ pub struct Transform {
 }
 impl Component for Transform {
     const NAME: &'static str = "core.transform";
+    /// The placement itself, which a pass baking its non-rigid part replaces: not mapped.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         finite(self.cols.iter().flatten().copied(), "transform")
     }
@@ -143,6 +155,79 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     ]
 }
 
+/// A linear map of an entity's local space (a transform's 3x3 part), computed in f64 from the f32 entries and rounded
+/// once per value: what [`crate::Component::apply_linear`] maps local-space geometry by.
+///
+/// Points go through `M`; normals through `M^-T` with the determinant's sign kept (they stay on the side they were
+/// on) and directions through `M`, both then of unit length (zero stays zero); a tangent's w (the bitangent sign) and
+/// a triangle's winding flip when the determinant is negative ([`Linear::mirrors`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Linear {
+    c: [[f64; 3]; 3],
+    /// Columns of the inverse transpose times the determinant: `[c1 x c2, c2 x c0, c0 x c1]`.
+    cof: [[f64; 3]; 3],
+    det: f64,
+}
+
+impl Linear {
+    /// The 3x3 part of `t`.
+    pub fn of(t: &Transform) -> Linear {
+        Linear::new(std::array::from_fn(|i| t.cols[i]))
+    }
+
+    /// The map with these columns (images of local +X, +Y, +Z).
+    pub fn new(cols: [[f32; 3]; 3]) -> Linear {
+        let c: [[f64; 3]; 3] = cols.map(|col| col.map(f64::from));
+        let cof = [cross(c[1], c[2]), cross(c[2], c[0]), cross(c[0], c[1])];
+        let det = dot(c[0], cof[0]);
+        Linear { c, cof, det }
+    }
+
+    /// x negated: the mirror a mirroring placement keeps out of its transform, `M = M' * MIRROR_X`.
+    pub fn mirror_x() -> Linear {
+        Linear::new([[-1., 0., 0.], [0., 1., 0.], [0., 0., 1.]])
+    }
+
+    pub fn determinant(&self) -> f64 {
+        self.det
+    }
+
+    /// Whether it reverses orientation (negative determinant): triangles must be reversed and tangent w negated.
+    pub fn mirrors(&self) -> bool {
+        self.det < 0.0
+    }
+
+    fn apply(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+        std::array::from_fn(|r| m[0][r] * v[0] + m[1][r] * v[1] + m[2][r] * v[2])
+    }
+
+    /// `M p`.
+    pub fn point(&self, p: [f32; 3]) -> [f32; 3] {
+        Self::apply(&self.c, p.map(f64::from)).map(|x| x as f32)
+    }
+
+    /// `M^-T n` times the determinant's sign, of unit length.
+    pub fn normal(&self, n: [f32; 3]) -> [f32; 3] {
+        let v = Self::apply(&self.cof, n.map(f64::from)).map(|x| x * self.det.signum());
+        unit(v)
+    }
+
+    /// `M t` of unit length; w negated under a mirror.
+    pub fn tangent(&self, t: [f32; 4]) -> [f32; 4] {
+        let v = unit(Self::apply(&self.c, [t[0], t[1], t[2]].map(f64::from)));
+        let w = if self.mirrors() { -t[3] } else { t[3] };
+        [v[0], v[1], v[2], w]
+    }
+}
+
+fn unit(v: [f64; 3]) -> [f32; 3] {
+    let len = dot(v, v).sqrt();
+    if len == 0.0 {
+        return [0.0; 3];
+    }
+    v.map(|x| (x / len) as f32)
+}
+
 /// A placement of a prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Instance {
@@ -153,6 +238,10 @@ pub struct Instance {
 }
 impl Component for Instance {
     const NAME: &'static str = "core.instance";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -180,6 +269,10 @@ pub struct Shadows {
 }
 impl Component for Shadows {
     const NAME: &'static str = "core.shadows";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -275,6 +368,35 @@ pub struct Mesh {
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
+    /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror.
+    fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
+        let mut m = self.clone();
+        for p in &mut m.primitives {
+            for (sem, st) in &mut p.streams {
+                match (sem, st) {
+                    (Semantic::Position, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.point(*x)),
+                    (Semantic::Normal, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.normal(*x)),
+                    (Semantic::Tangent, Stream::F32x4(v)) => v.iter_mut().for_each(|x| *x = l.tangent(*x)),
+                    (Semantic::Position | Semantic::Normal | Semantic::Tangent, _) => {
+                        return crate::world::Linearity::Unsupported;
+                    }
+                    _ => {}
+                }
+            }
+            if l.mirrors() && p.topology == Topology::Triangles {
+                let n = p.vertex_count() as u32;
+                for t in p
+                    .indices
+                    .get_or_insert_with(|| (0..n).collect())
+                    .as_chunks_mut::<3>()
+                    .0
+                {
+                    t.swap(1, 2);
+                }
+            }
+        }
+        crate::world::Linearity::Applied(m)
+    }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.primitives.iter().filter_map(|p| p.material));
     }
@@ -507,6 +629,15 @@ impl Collision {
 
 impl Component for Collision {
     const NAME: &'static str = "core.collision";
+    /// Positions mapped; triangles reversed under a mirror.
+    fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
+        let mut c = self.clone();
+        c.positions.iter_mut().for_each(|p| *p = l.point(*p));
+        if l.mirrors() {
+            c.triangles.iter_mut().for_each(|t| t.swap(1, 2));
+        }
+        crate::world::Linearity::Applied(c)
+    }
     /// One surface per triangle, indices in range, positions finite, surfaces known to the world's [`Surfaces`].
     fn verify(&self, _e: Entity, w: &crate::World) -> Result<(), String> {
         if self.surfaces.len() != self.triangles.len() {
@@ -711,6 +842,10 @@ pub struct MeshFile {
 }
 impl Component for MeshFile {
     const NAME: &'static str = "core.mesh_file";
+    /// The geometry is no longer the file's.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Drop
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -725,6 +860,10 @@ impl Component for MeshFile {
 pub struct MaterialVariants(pub Vec<BTreeMap<u32, Entity>>);
 impl Component for MaterialVariants {
     const NAME: &'static str = "core.material_variants";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -744,6 +883,10 @@ pub struct Tile {
 }
 impl Component for Tile {
     const NAME: &'static str = "core.tile";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

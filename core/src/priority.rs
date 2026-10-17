@@ -18,6 +18,10 @@ pub struct Priority(pub u8);
 
 impl Component for Priority {
     const NAME: &'static str = "core.priority";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
 
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)

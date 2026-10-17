@@ -50,6 +50,10 @@ fn check_kind(kind: &str) -> Result<(), String> {
 
 impl Component for Marker {
     const NAME: &'static str = "core.marker";
+    /// Placed by its entity's transform, which the pass keeps rigid; a ground position is world space.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -69,6 +73,10 @@ impl Component for Marker {
 
 impl Component for Curve {
     const NAME: &'static str = "core.curve";
+    /// World space: not in any entity's local space.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

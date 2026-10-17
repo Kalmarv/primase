@@ -74,6 +74,29 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     fn remap_primitives(&self, _from: &[usize]) -> Option<Result<Self, String>> {
         None
     }
+
+    /// The component after its entity's local space was mapped by `l` (a pass that bakes a placement's mirror or
+    /// shear into a copy of its geometry, so transforms stay rigid). [`World::apply_linear`] calls it for every
+    /// component of the entity. The default is [`Linearity::Unsupported`]: a component that holds local-space
+    /// geometry and does not say how it follows is never silently left behind; one without geometry says
+    /// [`Linearity::Invariant`].
+    fn apply_linear(&self, _l: &crate::Linear) -> Linearity<Self> {
+        Linearity::Unsupported
+    }
+}
+
+/// What a component becomes when its entity's local space is mapped by a [`crate::Linear`]
+/// ([`Component::apply_linear`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Linearity<T> {
+    /// It holds no local-space geometry: kept as it is.
+    Invariant,
+    /// It holds geometry, mapped.
+    Applied(T),
+    /// What it says is no longer true of the mapped geometry (a file the geometry was read from): removed.
+    Drop,
+    /// It cannot follow: the entity is left as it was.
+    Unsupported,
 }
 
 /// `list` (one entry per primitive) for primitives rebuilt from `from` ([`Component::remap_primitives`]).
@@ -232,8 +255,12 @@ trait AnyColumn: Any + Send + Sync {
     /// `e`'s value remapped to rebuilt primitives ([`Component::remap_primitives`]), not stored yet; `None` when `e`
     /// has none or it does not follow primitives.
     fn remapped(&self, e: Entity, from: &[usize]) -> Option<Result<Box<dyn Any + Send>, String>>;
-    /// Store a value [`AnyColumn::remapped`] made.
+    /// Store a value [`AnyColumn::remapped`] or [`AnyColumn::linear`] made.
     fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>);
+    /// A copy of `from`'s value, if it has one, onto `to`.
+    fn copy_entity(&mut self, from: Entity, to: Entity);
+    /// `e`'s value under [`Component::apply_linear`], not stored yet; `None` when `e` has none.
+    fn linear(&self, e: Entity, l: &crate::Linear) -> Option<Linearity<Box<dyn Any + Send>>>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -316,6 +343,19 @@ impl<T: Component> AnyColumn for Column<T> {
             .downcast::<T>()
             .expect("a value remapped by this column");
         self.values.insert(e, v);
+    }
+    fn copy_entity(&mut self, from: Entity, to: Entity) {
+        if let Some(v) = self.values.get(&from).cloned() {
+            self.values.insert(to, v);
+        }
+    }
+    fn linear(&self, e: Entity, l: &crate::Linear) -> Option<Linearity<Box<dyn Any + Send>>> {
+        Some(match self.values.get(&e)?.apply_linear(l) {
+            Linearity::Invariant => Linearity::Invariant,
+            Linearity::Applied(v) => Linearity::Applied(Box::new(v) as Box<dyn Any + Send>),
+            Linearity::Drop => Linearity::Drop,
+            Linearity::Unsupported => Linearity::Unsupported,
+        })
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -513,6 +553,59 @@ impl World {
         self.alive.remove(&from);
         self.forget_in_resources(|x| x == from);
         true
+    }
+
+    /// A new entity with a copy of every typed and opaque component of `e`; `None` when `e` is not alive. Shallow:
+    /// references in the copies still name the entities `e`'s did (a pass that needs referenced entities copied too,
+    /// LOD forms of a prototype, copies them itself).
+    pub fn duplicate(&mut self, e: Entity) -> Option<Entity> {
+        if !self.is_alive(e) {
+            return None;
+        }
+        let d = self.spawn();
+        for c in self.columns.values_mut() {
+            c.copy_entity(e, d);
+        }
+        for values in self.opaque.values_mut() {
+            if let Some(v) = values.get(&e).cloned() {
+                values.insert(d, v);
+            }
+        }
+        Some(d)
+    }
+
+    /// Map `e`'s local space by `l`: every component of `e` through [`Component::apply_linear`]. All or nothing:
+    /// when a component is [`Linearity::Unsupported`] (opaque components always are) nothing changes and the error
+    /// names every such component, sorted.
+    pub fn apply_linear(&mut self, e: Entity, l: &crate::Linear) -> Result<(), Vec<String>> {
+        let mut unsupported: Vec<String> = self
+            .opaque
+            .iter()
+            .filter(|(_, values)| values.contains_key(&e))
+            .map(|(name, _)| name.clone())
+            .collect();
+        let mut done = Vec::new();
+        for (id, c) in &self.columns {
+            match c.linear(e, l) {
+                None | Some(Linearity::Invariant) => {}
+                Some(Linearity::Unsupported) => unsupported.push(c.name().to_string()),
+                Some(r) => done.push((*id, r)),
+            }
+        }
+        if !unsupported.is_empty() {
+            unsupported.sort();
+            return Err(unsupported);
+        }
+        for (id, r) in done {
+            if let Some(c) = self.columns.get_mut(&id) {
+                match r {
+                    Linearity::Applied(v) => c.put_remapped(e, v),
+                    Linearity::Drop => c.remove_entity(e),
+                    Linearity::Invariant | Linearity::Unsupported => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Keep `e`'s per-primitive components in step with its rebuilt mesh: every typed component that follows

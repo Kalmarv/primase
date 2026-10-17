@@ -200,6 +200,10 @@ pub struct Condition(pub Vec<Clause>);
 
 impl Component for Condition {
     const NAME: &'static str = "core.condition";
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

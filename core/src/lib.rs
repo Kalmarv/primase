@@ -28,6 +28,6 @@ pub use json::JsonError;
 pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
 pub use world::{
-    Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Opaque, OpaqueData, Resource,
-    World, remap_list,
+    Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Linearity, Opaque, OpaqueData,
+    Resource, World, remap_list,
 };
