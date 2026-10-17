@@ -1,7 +1,7 @@
 //! Gate of `lower-layered-reskate` and the writer's vertex-blend output on real scenes.
 //!
 //! For every scene folder under `PRIMASE_SCENES_GTA` (filtered by `PRIMASE_SCENE_FILTER`) with a `core.layered`
-//! material: building without the pass is refused, naming it; with the pass (after loading the meshes) the build
+//! material, after the default level-of-detail choice: building without the pass is refused, naming it; with the pass (after loading the meshes) the build
 //! writes, for every map material with `vertex_blend`, a `_RESKATE_BLEND` float per vertex in 0..1 on every GLB
 //! primitive drawing it (and on no other primitive); `vertex_blend.json` lists exactly those materials, each with
 //! the (mesh, primitive) pairs of map.json objects drawing it. The pass's counts (base and overlay triangles,
@@ -57,6 +57,11 @@ fn floats(json: &Value, bin: &[u8], accessor: usize) -> Vec<f32> {
         .collect()
 }
 
+/// The writer's default level of detail, as a pass (before the lowering: the writer refuses levels of detail).
+fn choose_lod(w: &mut World) {
+    primase_reskate::select_lod(w, primase_core::LodChoice::Default).unwrap();
+}
+
 /// After lowering: (overlay triangles that another overlay of the same base also draws, all overlay triangles). A
 /// base's overlays are the primitives with opacities after it.
 fn overlaps(w: &World) -> (usize, usize) {
@@ -98,10 +103,11 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         if w.iter::<LayeredMaterial>().count() == 0 {
             continue;
         }
-        let o = BuildOptions {
+        let mut o = BuildOptions {
             out_root: out_root.clone(),
             ..BuildOptions::default()
         };
+        choose_lod(&mut w);
         let refused = primase_reskate::build(&w, &scene, &o)
             .err()
             .map(|e| e.to_string())
@@ -115,6 +121,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         // overlapping area it counts is the default's
         let mut one = World::new();
         primase_skate_scene::read(&scene, &mut one).unwrap();
+        choose_lod(&mut one);
         primase_gltf::load_mesh_files(&mut one, &scene).unwrap();
         let mut one_log = PassLog::default();
         LowerLayeredReskate {
@@ -141,6 +148,12 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             one_log.counts["area limited to one overlay (m2)"]
         );
         assert_eq!(overlaps(&w).1 as u64, log.counts["overlay triangles"]);
+        // the scene's warnings, with nothing left out (needs the lowered scene)
+        o.scene_warnings = Some(
+            primase_reskate::leave_out_optional(&mut w, &scene, None)
+                .unwrap()
+                .0,
+        );
         let report = primase_reskate::build(&w, &scene, &o).unwrap();
         let out = report.out_dir;
         let map: Value = serde_json::from_slice(&std::fs::read(out.join("map.json")).unwrap()).unwrap();
