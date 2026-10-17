@@ -9,9 +9,11 @@
 //! calming quads (a dampening of the waves) and wave quads (amplitude and direction). The tuning file
 //! (`common.rpf\data\watertune.xml`) gives, among others, the specular falloff of the water shader.
 //!
-//! `gta-select-water{x0,y0,x1,y1}` (a selection pass): every visible water quad (or its triangle), clipped to the
-//! region (without one, whole), as a prototype holding that outline (`gta.water_surface`) with a placement of an
-//! identity transform; it removes `gta.water`. Calming and wave quads, the corner values and the depth flags have no
+//! `gta-select-water{x0,y0,x1,y1}` (a selection pass, after the region's placements are chosen): every visible water
+//! quad (or its triangle), clipped to the ground extent of the kept placements (the water goes as far as what is
+//! drawn: the region rules keep a placement whose box meets the region, so the seabed reaches past it), else to the
+//! region, else whole, as a prototype holding that outline (`gta.water_surface`) with a placement of an identity
+//! transform; it removes `gta.water`. Calming and wave quads, the corner values and the depth flags have no
 //! glTF meaning: counted, not placed.
 //!
 //! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
@@ -329,6 +331,9 @@ impl Pass for SelectGtaWater {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let waters: Vec<(Entity, GtaWater)> = w.iter::<GtaWater>().map(|(e, g)| (e, g.clone())).collect();
+        // the water goes as far as what is drawn: the ground extent of the kept placements (their prototypes' boxes
+        // placed), else the region
+        let extent = placed_extent(w);
         for (e, water) in waters {
             w.remove::<GtaWater>(e);
             log.count("calming quads not drawn", water.calming.len() as u64);
@@ -339,7 +344,7 @@ impl Pass for SelectGtaWater {
                     log.count("invisible water quads left out", 1);
                     continue;
                 }
-                let outline = match self.region {
+                let outline = match extent.or(self.region) {
                     Some(r) => clip(&outline(q), r),
                     None => outline(q),
                 };
@@ -383,6 +388,32 @@ impl Pass for SelectGtaWater {
         }
         Ok(())
     }
+}
+
+/// The ground extent `[x0, y0, x1, y1]` (GTA coordinates) of every placement whose prototype has a box before loading
+/// ([`crate::pipeline::prototype_box`]), its box through the placement's transform; `None` without one.
+fn placed_extent(w: &World) -> Option<[f32; 4]> {
+    let mut e: Option<[f32; 4]> = None;
+    for (p, i) in w.iter::<Instance>() {
+        let (Some(b), Some(t)) = (
+            crate::pipeline::prototype_box(w, i.prototype),
+            w.get::<Transform>(p),
+        ) else {
+            continue;
+        };
+        for k in 0..8 {
+            let c = [0, 1, 2].map(|a| b[(k >> a) & 1][a] as f32);
+            // core (x, up, z) is GTA (x, -z) on the ground
+            let q = t.apply(c);
+            let g = [q[0], -q[2]];
+            let r = e.get_or_insert([g[0], g[1], g[0], g[1]]);
+            r[0] = r[0].min(g[0]);
+            r[1] = r[1].min(g[1]);
+            r[2] = r[2].max(g[0]);
+            r[3] = r[3].max(g[1]);
+        }
+    }
+    e
 }
 
 /// `lower-gta-water` (see the module documentation).
@@ -531,6 +562,71 @@ mod tests {
         assert_eq!(q.corners, [26.0, 26.0, 0.0, 26.0]);
         assert_eq!(w.calming[0].dampening, 0.5);
         assert_eq!((w.waves[0].amplitude, w.waves[0].direction), (2.0, [0.5, -0.5]));
+    }
+
+    /// The water reaches as far as the kept placements do, past the region.
+    #[test]
+    fn water_is_clipped_to_the_placements_extent() {
+        let mut w = World::new();
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            crate::components::GtaArchetype {
+                ytyp: String::new(),
+                name: 1,
+                kind: "base",
+                flags: 0,
+                special_attribute: 0,
+                lod_dist: 100.0,
+                hd_texture_dist: 0.0,
+                // GTA x 0-20, y 0-10
+                bb_min: [0.0, 0.0, 0.0],
+                bb_max: [20.0, 10.0, 1.0],
+                bs_centre: [10.0, 5.0, 0.5],
+                bs_radius: 12.0,
+                texture_dictionary: 0,
+                drawable_dictionary: 0,
+                physics_dictionary: 0,
+                clip_dictionary: 0,
+                asset_type: 2,
+                asset_name: 1,
+                time_flags: None,
+            },
+        );
+        let p = w.spawn();
+        w.insert(
+            p,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(p, Transform::IDENTITY);
+        let e = w.spawn();
+        w.insert(
+            e,
+            parse_water(
+                br#"<WaterData><WaterQuads>
+<Item><minX value="-50" /><maxX value="50" /><minY value="-50" /><maxY value="50" /><Type value="0" />
+<IsInvisible value="false" /><HasLimitedDepth value="false" /><z value="0" />
+<a1 value="26" /><a2 value="26" /><a3 value="26" /><a4 value="26" /><NoStencil value="false" /></Item>
+</WaterQuads></WaterData>"#,
+            )
+            .unwrap(),
+        );
+        SelectGtaWater {
+            region: Some([0.0, 0.0, 5.0, 5.0]),
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+        let s: Vec<&GtaWaterSurface> = w.iter::<GtaWaterSurface>().map(|(_, s)| s).collect();
+        assert_eq!(s.len(), 1);
+        // 20 x 10 (the placement's extent), not the region's 5 x 5
+        assert!(
+            (area(&s[0].outline) / 2.0 - 200.0).abs() < 1e-3,
+            "{:?}",
+            s[0].outline
+        );
     }
 
     #[test]
