@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
-use primase_core::pass::PassLog;
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_unity::TypeTreePackage;
 use primase_unity::level::read_level;
 use primase_unity::player::Player;
@@ -68,27 +68,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "not decoded {:?}; not reproduced {:?}",
         report.textures_not_decoded, report.not_reproduced
     );
-    show("lower-unity-pbr", &primase_unity::lower::lower_unity_pbr(&mut w)?);
-    show(
-        "lower-unity-terrain",
-        &primase_unity::lower_terrain::lower_unity_terrain(&mut w)?,
-    );
-    show(
-        "lower-unity-collision",
-        &primase_unity::lower_collision::lower_unity_collision(&mut w)?,
-    );
-    show(
-        "lower-unity-lights",
-        &primase_unity::lower_lights::lower_unity_lights(&mut w)?,
-    );
-    show("normalize-normals", &primase_image::normalize_normals(&mut w)?);
-    let problems = w.verify_components();
-    if let Some((name, e, detail)) = problems.first() {
-        return Err(format!(
-            "{} invalid components; first {name} on {e:?}: {detail}",
-            problems.len()
-        )
-        .into());
+    // the lowering, as a pipeline: each pass whose input the level has, verified after each
+    let passes: Vec<Box<dyn Pass>> = vec![
+        Box::new(primase_unity::lower::LowerUnityPbr),
+        Box::new(primase_unity::lower_terrain::LowerUnityTerrain),
+        Box::new(primase_unity::lower_collision::LowerUnityCollision),
+        Box::new(primase_unity::lower_lights::LowerUnityLights),
+        Box::new(primase_image::NormalizeNormals),
+    ];
+    let mut lowering = Vec::new();
+    for p in passes {
+        // a pass's input may come from an earlier pass (terrain textures for normalize-normals)
+        let present = |w: &World, p: &dyn Pass| p.requires().iter().all(|r| w.has_component_named(r));
+        if present(&w, p.as_ref()) {
+            let mut report = RunReport::default();
+            PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes: vec![p] }, &mut report)?;
+            lowering.extend(report.steps);
+        } else {
+            println!("{}: nothing to lower", p.name());
+        }
+    }
+    for step in &lowering {
+        show(&step.pass, &step.log);
     }
     println!("lowered in {:.1} s", started.elapsed().as_secs_f64());
     std::fs::create_dir_all(out)?;
