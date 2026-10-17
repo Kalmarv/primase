@@ -1,8 +1,9 @@
 //! The pass manager (DESIGN.md §4): passes that transform the world, the targets writers declare, a search for a
 //! pipeline from what the world has to what a target accepts, and the verifier that runs between every step.
 //!
-//! - A [`Pass`] has a stable name, text options, and declares the component names it **requires**, **provides**,
-//!   **removes** and **modifies** (in place), plus what it approximates. After a pass runs, the names that actually
+//! - A [`Pass`] has a stable name, text options, and declares the component and resource names it **requires**,
+//!   **provides**, **removes** and **modifies** (in place), plus what it approximates (a name is a component's or a
+//!   resource's, never both). After a pass runs, the names that actually
 //!   appeared and disappeared must be among those it declared. A pass that declares it **despawns entities** (leaves
 //!   placements out, discards forms) may also make a name disappear that only despawned entities held: no
 //!   surviving entity lost it. The planner does not count on that; it plans by the declared removals alone.
@@ -624,7 +625,7 @@ impl PassManager {
     /// One pass: its requirements, the run, its declarations, the verifier.
     fn run_pass(&self, w: &mut World, p: &dyn Pass, text: &str) -> Result<StepReport> {
         for &r in p.requires() {
-            if !w.has_component_named(r) {
+            if !w.has_component_named(r) && !w.resource_names().contains(&r) {
                 return Err(Error::Missing {
                     pass: text.to_owned(),
                     name: r.to_owned(),
@@ -632,6 +633,7 @@ impl PassManager {
             }
         }
         let before: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
+        let resources_before: BTreeSet<String> = w.resource_names().into_iter().map(str::to_owned).collect();
         // who held each name a despawning pass may make disappear without declaring it
         let holders: BTreeMap<&str, Vec<Entity>> = if p.despawns_entities() {
             before
@@ -648,8 +650,9 @@ impl PassManager {
             message,
         })?;
         let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
-        let added: Vec<String> = after.difference(&before).cloned().collect();
-        let removed: Vec<String> = before.difference(&after).cloned().collect();
+        let resources_after: BTreeSet<String> = w.resource_names().into_iter().map(str::to_owned).collect();
+        let mut added: Vec<String> = after.difference(&before).cloned().collect();
+        let mut removed: Vec<String> = before.difference(&after).cloned().collect();
         let despawned_with = |n: &str| {
             holders
                 .get(n)
@@ -672,6 +675,40 @@ impl PassManager {
                 });
             }
         }
+        // resources by the same declarations; despawning never takes one away, so no exemption
+        for (what, names, declared) in [
+            (
+                "added",
+                resources_after.difference(&resources_before),
+                p.provides(),
+            ),
+            (
+                "removed",
+                resources_before.difference(&resources_after),
+                p.removes(),
+            ),
+        ] {
+            let names: Vec<String> = names.cloned().collect();
+            let undeclared: Vec<String> = names
+                .iter()
+                .filter(|n| !declared.contains(&n.as_str()))
+                .cloned()
+                .collect();
+            if !undeclared.is_empty() {
+                return Err(Error::Undeclared {
+                    pass: text.to_owned(),
+                    what,
+                    names: undeclared,
+                });
+            }
+            if what == "added" {
+                added.extend(names);
+            } else {
+                removed.extend(names);
+            }
+        }
+        added.sort();
+        removed.sort();
         self.verify(w, text)?;
         Ok(StepReport {
             pass: text.to_owned(),
@@ -1376,6 +1413,152 @@ mod tests {
             .run(&mut world(), &pipeline, &mut RunReport::default())
             .unwrap_err();
         assert!(matches!(err, Error::Undeclared { what: "added", .. }), "{err}");
+    }
+
+    #[derive(Clone, Debug)]
+    struct Env;
+    impl crate::world::Resource for Env {
+        const NAME: &'static str = "toy.env";
+    }
+
+    /// Inserts `toy.env` (`add`) or takes it away, declaring it or not.
+    struct EnvPass {
+        add: bool,
+        declared: bool,
+        despawns: bool,
+    }
+    impl Pass for EnvPass {
+        fn name(&self) -> &'static str {
+            "env"
+        }
+        fn provides(&self) -> &[&'static str] {
+            if self.add && self.declared {
+                &["toy.env"]
+            } else {
+                &[]
+            }
+        }
+        fn removes(&self) -> &[&'static str] {
+            if !self.add && self.declared {
+                &["toy.env"]
+            } else {
+                &[]
+            }
+        }
+        fn despawns_entities(&self) -> bool {
+            self.despawns
+        }
+        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            if self.add {
+                w.insert_resource(Env);
+            } else {
+                w.remove_resource::<Env>();
+            }
+            Ok(())
+        }
+    }
+
+    fn env_run(pass: EnvPass, w: &mut World) -> Result<RunReport> {
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new()).run(
+            w,
+            &Pipeline {
+                passes: vec![Box::new(pass)],
+            },
+            &mut report,
+        )?;
+        Ok(report)
+    }
+
+    #[test]
+    fn resources_are_checked_by_the_same_declarations() {
+        // inserted without declaring it: refused by name
+        let err = env_run(
+            EnvPass {
+                add: true,
+                declared: false,
+                despawns: false,
+            },
+            &mut world(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pass env added `[\"toy.env\"]` without declaring it"
+        );
+        // declared: reported with the component names
+        let mut w = world();
+        let report = env_run(
+            EnvPass {
+                add: true,
+                declared: true,
+                despawns: false,
+            },
+            &mut w,
+        )
+        .unwrap();
+        assert_eq!(report.steps[0].added, ["toy.env"]);
+        // replacing one that is there is no change of names
+        let report = env_run(
+            EnvPass {
+                add: true,
+                declared: false,
+                despawns: false,
+            },
+            &mut w,
+        )
+        .unwrap();
+        assert!(report.steps[0].added.is_empty());
+        // taken away undeclared: refused, also by a pass that despawns entities (no entity held it)
+        let err = env_run(
+            EnvPass {
+                add: false,
+                declared: false,
+                despawns: true,
+            },
+            &mut w,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pass env removed `[\"toy.env\"]` without declaring it"
+        );
+        // a refused pass has still run: the world is as it left it
+        w.insert_resource(Env);
+        let report = env_run(
+            EnvPass {
+                add: false,
+                declared: true,
+                despawns: false,
+            },
+            &mut w,
+        )
+        .unwrap();
+        assert_eq!(report.steps[0].removed, ["toy.env"]);
+        // a pass may require a resource
+        struct NeedsEnv;
+        impl Pass for NeedsEnv {
+            fn name(&self) -> &'static str {
+                "needs-env"
+            }
+            fn requires(&self) -> &[&'static str] {
+                &["toy.env"]
+            }
+            fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+        let needs = || Pipeline {
+            passes: vec![Box::new(NeedsEnv)],
+        };
+        let m = PassManager::new(PassRegistry::new());
+        assert!(matches!(
+            m.run(&mut world(), &needs(), &mut RunReport::default()),
+            Err(Error::Missing { .. })
+        ));
+        let mut w = world();
+        w.insert_resource(Env);
+        m.run(&mut w, &needs(), &mut RunReport::default()).unwrap();
     }
 
     #[test]

@@ -327,8 +327,14 @@ impl Pass for ResolveState {
         let items: Vec<String> = self.assign.iter().map(|(k, v)| format!("{k}:{v}")).collect();
         Options::from([("assign".to_owned(), items.join(";"))])
     }
+    /// The state model's components, and the `core.state_assignment` resource it applied.
     fn removes(&self) -> &[&'static str] {
-        &[StateAxis::NAME, Condition::NAME, StateOverride::NAME]
+        &[
+            StateAxis::NAME,
+            Condition::NAME,
+            StateOverride::NAME,
+            StateAssignment::NAME,
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &[Transform::NAME, Instance::NAME]

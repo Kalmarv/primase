@@ -249,8 +249,9 @@ impl Pass for LowerUnityCollision {
     fn requires(&self) -> &[&'static str] {
         &["unity.collider"]
     }
+    /// `core.collision`, and the `core.surfaces` resource its triangles index.
     fn provides(&self) -> &[&'static str] {
-        &["core.collision"]
+        &["core.collision", "core.surfaces"]
     }
     fn approximates(&self) -> &'static str {
         "spheres and capsules tessellated; one diagonal per terrain cell"

@@ -154,8 +154,9 @@ impl Pass for LowerUnityLights {
     fn requires(&self) -> &[&'static str] {
         &["unity.light"]
     }
+    /// `core.light`s, and the `core.environment` resource when RenderSettings names a directional sun.
     fn provides(&self) -> &[&'static str] {
-        &["core.light"]
+        &["core.light", "core.environment"]
     }
     fn approximates(&self) -> &'static str {
         "URP intensity taken as candela or lux; colour temperature not applied; area lights left out"

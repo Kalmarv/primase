@@ -635,6 +635,11 @@ impl World {
         if let Some(&owner) = self.names.get(T::NAME) {
             assert!(owner == id, "two component types share the name {:?}", T::NAME);
         } else {
+            assert!(
+                !self.is_resource_name(T::NAME),
+                "{} is a resource's name: a name is a component's or a resource's, not both",
+                T::NAME
+            );
             self.names.insert(T::NAME, id);
         }
         self.columns
@@ -913,6 +918,10 @@ impl World {
             !self.names.contains_key(name),
             "{name} is a typed component; decode it instead"
         );
+        assert!(
+            !self.is_resource_name(name),
+            "{name} is a resource's name: a name is a component's or a resource's, not both"
+        );
         self.opaque.entry(name.to_owned()).or_default().insert(e, value)
     }
 
@@ -931,7 +940,14 @@ impl World {
 
     // ---- resources ---------------------------------------------------------------------------------------------
 
+    /// Insert (or replace) a resource. Panics if a component has its name: a name is a component's or a resource's,
+    /// not both, so pass declarations, which list both, stay unambiguous.
     pub fn insert_resource<T: Resource>(&mut self, value: T) -> Option<T> {
+        assert!(
+            !self.is_component_name(T::NAME),
+            "{} is a component's name: a name is a component's or a resource's, not both",
+            T::NAME
+        );
         let old = self.resources.insert(TypeId::of::<T>(), Box::new(value))?;
         let any: Box<dyn Any> = old;
         any.downcast::<T>().ok().map(|b| *b)
@@ -955,8 +971,35 @@ impl World {
         any.downcast::<T>().ok().map(|b| *b)
     }
 
+    /// As [`World::insert_resource`], for a resource this build does not model.
     pub fn insert_opaque_resource(&mut self, name: &str, value: Opaque) -> Option<Opaque> {
+        assert!(
+            !self.is_component_name(name),
+            "{name} is a component's name: a name is a component's or a resource's, not both"
+        );
         self.opaque_resources.insert(name.to_owned(), value)
+    }
+
+    /// Names of every resource (typed and opaque), sorted.
+    pub fn resource_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .resources
+            .values()
+            .map(|r| r.name())
+            .chain(self.opaque_resources.keys().map(String::as_str))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    fn is_resource_name(&self, name: &str) -> bool {
+        self.resources.values().any(|r| r.name() == name) || self.opaque_resources.contains_key(name)
+    }
+
+    /// A component type or an opaque component has ever been stored under `name`.
+    fn is_component_name(&self, name: &str) -> bool {
+        self.names.contains_key(name) || self.opaque.contains_key(name)
     }
 
     pub fn opaque_resources(&self) -> impl Iterator<Item = (&str, &Opaque)> {
@@ -1095,6 +1138,44 @@ mod tests {
         assert_eq!(w.get_opaque(to, "game.form"), Some(&opaque));
         assert!(!w.move_components(from, to));
         assert_ne!(w.spawn(), from, "the moved-from id is not reused");
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct NamedLikeA;
+    impl Resource for NamedLikeA {
+        const NAME: &'static str = "test.a";
+    }
+
+    #[test]
+    #[should_panic(expected = "a component's or a resource's, not both")]
+    fn a_resource_cannot_take_a_component_name() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        w.insert_resource(NamedLikeA);
+    }
+
+    #[test]
+    #[should_panic(expected = "a component's or a resource's, not both")]
+    fn a_component_cannot_take_a_resource_name() {
+        let mut w = World::new();
+        w.insert_resource(NamedLikeA);
+        let e = w.spawn();
+        w.insert(e, A(1));
+    }
+
+    #[test]
+    fn resource_names_list_typed_and_opaque_sorted() {
+        let mut w = World::new();
+        w.insert_resource(R(1));
+        w.insert_opaque_resource(
+            "game.settings",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Bytes(vec![]),
+            },
+        );
+        assert_eq!(w.resource_names(), ["game.settings", "test.r"]);
     }
 
     #[test]
