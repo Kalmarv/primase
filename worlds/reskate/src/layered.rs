@@ -353,9 +353,33 @@ pub struct LowerLayeredReskate {
     pub overlays: OverlayLimit,
 }
 
+/// `lower-layered-reskate{overlays=all|one}` from its options (a [`primase_core::pass::PassFactory`]).
+pub fn lower_layered_reskate(
+    o: &primase_core::pass::Options,
+) -> Result<Box<dyn primase_core::pass::Pass>, String> {
+    let mut pass = LowerLayeredReskate::default();
+    for (k, v) in o {
+        match (k.as_str(), v.as_str()) {
+            ("overlays", "all") => pass.overlays = OverlayLimit::All,
+            ("overlays", "one") => pass.overlays = OverlayLimit::One,
+            ("overlays", v) => return Err(format!("overlays={v} is not all or one")),
+            _ => return Err(format!("unknown option {k}")),
+        }
+    }
+    Ok(Box::new(pass))
+}
+
 impl primase_core::pass::Pass for LowerLayeredReskate {
     fn name(&self) -> &'static str {
         "lower-layered-reskate"
+    }
+    fn options(&self) -> primase_core::pass::Options {
+        match self.overlays {
+            OverlayLimit::All => primase_core::pass::Options::new(),
+            OverlayLimit::One => {
+                primase_core::pass::Options::from([("overlays".to_owned(), "one".to_owned())])
+            }
+        }
     }
     fn requires(&self) -> &[&'static str] {
         &["core.layered", "core.mesh", "skate.material"]
@@ -817,6 +841,40 @@ mod tests {
         assert_eq!(parts[0].layer, OverlayLayer::Darkening);
         assert!((parts[0].opacity[0] - 0.6 / 0.9).abs() < 1e-6);
         assert_eq!((c.overlapping_triangles, c.darkening_vertices), (1, 3));
+    }
+
+    #[test]
+    fn options_name_the_overlay_limit_and_round_trip() {
+        use primase_core::pass::Options;
+        assert_eq!(LowerLayeredReskate::default().options(), Options::new());
+        for limit in [OverlayLimit::All, OverlayLimit::One] {
+            let o = LowerLayeredReskate { overlays: limit }.options();
+            assert_eq!(lower_layered_reskate(&o).unwrap().options(), o);
+        }
+        let one = Options::from([("overlays".to_owned(), "one".to_owned())]);
+        assert_eq!(
+            LowerLayeredReskate {
+                overlays: OverlayLimit::One
+            }
+            .options(),
+            one
+        );
+        let all = Options::from([("overlays".to_owned(), "all".to_owned())]);
+        assert_eq!(lower_layered_reskate(&all).unwrap().options(), Options::new());
+        let bad = Options::from([("overlays".to_owned(), "two".to_owned())]);
+        assert!(
+            lower_layered_reskate(&bad)
+                .err()
+                .unwrap()
+                .contains("not all or one")
+        );
+        let unknown = Options::from([("limit".to_owned(), "one".to_owned())]);
+        assert!(
+            lower_layered_reskate(&unknown)
+                .err()
+                .unwrap()
+                .contains("unknown option limit")
+        );
     }
 
     use primase_core::pass::{Pass, PassLog};
