@@ -98,6 +98,11 @@ Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crat
 
 - Every decoder has a second, independent decoder or fixtures to check it against (`primase_core::gate::GateReport`).
   The test's doc comment names the oracle.
+- **Independent means not ours.** Compare against something we did not write: the game or consumer itself, or an
+  existing third-party tool or library (format libraries, the Khronos glTF validator, shader compilers, UnityPy,
+  community readers). Where none exists, use small hand-worked fixtures. A second implementation written for this
+  project is not independent of the first; do not add one, and when an existing home-made oracle's test is next
+  touched, replace it with a third-party check or fixtures.
 - Every reader has a census over all of a game's real data of its kind, reporting failures by count.
 - Writers round-trip: write, read back, compare.
 - Known test values (hash outputs, decoded pixels of a known block) are unit tests.
