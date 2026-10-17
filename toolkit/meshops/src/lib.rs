@@ -1,4 +1,6 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 mod distance;
 mod layered;
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};

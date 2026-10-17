@@ -2,6 +2,8 @@
 //! No colour-space transfer is performed. Missing channels are zero, alpha is one.
 //! SNORM floats are signed; RGBA8 biases present signed channels from [-1,1] to
 //! [0,255], rounding ties to even. BC4 remains red-only.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use primase_core::TexFormat;
 use thiserror::Error;
 mod blocks;

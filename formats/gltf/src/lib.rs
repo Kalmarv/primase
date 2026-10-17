@@ -6,6 +6,7 @@
 //! - [`load_mesh_files`]: the pass loading `core.mesh_file` prototypes into `core.mesh`.
 //!
 //! Frames: the world frame is glTF's (metres, right-handed, +Y up, -Z forward), so nothing is converted.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod glb;
 mod json;

@@ -54,6 +54,11 @@ pub struct Record {
 
 impl Record {
     /// The record of map folder `map`; `None` when the map has no vertex-blend material (no record).
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: reads the map's vertex-blend record"
+    )]
     pub fn read(map: &Path) -> Result<Option<Record>> {
         let path = map.join(RECORD);
         let bytes = match std::fs::read(&path) {
@@ -193,6 +198,11 @@ fn distinctive(bits: u16) -> bool {
 
 /// A recorded file of map folder `map`: `rel` must be a relative path with forward slashes that stays inside the
 /// folder and goes through no link (as the scene reader requires of its files).
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: checks the record's paths inside the map folder"
+)]
 fn map_file(map: &Path, rel: &str) -> Result<PathBuf> {
     let refuse = |why: &str| bad(W, 0, format!("{RECORD}: '{rel}' {why}"));
     if rel.is_empty() || rel.contains('\\') || rel.starts_with('/') || rel.as_bytes().get(1) == Some(&b':') {
@@ -228,6 +238,11 @@ struct MapGlb {
 }
 
 /// Reads and parses the map GLB at `path`, which must hold the writer's one mesh.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: reads the map's GLBs"
+)]
 fn load_glb(path: &Path) -> Result<MapGlb> {
     let bytes = std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -562,6 +577,11 @@ pub fn apply(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test I/O: writes and reads fixture files"
+)]
 mod tests {
     use super::*;
 

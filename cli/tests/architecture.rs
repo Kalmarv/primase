@@ -5,6 +5,9 @@
 //! means deleting its entry.
 //!
 //! - `dependencies`: crate edges per layer (`core`, `toolkit`, `formats`, `worlds`, `pipelines`, `cli`).
+//! - `io_opt_ins_are_declared`: every library crate denies `clippy::disallowed_methods`/`disallowed_types`
+//!   (file, environment and process access, listed in `clippy.toml`), and every module that opts back in names its
+//!   role.
 //! - `game_names`: no game or engine names in the identifiers or strings of core, toolkit and formats code.
 //! - `entry_points`: examples, bins, the cli and pipelines compose library entry points; no world data or format
 //!   handling of their own.
@@ -42,6 +45,14 @@ struct Member {
 impl Member {
     fn layer(&self) -> &str {
         self.path.split('/').next().unwrap()
+    }
+    /// A library crate: holds readers, passes, writers or mechanisms (everything below the cli but the dev-only
+    /// test-data crate).
+    fn library(&self) -> bool {
+        matches!(
+            self.layer(),
+            "core" | "toolkit" | "formats" | "worlds" | "pipelines"
+        ) && self.path != "toolkit/testdata"
     }
 }
 
@@ -368,6 +379,66 @@ fn dependencies() {
         .map(|e| format!("{} -> {} ({})", e["from"], e["to"], e["section"]))
         .collect();
     assert_reconciled("crate dependencies", found, excused);
+}
+
+// ---- file, environment and process access ----
+
+const DENY_IO: &str = "#![deny(clippy::disallowed_methods, clippy::disallowed_types)]";
+const IO_ROLES: &[&str] = &["reader I/O", "writer I/O", "toolkit I/O", "test I/O", "exception"];
+
+/// The roles named by the `allow(clippy::disallowed_*)` attributes of a source text.
+fn io_opt_ins(text: &str) -> Vec<String> {
+    let mut roles = Vec::new();
+    let mut rest = text;
+    while let Some(p) = rest.find("allow(") {
+        let attr_start = &rest[p..];
+        let end = attr_start.find(")]").map_or(attr_start.len(), |e| e + 2);
+        let attr = &attr_start[..end];
+        if attr.contains("clippy::disallowed_") {
+            let role = attr
+                .split_once("reason = \"")
+                .and_then(|(_, r)| r.split_once(':'))
+                .map_or_else(|| "(no reason)".to_owned(), |(role, _)| role.to_owned());
+            roles.push(role);
+        }
+        rest = &attr_start[end..];
+    }
+    roles
+}
+
+#[test]
+fn io_opt_ins_are_declared() {
+    let mut found = BTreeSet::new();
+    for m in members().iter().filter(|m| m.library()) {
+        let lib = format!("{}/src/lib.rs", m.path);
+        assert!(
+            read(&root().join(&lib)).contains(DENY_IO),
+            "{lib}: a library crate starts with {DENY_IO} (file, environment and process access only in modules that \
+             opt in with their role)"
+        );
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            for role in io_opt_ins(&read(&root().join(&file))) {
+                assert!(
+                    IO_ROLES.contains(&role.as_str()),
+                    "{file}: an I/O opt-in's reason starts with one of {IO_ROLES:?} and a colon, not '{role}'"
+                );
+                found.insert(format!("{file}: {role}"));
+            }
+        }
+    }
+    let excused = entries("io")
+        .iter()
+        .map(|e| {
+            if e["role"] == "exception" {
+                assert!(
+                    e.contains_key("removed_when"),
+                    "io exception {e:?} says when it goes"
+                );
+            }
+            format!("{}: {}", e["file"], e["role"])
+        })
+        .collect();
+    assert_reconciled("I/O opt-ins", found, excused);
 }
 
 // ---- game and engine names ----

@@ -471,6 +471,11 @@ fn file_name(pass: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test I/O: unit tests write and read a sink file"
+)]
 mod tests {
     use super::*;
     use crate::components::{Mesh, Primitive, Semantic, Stream, Topology};

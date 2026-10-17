@@ -1,4 +1,9 @@
 //! The pass that loads `core.mesh_file` prototypes into `core.mesh`.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: a loader pass reads GLB files; loading belongs to a reader's load step"
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

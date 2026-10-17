@@ -12,6 +12,11 @@
 //! - Which entities a scene finally draws (LOD stand-ins, priority, size) is for passes; the reader keeps them all.
 //!   An interior instance's own entities are placed by its rotation and position; its entity sets (which scripts
 //!   switch) are not read yet (counted).
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads map files from the install"
+)]
 use std::collections::BTreeMap;
 use std::fs::File;
 

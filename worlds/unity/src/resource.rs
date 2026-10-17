@@ -1,5 +1,10 @@
 //! Streamed resources: bulk data (texture pixels, vertex data, audio) kept in a `.resS` or `.resource` file beside
 //! the serialized file, named by an object's `StreamingInfo` (`offset`, `size`, `path`).
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads streamed resource files"
+)]
 
 use std::path::{Path, PathBuf};
 

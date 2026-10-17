@@ -2,6 +2,7 @@
 //! `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`, `pieces.json`, `textures_index.json`), gated
 //! against the reference C# writer by what Studio reads: meshes, tables and texture payloads exactly, JSON as parsed
 //! values, PNGs by pixels.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod build;
 pub mod collision;

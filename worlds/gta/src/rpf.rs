@@ -1,6 +1,11 @@
 //! RPF7 archives: a 16-byte header (magic, entry count, names length, cipher), 16-byte entries and a name table,
 //! both under the archive's cipher; file data in 512-byte blocks. An archive may hold archives (binary entries
 //! named `*.rpf`, stored uncompressed), which are read in place.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads RPF archives"
+)]
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;

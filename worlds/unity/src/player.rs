@@ -1,5 +1,10 @@
 //! A Unity player's data folder: its SerializedFiles by name, pointers (`PPtr`) resolved across them, objects decoded
 //! by their classes' type trees.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the player's data folder"
+)]
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

@@ -1,5 +1,6 @@
 //! Bounds-checked views of Havok binary tagfiles and their type compendia.
 //! Type indices are one-based; zero denotes a null type or object reference.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod convex;
 mod mesh;

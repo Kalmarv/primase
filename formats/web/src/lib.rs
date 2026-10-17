@@ -1,4 +1,6 @@
 //! Web tile sets in the core frame (metres, +Y up). Tiles use east/north ground coordinates.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use primase_core::{
     Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Topology, Transform, TransformKind, World,
 };
@@ -322,6 +324,11 @@ pub struct WrittenTile {
 }
 impl WrittenTile {
     /// Write the tile's image files (those not there yet), then its GLB and collision sidecar, into `folder`.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "writer I/O: writes the tile"
+    )]
     pub fn write_to(&self, folder: &Path) -> Result<()> {
         let dir = folder.join(IMAGE_DIR);
         std::fs::create_dir_all(&dir).map_err(|source| Error::Io { path: dir, source })?;
@@ -1195,6 +1202,11 @@ fn asset_name(kind: &str, col: i32, row: i32, cell: Option<Subcell>, bytes: &[u8
 impl Index {
     /// Publish `tiles.json` in `folder`, after checking that every image, tile and collision file it names is there
     /// with its length (a driver writes each [`WrittenTile`] first).
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "writer I/O: writes the index and its shared images"
+    )]
     pub fn write_to(&self, folder: &Path) -> Result<()> {
         for (file, bytes) in self
             .images
@@ -1224,6 +1236,11 @@ impl Index {
 impl TileSet {
     /// Write only generated tile filenames, then publish tiles.json after every tile
     /// is present. Unrelated files in the destination are retained.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "writer I/O: writes the tile set"
+    )]
     pub fn write_to(&self, folder: &Path) -> Result<()> {
         let names: BTreeSet<_> = self.index.tiles.iter().map(|t| t.file.as_str()).collect();
         if names.len() != self.index.tiles.len()

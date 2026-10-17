@@ -1,4 +1,9 @@
 //! Files for the file-backed writer: the prototype GLBs and texture PNGs a skate world names but holds in memory.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: writes assets and repoints the world before the writer runs"
+)]
 
 use std::path::{Path, PathBuf};
 

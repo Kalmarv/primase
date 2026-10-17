@@ -19,6 +19,7 @@
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 //! - [`lower_lights`]: lights lowered to `core.light`.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
 pub mod drawn;

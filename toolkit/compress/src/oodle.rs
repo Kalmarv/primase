@@ -56,6 +56,11 @@ impl Oodle {
     /// # Safety
     /// Caller must trust the native library and its dependencies: loading executes
     /// native initialization. Exports must implement the selected Oodle 5/6/9 x64 ABI.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "toolkit I/O: loads the codec library the caller names"
+    )]
     pub unsafe fn load(path: impl AsRef<Path>, version: Version) -> Result<Self> {
         let path = path.as_ref().canonicalize()?;
         // SAFETY: caller guarantees trusted initialization and matching export ABI;
@@ -167,6 +172,11 @@ impl Compressor for Oodle {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test I/O: real-data gates"
+)]
 mod tests {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};
@@ -235,6 +245,11 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test I/O: real-data gates"
+)]
 mod dcx_gate {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};

@@ -6,6 +6,11 @@
 //! as their shortest round-trip text for the type the field is read as. String lists (`placement_sources`,
 //! `light_groups`, `light_sources`) keep the order they were read in, new strings appended, so an unchanged world
 //! gives the same table bytes.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: writes the scene folder and copies the files it references"
+)]
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component as PathComponent, Path, PathBuf};

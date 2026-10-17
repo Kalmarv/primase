@@ -3,6 +3,8 @@
 //! Legacy DDS has no colour-space tag and reads as linear; callers may override it.
 //! DX10 sRGB tags are preserved. Role and normal convention are not DDS metadata:
 //! reads use `Other` and `None`. Only tightly packed rows are supported.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 
 #[derive(Debug, thiserror::Error)]

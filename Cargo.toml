@@ -90,6 +90,9 @@ float_cmp = "allow"
 dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
+# Denied in each library crate's lib.rs, so tests, examples and the cli keep file access (clippy.toml lists them).
+disallowed_methods = "allow"
+disallowed_types = "allow"
 
 [profile.test]
 opt-level = 1

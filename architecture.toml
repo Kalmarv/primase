@@ -247,3 +247,163 @@ what = "write_cell takes &mut World"
 reason = "a cell's world is split off and absorbed while it is written"
 removed_when = "write_cell takes &World and a Selection"
 
+# ---- file, environment and process access (clippy.toml), by module role ----
+
+[[io]]
+file = "formats/skate-scene/src/read.rs"
+role = "reader I/O"
+reason = "the skate-scene reader reads its folder"
+
+[[io]]
+file = "worlds/fromsoft/src/archive.rs"
+role = "reader I/O"
+reason = "the FromSoft reader opens the install's archives"
+
+[[io]]
+file = "worlds/gta/src/archive_set.rs"
+role = "reader I/O"
+reason = "the GTA reader opens the install's archives"
+
+[[io]]
+file = "worlds/gta/src/assets.rs"
+role = "reader I/O"
+reason = "the GTA reader loads drawables and textures"
+
+[[io]]
+file = "worlds/gta/src/gtxd.rs"
+role = "reader I/O"
+reason = "the GTA reader reads the texture parent table"
+
+[[io]]
+file = "worlds/gta/src/keys.rs"
+role = "reader I/O"
+reason = "the GTA reader reads the key files its caller names"
+
+[[io]]
+file = "worlds/gta/src/region.rs"
+role = "reader I/O"
+reason = "the GTA reader reads map files"
+
+[[io]]
+file = "worlds/gta/src/rpf.rs"
+role = "reader I/O"
+reason = "the GTA reader reads RPF archives"
+
+[[io]]
+file = "worlds/unity/src/player.rs"
+role = "reader I/O"
+reason = "the Unity reader reads the player's data folder"
+
+[[io]]
+file = "worlds/unity/src/resource.rs"
+role = "reader I/O"
+reason = "the Unity reader reads streamed resources"
+
+[[io]]
+file = "formats/gltf/src/write.rs"
+role = "writer I/O"
+reason = "write_file writes the GLB"
+
+[[io]]
+file = "formats/skate-scene/src/write.rs"
+role = "writer I/O"
+reason = "the skate-scene writer writes its folder and copies the files the scene references"
+
+[[io]]
+file = "formats/web/src/lib.rs"
+role = "writer I/O"
+reason = "the web writer writes tiles, images and the index"
+
+[[io]]
+file = "worlds/reskate/src/build.rs"
+role = "writer I/O"
+reason = "the ReSkate writer writes the map folder"
+
+[[io]]
+file = "worlds/reskate/src/texture.rs"
+role = "writer I/O"
+reason = "the ReSkate writer writes the map's texture files"
+
+[[io]]
+file = "worlds/reskate/src/postcompile/vblend.rs"
+role = "writer I/O"
+reason = "the post-compile step writes the patched Patch folder"
+
+[[io]]
+file = "toolkit/compress/src/oodle.rs"
+role = "toolkit I/O"
+reason = "loads the Oodle library the caller names"
+
+[[io]]
+file = "toolkit/frostbite/src/folder.rs"
+role = "toolkit I/O"
+reason = "opens the container files of a data folder the caller names"
+
+[[io]]
+file = "toolkit/compress/src/oodle.rs"
+role = "test I/O"
+reason = "real-data gates in unit tests"
+
+[[io]]
+file = "worlds/reskate/src/postcompile/vbrecord.rs"
+role = "test I/O"
+reason = "unit tests write and read fixture files"
+
+[[io]]
+file = "formats/gltf/src/load.rs"
+role = "exception"
+reason = "load-mesh-files is a pass that reads GLB files"
+removed_when = "loading meshes is a reader's load step, not a pass"
+
+[[io]]
+file = "toolkit/image/src/texture.rs"
+role = "exception"
+reason = "load-textures is a pass that reads PNG and DDS files"
+removed_when = "loading textures is a reader's load step, not a pass"
+
+[[io]]
+file = "formats/gltf/src/write.rs"
+role = "exception"
+reason = "the glTF writer embeds referenced PNG files as stored"
+removed_when = "textures reach the writer loaded"
+
+[[io]]
+file = "formats/skate-scene/src/assets.rs"
+role = "exception"
+reason = "prepare_scene_assets writes assets and repoints the world before the writer runs"
+removed_when = "write serializes in-memory meshes and textures itself"
+
+[[io]]
+file = "worlds/reskate/src/map.rs"
+role = "exception"
+reason = "the ReSkate writer reads a texture caps file"
+removed_when = "the caller passes the caps as options"
+
+[[io]]
+file = "worlds/reskate/src/scene.rs"
+role = "exception"
+reason = "the ReSkate writer re-reads prototype GLBs"
+removed_when = "meshes reach the writer as core.mesh through the reader's load step"
+
+[[io]]
+file = "worlds/reskate/src/texture.rs"
+role = "exception"
+reason = "the ReSkate writer reads source texture files"
+removed_when = "textures reach the writer as core.texture through the reader's load step"
+
+[[io]]
+file = "worlds/reskate/src/postcompile/vblend.rs"
+role = "exception"
+reason = "the post-compile step reads the compiled Patch and the installed game's stock material rows"
+removed_when = "a ReSkate reader reads them into the world for the post-compile writer step"
+
+[[io]]
+file = "worlds/reskate/src/postcompile/vbrecord.rs"
+role = "exception"
+reason = "the post-compile step reads the map's vertex-blend record and GLBs"
+removed_when = "the record reaches the post-compile step in memory from the writer"
+
+[[io]]
+file = "core/src/print.rs"
+role = "test I/O"
+reason = "unit tests write and read a sink file"

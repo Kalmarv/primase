@@ -1,5 +1,7 @@
 //! Checked, bounded Shader Model 5 pixel-program evaluation.
 //! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 mod evaluate;
 mod opcodes;
 mod program;

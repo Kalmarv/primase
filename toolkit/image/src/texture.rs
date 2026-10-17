@@ -23,6 +23,11 @@ pub struct TextureLoadReport {
 /// DDS retains stored levels and colour-space tags; PNG retains 8/16-bit samples,
 /// defaults to sRGB, and performs no transfer. Readers/lowerings own semantic
 /// role and normal metadata. Validation completes before the world is mutated.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: a loader pass reads PNG and DDS files; loading belongs to a reader's load step"
+)]
 pub fn load_textures(world: &mut World, base_dir: &Path) -> Result<TextureLoadReport> {
     let jobs: Vec<_> = world
         .iter::<TextureFile>()

@@ -1,6 +1,7 @@
 //! primase core: the world store, the core components, the frame, the pass manager and gates.
 //!
 //! See `docs/DESIGN.md` §3-4 and CONTRIBUTING.md for the conventions every crate follows.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
 mod environment;

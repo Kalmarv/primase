@@ -1,4 +1,6 @@
 //! Vertex arithmetic preserves f32 operation order; no fused multiply-add or implicit axis conversion.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use std::collections::BTreeMap;
 #[derive(Debug, thiserror::Error)]
 #[error("invalid vertex input: {0}")]

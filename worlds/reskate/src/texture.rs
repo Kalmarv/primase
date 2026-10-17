@@ -94,6 +94,11 @@ fn level_bytes(w: u32, h: u32, block: u64) -> u64 {
 }
 
 impl TexSource {
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: the writer reads source texture files"
+    )]
     pub fn open(
         path: &Path,
         source_format: Option<&str>,
@@ -270,6 +275,11 @@ impl TexSource {
     }
 
     /// Block data of every level, level 0 first (DXT only).
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: the writer reads source texture files"
+    )]
     pub fn data(&self) -> Result<Option<Vec<u8>>> {
         if self.kind != Kind::Dxt {
             return Ok(None);
@@ -290,6 +300,11 @@ impl TexSource {
     }
 
     /// A level the file holds, decoded; `None` when it is not in the data.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: the writer reads source texture files"
+    )]
     fn file_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
         let b = std::fs::read(&self.path).map_err(|source| Error::Io {
             path: self.path.clone(),
@@ -876,6 +891,11 @@ impl TexLib {
     }
 
     /// Writes the files that are not removed.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "writer I/O: writes the map's texture files"
+    )]
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(&self.out_dir).map_err(|source| Error::Io {
             path: self.out_dir.clone(),

@@ -3,6 +3,11 @@
 //! The reader applies the reference validator's checks (`scene-skate validate`): an input it rejects, this rejects,
 //! with the same cause in the message. Not checked here: the GLB contents (the glTF crate's load pass reads them;
 //! its primitive count must match the parts) and whether texture files decode.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the scene folder"
+)]
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Component as PathComponent, Path, PathBuf};

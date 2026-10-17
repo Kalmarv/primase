@@ -1,2 +1,39 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# File, environment and process access. Library crates deny these (`#![deny(clippy::disallowed_methods,
+# clippy::disallowed_types)]` in each lib.rs); a reader's or writer's I/O module opts back in with its role, checked by
+# cli/tests/architecture.rs. Passes, core and the toolkit's pure mechanisms never touch files (CONTRIBUTING.md, "Roles").
+disallowed-methods = [
+    { path = "std::fs::read", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::read_to_string", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::read_dir", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::write", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::copy", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::rename", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::create_dir", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::create_dir_all", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::remove_file", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::remove_dir", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::remove_dir_all", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::metadata", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::symlink_metadata", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::canonicalize", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::exists", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::try_exists", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::is_file", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::is_dir", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::metadata", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::read_dir", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::Path::canonicalize", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::path::absolute", reason = "reads the working directory: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::env::var", reason = "hidden options: the caller passes them (CONTRIBUTING.md, Roles)" },
+    { path = "std::env::var_os", reason = "hidden options: the caller passes them (CONTRIBUTING.md, Roles)" },
+    { path = "std::env::vars", reason = "hidden options: the caller passes them (CONTRIBUTING.md, Roles)" },
+    { path = "std::env::current_dir", reason = "hidden options: the caller passes them (CONTRIBUTING.md, Roles)" },
+    { path = "std::process::Command::new", reason = "no processes in library code (CONTRIBUTING.md, Roles)" },
+]
+disallowed-types = [
+    { path = "std::fs::File", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::fs::OpenOptions", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+]

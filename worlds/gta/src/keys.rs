@@ -3,6 +3,11 @@
 //! GTA V Enhanced keeps its archives under the NG cipher, whose keys and tables are not present in the Enhanced
 //! executable in a form a digest search finds; the caller passes them in. The Legacy executable does hold them, and
 //! [`Keys::from_legacy_executable`] finds them there by the published digests.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the key files the caller names"
+)]
 use std::path::Path;
 
 use sha1::{Digest, Sha1};

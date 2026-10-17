@@ -22,6 +22,11 @@
 //! archives while mounting before those packs (patchday21ng, order 21, and the vehicles of mpchristmas2018), and
 //! overlay archives exist at paths no other archive has (`levels/patchday26ng/vehiclemods/...`), so the flag is
 //! about names, not about one archive overlaying another.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the install's archives"
+)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};

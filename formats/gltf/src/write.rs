@@ -250,6 +250,11 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
 }
 
 /// Write the world to a GLB file.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: writes the GLB file"
+)]
 pub fn write_file(world: &World, options: &WriteOptions, path: &Path) -> Result<WriteReport> {
     let (bytes, report) = write(world, options)?;
     std::fs::write(path, bytes).map_err(|source| Error::Io {
@@ -1213,6 +1218,11 @@ impl Writer<'_> {
     }
 
     /// The image of a texture entity: canonical PNG for loaded pixels, otherwise a PNG file as-is.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: embeds referenced PNG files as stored; textures should arrive loaded"
+    )]
     fn image(&mut self, e: Entity) -> Result<Option<usize>> {
         if let Some(&i) = self.image_of_entity.get(&e) {
             return Ok(i);

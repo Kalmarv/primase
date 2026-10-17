@@ -1,4 +1,6 @@
 //! Borrowed byte bounds; format, endian, allocation and count policies stay with callers.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use std::{fmt, ops::Range};
 
 /// Local byte operands and their source origin, retained without lossy arithmetic.

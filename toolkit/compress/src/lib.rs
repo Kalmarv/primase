@@ -1,4 +1,6 @@
 //! Strict, size-bounded compression adapters. No format autodetection.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use std::io::Write;
 
 pub mod cas;

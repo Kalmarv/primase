@@ -1,4 +1,9 @@
 //! A skate-scene world -> a ReSkate Studio normalized map folder (the reference `scene-skate build`).
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: writes the map folder"
+)]
 
 mod floor;
 

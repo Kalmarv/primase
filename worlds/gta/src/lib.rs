@@ -2,6 +2,8 @@
 //!
 //! Key material is never part of this crate: the caller supplies it ([`Keys`]) and the crate checks it against
 //! published digests before using it.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 pub mod archive_set;
 pub mod assets;
 pub mod components;

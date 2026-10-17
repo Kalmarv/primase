@@ -4,6 +4,7 @@
 //! collision soups) and the files they reference (prototype GLBs, textures). [`read`] attaches a folder to a
 //! [`primase_core::World`] (see [`components`] for the mapping); [`write`] writes a world back as a folder. An unchanged
 //! world writes the same tables byte for byte, the same manifest as parsed values, and the referenced files copied.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod assets;
 pub mod collision;

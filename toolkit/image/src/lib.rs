@@ -1,5 +1,7 @@
 //! PNG to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 mod channels;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
 mod normals;

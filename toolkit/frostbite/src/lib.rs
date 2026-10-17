@@ -7,6 +7,7 @@
 //!
 //! Every reader is strict (it walks to the exact end of what it reads and rejects anything it does not know) and
 //! every writer is the counterpart of the reader: an unmodified Patch read and written again is byte-identical.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod bundle;
 pub mod db;

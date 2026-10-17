@@ -510,6 +510,11 @@ struct Proto {
 const APRON: f32 = 30.0;
 
 impl MapWriter {
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: reads a texture caps file; the caller should pass the caps"
+    )]
     pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
         let off = Vec3::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
         let pm = match &o.pause_picture {

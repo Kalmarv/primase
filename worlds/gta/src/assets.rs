@@ -14,6 +14,11 @@
 //!   dictionary's parents ([`TextureParents`]), then the resident detail dictionary ([`RESIDENT`]).
 //! - A texture entity per (dictionary, texture): `core.texture` (blocks as stored, levels split, colour space from the
 //!   format; role `Other` until a pass knows which sampler reads it), `core.name`, `core.source`.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads drawables and textures from the install"
+)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 

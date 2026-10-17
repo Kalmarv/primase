@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the install's archives"
+)]
 use crate::{
     Result,
     bhd::{Entry, Header, unwrap_rsa},

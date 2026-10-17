@@ -1,4 +1,5 @@
 //! Exact game name hashes. Byte functions never normalize their inputs.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 /// IEEE CRC-32: reflected polynomial 0xEDB88320, initial/final xor 0xFFFFFFFF.
 pub fn crc32(bytes: &[u8]) -> u32 {

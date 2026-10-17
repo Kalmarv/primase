@@ -1,4 +1,6 @@
 //! Read-only Sekiro BHD5/BDT archives, DCX envelopes and BND4 binders.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
+
 pub mod archive;
 pub mod bhd;
 pub mod binder;

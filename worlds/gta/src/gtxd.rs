@@ -5,6 +5,11 @@
 //! `gtxd.ymt` (RBF, in `levels/gta5/generic/gtxd.rpf`, which patch packs overlay), the live `mph4_gtxd.ymt`, and the
 //! packs' enabled `GTXD_PARENTING_DATA` files (XML), in that order. A child named again with another parent keeps its
 //! first parent; such conflicts are listed, not hidden.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the texture parent table from the install"
+)]
 use std::collections::BTreeMap;
 
 use crate::archive_set::{ArchiveSet, FileRef};

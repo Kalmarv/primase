@@ -1,5 +1,10 @@
 //! A data folder (a Patch folder Studio writes, or the game's `Data`): its TOCs, its CAS archives and the install
 //! chunks of its `layout.toc` that name the archives' directories; reading the files a bundle region points at.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "toolkit I/O: opens the container files of a data folder the caller names"
+)]
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -268,6 +268,11 @@ pub struct Report {
     pub rows: BTreeMap<u64, (Vec<u32>, Vec<u32>)>,
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: reads the compiled Patch and the installed game's stock rows"
+)]
 fn read_file(p: &Path) -> Result<Vec<u8>> {
     fs::read(p).map_err(|source| Error::Io {
         path: p.to_path_buf(),
@@ -275,6 +280,11 @@ fn read_file(p: &Path) -> Result<Vec<u8>> {
     })
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: writes the patched files"
+)]
 fn write_file(p: &Path, d: &[u8]) -> Result<()> {
     fs::write(p, d).map_err(|source| Error::Io {
         path: p.to_path_buf(),
@@ -282,6 +292,11 @@ fn write_file(p: &Path, d: &[u8]) -> Result<()> {
     })
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: copies the Patch folder to the output"
+)]
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     let io = |p: &Path| {
         let p = p.to_path_buf();
@@ -530,6 +545,11 @@ pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
 /// Rewrites Patch `patch` into `out` (which must not exist) with every request applied. `values` gives each
 /// rewritten section's per-vertex values; it is called once per section, in TOC, bundle, MeshSet, LOD and section
 /// order.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: refuses an existing output folder"
+)]
 pub fn apply(
     patch: &Path,
     out: &Path,

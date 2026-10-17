@@ -479,6 +479,11 @@ pub struct ScenePlacement {
 
 impl Scene {
     /// The scene a skate-scene reader attached to `w`, read from `dir`.
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "exception: the writer re-reads prototype GLBs for their bounds"
+    )]
     pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
         if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
             return Err(Error::Scene(format!(
@@ -887,6 +892,11 @@ pub struct GlbPrim {
     pub blend: Option<Vec<f32>>,
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "exception: the writer re-reads prototype GLBs"
+)]
 pub fn read_glb(path: &std::path::Path, mesh: u32) -> Result<Vec<GlbPrim>> {
     let bytes = std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_owned(),
