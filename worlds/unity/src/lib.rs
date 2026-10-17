@@ -10,6 +10,7 @@
 //! - [`player`]: a player's data folder: its files, pointers resolved across them.
 //! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
+//! - [`drawn`]: what a renderer other than Unity's can draw of the scene's renderers (pass `unity-drawn`).
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
@@ -20,6 +21,7 @@
 //! - [`lower_lights`]: lights lowered to `core.light`.
 
 pub mod components;
+pub mod drawn;
 pub mod level;
 pub mod lower;
 pub mod lower_collision;

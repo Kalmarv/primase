@@ -52,6 +52,11 @@ fn family(shader: Option<&str>) -> Family {
     }
 }
 
+/// Whether the lowering models a shader (URP Lit, URP Unlit, SpeedTree 7) rather than taking its base colour only.
+pub fn modelled(shader: Option<&str>) -> bool {
+    family(shader) != Family::Other
+}
+
 /// The base colour properties of a shader not modelled, by Unity's usual names: the first texture property with a
 /// texture of `_BaseMap`, `_MainTex`, `_Main_Tex`, `_Texture2D`, and the colour named with it by convention (`_BaseMap`
 /// and `_BaseColor`, `_MainTex` and `_Color`), else the first colour of `_BaseColor`, `_Color`, `_Default_Color`,

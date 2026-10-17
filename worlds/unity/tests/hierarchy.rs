@@ -6,9 +6,11 @@
 //!
 //! Every drawn renderer: path, layer, mesh, materials, static-batch slice and shadow mode exactly; the world matrix
 //! within the scan's rounding (5e-7) plus 1e-12 relative (the two readers sum the products in another order). Then the
-//! level in the world: one entity per renderer, its transform converted back to Unity's frame the f32 matrix bit for
-//! bit, one prototype per mesh or batch slice; each prototype's primitives, converted back to Unity's frame corner by
-//! corner, the mesh's own channels bit for bit (texture v as 1 - v), and the world's components valid.
+//! level in the world: one placement per renderer, its transform converted back to Unity's frame the f32 matrix bit
+//! for bit, one prototype per mesh or batch slice; each prototype's primitives, converted back to Unity's frame corner
+//! by corner, the mesh's own channels bit for bit (texture v as 1 - v), and the world's components valid. What
+//! `unity-drawn` leaves out: a procedural renderer with its Shapes component's data, or a placement of a mesh that
+//! draws nothing.
 
 #![allow(clippy::unwrap_used)]
 
@@ -16,7 +18,7 @@ use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
 use primase_testdata::real_data;
 use primase_unity::TypeTreePackage;
-use primase_unity::components::{UnityBehaviours, UnityLeftOut, UnityMesh, UnityRenderer, UnityTreeInstance};
+use primase_unity::components::{UnityBehaviours, UnityMesh, UnityRenderer, UnityTreeInstance};
 use primase_unity::level::{UNITY, read_level, transform_of};
 use primase_unity::mesh::UnityMeshData;
 use primase_unity::player::{ObjRef, Player};
@@ -117,8 +119,6 @@ fn renderers_match_the_scan() {
         .iter::<UnityRenderer>()
         .filter(|(e, _)| !w.has::<UnityTreeInstance>(*e))
         .collect();
-    let mut left_out = std::collections::BTreeSet::new();
-    let mut left_out_scripts = std::collections::BTreeMap::new();
     assert_eq!(entities.len(), ours.len());
     for ((e, u), r) in entities.iter().zip(&ours) {
         assert_eq!(u.renderer.path_id, r.renderer.path_id);
@@ -136,35 +136,50 @@ fn renderers_match_the_scan() {
         } else {
             placed.fail(&r.path, format!("{:?} vs {:?}", back.cols, want.cols));
         }
-        if let Some(why) = w.get::<UnityLeftOut>(*e) {
-            assert!(
-                w.get::<Instance>(*e).is_none(),
-                "{}: left out ({}) but placed",
-                r.path,
-                why.0
-            );
-            left_out.insert(r.path.clone());
-            let behaviours = w.get::<UnityBehaviours>(*e).map_or(&[][..], |b| &b.0);
-            for b in behaviours {
-                *left_out_scripts.entry(b.script.clone()).or_insert(0u64) += 1;
-            }
-            // the component a later lowering needs: a Shapes behaviour with its fields
-            assert!(
-                !why.0.starts_with("procedural")
-                    || behaviours
-                        .iter()
-                        .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty()),
-                "{}: no Shapes component data",
-                r.path
-            );
-            continue;
-        }
         let proto = w.get::<Instance>(*e).unwrap().prototype;
         let m = w.get::<UnityMesh>(proto).unwrap();
         assert_eq!((m.mesh.path_id, m.submeshes), (r.mesh.path_id, r.submeshes));
     }
-    assert_eq!(left_out.len(), rep.left_out);
-    println!("left out, their MonoBehaviours by script: {left_out_scripts:?}");
+    // what unity-drawn leaves out, and why
+    let mut drawn = w.clone();
+    let log = primase_unity::drawn::unity_drawn(&mut drawn);
+    let mut left_out_scripts = std::collections::BTreeMap::new();
+    let mut left_out = 0;
+    for ((e, _), r) in entities.iter().zip(&ours) {
+        if drawn.is_alive(*e) {
+            continue;
+        }
+        left_out += 1;
+        let proto = w.get::<Instance>(*e).unwrap().prototype;
+        let behaviours = w.get::<UnityBehaviours>(*e).map_or(&[][..], |b| &b.0);
+        for b in behaviours {
+            *left_out_scripts.entry(b.script.clone()).or_insert(0u64) += 1;
+        }
+        // a mesh that draws nothing, a procedural renderer with the component a later lowering needs, or an
+        // additive surface (counted by the pass)
+        let empty = !w.has::<Mesh>(proto);
+        let shapes = behaviours
+            .iter()
+            .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty());
+        assert!(
+            empty || shapes || log.counts.keys().any(|k| k.contains("additive")),
+            "{}: left out, neither empty nor a Shapes renderer",
+            r.path
+        );
+    }
+    println!(
+        "unity-drawn: {:?}; left out, their MonoBehaviours by script: {left_out_scripts:?}",
+        log.counts
+    );
+    // the pass counts each placement it leaves out once by reason (the placeholder mesh lines repeat the shader's)
+    let removed = w.iter::<Instance>().count() - drawn.iter::<Instance>().count();
+    let by_reason: u64 = log
+        .counts
+        .iter()
+        .filter(|(k, _)| !k.contains("placeholder mesh"))
+        .map(|(_, n)| n)
+        .sum();
+    assert_eq!(removed as u64, by_reason);
     // the scan's meshes or slices of the renderers placed
     // and the terrain trees' (gated with the terrains)
     let trees = scan["instances"]
@@ -175,15 +190,13 @@ fn renderers_match_the_scan() {
     let slices: std::collections::BTreeSet<String> = theirs
         .iter()
         .copied()
-        .filter(|t| !left_out.contains(t["path"].as_str().unwrap()))
         .chain(trees)
         .map(|t| format!("{} {}", t["mesh"], t.get("submeshes").unwrap_or(&Json::Null)))
         .collect();
     println!(
         "{placed}
-world: {} renderer entities ({} left out), {} prototypes ({} meshes or batch slices in the scan's scene renderers placed), {} primitives",
+world: {} renderer entities ({left_out} left out by unity-drawn), {} prototypes ({} meshes or batch slices in the scan's scene renderers placed), {} primitives",
         rep.renderers,
-        rep.left_out,
         rep.prototypes,
         slices.len(),
         rep.primitives

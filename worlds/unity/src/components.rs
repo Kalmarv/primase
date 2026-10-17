@@ -210,18 +210,6 @@ impl Component for UnityBehaviours {
     }
 }
 
-/// A renderer the world leaves out, and why (`procedural geometry: Shapes/Line 2D Opaque`): it keeps its transform,
-/// `unity.renderer` and the GameObject's `unity.behaviours`, but no instance.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct UnityLeftOut(pub String);
-
-impl Component for UnityLeftOut {
-    const NAME: &'static str = "unity.left_out";
-    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
-
 /// A terrain layer: its textures (entities) and how the terrain shader uses them.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityTerrainLayer {

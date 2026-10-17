@@ -9,10 +9,10 @@
 //! its variants ([`MaterialVariants`], [`Instance::variant`]). Submeshes beyond a renderer's materials are not drawn
 //! and materials beyond its submeshes draw the last one again (an extra pass): neither is reproduced, both counted.
 //!
-//! Renderers whose material builds its geometry in the vertex shader from component data ([`procedural`]) draw a
-//! placeholder mesh: they are left out (an entity with their transform, renderer, the GameObject's MonoBehaviours as
-//! bytes and [`UnityLeftOut`], no instance), counted by shader and placeholder mesh. Renderers whose mesh has no
-//! submesh with indices draw nothing and are left out the same way, counted.
+//! Every renderer is placed as stored. One whose material builds its geometry in the vertex shader from component
+//! data ([`procedural`]) draws a placeholder mesh; it carries its GameObject's MonoBehaviours as bytes
+//! ([`UnityBehaviours`]), which hold the shape. A mesh with no submesh that has indices draws nothing: its prototype
+//! has no mesh. Leaving such renderers out is a pass's ([`crate::drawn`]).
 
 use std::collections::BTreeMap;
 
@@ -21,10 +21,10 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Name, ShadowCast, S
 
 use crate::Result;
 use crate::components::{
-    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCollider, UnityColliderShape, UnityLeftOut,
-    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings,
-    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
-    UnityTree, UnityTreeInstance,
+    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCollider, UnityColliderShape, UnityLight,
+    UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
+    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
+    UnityTreeInstance,
 };
 use crate::material::{ShaderData, UnityMaterialData};
 use crate::mesh::UnityMeshData;
@@ -100,8 +100,6 @@ pub struct LevelReport {
     pub primitives: usize,
     pub materials: usize,
     pub textures: usize,
-    /// Renderers left out (procedural geometry).
-    pub left_out: usize,
     pub terrains: usize,
     pub lights: usize,
     /// Lights whose GameObject is inactive or that are disabled (not read).
@@ -648,9 +646,6 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     }
     let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
     let mut prototypes: BTreeMap<(ObjRef, Option<(u32, u32)>), Proto> = BTreeMap::new();
-    // meshes (or batch slices) that draw nothing
-    let mut empty: std::collections::BTreeSet<(ObjRef, Option<(u32, u32)>)> =
-        std::collections::BTreeSet::new();
     let placed = renderers
         .iter()
         .map(|r| (None, r))
@@ -663,34 +658,17 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 None => None,
             });
         }
-        let shaders = materials
+        // a procedural renderer's shape is in its GameObject's MonoBehaviours
+        let procedural_shape = materials
             .iter()
             .flatten()
-            .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.clone()));
-        if let Some(shader) = shaders.into_iter().find(|s| procedural(s)) {
-            b.note(
-                &format!("renderers left out: procedural geometry, shader {shader}"),
-                1,
-            );
-            b.note(
-                &format!(
-                    "renderers left out: procedural geometry, placeholder mesh {}/{}",
-                    r.mesh.file, r.mesh.path_id
-                ),
-                1,
-            );
-            let behaviours = b.behaviours(&scene, r.game_object)?;
-            let e = w.spawn();
-            w.insert(e, UNITY.transform(&transform_of(&r.world)));
-            w.insert(e, Name(r.path.clone()));
-            w.insert(e, unity_renderer(r));
-            w.insert(e, UnityLeftOut(format!("procedural geometry: {shader}")));
-            if !behaviours.is_empty() {
-                w.insert(e, UnityBehaviours(behaviours));
-            }
-            b.report.left_out += 1;
-            continue;
-        }
+            .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.as_deref()))
+            .any(procedural);
+        let behaviours = if procedural_shape && tree.is_none() {
+            b.behaviours(&scene, r.game_object)?
+        } else {
+            Vec::new()
+        };
         if !meshes.contains_key(&r.mesh) {
             meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
         }
@@ -700,49 +678,34 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             None => (0, data.submeshes.len()),
         };
         let key = (r.mesh.clone(), r.submeshes);
-        if !prototypes.contains_key(&key) && !empty.contains(&key) {
+        if !prototypes.contains_key(&key) {
             let (drawn, primitives): (Vec<u32>, Vec<_>) = data
                 .primitives(first as usize..first as usize + count)?
                 .into_iter()
                 .map(|(k, p)| (k as u32, p))
                 .unzip();
-            if primitives.is_empty() {
-                empty.insert(key.clone());
-            } else {
-                b.report.primitives += primitives.len();
-                let e = w.spawn();
-                w.insert(e, Mesh { primitives });
-                w.insert(
-                    e,
-                    UnityMesh {
-                        mesh: UnityObject::from(&r.mesh),
-                        submeshes: r.submeshes,
-                        drawn: drawn.clone(),
-                    },
-                );
-                prototypes.insert(
-                    key.clone(),
-                    Proto {
-                        entity: e,
-                        drawn,
-                        variants: Vec::new(),
-                    },
-                );
-            }
-        }
-        // a mesh with no submesh that has indices draws nothing: the renderer is left out
-        if empty.contains(&key) {
-            b.note(
-                "renderers left out: their mesh draws nothing (no submesh with indices)",
-                1,
-            );
             let e = w.spawn();
-            w.insert(e, UNITY.transform(&transform_of(&r.world)));
-            w.insert(e, Name(r.path.clone()));
-            w.insert(e, unity_renderer(r));
-            w.insert(e, UnityLeftOut("draws nothing: an empty mesh".into()));
-            b.report.left_out += 1;
-            continue;
+            // a mesh with no submesh that has indices draws nothing: no core mesh
+            if !primitives.is_empty() {
+                b.report.primitives += primitives.len();
+                w.insert(e, Mesh { primitives });
+            }
+            w.insert(
+                e,
+                UnityMesh {
+                    mesh: UnityObject::from(&r.mesh),
+                    submeshes: r.submeshes,
+                    drawn: drawn.clone(),
+                },
+            );
+            prototypes.insert(
+                key.clone(),
+                Proto {
+                    entity: e,
+                    drawn,
+                    variants: Vec::new(),
+                },
+            );
         }
         let proto = prototypes.get_mut(&key).expect("inserted");
         let variant = match proto.variants.iter().position(|v| *v == materials) {
@@ -802,6 +765,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         if let Some((terrain, tree)) = tree {
             w.insert(e, UnityTreeInstance { terrain, tree });
         }
+        if !behaviours.is_empty() {
+            w.insert(e, UnityBehaviours(behaviours));
+        }
     }
     // each primitive's material from variant 0, the other variants' where they differ
     for (key, p) in &prototypes {
@@ -825,7 +791,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             "variant primitives without a material where variant 0 has one (drawn with variant 0's)",
             unset,
         );
-        let mesh = w.get_mut::<Mesh>(p.entity).expect("prototype mesh");
+        let Some(mesh) = w.get_mut::<Mesh>(p.entity) else {
+            continue;
+        };
         for (prim, &k) in mesh.primitives.iter_mut().zip(&p.drawn) {
             prim.material = material(&p.variants[0], k);
         }

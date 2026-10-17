@@ -48,10 +48,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = std::time::Instant::now();
     let report = read_level(&player, level, &mut w)?;
     println!(
-        "read {level}: {} renderers ({} left out), {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
+        "read {level}: {} renderers, {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
          textures, {} terrains, {} lights ({} off, sun named: {}), {} colliders ({} by trees)",
         report.renderers,
-        report.left_out,
         report.tree_renderers,
         report.prototypes,
         report.primitives,
@@ -70,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the lowering, as a pipeline: each pass whose input the level has, verified after each
     let passes: Vec<Box<dyn Pass>> = vec![
+        Box::new(primase_unity::drawn::UnityDrawn),
         Box::new(primase_unity::lower::LowerUnityPbr),
         Box::new(primase_unity::lower_terrain::LowerUnityTerrain),
         Box::new(primase_unity::lower_collision::LowerUnityCollision),
