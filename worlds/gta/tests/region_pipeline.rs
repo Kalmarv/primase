@@ -26,6 +26,9 @@ fn every_named_region_through_the_gta_passes() {
     let mut registry = PassRegistry::new();
     registry.register("select-lod", primase_core::select_lod);
     registry.register("resolve-state", primase_core::state::resolve_state);
+    registry.register("normalize-normals", |_| {
+        Ok(Box::new(primase_image::NormalizeNormals))
+    });
     primase_gta::register(&mut registry);
     let pipeline = registry.parse(DEFAULT_PASSES).expect("default passes");
     let manager = PassManager::new(registry);

@@ -95,6 +95,8 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
             Semantic::Normal,
             Stream::F32x3(f3(&bytes).into_iter().map(|n| GTA.direction(n)).collect()),
         ),
+        // GTA's vertex shaders take the binormal as cross(T, N) * w (VS_TransformD_81053d2c); glTF's bitangent is
+        // cross(N, T) * w, and the frame change is a rotation: w negated
         (8, 0x02) => (
             Semantic::Tangent,
             Stream::F32x4(
@@ -105,7 +107,7 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
                     .map(|c| {
                         let v = le::vec4(c, 0);
                         let d = GTA.direction([v[0], v[1], v[2]]);
-                        [d[0], d[1], d[2], v[3]]
+                        [d[0], d[1], d[2], -v[3]]
                     })
                     .collect(),
             ),
@@ -587,4 +589,40 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
         ctx.report.drawables += 1;
     }
     Ok(ctx.report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stream;
+    use crate::drawable::{Element, Geometry};
+    use crate::sga::BufferFormat;
+    use primase_core::{Semantic, Stream};
+
+    /// GTA's binormal is cross(T, N) * w and glTF's bitangent cross(N, T) * w: the tangent's w is negated, its
+    /// direction turned into glTF's frame like normals.
+    #[test]
+    fn tangent_w_takes_gltf_meaning() {
+        let mut vertices = Vec::new();
+        for v in [1.0f32, 0.0, 0.0, 1.0] {
+            vertices.extend(v.to_le_bytes());
+        }
+        let e = Element {
+            slot: 8,
+            format: BufferFormat(0x02),
+            offset: 0,
+        };
+        let g = Geometry {
+            shader: 0,
+            bounds: [[0.0; 4]; 2],
+            vertex_count: 1,
+            stride: 16,
+            elements: vec![e],
+            vertices,
+            indices: vec![],
+        };
+        let (semantic, s) = stream(&g, e).unwrap();
+        assert_eq!(semantic, Semantic::Tangent);
+        let d = crate::region::GTA.direction([1.0, 0.0, 0.0]);
+        assert_eq!(s, Stream::F32x4(vec![[d[0], d[1], d[2], -1.0]]));
+    }
 }

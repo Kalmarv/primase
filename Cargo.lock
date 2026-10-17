@@ -791,6 +791,7 @@ version = "0.1.0"
 dependencies = [
  "primase-core",
  "primase-gta",
+ "primase-image",
  "primase-web",
  "toml",
 ]

@@ -76,12 +76,16 @@ pub struct Passes {
     pub pipeline: Pipeline,
 }
 
-/// Every pass by name: core's and each world crate's.
+/// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
     let mut r = PassRegistry::new();
     r.register("select-lod", primase_core::select_lod);
     r.register("drop-optional", primase_core::drop_optional);
     r.register("resolve-state", primase_core::state::resolve_state);
+    r.register("normalize-normals", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(primase_image::NormalizeNormals)),
+    });
     primase_gta::register(&mut r);
     r
 }

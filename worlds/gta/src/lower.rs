@@ -13,6 +13,10 @@
 //!   texture derived from the map (one per map, mask and power) holding the strength dot((s.r^2, s.g^2, s.b), mask) and
 //!   the roughness of the exponent of `Specular` x s.a, per texel. A shader without `SpecularColor` writes no intensity
 //!   (dry), so its specular factor is 0.
+//!
+//!   Normal maps (`BumpTex`): GTA's pixel shaders take x = 2 r - 1, y = 2 g - 1 along the tangent and binormal (the
+//!   reader's TANGENT, whose w it gives glTF's meaning), rebuild z from the unscaled xy and scale xy by `Bumpiness`
+//!   before normalising: glTF's normal texture with that scale, in [`GTA_NORMALS`] (`normalize-normals` converts it).
 //! - `gta-vertex-colours`: vertex colour 0 kept where it fades the surface (as white with GTA's alpha), vertex colour 1
 //!   kept where it weighs a layered material, both dropped elsewhere (glTF multiplies COLOR_0 into the base colour;
 //!   GTA's red and green are ambient occlusion and its blue a palette column, none of them a colour).
@@ -21,8 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::{
-    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole,
-    Texture, World,
+    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
+    NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
@@ -39,6 +43,14 @@ pub const GREY: u8 = 128;
 pub const DEFAULT_FRESNEL: f32 = 0.98;
 /// The specular map intensity mask of a shader without `SpecularMapIntensityMask`: the red channel.
 pub const DEFAULT_MASK: [f32; 3] = [1.0, 0.0, 0.0];
+/// How GTA's bump maps encode a normal: x in red along the tangent, y in green along the bitangent (glTF's, with the
+/// reader's TANGENT w), z rebuilt (its pixel shaders ignore blue).
+pub const GTA_NORMALS: NormalConvention = NormalConvention {
+    green: NormalGreen::Up,
+    z: NormalZ::Rebuild,
+    x: NormalX::Red,
+    basis: NormalBasis::TangentBitangent,
+};
 
 /// The class of every shader material in `w` (an effect name hash no name in [`crate::shader_names`] gives is an
 /// error).
@@ -273,8 +285,7 @@ impl Pass for LowerGtaPbr {
     }
     fn approximates(&self) -> &'static str {
         "alpha tested at 0.5 (the game's reference is a render state); the Blinn-Phong lobe as GGX of the same \
-         highlight, dry (no wetness); normal maps not lowered yet; water a \
-         blended flat colour"
+         highlight, dry (no wetness); detail maps not carried; water a blended flat colour"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
@@ -392,8 +403,50 @@ impl Pass for LowerGtaPbr {
             lowered.push((e, m));
         }
         log.count("materials", lowered.len() as u64);
+        // normal maps in GTA's convention; a texture also drawn as a base colour gets a copy of its own
+        let mut normal_copies: BTreeMap<Entity, Entity> = BTreeMap::new();
+        for (_, m) in &mut lowered {
+            let Some(n) = m.normal_texture.as_mut() else {
+                continue;
+            };
+            if !colour.contains(&n.texture) {
+                continue;
+            }
+            n.texture = match normal_copies.get(&n.texture) {
+                Some(&c) => c,
+                None => {
+                    let Some(tex) = w.get::<Texture>(n.texture).cloned() else {
+                        continue;
+                    };
+                    let name = w.get::<Name>(n.texture).map(|x| format!("{}_normal", x.0));
+                    let c = w.spawn();
+                    w.insert(c, tex);
+                    if let Some(x) = name {
+                        w.insert(c, Name(x));
+                    }
+                    log.count(
+                        "textures drawn as base colour and normal map: copied for the normal",
+                        1,
+                    );
+                    normal_copies.insert(n.texture, c);
+                    c
+                }
+            };
+        }
+        let normals: BTreeSet<Entity> = lowered
+            .iter()
+            .filter_map(|(_, m)| m.normal_texture.map(|t| t.texture))
+            .collect();
         for (e, m) in lowered {
             w.insert(e, m);
+        }
+        for t in normals {
+            if let Some(tex) = w.get_mut::<Texture>(t) {
+                tex.role = TexRole::Normal;
+                tex.color_space = ColorSpace::Linear;
+                tex.normal = Some(GTA_NORMALS);
+                log.count("normal textures marked (GTA's convention)", 1);
+            }
         }
         for t in colour {
             if let Some(tex) = w.get_mut::<Texture>(t)
@@ -529,8 +582,21 @@ impl LowerGtaPbr {
                 color_texture: None,
             });
         }
-        if matches!(texture(s, "BumpTex"), Some(Some(_))) {
-            log.approximate("normal maps not lowered yet", 1);
+        // the bump map: x = 2 r - 1, y = 2 g - 1 along the tangent and binormal, z rebuilt, xy times Bumpiness
+        // (at least 0.001) before normalising, as glTF's normal scale does (PS_DeferredTextured_03e008ef)
+        match texture(s, "BumpTex") {
+            Some(Some(t)) => {
+                m.normal_texture = Some(TextureRef::new(t));
+                m.normal_scale = scalar(s, "Bumpiness").map_or(1.0, |b| b.max(0.001));
+                log.count("normal maps", 1);
+            }
+            Some(None) => log.count("normal map not found: flat", 1),
+            None => {}
+        }
+        // the detail map darkens the albedo and the specular intensity by a tiled noise (and can bend the normal):
+        // no glTF channel carries a second tiling of a texture
+        if matches!(texture(s, "DetailTex"), Some(Some(_))) {
+            log.approximate("detail maps not carried", 1);
         }
         (m, map, distance)
     }
@@ -619,6 +685,104 @@ impl Pass for GtaVertexColours {
 mod tests {
     use super::{exponent, roughness, specular_texture};
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+
+    /// A world with one `normal_spec` material binding `diffuse` and `bump`, Bumpiness 0.5.
+    fn bumped(
+        diffuse: primase_core::Entity,
+        bump: primase_core::Entity,
+        w: &mut primase_core::World,
+    ) -> primase_core::Entity {
+        use crate::components::{GtaParam, GtaShader};
+        let tex = |t| GtaParam::Texture {
+            name: None,
+            texture: Some(t),
+        };
+        let m = w.spawn();
+        w.insert(
+            m,
+            GtaShader {
+                drawable: "d".into(),
+                index: 0,
+                name: primase_hash::joaat(b"normal_spec"),
+                preset: 0,
+                render_bucket: 0,
+                bucket_mask: 0,
+                params: vec![
+                    (primase_hash::joaat(b"DiffuseTex"), tex(diffuse)),
+                    (primase_hash::joaat(b"BumpTex"), tex(bump)),
+                    (
+                        primase_hash::joaat(b"Bumpiness"),
+                        GtaParam::Floats(vec![0.5, 0.0, 0.0, 0.0]),
+                    ),
+                ],
+            },
+        );
+        m
+    }
+
+    fn rgba(px: [u8; 4]) -> Texture {
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![px.to_vec()],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Other,
+            normal: None,
+        }
+    }
+
+    /// The bump map is the material's normal texture at the shader's Bumpiness, in GTA's convention (x red along the
+    /// tangent, y green along the bitangent, z rebuilt); normalize-normals turns it into glTF's.
+    #[test]
+    fn bump_maps_are_normal_textures_in_gta_convention() {
+        use primase_core::pass::Pass;
+        let mut w = primase_core::World::new();
+        let (d, n) = (w.spawn(), w.spawn());
+        w.insert(d, rgba([200, 100, 50, 255]));
+        // x = 2 * 255 / 255 - 1 = 1 (along the tangent), y = 2 * 128 / 255 - 1 (about 0)
+        w.insert(n, rgba([255, 128, 77, 0]));
+        let m = bumped(d, n, &mut w);
+        super::LowerGtaPbr::default()
+            .run(&mut w, &mut primase_core::pass::PassLog::default())
+            .unwrap();
+        let p = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
+        assert_eq!(p.normal_texture.map(|t| t.texture), Some(n));
+        assert_eq!(p.normal_scale, 0.5);
+        let t = w.get::<Texture>(n).unwrap();
+        assert_eq!(
+            (t.role, t.color_space, t.normal),
+            (TexRole::Normal, ColorSpace::Linear, Some(super::GTA_NORMALS))
+        );
+        primase_image::normalize_normals(&mut w).unwrap();
+        let t = w.get::<Texture>(n).unwrap();
+        assert_eq!(t.normal, Some(primase_core::NormalConvention::GLTF));
+        // red and green kept, blue the rebuilt z of (1, 0): 0 encoded as 128 (blue 77 ignored), alpha kept
+        assert_eq!(t.levels[0][..2], [255, 128]);
+        assert!(t.levels[0][2].abs_diff(128) <= 1, "z {}", t.levels[0][2]);
+    }
+
+    /// A texture a shader binds as its base colour and another as its bump map: the normal gets its own copy.
+    #[test]
+    fn a_base_colour_texture_bound_as_a_bump_map_is_copied() {
+        use primase_core::pass::Pass;
+        let mut w = primase_core::World::new();
+        let t = w.spawn();
+        w.insert(t, rgba([128, 128, 255, 255]));
+        let m = bumped(t, t, &mut w);
+        super::LowerGtaPbr::default()
+            .run(&mut w, &mut primase_core::pass::PassLog::default())
+            .unwrap();
+        let p = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
+        let (base, normal) = (
+            p.base_color_texture.unwrap().texture,
+            p.normal_texture.unwrap().texture,
+        );
+        assert_eq!(base, t);
+        assert_ne!(normal, t);
+        assert_eq!(w.get::<Texture>(t).unwrap().role, TexRole::Color);
+        assert_eq!(w.get::<Texture>(normal).unwrap().role, TexRole::Normal);
+    }
 
     #[test]
     fn roughness_of_a_specular_power() {

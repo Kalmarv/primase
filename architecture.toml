@@ -108,12 +108,6 @@ reason = "a loader written as a pass; loading is a reader's load step"
 removed_when = "texture loading is a reader function, not a pass"
 
 [[pass]]
-file = "toolkit/image/src/texture.rs"
-what = "pass normalize-normals is not registered"
-reason = "drivers register it by hand"
-removed_when = "toolkit/image exports register()"
-
-[[pass]]
 file = "toolkit/meshops/src/texcoords.rs"
 what = "pass bake-texture-transforms is not registered"
 reason = "drivers call it directly"

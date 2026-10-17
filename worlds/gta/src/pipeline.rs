@@ -22,8 +22,9 @@ use crate::{Install, Result};
 /// The passes a loaded GTA world goes through before a writer, in order: each prototype's finest level of detail (a
 /// writer that draws chooses no level itself; the passes after it then have no discarded forms to lower), fragments'
 /// models at their bones' poses, shaders lowered to `pbr.material`, winding turned to the stored normals, tint palettes
-/// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning.
-pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours";
+/// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning, normal maps to glTF's
+/// convention.
+pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, normalize-normals";
 
 /// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
 /// on.
