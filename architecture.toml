@@ -64,12 +64,6 @@ removed_when = "it moves into toolkit/frostbite, its only user"
 # ---- composition without data logic (examples, bins, cli, pipelines) ----
 
 [[entry_point]]
-file = "cli/src/web.rs"
-what = "queries or edits world components"
-reason = "the web writer of primase convert plans tiles from the world until primase-web has a convert writer"
-removed_when = "the web writer moves into primase-web"
-
-[[entry_point]]
 file = "formats/web/examples/scene_to_tiles.rs"
 what = "queries or edits world components"
 reason = "turns skate.* markers and grind curves into viewer items, and measures placements for the spanning rule"

@@ -8,6 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 mod collision;
 mod compression;
+pub mod convert;
 mod images;
 mod instancing;
 mod spanning;
