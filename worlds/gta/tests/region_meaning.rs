@@ -676,17 +676,34 @@ fn region_placements_against_the_scene() {
                     .map(|p| p.map(f64::from))
                     .collect();
                 let our_tris = triangles(op);
-                parts
+                // part by part, else summed over all the geometry's parts (one bucket the scene split)
+                let each = parts
                     .iter()
                     .map(|&i| {
-                        let r = replay_lift(&ours, &our_tris, &their_mesh.primitives[i]);
+                        let r = replay_lift(&ours, &our_tris, &[&their_mesh.primitives[i]], false, false);
                         if only_some && r != Lift::Exact {
                             println!("      lift: {name} {g:?} part {i}: {r:?}");
                         }
                         r
                     })
                     .max()
-                    .unwrap_or(Lift::Exact)
+                    .unwrap_or(Lift::Exact);
+                if each == Lift::Exact {
+                    each
+                } else {
+                    // that exporter sums over its bucket: all the geometry's scene parts, and the triangles of ours
+                    // the scene has none of (left out after the lift)
+                    let all: Vec<&primase_core::Primitive> =
+                        parts.iter().map(|&i| &their_mesh.primitives[i]).collect();
+                    let together = replay_lift(&ours, &our_tris, &all, true, only_some);
+                    if only_some {
+                        println!(
+                            "      lift: {name} {g:?} {} parts and our unmatched triangles summed together: {together:?}",
+                            parts.len()
+                        );
+                    }
+                    each.min(together)
+                }
             } else {
                 Lift::Differs { corners_off: 0 }
             };
@@ -696,6 +713,9 @@ fn region_placements_against_the_scene() {
                 }
                 Lift::Creases { .. } => {
                     *geo.entry("decal geometries lifted 12 mm along the drawn face but at a few crease corners (that exporter's sums there mix faces)").or_default() += 1;
+                }
+                Lift::Bounded { .. } => {
+                    *geo.entry("decal geometries lifted 12 mm within 30 degrees of the replayed face (that exporter's sums over triangles the replay does not know)").or_default() += 1;
                 }
                 Lift::Differs { .. } => {
                     if only_some {
@@ -2122,16 +2142,27 @@ enum Lift {
     /// All but a few corners (at most 10, or 1 in 100) exact, those within 25 mm: creases, where that exporter's sum
     /// mixes faces whose vertices ours keeps apart.
     Creases { corners_off: usize },
-    /// Neither: corners off the replay (`usize::MAX`: a scene triangle with no source triangle of ours).
+    /// Every corner 12 mm (within 0.5 mm) from its vertex of ours, within 30 degrees of the replayed direction, but
+    /// not along it: that exporter's sums over triangles the replay does not know.
+    Bounded { corners_off: usize },
+    /// None of these: corners off the replay (`usize::MAX`: a scene triangle with no source triangle of ours).
     Differs { corners_off: usize },
 }
 
-/// Replays that exporter's decal lift (its --decal-face-lift) for one scene part `theirs` against our geometry as read
-/// (`ours`, `our_tris`). Each scene triangle is matched to the triangle of ours it came from: of those with every corner
-/// within 13 mm, the one nearest the scene triangle moved back 12 mm along its own face, either way (decal stacks put
-/// other layers of ours nearer the lifted triangle than its source). Our face normals are summed per vertex over the
-/// part in the scene triangles' order, and each vertex of ours is moved 12 mm along its normalised sum.
-fn replay_lift(ours: &[[f64; 3]], our_tris: &[[u32; 3]], theirs: &primase_core::Primitive) -> Lift {
+/// Replays that exporter's decal lift (its --decal-face-lift) for scene parts `theirs` of one geometry against our
+/// geometry as read (`ours`, `our_tris`). Each scene triangle is matched to the triangle of ours it came from: of those
+/// with every corner within 13 mm, the one nearest the scene triangle moved back 12 mm along its own face, either way
+/// (decal stacks put other layers of ours nearer the lifted triangle than its source). Our face normals (area
+/// weighted) are summed per vertex over the triangles of `theirs`, in the scene triangles' order, and each vertex of
+/// ours is moved 12 mm along its normalised sum. One part, or several summed together: that exporter sums over its
+/// bucket, which the scene may split into parts.
+fn replay_lift(
+    ours: &[[f64; 3]],
+    our_tris: &[[u32; 3]],
+    theirs: &[&primase_core::Primitive],
+    unmatched: bool,
+    debug: bool,
+) -> Lift {
     let grid = |c: [f64; 3]| c.map(|v| (v / 0.025).floor() as i64);
     let mut cells: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
     for (n, t) in our_tris.iter().enumerate() {
@@ -2173,15 +2204,17 @@ fn replay_lift(ours: &[[f64; 3]], our_tris: &[[u32; 3]], theirs: &primase_core::
         }
         best.map(|(_, v)| v)
     };
-    let pos: Vec<[f64; 3]> = theirs
-        .positions()
-        .expect("positions")
+    let tris: Vec<Tri> = theirs
         .iter()
-        .map(|p| p.map(f64::from))
-        .collect();
-    let tris: Vec<Tri> = triangles(theirs)
-        .iter()
-        .map(|t| t.map(|k| pos[k as usize]))
+        .flat_map(|p| {
+            let pos: Vec<[f64; 3]> = p
+                .positions()
+                .expect("positions")
+                .iter()
+                .map(|v| v.map(f64::from))
+                .collect();
+            triangles(p).into_iter().map(move |t| t.map(|k| pos[k as usize]))
+        })
         .collect();
     let Some(from) = tris.iter().map(source).collect::<Option<Vec<[usize; 3]>>>() else {
         return Lift::Differs {
@@ -2196,12 +2229,57 @@ fn replay_lift(ours: &[[f64; 3]], our_tris: &[[u32; 3]], theirs: &primase_core::
             *e = add(*e, n);
         }
     }
+    if unmatched {
+        // triangles of ours no scene triangle came from, in the drawn order: ours, or reversed where the scene turned
+        // the geometry (that exporter flips a whole geometry's winding)
+        let matched: BTreeSet<[usize; 3]> = from
+            .iter()
+            .map(|v| {
+                let mut k = *v;
+                k.sort();
+                k
+            })
+            .collect();
+        let rotations = |t: [usize; 3]| [t, [t[1], t[2], t[0]], [t[2], t[0], t[1]]];
+        let flipped = from.first().is_some_and(|v| {
+            our_tris
+                .iter()
+                .map(|t| t.map(|i| i as usize))
+                .find(|t| {
+                    let mut k = *t;
+                    k.sort();
+                    let mut w = *v;
+                    w.sort();
+                    k == w
+                })
+                .is_some_and(|t| !rotations(t).contains(v))
+        });
+        for t in our_tris {
+            let v = t.map(|i| i as usize);
+            let mut k = v;
+            k.sort();
+            if matched.contains(&k) || !v.iter().any(|j| sums.contains_key(j)) {
+                continue;
+            }
+            let n = cross(sub(ours[v[1]], ours[v[0]]), sub(ours[v[2]], ours[v[0]]));
+            let n = if flipped { n.map(|x| -x) } else { n };
+            for j in v {
+                if let Some(e) = sums.get_mut(&j) {
+                    *e = add(*e, n);
+                }
+            }
+        }
+    }
+    let corners: Vec<([f64; 3], usize)> = tris
+        .iter()
+        .zip(&from)
+        .flat_map(|(s, v)| (0..3).map(move |j| (s[j], v[j])))
+        .collect();
     // each corner's distance from the replay, lifting to one side
     let off = |side: f64| -> Vec<f64> {
-        tris.iter()
-            .zip(&from)
-            .flat_map(|(s, v)| (0..3).map(move |j| (s[j], v[j])))
-            .map(|(s, j)| {
+        corners
+            .iter()
+            .map(|&(s, j)| {
                 let n = sums[&j];
                 dist(s, add(ours[j], n.map(|x| x * side / dot(n, n).sqrt())))
             })
@@ -2209,12 +2287,35 @@ fn replay_lift(ours: &[[f64; 3]], our_tris: &[[u32; 3]], theirs: &primase_core::
     };
     let (up, down) = (off(0.012), off(-0.012));
     let count = |d: &[f64]| d.iter().filter(|&&x| x > 2e-4).count();
-    let d = if count(&up) <= count(&down) { up } else { down };
+    let side: f64 = if count(&up) <= count(&down) { 0.012 } else { -0.012 };
+    let d = if side > 0.0 { up } else { down };
     let corners_off = count(&d);
+    if debug && corners_off > 0 {
+        // the first corners off the replay: their source vertex, offset from it, the replayed direction, and how many
+        // of the triangles share that vertex
+        let r = |v: [f64; 3]| v.map(|x| (x * 1e4).round() / 1e4);
+        for (k, &(c, j)) in corners.iter().enumerate().filter(|&(k, _)| d[k] > 2e-4).take(4) {
+            let n = sums[&j];
+            let shared = from.iter().filter(|v| v.contains(&j)).count();
+            println!(
+                "        corner {k}: source {j}, offset {:?} ({:.4} m off), replay {:?}, {shared} triangles share it",
+                r(sub(c, ours[j])),
+                d[k],
+                r(n.map(|x| x * side.signum() / dot(n, n).sqrt()))
+            );
+        }
+    }
     if corners_off == 0 {
         Lift::Exact
     } else if corners_off <= 10.max(d.len() / 100) && d.iter().all(|&x| x <= 0.025) {
         Lift::Creases { corners_off }
+    } else if corners.iter().all(|&(c, j)| {
+        let o = sub(c, ours[j]);
+        let n = sums[&j].map(|x| x * side.signum());
+        let (lo, ln) = (dot(o, o).sqrt(), dot(n, n).sqrt());
+        (lo - 0.012).abs() <= 5e-4 && dot(o, n) >= lo * ln * 30f64.to_radians().cos()
+    }) {
+        Lift::Bounded { corners_off }
     } else {
         Lift::Differs { corners_off }
     }
