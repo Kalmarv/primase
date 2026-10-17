@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::hash::skate_fnv_string;
 use primase_core::{
     Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
-    TextureFile, Tile, Transform, World,
+    TextureFile, Tile, Transform, TransformKind, World,
 };
 use primase_skate_scene::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
@@ -665,6 +665,11 @@ impl Scene {
         let mut placements = Vec::new();
         for (e, inst) in world.iter::<Instance>() {
             let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+            if matches!(t.classify(), TransformKind::Mirrored | TransformKind::Sheared) {
+                return Err(Error::Scene(format!(
+                    "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
+                )));
+            }
             let sp = world.get::<SkatePlacement>(e).cloned().unwrap_or_default();
             let c = t.cols;
             let m = [
@@ -1419,6 +1424,39 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
+    }
+
+    /// A mirrored or sheared placement is refused, and the error names the pass that bakes it into geometry.
+    #[test]
+    fn non_rigid_placement_is_refused_naming_the_pass() {
+        for cols in [
+            [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]],
+            [[1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]],
+        ] {
+            let mut w = World::new();
+            w.insert_resource(SkateScene {
+                name: "t".into(),
+                ..SkateScene::default()
+            });
+            let proto = w.spawn();
+            let e = w.spawn();
+            w.insert(
+                e,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            w.insert(e, Transform { cols });
+            let err = Scene::from_world(&w, std::path::Path::new("."))
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                err.contains("non-rigid") && err.contains("bake-nonrigid"),
+                "{err}"
+            );
+        }
     }
 
     /// A layered material that no lowering pass replaced is refused, and the error names the pass to run.

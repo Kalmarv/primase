@@ -85,12 +85,11 @@ pub fn add_prop(
     bbox: Option<[f32; 4]>,
 ) -> i64 {
     let key = ((p.x / SRC_TILE).floor() as i32, (p.y / SRC_TILE).floor() as i32);
-    let mirrored = ex.cross(ey).dot(ez) < 0.0;
     let mut added = 0;
     let mut wv = [0f32; 9];
     for t in (0..col_idx.len().saturating_sub(2)).step_by(3) {
         for k in 0..3 {
-            let vi = col_idx[t + if mirrored && k > 0 { 3 - k } else { k }] as usize * 3;
+            let vi = col_idx[t + k] as usize * 3;
             let (x, y, z) = (col_pos[vi], col_pos[vi + 1], col_pos[vi + 2]);
             wv[k * 3] = p.x + ex.x * x + ey.x * y + ez.x * z;
             wv[k * 3 + 1] = p.y + ex.y * x + ey.y * y + ez.y * z;

@@ -173,8 +173,6 @@ struct PieceRec {
 #[derive(Clone, Copy, Debug)]
 struct Shape {
     degenerate: bool,
-    sheared: bool,
-    mirrored: bool,
     longest: f32,
 }
 
@@ -185,14 +183,9 @@ fn shape_of(s: &Placement) -> Shape {
     let small = |l: f32| l.is_nan() || l < 1e-6;
     let lim = 1e-6 * lx * ly * lz;
     let degenerate = small(lx) || small(ly) || small(lz) || det.is_nan() || lim.is_nan() || det.abs() <= lim;
-    let sheared = !degenerate
-        && (s.ex.dot(s.ey).abs() > 1e-4 * lx * ly
-            || s.ey.dot(s.ez).abs() > 1e-4 * ly * lz
-            || s.ez.dot(s.ex).abs() > 1e-4 * lz * lx);
+    // placements reach the writer rigid (the scene refuses a mirrored or sheared one: bake-nonrigid bakes them)
     Shape {
         degenerate,
-        sheared,
-        mirrored: det < 0.0,
         longest: lx.max(ly.max(lz)),
     }
 }
@@ -242,9 +235,9 @@ fn kept(
 }
 
 /// Append a part, moved by pos + basis (`s` none: as it is); with `only`, just those triangles and their vertices.
-fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin: Vec3, only: Option<&[u32]>) {
+fn append_core(a: &mut Acc, p: &SrcPart, s: Option<&Placement>, origin: Vec3, only: Option<&[u32]>) {
     let vbase = (a.pos.len() / 3) as u32;
-    let Some((s, sh)) = s else {
+    let Some(s) = s else {
         a.pos.extend_from_slice(&p.pos);
         a.nrm.extend_from_slice(&p.nrm);
         a.uv.extend_from_slice(&p.uv);
@@ -275,20 +268,15 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
             indices: idx,
         }
     };
-    let flip = sh.mirrored;
     // the mesh to transform: every vertex (the part's order), or the kept triangles' vertices in the order they are
-    // first used, corners taken in the order a mirrored placement writes them
+    // first used
     let mut picked: Option<Vec<u32>> = None;
     let m = match only {
         None => mesh_of(p.idx.clone(), None),
         Some(only) => {
             let mut corners: Vec<u32> = Vec::with_capacity(only.len());
             for t in only.as_chunks::<3>().0 {
-                if flip {
-                    corners.extend_from_slice(&[t[0], t[2], t[1]])
-                } else {
-                    corners.extend_from_slice(t)
-                }
+                corners.extend_from_slice(t);
             }
             let mut remap: HashMap<u32, u32> = HashMap::new();
             let mut verts: Vec<u32> = Vec::new();
@@ -299,12 +287,6 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
                     (verts.len() - 1) as u32
                 });
                 idx.push(n);
-            }
-            if flip {
-                // transform turns them over again
-                for t in idx.as_chunks_mut::<3>().0 {
-                    t.swap(1, 2);
-                }
             }
             let m = mesh_of(idx, Some(&verts));
             picked = Some(verts);
@@ -322,7 +304,6 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<(&Placement, Shape)>, origin:
         [t.x, t.y, t.z],
     )
     .expect("a placement checked not degenerate");
-    let _ = sh.sheared;
     a.pos.extend(out.positions.iter().flatten());
     a.nrm.extend(out.normals.iter().flatten());
     a.uv.extend(out.uv.iter().flatten());
@@ -817,7 +798,7 @@ impl MapWriter {
     fn append(
         a: &mut Acc,
         p: &SrcPart,
-        s: Option<(&Placement, Shape)>,
+        s: Option<&Placement>,
         origin: Vec3,
         order: i32,
         only: Option<&[u32]>,
@@ -837,7 +818,7 @@ impl MapWriter {
             });
             a.src.push(PieceSrc {
                 drawable: drawable.to_owned(),
-                entity: s.map_or(Vec3::ZERO, |x| x.0.pos),
+                entity: s.map_or(Vec3::ZERO, |x| x.pos),
                 shader: p.shader.clone(),
                 bucket: p.bucket,
                 model: p.model,
@@ -1007,9 +988,7 @@ impl MapWriter {
                     }
                     let mut inst = arch_count[&m.hash] >= o.min_instances && m.tris >= o.min_instance_tris;
                     if inst
-                        && (sh.sheared
-                            || sh.mirrored
-                            || s.no_instance
+                        && (s.no_instance
                             || s.part_off.is_some()
                             || (o.max_render_edge > 0.0 && sh.longest > 1.0001))
                     {
@@ -1057,12 +1036,7 @@ impl MapWriter {
                                 w[v + 1] = s.pos.y + s.ex.y * x + s.ey.y * y + s.ez.y * z;
                                 w[v + 2] = s.pos.z + s.ex.z * x + s.ey.z * y + s.ez.z * z;
                             }
-                            let mut ii = ci.clone();
-                            if sh.mirrored {
-                                for t in ii.as_chunks_mut::<3>().0 {
-                                    t.swap(1, 2);
-                                }
-                            }
+                            let ii = ci.clone();
                             let surf = m.col_surf.first().map_or(0, |b| (b & 0x7F) as usize);
                             self.prop_hulls.push(Hull {
                                 name,
@@ -1177,7 +1151,7 @@ impl MapWriter {
                         Self::append(
                             part(&mut parts, mat),
                             p,
-                            Some((s, sh)),
+                            Some(s),
                             origin,
                             piece_order,
                             only,
