@@ -387,3 +387,25 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
     );
     Ok(())
 }
+
+#[test]
+fn control_flow_and_opcodes_outside_the_subset_are_refused_by_name() {
+    // The evaluator runs straight-line programs only: loops, switches, continue, umul, uge and the SM5 rcp are
+    // refused when the program is read, never evaluated approximately.
+    for (op, name) in [
+        (48, "loop"),
+        (7, "continue"),
+        (8, "continuec"),
+        (76, "switch"),
+        (80, "uge"),
+        (81, "umul"),
+        (129, "rcp"),
+    ] {
+        let mut words = vec![0x50, 0];
+        words.extend(instruction(op, &[]));
+        words.extend(instruction(62, &[]));
+        words[1] = words.len() as u32;
+        let error = Program::from_words(&words).unwrap_err().to_string();
+        assert!(error.contains(&format!("unsupported {name} ({op})")), "{error}");
+    }
+}
