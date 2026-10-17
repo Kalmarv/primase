@@ -2,10 +2,10 @@
 //! target check, with a toy reader and writer.
 #![allow(clippy::unwrap_used)]
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use primase_core::convert::{Reader, Report, Result, Writer, convert};
+use primase_core::convert::{PartSize, Reader, Report, Result, Writer, convert};
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Target};
 use primase_core::{Component, Entity, Instance, Name, World};
 
@@ -13,6 +13,10 @@ use primase_core::{Component, Entity, Instance, Name, World};
 struct ToyMesh(u32);
 impl Component for ToyMesh {
     const NAME: &'static str = "toy.mesh";
+    /// The toy's payload is its number, in bytes.
+    fn payload_bytes(&self) -> u64 {
+        u64::from(self.0)
+    }
 }
 
 /// A component outside the toy reader's namespaces.
@@ -152,12 +156,13 @@ impl Pass for ToyPass {
         "toy-pass"
     }
     fn provides(&self) -> &[&'static str] {
-        &["core.name"]
+        &["core.name", "toy.mesh"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         event("passes");
         let orphan = w.spawn();
         w.insert(orphan, Name("left unreferenced".into()));
+        w.insert(orphan, ToyMesh(5));
         log.count("orphans", 1);
         Ok(())
     }
@@ -219,6 +224,14 @@ fn reads_selects_plans_then_loads_passes_checks_and_writes_each_part() {
     assert_eq!(report.written, vec![("toy".to_string(), "2 parts".to_string())]);
     // each part is its placement and prototype, loaded; the pass's orphan is not part of it
     assert_eq!(*written.borrow(), vec![(2, true), (2, true)]);
+    // each part's payload as loaded and as written (its one root, the placement, and the prototype it reaches): the
+    // orphan's 5 bytes are not the writer's
+    let size = PartSize {
+        roots: 1,
+        loaded: BTreeMap::from([("toy.mesh".to_string(), 7)]),
+        written: BTreeMap::from([("toy.mesh".to_string(), 7)]),
+    };
+    assert_eq!(report.part_sizes, vec![size.clone(), size]);
 }
 
 #[test]

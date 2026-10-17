@@ -73,10 +73,39 @@ pub struct ConvertReport {
     /// The reader's reports on loading, part by part.
     pub loads: Report,
     pub parts: usize,
+    /// The bulk payload of every part, in the order written.
+    pub part_sizes: Vec<PartSize>,
     /// Every pass's counts over all parts, as `<pass>: <what>`.
     pub counts: BTreeMap<String, u64>,
     /// The writer's report.
     pub written: Report,
+}
+
+/// The bulk payload one part held ([`World::payload_bytes`]), by component name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PartSize {
+    /// The roots the writer asked for.
+    pub roots: usize,
+    /// As the reader loaded it.
+    pub loaded: BTreeMap<String, u64>,
+    /// After the passes, as the writer got it.
+    pub written: BTreeMap<String, u64>,
+}
+
+impl PartSize {
+    pub fn loaded_total(&self) -> u64 {
+        self.loaded.values().sum()
+    }
+    pub fn written_total(&self) -> u64 {
+        self.written.values().sum()
+    }
+}
+
+fn sizes(w: &World) -> BTreeMap<String, u64> {
+    w.payload_bytes()
+        .into_iter()
+        .map(|(n, b)| (n.to_owned(), b))
+        .collect()
 }
 
 /// Adds each step's counts to `counts` under `<pass>: <what>`.
@@ -107,6 +136,11 @@ pub fn convert(
     while let Some(roots) = writer.next_part()? {
         let (mut part, loaded) = reader.load(&world, &roots)?;
         report.loads.extend(loaded);
+        let mut size = PartSize {
+            roots: roots.len(),
+            loaded: sizes(&part),
+            ..PartSize::default()
+        };
         check_emits(&part, reader.emits(), "load")?;
         let mut run = RunReport::default();
         manager.run(&mut part, passes, &mut run)?;
@@ -117,6 +151,8 @@ pub fn convert(
         let checked = manager.convert(&mut part, &target, Mode::Full, &PassOptions::new())?;
         tally(&mut report.counts, run);
         tally(&mut report.counts, checked);
+        size.written = sizes(&part);
+        report.part_sizes.push(size);
         writer.write(&part)?;
         report.parts += 1;
     }

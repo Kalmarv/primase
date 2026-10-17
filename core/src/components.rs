@@ -348,6 +348,18 @@ impl Stream {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// The stream's data in bytes: its length times its element size.
+    pub fn byte_len(&self) -> u64 {
+        let element = match self {
+            Stream::F32x2(_) => 8,
+            Stream::F32x3(_) => 12,
+            Stream::F32x4(_) => 16,
+            Stream::U8x4(_) => 4,
+            Stream::U16x4(_) => 8,
+        };
+        self.len() as u64 * element
+    }
 }
 
 /// Primitive topology. Strips and fans are lowered to lists by readers (toolkit vertex helpers).
@@ -422,6 +434,16 @@ impl Component for Mesh {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.primitives.iter().filter_map(|p| p.material));
+    }
+    /// Every stream's bytes and 4 bytes per index.
+    fn payload_bytes(&self) -> u64 {
+        self.primitives
+            .iter()
+            .map(|p| {
+                p.streams.values().map(Stream::byte_len).sum::<u64>()
+                    + p.indices.as_ref().map_or(0, |i| i.len() as u64 * 4)
+            })
+            .sum()
     }
     /// Float streams finite (glTF and every writer we have refuse NaN and infinity).
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
@@ -550,6 +572,10 @@ impl Component for Texture {
     const NAME: &'static str = "core.texture";
     /// 3: the normal convention gained tangent/bitangent basis ordering.
     const VERSION: u32 = 3;
+    /// Every level's bytes.
+    fn payload_bytes(&self) -> u64 {
+        self.levels.iter().map(|l| l.len() as u64).sum()
+    }
     /// A summary, not the pixels: size, format, level count, colour space, role, normal convention.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(json!({
@@ -660,6 +686,10 @@ impl Component for Collision {
             c.triangles.iter_mut().for_each(|t| t.swap(1, 2));
         }
         crate::world::Linearity::Applied(c)
+    }
+    /// 12 bytes per position, 12 per triangle and 2 per surface index.
+    fn payload_bytes(&self) -> u64 {
+        (self.positions.len() as u64 + self.triangles.len() as u64) * 12 + self.surfaces.len() as u64 * 2
     }
     /// One surface per triangle, indices in range, positions finite, surfaces known to the world's [`Surfaces`].
     fn verify(&self, _e: Entity, w: &crate::World) -> Result<(), String> {
@@ -918,6 +948,61 @@ impl Component for Tile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_bytes_count_streams_indices_levels_and_soups() {
+        // 3 positions (12 bytes each), 3 normals (12), 3 uvs (8), 3 indices (4): 36 + 36 + 24 + 12 = 108
+        let streams = BTreeMap::from([
+            (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
+            (Semantic::Normal, Stream::F32x3(vec![[0.0, 0.0, 1.0]; 3])),
+            (Semantic::TexCoord(0), Stream::F32x2(vec![[0.0; 2]; 3])),
+        ]);
+        let mesh = Mesh {
+            primitives: vec![Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(vec![0, 1, 2]),
+                material: None,
+            }],
+        };
+        assert_eq!(mesh.payload_bytes(), 108);
+        // a 4 x 4 RGBA8 texture with its 2 x 2 and 1 x 1 levels: 64 + 16 + 4
+        let texture = Texture {
+            width: 4,
+            height: 4,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![0; 64], vec![0; 16], vec![0; 4]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        };
+        assert_eq!(texture.payload_bytes(), 84);
+        // 3 positions and 1 triangle (12 bytes each), 1 surface index (2)
+        let soup = Collision {
+            positions: vec![[0.0; 3]; 3],
+            triangles: vec![[0, 1, 2]],
+            surfaces: vec![0],
+        };
+        assert_eq!(soup.payload_bytes(), 50);
+        let mut w = crate::World::new();
+        let (a, b) = (w.spawn(), w.spawn());
+        w.insert(a, mesh.clone());
+        w.insert(b, mesh);
+        w.insert(a, texture);
+        w.insert(a, Name("small".into()));
+        w.insert_opaque(
+            b,
+            "game.blob",
+            crate::Opaque {
+                version: 1,
+                data: crate::OpaqueData::Bytes(vec![0; 7]),
+            },
+        );
+        assert_eq!(
+            w.payload_bytes(),
+            BTreeMap::from([("core.mesh", 216), ("core.texture", 84), ("game.blob", 7)])
+        );
+    }
 
     fn t(cols: [[f32; 3]; 4]) -> Transform {
         Transform { cols }

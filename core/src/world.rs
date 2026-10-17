@@ -67,6 +67,12 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     /// [`World::closure`] follows. A component holding entity references must declare every one of them.
     fn references(&self, _out: &mut Vec<Entity>) {}
 
+    /// The bytes of bulk payload the value holds (vertex streams and indices, texture levels, triangle soups), for
+    /// memory reports: element counts times element sizes, not allocated capacity. 0 for small components.
+    fn payload_bytes(&self) -> u64 {
+        0
+    }
+
     /// The component after its entity's mesh primitives were rebuilt, for a component that holds something per
     /// primitive: new primitive `i` comes from old primitive `from[i]` (a source may repeat, when a primitive is
     /// split, or be absent, when one is dropped). `None`: the component does not follow primitives (the default).
@@ -243,6 +249,8 @@ trait AnyColumn: Any + Send + Sync {
     fn entities(&self) -> Vec<Entity>;
     /// [`Component::references`] of entity `e`'s value, if it has one.
     fn references(&self, e: Entity, out: &mut Vec<Entity>);
+    /// The sum of every value's [`Component::payload_bytes`].
+    fn payload_bytes(&self) -> u64;
     fn clone_box(&self) -> Box<dyn AnyColumn>;
     /// A copy holding only the values of `keep`.
     fn subset_box(&self, keep: &BTreeSet<Entity>) -> Box<dyn AnyColumn>;
@@ -313,6 +321,9 @@ impl<T: Component> AnyColumn for Column<T> {
         if let Some(v) = self.values.get(&e) {
             v.references(out);
         }
+    }
+    fn payload_bytes(&self) -> u64 {
+        self.values.values().map(Component::payload_bytes).sum()
     }
     fn clone_box(&self) -> Box<dyn AnyColumn> {
         Box::new(self.clone())
@@ -981,6 +992,31 @@ impl World {
             }
         }
         out.sort();
+        out
+    }
+
+    /// Bulk payload bytes by component name, for the names that hold any: typed components'
+    /// [`Component::payload_bytes`] and opaque byte payloads.
+    pub fn payload_bytes(&self) -> BTreeMap<&str, u64> {
+        let mut out: BTreeMap<&str, u64> = BTreeMap::new();
+        for c in self.columns.values() {
+            let n = c.payload_bytes();
+            if n > 0 {
+                *out.entry(c.name()).or_default() += n;
+            }
+        }
+        for (name, col) in &self.opaque {
+            let n: u64 = col
+                .values()
+                .map(|o| match &o.data {
+                    OpaqueData::Bytes(b) => b.len() as u64,
+                    OpaqueData::Json(_) => 0,
+                })
+                .sum();
+            if n > 0 {
+                *out.entry(name.as_str()).or_default() += n;
+            }
+        }
         out
     }
 

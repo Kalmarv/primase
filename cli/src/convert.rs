@@ -1,8 +1,9 @@
 //! `convert`: one reader, the passes, one writer ([`primase_core::convert`]). Readers and writers are registered once,
 //! here; this module parses the command line, builds them and the pipelines, runs the conversion and prints its report.
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use primase_core::convert::{ConvertReport, Reader, Writer, convert};
+use primase_core::convert::{ConvertReport, PartSize, Reader, Writer, convert};
 use primase_core::pass::{PassManager, PassRegistry};
 
 pub type Result<T> = primase_core::convert::Result<T>;
@@ -58,6 +59,22 @@ fn print(r: &ConvertReport) {
         println!("{k}: {v}");
     }
     println!("parts loaded: {}", r.parts);
+    let mib = |b: u64| b as f64 / 1_048_576.0;
+    let show = |what: &str, p: &PartSize, names: &BTreeMap<String, u64>| {
+        let by_name: Vec<String> = names.iter().map(|(n, b)| format!("{n} {:.1}", mib(*b))).collect();
+        println!(
+            "largest part {what}: {:.1} MiB ({} roots; {})",
+            mib(names.values().sum()),
+            p.roots,
+            by_name.join(", ")
+        );
+    };
+    if let Some(p) = r.part_sizes.iter().max_by_key(|p| p.loaded_total()) {
+        show("as loaded", p, &p.loaded);
+    }
+    if let Some(p) = r.part_sizes.iter().max_by_key(|p| p.written_total()) {
+        show("at the writer", p, &p.written);
+    }
     println!("passes over all parts: {:?}", r.counts);
     for (k, v) in &r.written {
         println!("{k}: {v}");
