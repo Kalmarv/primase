@@ -1117,6 +1117,23 @@ fn region_placements_against_the_scene() {
                     sm.emissive.unwrap_or(false)
                 ));
             }
+            // sign text: that exporter read no field (a flat opaque plate); ours is the fill colour cut at the
+            // field's half
+            let effect_name = drawn
+                .get::<primase_gta::components::GtaShader>(om_e)
+                .and_then(|s| primase_gta::shader_names::effect(s.name));
+            if effect_name == Some("distance_map")
+                && sm.base.is_none()
+                && tp.alpha_mode == primase_core::pbr::AlphaMode::Opaque
+                && ours_p.alpha_mode == (primase_core::pbr::AlphaMode::Mask { cutoff: 0.5 })
+            {
+                diffs.retain(|k| {
+                    !(k.starts_with("alpha: scene opaque")
+                        || k.starts_with("base colour factor")
+                        || k.starts_with("base texture: scene flat"))
+                });
+                diffs.push("distance_map: that exporter's flat opaque plate; ours the fill colour cut at the field's half".into());
+            }
             if diffs.is_empty() {
                 *mat.entry("parts equal".into()).or_default() += 1;
             } else {
@@ -1172,6 +1189,8 @@ fn region_placements_against_the_scene() {
                 | "layer texture: that exporter's copy from a same-named dictionary the game's mounts replace or never mount"
                 | "layer texture: that exporter's alpha-only (A8) texture as white or grey"
                 | "layer texture: that exporter's re-encoding of ours (another format, its own levels)"
+                // GTA cuts the sign text's distance field at half in its fill colour; that exporter read no field
+                | "distance_map: that exporter's flat opaque plate; ours the fill colour cut at the field's half"
                 // both approximate the lookup per vertex (gta-terrain-layers counts it)
                 | "layer weights: lookup-blended terrain, each side's per-vertex sampling of the game's per-pixel lookup"
         ) || k.contains("opaque, its texture without alpha by that exporter's probe")
