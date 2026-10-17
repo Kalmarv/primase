@@ -50,6 +50,9 @@ pub struct AssetReport {
     pub posed_models: usize,
     /// Prototypes whose archetype names no live file or entry.
     pub asset_missing: usize,
+    /// Vertex streams left out because the file stores values that are not finite (NaN, infinity), by semantic: one
+    /// per primitive of any LOD. Such a value is unknown, and core holds finite streams only.
+    pub non_finite_streams: BTreeMap<String, usize>,
 }
 
 struct Ctx<'a> {
@@ -165,14 +168,42 @@ fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose
         .collect()
 }
 
-/// A model list as a mesh, each geometry a primitive with its shader's material.
-fn mesh(models: &[Model], materials: &[Entity], poses: &[Option<Pose>]) -> Result<Mesh> {
+/// Whether every value of a float stream is finite (integer streams always are).
+fn finite(s: &Stream) -> bool {
+    match s {
+        Stream::F32x2(v) => v.iter().flatten().all(|x| x.is_finite()),
+        Stream::F32x3(v) => v.iter().flatten().all(|x| x.is_finite()),
+        Stream::F32x4(v) => v.iter().flatten().all(|x| x.is_finite()),
+        Stream::U8x4(_) | Stream::U16x4(_) => true,
+    }
+}
+
+/// A model list as a mesh, each geometry a primitive with its shader's material. A stream other than the positions
+/// holding a value that is not finite is left out and counted in `non_finite`; such positions are an error.
+fn mesh(
+    path: &str,
+    models: &[Model],
+    materials: &[Entity],
+    poses: &[Option<Pose>],
+    non_finite: &mut BTreeMap<String, usize>,
+) -> Result<Mesh> {
     let mut primitives = Vec::new();
     for (m, pose) in models.iter().zip(poses) {
         for g in &m.geometries {
             let mut streams = BTreeMap::new();
             for &e in &g.elements {
                 let (sem, s) = stream(g, e, pose.as_ref())?;
+                if !finite(&s) {
+                    if sem == Semantic::Position {
+                        return Err(invalid(
+                            "drawable",
+                            0,
+                            format!("{path}: positions that are not finite"),
+                        ));
+                    }
+                    *non_finite.entry(format!("{sem:?}")).or_default() += 1;
+                    continue;
+                }
                 streams.insert(sem, s);
             }
             primitives.push(Primitive {
@@ -384,16 +415,30 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
         }
         let poses: [Vec<Option<Pose>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
         ctx.report.posed_models += poses[0].iter().filter(|p| p.is_some()).count();
-        let high = mesh(&d.lods[0], &materials, &poses[0])?;
+        let high = mesh(
+            &path,
+            &d.lods[0],
+            &materials,
+            &poses[0],
+            &mut ctx.report.non_finite_streams,
+        )?;
         ctx.report.geometries += high.primitives.len();
         w.insert(proto, high);
-        let lod = |i: usize| -> Result<Option<Mesh>> {
+        let mut lod = |i: usize| -> Result<Option<Mesh>> {
             if d.lods[i].is_empty() {
                 Ok(None)
             } else {
-                mesh(&d.lods[i], &materials, &poses[i]).map(Some)
+                mesh(
+                    &path,
+                    &d.lods[i],
+                    &materials,
+                    &poses[i],
+                    &mut ctx.report.non_finite_streams,
+                )
+                .map(Some)
             }
         };
+        let lods = [lod(1)?, lod(2)?, lod(3)?];
         w.insert(
             proto,
             GtaDrawable {
@@ -407,7 +452,7 @@ pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Ass
                         .flat_map(|(m, model)| (0..model.geometries.len() as u32).map(move |g| [m as u32, g]))
                         .collect()
                 }),
-                lods: [lod(1)?, lod(2)?, lod(3)?],
+                lods,
             },
         );
         ctx.report.drawables += 1;
