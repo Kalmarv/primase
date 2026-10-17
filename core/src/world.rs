@@ -5,7 +5,7 @@
 //! same bytes for the same world.
 
 use std::any::{Any, TypeId};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::json::JsonError;
@@ -399,11 +399,11 @@ pub struct World {
     next: u32,
     /// Alive entities. Despawned ids stay out forever.
     alive: std::collections::BTreeSet<Entity>,
-    columns: HashMap<TypeId, Box<dyn AnyColumn>>,
+    columns: BTreeMap<TypeId, Box<dyn AnyColumn>>,
     /// Component name -> owning type, to refuse two Rust types claiming one name.
     names: BTreeMap<&'static str, TypeId>,
     opaque: BTreeMap<String, BTreeMap<Entity, Opaque>>,
-    resources: HashMap<TypeId, Box<dyn AnyResource>>,
+    resources: BTreeMap<TypeId, Box<dyn AnyResource>>,
     opaque_resources: BTreeMap<String, Opaque>,
 }
 
@@ -443,7 +443,7 @@ impl World {
     }
 
     /// Every resource, copied, with its references to entities outside `alive` forgotten.
-    fn resources_for(&self, alive: &BTreeSet<Entity>) -> HashMap<TypeId, Box<dyn AnyResource>> {
+    fn resources_for(&self, alive: &BTreeSet<Entity>) -> BTreeMap<TypeId, Box<dyn AnyResource>> {
         self.resources
             .iter()
             .map(|(k, v)| {
@@ -758,7 +758,14 @@ impl World {
     ) -> (Option<ColumnMut<'_, A>>, Option<ColumnMut<'_, B>>) {
         let (a, b) = (TypeId::of::<A>(), TypeId::of::<B>());
         assert!(a != b, "columns2_mut needs two different component types");
-        let [ca, cb] = self.columns.get_disjoint_mut([&a, &b]);
+        let (mut ca, mut cb) = (None, None);
+        for (k, c) in &mut self.columns {
+            if *k == a {
+                ca = Some(c);
+            } else if *k == b {
+                cb = Some(c);
+            }
+        }
         (
             ca.map(|c| ColumnMut(c.as_any_mut().downcast_mut().expect("column type"))),
             cb.map(|c| ColumnMut(c.as_any_mut().downcast_mut().expect("column type"))),
