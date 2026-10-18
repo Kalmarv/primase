@@ -1362,7 +1362,7 @@ fn mirrored_collision_keeps_its_fronts() {
     // the writer takes rigid transforms: refused until bake-nonrigid moves the mirror into the soup
     let refused = scene::write(&w, &out).unwrap_err().to_string();
     assert!(refused.contains("bake-nonrigid"), "{refused}");
-    primase_meshops::bake_nonrigid(&mut w);
+    primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
     scene::write(&w, &out).unwrap();
     let m = manifest(&out);
     let entry = &m["collision"][before];

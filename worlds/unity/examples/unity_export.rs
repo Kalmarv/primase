@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the writers here take collision as triangles
         Box::new(primase_meshops::TessellateColliders),
         // last before the writers: authored mirrors and shears into geometry, so every placement is rigid
-        Box::new(primase_meshops::BakeNonrigid),
+        Box::new(primase_meshops::BakeNonrigid::default()),
     ];
     let mut lowering = Vec::new();
     for p in passes {

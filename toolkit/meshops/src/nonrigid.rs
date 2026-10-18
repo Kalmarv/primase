@@ -1,5 +1,6 @@
 //! `bake-nonrigid`: authored mirrors and shears moved out of transforms into geometry, so every transform a writer
-//! sees is a rotation with positive per-axis scale and a translation ([`TransformKind::Regular`]).
+//! sees is a rotation with positive per-axis scale and a translation ([`TransformKind::Regular`]); with
+//! `mirrors=keep` only shears are moved, for a writer whose format carries a mirroring transform itself (glTF).
 //!
 //! Readers undo their own frame's mirror in geometry; what is left non-rigid is what the source authored (a negative
 //! scale, a non-uniform scale under a rotation in a hierarchy). By [`Transform::classify`]:
@@ -14,16 +15,16 @@
 //!   the placement's entity index.
 //! - **Regular** and **degenerate** transforms are left as they are (a writer skips a degenerate one).
 //!
-//! It runs after a reader's own lowerings and before raising to a target dialect (`raise-skate`) and the writers: a
-//! dialect component that describes geometry as stored (relative to the stored transform) is dropped from a mapped
-//! entity, so the lowering that turns it into core geometry (`lower-unity-collision` for `unity.collider`) must have
-//! run; a target dialect's components (`skate.*`) say nothing yet of how they follow, so they would stop the bake.
+//! Its place in a pipeline: after the reader's own lowerings, before raising to a target's dialect and before the
+//! writers. A reader's dialect component that describes geometry as stored (relative to the stored transform) answers
+//! [`primase_core::Linearity::Drop`], so the lowering that turns it into core geometry must have run first; a
+//! target dialect's components give no answer yet, so they would stop the bake.
 //!
 //! Mapping is all or nothing per entity: when a component cannot follow ([`primase_core::Linearity::Unsupported`]),
 //! or a prototype's geometry is still in a file, the placement is left as it was and counted by what stopped it.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
     Collision, Entity, Instance, Light, Linear, Lods, Marker, Mesh, MeshFile, Name, Transform, TransformKind,
     World,
@@ -31,11 +32,21 @@ use primase_core::{
 
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BakeNonrigid;
+pub struct BakeNonrigid {
+    /// `mirrors=keep`: mirrored transforms stay as they are; only sheared ones are baked.
+    pub keep_mirrors: bool,
+}
 
 impl Pass for BakeNonrigid {
     fn name(&self) -> &'static str {
         "bake-nonrigid"
+    }
+    fn options(&self) -> Options {
+        if self.keep_mirrors {
+            Options::from([("mirrors".to_owned(), "keep".to_owned())])
+        } else {
+            Options::new()
+        }
     }
     fn modifies(&self) -> &[&'static str] {
         &[
@@ -56,7 +67,7 @@ impl Pass for BakeNonrigid {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let done = bake_nonrigid(w);
+        let done = bake_nonrigid(w, self);
         for (k, n) in done.counts {
             log.count(&k, n);
         }
@@ -65,13 +76,19 @@ impl Pass for BakeNonrigid {
     }
 }
 
-/// Register `bake-nonrigid` (no options).
+/// Register `bake-nonrigid` (option `mirrors=keep|bake`, default `bake`).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("bake-nonrigid", |o| {
-        if let Some(k) = o.keys().next() {
-            return Err(format!("bake-nonrigid: unknown option {k}"));
+        let mut pass = BakeNonrigid::default();
+        for (k, v) in o {
+            match (k.as_str(), v.as_str()) {
+                ("mirrors", "keep") => pass.keep_mirrors = true,
+                ("mirrors", "bake") => pass.keep_mirrors = false,
+                ("mirrors", v) => return Err(format!("bake-nonrigid: mirrors={v} is not keep or bake")),
+                _ => return Err(format!("bake-nonrigid: unknown option {k}")),
+            }
         }
-        Ok(Box::new(BakeNonrigid))
+        Ok(Box::new(pass))
     });
 }
 
@@ -152,8 +169,8 @@ fn mapped_copy(
     result
 }
 
-/// Bake every non-rigid transform (see the module documentation).
-pub fn bake_nonrigid(w: &mut World) -> PassLog {
+/// Bake every non-rigid transform as `pass` says (its `mirrors` option; see the module documentation).
+pub fn bake_nonrigid(w: &mut World, pass: &BakeNonrigid) -> PassLog {
     let mut log = PassLog::default();
     let mut twins: BTreeMap<Entity, Result<Entity, String>> = BTreeMap::new();
     let placed: Vec<(Entity, Transform, Option<Entity>)> = w
@@ -162,7 +179,9 @@ pub fn bake_nonrigid(w: &mut World) -> PassLog {
         .collect();
     for (e, t, proto) in placed {
         let kind = t.classify();
-        if !matches!(kind, TransformKind::Mirrored | TransformKind::Sheared) {
+        if !matches!(kind, TransformKind::Mirrored | TransformKind::Sheared)
+            || (pass.keep_mirrors && kind == TransformKind::Mirrored)
+        {
             continue;
         }
         let what = if kind == TransformKind::Mirrored {

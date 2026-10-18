@@ -460,7 +460,7 @@ pub fn build(dir: &Path) -> Built {
         .map(|e| (e, *w.get::<Transform>(e).unwrap()))
         .into_iter()
         .collect();
-    let log = primase_meshops::bake_nonrigid(&mut w);
+    let log = primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
     assert_eq!(
         log.counts.get("mirrored transforms made rigid"),
         Some(&1),
