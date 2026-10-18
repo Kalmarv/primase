@@ -100,17 +100,19 @@ fn glb_box(json: &Value) -> [f64; 6] {
     b
 }
 
-/// A (tile, axis)'s rank objects: rank -> (translation, mesh).
+/// A (tile, cell, axis)'s rank objects: rank -> (translation, mesh).
 type RankObjects = BTreeMap<u8, ([f32; 3], String)>;
 
-/// Design A' ([`primase_reskate::blend_order`]): every chain rank of a tile's overlays is an object of its own,
-/// `<tile>_v<axis><rank>`, placed at its tile's translation lifted along the axis (the top rank lowest), in no tile
-/// mesh, and the ranks of a (tile, axis) have the same bounds.
+/// Design A' ([`primase_reskate::blend_order`]): every chain rank of a tile's overlays is an object of its own per
+/// cell of the blend grid, `<tile>_c<column>_<row>_v<axis><rank>`, placed at its tile's translation lifted along the
+/// axis (the top rank lowest), in no tile mesh; the ranks of a (tile, cell, axis) have the same bounds, and those
+/// bounds lie inside one cell of the grid (`grid` metres, Studio's frame x and z), so Studio has nothing to cut.
 fn check_chain_objects(
     map: &Value,
     out: &Path,
     by_mesh: &BTreeMap<String, (Value, Vec<u8>)>,
     stats: &primase_reskate::blend_order::Stats,
+    grid: f32,
 ) {
     let mut tile_at: BTreeMap<String, [f32; 3]> = BTreeMap::new();
     let mut ranks: BTreeMap<(String, u8), RankObjects> = BTreeMap::new();
@@ -131,11 +133,11 @@ fn check_chain_objects(
             continue;
         }
         match stem.rsplit_once("_v") {
-            Some((tile, ar)) if ar.len() == 2 && ar.bytes().all(|c| c.is_ascii_digit()) => {
+            Some((group, ar)) if ar.len() == 2 && ar.bytes().all(|c| c.is_ascii_digit()) => {
                 let (axis, rank) = (ar.as_bytes()[0] - b'0', ar.as_bytes()[1] - b'0');
                 chain_mats.insert(mat.to_owned());
                 let prev = ranks
-                    .entry((tile.to_owned(), axis))
+                    .entry((group.to_owned(), axis))
                     .or_default()
                     .insert(rank, (at, mesh.to_owned()));
                 assert!(prev.is_none_or(|(p, _)| p == at), "{stem}: sections placed apart");
@@ -159,7 +161,9 @@ fn check_chain_objects(
     let meshes: BTreeSet<&String> = ranks.values().flat_map(|r| r.values().map(|(_, m)| m)).collect();
     assert_eq!(meshes.len(), stats.objects, "objects added");
     let mut placements = BTreeSet::new();
-    for ((tile, axis), by_rank) in &ranks {
+    for ((group, axis), by_rank) in &ranks {
+        // `<tile>_c<column>_<row>` with a grid, `<tile>` without
+        let tile = group.rsplit_once("_c").map_or(group.as_str(), |(t, _)| t);
         let base = tile_at[tile];
         // Studio's frame (x, z, -y) back to the writer's
         let n = primase_reskate::blend_order::axis_vector(*axis);
@@ -178,16 +182,28 @@ fn check_chain_objects(
             );
             last = along;
             assert!(
-                placements.insert(at.map(f32::to_bits)),
+                placements.insert((group.clone(), at.map(f32::to_bits))),
                 "{mesh}: shares a placement"
             );
             let json = match by_mesh.get(mesh) {
                 Some((j, _)) => j.clone(),
                 None => glb(&std::fs::read(out.join(mesh)).unwrap()).0,
             };
-            boxes.insert(glb_box(&json).map(f64::to_bits));
+            let b = glb_box(&json);
+            if grid > 0.0 {
+                // inside one cell in Studio's horizontal axes (x, z), from the tile's (unlifted) translation
+                for k in [0, 2] {
+                    let (lo, hi) = (b[k] + f64::from(base[k]), b[k + 3] + f64::from(base[k]));
+                    let cell = (lo / f64::from(grid)).floor();
+                    assert!(
+                        hi <= (cell + 1.0) * f64::from(grid),
+                        "{mesh}: bounds {lo}..{hi} cross a {grid} m cell border"
+                    );
+                }
+            }
+            boxes.insert(b.map(f64::to_bits));
         }
-        assert_eq!(boxes.len(), 1, "{tile} axis {axis}: ranks with different bounds");
+        assert_eq!(boxes.len(), 1, "{group} axis {axis}: ranks with different bounds");
     }
     println!("blend order: {stats:?}");
 }
@@ -332,7 +348,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             l.sort();
         }
         assert_eq!(record, record_want, "vertex_blend.json vs map.json objects");
-        check_chain_objects(&map, &out, &by_mesh, &report.blend);
+        check_chain_objects(&map, &out, &by_mesh, &report.blend, o.blend_grid);
         println!(
             "{}: {} vertex_blend materials, {} blended object primitives, {} other",
             scene.display(),

@@ -44,6 +44,13 @@ pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
                     .parse()
                     .map_err(|_| "reskate: --blend-objects is a number")?
             }
+            "--blend-grid" => {
+                options.blend_grid = value()?
+                    .parse()
+                    .ok()
+                    .filter(|g: &f32| g.is_finite() && *g >= 0.0)
+                    .ok_or("reskate: --blend-grid is a size in metres (0: not cut)")?
+            }
             _ => return Err(format!("reskate: unknown option {a}").into()),
         }
     }

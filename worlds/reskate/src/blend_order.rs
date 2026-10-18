@@ -52,6 +52,9 @@ pub struct Stats {
     /// step used, in metres.
     pub steps_widened: usize,
     pub max_step_m: f32,
+    /// The grid the objects were cut on, in metres (0: not cut), and the overlay triangles clipped at its borders.
+    pub grid_m: f32,
+    pub triangles_clipped: usize,
 }
 
 /// Triangles with their vertices: positions (xyz), normals (xyz), UVs (uv), blend weights (one per vertex) and
@@ -122,6 +125,140 @@ pub fn split_by_axis(g: &Geometry) -> BTreeMap<u8, Geometry> {
         }
     }
     out.into_iter().map(|(k, (h, _))| (k, h)).collect()
+}
+
+/// How far inside its cell a piece cut by [`split_by_cell`] stays, in metres: geometry on a border could count as
+/// both cells', and an object reaching into a second cell is cut again by Studio.
+pub const CELL_INSET: f32 = 0.0005;
+
+/// A polygon vertex while clipping a triangle: its barycentric weights on the source triangle and its position in
+/// the grid's frame (x, y).
+#[derive(Clone, Copy, Debug)]
+struct ClipVertex {
+    b: [f32; 3],
+    x: f32,
+    y: f32,
+}
+
+/// `poly` clipped to the side of the line `x = k` (`along_y`: `y = k`) where the coordinate is above `k`
+/// (`keep_above`) or below it, the new vertices' weights interpolated (Sutherland-Hodgman, one edge).
+fn clip_edge(poly: &[ClipVertex], along_y: bool, k: f32, keep_above: bool) -> Vec<ClipVertex> {
+    let side = |v: &ClipVertex| {
+        let c = if along_y { v.y } else { v.x };
+        if keep_above { c - k } else { k - c }
+    };
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    for (i, a) in poly.iter().enumerate() {
+        let b = &poly[(i + 1) % poly.len()];
+        let (da, db) = (side(a), side(b));
+        if da >= 0.0 {
+            out.push(*a);
+        }
+        if (da >= 0.0) != (db >= 0.0) {
+            let t = da / (da - db);
+            out.push(ClipVertex {
+                b: std::array::from_fn(|j| a.b[j] + (b.b[j] - a.b[j]) * t),
+                x: a.x + (b.x - a.x) * t,
+                y: a.y + (b.y - a.y) * t,
+            });
+        }
+    }
+    out
+}
+
+/// A part's triangles cut on a grid of `cell`-metre squares in the horizontal plane (x, y), with borders at whole
+/// multiples of `cell` once `origin` (where the geometry's local zero sits) is added: Studio's WorldPartition cells
+/// (200 m, from a world corner at -4800 m) or any grid dividing them. Per cell (column, row): the triangles inside
+/// it, and those crossing a border clipped to it, every vertex at least [`CELL_INSET`] inside; a clipped vertex's
+/// normal, UV and blend weight are interpolated from its triangle's. The count is of the triangles that were clipped.
+pub fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i32), Geometry>, usize) {
+    let mut out: BTreeMap<(i32, i32), (Geometry, BTreeMap<u32, u32>)> = BTreeMap::new();
+    let mut clipped = 0;
+    let world = |i: u32| {
+        let p = g.vertex(i);
+        (p.x + origin.x, p.y + origin.y)
+    };
+    let cell_of = |c: f32| (c / cell).floor() as i32;
+    let inside = |c: f32, k: i32| {
+        let lo = k as f32 * cell;
+        c >= lo + CELL_INSET && c <= lo + cell - CELL_INSET
+    };
+    for t in g.idx.as_chunks::<3>().0 {
+        let w = t.map(world);
+        let (cx, cy) = (cell_of(w[0].0), cell_of(w[0].1));
+        if w.iter().all(|&(x, y)| inside(x, cx) && inside(y, cy)) {
+            // whole: its vertices shared with the cell's other whole triangles
+            let (h, remap) = out.entry((cx, cy)).or_default();
+            for &v in t {
+                let n = *remap.entry(v).or_insert_with(|| {
+                    let vi = v as usize;
+                    h.pos.extend_from_slice(&g.pos[vi * 3..vi * 3 + 3]);
+                    h.nrm.extend_from_slice(&g.nrm[vi * 3..vi * 3 + 3]);
+                    h.uv.extend_from_slice(&g.uv[vi * 2..vi * 2 + 2]);
+                    if !g.blend.is_empty() {
+                        h.blend.push(g.blend[vi]);
+                    }
+                    (h.pos.len() / 3 - 1) as u32
+                });
+                h.idx.push(n);
+            }
+            continue;
+        }
+        clipped += 1;
+        let (x0, x1) = (
+            w.iter().map(|p| p.0).fold(f32::INFINITY, f32::min),
+            w.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max),
+        );
+        let (y0, y1) = (
+            w.iter().map(|p| p.1).fold(f32::INFINITY, f32::min),
+            w.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max),
+        );
+        let tri = [0, 1, 2].map(|k| ClipVertex {
+            b: std::array::from_fn(|j| if j == k { 1.0 } else { 0.0 }),
+            x: w[k].0,
+            y: w[k].1,
+        });
+        for kx in cell_of(x0)..=cell_of(x1) {
+            for ky in cell_of(y0)..=cell_of(y1) {
+                let (lx, ly) = (kx as f32 * cell, ky as f32 * cell);
+                let mut poly = tri.to_vec();
+                for (along_y, k, above) in [
+                    (false, lx + CELL_INSET, true),
+                    (false, lx + cell - CELL_INSET, false),
+                    (true, ly + CELL_INSET, true),
+                    (true, ly + cell - CELL_INSET, false),
+                ] {
+                    poly = clip_edge(&poly, along_y, k, above);
+                    if poly.len() < 3 {
+                        break;
+                    }
+                }
+                if poly.len() < 3 {
+                    continue;
+                }
+                let (h, _) = out.entry((kx, ky)).or_default();
+                let base = (h.pos.len() / 3) as u32;
+                for v in &poly {
+                    let mix = |s: &[f32], n: usize, i: usize| -> f32 {
+                        (0..3).map(|j| v.b[j] * s[t[j] as usize * n + i]).sum()
+                    };
+                    let p = [mix(&g.pos, 3, 0), mix(&g.pos, 3, 1), mix(&g.pos, 3, 2)];
+                    let n = Vec3::new(mix(&g.nrm, 3, 0), mix(&g.nrm, 3, 1), mix(&g.nrm, 3, 2))
+                        .normalize_or(Vec3::UNIT_Z);
+                    h.pos.extend_from_slice(&p);
+                    h.nrm.extend_from_slice(&[n.x, n.y, n.z]);
+                    h.uv.extend_from_slice(&[mix(&g.uv, 2, 0), mix(&g.uv, 2, 1)]);
+                    if !g.blend.is_empty() {
+                        h.blend.push(mix(&g.blend, 1, 0));
+                    }
+                }
+                for i in 1..poly.len() as u32 - 1 {
+                    h.idx.extend_from_slice(&[base, base + i, base + i + 1]);
+                }
+            }
+        }
+    }
+    (out.into_iter().map(|(k, (h, _))| (k, h)).collect(), clipped)
 }
 
 /// The box around every vertex of `gs` (`None`: no vertex).
@@ -241,6 +378,59 @@ mod tests {
         assert_eq!(s[&5].idx, vec![0, 1, 2]);
         assert_eq!(&s[&5].pos[3..6], &[1., 1., 0.]);
         assert_eq!(s[&5].blend, vec![0.5; 3]);
+    }
+
+    /// Worked by hand: a 4 x 2 m quad from x = 198 to 202 (origin at x = 190, local 8..12) crosses the 200 m border.
+    /// It comes back as two pieces, each inside its cell by the inset, with the same total area less the 1 mm strip.
+    /// UVs and blend weights are interpolated along x (u = 0 at x = 198, 1 at x = 202, so 0.5 at the border).
+    /// A triangle inside one cell keeps its vertices.
+    #[test]
+    fn a_border_crossing_part_is_cut_into_cells() {
+        let g = Geometry {
+            pos: vec![8., 0., 0., 12., 0., 0., 8., 2., 0., 12., 2., 0.],
+            nrm: [0., 0., 1.].repeat(4),
+            uv: vec![0., 0., 1., 0., 0., 1., 1., 1.],
+            blend: vec![0.0, 1.0, 0.0, 1.0],
+            idx: vec![0, 1, 2, 2, 1, 3],
+        };
+        let origin = Vec3::new(190.0, 10.0, 5.0);
+        let (cells, clipped) = split_by_cell(&g, origin, 200.0);
+        assert_eq!(clipped, 2);
+        assert_eq!(cells.keys().copied().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
+        let mut area = 0.0;
+        for (&(cx, _), h) in &cells {
+            for p in h.pos.as_chunks::<3>().0 {
+                let x = p[0] + origin.x;
+                assert!(
+                    x >= cx as f32 * 200.0 + CELL_INSET * 0.99
+                        && x <= (cx + 1) as f32 * 200.0 - CELL_INSET * 0.99,
+                    "x {x} outside cell {cx}"
+                );
+            }
+            for (i, uv) in h.uv.as_chunks::<2>().0.iter().enumerate() {
+                let x = h.pos[i * 3];
+                assert!((uv[0] - (x - 8.0) / 4.0).abs() < 1e-4, "u at local x {x}");
+                assert!((h.blend[i] - uv[0]).abs() < 1e-4, "blend weight follows u");
+            }
+            for t in h.idx.as_chunks::<3>().0 {
+                let [a, b, c] = t.map(|i| Vec3::at(&h.pos, i as usize * 3));
+                area += f64::from((b - a).cross(c - a).length()) / 2.0;
+            }
+        }
+        assert!(
+            (area - (8.0 - 2.0 * f64::from(CELL_INSET) * 2.0)).abs() < 1e-3,
+            "area {area}"
+        );
+        let whole = Geometry {
+            pos: vec![1., 1., 0., 2., 1., 0., 1., 2., 0.],
+            nrm: [0., 0., 1.].repeat(3),
+            uv: vec![0.; 6],
+            blend: Vec::new(),
+            idx: vec![0, 1, 2],
+        };
+        let (cells, clipped) = split_by_cell(&whole, Vec3::new(10.0, 10.0, 0.0), 200.0);
+        assert_eq!(clipped, 0);
+        assert_eq!(cells[&(0, 0)], whole);
     }
 
     #[test]

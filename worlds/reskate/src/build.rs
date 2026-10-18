@@ -37,6 +37,9 @@ pub struct BuildOptions {
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
     /// and takes a cull ID: released ReSkate has 40,000, so a map near that should lower it).
     pub blend_objects: usize,
+    /// The grid the blend-chain objects are cut on ([`crate::map::WriterOptions::blend_grid`]): Studio's 200 m
+    /// WorldPartition cell by default.
+    pub blend_grid: f32,
     pub piece_log: bool,
     pub limit: f32,
     pub map_height: usize,
@@ -67,6 +70,7 @@ impl Default for BuildOptions {
             min_instance_tris: 150,
             overlay_step: 0.004,
             blend_objects: 1000,
+            blend_grid: 200.0,
             piece_log: false,
             limit: 4780.0,
             map_height: 2160,
@@ -473,6 +477,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         tex_caps: a.tex_caps.clone(),
         overlay_step: a.overlay_step,
         blend_objects: a.blend_objects,
+        blend_grid: a.blend_grid,
         piece_log: a.piece_log,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
