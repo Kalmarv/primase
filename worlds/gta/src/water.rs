@@ -18,7 +18,8 @@
 //! in a `gta.water` entity of their own.
 //!
 //! `gta-select-water{x0,y0,x1,y1,clip}` (a selection pass): each placed water surface clipped to the region
-//! (`clip=region`, the default), or to the region and as far past it as the placements `gta-select-region` kept reach
+//! (`clip=region`, the default), none kept (`clip=none`: a level whose water comes from elsewhere, counted), or to the
+//! region and as far past it as the placements `gta-select-region` kept reach
 //! (`clip=kept`: its `gta.region_extent`, which this pass then removes; the region rules keep a placement whose box
 //! meets the region, so the seabed reaches past it); a surface with nothing left is left out with its placement.
 //! Every placed surface is counted once, kept or outside; surfaces whose placement another state left out go too,
@@ -415,13 +416,25 @@ impl GtaWaterSurface {
     }
 }
 
+/// What `gta-select-water` clips the placed water to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Clip {
+    /// `clip=region` (the default): the region, or every surface whole without one.
+    #[default]
+    Region,
+    /// `clip=kept`: the region and as far as `gta.region_extent` reaches.
+    Kept,
+    /// `clip=none`: no water at all, every placed surface left out (a level whose water comes from elsewhere, such
+    /// as a far view drawn over the city's own sea).
+    None,
+}
+
 /// `gta-select-water{x0,y0,x1,y1,clip}` (see the module documentation).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SelectGtaWater {
     /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every surface whole.
     pub region: Option<[f32; 4]>,
-    /// `clip=kept`: also as far as `gta.region_extent` reaches.
-    pub kept: bool,
+    pub clip: Clip,
 }
 
 impl SelectGtaWater {
@@ -431,10 +444,11 @@ impl SelectGtaWater {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let kept = match o.get("clip").map(String::as_str) {
-            None | Some("region") => false,
-            Some("kept") => true,
-            Some(v) => return Err(format!("clip: {v} is neither region nor kept")),
+        let clip = match o.get("clip").map(String::as_str) {
+            None | Some("region") => Clip::Region,
+            Some("kept") => Clip::Kept,
+            Some("none") => Clip::None,
+            Some(v) => return Err(format!("clip: {v} is none of region, kept and none")),
         };
         let num = |k: &str| -> std::result::Result<Option<f32>, String> {
             o.get(k)
@@ -446,10 +460,10 @@ impl SelectGtaWater {
             [None, None, None, None] => None,
             _ => return Err("x0, y0, x1 and y1 go together".into()),
         };
-        if kept && region.is_none() {
+        if clip == Clip::Kept && region.is_none() {
             return Err("clip=kept needs the region (x0, y0, x1, y1)".into());
         }
-        Ok(SelectGtaWater { region, kept })
+        Ok(SelectGtaWater { region, clip })
     }
 }
 
@@ -464,13 +478,19 @@ impl Pass for SelectGtaWater {
                 o.insert(k.to_string(), v.to_string());
             }
         }
-        if self.kept {
-            o.insert("clip".into(), "kept".into());
+        match self.clip {
+            Clip::Region => {}
+            Clip::Kept => {
+                o.insert("clip".into(), "kept".into());
+            }
+            Clip::None => {
+                o.insert("clip".into(), "none".into());
+            }
         }
         o
     }
     fn requires(&self) -> &[&'static str] {
-        if self.kept {
+        if self.clip == Clip::Kept {
             &["gta.water", RegionExtent::NAME]
         } else {
             &["gta.water"]
@@ -480,7 +500,7 @@ impl Pass for SelectGtaWater {
         &["gta.water_surface"]
     }
     fn removes(&self) -> &[&'static str] {
-        if self.kept {
+        if self.clip == Clip::Kept {
             &["gta.water", RegionExtent::NAME]
         } else {
             &["gta.water"]
@@ -497,8 +517,8 @@ impl Pass for SelectGtaWater {
             log.count("wave quads not drawn", water.waves.len() as u64);
         }
         // the region, and with clip=kept as far as what is drawn
-        let clip_to = match (self.region, self.kept) {
-            (Some(r), true) => {
+        let clip_to = match (self.region, self.clip) {
+            (Some(r), Clip::Kept) => {
                 let extent = w
                     .remove_resource::<RegionExtent>()
                     .ok_or("clip=kept: no gta.region_extent")?;
@@ -526,6 +546,14 @@ impl Pass for SelectGtaWater {
         );
         for e in unplaced {
             w.despawn(e);
+        }
+        if self.clip == Clip::None {
+            log.count("water surfaces left out: clip=none", placements.len() as u64);
+            for (p, proto) in placements {
+                w.despawn(p);
+                w.despawn(proto);
+            }
+            return Ok(());
         }
         let Some(r) = clip_to else {
             log.count("water surfaces kept", placements.len() as u64);
@@ -838,6 +866,21 @@ mod tests {
             );
             assert_eq!(w.resource::<RegionExtent>().is_none(), clip.is_some());
         }
+        // clip=none: no water placed, counted
+        let mut w = World::new();
+        place_water(
+            &mut w,
+            vec![(
+                "world",
+                file("w.xml", &[quad_xml([-50, 50, -50, 50], false, false, false)]),
+            )],
+        );
+        let mut log = PassLog::default();
+        select([0.0, 0.0, 5.0, 5.0], Some("none"))
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert!(surfaces(&w).is_empty() && w.iter::<GtaWaterSurface>().next().is_none());
+        assert_eq!(log.counts.get("water surfaces left out: clip=none"), Some(&1));
         let mut o = Options::new();
         o.insert("clip".into(), "kept".into());
         assert!(
