@@ -403,6 +403,18 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md"#,
     },
     Variable {
+        name: "PRIMASE_FROSTBITE_EBX",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; toolkit/frostbite/tests/ebx.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_CLI",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"the ReSkate CLI executable, used as an independent EBX reader and reference writer (`ebx-values`, `ebx-rewrite-diff`); toolkit/frostbite/tests/ebx.rs"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_UV_FRAME_CENSUS",
         kind: Kind::Input,
         gate: true,

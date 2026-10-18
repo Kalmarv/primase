@@ -6,10 +6,15 @@
 //! `ebx_writer.cpp` and `ebx_merge.cpp`; github.com/Dingo-Shenanigans/ReSkate, GPL-3.0-or-later), which is the
 //! reference for the choices the format leaves open: the donor reflection table is carried as stored, boxed values
 //! travel as their bytes plus what those bytes point at, and a new array takes the hash of an array of its field. The
-//! port adds bounds checks and strict validation where the C++ trusts its input.
+//! port adds bounds checks and strict validation where the C++ trusts its input. A byte comparison with that reference
+//! writer therefore measures agreement with the port's source; independent evidence comes from stock documents, whose
+//! values must survive a rewrite.
 //!
 //! Strings are bytes as stored (Frostbite strings are not guaranteed UTF-8). Offsets named `*_offset` are relative to
 //! the start of the EBXD payload (`data_start`, 16-aligned) unless they say otherwise.
+//!
+//! A document read and written again keeps its values; the bytes come back exactly when the document already has the
+//! writer's layout (a document the writer produced, or one laid out the same way).
 
 pub mod carry;
 mod read;

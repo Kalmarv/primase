@@ -255,6 +255,8 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_FROMSOFT_SCENE` | input | reference area skate-scene folder containing placement sources and tables |
 | `PRIMASE_FROMSOFT_BHD_ORACLE` | input | reference archive outputs; schema in worlds/fromsoft/README.md |
 | `PRIMASE_HAVOK_CORPUS` | input | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md |
+| `PRIMASE_FROSTBITE_EBX` | input | a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; toolkit/frostbite/tests/ebx.rs |
+| `PRIMASE_RESKATE_CLI` | input | the ReSkate CLI executable, used as an independent EBX reader and reference writer (`ebx-values`, `ebx-rewrite-diff`); toolkit/frostbite/tests/ebx.rs |
 | `PRIMASE_FROMSOFT_UV_FRAME_CENSUS` | input | independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions |
 | `PRIMASE_CODEC_CORPUS` | input | TSV: codec, compressed path, oracle decoded path (tab-separated) |
 | `PRIMASE_DXBC_SHADERS` | input | shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md |
