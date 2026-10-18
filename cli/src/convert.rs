@@ -23,6 +23,7 @@ pub fn registry() -> PassRegistry {
     let mut r = PassRegistry::new();
     r.register("select-lod", primase_core::select_lod);
     r.register("drop-optional", primase_core::drop_optional);
+    r.register("place-spawn", primase_core::place_spawn);
     r.register("resolve-state", primase_core::state::resolve_state);
     // cap-textures, bake-layer-channels, normalize-normals and bake-normal-scale
     primase_image::register(&mut r);

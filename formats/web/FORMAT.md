@@ -199,12 +199,12 @@ The writer makes records of the world's curves and markers (`core.curve` and
 its first point, a marker a `spawn` (marker kind `spawn`) or a `marker` (any
 other kind) anchored at its position. `name` is the entity's name (else
 `Entity_<n>`) and `data` the core component: `{"kind", "points", "closed"}` for
-a curve, `{"kind", "ground"}` for a marker. `data.kind` is a lower-case word:
+a curve, `{"kind", "ground", "yaw"?}` for a marker. `data.kind` is a lower-case word:
 known curve kinds are `rail`, `ledge` and `coping`, known marker kinds `spawn`,
 `travel`, `trainer`, `vfx` and `trigger_effect`; a source may give others, which
 a consumer shows as a plain curve or marker. A marker whose source leaves its
 height to be found (`data.ground` is its east/north position) is anchored at
-height 0. The record node's `extras.primase` also carries the entity's other
+height 0; its optional `data.yaw` is the way it faces (degrees about +Y, 0 facing +Z, 90 facing +X). The record node's `extras.primase` also carries the entity's other
 components (a source dialect's, such as `skate.marker` or `skate.grind_curve`)
 as `{"version", "value"}`, as glTF node extras do.
 - `collision_reference`: `data.file` identifies the tile collision GLB and

@@ -527,14 +527,21 @@ fn markers_and_curves_are_core_facts_too() {
     let marker = |kind: &str, ground| Marker {
         kind: kind.into(),
         ground,
+        yaw: None,
     };
     assert_eq!(
         markers,
         [
             // a height: placed, facing yaw 0 (+Z)
             (marker("spawn", None), at([0., 120., 0.])),
-            // no height: a ground position (east, north), no transform
-            (marker("travel", Some([12., 40.])), None),
+            // no height: a ground position (east, north), no transform, its yaw its own
+            (
+                Marker {
+                    yaw: Some(90.5),
+                    ..marker("travel", Some([12., 40.]))
+                },
+                None,
+            ),
             (marker("trainer", None), at([80., 300., 12.])),
             // an effect: its matrix
             (marker("vfx", None), at([0., 140., 0.])),

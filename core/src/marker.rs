@@ -19,6 +19,10 @@ pub struct Marker {
     /// The ground position `(east, north)`, metres ([`crate::frame::ground`]), when the source states no height: the
     /// entity then has no transform.
     pub ground: Option<[f32; 2]>,
+    /// A ground marker's facing, which no transform gives it: degrees about +Y, 0 facing +Z and 90 facing +X, as a
+    /// marker with a transform faces its local +Z. `None`: the source states none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f32>,
 }
 
 /// `core.curve`: an author-placed curve in world space: a grind rail, a ledge, a coping, a path, a chairlift's cable.
@@ -59,6 +63,8 @@ fn check_kind(kind: &str) -> Result<(), String> {
 
 impl Component for Marker {
     const NAME: &'static str = "core.marker";
+    /// 2: a ground marker's `yaw`.
+    const VERSION: u32 = 2;
     /// Placed by its entity's transform, which the pass keeps rigid; a ground position is world space.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -75,6 +81,10 @@ impl Component for Marker {
             (Some(g), false) if !g.iter().all(|v| v.is_finite()) => {
                 Err(format!("ground position {g:?} is not finite"))
             }
+            _ if self.yaw.is_some() && self.ground.is_none() => {
+                Err("a yaw without a ground position (a transform gives the facing)".into())
+            }
+            _ if self.yaw.is_some_and(|y| !y.is_finite()) => Err("a yaw that is not finite".into()),
             _ => Ok(()),
         }
     }
@@ -150,6 +160,7 @@ mod tests {
             Marker {
                 kind: "spawn".into(),
                 ground: None,
+                yaw: None,
             },
         );
         let snapped = w.spawn();
@@ -158,6 +169,7 @@ mod tests {
             Marker {
                 kind: "travel".into(),
                 ground: Some([12., 40.]),
+                yaw: None,
             },
         );
         assert!(w.verify_components().is_empty());
@@ -168,6 +180,7 @@ mod tests {
             Marker {
                 kind: "travel".into(),
                 ground: Some([0., 0.]),
+                yaw: None,
             },
         );
         let neither = w.spawn();
@@ -176,6 +189,7 @@ mod tests {
             Marker {
                 kind: "travel".into(),
                 ground: None,
+                yaw: None,
             },
         );
         let nan = w.spawn();
@@ -184,6 +198,7 @@ mod tests {
             Marker {
                 kind: "travel".into(),
                 ground: Some([f32::NAN, 0.]),
+                yaw: None,
             },
         );
         let bad_kind = w.spawn();
@@ -192,6 +207,7 @@ mod tests {
             Marker {
                 kind: "Travel".into(),
                 ground: Some([0., 0.]),
+                yaw: None,
             },
         );
         let found: Vec<(Entity, String)> = w

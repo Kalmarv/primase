@@ -15,6 +15,8 @@ mod lod;
 pub use lod::{LodChoice, LodForm, Lods, SelectLod, select_lod};
 mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};
+mod spawn;
+pub use spawn::{PlaceSpawn, SpawnAt, place_spawn};
 mod collider;
 pub use collider::{Collider, Diagonal, Heightfield, Shape};
 mod draw_order;

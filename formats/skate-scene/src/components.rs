@@ -435,7 +435,7 @@ impl SkateMarker {
 
     /// The marker as the core states it: its kind, and where it is. An effect's `m` is its transform; else a
     /// position with a height is the translation, turned by `yaw` (degrees about +Y; yaw 0 faces +Z, 90 +X: the
-    /// marker's local +Z is its facing); a position without one is a ground position (the yaw stays here only).
+    /// marker's local +Z is its facing); a position without one is a ground position, with the yaw as its own.
     pub(crate) fn core(&self) -> (primase_core::Marker, Option<primase_core::Transform>) {
         let kind = self.kind.as_str().to_owned();
         let transform = match (self.m, self.position) {
@@ -457,7 +457,9 @@ impl SkateMarker {
             (None, Some(([x, z], None))) => Some(primase_core::frame::ground([x, 0., z])),
             _ => None,
         };
-        (primase_core::Marker { kind, ground }, transform)
+        // a ground marker keeps its yaw (no transform carries it); a placed one's is in its transform
+        let yaw = ground.and(self.yaw).map(|y| y as f32);
+        (primase_core::Marker { kind, ground, yaw }, transform)
     }
 }
 

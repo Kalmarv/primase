@@ -572,6 +572,7 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
         Marker {
             kind: "spawn".into(),
             ground: None,
+            yaw: None,
         },
     );
     let stop = w.spawn();
@@ -580,6 +581,7 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
         Marker {
             kind: "travel".into(),
             ground: Some([12., 40.]),
+            yaw: None,
         },
     );
     let options = Options {
