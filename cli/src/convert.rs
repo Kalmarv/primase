@@ -125,7 +125,9 @@ mod tests {
     /// writers that take rigid ones).
     #[test]
     fn the_registry_knows_bake_nonrigid() {
-        let p = super::registry().parse("bake-nonrigid").expect("registered");
-        assert_eq!(p.to_string(), "bake-nonrigid");
+        let pass = super::registry()
+            .make("bake-nonrigid", &primase_core::pass::Options::new())
+            .expect("primase_meshops::register is wired into registry()");
+        assert_eq!(pass.name(), "bake-nonrigid");
     }
 }
