@@ -50,7 +50,7 @@ impl Reader for GtaReader {
                 ("gta lights".into(), format!("{:?}", r.lights)),
                 ("gta bounds".into(), format!("{:?}", r.bounds)),
                 (
-                    "gta water (water, calming, wave quads)".into(),
+                    "gta water (each file: water, calming, wave quads)".into(),
                     format!("{:?}", r.water),
                 ),
             ],

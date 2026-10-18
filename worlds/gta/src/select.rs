@@ -17,10 +17,15 @@
 //!   instance's pivot lies in the region, else by the rules above, except their shadow and reflection helper meshes.
 //!   Which interiors that export placed at all came from its own interior table; that table is not a pass here, so
 //!   interiors are counted, not matched.
+//!
+//! It also states how far what it kept reaches on the ground (`gta.region_extent`, [`RegionExtent`]): the union of
+//! the kept placements' archetype boxes, each placed by its transform, with a box wider than the reach counted by its
+//! pivot (as the rules judge it). The seabed a kept placement draws reaches past the region; `gta-select-water`
+//! (`clip=kept`) reads it.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Component, Entity, Instance, Name, Transform, World};
+use primase_core::{Component, Entity, Instance, JsonError, Name, Resource, Transform, World};
 
 use crate::components::{GtaArchetype, GtaEntity};
 use crate::region::GTA;
@@ -29,6 +34,18 @@ use crate::region::GTA;
 const REACH: f32 = 600.0;
 /// Reflection proxy entities: whole flag words that export skipped.
 const REFLECTION_PROXY_FLAGS: [u32; 6] = [135790592, 135790593, 672661504, 536870912, 35127296, 39321602];
+
+/// `gta.region_extent`: the ground extent `[x0, y0, x1, y1]` (GTA coordinates) of the placements `gta-select-region`
+/// kept (see the module documentation); `None` when it kept none.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct RegionExtent(pub Option<[f32; 4]>);
+
+impl Resource for RegionExtent {
+    const NAME: &'static str = "gta.region_extent";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
 
 /// The region rules, with the region in GTA's ground coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -140,6 +157,9 @@ impl Pass for SelectRegion {
     /// The placements the rules leave out.
     fn despawns_entities(&self) -> bool {
         true
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[RegionExtent::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut all = Vec::new();
@@ -260,6 +280,24 @@ impl Pass for SelectRegion {
                 drop.insert(c.entity);
             }
         }
+        // how far what is kept reaches: each box placed, a box wider than the reach by its pivot
+        let mut extent: Option<[f32; 4]> = None;
+        for c in kept.iter().filter(|c| !drop.contains(&c.entity)) {
+            let (cc, h) = box_centre_half(&c.arch);
+            let (centre, half) = (point(&c.t, cc), half_extent(&c.t, h));
+            let (lo, hi) = if half[0] <= REACH && half[1] <= REACH {
+                (
+                    [centre[0] - half[0], centre[1] - half[1]],
+                    [centre[0] + half[0], centre[1] + half[1]],
+                )
+            } else {
+                let p = c.t.cols[3];
+                ([p[0], p[1]], [p[0], p[1]])
+            };
+            let r = extent.get_or_insert([lo[0], lo[1], hi[0], hi[1]]);
+            *r = [r[0].min(lo[0]), r[1].min(lo[1]), r[2].max(hi[0]), r[3].max(hi[1])];
+        }
+        w.insert_resource(RegionExtent(extent));
         for e in &drop {
             w.despawn(*e);
         }
@@ -452,6 +490,56 @@ mod stand_in_tests {
         let alive: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
         assert_eq!(alive, vec![s1, s3]);
         assert_eq!(log.counts.get("dropped: outside the region"), Some(&1));
+    }
+
+    /// The region's extent is the kept boxes placed; a box wider than the reach counts by its pivot. Two HD leaves with
+    /// their pivots in the region (GTA (1, 5) and (2, 5)): a 20 x 10 box from the pivot, and a 1400 m wide one.
+    #[test]
+    fn the_region_extent_is_the_kept_boxes_with_a_wide_box_by_its_pivot() {
+        let mut w = World::new();
+        for (x, bb_min, bb_max) in [
+            (1.0, [0.0, 0.0, 0.0], [20.0, 10.0, 1.0]),
+            (2.0, [-700.0, -700.0, 0.0], [700.0, 700.0, 1.0]),
+        ] {
+            let e = placed(&mut w, 0, None, x);
+            let proto = w.get::<Instance>(e).unwrap().prototype;
+            w.insert(
+                proto,
+                crate::components::GtaArchetype {
+                    ytyp: String::new(),
+                    name: 1,
+                    kind: "base",
+                    flags: 0,
+                    special_attribute: 0,
+                    lod_dist: 100.0,
+                    hd_texture_dist: 0.0,
+                    bb_min,
+                    bb_max,
+                    bs_centre: [0.0; 3],
+                    bs_radius: 12.0,
+                    texture_dictionary: 0,
+                    drawable_dictionary: 0,
+                    physics_dictionary: 0,
+                    clip_dictionary: 0,
+                    asset_type: 2,
+                    asset_name: 1,
+                    time_flags: None,
+                },
+            );
+        }
+        SelectRegion {
+            min: [0.0, 0.0],
+            max: [10.0, 10.0],
+            max_priority: 3,
+            min_size: 0.0,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+        assert_eq!(w.iter::<Instance>().count(), 2);
+        assert_eq!(
+            w.resource::<RegionExtent>(),
+            Some(&RegionExtent(Some([1.0, 5.0, 21.0, 15.0])))
+        );
     }
 
     /// Levels are stand-in levels; with none given, SLOD1 to SLOD3.

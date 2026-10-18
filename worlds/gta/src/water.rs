@@ -1,41 +1,63 @@
-//! GTA's water: the reader's side ([`read_water`]: the level's water data, raw, as `gta.water`), `gta-select-water`,
-//! which places the water quads in the region, and `lower-gta-water`, which makes them drawn surfaces.
+//! GTA's water: the reader's side ([`attach_water`]: every water file, each quad placed as a `gta.water_surface`, the
+//! rest of the file as a `gta.water`), `gta-select-water`, which clips the placed water to the region, and
+//! `lower-gta-water`, which makes the surfaces drawn meshes.
 //!
-//! The data (`common.rpf\data\levels\gta5\water.xml`, the world map's; Cayo Perico's `water_heistisland.xml` replaces
-//! it only while a script loads the island, and is not read): water quads, axis-aligned rectangles in GTA ground
-//! coordinates at a height `z` (the sea at 0, lakes, rivers and pools above), each the whole rectangle (type 0) or one
-//! of its four corner triangles (types 1-4, by the corners (minX, minY), (maxX, minY), (minX, maxY), (maxX, maxY) as
-//! 0-3: 1 = 0 1 2, 2 = 0 3 2, 3 = 1 3 2, 4 = 0 1 3), with a per-corner value `a1`-`a4`, invisibility and depth flags;
-//! calming quads (a dampening of the waves) and wave quads (amplitude and direction). The tuning file
-//! (`common.rpf\data\watertune.xml`) gives, among others, the specular falloff of the water shader.
+//! The data: the game holds one water file at a time ([`WATER_FILES`]), the world map's
+//! (`common.rpf\data\levels\gta5\water.xml`) or, while a script loads the island, Cayo Perico's
+//! (`water_heistisland.xml`, with its own tuning). Both are read; which one holds is the state axis `gta.water`
+//! (default the world map's), and each file's placed surfaces carry its condition, so `resolve-state` picks the file
+//! like any other state. A file: water quads, axis-aligned rectangles in GTA ground coordinates at a height `z` (the
+//! sea at 0, lakes, rivers and pools above), each the whole rectangle (type 0) or one of its four corner triangles
+//! (types 1-4, by the corners (minX, minY), (maxX, minY), (minX, maxY), (maxX, maxY) as 0-3: 1 = 0 1 2, 2 = 0 3 2,
+//! 3 = 1 3 2, 4 = 0 1 3), with a per-corner value `a1`-`a4`, invisibility, depth and stencil flags; calming quads (a
+//! dampening of the waves) and wave quads (amplitude and direction). The tuning file (`common.rpf\data\watertune.xml`,
+//! the island's `watertune_heistisland.xml`) gives, among others, the specular falloff of the water shader.
 //!
-//! `gta-select-water{x0,y0,x1,y1}` (a selection pass, after the region's placements are chosen): every visible water
-//! quad (or its triangle), clipped to the ground extent of the kept placements (the water goes as far as what is
-//! drawn: the region rules keep a placement whose box meets the region, so the seabed reaches past it), else to the
-//! region, else whole, as a prototype holding that outline (`gta.water_surface`) with a placement of an identity
-//! transform; it removes `gta.water`. Calming and wave quads, the corner values and the depth flags have no
-//! glTF meaning: counted, not placed.
+//! The reader places every quad as authored: a prototype holding its outline and the quad as stored
+//! (`gta.water_surface`), placed once with an identity transform; the file's calming and wave quads and its path stay
+//! in a `gta.water` entity of their own.
+//!
+//! `gta-select-water{x0,y0,x1,y1,clip}` (a selection pass): each placed water surface clipped to the region
+//! (`clip=region`, the default), or to the region and as far past it as the placements `gta-select-region` kept reach
+//! (`clip=kept`: its `gta.region_extent`, which this pass then removes; the region rules keep a placement whose box
+//! meets the region, so the seabed reaches past it); a surface with nothing left is left out with its placement.
+//! Every placed surface is counted once, kept or outside; surfaces whose placement another state left out go too,
+//! counted. It removes `gta.water`, counting the calming and wave quads of every file read (they are not placed).
 //!
 //! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
 //! material: the earlier exporter's blended colour ([`crate::lower::WATER`], as water shaders get), roughness from the
-//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated).
-use std::collections::BTreeMap;
+//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated). An
+//! invisible quad gets no mesh; the corner values and the depth and stencil flags are not drawn: counted.
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
+use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Component, Entity, Instance, JsonError, Mesh, Name, Primitive, Semantic, Source, Stream, Topology,
-    Transform, World,
+    Component, Entity, Instance, JsonError, Mesh, Name, Primitive, Resource, Semantic, Source, Stream,
+    Topology, Transform, World,
 };
 
 use crate::archive_set::Install;
 use crate::keys::Keys;
 use crate::region::GTA;
+use crate::select::RegionExtent;
 use crate::{Result, invalid};
 
 /// The world map's water data and the water tuning, as the install stores them.
 pub const WATER_FILE: &str = r"common.rpf\data\levels\gta5\water.xml";
 pub const TUNE_FILE: &str = r"common.rpf\data\watertune.xml";
+
+/// The water files the game holds one at a time: the `gta.water` axis's value name, the water data and its tuning.
+/// The first is the world map's (required; the axis's default); the others are read when the install has them.
+pub const WATER_FILES: [(&str, &str, &str); 2] = [
+    ("world", WATER_FILE, TUNE_FILE),
+    (
+        "heistisland",
+        r"update\update.rpf\common\data\levels\gta5\water_heistisland.xml",
+        r"update\update.rpf\common\data\watertune_heistisland.xml",
+    ),
+];
 
 /// A water quad, as stored (GTA ground coordinates, metres).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -69,9 +91,9 @@ pub struct WaveQuad {
     pub direction: [f32; 2],
 }
 
-/// The level's water data, raw, and the tuning's specular falloff.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct GtaWater {
+/// A water file as stored, with its tuning's specular falloff.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterFile {
     pub path: String,
     pub quads: Vec<WaterQuad>,
     pub calming: Vec<CalmingQuad>,
@@ -80,17 +102,20 @@ pub struct GtaWater {
     pub specular_falloff: Option<f32>,
 }
 
+/// What a water file holds besides its quads (which are placed): its calming and wave quads, raw.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GtaWater {
+    pub path: String,
+    pub calming: Vec<CalmingQuad>,
+    pub waves: Vec<WaveQuad>,
+}
+
 impl Component for GtaWater {
     const NAME: &'static str = "gta.water";
-    /// A summary: the file and how many quads of each kind.
+    /// 2: the quads are placed (`gta.water_surface`), the tuning's falloff is theirs.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(Some(serde_json::json!({
-            "path": self.path,
-            "water_quads": self.quads.len(),
-            "calming_quads": self.calming.len(),
-            "wave_quads": self.waves.len(),
-            "specular_falloff": self.specular_falloff,
-        })))
+        primase_core::json::to_value(self).map(Some)
     }
 }
 
@@ -98,22 +123,126 @@ fn err(detail: impl ToString) -> crate::Error {
     invalid("water", 0, detail)
 }
 
-/// The world map's water data ([`WATER_FILE`]) and the tuning's specular falloff ([`TUNE_FILE`]), as stored.
-pub fn read_water(install: &Install, keys: &Keys) -> Result<GtaWater> {
-    let bytes = install
-        .read(WATER_FILE, keys)?
-        .ok_or_else(|| err(format!("{WATER_FILE} not found")))?;
-    let mut w = parse_water(&bytes)?;
-    w.path = WATER_FILE.to_string();
-    if let Some(tune) = install.read(TUNE_FILE, keys)? {
-        let root = crate::xml::parse(&tune, TUNE_FILE)?;
-        w.specular_falloff = root.child_value("SpecularFalloff").and_then(|v| v.parse().ok());
+/// Each water file of [`WATER_FILES`] the install has (the world map's is required) with its value name on
+/// `gta.water` and its tuning's specular falloff, as stored.
+pub fn read_water(install: &Install, keys: &Keys) -> Result<Vec<(&'static str, WaterFile)>> {
+    let mut out = Vec::new();
+    for (i, (value, path, tune_path)) in WATER_FILES.into_iter().enumerate() {
+        let Some(bytes) = install.read(path, keys)? else {
+            if i == 0 {
+                return Err(err(format!("{path} not found")));
+            }
+            continue;
+        };
+        let mut w = parse_water(&bytes)?;
+        w.path = path.to_string();
+        if let Some(tune) = install.read(tune_path, keys)? {
+            w.specular_falloff = specular_falloff(&tune, tune_path)?;
+        }
+        out.push((value, w));
     }
-    Ok(w)
+    Ok(out)
+}
+
+/// A tuning file's `SpecularFalloff`: `None` when it has none, an error when it is not a number.
+pub fn specular_falloff(tune: &[u8], path: &str) -> Result<Option<f32>> {
+    let root = crate::xml::parse(tune, path)?;
+    root.child_value("SpecularFalloff")
+        .map(|v| {
+            v.parse()
+                .map_err(|_| err(format!("{path}: SpecularFalloff {v:?} is not a number")))
+        })
+        .transpose()
+}
+
+/// Every water file the install has ([`read_water`]) into the world (see the module documentation): with more than
+/// one, the `gta.water` axis (default the world map's); each quad a placed `gta.water_surface` (with its file's
+/// condition), the rest of each file a `gta.water`. Returns each file's path with its water, calming and wave quad
+/// counts.
+pub fn attach_water(w: &mut World, install: &Install, keys: &Keys) -> Result<Vec<(String, [usize; 3])>> {
+    let files = read_water(install, keys)?;
+    Ok(place_water(w, files))
+}
+
+/// [`attach_water`] for files already read.
+pub fn place_water(w: &mut World, files: Vec<(&str, WaterFile)>) -> Vec<(String, [usize; 3])> {
+    let axis = (files.len() > 1).then(|| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            StateAxis {
+                key: "gta.water".into(),
+                domain: Domain::Enum(files.iter().map(|(v, _)| v.to_string()).collect()),
+                default: 0,
+                scope: Scope::Global,
+                class: "water".into(),
+                source: "the water file the game holds: the world map's, or Cayo Perico's while a script loads the \
+                         island"
+                    .into(),
+            },
+        );
+        e
+    });
+    let mut counts = Vec::new();
+    for (i, (value, file)) in files.into_iter().enumerate() {
+        counts.push((
+            file.path.clone(),
+            [file.quads.len(), file.calming.len(), file.waves.len()],
+        ));
+        let condition = axis.map(|axis| {
+            Condition(vec![Clause(vec![Literal {
+                axis,
+                values: 1u64 << i,
+            }])])
+        });
+        for (k, q) in file.quads.iter().enumerate() {
+            let proto = w.spawn();
+            w.insert(
+                proto,
+                GtaWaterSurface {
+                    outline: outline(q),
+                    quad: *q,
+                    specular_falloff: file.specular_falloff,
+                },
+            );
+            // the world map's names as before; another file's carry its value
+            w.insert(
+                proto,
+                Name(if i == 0 {
+                    format!("gta_water_{k}")
+                } else {
+                    format!("gta_water_{value}_{k}")
+                }),
+            );
+            let p = w.spawn();
+            w.insert(
+                p,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            w.insert(p, Transform::IDENTITY);
+            if let Some(c) = &condition {
+                w.insert(p, c.clone());
+            }
+            w.insert(p, Source(format!("{}#water_quad_{k}", file.path)));
+        }
+        let e = w.spawn();
+        w.insert(
+            e,
+            GtaWater {
+                path: file.path,
+                calming: file.calming,
+                waves: file.waves,
+            },
+        );
+    }
+    counts
 }
 
 /// Water data from `water.xml` bytes (`path` empty, no tuning).
-pub fn parse_water(bytes: &[u8]) -> Result<GtaWater> {
+pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
     let root = crate::xml::parse(bytes, "water.xml")?;
     let num = |e: &crate::xml::Element, k: &str| -> Result<f32> {
         e.child_value(k)
@@ -121,8 +250,15 @@ pub fn parse_water(bytes: &[u8]) -> Result<GtaWater> {
             .parse()
             .map_err(|_| err(format!("{k}: not a number")))
     };
-    let flag =
-        |e: &crate::xml::Element, k: &str| e.child_value(k).is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    // a flag left out is false; any value but true or false is an error
+    let flag = |e: &crate::xml::Element, k: &str| -> Result<bool> {
+        match e.child_value(k) {
+            None => Ok(false),
+            Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
+            Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
+            Some(v) => Err(err(format!("{k}: {v:?} is neither true nor false"))),
+        }
+    };
     let rect = |e: &crate::xml::Element| -> Result<([f32; 2], [f32; 2])> {
         Ok((
             [num(e, "minX")?, num(e, "minY")?],
@@ -142,10 +278,10 @@ pub fn parse_water(bytes: &[u8]) -> Result<GtaWater> {
             max,
             z: num(q, "z")?,
             kind,
-            invisible: flag(q, "IsInvisible"),
-            limited_depth: flag(q, "HasLimitedDepth"),
+            invisible: flag(q, "IsInvisible")?,
+            limited_depth: flag(q, "HasLimitedDepth")?,
             corners: [num(q, "a1")?, num(q, "a2")?, num(q, "a3")?, num(q, "a4")?],
-            no_stencil: flag(q, "NoStencil"),
+            no_stencil: flag(q, "NoStencil")?,
         });
     }
     let mut calming = Vec::new();
@@ -167,7 +303,7 @@ pub fn parse_water(bytes: &[u8]) -> Result<GtaWater> {
             direction: [num(q, "XDirection")?, num(q, "YDirection")?],
         });
     }
-    Ok(GtaWater {
+    Ok(WaterFile {
         path: String::new(),
         quads,
         calming,
@@ -240,20 +376,22 @@ pub fn clip(p: &[[f32; 2]], r: [f32; 4]) -> Vec<[f32; 2]> {
     }
 }
 
-/// One water surface to draw: a water quad's outline clipped to the region (GTA ground coordinates,
-/// counter-clockwise from above) at its height, with the tuning's specular falloff; a prototype of its own, placed
-/// once by `gta-select-water` and lowered by `lower-gta-water`.
+/// One water surface to draw: a water quad's outline (GTA ground coordinates, counter-clockwise from above; the whole
+/// quad as read, clipped by `gta-select-water`), the quad as stored (its height, corner values and flags) and its
+/// tuning's specular falloff; a prototype of its own, placed once by the reader and lowered by `lower-gta-water`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct GtaWaterSurface {
     pub outline: Vec<[f32; 2]>,
-    pub z: f32,
+    pub quad: WaterQuad,
     pub specular_falloff: Option<f32>,
 }
 
 impl Component for GtaWaterSurface {
     const NAME: &'static str = "gta.water_surface";
+    /// 2: the quad as stored (`quad`) instead of its height alone.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(Some(serde_json::json!({ "outline": self.outline, "z": self.z })))
+        primase_core::json::to_value(self).map(Some)
     }
 }
 
@@ -262,7 +400,7 @@ impl GtaWaterSurface {
     pub fn bounds(&self) -> Option<[[f64; 3]; 2]> {
         let mut b: Option<[[f64; 3]; 2]> = None;
         for p in &self.outline {
-            let c = GTA.point([p[0], p[1], self.z]).map(f64::from);
+            let c = GTA.point([p[0], p[1], self.quad.z]).map(f64::from);
             let [lo, hi] = b.get_or_insert([c, c]);
             for k in 0..3 {
                 lo[k] = lo[k].min(c[k]);
@@ -273,20 +411,27 @@ impl GtaWaterSurface {
     }
 }
 
-/// `gta-select-water{x0,y0,x1,y1}` (see the module documentation).
+/// `gta-select-water{x0,y0,x1,y1,clip}` (see the module documentation).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SelectGtaWater {
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every quad whole.
+    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every surface whole.
     pub region: Option<[f32; 4]>,
+    /// `clip=kept`: also as far as `gta.region_extent` reaches.
+    pub kept: bool,
 }
 
 impl SelectGtaWater {
     pub fn from_options(o: &Options) -> std::result::Result<SelectGtaWater, String> {
         for k in o.keys() {
-            if !["x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+            if !["x0", "y0", "x1", "y1", "clip"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
+        let kept = match o.get("clip").map(String::as_str) {
+            None | Some("region") => false,
+            Some("kept") => true,
+            Some(v) => return Err(format!("clip: {v} is neither region nor kept")),
+        };
         let num = |k: &str| -> std::result::Result<Option<f32>, String> {
             o.get(k)
                 .map(|v| v.parse().map_err(|_| format!("{k}: not a number")))
@@ -297,7 +442,10 @@ impl SelectGtaWater {
             [None, None, None, None] => None,
             _ => return Err("x0, y0, x1 and y1 go together".into()),
         };
-        Ok(SelectGtaWater { region })
+        if kept && region.is_none() {
+            return Err("clip=kept needs the region (x0, y0, x1, y1)".into());
+        }
+        Ok(SelectGtaWater { region, kept })
     }
 }
 
@@ -312,108 +460,88 @@ impl Pass for SelectGtaWater {
                 o.insert(k.to_string(), v.to_string());
             }
         }
+        if self.kept {
+            o.insert("clip".into(), "kept".into());
+        }
         o
     }
     fn requires(&self) -> &[&'static str] {
-        &["gta.water"]
+        if self.kept {
+            &["gta.water", RegionExtent::NAME]
+        } else {
+            &["gta.water"]
+        }
     }
-    fn provides(&self) -> &[&'static str] {
-        &[
-            "gta.water_surface",
-            "core.instance",
-            "core.transform",
-            "core.name",
-            "core.source",
-        ]
+    fn modifies(&self) -> &[&'static str] {
+        &["gta.water_surface"]
     }
     fn removes(&self) -> &[&'static str] {
-        &["gta.water"]
+        if self.kept {
+            &["gta.water", RegionExtent::NAME]
+        } else {
+            &["gta.water"]
+        }
+    }
+    fn despawns_entities(&self) -> bool {
+        true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let waters: Vec<(Entity, GtaWater)> = w.iter::<GtaWater>().map(|(e, g)| (e, g.clone())).collect();
-        // the water goes as far as what is drawn: the ground extent of the kept placements (their prototypes' boxes
-        // placed), else the region
-        let extent = placed_extent(w);
         for (e, water) in waters {
             w.remove::<GtaWater>(e);
             log.count("calming quads not drawn", water.calming.len() as u64);
             log.count("wave quads not drawn", water.waves.len() as u64);
-            let mut placed = 0;
-            for (i, q) in water.quads.iter().enumerate() {
-                if q.invisible {
-                    log.count("invisible water quads left out", 1);
-                    continue;
-                }
-                let outline = match extent.or(self.region) {
-                    Some(r) => clip(&outline(q), r),
-                    None => outline(q),
-                };
-                if outline.is_empty() {
-                    continue;
-                }
-                let proto = w.spawn();
-                w.insert(
-                    proto,
-                    GtaWaterSurface {
-                        outline,
-                        z: q.z,
-                        specular_falloff: water.specular_falloff,
-                    },
-                );
-                w.insert(proto, Name(format!("gta_water_{i}")));
-                let p = w.spawn();
-                w.insert(
-                    p,
-                    Instance {
-                        prototype: proto,
-                        variant: 0,
-                    },
-                );
-                w.insert(p, Transform::IDENTITY);
-                w.insert(p, Source(format!("{}#water_quad_{i}", water.path)));
-                placed += 1;
-                log.count(
-                    if q.z == 0.0 {
-                        "water surfaces placed: sea"
-                    } else {
-                        "water surfaces placed: above sea level (lakes, rivers, pools)"
-                    },
-                    1,
-                );
+        }
+        // the region, and with clip=kept as far as what is drawn
+        let clip_to = match (self.region, self.kept) {
+            (Some(r), true) => {
+                let extent = w
+                    .remove_resource::<RegionExtent>()
+                    .ok_or("clip=kept: no gta.region_extent")?;
+                Some(extent.0.map_or(r, |e| {
+                    [r[0].min(e[0]), r[1].min(e[1]), r[2].max(e[2]), r[3].max(e[3])]
+                }))
             }
-            log.count(
-                "water quads outside the region",
-                (water.quads.len() - placed) as u64,
-            );
+            (r, _) => r,
+        };
+        let placements: Vec<(Entity, Entity)> = w
+            .iter::<Instance>()
+            .filter(|(_, i)| w.has::<GtaWaterSurface>(i.prototype))
+            .map(|(p, i)| (p, i.prototype))
+            .collect();
+        let placed: BTreeSet<Entity> = placements.iter().map(|&(_, proto)| proto).collect();
+        // a surface whose placement another state left out (resolve-state) goes with it
+        let unplaced: Vec<Entity> = w
+            .iter::<GtaWaterSurface>()
+            .map(|(e, _)| e)
+            .filter(|e| !placed.contains(e))
+            .collect();
+        log.count(
+            "water surfaces left out: placement left out by its state",
+            unplaced.len() as u64,
+        );
+        for e in unplaced {
+            w.despawn(e);
+        }
+        let Some(r) = clip_to else {
+            log.count("water surfaces kept", placements.len() as u64);
+            return Ok(());
+        };
+        for (p, proto) in placements {
+            let Some(s) = w.get_mut::<GtaWaterSurface>(proto) else {
+                continue;
+            };
+            s.outline = clip(&s.outline, r);
+            if s.outline.is_empty() {
+                log.count("water surfaces left out: outside the region", 1);
+                w.despawn(p);
+                w.despawn(proto);
+            } else {
+                log.count("water surfaces kept", 1);
+            }
         }
         Ok(())
     }
-}
-
-/// The ground extent `[x0, y0, x1, y1]` (GTA coordinates) of every placement whose prototype has a box before loading
-/// ([`crate::pipeline::prototype_box`]), its box through the placement's transform; `None` without one.
-fn placed_extent(w: &World) -> Option<[f32; 4]> {
-    let mut e: Option<[f32; 4]> = None;
-    for (p, i) in w.iter::<Instance>() {
-        let (Some(b), Some(t)) = (
-            crate::pipeline::prototype_box(w, i.prototype),
-            w.get::<Transform>(p),
-        ) else {
-            continue;
-        };
-        for k in 0..8 {
-            let c = [0, 1, 2].map(|a| b[(k >> a) & 1][a] as f32);
-            // core (x, up, z) is GTA (x, -z) on the ground
-            let q = t.apply(c);
-            let g = [q[0], -q[2]];
-            let r = e.get_or_insert([g[0], g[1], g[0], g[1]]);
-            r[0] = r[0].min(g[0]);
-            r[1] = r[1].min(g[1]);
-            r[2] = r[2].max(g[0]);
-            r[3] = r[3].max(g[1]);
-        }
-    }
-    e
 }
 
 /// `lower-gta-water` (see the module documentation).
@@ -448,15 +576,19 @@ impl Pass for LowerGtaWater {
     }
     fn approximates(&self) -> &'static str {
         "the water shader as the earlier exporter's blended flat colour, its roughness from the tuning's specular \
-         falloff; waves, calming, corner values and depth flags not drawn"
+         falloff; waves, calming, corner values and depth and stencil flags not drawn"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let surfaces: Vec<(Entity, GtaWaterSurface)> =
             w.iter::<GtaWaterSurface>().map(|(e, s)| (e, s.clone())).collect();
-        // one material per specular falloff (one for the level's water)
+        // one material per specular falloff (one per water file)
         let mut materials: BTreeMap<Option<u32>, Entity> = BTreeMap::new();
         for (proto, s) in surfaces {
             w.remove::<GtaWaterSurface>(proto);
+            if s.quad.invisible {
+                log.count("invisible water quads: no mesh", 1);
+                continue;
+            }
             let material = *materials
                 .entry(s.specular_falloff.map(f32::to_bits))
                 .or_insert_with(|| {
@@ -466,7 +598,19 @@ impl Pass for LowerGtaWater {
                     log.approximate("water drawn as a blended flat colour", 1);
                     m
                 });
-            let positions: Vec<[f32; 3]> = s.outline.iter().map(|p| GTA.point([p[0], p[1], s.z])).collect();
+            // as stored, with no glTF meaning: counted
+            log.approximate("water surfaces drawn without their corner values (a1-a4)", 1);
+            if s.quad.limited_depth {
+                log.approximate("water surfaces drawn without their limited depth", 1);
+            }
+            if s.quad.no_stencil {
+                log.approximate("water surfaces drawn without their no-stencil flag", 1);
+            }
+            let positions: Vec<[f32; 3]> = s
+                .outline
+                .iter()
+                .map(|p| GTA.point([p[0], p[1], s.quad.z]))
+                .collect();
             let up = GTA.direction([0.0, 0.0, 1.0]);
             let indices: Vec<u32> = (1..s.outline.len() as u32 - 1)
                 .flat_map(|k| [0, k, k + 1])
@@ -483,7 +627,14 @@ impl Pass for LowerGtaWater {
                     material: Some(material),
                 }]),
             );
-            log.count("water surfaces", 1);
+            log.count(
+                if s.quad.z == 0.0 {
+                    "water surfaces: sea"
+                } else {
+                    "water surfaces: above sea level (lakes, rivers, pools)"
+                },
+                1,
+            );
         }
         Ok(())
     }
@@ -492,6 +643,7 @@ impl Pass for LowerGtaWater {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use primase_core::state::ResolveState;
 
     fn quad(kind: u8) -> WaterQuad {
         WaterQuad {
@@ -562,111 +714,222 @@ mod tests {
         assert_eq!((w.waves[0].amplitude, w.waves[0].direction), (2.0, [0.5, -0.5]));
     }
 
-    /// The water reaches as far as the kept placements do, past the region.
-    #[test]
-    fn water_is_clipped_to_the_placements_extent() {
-        let mut w = World::new();
-        let proto = w.spawn();
-        w.insert(
-            proto,
-            crate::components::GtaArchetype {
-                ytyp: String::new(),
-                name: 1,
-                kind: "base",
-                flags: 0,
-                special_attribute: 0,
-                lod_dist: 100.0,
-                hd_texture_dist: 0.0,
-                // GTA x 0-20, y 0-10
-                bb_min: [0.0, 0.0, 0.0],
-                bb_max: [20.0, 10.0, 1.0],
-                bs_centre: [10.0, 5.0, 0.5],
-                bs_radius: 12.0,
-                texture_dictionary: 0,
-                drawable_dictionary: 0,
-                physics_dictionary: 0,
-                clip_dictionary: 0,
-                asset_type: 2,
-                asset_name: 1,
-                time_flags: None,
-            },
-        );
-        let p = w.spawn();
-        w.insert(
-            p,
-            Instance {
-                prototype: proto,
-                variant: 0,
-            },
-        );
-        w.insert(p, Transform::IDENTITY);
-        let e = w.spawn();
-        w.insert(
-            e,
-            parse_water(
-                br#"<WaterData><WaterQuads>
-<Item><minX value="-50" /><maxX value="50" /><minY value="-50" /><maxY value="50" /><Type value="0" />
-<IsInvisible value="false" /><HasLimitedDepth value="false" /><z value="0" />
-<a1 value="26" /><a2 value="26" /><a3 value="26" /><a4 value="26" /><NoStencil value="false" /></Item>
-</WaterQuads></WaterData>"#,
-            )
-            .unwrap(),
-        );
-        SelectGtaWater {
-            region: Some([0.0, 0.0, 5.0, 5.0]),
-        }
-        .run(&mut w, &mut PassLog::default())
-        .unwrap();
-        let s: Vec<&GtaWaterSurface> = w.iter::<GtaWaterSurface>().map(|(_, s)| s).collect();
-        assert_eq!(s.len(), 1);
-        // 20 x 10 (the placement's extent), not the region's 5 x 5
-        assert!(
-            (area(&s[0].outline) / 2.0 - 200.0).abs() < 1e-3,
-            "{:?}",
-            s[0].outline
-        );
+    /// A type-0 quad at sea level as water.xml writes it.
+    fn quad_xml(x: [i32; 4], invisible: bool, limited_depth: bool, no_stencil: bool) -> String {
+        let [x0, x1, y0, y1] = x;
+        format!(
+            r#"<Item><minX value="{x0}" /><maxX value="{x1}" /><minY value="{y0}" /><maxY value="{y1}" />
+<Type value="0" /><IsInvisible value="{invisible}" /><HasLimitedDepth value="{limited_depth}" /><z value="0" />
+<a1 value="26" /><a2 value="26" /><a3 value="26" /><a4 value="26" /><NoStencil value="{no_stencil}" /></Item>"#
+        )
     }
 
-    #[test]
-    fn the_pass_places_one_surface_per_quad_in_the_region() {
-        let mut w = World::new();
-        let e = w.spawn();
-        let mut water = parse_water(
-            br#"<WaterData><WaterQuads>
-<Item><minX value="0" /><maxX value="10" /><minY value="0" /><maxY value="10" /><Type value="0" />
-<IsInvisible value="false" /><HasLimitedDepth value="false" /><z value="0" />
-<a1 value="26" /><a2 value="26" /><a3 value="26" /><a4 value="26" /><NoStencil value="false" /></Item>
-<Item><minX value="100" /><maxX value="110" /><minY value="0" /><maxY value="10" /><Type value="0" />
-<IsInvisible value="false" /><HasLimitedDepth value="false" /><z value="0" />
-<a1 value="26" /><a2 value="26" /><a3 value="26" /><a4 value="26" /><NoStencil value="false" /></Item>
-</WaterQuads></WaterData>"#,
+    fn file(path: &str, quads: &[String]) -> WaterFile {
+        let mut f = parse_water(
+            format!(
+                "<WaterData><WaterQuads>{}</WaterQuads></WaterData>",
+                quads.concat()
+            )
+            .as_bytes(),
         )
         .unwrap();
-        water.specular_falloff = Some(1118.0);
-        w.insert(e, water);
-        let mut log = PassLog::default();
-        SelectGtaWater {
-            region: Some([-5.0, -5.0, 5.0, 5.0]),
+        f.path = path.into();
+        f.specular_falloff = Some(1118.0);
+        f
+    }
+
+    fn select(region: [f32; 4], clip: Option<&str>) -> SelectGtaWater {
+        let mut o = Options::new();
+        for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(region) {
+            o.insert(k.into(), v.to_string());
         }
-        .run(&mut w, &mut log)
-        .unwrap();
-        assert!(w.get::<GtaWater>(e).is_none());
-        // placed with its outline, no mesh until it is lowered
+        if let Some(c) = clip {
+            o.insert("clip".into(), c.into());
+        }
+        SelectGtaWater::from_options(&o).unwrap()
+    }
+
+    fn surfaces(w: &World) -> Vec<GtaWaterSurface> {
+        w.iter::<Instance>()
+            .filter_map(|(_, i)| w.get::<GtaWaterSurface>(i.prototype).cloned())
+            .collect()
+    }
+
+    /// The reader places every quad whole, the rest of the file apart; one file has no state.
+    #[test]
+    fn the_reader_places_every_quad_as_stored() {
+        let mut w = World::new();
+        let counts = place_water(
+            &mut w,
+            vec![(
+                "world",
+                file("w.xml", &[quad_xml([0, 10, 0, 10], true, false, false)]),
+            )],
+        );
+        assert_eq!(counts, vec![("w.xml".to_string(), [1, 0, 0])]);
+        let s = surfaces(&w);
+        assert_eq!(s.len(), 1);
+        assert!(s[0].quad.invisible && (area(&s[0].outline) / 2.0 - 100.0).abs() < 1e-3);
+        assert_eq!(w.iter::<StateAxis>().count(), 0);
+        assert_eq!(w.iter::<Condition>().count(), 0);
+        assert_eq!(w.iter::<GtaWater>().count(), 1);
+    }
+
+    /// The options decide the clip: the region alone by default; with clip=kept, also as far as the kept placements
+    /// reach (here GTA x 0-20, y 0-10, past the 5 x 5 region), and the extent is used up.
+    #[test]
+    fn the_clip_is_the_region_or_the_region_and_what_is_kept() {
+        for (clip, area_left) in [(None, 25.0), (Some("kept"), 200.0)] {
+            let mut w = World::new();
+            w.insert_resource(RegionExtent(Some([0.0, 0.0, 20.0, 10.0])));
+            place_water(
+                &mut w,
+                vec![(
+                    "world",
+                    file("w.xml", &[quad_xml([-50, 50, -50, 50], false, false, false)]),
+                )],
+            );
+            let pass = select([0.0, 0.0, 5.0, 5.0], clip);
+            assert_eq!(pass.requires().contains(&RegionExtent::NAME), clip.is_some());
+            pass.run(&mut w, &mut PassLog::default()).unwrap();
+            let s = surfaces(&w);
+            assert_eq!(s.len(), 1);
+            assert!(
+                (area(&s[0].outline) / 2.0 - area_left).abs() < 1e-3,
+                "{clip:?}: {:?}",
+                s[0].outline
+            );
+            assert_eq!(w.resource::<RegionExtent>().is_none(), clip.is_some());
+        }
+        let mut o = Options::new();
+        o.insert("clip".into(), "kept".into());
+        assert!(
+            SelectGtaWater::from_options(&o).is_err(),
+            "clip=kept without a region"
+        );
+        o.insert("clip".into(), "all".into());
+        assert!(SelectGtaWater::from_options(&o).is_err());
+    }
+
+    /// Two files: each placement carries its file's value on `gta.water`; resolve-state keeps the world map's by
+    /// default, and the selection counts every surface once (kept, outside, or left out by its state). Lowering draws
+    /// no invisible quad and counts what it does not draw.
+    #[test]
+    fn the_water_file_is_a_state_and_every_surface_is_counted_once() {
+        let mut w = World::new();
+        let counts = place_water(
+            &mut w,
+            vec![
+                (
+                    "world",
+                    file(
+                        "w.xml",
+                        &[
+                            quad_xml([0, 10, 0, 10], false, true, true),
+                            quad_xml([0, 10, 0, 10], true, false, false),
+                            quad_xml([100, 110, 0, 10], false, false, false),
+                        ],
+                    ),
+                ),
+                (
+                    "heistisland",
+                    file("h.xml", &[quad_xml([0, 10, 0, 10], false, false, false)]),
+                ),
+            ],
+        );
+        assert_eq!(counts.len(), 2);
+        let axis = w.iter::<StateAxis>().next().unwrap().1.clone();
+        assert_eq!(
+            (axis.key.as_str(), axis.domain.len(), axis.default),
+            ("gta.water", 2, 0)
+        );
+        assert_eq!(w.iter::<Condition>().count(), 4);
+        let mut log = PassLog::default();
+        ResolveState::default().run(&mut w, &mut log).unwrap();
+        assert_eq!(log.counts.get("gta.water=world kept"), Some(&3));
+        assert_eq!(log.counts.get("gta.water=world despawned"), Some(&1));
+        let mut log = PassLog::default();
+        select([-5.0, -5.0, 5.0, 5.0], None)
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert_eq!(log.counts.get("water surfaces kept"), Some(&2));
+        assert_eq!(
+            log.counts.get("water surfaces left out: outside the region"),
+            Some(&1)
+        );
+        assert_eq!(
+            log.counts
+                .get("water surfaces left out: placement left out by its state"),
+            Some(&1)
+        );
+        assert_eq!(w.iter::<GtaWaterSurface>().count(), 2);
+        let s = surfaces(&w);
+        assert!(s.iter().any(|s| s.quad.limited_depth && s.quad.no_stencil));
+        let json = s[0].to_json().unwrap().unwrap();
+        assert_eq!(json["quad"]["corners"][0], 26.0);
+        let mut log = PassLog::default();
+        LowerGtaWater.run(&mut w, &mut log).unwrap();
+        assert_eq!(log.counts.get("invisible water quads: no mesh"), Some(&1));
+        assert_eq!(log.counts.get("water surfaces: sea"), Some(&1));
+        for what in [
+            "water surfaces drawn without their corner values (a1-a4)",
+            "water surfaces drawn without their limited depth",
+            "water surfaces drawn without their no-stencil flag",
+        ] {
+            assert_eq!(log.approximations.get(what), Some(&1), "{what}");
+        }
+    }
+
+    /// The selected surface lowered: flat at its height, the water material.
+    #[test]
+    fn a_selected_surface_is_lowered_flat_with_the_water_material() {
+        let mut w = World::new();
+        place_water(
+            &mut w,
+            vec![(
+                "world",
+                file("w.xml", &[quad_xml([0, 10, 0, 10], false, false, false)]),
+            )],
+        );
+        let mut log = PassLog::default();
+        select([-5.0, -5.0, 5.0, 5.0], None)
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert!(w.iter::<GtaWater>().next().is_none());
         let protos: Vec<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         assert_eq!(protos.len(), 1);
         assert!(w.get::<Mesh>(protos[0]).is_none());
         LowerGtaWater.run(&mut w, &mut log).unwrap();
         assert!(w.get::<GtaWaterSurface>(protos[0]).is_none());
-        let placed: Vec<_> = w.iter::<Instance>().collect();
-        assert_eq!(placed.len(), 1);
-        let mesh = w.get::<Mesh>(placed[0].1.prototype).unwrap();
+        let mesh = w.get::<Mesh>(protos[0]).unwrap();
         let p = mesh.primitives()[0].positions().unwrap();
-        // the 5 x 5 corner of the first quad, flat at the sea's height (core y up)
+        // the 5 x 5 corner of the quad, flat at the sea's height (core y up)
         assert!(p.iter().all(|v| v[1] == 0.0));
         let m = w
             .get::<PbrMaterial>(mesh.primitives()[0].material.unwrap())
             .unwrap();
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
         assert!((m.roughness - (2.0f32 / 1120.0).powf(0.25)).abs() < 1e-6);
+    }
+
+    /// A tuning value that is not a number, or a flag that is neither true nor false, is an error naming it.
+    #[test]
+    fn malformed_values_are_errors() {
+        let tune = |v: &str| format!("<WaterTune><SpecularFalloff value=\"{v}\" /></WaterTune>");
+        assert_eq!(
+            specular_falloff(tune("1118").as_bytes(), "t.xml").unwrap(),
+            Some(1118.0)
+        );
+        let e = specular_falloff(tune("1,118").as_bytes(), "t.xml")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("SpecularFalloff"), "{e}");
+        assert_eq!(specular_falloff(b"<WaterTune />", "t.xml").unwrap(), None);
+        let bad = quad_xml([0, 1, 0, 1], false, false, false)
+            .replace(r#"IsInvisible value="false""#, r#"IsInvisible value="1""#);
+        let e = parse_water(format!("<WaterData><WaterQuads>{bad}</WaterQuads></WaterData>").as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("IsInvisible"), "{e}");
     }
 }

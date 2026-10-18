@@ -111,7 +111,9 @@ pub fn select_passes(s: &Selection) -> String {
         ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
     p.push_str(", lower-gta-surfaces");
-    p.push_str(&format!(", gta-select-water{{x0={x0},y0={y0},x1={x1},y1={y1}}}"));
+    p.push_str(&format!(
+        ", gta-select-water{{x0={x0},y0={y0},x1={x1},y1={y1},clip=kept}}"
+    ));
     p
 }
 
@@ -159,8 +161,8 @@ pub struct ReadReport {
     pub region: RegionReport,
     pub lights: LightsReport,
     pub bounds: BoundsReport,
-    /// The level's water data: water, calming and wave quads.
-    pub water: [usize; 3],
+    /// Each water file: its path with its water, calming and wave quad counts.
+    pub water: Vec<(String, [usize; 3])>,
 }
 
 /// An opened install: its key material, both maps' archive sets and the texture dictionary parents of the map assets
@@ -215,8 +217,9 @@ impl GtaSource {
     /// Every entity of both maps within `reach` metres of `region` (`[x0, y0, x1, y1]`), with its prototype and its
     /// map-state and hour conditions ([`crate::region::read_region`]), each prototype's light records
     /// ([`crate::assets::attach_lights`]), the static map bounds meeting the region
-    /// ([`crate::collision::attach_map_bounds`]) and the level's water data ([`crate::water::read_water`], one
-    /// `gta.water` entity); no geometry or textures yet.
+    /// ([`crate::collision::attach_map_bounds`]) and every water file ([`crate::water::attach_water`]: each quad of
+    /// the whole map placed with its file's `gta.water` condition, the rest of each file a `gta.water`); no geometry
+    /// or textures yet.
     pub fn read(&self, region: [f32; 4], reach: f32) -> Result<(World, ReadReport)> {
         let bounds_region = region;
         let (mut w, region) = read_region(
@@ -231,17 +234,14 @@ impl GtaSource {
         )?;
         let lights = attach_lights(&mut w, self.assets(), &self.keys)?;
         let bounds = attach_map_bounds(&mut w, self.assets(), &self.keys, bounds_region)?;
-        let water = crate::water::read_water(&self.assets().install, &self.keys)?;
-        let counts = [water.quads.len(), water.calming.len(), water.waves.len()];
-        let e = w.spawn();
-        w.insert(e, water);
+        let water = crate::water::attach_water(&mut w, &self.assets().install, &self.keys)?;
         Ok((
             w,
             ReadReport {
                 region,
                 lights,
                 bounds,
-                water: counts,
+                water,
             },
         ))
     }
