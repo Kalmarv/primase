@@ -182,6 +182,10 @@ fn mutations_never_panic() {
         }
     }
     println!("{runs} mutations: {parsed} parsed, {evaluated} evaluated");
+    assert!(
+        parsed > 0 && evaluated > 0,
+        "{runs} mutations: {parsed} parsed, {evaluated} evaluated; the run must reach the evaluator"
+    );
 }
 
 const OPS: &[u8] = include_bytes!("fixtures/ops.dxil");
