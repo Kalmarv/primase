@@ -14,7 +14,8 @@
 //! - Studio tessellates and re-wraps those surfaces (about five times the triangles), so section vertices are not the
 //!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
 //!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
-//!   vertices), as a half float, occurs in its key's sections;
+//!   vertices), as a half float (a weight exactly halfway between two halves: either, as Studio rounds such a tie
+//!   away from the even half: [`half_choices`]), occurs in its key's sections;
 //! - a primitive's candidates are the vertex-blend keys of its GLB's MeshSets whose sections contain all of its weights
 //!   other than 0 and 1 (those are not distinctive; a primitive with no other weight, a small piece of one layer or of
 //!   a decal's fade, allows every key of its GLB); a material's key is one all its primitives allow, and a key belongs
@@ -214,6 +215,30 @@ fn glb_stem(mesh: &str) -> String {
 /// Half-float bits of 0, -0 and 1: weights that do not identify a section.
 fn distinctive(bits: u16) -> bool {
     !matches!(bits, 0x0000 | 0x8000 | 0x3c00)
+}
+
+/// The half floats Studio may store for a weight: the nearest, and where the weight lies exactly halfway between two
+/// halves, both of them. Studio rounds such a tie away from the even half (found on the GTA downtown-east compile:
+/// both of its tie weights, 0.968994140625, were stored as 0.969238 where round-half-to-even gives 0.96875), where
+/// `half` rounds to even; so a tie allows either.
+fn half_choices(w: f32) -> [u16; 2] {
+    let h = half::f16::from_f32(w);
+    let (lo, hi) = (
+        half::f16::from_bits(h.to_bits().wrapping_sub(1)),
+        half::f16::from_bits(h.to_bits().wrapping_add(1)),
+    );
+    let d = (f64::from(w) - f64::from(h.to_f32())).abs();
+    // the neighbour on the weight's side, if it is exactly as near
+    let other = if f64::from(w) > f64::from(h.to_f32()) {
+        hi
+    } else {
+        lo
+    };
+    if d > 0.0 && (f64::from(other.to_f32()) - f64::from(w)).abs() == d {
+        [h.to_bits(), other.to_bits()]
+    } else {
+        [h.to_bits(); 2]
+    }
 }
 
 /// A recorded file of map folder `map`: `rel` must be a relative path with forward slashes that stays inside the
@@ -507,14 +532,22 @@ fn resolve_by(
                     ),
                 )
             })?;
-            let weights: BTreeSet<u16> = weights_of(mesh, *primitive)?
+            let weights: BTreeSet<[u16; 2]> = weights_of(mesh, *primitive)?
                 .iter()
-                .map(|&w| half::f16::from_f32(w).to_bits())
-                .filter(|&b| distinctive(b))
+                .map(|&w| half_choices(w))
+                .filter(|b| distinctive(b[0]))
                 .collect();
             let contained: Vec<(u64, usize)> = candidates
                 .iter()
-                .map(|(&k, set)| (k, weights.iter().filter(|w| set.contains(w)).count()))
+                .map(|(&k, set)| {
+                    (
+                        k,
+                        weights
+                            .iter()
+                            .filter(|w| w.iter().any(|b| set.contains(b)))
+                            .count(),
+                    )
+                })
                 .collect();
             let full: BTreeSet<u64> = contained
                 .iter()
@@ -903,6 +936,31 @@ mod tests {
             r.keys,
             BTreeMap::from([("a".into(), 0xa), ("b".into(), 0xb), ("d".into(), 0xc)])
         );
+    }
+
+    /// A weight exactly halfway between two halves (0.968994140625: halves 0.96875 and 0.96923828125, worked by
+    /// hand) is found whichever of them Studio stored; a weight off the tie allows only its nearest half.
+    #[test]
+    fn a_tie_weight_matches_either_half() {
+        let tie = 0.968_994_14_f32;
+        assert_eq!(f64::from(tie), 0.968_994_140_625);
+        let [even, away] = half_choices(tie);
+        assert_eq!(
+            (
+                half::f16::from_bits(even).to_f32(),
+                half::f16::from_bits(away).to_f32()
+            ),
+            (0.968_75, 0.968_75 + 1.0 / 2048.0)
+        );
+        assert_eq!(half_choices(0.968_8), [half::f16::from_f32(0.968_8).to_bits(); 2]);
+        let away = half::f16::from_bits(away).to_f32();
+        let s = vec![section("t_0", 0xa, &[0.0, away, 0.25])];
+        let w = |_: &str, _: usize| Ok(vec![tie, 0.25]);
+        let r = resolve_by_files(&record(&[("x", "t_0", 0)]), &s, w).unwrap();
+        assert_eq!(r.keys["x"], 0xa);
+        let off = |_: &str, _: usize| Ok(vec![0.968_8, 0.25]);
+        let e = message(resolve_by_files(&record(&[("x", "t_0", 0)]), &s, off));
+        assert!(e.contains("contain all 2 of its weights"), "{e}");
     }
 
     /// Two materials whose weights fit the same two keys (decals faded by one alpha value) take one key each; which

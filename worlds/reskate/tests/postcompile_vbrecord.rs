@@ -67,6 +67,9 @@ fn vbrecord_gate() -> R {
     };
     let sections = vbrecord::blend_sections(&so)?;
     let resolution = vbrecord::resolve(&record, &map, &sections)?;
+    // a primitive whose own weights fit another key too is decided by its material's other primitives or by a
+    // key belonging to one material (the module's rule); counted, and the read-back below checks the result
+    let mut shared = 0;
     for r in &resolution.primitives {
         println!(
             "{} {} primitive {} -> key {:016x}: {} distinct weights, all contained; next-best key contains {:.1}%",
@@ -77,8 +80,9 @@ fn vbrecord_gate() -> R {
             r.distinct_weights,
             100.0 * r.runner_up
         );
-        assert!(r.runner_up < 1.0);
+        shared += usize::from(r.runner_up >= 1.0);
     }
+    println!("primitives whose own weights fit another key as well: {shared}");
     let worst = resolution
         .primitives
         .iter()
