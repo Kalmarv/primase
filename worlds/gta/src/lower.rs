@@ -2,9 +2,10 @@
 //! each shader draws).
 //!
 //! - `lower-gta-pbr`: the geometry of shaders with nothing a surface material can draw is dropped (counted by
-//!   reason), and so is night-only geometry unless the pass is told it is night; every other shader but terrain's
-//!   (`gta-terrain-layers`) gets a `pbr.material`, and a `core.draw_order` from its shader's render bucket
-//!   ([`draw_order`]).
+//!   reason), and so is night-only geometry unless the pass is told it is night; every other shader a primitive
+//!   draws with, but terrain's (`gta-terrain-layers`), gets a `pbr.material`, and a `core.draw_order` from its
+//!   shader's render bucket ([`draw_order`]). A shader no primitive uses (its level of detail discarded) is not
+//!   lowered, counted, so nothing is derived for it.
 //!
 //!   Specular, as GTA's shaders and deferred lights compute it: a shader's G-buffer intensity is
 //!   I = `SpecularColor` x dot((s.r^2, s.g^2, s.b), `SpecularMapIntensityMask`) for its specular map s (`SpecularTex`),
@@ -477,6 +478,12 @@ impl Pass for LowerGtaPbr {
         for e in emptied {
             w.remove::<Mesh>(e);
         }
+        // the materials some primitive draws with: one no primitive uses (its geometry dropped, its level of detail
+        // discarded) is not lowered, so nothing is derived for it
+        let used: BTreeSet<Entity> = w
+            .iter::<Mesh>()
+            .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
+            .collect();
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
         let mut orders = Vec::new();
@@ -488,6 +495,10 @@ impl Pass for LowerGtaPbr {
         let mut emissive_masks: BTreeMap<Entity, Option<Entity>> = BTreeMap::new();
         for (&e, c) in &classes {
             if dropped.contains_key(&e) {
+                continue;
+            }
+            if !used.contains(&e) {
+                log.count("materials no primitive uses: not lowered", 1);
                 continue;
             }
             if c.class == Class::Terrain {
@@ -1069,7 +1080,25 @@ mod tests {
     use super::{exponent, roughness, specular_texture};
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 
-    /// A world with one `normal_spec` material binding `diffuse` and `bump`, Bumpiness 0.5.
+    /// A mesh drawing one triangle with each of `materials`.
+    fn drawn(w: &mut primase_core::World, materials: &[primase_core::Entity]) {
+        let prim = |m| primase_core::Primitive {
+            topology: primase_core::Topology::Triangles,
+            streams: std::collections::BTreeMap::from([(
+                primase_core::Semantic::Position,
+                primase_core::Stream::F32x3(vec![[0.0; 3]; 3]),
+            )]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(m),
+        };
+        let e = w.spawn();
+        w.insert(
+            e,
+            primase_core::Mesh::new(materials.iter().map(|&m| prim(m)).collect()),
+        );
+    }
+
+    /// A world with one `normal_spec` material binding `diffuse` and `bump`, Bumpiness 0.5, drawn by a mesh.
     fn bumped(
         diffuse: primase_core::Entity,
         bump: primase_core::Entity,
@@ -1100,6 +1129,7 @@ mod tests {
                 ],
             },
         );
+        drawn(w, &[m]);
         m
     }
 
@@ -1174,6 +1204,8 @@ mod tests {
         let cutout = shader(b"normal_spec", 3);
         let alpha = shader(b"normal_spec", 1);
         let other = shader(b"default", 5);
+        let unused = shader(b"decal", 2);
+        drawn(&mut w, &[decal, named, cutout, alpha, other]);
         let mut log = PassLog::default();
         super::LowerGtaPbr::default().run(&mut w, &mut log).unwrap();
         let layer = |e| w.get::<DrawOrder>(e).map(|d| d.layer);
@@ -1188,6 +1220,14 @@ mod tests {
             ]
         );
         assert_eq!(w.get::<DrawOrder>(decal).unwrap().queue, super::DECAL_QUEUE);
+        // a material no primitive uses is not lowered
+        assert!(
+            w.get::<DrawOrder>(unused).is_none() && w.get::<primase_core::pbr::PbrMaterial>(unused).is_none()
+        );
+        assert_eq!(
+            log.counts.get("materials no primitive uses: not lowered"),
+            Some(&1)
+        );
         assert_eq!(
             log.counts
                 .get("draw order: render bucket 0 drawn Opaque, its shader's class Decal"),
