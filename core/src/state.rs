@@ -1187,13 +1187,13 @@ mod tests {
     fn references_reach_axes_and_targets() {
         let c = castle();
         let reached = c.w.closure([c.intact]);
-        assert!(
+        let mut keys: Vec<&str> =
             c.w.iter::<StateAxis>()
                 .filter(|(e, _)| reached.contains(e))
-                .count()
-                == 2,
-            "8306 and 8302"
-        );
+                .map(|(_, a)| a.key.as_str())
+                .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["fromsoft.flag.8302", "fromsoft.flag.8306"]);
     }
 
     fn registry() -> PassRegistry {
