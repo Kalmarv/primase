@@ -165,13 +165,14 @@ pub struct Built {
     pub degenerate: Entity,
     pub variant1: Entity,
     pub no_mesh: Entity,
-    /// The transforms the mirrored and sheared placements were authored with: `build` runs `bake-nonrigid`, as every
-    /// pipeline does before a writer, so the world holds their rigid remainders and baked geometry.
+    /// The transforms the mirrored and sheared placements were authored with: `build` runs `bake-nonrigid{mirrors=keep}`,
+    /// as a glTF pipeline does, so the world keeps the mirrored one and holds the sheared ones' rigid remainders and
+    /// baked geometry.
     pub authored: std::collections::BTreeMap<Entity, Transform>,
 }
 
 /// The synthetic world: PNG and DDS texture files under `dir`, three kinds of material, four prototypes and
-/// placements of every transform kind, the mirrored and sheared ones baked by `bake-nonrigid`.
+/// placements of every transform kind, the sheared ones baked by `bake-nonrigid{mirrors=keep}`.
 pub fn build(dir: &Path) -> Built {
     std::fs::create_dir_all(dir.join("textures")).unwrap();
     std::fs::write(
@@ -460,10 +461,11 @@ pub fn build(dir: &Path) -> Built {
         .map(|e| (e, *w.get::<Transform>(e).unwrap()))
         .into_iter()
         .collect();
-    let log = primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
+    // as a glTF pipeline runs it: shears baked, mirrors kept (glTF carries them)
+    let log = primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid { keep_mirrors: true });
     assert_eq!(
         log.counts.get("mirrored transforms made rigid"),
-        Some(&1),
+        None,
         "{:?}",
         log.counts
     );

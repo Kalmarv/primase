@@ -20,7 +20,7 @@ use primase_skate_scene::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 
-const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, bake-nonrigid";
+const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, bake-nonrigid{mirrors=keep}";
 
 fn registry() -> PassRegistry {
     let mut reg = PassRegistry::new();

@@ -5,9 +5,10 @@
 //!   same resolved materials; a prototype placed with several [`MaterialVariants`] gets one mesh per distinct
 //!   material list, all of them sharing the same accessors.
 //! - **Placements** ([`Instance`] + [`Transform`]) become nodes, the transform written as the node's matrix exactly.
-//!   Transforms must be rigid ([`TransformKind::Regular`]): a mirrored or sheared one is refused, since
-//!   `bake-nonrigid` (primase-meshops) moves an authored mirror or shear into geometry before writing. Degenerate
-//!   transforms are skipped and counted. An entity with a `Mesh` and a `Transform` but no `Instance` is placed as itself.
+//!   A mirrored transform is written as it is (glTF allows a negative determinant and reverses the winding itself).
+//!   A sheared one has no translation-rotation-scale decomposition, which glTF requires of node matrices, so it is
+//!   refused: `bake-nonrigid` (primase-meshops; `mirrors=keep` for this writer) moves a shear into geometry before
+//!   writing. Degenerate transforms are skipped and counted. An entity with a `Mesh` and a `Transform` but no `Instance` is placed as itself.
 //! - **Collections**: Blender 4.3's importer makes no collections (every object goes to the active collection;
 //!   nodes without a mesh become empties, children are parented). So groups are empty nodes, one per prototype or
 //!   per tile ([`GroupBy`]), with `"primase.collection": <name>` in their extras so a Blender-side script can turn
@@ -139,6 +140,8 @@ pub struct WriteReport {
     pub image_bytes: u64,
     /// Placements written as nodes (including self-placed and unplaced-at-origin ones).
     pub placements: u64,
+    /// Mirrored placements, written with their negative-determinant matrix (glTF then reverses the winding).
+    pub placements_mirrored: u64,
     pub placements_degenerate_skipped: u64,
     /// Placements whose prototype has no `core.mesh` (nothing to draw).
     pub placements_without_mesh: u64,
@@ -183,8 +186,9 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(
             f,
-            "placements {}: degenerate skipped {}, without mesh {}; prototypes unplaced {}",
+            "placements {}: mirrored {}, degenerate skipped {}, without mesh {}; prototypes unplaced {}",
             self.placements,
+            self.placements_mirrored,
             self.placements_degenerate_skipped,
             self.placements_without_mesh,
             self.prototypes_unplaced
@@ -658,22 +662,22 @@ impl Writer<'_> {
                 self.report.placements_degenerate_skipped += 1;
                 return Ok(None);
             }
-            TransformKind::Mirrored | TransformKind::Sheared => {
+            TransformKind::Sheared => {
                 return Err(Error::World {
                     entity: place.entity,
-                    detail: format!(
-                        "a {} transform: the writer takes rigid placements; run bake-nonrigid first",
-                        if kind == TransformKind::Mirrored {
-                            "mirrored"
-                        } else {
-                            "sheared"
-                        }
-                    ),
+                    detail: concat!(
+                        "a sheared transform: glTF node matrices must decompose into translation, rotation and ",
+                        "scale; run bake-nonrigid first (mirrors=keep keeps mirrors, which glTF carries)"
+                    )
+                    .into(),
                 });
             }
-            TransformKind::Regular => {
+            TransformKind::Regular | TransformKind::Mirrored => {
                 let mesh_index = self.shared_mesh(&from, mesh, materials, place.variant)?;
                 node.insert("mesh".into(), json!(mesh_index));
+                if kind == TransformKind::Mirrored {
+                    self.report.placements_mirrored += 1;
+                }
                 if c[..3] == Transform::IDENTITY.cols[..3] {
                     if c[3] != [0.0; 3] {
                         node.insert("translation".into(), f32s_value(&c[3]));
