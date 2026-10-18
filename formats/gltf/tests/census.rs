@@ -1,7 +1,8 @@
 //! Reader census over real scene folders: every mesh of every `prototypes/*.glb` (written by the games' existing
 //! exporters, not by us) is read by the strict reader, re-written by our writer and read back; the gate is a
-//! bit-exact match of every stream and index list. Skipped unless `PRIMASE_SCENES_SEKIRO` (its `scene_*`
-//! subfolders) or `PRIMASE_SCENES_GTA` (all subfolders) is set.
+//! bit-exact match of every stream and index list. Skipped unless `PRIMASE_SCENES_SEKIRO` (scene folders whose own
+//! name starts with `scene_`) or `PRIMASE_SCENES_GTA` (every scene folder) is set. A configured root must yield at
+//! least one scene folder (a folder holding `scene.json` and `prototypes`).
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -13,19 +14,26 @@ use primase_core::{Mesh, Transform, World};
 use primase_gltf::{Gltf, GroupBy, WriteOptions, write};
 use primase_testdata::real_data;
 
-fn scene_folders(var: &str, prefix: &str) -> Vec<PathBuf> {
-    let Some(root) = real_data(var) else {
-        return Vec::new();
+/// Every folder under `root` holding a `scene.json` and a `prototypes` folder whose own name starts with `prefix`
+/// (empty: every name).
+fn scene_folders(root: &Path, prefix: &str, out: &mut Vec<PathBuf>) {
+    let named = |p: &Path| {
+        p.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with(prefix))
     };
-    let mut out: Vec<PathBuf> = std::fs::read_dir(root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| {
-            p.join("prototypes").is_dir() && p.file_name().unwrap().to_string_lossy().starts_with(prefix)
-        })
+    if root.join("scene.json").is_file() && root.join("prototypes").is_dir() && named(root) {
+        out.push(root.to_owned());
+    }
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    let mut dirs: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
         .collect();
-    out.sort();
-    out
+    dirs.sort();
+    for d in dirs {
+        scene_folders(&d, prefix, out);
+    }
 }
 
 fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
@@ -96,9 +104,15 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
 }
 
 fn run(var: &str, prefix: &str) {
-    for folder in scene_folders(var, prefix) {
+    let Some(root) = real_data(var) else {
+        return;
+    };
+    let mut folders = Vec::new();
+    scene_folders(&root, prefix, &mut folders);
+    primase_testdata::expect_items(var, "scene folders with prototypes", folders.len());
+    for folder in &folders {
         let mut gate = GateReport::new(format!("glb census {}", folder.display()), Tolerance::Exact);
-        let (meshes, triangles) = census(&folder, &mut gate);
+        let (meshes, triangles) = census(folder, &mut gate);
         println!("{gate}\n  {meshes} meshes, {triangles} triangles");
         gate.assert_passed();
     }
