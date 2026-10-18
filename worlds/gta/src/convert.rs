@@ -1,12 +1,13 @@
 //! The GTA reader of [`primase_core::convert`]: a region of an install, read once to plan from and loaded part by
-//! part ([`crate::pipeline::GtaSource`]), with the selection and passes of [`crate::pipeline`] as its defaults.
+//! part ([`crate::pipeline::GtaSource`]). Which selection and passes a conversion runs is its caller's choice
+//! ([`crate::pipeline`] documents one recipe).
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use primase_core::convert::{Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use crate::pipeline::{GtaSource, Map, Selection, default_passes, prototype_box, select_passes};
+use crate::pipeline::{GtaSource, Map, Selection, prototype_box};
 
 /// What to read: the install and its key folder, and the selection (region, map, hour, sizes, interiors).
 #[derive(Clone, Debug)]
@@ -72,12 +73,6 @@ impl Reader for GtaReader {
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "gta"]
-    }
-    fn default_select(&self) -> String {
-        select_passes(&self.selection)
-    }
-    fn default_passes(&self) -> String {
-        default_passes(&self.selection)
     }
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         prototype_box(world, prototype)

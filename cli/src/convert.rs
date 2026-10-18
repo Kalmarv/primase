@@ -3,13 +3,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use primase_core::convert::{ConvertReport, PartSize, Reader, Writer, convert};
+use primase_core::convert::{ConvertReport, PartSize, PartSource, Reader, Writer, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry};
 
 pub type Result<T> = primase_core::convert::Result<T>;
 
-pub const USAGE: &str = "usage: primase convert --from <reader> [reader options] [--select \"<pipeline>\"] [--passes \"<pipeline>\"] --to <writer> \
+pub const USAGE: &str = "usage: primase convert --from <reader> [reader options] --select \"<pipeline>\" --passes \"<pipeline>\" --to <writer> \
 <out> [writer options]
+--select and --passes are the conversion's choices (no reader supplies them). For a GTA region the gta crate documents
+one recipe: primase_gta::pipeline::select_passes and DEFAULT_PASSES.
 readers:
   gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H | --keep-hour]
         [--min-size M] [--max-priority N] [--interiors none|all]
@@ -35,7 +37,9 @@ pub fn registry() -> PassRegistry {
 }
 
 type ReaderFactory = fn(&[String]) -> Result<Box<dyn Reader>>;
-type WriterFactory = fn(&Path, &[String]) -> Result<Box<dyn Writer>>;
+/// A destination: how it divides the selection into parts, and its writer.
+pub type Destination = (Box<dyn PartSource>, Box<dyn Writer>);
+type WriterFactory = fn(&Path, &[String]) -> Result<Destination>;
 
 /// The readers, by `--from` name.
 pub const READERS: &[(&str, ReaderFactory)] = &[("gta", crate::gta::reader)];
@@ -112,14 +116,25 @@ pub fn run(args: &[String]) -> Result<()> {
     let writer_name = &args[to + 1];
     let out = Path::new(args.get(to + 2).ok_or(USAGE)?);
     let mut reader = find(READERS, reader_name, "reader")?(&reader_args)?;
-    let writer = find(WRITERS, writer_name, "writer")?(out, &args[to + 3..])?;
+    let (mut parts, writer) = find(WRITERS, writer_name, "writer")?(out, &args[to + 3..])?;
     let registry = registry();
-    let select = registry.parse(&select_text.unwrap_or_else(|| reader.default_select()))?;
-    let passes = registry.parse(&passes_text.unwrap_or_else(|| reader.default_passes()))?;
+    // the selection and the passes are the conversion's choices: no reader supplies them
+    let (Some(select_text), Some(passes_text)) = (select_text, passes_text) else {
+        return Err(format!("--select and --passes are required; {USAGE}").into());
+    };
+    let select = registry.parse(&select_text)?;
+    let passes = registry.parse(&passes_text)?;
     println!("select: {select}");
     println!("passes: {passes}");
     let manager = PassManager::new(registry);
-    let report = match convert(reader.as_mut(), writer, &manager, &select, &passes) {
+    let report = match convert_parts(
+        reader.as_mut(),
+        parts.as_mut(),
+        writer,
+        &manager,
+        &select,
+        &passes,
+    ) {
         Ok(report) => report,
         Err(e) => {
             // what was done before the failure, then the failure

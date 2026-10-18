@@ -1,15 +1,21 @@
-//! Convert: one reader, the passes, one writer, and the loop that drives them ([`convert`]).
+//! Convert: one reader, the program's passes, one writer, and the loop that drives them ([`convert_parts`],
+//! [`convert`]).
 //!
-//! The loop owns the streaming: it reads the world and runs the selection on it, lets the writer plan from that world
-//! (geometry not loaded yet), then loads each part the writer asks for through the reader, runs the passes on it,
-//! checks it against the writer's target and hands it to the writer read-only, one part in memory at a time. It does
-//! no I/O of its own: reading and writing are the reader's and the writer's, and what they report comes back in the
-//! [`ConvertReport`] for the caller to show: every part's pass reports whole ([`PartReport`]), and the notices the
-//! reader and writer give ([`Notice`]). A conversion that fails keeps what it had reported ([`ConvertError`]).
+//! The loop owns the streaming: it reads the world and runs the program's selection on it, lets a [`PartSource`] plan
+//! the parts from that world (geometry not loaded yet), then loads each part through the reader (its roots and the
+//! context its passes need), runs the program's passes on it once, checks the part against what the writer writes
+//! without changing it, and hands the part's own output to the writer read-only, one part in memory at a time. It
+//! adds no pass of its own: what the writer doesn't write is reported as a notice, and values it can't encode are an
+//! error. It does no I/O of its own: reading and writing are the reader's and the writer's, and what they report comes
+//! back in the [`ConvertReport`]: every part's pass reports whole ([`PartReport`]), and the notices the reader and
+//! writer give ([`Notice`]). A conversion that fails keeps what it had reported ([`ConvertError`]).
+//!
+//! How the content is divided is a choice: [`WholeWorld`] is one part; [`PlannedParts`] takes the parts a partition
+//! pass (as `partition-grid`) put in the selected world's [`PartitionPlan`]; a destination may plan its own.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::pass::{Mode, PassManager, PassOptions, Pipeline, RunReport, Target};
-use crate::{Entity, World};
+use crate::pass::{PassManager, Pipeline, RunReport, Target};
+use crate::{Entity, Resource, World};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -17,18 +23,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Labelled lines for the log: what a reader read or loaded, what a writer wrote.
 pub type Report = Vec<(String, String)>;
 
-/// A source of worlds: the world to plan from, then the parts a writer asks for, loaded.
+/// A source of worlds: the world to plan from, then the parts asked for, loaded.
 pub trait Reader {
     /// The world to plan from: placements, prototypes and their state; geometry and textures not loaded yet.
     fn read(&mut self) -> Result<(World, Report)>;
     /// The subset of `world` that `roots` reach, with everything a writer needs loaded (meshes, textures); entity ids
     /// stay `world`'s, and what loading spawns is reached through the roots.
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)>;
-    /// The passes the read world goes through before a writer plans (which state and placements to keep), unless the
-    /// caller gives others.
-    fn default_select(&self) -> String;
-    /// The passes a loaded world goes through, unless the caller gives others.
-    fn default_passes(&self) -> String;
     /// The component namespaces it may put in a world (`core`, its own dialect): a reader reads, it lowers nothing
     /// (no `pbr.*` unless its source format is PBR). [`check_emits`] holds it to that after reading and loading.
     fn emits(&self) -> &'static [&'static str];
@@ -53,21 +54,125 @@ pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
     Ok(())
 }
 
-/// A destination. It plans from the selected world, then asks for its parts one at a time: the loop loads each (the
-/// closure of its roots, through the passes, with what the passes placed) and hands it back to [`Writer::write`]
-/// before asking for the next.
-pub trait Writer {
-    /// What it accepts: every loaded part is checked against it ([`PassManager::convert`], [`Mode::Full`]) before
-    /// it is written.
-    fn target(&self) -> Target;
-    /// Plan from the selected world, its geometry not loaded yet: `boxes` gives a prototype's box (core frame)
-    /// where the reader knows it.
+/// One part to load: the roots it outputs, and the context its passes need around them (neighbouring placements a
+/// collision or normal operation reads). The reader loads both; only the roots' closure, with what the passes placed,
+/// goes to the writer, so content a part only reads is written by the part that owns it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Part {
+    pub roots: BTreeSet<Entity>,
+    pub context: BTreeSet<Entity>,
+}
+
+/// How a conversion divides the selected world into parts.
+pub trait PartSource {
+    /// Plan from the selected world, its geometry not loaded yet: `boxes` gives a prototype's box (core frame) where
+    /// the reader knows it.
     fn plan(&mut self, world: &World, boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()>;
-    /// The roots of the next part to load, `None` when every part is written.
-    fn next_part(&mut self) -> Result<Option<BTreeSet<Entity>>>;
-    /// Write the part last asked for, loaded: the closure of its roots and of every entity a pass placed (content
-    /// nothing references, such as a marker; [`crate::pass::PassLog::place`]). Other entities the passes made are in
-    /// it only where something in it references them.
+    /// The next part to load, `None` when every part is done.
+    fn next_part(&mut self) -> Result<Option<Part>>;
+    /// The part just asked for, as the writer got it: for a source that refines its plan from loaded geometry.
+    fn written(&mut self, _part: &World) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// One part: every entity of the selected world.
+#[derive(Debug, Default)]
+pub struct WholeWorld {
+    roots: Option<BTreeSet<Entity>>,
+}
+
+impl PartSource for WholeWorld {
+    fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
+        self.roots = Some(world.entities().collect());
+        Ok(())
+    }
+    fn next_part(&mut self) -> Result<Option<Part>> {
+        Ok(self.roots.take().map(|roots| Part {
+            roots,
+            context: BTreeSet::new(),
+        }))
+    }
+}
+
+/// `core.partition_plan`: how a pass divided the content into output parts, in order. Each group owns its roots
+/// (every root in one group) and names the context its passes need (roots of other groups, loaded but written by
+/// their owner).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PartitionPlan {
+    /// What made it (`partition-grid{cell=200}`).
+    pub by: String,
+    pub groups: Vec<PartitionGroup>,
+}
+
+/// One part of a [`PartitionPlan`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PartitionGroup {
+    /// A name for reports (`cell 3,-2`).
+    pub key: String,
+    pub roots: BTreeSet<Entity>,
+    pub context: BTreeSet<Entity>,
+}
+
+impl Resource for PartitionPlan {
+    const NAME: &'static str = "core.partition_plan";
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, crate::JsonError> {
+        let groups: Vec<serde_json::Value> = self
+            .groups
+            .iter()
+            .map(|g| {
+                serde_json::json!({
+                    "key": g.key,
+                    "roots": g.roots.iter().map(|e| e.index()).collect::<Vec<_>>(),
+                    "context": g.context.iter().map(|e| e.index()).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok(Some(serde_json::json!({ "by": self.by, "groups": groups })))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        for g in &self.groups {
+            out.extend(g.roots.iter().chain(&g.context).copied());
+        }
+    }
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        for g in &mut self.groups {
+            g.roots.retain(|&e| keep(e));
+            g.context.retain(|&e| keep(e));
+        }
+    }
+}
+
+/// The parts of the selected world's [`PartitionPlan`], in its order. A world without one is an error: the program
+/// runs the partition pass in its selection.
+#[derive(Debug, Default)]
+pub struct PlannedParts {
+    groups: std::vec::IntoIter<PartitionGroup>,
+}
+
+impl PartSource for PlannedParts {
+    fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
+        let plan = world
+            .resource::<PartitionPlan>()
+            .ok_or("no core.partition_plan in the selected world: run a partition pass in the selection")?;
+        self.groups = plan.groups.clone().into_iter();
+        Ok(())
+    }
+    fn next_part(&mut self) -> Result<Option<Part>> {
+        Ok(self.groups.next().map(|g| Part {
+            roots: g.roots,
+            context: g.context,
+        }))
+    }
+}
+
+/// A destination. It is handed each part, loaded and through the program's passes: the closure of its roots and of
+/// every entity a pass placed (content nothing references, such as a marker; [`crate::pass::PassLog::place`]).
+/// Other entities the passes made are in it only where something in it references them.
+pub trait Writer {
+    /// What it writes: every part is checked against it before it is written ([`Target::check_prepared`]), without
+    /// changing it. A name it doesn't write is reported; a value of a name it writes that its rule refuses is an error.
+    fn target(&self) -> Target;
     fn write(&mut self, part: &World) -> Result<()>;
     /// What it noticed since it was last asked (what it omitted because it doesn't support it), taken after each
     /// part and before [`Writer::finish`]. None by default.
@@ -148,14 +253,16 @@ impl std::fmt::Display for Notice {
 pub struct PartReport {
     /// Its place in the order the writer asked for the parts, from 0.
     pub ordinal: usize,
-    /// The roots the writer asked for. Entity ids are the planning world's; a pass's own entities are the part's.
+    /// The roots asked for. Entity ids are the planning world's; a pass's own entities are the part's.
     pub roots: BTreeSet<Entity>,
+    /// The context loaded with them, not written by this part.
+    pub context: BTreeSet<Entity>,
     /// The reader's report on loading it.
     pub load: Report,
-    /// The passes the caller gave.
+    /// The program's passes.
     pub explicit: RunReport,
-    /// The check against the writer's target, with what it lowered to pass it.
-    pub automatic: RunReport,
+    /// Names the writer doesn't write, with how many entities held them ([`Target::check_prepared`]).
+    pub unsupported: Vec<(String, u64)>,
     /// What the part kept and left out of what the passes made, by its components: `entities the passes placed (..)`,
     /// `made entities nothing keeps, dropped (..)`.
     pub kept: BTreeMap<String, u64>,
@@ -185,12 +292,10 @@ pub struct ConvertReport {
 }
 
 impl ConvertReport {
-    /// Every approximation, as `<pass>: <what>`, over the selection and every part (explicit passes and the target
-    /// check), from the reports kept.
+    /// Every approximation, as `<pass>: <what>`, over the selection and every part, from the reports kept.
     pub fn approximations(&self) -> BTreeMap<String, u64> {
         let mut out = BTreeMap::new();
-        let runs = std::iter::once(&self.select)
-            .chain(self.part_reports.iter().flat_map(|p| [&p.explicit, &p.automatic]));
+        let runs = std::iter::once(&self.select).chain(self.part_reports.iter().map(|p| &p.explicit));
         for run in runs {
             for step in &run.steps {
                 for (k, v) in &step.log.approximations {
@@ -201,8 +306,8 @@ impl ConvertReport {
         out
     }
 
-    /// Every notice: the reader's and the writer's, then the passes' approximations and what the parts left out, one
-    /// notice per stage and reason over all parts, with the ordinals of the parts as examples.
+    /// Every notice: the reader's and the writer's, then the passes' approximations, what the parts left out and what
+    /// the writer doesn't write, one notice per stage and reason over all parts, with the parts as examples.
     pub fn notices(&self) -> Vec<Notice> {
         let mut out = self.reported.clone();
         let mut derived: BTreeMap<(String, NoticeKind, String), (u64, Vec<String>)> = BTreeMap::new();
@@ -223,7 +328,7 @@ impl ConvertReport {
             }
         }
         for p in &self.part_reports {
-            for step in p.explicit.steps.iter().chain(&p.automatic.steps) {
+            for step in &p.explicit.steps {
                 for (k, v) in &step.log.approximations {
                     add(&step.pass, NoticeKind::Approximation, k, *v, Some(p.ordinal));
                 }
@@ -232,6 +337,15 @@ impl ConvertReport {
                 if k.starts_with("made entities nothing keeps") {
                     add("convert", NoticeKind::Selection, k, *v, Some(p.ordinal));
                 }
+            }
+            for (name, n) in &p.unsupported {
+                add(
+                    "convert",
+                    NoticeKind::Unsupported,
+                    &format!("{name}: the writer doesn't write it"),
+                    *n,
+                    Some(p.ordinal),
+                );
             }
         }
         out.extend(
@@ -306,11 +420,12 @@ fn tally(counts: &mut BTreeMap<String, u64>, report: &RunReport) {
     }
 }
 
-/// Reads with `reader`, runs `select` on the read world, lets `writer` plan, then loads, passes (`passes`), checks
-/// and writes each part it asks for (see the module documentation). On failure the error is a [`ConvertError`]
-/// holding what was reported until then.
-pub fn convert(
+/// Reads with `reader`, runs the program's `select` on the read world, lets `parts` plan, then loads each part, runs
+/// the program's `passes` on it once, checks it against `writer`'s target and writes it (see the module
+/// documentation). On failure the error is a [`ConvertError`] holding what was reported until then.
+pub fn convert_parts(
     reader: &mut dyn Reader,
+    parts: &mut dyn PartSource,
     writer: Box<dyn Writer>,
     manager: &PassManager,
     select: &Pipeline,
@@ -318,7 +433,16 @@ pub fn convert(
 ) -> Result<ConvertReport> {
     let mut report = ConvertReport::default();
     let mut during = String::new();
-    match run(reader, writer, manager, select, passes, &mut report, &mut during) {
+    match run(
+        reader,
+        parts,
+        writer,
+        manager,
+        select,
+        passes,
+        &mut report,
+        &mut during,
+    ) {
         Ok(()) => Ok(report),
         Err(error) => {
             report.reported.push(Notice::new(
@@ -336,8 +460,28 @@ pub fn convert(
     }
 }
 
+/// [`convert_parts`] in one part: every entity of the selected world ([`WholeWorld`]).
+pub fn convert(
+    reader: &mut dyn Reader,
+    writer: Box<dyn Writer>,
+    manager: &PassManager,
+    select: &Pipeline,
+    passes: &Pipeline,
+) -> Result<ConvertReport> {
+    convert_parts(
+        reader,
+        &mut WholeWorld::default(),
+        writer,
+        manager,
+        select,
+        passes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run(
     reader: &mut dyn Reader,
+    parts: &mut dyn PartSource,
     mut writer: Box<dyn Writer>,
     manager: &PassManager,
     select: &Pipeline,
@@ -354,11 +498,12 @@ fn run(
     manager.run(&mut world, select, &mut report.select)?;
     let target = writer.target();
     "plan".clone_into(during);
-    writer.plan(&world, &|p| reader.prototype_box(&world, p))?;
-    while let Some(roots) = writer.next_part()? {
+    parts.plan(&world, &|p| reader.prototype_box(&world, p))?;
+    while let Some(Part { roots, context }) = parts.next_part()? {
         let ordinal = report.part_reports.len();
         *during = format!("part {ordinal}: load");
-        let (mut part, loaded) = reader.load(&world, &roots)?;
+        let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+        let (mut part, loaded) = reader.load(&world, &asked)?;
         report.loads.extend(loaded.iter().cloned());
         report.reported.extend(reader.notices());
         let mut size = PartSize {
@@ -371,15 +516,17 @@ fn run(
         let mut part_report = PartReport {
             ordinal,
             roots: roots.clone(),
+            context: context.clone(),
             load: loaded,
             ..PartReport::default()
         };
         let loaded: BTreeSet<Entity> = part.entities().collect();
         manager.run(&mut part, passes, &mut part_report.explicit)?;
-        // the part is the closure of the roots and of what the passes placed (content of its own nothing need
-        // reference, as a marker; PassLog::place). What the passes left unreferenced of what was loaded (materials of
-        // dropped geometry, of a discarded level of detail) is not part of it, nor is what they made that nothing kept
-        // reaches: dropped, and named in the counts by its components, as are the placed entities
+        // the part's output is the closure of its roots and of what the passes placed (content of its own nothing
+        // need reference, as a marker; PassLog::place). Its context is not output, unless the output reaches it. What
+        // the passes left unreferenced of what was loaded (materials of dropped geometry, of a discarded level of
+        // detail) is not part of it, nor is what they made that nothing kept reaches: dropped, and named in the counts
+        // by its components, as are the placed entities
         let placed: BTreeSet<Entity> = part_report
             .explicit
             .steps
@@ -415,14 +562,33 @@ fn run(
         }
         part.retain(&keep);
         *during = format!("part {ordinal}: target check");
-        part_report.automatic = manager.convert(&mut part, &target, Mode::Full, &PassOptions::new())?;
+        manager.verify(&part, "the passes")?;
+        let checked = target.check_prepared(&part);
+        if let Some((name, words, bad)) = checked.invalid.first() {
+            return Err(format!(
+                "{}: {} of {name} the writer can't write ({words}), the first {:?}",
+                target.name,
+                bad.len(),
+                bad[0]
+            )
+            .into());
+        }
+        if let Some(name) = checked.invalid_resources.first() {
+            return Err(format!(
+                "{}: resource {name} refused ({})",
+                target.name,
+                target.rule_words(name).unwrap_or_default()
+            )
+            .into());
+        }
+        part_report.unsupported = checked.unsupported;
         tally(&mut report.counts, &part_report.explicit);
-        tally(&mut report.counts, &part_report.automatic);
         size.written = sizes(&part);
         report.part_sizes.push(size);
         report.part_reports.push(part_report);
         *during = format!("part {ordinal}: write");
         writer.write(&part)?;
+        parts.written(&part)?;
         report.reported.extend(writer.notices());
         report.parts += 1;
     }

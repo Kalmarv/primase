@@ -480,6 +480,31 @@ impl Target {
         self.rules.get(name)
     }
 
+    /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
+    /// unless carried, an unlisted name: [`Prepared::unsupported`], entity counts by name), and values of names it
+    /// writes that its value rule refuses ([`Prepared::invalid`], by name with the rule's words) or resources it
+    /// refuses ([`Prepared::invalid_resources`]).
+    pub fn check_prepared(&self, w: &World) -> Prepared {
+        let mut out = Prepared::default();
+        for name in w.component_names() {
+            let all = w.entities_named(name);
+            match self.rules.get(name) {
+                Some(Legality::Legal | Legality::Carry | Legality::LowerAndCarry) => {}
+                Some(Legality::Dynamic(f)) => {
+                    let bad: Vec<Entity> = all.into_iter().filter(|&e| !f(w, e)).collect();
+                    if !bad.is_empty() {
+                        let words = self.rule_words(name).unwrap_or_default().to_owned();
+                        out.invalid.push((name.to_owned(), words, bad));
+                    }
+                }
+                None if self.carry_unknown => {}
+                Some(Legality::Illegal) | None => out.unsupported.push((name.to_owned(), all.len() as u64)),
+            }
+        }
+        out.invalid_resources = self.refused_resources(w).into_iter().map(str::to_owned).collect();
+        out
+    }
+
     /// Entities whose `name` component the target does not accept as it is (all of them for an illegal name).
     pub fn illegal_entities(&self, w: &World, name: &str, mode: Mode) -> Vec<Entity> {
         let all = w.entities_named(name);
@@ -514,6 +539,17 @@ impl Target {
             None => Need::Remove,
         }
     }
+}
+
+/// What [`Target::check_prepared`] found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prepared {
+    /// Names the writer doesn't write, with how many entities hold them.
+    pub unsupported: Vec<(String, u64)>,
+    /// Names it writes whose values its rule refuses: the name, the rule's words, the entities.
+    pub invalid: Vec<(String, String, Vec<Entity>)>,
+    /// Resources its rule refuses.
+    pub invalid_resources: Vec<String>,
 }
 
 /// What a plan must do about one name, by the target's rule for it.

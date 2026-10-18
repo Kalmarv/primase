@@ -1,17 +1,15 @@
-//! `--to web`: web tiles for the viewer ([`primase_web::convert::TileWriter`]). Writes `<out>` (compressed,
+//! `--to web`: web tiles ([`primase_web::convert::tiles`]: the tiles plan their own parts). Writes `<out>` (compressed,
 //! instanced) and, with `--plain`, `<out>/plain` (the plain comparison set, for gates).
 use std::path::Path;
 
-use primase_core::convert::Writer;
 use primase_web::Options;
-use primase_web::convert::TileWriter;
 
 use crate::convert::Result;
 
 /// `[--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]] [--budget-mib N |
 /// --no-budget] [--plain]`. KTX2 encodings are kept in the cache folder across runs, else in `PRIMASE_CACHE` when
 /// set; in memory, at most `--encoding-memory-mib` (512 by default) between tiles.
-pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
+pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
     let (mut options, mut plain) = (Options::default(), false);
     #[cfg(feature = "ktx2")]
     let (mut cache_dir, mut cache_max_gib) = (None::<std::path::PathBuf>, None::<u64>);
@@ -77,5 +75,6 @@ pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
         };
         sets.push((plain, out.join("plain")));
     }
-    Ok(Box::new(TileWriter::new(sets)))
+    let (parts, writer) = primase_web::convert::tiles(sets);
+    Ok((Box::new(parts), Box::new(writer)))
 }

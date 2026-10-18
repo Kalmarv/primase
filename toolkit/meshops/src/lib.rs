@@ -19,7 +19,12 @@ pub use parametric::{FlattenCurves, TessellateColliders};
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
+    reg.register("partition-grid", |o| {
+        Ok(Box::new(PartitionGrid::from_options(o)?))
+    });
 }
+mod partition;
+pub use partition::PartitionGrid;
 mod primitive;
 mod texcoords;
 pub mod vector;

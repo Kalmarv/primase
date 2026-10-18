@@ -3,24 +3,22 @@
 //! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>,
 //! spawn=centre}` (the skate dialect, a spawn at the centre of the placements snapped to the ground) and
 //! `lower-layered-reskate` (blends as decal overlays); the target refuses an unlowered blend.
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use primase_core::World;
 use primase_core::convert::{Report, Writer};
 use primase_core::pass::Target;
-use primase_core::{Entity, World};
 use primase_reskate::BuildOptions;
 
 use crate::convert::Result;
 
 struct Reskate {
     options: BuildOptions,
-    roots: Option<BTreeSet<Entity>>,
     report: Report,
 }
 
 /// `[--name N] [--blend-objects N] [--min-instances N]`
-pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
+pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
     let mut name = out
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -64,26 +62,21 @@ pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
         return Err(format!("reskate: the map name {name:?} is not [A-Za-z0-9_-]+ (--name)").into());
     }
     options.name = Some(name);
-    Ok(Box::new(Reskate {
-        options,
-        roots: None,
-        report: Report::new(),
-    }))
+    // one map: the whole selection in one part
+    Ok((
+        Box::new(primase_core::convert::WholeWorld::default()),
+        Box::new(Reskate {
+            options,
+            report: Report::new(),
+        }),
+    ))
 }
 
 impl Writer for Reskate {
-    /// Blends are lowered to decal overlays (`lower-layered-reskate`); the map builder reads the skate dialect and
-    /// core and leaves other names alone.
+    /// The map builder writes the skate dialect and core and leaves other names alone; a blend (`core.layered`) it
+    /// doesn't write: `lower-layered-reskate` lowers blends to decal overlays first.
     fn target(&self) -> Target {
         Target::new("reskate").illegal("core.layered").carry_unknown()
-    }
-    fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
-        // one part: everything selected
-        self.roots = Some(world.entities().collect());
-        Ok(())
-    }
-    fn next_part(&mut self) -> Result<Option<BTreeSet<Entity>>> {
-        Ok(self.roots.take())
     }
     fn write(&mut self, part: &World) -> Result<()> {
         // the world carries every input in memory: no scene folder to read from
