@@ -509,7 +509,8 @@ impl Pass for LowerGtaPbr {
             let anim = anim_uv(s, log);
             match draw_order(s.render_bucket) {
                 Some(d) => {
-                    // the bucket's layer against the shader's class (effect name and bucket), where they disagree
+                    // the bucket's layer against the shader's class (effect name and bucket), where they disagree, by
+                    // effect
                     let class_layer = match c.class {
                         Class::Decal => DrawLayer::Decal,
                         Class::Cutout | Class::Foliage => DrawLayer::Cutout,
@@ -519,8 +520,11 @@ impl Pass for LowerGtaPbr {
                     if class_layer != d.layer {
                         log.count(
                             &format!(
-                                "draw order: render bucket {} drawn {:?}, its shader's class {:?}",
-                                s.render_bucket, d.layer, c.class
+                                "draw order: {} in render bucket {} drawn {:?}, its shader's class {:?}",
+                                crate::shader_names::effect(s.name).unwrap_or("?"),
+                                s.render_bucket,
+                                d.layer,
+                                c.class
                             ),
                             1,
                         );
@@ -1230,7 +1234,7 @@ mod tests {
         );
         assert_eq!(
             log.counts
-                .get("draw order: render bucket 0 drawn Opaque, its shader's class Decal"),
+                .get("draw order: normal_decal in render bucket 0 drawn Opaque, its shader's class Decal"),
             Some(&1)
         );
         assert_eq!(
