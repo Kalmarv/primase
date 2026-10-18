@@ -583,6 +583,11 @@ impl Pass for LowerGtaWater {
     fn removes(&self) -> &[&'static str] {
         &["gta.water_surface"]
     }
+    /// The one surface it adds (`WATER`) is classified from the surface table as it is added, so it can run after
+    /// `lower-gta-surfaces`.
+    fn settles(&self) -> &[&'static str] {
+        &["core.surfaces"]
+    }
     fn approximates(&self) -> &'static str {
         "the water shader as the earlier exporter's blended flat colour, its roughness from the tuning's specular \
          falloff; waves, calming, corner values and depth and stencil flags not drawn"

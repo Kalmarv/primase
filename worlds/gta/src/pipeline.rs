@@ -314,4 +314,39 @@ mod tests {
         let p = default_passes(&s);
         assert!(p.contains("lower-gta-pbr{night=true}") && p.matches("lower-gta-pbr").count() == 1);
     }
+
+    /// The pipelines a conversion runs (the selection, the default passes by day and at night, and the GTA part of
+    /// the city program's per-cell list, a fixture: its own cap-textures pass and the skate passes after it are left
+    /// out) are accepted by the pass manager: no pass provides what an earlier one settled (core.surfaces after
+    /// lower-gta-surfaces). Declarations only, no game data.
+    #[test]
+    fn the_conversion_pipelines_are_not_refused() {
+        use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
+        let mut r = PassRegistry::new();
+        r.register("select-lod", primase_core::select_lod);
+        r.register("resolve-state", primase_core::state::resolve_state);
+        r.register("normalize-normals", |_| {
+            Ok(Box::new(primase_image::NormalizeNormals))
+        });
+        crate::register(&mut r);
+        let m = PassManager::new(r);
+        let mut s = Selection::new([0.0, 0.0, 1.0, 1.0], super::Map::Online);
+        let mut pipelines = vec![super::select_passes(&s), default_passes(&s)];
+        s.hour = Some(22);
+        pipelines.extend([super::select_passes(&s), default_passes(&s)]);
+        pipelines.push(
+            "select-lod{form=1}, lower-gta-embedded-collision, gta-pose-fragments, lower-gta-pbr, gta-winding, \
+             gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals"
+                .to_string(),
+        );
+        for text in pipelines {
+            let p = m.registry.parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            // an empty world: the run may stop for other reasons (an axis the assignment names), never this one
+            let r = m.run(&mut primase_core::World::new(), &p, &mut RunReport::default());
+            assert!(
+                !matches!(r, Err(Error::SettledThenChanged { .. })),
+                "{text}: {r:?}"
+            );
+        }
+    }
 }
