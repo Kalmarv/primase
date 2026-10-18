@@ -438,12 +438,44 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
         use primase_core::{LayeredMaterial, MaterialVariants, MeshFile};
         use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial};
-        use std::collections::BTreeMap;
-        let layered: BTreeMap<Entity, LayeredMaterial> = world
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut layered: BTreeMap<Entity, LayeredMaterial> = world
             .iter::<LayeredMaterial>()
             .map(|(e, l)| (e, l.clone()))
             .collect();
+        // a blend no placed primitive draws: raise-skate leaves it unraised (no skate.material, counted there), and so
+        // does this pass, its core.layered dropped (counted); one a placed primitive draws must have been raised
+        let mut drawn: BTreeSet<Entity> = BTreeSet::new();
+        for p in world
+            .iter::<primase_core::Instance>()
+            .map(|(_, i)| i.prototype)
+            .collect::<BTreeSet<_>>()
+        {
+            if let Some(mesh) = world.get::<Mesh>(p) {
+                drawn.extend(mesh.primitives().iter().filter_map(|q| q.material));
+            }
+            if let Some(v) = world.get::<MaterialVariants>(p) {
+                drawn.extend(v.0.iter().flat_map(|o| o.values().copied()));
+            }
+        }
+        let undrawn: Vec<Entity> = layered
+            .keys()
+            .filter(|e| !world.has::<SkateMaterial>(**e) && !drawn.contains(e))
+            .copied()
+            .collect();
+        for e in &undrawn {
+            layered.remove(e);
+        }
         if layered.is_empty() {
+            for e in &undrawn {
+                world.remove::<LayeredMaterial>(*e);
+            }
+            if !undrawn.is_empty() {
+                log.count(
+                    "blends no placed primitive draws (not raised), left out",
+                    undrawn.len() as u64,
+                );
+            }
             return Ok(());
         }
         if let Some(e) = layered
@@ -657,6 +689,15 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         for m in layered.keys() {
             world.remove::<LayeredMaterial>(*m);
             world.remove::<SkateMaterial>(*m);
+        }
+        for e in &undrawn {
+            world.remove::<LayeredMaterial>(*e);
+        }
+        if !undrawn.is_empty() {
+            log.count(
+                "blends no placed primitive draws (not raised), left out",
+                undrawn.len() as u64,
+            );
         }
         Ok(())
     }
@@ -1038,9 +1079,35 @@ mod tests {
         refused_unchanged(world, "test.sources");
     }
 
+    /// A blend a placed primitive draws must have been raised (its overlays need its key): refused, nothing changed.
     #[test]
     fn unkeyed_layered_material_refuses_all_changes() {
-        refused_unchanged(layered_world(false, Some(1)).0, "no skate.material");
+        let (mut world, _, mesh) = layered_world(false, Some(1));
+        let at = world.spawn();
+        world.insert(
+            at,
+            primase_core::Instance {
+                prototype: mesh,
+                variant: 0,
+            },
+        );
+        refused_unchanged(world, "no skate.material");
+    }
+
+    /// A blend no placed primitive draws (raise-skate left it unraised) is left out: its core.layered dropped,
+    /// counted, the unplaced mesh that draws it untouched.
+    #[test]
+    fn a_blend_no_placed_primitive_draws_is_left_out() {
+        let (mut world, m, mesh) = layered_world(false, Some(1));
+        let before = world.get::<Mesh>(mesh).cloned();
+        let mut log = PassLog::default();
+        LowerLayeredReskate::default().run(&mut world, &mut log).unwrap();
+        assert!(!world.has::<LayeredMaterial>(m));
+        assert_eq!(world.get::<Mesh>(mesh).cloned(), before);
+        assert_eq!(
+            log.counts["blends no placed primitive draws (not raised), left out"],
+            1
+        );
     }
 
     #[test]
