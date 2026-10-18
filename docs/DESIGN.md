@@ -19,9 +19,9 @@ and writers ask for (section 3).
 
 ## 2. Principles
 
-0. **Roles.** Readers only read, passes transform, writers only write; core holds world facts and the pass
-   machinery, the toolkit shared mechanisms, the cli and pipelines compose. CONTRIBUTING.md ("Roles: read this
-   first") says what each may and may not do and which check enforces it. Without these roles the plumbing between
+0. **Roles.** Readers only read, passes transform, writers only write; core holds shared meanings and the pass
+   machinery, the toolkit shared mechanisms; programs, in their consumers' repositories, compose them and make the
+   choices. CONTRIBUTING.md ("The model", "Roles") says what each may and may not do and which check enforces it. Without these roles the plumbing between
    any input and any output stops being plumbing.
 1. **Small core, open edges.** The core fixes only what everyone must agree on: entities, transforms, meshes,
    textures, units/axes/handedness, colour space. Game- and target-specific meaning lives in namespaced components.
@@ -35,7 +35,8 @@ and writers ask for (section 3).
 5. **Community tools become test oracles, not dependencies.** Our readers decode the same files as the established
    community tools (CodeWalker, SoulsFormats, ALERT, Pillow, ReSkate's readers); any difference is a bug in one of
    them.
-6. **Deterministic.** The same inputs give byte-identical outputs.
+6. **Deterministic.** The same inputs give the same output bytes. Matching an older tool's bytes is not a goal:
+   outputs are compared with references by meaning.
 
 ## 3. The world: core plus components
 
@@ -157,7 +158,7 @@ across games become core or toolkit functions: the second time a game crate need
 (a codec, a container walk, a vertex decode, a transform convention, a hash), it moves to the toolkit with a gate and
 both games call it. A game crate ends up mostly composition: format specifics plus calls into the toolkit. Likewise a
 CLI is a few dozen lines of reader + passes + writer; if it needs more than piping, the missing piece belongs in a
-crate. Dependencies point down only (`cli -> pipelines -> worlds/formats -> toolkit -> core`); world crates never
+crate. Dependencies point down only (`cli -> worlds/formats -> toolkit -> core`); world crates never
 depend on each other or on formats, and formats depend on no format but `formats/gltf` (CONTRIBUTING.md). `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
 two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or go to Blender.
 
@@ -182,7 +183,7 @@ lowering among them) is what it writes. Re-reading a prototype's GLB from `core.
 `core.mesh`, is the legacy path, kept because the writer loads geometry lazily, one placement band at a time: an M3
 area holds 22-82 MB of GLB, but one tile of a whole GTA city 1.1-1.7 GB (six tiles: 38,051 GLBs, 8.6 GB), more
 than a whole-scene load should hold. That laziness is to move behind the `core.mesh` interface (a loader filling
-`core.mesh` per band) rather than stay a second input. The two paths are gated to write byte-identical maps.
+`core.mesh` per band) rather than stay a second input. The two paths are checked to write the same map.
 
 **The web writer** is the glTF writer plus a web lowering: KTX2 (Basis Universal) textures, meshopt-compressed and
 quantised vertices (`EXT_meshopt_compression`), prototypes and placements as `EXT_mesh_gpu_instancing` (three.js
@@ -193,11 +194,11 @@ collision soups for `@react-three/rapier`, grind curves, spawns and markers as g
 crease edges picked by dihedral angle, optional hatching from baked colour or normals, per-material pens.
 
 ## 6. Testing (gates are the product)
-- **Decoder gates:** every decoder against a second decoder or fixtures, over synthetic data and a sample of every
-  game's real data; bit exact or a stated tolerance.
-- **Reader census:** every reader runs over all assets of its kind in a game and reports decode failures by count.
-- **Writer round trips:** write -> read back -> compare; the ReSkate writer is gated byte-identical against the
-  existing reference writer.
+- **Decoder gates:** a decoder against an independent decoder or fixtures, over synthetic data and the real data the
+  change affects; exact where the format defines it, else a stated tolerance.
+- **Reader census:** a reader can run over all assets of its kind in a game and report decode failures by count, when
+  a change needs that breadth; it is not run for every change.
+- **Writer round trips:** write -> read back -> compare by meaning; omitted features are reported.
 - **World validators:** identity rules ("texture name -> one image", "EBX name -> one partition"), frame sanity,
   non-finite and degenerate checks.
 
@@ -207,7 +208,7 @@ are unset (CONTRIBUTING.md).
 ## 7. Roadmap
 
 **v1.** Readers: Forza Horizon 6, a Unity game, Sekiro, GTA V (from existing scene-interchange folders first). Writers:
-ReSkate (skate. maps, byte-identical to the reference writer), Blender via glTF (materials, collections, and the
+ReSkate (skate. maps), Blender via glTF (materials, collections, and the
 un-lowered material data kept in `extras.primase` next to the baked PBR), and three.js / react-three-fiber.
 
 **After v1:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'

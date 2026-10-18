@@ -1,6 +1,7 @@
 # primase
 
-A compiler-style library for converting 3D game worlds, with a command-line binary on the way.
+A compiler-style library for converting 3D game worlds. Programs that use it compose its readers, passes and
+writers and make the conversion's choices; a small command line is there for trying it.
 
 Instead of writing N x M point-to-point exporters, **readers** lift a game or file format into a shared
 entity-component [`World`](core/src/world.rs), **passes** lower and normalise dialects step by step, and **writers**
@@ -54,16 +55,16 @@ The core design is borrowed from **MLIR**:
 | :--- | :--- |
 | [`core/`](core/) | The `World`, core/PBR/LOD/state/layered components, `PassManager`, target legalisation and the world printer. |
 | [`toolkit/`](toolkit/) | Format and math primitives with no game knowledge: `bytes`, `compress`, `hash`, `dds`, `texcodec`, `image` (BCn/DDS/PNG textures), `meshops` and `vertex` (mesh and UV operations), `dxbc` (an SM5 shader interpreter), `havok`, `frostbite`, and `testdata` (real-data test configuration). |
-| [`formats/`](formats/) | Interchange readers and writers: `gltf`, `skate-scene` and `web` (tiled Three.js worlds with KTX2, meshopt and GPU instancing, for [`primase-viewer`](https://github.com/kalmarv/primase-viewer)). |
+| [`formats/`](formats/) | Interchange readers and writers: `gltf`, `skate-scene` and `web` (tiled Three.js worlds with KTX2, meshopt and GPU instancing, for a web viewer). |
 | [`worlds/`](worlds/) | Per-game readers, dialect lowerings and builders: `fromsoft` (Sekiro), `unity`, `gta` (GTA V) and `reskate` (*skate.*). |
-| [`cli/`](cli/) | The `primase` binary (it has no subcommands yet) and the architecture test. |
+| [`cli/`](cli/) | The `primase` binary (`primase convert`, for trying a reader, passes and a writer together) and the architecture test. |
 
 ## Getting started
 
 The library is used from Rust. Worked compositions of a reader, passes and a writer are the examples:
 
 ```sh
-# Export a skate-scene folder as web tiles for primase-viewer
+# Export a skate-scene folder as web tiles
 cargo run --release -p primase-web --example scene_to_tiles -- path/to/scene path/to/out
 
 # Export a Unity level (needs the game's data folder and a type-tree package)
@@ -83,7 +84,8 @@ see the real-data section of [`CONTRIBUTING.md`](CONTRIBUTING.md).
 * [`docs/SPEC.md`](docs/SPEC.md): the columnar World Format v2 (`.pwc`).
 * [`docs/research/MLIR.md`](docs/research/MLIR.md): how MLIR's concepts (operations, conversion targets, pass
   manager, text printing) map to primase.
-* [`CONTRIBUTING.md`](CONTRIBUTING.md): the reader, pass, writer and CLI role rules, gates and real-data setup.
+* [`CONTRIBUTING.md`](CONTRIBUTING.md): the model (read it first), the reader, pass, writer and program roles, checks
+  and real-data setup.
 
 ## Licence
 

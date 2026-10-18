@@ -1,101 +1,152 @@
 # Contributing to primase
 
-How the workspace is laid out and the rules every crate follows. The design is `docs/DESIGN.md`.
+What primase is, the role of every piece, and the rules every crate follows. This page comes first; where any other
+document, rule, `architecture.toml` entry or older decision disagrees with it, this page wins. The design notes are
+`docs/DESIGN.md`.
 
-## Roles: read this first
+## The model
 
-There is one way through primase: **source -> reader -> passes -> writer**. Every piece of code is one of the roles
-below, and each rule is checked by the normal gates (`cargo clippy ... -D warnings`, `cargo test --workspace`).
+primase is a library. Readers bring a game's data in, passes transform it, writers write it out, and a **program**
+composes them and makes the choices.
+
+- **Readers** read supported source information faithfully, into shared core pieces or clearly namespaced game data
+  (`gta.*`, `fromsoft.*`). They don't bake and don't choose destination policy. Coverage grows over time: readers
+  read what they can read. They keep the supported meaning, not necessarily the original encoded bytes; an old
+  compressor's quirks are not reproduced to match its output.
+- **Core and toolkit.** Core holds shared meanings and representations; toolkit holds reusable mechanisms (a codec
+  used by several games is a toolkit crate, because it isn't one game's). New readers and writers should widen the
+  useful combinations without a bespoke integration for every pair.
+- **Passes** transform data, and the program selects them. Shared operations handle texture and geometry work.
+  Destination passes prepare data for one writer: ReSkate's preparation and its prepared data live in the ReSkate
+  crate next to its writer, not in core, and run before writing. Choices such as quality, region, spawn or whether to
+  add a floor are explicit settings or parameters of the passes a program picks.
+- **Programs** live in the consumer's repository (a game's conversion program), import primase and compose its
+  operations, through the chunked conversion helper (`convert`) or directly. They own the recipe and the choices, and
+  may hold custom steps; useful pieces move into primase later. primase has no library tier for complete recipes.
+- **Writers** write the prepared core and namespaced data they understand, whichever reader it came from. They write
+  what they can write: an unsupported feature is omitted and reported, not a failure. They never adapt: baking,
+  resizing, generating collision or moving placements is a pass. Encoding prepared data in their format is writing
+  (vertex packing, file-sized splits, index layout, texture encoding). Invalid data that prevents valid output is an
+  error; an unsupported feature is not.
+- **Further stages** a program runs after writing (a Studio compile, stitching) stay visible stages; they don't
+  justify hidden adaptation in a writer.
+- **When things move into core.** A standard, broadly useful concept can enter core with one current reader. More
+  readers or writers needing the same meaning is another reason. Shared meanings go to core, mechanisms to toolkit,
+  reusable destination preparation to destination passes.
+- **Reports** return what the program needs to see: known coverage limits, approximations, deliberate selections and
+  exclusions, unsupported output and failures, with each part's approximation details kept. The program decides how to
+  show or act on them. Nothing implies that omitted data was written or that an approximation was exact. A report
+  can't promise to find source features a reader doesn't recognise.
+- **Verification** tests the behaviour a change affects, widening when shared-code impact is uncertain. Missing inputs
+  are reported; not every decoder or game conversion runs for every change.
+
+Clarifications:
+
+- **Choices.** Choosing an operation ("resize this texture") is the program's. Choosing a sensible implementation of it
+  (filter, compression effort, precision) is the library's, with documented defaults. Decisions that materially change
+  what is produced (dropping geometry, lowering resolution, picking a world state) are explicit.
+- **Writing.** Writers may encode and arrange prepared data their own way. Byte differences from an old tool are not a
+  loss; keeping the meaning still needs checking. Changes to content, quality, appearance or gameplay are passes.
+- **Missing support.** Visible reporting is enough for the program to react (a map with no collision, say). There is no
+  mandatory requirements framework.
+- **Chunking.** Deciding how to divide content (regions, tiles, output groups) is a pass's job; loading and processing
+  the pieces incrementally is the reader's and the conversion machinery's. The world can describe objects whose heavy
+  data isn't loaded yet. Operations that need neighbouring geometry or world-wide information get it rather than treat
+  a chunk as an isolated world, and processing in chunks preserves the intended result.
+
+Also always: the repository holds no game files and nothing about anyone's machine; output is deterministic;
+dependencies are small and pinned; correctness comes from independent sources (the game, a third-party tool, a
+hand-worked fixture), never from a second implementation of ours; make it work, then correct, then fast.
+
+## Roles
+
+Every piece of code has one of these roles. Each rule is checked by the normal gates (`cargo clippy ... -D warnings`,
+`cargo test --workspace`) where a check can see it; a lexical check is a guardrail, not proof.
 
 | role | may | may not | checked by |
 |---|---|---|---|
-| **reader** | read the source it is given; attach core components and its own dialect (`gta.*`, `fromsoft.*`); keep the source as authored (bone-space geometry with its skeleton and pose, every level of detail, every state); count what it tolerated; load the meshes and textures a world references, when asked (its load step) | lower, bake, approximate, apply poses, pick levels of detail or states, select what a target draws, shape for a target (another dialect's components, target units), read options from the environment | I/O only in modules that opt in as `reader I/O` (clippy); the namespaces a reader declares, checked by `primase convert` for registered readers |
-| **pass** | transform the world it is given: lower, bake, approximate, select, split, merge; declare what it requires, provides, removes and modifies; name and count every approximation | touch files, the environment or processes; run outside the pass manager | clippy's file/environment ban; every pass registered by name and every public lowering run by a pass (`cli/tests/architecture.rs`) |
-| **writer** | serialize what its target declares, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing the world; refuse the rest by name | lower, approximate, or select and merge what the world means for its target (a pass does that first), derive data a pass should own, read other files, change the world | writer entry points take `&World` (`cli/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
-| **core** | world facts, the store, frames, the pass machinery and its generic passes, gates | game or target names, renderer tuning, file access, dependencies on other crates | crate dependencies, game names, clippy's file ban (`cli/tests/architecture.rs`) |
+| **reader** | read the source it is given; attach core components and its own namespace (`gta.*`, `fromsoft.*`); keep the source as authored (bone-space geometry with its skeleton and pose, every level of detail, every state); report what it tolerated or can't read; load the heavy data (meshes, textures) of the parts it is asked for | lower, bake, approximate, apply poses, pick levels of detail or states, select what a destination draws, shape for a destination (another namespace's components, destination units), read options from the environment | I/O only in modules that opt in as `reader I/O` (clippy); the namespaces a reader declares, checked by `primase convert` for registered readers |
+| **pass** | transform the world it is given: lower, bake, approximate, select, split, merge, prepare for a destination; declare what it requires, provides, removes and modifies; report every approximation and exclusion by name | touch files, the environment or processes; run outside the pass manager | clippy's file/environment ban; every pass registered by name and every public lowering run by a pass (`cli/tests/architecture.rs`) |
+| **writer** | encode the prepared data its format supports, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing what it means; omit and report what it doesn't support; refuse invalid prepared data with the reason | lower, approximate, resize, select, merge, generate or move content (a pass does that first), read other files, change the world | writer entry points take `&World` (`cli/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
+| **core** | shared meanings, the store, frames, the pass machinery and its generic passes, gates | game or destination names, renderer tuning, file access, dependencies on other crates | crate dependencies, game names, clippy's file ban (`cli/tests/architecture.rs`) |
 | **toolkit** | shared mechanisms that games supply data to | game branches, depending on formats or worlds | crate dependencies, game names |
 | **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf` | crate dependencies, game names |
 | **test-input registry** (`toolkit/testdata`) | name and describe the real-data inputs tests read, games and third-party tools included; resolve them | game logic, depending on workspace crates, being a normal dependency of any crate | crate dependencies (not excusable in `architecture.toml`); `real_data_variables_are_declared` |
-| **cli, pipelines, examples, scripts** | compose readers, passes, writers and `convert`, in any combination | data logic of their own: reimplementing a step, querying or editing world components, reading a format, running a pass past the manager | `cli/tests/architecture.rs` (`entry_points`) |
+| **cli, examples** | compose readers, passes, writers and `convert` for a person trying the library | data logic of their own (reimplementing a step, querying or editing world components, reading a format, running a pass past the manager); hiding a recipe's choices | `cli/tests/architecture.rs` (`entry_points`) |
+
+Programs are not in this repository: they live with their consumers and hold the recipe, the settings, custom steps and
+the stages after writing.
 
 Known exceptions are listed in `architecture.toml`, each with its reason and what removes it. The test fails on an
-exception that no longer occurs, so fixing a violation means deleting its entry; adding one needs a reviewer's
-agreement.
+exception that no longer occurs, so fixing a violation means deleting its entry. The list only shrinks: a new entry
+needs Caleb's approval, recorded in the entry (`approved = "Caleb, YYYY-MM-DD"`); an exception is never added to make
+a check pass (`exceptions_are_approved_or_shrinking`).
 
 ## Drift: shapes to refuse in review
 
-Changes drift towards one program's situation in recognisable shapes. Writers check their change against these, and
-reviewers refuse them.
-
-- **A reader that bakes, lowers or approximates.** The reader keeps the source's data; a named pass changes it
-  (Roles). Checked by the namespaces a reader declares.
-- **A flag or boolean added for one target's need.** If the fact is in the source (draw order, what draws over what,
-  a surface's material), the reader reads it into a generic core component every target can use. A target-shaped
-  switch doesn't land.
+- **A reader that bakes, lowers, selects or approximates.** The reader keeps the source's data; a pass the program
+  selects changes it.
+- **A writer that adapts.** Resizing, budgets, floors, lifts, collision generation, a fallback spawn: each is a pass
+  the program selects, not a side effect of writing.
+- **A default that is a choice.** A reader or library operation that silently picks a quality, region, LOD, state or
+  fallback for its caller. The program states it; the library documents implementation defaults (filters, effort)
+  only.
+- **A flag or boolean added for one destination's need.** If the fact is in the source (draw order, what draws over
+  what, a surface's material), the reader reads it into a shared core meaning every destination can use.
 - **A hand-kept name list where the data already says it.** Read the field (a sampler state, a shader class, a
-  surface id). A name list is acceptable only as a named, documented table from source names to core vocabulary, in
-  a pass, counting what it doesn't map.
-- **Game or target semantics in core or the toolkit.** Core holds generic facts; game names and target rules live
-  in that game's or target's crate. A core change carries evidence from two sources, or a written reason why one is
-  enough.
-- **A contract a pass may skip.** Counts, per-primitive data (`World::rebuild_primitives`), declarations (the pass
+  surface id). A name list is acceptable only as a named, documented table from source names to shared vocabulary,
+  in the game's reader or passes, reporting what it doesn't map.
+- **Game or destination semantics in core or the toolkit.** Core holds shared meanings; a game's meaning lives in its
+  reader and passes, a destination's preparation in the destination's crate.
+- **A contract a pass may skip.** Reports, per-primitive data (`World::rebuild_primitives`), declarations (the pass
   manager's checks). If a contract can be skipped, make it a compile or run error, not a convention.
 - **A home-made oracle.** Compare against the game, a third-party tool or hand-worked fixtures. A second
-  implementation of our own isn't evidence. A baseline of our own output detects changes; it doesn't check
+  implementation of our own isn't evidence. A baseline of our own output detects change; it doesn't check
   correctness.
-- **A program-specific shortcut in the library.** A path, option or code branch that exists for one driver, scene
-  or machine stays in that driver: the library is composable by any program.
+- **A lost report.** An approximation, exclusion or omission that a pass or writer knew about and the program can't
+  see.
 
-## Priorities: correct first, then fast
+## Priorities: work, then correct, then fast
 
-1. Every piece lands with its gates passing: cross-checks against a second decoder or fixtures, the census over a
-   game's real data, byte-identical round trips. No gates, no merge.
-2. Performance comes after, measured with benches (`criterion`, in the crate's `benches/`). An optimisation merges only
-   if every gate still passes **byte for byte**.
+1. Every piece lands with the checks its change affects passing: independent cross-checks or hand-worked fixtures for
+   what it reads or writes, compared by meaning.
+2. Performance comes after, measured with benches (`criterion`, in the crate's `benches/`). An optimisation lands only
+   if the meaning of every affected output is unchanged.
 3. Never trade correctness for speed: no "fast path" that skips a check, no tolerance widened to make a faster
    version pass.
 
-## Layout and the crate rule
+## Layout
 
 ```
-core/                 primase-core: world store, core components, TexFormat, frame, pass manager, gates
-toolkit/<name>/       primase-<name>: patterns games repeat (texcodec, dds, compress, hash, image, vertex, ...)
-worlds/<game>/        primase-<game>: one crate per game or engine (sekiro, gta, fh6, unity, reskate, ...)
-formats/<name>/       primase-<name>: file formats that are not one game's (skate-scene, gltf, usd, web, ...)
-pipelines/<name>/     primase-<name>: reusable compositions of readers, passes and writers (no data logic)
-cli/                  primase: thin compositions of readers + passes + writers
+core/                 primase-core: world store, core components, TexFormat, frame, pass manager, conversion helper
+toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, hash, image, meshops, vertex, ...)
+worlds/<name>/        primase-<name>: one crate per game, engine or destination (fromsoft, gta, unity, reskate, ...):
+                      its reader, its passes, and for a destination its preparation passes and writer
+formats/<name>/       primase-<name>: file formats that are not one game's (skate-scene, gltf, web, ...)
+cli/                  primase: a small command line over the library, for trying it; not where recipes live
 ```
 
-**Each new game is its own crate. Patterns that recur across games move into core or the toolkit:** the second time a
-game crate needs something another game already has (a codec, a container walk, a vertex decode, a transform
-convention, a hash), it moves to the toolkit with a gate and both games call it. A game crate should end up mostly
-composition: its format specifics plus calls into the toolkit. Likewise a CLI that needs more than piping is missing a
-crate function.
+Dependencies point down only: `cli -> worlds/formats -> toolkit -> core`. A world crate depends only on the toolkit
+and core: never on a format or another world. A format crate depends on the toolkit, core and `formats/gltf` (the
+container other formats embed) only. What two of them share belongs lower. Dev-dependencies may add format crates
+(round-trip gates) and `toolkit/testdata`, which is never a normal dependency.
 
-Dependencies point down only: `cli -> pipelines -> worlds/formats -> toolkit -> core`. A world crate depends only on
-the toolkit and core: never on a format or another world. A format crate depends on the toolkit, core and
-`formats/gltf` (the container other formats embed) only. What two of them share belongs lower. Dev-dependencies may
-add format crates (round-trip gates) and `toolkit/testdata`, which is never a normal dependency.
-
-Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's world crate, or for
-`skate.*` (until `worlds/reskate` exists) `formats/skate-scene`. `pbr.*` lives in core.
+Namespaced components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's or destination's
+crate (`skate.*`: `formats/skate-scene` until it folds into `worlds/reskate`). `pbr.*` lives in core.
 
 ### Where code goes
 
-1. **Three layers.** `core` is tiny and slow to change: the world, core components, frames, the pass manager,
-   gates. The **toolkit** is many small, independent crates where most reuse lands: codecs, containers, vertex
-   layouts, mesh operations, hashes. Game and format crates sit on top. "Should this be shared?" usually means a
-   toolkit crate, not core.
-2. **Share mechanisms; games supply data.** Prefer one mechanism driven by per-game tables over per-game code: one
-   vertex decoder driven by layout descriptors (each game maps its layout format onto them), one `TexFormat` that
-   games map their format ids onto, one index + entries + decompression container walker with per-game headers and
-   hash functions.
-3. **Move it down at the second copy; refine its interface at the third.** No abstraction is designed ahead of two
-   real users.
-4. **Watch for the opposite failure.** Shared code that grows game flags or `if game == ...` branches is two things
-   under one name: split it, or push it back down into the game crates.
-5. **Measure it.** For each new game reader, record its game-specific line count against its toolkit calls. A large
-   game-specific share points at a missing toolkit piece.
+1. **A game's meaning** (what its data is, its shader classes, which of its records are ledges or spawns) goes to its
+   reader, or to its passes when turning it into shared core data is a choice or an approximation.
+2. **A shared meaning** goes to core. A standard, broadly useful concept can enter core with one current reader; a
+   one-off convenience doesn't.
+3. **A mechanism** (codec, container walk, vertex decode, mesh or image operation, hash) goes to the toolkit, so games
+   and destinations supply data to one mechanism instead of each growing their own. Code moves down when a second
+   copy appears; don't design an abstraction ahead of real use.
+4. **Destination preparation** goes to the destination's crate as passes, next to its writer.
+5. **A recipe and its choices** go to the program, in its consumer's repository.
+6. **Watch for the opposite failure.** Shared code that grows game flags or `if game == ...` branches is two things
+   under one name: split it, or push it back down.
 
 ## API conventions
 
@@ -111,7 +162,7 @@ Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crat
 - **Determinism**: same inputs, same bytes. No `HashMap`/`HashSet` iteration on any path that reaches output (use
   `BTreeMap`, `IndexMap`, or sort); no thread-timing-dependent order; output names come from content. Parallel code
   must produce the same bytes as serial code (a test proves it).
-- **Numbers**: geometry and transforms are f32 where the formats are f32 (byte-identical round trips); compute in f64
+- **Numbers**: geometry and transforms are f32 where the formats are f32 (lossless round trips); compute in f64
   where precision matters and say where results are rounded. Non-finite values are errors, never silently written.
 - **Frame**: the world is metres, right-handed, +Y up, -Z north (glTF). Readers convert in, writers convert out, with
   `primase_core::frame`.
@@ -121,15 +172,16 @@ Dialect components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crat
 
 ## Gates
 
-- Every decoder has a second, independent decoder or fixtures to check it against (`primase_core::gate::GateReport`).
-  The test's doc comment names the oracle.
+- Test what the change affects. A decoder is checked against an independent decoder or fixtures
+  (`primase_core::gate::GateReport`); the test's doc comment names the oracle.
 - **Independent means not ours.** Compare against something we did not write: the game or consumer itself, or an
   existing third-party tool or library (format libraries, the Khronos glTF validator, shader compilers, UnityPy,
   community readers). Where none exists, use small hand-worked fixtures. A second implementation written for this
   project is not independent of the first; do not add one, and when an existing home-made oracle's test is next
   touched, replace it with a third-party check or fixtures.
-- Every reader has a census over all of a game's real data of its kind, reporting failures by count.
-- Writers round-trip: write, read back, compare.
+- A census over a game's real data is a tool for a reader change that needs it, not a default for every change.
+- Writers round-trip where they can: write, read back, compare by meaning; and their tests show what they omit is
+  reported.
 - Known test values (hash outputs, decoded pixels of a known block) are unit tests.
 
 ### What "correct" means
@@ -146,7 +198,8 @@ tool), cross-checked by an independent decoder. It does not mean reproducing an 
   reads: f32 fields as f32, integers exact); PNGs by header, palette, transparency and decoded pixels; BCn conventions
   that differ from the spec (about one grey level, each convention named); derived floats such as normals and
   tangents (a few ulp); compressed byte streams. Every known difference is named and counted in the gate's report.
-- **Deterministic.** Our own output stays the same bytes for the same input, for our reproducibility.
+- **Deterministic.** Our own output stays the same bytes for the same input, for our reproducibility. Matching an
+  old tool's bytes is not a goal.
 - **No complexity for quirks**, unless the quirk has an effect in the consumer. Code that only reproduces another
   program's formatting or arithmetic quirks doesn't belong in the library. When a game or target tool actually
   depends on an old tool's behaviour (a value it reads, a layout it requires), we match it, and the gate says why,
@@ -176,8 +229,8 @@ Resolution is the named environment variable if set (even if empty), then its en
 then no value. There is no implicit file search. An environment override does not read the file. Partial files are
 normal: absent names print `SKIPPED` for path-based gates, including the configured file name, and return `None`.
 A name that is set but whose path does not exist fails the gate: a configured input that is gone is never a skip.
-With `PRIMASE_REQUIRE_REAL_DATA = "1"` (environment or the `PRIMASE_DATA` file) an unset name fails too; merge gates
-for a crate run its real-data tests with it, so a skipped real-data test counts as a failure. A named configuration
+With `PRIMASE_REQUIRE_REAL_DATA = "1"` (environment or the `PRIMASE_DATA` file) an unset name fails too: use it when
+running the real-data tests a change affects, so a skipped affected test counts as a failure, not a pass. A named configuration
 file that cannot be read, is invalid TOML, or contains any non-string value is a configuration error that fails the
 gate with the requested name and file path. Use TOML literal strings (single quotes) for Windows backslashes.
 
@@ -308,4 +361,4 @@ Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-co
 
 Toolchain: pinned in `rust-toolchain.toml` (latest stable). `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`. Commit messages say what changed
-and how it was verified.
+and how it was verified: which affected checks ran, and which inputs were missing.
