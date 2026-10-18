@@ -84,6 +84,27 @@ impl Selection {
     }
 }
 
+/// The hours GTA's night-only surfaces and lights are on, bit h for hour h: 00-05 and 20-23, the hours the city's
+/// street lamps' light records name (`time_flags` 0xF0003F on the lamps of every region read so far).
+pub const NIGHT_HOURS: u32 = 0x00F0_003F;
+
+/// Hour `hour` (0-23) is a night hour ([`NIGHT_HOURS`]).
+pub fn is_night(hour: u8) -> bool {
+    hour < 24 && NIGHT_HOURS & (1 << hour) != 0
+}
+
+/// The passes a loaded world goes through for the selection: [`DEFAULT_PASSES`], lowered for night
+/// (`lower-gta-pbr{night=true}`: night emission on, night-only geometry kept) when its hour is a night hour, so the
+/// materials agree with the hour the selection resolves the time archetypes and lights at (the default hour, 12, is
+/// day).
+pub fn default_passes(s: &Selection) -> String {
+    if s.hour.is_some_and(is_night) {
+        DEFAULT_PASSES.replacen("lower-gta-pbr", "lower-gta-pbr{night=true}", 1)
+    } else {
+        DEFAULT_PASSES.to_string()
+    }
+}
+
 /// The selection as passes on the read world: `resolve-state` to the map state (and hour), `gta-select-region` with
 /// the region rules, unless interiors stay `gta-leave-out-interiors`, then `lower-gta-lights` for the placements kept
 /// (inside the region; given an hour, those on then), `gta-select-collision` (the plain map bounds) and
@@ -272,4 +293,25 @@ pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> 
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)
     Some([[lo[0], lo[2], -hi[1]], [hi[0], hi[2], -lo[1]]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_PASSES, Selection, default_passes, is_night};
+
+    /// The street lamps' hours are night: 00-05 and 20-23; a selection at a night hour lowers for night, the default
+    /// (no hour: 12) and day hours as the default passes.
+    #[test]
+    fn the_selection_hour_decides_night() {
+        let night: Vec<u8> = (0..24).filter(|&h| is_night(h)).collect();
+        assert_eq!(night, vec![0, 1, 2, 3, 4, 5, 20, 21, 22, 23]);
+        assert!(!is_night(24));
+        let mut s = Selection::new([0.0, 0.0, 1.0, 1.0], super::Map::Online);
+        assert_eq!(default_passes(&s), DEFAULT_PASSES);
+        s.hour = Some(12);
+        assert_eq!(default_passes(&s), DEFAULT_PASSES);
+        s.hour = Some(22);
+        let p = default_passes(&s);
+        assert!(p.contains("lower-gta-pbr{night=true}") && p.matches("lower-gta-pbr").count() == 1);
+    }
 }

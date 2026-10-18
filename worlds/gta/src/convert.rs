@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use primase_core::convert::{Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use crate::pipeline::{DEFAULT_PASSES, GtaSource, Map, Selection, prototype_box, select_passes};
+use crate::pipeline::{GtaSource, Map, Selection, default_passes, prototype_box, select_passes};
 
 /// What to read: the install and its key folder, and the selection (region, map, hour, sizes, interiors).
 #[derive(Clone, Debug)]
@@ -77,7 +77,7 @@ impl Reader for GtaReader {
         select_passes(&self.selection)
     }
     fn default_passes(&self) -> String {
-        DEFAULT_PASSES.to_string()
+        default_passes(&self.selection)
     }
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         prototype_box(world, prototype)
