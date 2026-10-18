@@ -5,7 +5,7 @@
 //!   and 1 - A x `_Smoothness` (re-encoded as a glTF metallic-roughness texture, B and G); occlusion from the map's G,
 //!   lerped from white by `_OcclusionStrength` (moved to R); `_BumpMap` x `_BumpScale` with `_NORMALMAP`;
 //!   `_EmissionColor` x `_EmissionMap` with `_EMISSION` (HDR colour above 1: normalised, the rest as
-//!   `emissive_strength`); `_Cull` 0 double-sided.
+//!   `emissive_strength`).
 //! - **Standard** and **Standard (Specular setup)** (built-in), as `UnityStandardInput.cginc` reads them: base colour
 //!   `_MainTex` x `_Color`; metallic `_Metallic` and roughness 1 - `_Glossiness`, or with `_METALLICGLOSSMAP` the map's
 //!   R (it replaces `_Metallic`) and 1 - A x `_GlossMapScale` (re-encoded as for URP Lit); smoothness in the base
@@ -27,7 +27,9 @@
 //! core cannot carry yet, the depth write, beside `core.draw_order`, so that targets choose their own approximation;
 //! until then the blend factors stay in `unity.material` and the queue in `core.draw_order`. Cut out at `_Cutoff`
 //! with the `_ALPHATEST_ON` keyword, URP's `_AlphaClip`, or the render type `TransparentCutout` (the material's tag,
-//! else its subshader's: legacy cutout shaders clip in their programs).
+//! else its subshader's: legacy cutout shaders clip in their programs). Double-sided where the draw pass culls
+//! nothing (`Cull Off`, its own or bound to a property such as URP Lit's `_Cull`); without a draw pass, where the
+//! material's `_Cull` is 0.
 //!
 //! Colour properties are gamma-encoded as stored and become linear. The base map's tiling becomes every slot's
 //! [`UvTransform`] (origin moved to top-left): URP Lit's vertex pass computes one coordinate,
@@ -439,7 +441,13 @@ impl Lowering {
             }
             (None, None) => AlphaMode::Opaque,
         };
-        match f("_Cull", 2.0) as i64 {
+        // the draw pass's culling, a bound property read from the material (URP Lit's `Cull [_Cull]`) or the shader's own
+        // (a legacy leaf shader's `Cull Off`); without a draw pass, the material's `_Cull`
+        let cull = match pass {
+            Some(pass) => m.state_value(&pass.cull),
+            None => f("_Cull", 2.0),
+        };
+        match cull as i64 {
             0 => p.double_sided = true,
             1 => self
                 .log
@@ -1128,5 +1136,71 @@ mod tests {
         assert_eq!(mr.levels[0], vec![255, 191, 64, 255]);
         let q = w.get::<PbrMaterial>(b).unwrap();
         assert_eq!((q.metallic, q.roughness), (0.25, 0.25));
+    }
+
+    /// Double-sidedness follows the draw pass's culling: a legacy leaf shader's own `Cull Off`, URP Lit's `Cull [_Cull]`
+    /// read from the material, Standard's fixed `Cull Back`; without a draw pass the material's `_Cull`.
+    #[test]
+    fn double_sided_follows_the_draw_pass_culling() {
+        use crate::material::PassKind;
+        let mut leaves_pass = fixture::own(Some("FORWARDBASE"), 1.0, 0.0);
+        leaves_pass.cull = fixture::value(0.0, None);
+        let leaves = stated(
+            "Legacy Shaders/Transparent/Cutout/Diffuse",
+            vec![fixture::sub(
+                &[("RenderType", "TransparentCutout")],
+                vec![leaves_pass],
+            )],
+            &[],
+            &[],
+        );
+        let mut bound = fixture::pass(
+            PassKind::Normal,
+            Some("FORWARDBASE"),
+            fixture::value(1.0, None),
+            fixture::value(0.0, None),
+        );
+        bound.cull = fixture::value(2.0, Some("_Cull"));
+        let two_sided = stated(
+            "Custom/Two Sided",
+            vec![fixture::sub(&[], vec![bound])],
+            &[("_Cull", 0.0)],
+            &[],
+        );
+        let standard = stated(
+            "Standard",
+            vec![fixture::standard()],
+            &[("_SrcBlend", 1.0), ("_DstBlend", 0.0), ("_Cull", 0.0)],
+            &[],
+        );
+        let sided = |ms: &[UnityMaterial], pipeline| {
+            let mut w = World::new();
+            w.insert_resource(UnityRenderSettings {
+                pipeline,
+                ..Default::default()
+            });
+            let es: Vec<Entity> = ms
+                .iter()
+                .map(|m| {
+                    let e = w.spawn();
+                    w.insert(e, m.clone());
+                    e
+                })
+                .collect();
+            lower_unity_pbr(&mut w).unwrap();
+            es.iter()
+                .map(|e| w.get::<PbrMaterial>(*e).unwrap().double_sided)
+                .collect::<Vec<_>>()
+        };
+        // Standard's `_Cull` 0 is a stray float its passes never read
+        assert_eq!(
+            sided(
+                &[leaves.clone(), two_sided.clone(), standard.clone()],
+                Some(RenderPipeline::BuiltIn)
+            ),
+            [true, true, false]
+        );
+        // no pipeline known, so no draw pass: the material's `_Cull`
+        assert_eq!(sided(&[leaves, two_sided, standard], None), [false, true, true]);
     }
 }
