@@ -708,29 +708,24 @@ mod tests {
     use super::*;
     use primase_core::WeightMapping;
 
-    /// Draw the base and the overlays in order at one vertex with the opacities as written (bytes), and compare
-    /// with the core blend `sum(w_i * L_i)`.
-    fn composite(layers: &[f64], weights: [f32; 4], slots: usize) -> (f64, f64) {
-        let mut counts = OverlayCounts::default();
-        let (over, dark) = opacities(&[weights], slots, &mut counts);
-        let q = |a: f32| f64::from(decal_opacity(a)[0]) / 255.0;
-        let mut c = layers[0];
-        for i in 1..slots {
-            let a = q(over[i - 1][0]);
-            c = (1.0 - a) * c + a * layers[i];
-        }
-        c *= 1.0 - q(dark[0]);
-        let w: Vec<f64> = weights[..slots].iter().map(|&x| f64::from(x)).collect();
-        let s: f64 = w.iter().sum();
-        let norm = if s > 1.0 { s } else { 1.0 };
-        let want: f64 = w.iter().zip(layers).map(|(w, l)| w * l / norm).sum();
-        (c, want)
+    /// The opacity bytes written at one vertex: the slot overlays' red bytes, then the darkening overlay's.
+    fn bytes(weights: [f32; 4], slots: usize, counts: &mut OverlayCounts) -> (Vec<u8>, u8) {
+        let (over, dark) = opacities(&[weights], slots, counts);
+        (
+            over.iter().map(|o| decal_opacity(o[0])[0]).collect(),
+            decal_opacity(dark[0])[0],
+        )
     }
 
-    /// Each written opacity is off by at most half a byte step, and each step moves the result by at most that times
-    /// the colour range.
-    fn bound(slots: usize) -> f64 {
-        slots as f64 * 0.5 / 255.0 + 1e-9
+    /// The game's draw at one vertex: the base, each overlay lerped over it at its byte opacity in slot order, then the
+    /// black darkening overlay.
+    fn draw(layers: &[f64], over: &[u8], dark: u8) -> f64 {
+        let q = |b: u8| f64::from(b) / 255.0;
+        let mut c = layers[0];
+        for (l, &b) in layers[1..].iter().zip(over) {
+            c = (1.0 - q(b)) * c + q(b) * l;
+        }
+        c * (1.0 - q(dark))
     }
 
     fn lcg(seed: &mut u64) -> f64 {
@@ -758,43 +753,25 @@ mod tests {
         assert_eq!(VertexBlend::VertexAlpha.chain_rank(), None);
     }
 
+    /// An internal consistency bound, not an external oracle: over random weights (normalised, and rgb_product_4's,
+    /// which sum below one) the bytes drawn in order stay within half a byte step per written opacity of the core
+    /// blend `sum(w_i * L_i) / max(1, sum(w_i))` (`WeightMapping::evaluate`'s weights). The hand-worked tests below
+    /// carry the contract.
     #[test]
-    fn two_three_and_four_layers_reproduce_the_core_blend() {
+    fn quantization_stays_within_half_a_byte_per_overlay_of_the_core_blend() {
         let mut seed = 7u64;
+        let mut cases: Vec<([f32; 4], usize)> = Vec::new();
         for slots in 2..=4 {
             for _ in 0..2000 {
-                let mut w = [0f32; 4];
-                let mut raw: Vec<f64> = (0..slots).map(|_| lcg(&mut seed)).collect();
+                let raw: Vec<f64> = (0..slots).map(|_| lcg(&mut seed)).collect();
                 let total: f64 = raw.iter().sum();
-                raw.iter_mut().for_each(|x| *x /= total);
+                let mut w = [0f32; 4];
                 for i in 0..slots {
-                    w[i] = raw[i] as f32;
+                    w[i] = (raw[i] / total) as f32;
                 }
-                let layers: Vec<f64> = (0..slots).map(|_| lcg(&mut seed)).collect();
-                let (got, want) = composite(&layers, w, slots);
-                assert!(
-                    (got - want).abs() <= bound(slots + 1),
-                    "{slots} slots {w:?}: {got} vs {want}"
-                );
+                cases.push((w, slots));
             }
         }
-    }
-
-    #[test]
-    fn strongest_layer_not_layer_zero() {
-        let layers = [0.9, 0.1, 0.5];
-        let w = [0.1, 0.7, 0.2, 0.0];
-        let (got, want) = composite(&layers, w, 3);
-        assert!((got - want).abs() <= bound(4), "{got} vs {want}");
-        // the base is slot 0 even though slot 1 is strongest; slot 1's opacity is w1 / (w0 + w1)
-        let mut c = OverlayCounts::default();
-        let (over, _) = opacities(&[w], 3, &mut c);
-        assert!((over[0][0] - 0.7 / 0.8).abs() < 1e-6);
-    }
-
-    #[test]
-    fn rgb_product_4_darkening_matches_evaluate() {
-        let mut seed = 11u64;
         for _ in 0..2000 {
             let ch = [
                 lcg(&mut seed) as f32,
@@ -802,37 +779,74 @@ mod tests {
                 lcg(&mut seed) as f32,
                 1.0,
             ];
-            let w = WeightMapping::RgbProduct4.evaluate(ch);
-            let layers: Vec<f64> = (0..4).map(|_| lcg(&mut seed)).collect();
-            let (got, want) = composite(&layers, w, 4);
-            assert!((got - want).abs() <= bound(5), "{ch:?}: {got} vs {want}");
+            cases.push((WeightMapping::RgbProduct4.evaluate(ch), 4));
         }
+        for (w, slots) in cases {
+            let layers: Vec<f64> = (0..slots).map(|_| lcg(&mut seed)).collect();
+            let (over, dark) = bytes(w, slots, &mut OverlayCounts::default());
+            let got = draw(&layers, &over, dark);
+            let ws: Vec<f64> = w[..slots].iter().map(|&x| f64::from(x)).collect();
+            let norm = ws.iter().sum::<f64>().max(1.0);
+            let want: f64 = ws.iter().zip(&layers).map(|(w, l)| w * l / norm).sum();
+            let bound = (slots + 1) as f64 * 0.5 / 255.0 + 1e-9;
+            assert!(
+                (got - want).abs() <= bound,
+                "{slots} slots {w:?}: {got} vs {want}"
+            );
+        }
+    }
+
+    /// Weights 0.5, 0.3, 0.2 by hand: slot 1's opacity 0.3 / 0.8 = 0.375 (x 255 = 95.6: byte 96), slot 2's 0.2 / 1.0
+    /// (51), no darkening. Drawn over layers 0.9, 0.1, 0.5: 0.9 -> 0.5988 -> 0.5791 (the exact blend is 0.58).
+    #[test]
+    fn three_layers_write_hand_worked_bytes() {
         let mut c = OverlayCounts::default();
-        opacities(
-            &[WeightMapping::RgbProduct4.evaluate([0.5, 0.2, 0.3, 1.0])],
-            4,
-            &mut c,
-        );
-        assert_eq!(c.darkening_vertices, 1);
+        let (over, dark) = bytes([0.5, 0.3, 0.2, 0.0], 3, &mut c);
+        assert_eq!((over.as_slice(), dark), (&[96u8, 51][..], 0));
+        assert_eq!((c.clamped_vertices, c.darkening_vertices), (0, 0));
+        assert!((draw(&[0.9, 0.1, 0.5], &over, dark) - 0.579_059).abs() < 1e-6);
     }
 
     #[test]
-    fn weights_above_one_are_scaled_and_counted() {
-        let w = [0.8, 0.6, 0.0, 0.0];
-        let (got, want) = composite(&[0.2, 1.0], w, 2);
-        assert!((got - want).abs() <= bound(3), "{got} vs {want}");
+    fn strongest_layer_not_layer_zero() {
+        // the base is slot 0 even though slot 1 is strongest: slot 1's opacity is w1 / (w0 + w1) = 0.7 / 0.8 = 0.875
+        // (x 255 = 223.1: byte 223), slot 2's 0.2 (51). Over layers 0.9, 0.1, 0.5: 0.9 -> 0.2004 -> 0.2603 (exact 0.26)
+        let (over, dark) = bytes([0.1, 0.7, 0.2, 0.0], 3, &mut OverlayCounts::default());
+        assert_eq!((over.as_slice(), dark), (&[223u8, 51][..], 0));
+        assert!((draw(&[0.9, 0.1, 0.5], &over, dark) - 0.260_314).abs() < 1e-6);
+    }
+
+    /// rgb_product_4 at (r, g, b) = (0.5, 0, 0.5): weights 0.25, 0.25, 0, 0, summing to 0.5. Slot 1's opacity 0.25 /
+    /// 0.5 (x 255 = 127.5: byte 128), slots 2 and 3 none, the darkening 1 - 0.5 (128). Over layers 0.8, 0.4, -, -:
+    /// 0.8 -> 0.5992, darkened by 127/255 -> 0.2984 (exact 0.3).
+    #[test]
+    fn rgb_product_4_darkening_writes_hand_worked_bytes() {
+        let w = WeightMapping::RgbProduct4.evaluate([0.5, 0.0, 0.5, 1.0]);
+        assert_eq!(w, [0.25, 0.25, 0.0, 0.0]);
         let mut c = OverlayCounts::default();
-        opacities(&[w], 2, &mut c);
+        let (over, dark) = bytes(w, 4, &mut c);
+        assert_eq!((over.as_slice(), dark), (&[128u8, 0, 0][..], 128));
+        assert_eq!(c.darkening_vertices, 1);
+        assert!((draw(&[0.8, 0.4, 0.0, 0.0], &over, dark) - 0.298_433).abs() < 1e-6);
+    }
+
+    /// Weights 0.8 and 0.6 sum to 1.4: scaled by 1 / 1.4 and counted; slot 1's opacity 0.6 / 1.4 (x 255 = 109.3: byte
+    /// 109). Over layers 0.2, 1.0: 0.5420 (exact (0.16 + 0.6) / 1.4 = 0.5429).
+    #[test]
+    fn weights_above_one_are_scaled_and_counted() {
+        let mut c = OverlayCounts::default();
+        let (over, dark) = bytes([0.8, 0.6, 0.0, 0.0], 2, &mut c);
+        assert_eq!((over.as_slice(), dark), (&[109u8][..], 0));
         assert_eq!((c.clamped_vertices, c.darkening_vertices), (1, 0));
+        assert!((draw(&[0.2, 1.0], &over, dark) - 0.541_961).abs() < 1e-6);
     }
 
     #[test]
     fn all_zero_weights_are_black_and_zero_over_zero_is_zero() {
-        let (got, want) = composite(&[0.7, 0.4, 0.9], [0.0; 4], 3);
-        assert!((got - want).abs() <= bound(4) && want == 0.0, "{got}");
         let mut c = OverlayCounts::default();
-        let (over, dark) = opacities(&[[0.0; 4]], 3, &mut c);
-        assert_eq!((over[0][0], over[1][0], dark[0]), (0.0, 0.0, 1.0));
+        let (over, dark) = bytes([0.0; 4], 3, &mut c);
+        assert_eq!((over.as_slice(), dark), (&[0u8, 0][..], 255));
+        assert_eq!(draw(&[0.7, 0.4, 0.9], &over, dark), 0.0);
     }
 
     #[test]

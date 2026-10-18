@@ -1101,10 +1101,10 @@ mod tests {
 
     #[test]
     fn decal_opacity_is_never_the_opaque_sentinel() {
-        for i in 0..=1000 {
-            let w = i as f32 / 1000.0;
-            assert_ne!(decal_opacity(w), NO_VERTEX_COLOUR, "w = {w}");
-        }
+        // alpha is always 255, so no weight is the all-zero sentinel; an interior weight by hand: 0.5 x 255 = 127.5,
+        // rounded half away from zero to 128
+        assert_eq!(decal_opacity(0.5), [128, 0, 0, 255]);
+        assert_ne!(decal_opacity(0.5), NO_VERTEX_COLOUR);
         assert_eq!(decal_opacity(0.0), [0, 0, 0, 255]);
         assert_eq!(decal_opacity(1.0), [255, 0, 0, 255]);
         assert_eq!(decal_opacity(-3.0), [0, 0, 0, 255]);

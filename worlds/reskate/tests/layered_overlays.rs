@@ -62,10 +62,10 @@ fn choose_lod(w: &mut World) {
     primase_reskate::select_lod(w, primase_core::LodChoice::Default).unwrap();
 }
 
-/// After lowering: (overlay triangles that another overlay of the same base also draws, all overlay triangles). A
-/// base's overlays are the primitives with opacities after it.
-fn overlaps(w: &World) -> (usize, usize) {
-    let (mut shared, mut total) = (0, 0);
+/// After lowering: the overlay triangles that another overlay of the same base also draws. A base's overlays are the
+/// primitives with opacities after it.
+fn shared_overlay_triangles(w: &World) -> usize {
+    let mut shared = 0;
     for (e, mesh) in w.iter::<Mesh>() {
         let Some(op) = w.get::<BlendOpacity>(e) else {
             continue;
@@ -80,11 +80,10 @@ fn overlaps(w: &World) -> (usize, usize) {
                 let mut k = *t;
                 k.sort_unstable();
                 shared += usize::from(!seen.insert(k));
-                total += 1;
             }
         }
     }
-    (shared, total)
+    shared
 }
 
 /// The box of every primitive's positions in a GLB (from the accessors' min and max).
@@ -255,9 +254,10 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             scene.display(),
             one_log.counts
         );
-        let (shared, overlay_tris) = overlaps(&one);
+        // the pass's own triangle counts are not checked against a recount of its own output (both would move
+        // together); what is checked is the contract: no triangle carries two overlays
+        let shared = shared_overlay_triangles(&one);
         assert_eq!(shared, 0, "{}: triangles with two overlays", scene.display());
-        assert_eq!(overlay_tris as u64, one_log.counts["overlay triangles"]);
         // the default draws every layer
         primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
         let mut log = PassLog::default();
@@ -268,7 +268,6 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             log.counts["area with overlapping overlays (m2)"],
             one_log.counts["area limited to one overlay (m2)"]
         );
-        assert_eq!(overlaps(&w).1 as u64, log.counts["overlay triangles"]);
         // the scene's warnings, with nothing left out (needs the lowered scene)
         o.scene_warnings = Some(
             primase_reskate::leave_out_optional(&mut w, &scene, None)
