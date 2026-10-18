@@ -26,16 +26,19 @@
 //!
 //! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
 //! material: the earlier exporter's blended colour ([`crate::lower::WATER`], as water shaders get), roughness from the
-//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated). An
-//! invisible quad gets no mesh; the corner values and the depth and stencil flags are not drawn: counted.
+//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated), and
+//! its `core.collision`: the same outline as triangles at the water's height, every one on surface `WATER` (class
+//! water, from the surface table), so a writer that knows water surfaces makes it water to fall into, not ground.
+//! An invisible quad gets neither (counted); the corner values and the depth and stencil flags are not drawn:
+//! counted. The surfaces are counted by height: the sea (z = 0) and above it.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Component, Entity, Instance, JsonError, Mesh, Name, Primitive, Resource, Semantic, Source, Stream,
-    Topology, Transform, World,
+    Collision, Component, Entity, Instance, JsonError, Mesh, Name, Primitive, Resource, Semantic, Source,
+    Stream, Surfaces, Topology, Transform, World,
 };
 
 use crate::archive_set::Install;
@@ -569,7 +572,13 @@ impl Pass for LowerGtaWater {
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
-        &["core.mesh", "pbr.material", "core.name"]
+        &[
+            "core.mesh",
+            "pbr.material",
+            "core.name",
+            "core.collision",
+            "core.surfaces",
+        ]
     }
     fn removes(&self) -> &[&'static str] {
         &["gta.water_surface"]
@@ -581,12 +590,21 @@ impl Pass for LowerGtaWater {
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let surfaces: Vec<(Entity, GtaWaterSurface)> =
             w.iter::<GtaWaterSurface>().map(|(e, s)| (e, s.clone())).collect();
+        if surfaces.is_empty() {
+            return Ok(());
+        }
         // one material per specular falloff (one per water file)
         let mut materials: BTreeMap<Option<u32>, Entity> = BTreeMap::new();
+        // the water's collision surface, classified by the surface table
+        let mut table = w.remove_resource::<Surfaces>().unwrap_or_default();
+        let water = table.index("WATER").map_err(|e| e.to_string())?;
+        if let Some(t) = table.0.get_mut(usize::from(water)) {
+            t.class = crate::surfaces::surface_class("WATER");
+        }
         for (proto, s) in surfaces {
             w.remove::<GtaWaterSurface>(proto);
             if s.quad.invisible {
-                log.count("invisible water quads: no mesh", 1);
+                log.count("invisible water quads: no mesh, no collision", 1);
                 continue;
             }
             let material = *materials
@@ -615,6 +633,16 @@ impl Pass for LowerGtaWater {
             let indices: Vec<u32> = (1..s.outline.len() as u32 - 1)
                 .flat_map(|k| [0, k, k + 1])
                 .collect();
+            let triangles: Vec<[u32; 3]> = indices.as_chunks::<3>().0.to_vec();
+            log.count("water collision triangles", triangles.len() as u64);
+            w.insert(
+                proto,
+                Collision {
+                    positions: positions.clone(),
+                    surfaces: vec![water; triangles.len()],
+                    triangles,
+                },
+            );
             let mut streams = BTreeMap::new();
             streams.insert(Semantic::Normal, Stream::F32x3(vec![up; positions.len()]));
             streams.insert(Semantic::Position, Stream::F32x3(positions));
@@ -636,6 +664,7 @@ impl Pass for LowerGtaWater {
                 1,
             );
         }
+        w.insert_resource(table);
         Ok(())
     }
 }
@@ -869,7 +898,10 @@ mod tests {
         assert_eq!(json["quad"]["corners"][0], 26.0);
         let mut log = PassLog::default();
         LowerGtaWater.run(&mut w, &mut log).unwrap();
-        assert_eq!(log.counts.get("invisible water quads: no mesh"), Some(&1));
+        assert_eq!(
+            log.counts.get("invisible water quads: no mesh, no collision"),
+            Some(&1)
+        );
         assert_eq!(log.counts.get("water surfaces: sea"), Some(&1));
         for what in [
             "water surfaces drawn without their corner values (a1-a4)",
@@ -910,6 +942,21 @@ mod tests {
             .unwrap();
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
         assert!((m.roughness - (2.0f32 / 1120.0).powf(0.25)).abs() < 1e-6);
+        // its collision: the same two triangles at the sea's height, facing up, on surface WATER of class water
+        let c = w.get::<Collision>(protos[0]).unwrap();
+        assert_eq!(c.triangles.len(), 2);
+        assert!(c.positions.iter().all(|v| v[1] == 0.0));
+        let [a, b, d] = c.triangles[0].map(|i| c.positions[i as usize]);
+        let (u, v) = ([b[0] - a[0], b[2] - a[2]], [d[0] - a[0], d[2] - a[2]]);
+        // core y up: the normal's y is the cross product's (z, x) part; positive faces up
+        assert!(u[1] * v[0] - u[0] * v[1] > 0.0, "{:?}", c.triangles[0]);
+        let table = w.resource::<Surfaces>().unwrap();
+        let s = &table.0[usize::from(c.surfaces[0])];
+        assert_eq!(
+            (s.name.as_str(), s.class),
+            ("WATER", Some(primase_core::SurfaceClass::Water))
+        );
+        assert!(c.surfaces.iter().all(|&x| x == c.surfaces[0]));
     }
 
     /// A tuning value that is not a number, or a flag that is neither true nor false, is an error naming it.
