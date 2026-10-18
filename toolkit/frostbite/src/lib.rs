@@ -1,6 +1,6 @@
 //! Frostbite containers as skate. (ReSkate) reads and writes them: superbundle TOCs, bundle regions and manifests,
-//! the native DB, data folders and CAS archives, shader block depots and the shader lookup tables of
-//! `dingolevel_root`.
+//! the native DB, data folders and CAS archives, shader block depots, the shader lookup tables of
+//! `dingolevel_root`, and EBX documents.
 //!
 //! It covers the Frostbite generation skate. uses (its build of the containers and their versions, as Studio and
 //! ReSkate write them); other Frostbite titles are not assumed to match.
@@ -12,6 +12,7 @@
 pub mod bundle;
 pub mod db;
 pub mod depot;
+pub mod ebx;
 pub mod folder;
 pub mod lookup;
 pub mod toc;

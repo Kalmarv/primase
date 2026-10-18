@@ -888,6 +888,7 @@ dependencies = [
  "primase-bytes",
  "primase-compress",
  "primase-hash",
+ "primase-testdata",
  "thiserror",
 ]
 

@@ -1,6 +1,6 @@
 [package]
 name = "primase-frostbite"
-description = "Frostbite containers: superbundle TOCs, bundle regions and manifests, the native DB, data folders, shader block depots and shader lookup tables"
+description = "Frostbite containers: superbundle TOCs, bundle regions and manifests, the native DB, data folders, shader block depots, shader lookup tables and EBX documents"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,9 @@ primase-bytes.workspace = true
 primase-hash.workspace = true
 primase-compress.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
 
 [lints]
 workspace = true
