@@ -23,6 +23,8 @@ mod draw_order;
 pub use draw_order::{DrawLayer, DrawOrder};
 mod material_usage;
 pub use material_usage::MaterialUsage;
+mod vertex_color;
+pub use vertex_color::{VertexColor, color0_drawn, uses_color0};
 pub mod pass;
 pub mod pbr;
 pub mod print;

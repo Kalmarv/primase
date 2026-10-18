@@ -176,6 +176,16 @@ pub struct LayeredMaterial {
     pub weights: LayerWeights,
 }
 impl LayeredMaterial {
+    /// Whether its weights read vertex stream `semantic`: the attribute, or with per-pixel channels a vertex source.
+    pub fn reads(&self, semantic: Semantic) -> bool {
+        match &self.weights.channels {
+            None => self.weights.attribute == semantic,
+            Some(channels) => channels
+                .iter()
+                .flat_map(Channel::sources)
+                .any(|s| matches!(s, Source::Vertex { semantic: v, .. } if *v == semantic)),
+        }
+    }
     /// The mask textures its channels sample.
     pub fn mask_textures(&self) -> impl Iterator<Item = &TextureRef> {
         self.weights
