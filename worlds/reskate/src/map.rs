@@ -2121,13 +2121,24 @@ impl MapWriter {
                     (sx, sy) = col.placed[i];
                 }
                 let lift = if sp.lift.is_nan() { 0.3f32 } else { sp.lift as f32 };
+                // a spawn whose snap finds no ground keeps its own height if it has one; without one the skater
+                // would start at a guessed height (it used to be 50 m, a fall), so the map is refused
                 sz = if col.ground[i].is_nan() {
-                    if sp.z.is_nan() { 50.0 } else { sp.z }
+                    if sp.z.is_nan() {
+                        return Err(Error::Scene(format!(
+                            "spawn '{}' at ({sx}, {sy}): its snap found no ground under it and it has no height; \
+                             place it over collision or give it a height",
+                            sp.name.as_deref().unwrap_or("")
+                        )));
+                    }
+                    sp.z
                 } else {
                     col.ground[i] + lift
                 };
                 if col.ground[i].is_nan() && sp.snap.mode != SnapMode::None {
-                    self.r.warnings.push("spawn: its snap found nothing".into());
+                    self.r
+                        .warnings
+                        .push("spawn: its snap found nothing; its own height is kept".into());
                 }
             }
             if off.z != 0.0 {

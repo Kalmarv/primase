@@ -192,3 +192,45 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
         assert!(bytes == &by_mesh[name], "{name} differs");
     }
 }
+
+/// A spawn snapped to the ground lands on it (the 100 x 100 m ground at height 0, plus the 0.3 m lift); one whose snap
+/// finds no ground and that has no height is refused, not written at a guessed height.
+#[test]
+fn a_spawn_over_no_ground_is_refused() {
+    let build = |at: [f32; 2], tag: &str| {
+        let mut w = world();
+        primase_skate_scene::raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: "spawned".into(),
+                spawn: Some(primase_skate_scene::Spawn::At(at)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let assets = tmp(&format!("{tag}-assets"));
+        primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+        let scene = tmp(&format!("{tag}-scene"));
+        primase_skate_scene::write(&w, &scene).unwrap();
+        let mut w = World::new();
+        primase_skate_scene::read(&scene, &mut w).unwrap();
+        let out_root = tmp(&format!("{tag}-out"));
+        primase_reskate::build(
+            &w,
+            &scene,
+            &BuildOptions {
+                out_root: out_root.clone(),
+                ..BuildOptions::default()
+            },
+        )
+        .map(|_| out_root)
+        .map_err(|e| e.to_string())
+    };
+    let out = build([0.0, 0.0], "on").unwrap();
+    let map: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("spawned/map.json")).unwrap()).unwrap();
+    let y = map["spawn"]["position"][1].as_f64().unwrap();
+    assert!((y - 0.3).abs() < 1e-4, "spawn height {y}");
+    let e = build([300.0, 300.0], "off").unwrap_err();
+    assert!(e.contains("no ground under it"), "{e}");
+}
