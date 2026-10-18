@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::{Entity, Mesh, Primitive, Semantic, Stream, World};
+use primase_core::{Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, World};
 use primase_skate_scene::{MaterialClass, SkateMaterial};
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -29,6 +29,27 @@ fn alpha(p: &Primitive) -> Result<Option<Vec<f32>>, String> {
         Some(Stream::F32x3(_)) => None,
         Some(_) => return Err("COLOR_0 is not an RGB(A) stream".into()),
     })
+}
+
+/// Whether a primitive's `COLOR_0` colour (not its alpha) is other than white somewhere.
+fn coloured(p: &Primitive) -> bool {
+    match p.streams.get(&Semantic::Color(0)) {
+        Some(Stream::U8x4(v)) => v.iter().any(|c| c[..3] != [255; 3]),
+        Some(Stream::U16x4(v)) => v.iter().any(|c| c[..3] != [u16::MAX; 3]),
+        Some(Stream::F32x4(v)) => v.iter().any(|c| c[..3].iter().any(|&x| x < 1.0)),
+        Some(Stream::F32x3(v)) => v.iter().any(|c| c.iter().any(|&x| x < 1.0)),
+        _ => false,
+    }
+}
+
+/// The materials primitive `i` of mesh entity `e` is drawn with: its own and its variants'
+/// ([`MaterialVariants`]).
+fn drawn_with(world: &World, e: Entity, i: usize, p: &Primitive) -> Vec<Entity> {
+    let mut m: Vec<Entity> = p.material.into_iter().collect();
+    if let Some(v) = world.get::<MaterialVariants>(e).and_then(|v| v.0.get(i)) {
+        m.extend(v.values().copied());
+    }
+    m
 }
 
 /// `lower-vertex-alpha-reskate` (see the module documentation).
@@ -58,15 +79,16 @@ impl Pass for LowerVertexAlphaReskate {
         if decals.is_empty() {
             return Ok(());
         }
-        // the decals some primitive fades
+        // the decals some primitive fades, drawn with its own material or a variant's
         let mut fading = BTreeSet::new();
-        for (_, mesh) in world.iter::<Mesh>() {
-            for p in mesh.primitives() {
-                let Some(m) = p.material.filter(|m| decals.contains(m)) else {
-                    continue;
-                };
-                if alpha(p)?.is_some_and(|a| a.iter().any(|&x| x < 1.0)) {
-                    fading.insert(m);
+        for (e, mesh) in world.iter::<Mesh>() {
+            for (i, p) in mesh.primitives().iter().enumerate() {
+                let ms: Vec<Entity> = drawn_with(world, e, i, p)
+                    .into_iter()
+                    .filter(|m| decals.contains(m))
+                    .collect();
+                if !ms.is_empty() && alpha(p)?.is_some_and(|a| a.iter().any(|&x| x < 1.0)) {
+                    fading.extend(ms);
                 }
             }
         }
@@ -76,19 +98,24 @@ impl Pass for LowerVertexAlphaReskate {
         // every primitive drawing one gets its opacity (planned before anything changes)
         let mut opacities: BTreeMap<Entity, Vec<Option<Vec<f32>>>> = BTreeMap::new();
         for (e, mesh) in world.iter::<Mesh>() {
-            if !mesh
-                .primitives()
-                .iter()
-                .any(|p| p.material.is_some_and(|m| fading.contains(&m)))
-            {
+            let fades =
+                |i: usize, p: &Primitive| drawn_with(world, e, i, p).iter().any(|m| fading.contains(m));
+            if !mesh.primitives().iter().enumerate().any(|(i, p)| fades(i, p)) {
                 continue;
             }
             let mut o = world
                 .get::<BlendOpacity>(e)
                 .map_or_else(|| vec![None; mesh.primitives().len()], |b| b.0.clone());
             for (i, p) in mesh.primitives().iter().enumerate() {
-                if !p.material.is_some_and(|m| fading.contains(&m)) {
+                if !fades(i, p) {
                     continue;
+                }
+                if coloured(p) {
+                    // the decal row's Color0 carries the opacity: the source's colour is not drawn
+                    log.count(
+                        "faded decal primitives whose COLOR_0 colour is not white (colour not drawn)",
+                        1,
+                    );
                 }
                 let a = match alpha(p)? {
                     Some(a) => {
@@ -198,5 +225,29 @@ mod tests {
         assert_eq!((o[2].clone(), o[3].clone()), (None, None));
         assert_eq!(log.counts["decal materials faded by vertex alpha"], 1);
         assert_eq!(log.counts["faded decal vertices"], 2);
+    }
+    /// A decal reached only through a material variant fades too; a faded primitive whose colour is not white is
+    /// counted (the decal row's Color0 carries the opacity, so the colour is not drawn).
+    #[test]
+    fn a_variant_decal_fades_and_a_coloured_one_is_counted() {
+        let mut w = World::new();
+        let plain = decal(&mut w, MaterialClass::Alpha);
+        let variant = decal(&mut w, MaterialClass::Decal);
+        let mesh = w.spawn();
+        let fade = vec![[255, 128, 128, 255], [255, 128, 128, 51], [255, 128, 128, 0]];
+        w.insert(mesh, Mesh::new(vec![prim(plain, Some(fade))]));
+        w.insert(mesh, MaterialVariants(vec![BTreeMap::from([(1, variant)])]));
+        let mut log = PassLog::default();
+        LowerVertexAlphaReskate.run(&mut w, &mut log).unwrap();
+        assert_eq!(w.get::<VertexBlend>(variant), Some(&VertexBlend::VertexAlpha));
+        assert!(!w.has::<VertexBlend>(plain));
+        assert_eq!(
+            w.get::<BlendOpacity>(mesh).unwrap().0[0].as_deref(),
+            Some(&[1.0, 0.2, 0.0][..])
+        );
+        assert_eq!(
+            log.counts["faded decal primitives whose COLOR_0 colour is not white (colour not drawn)"],
+            1
+        );
     }
 }
