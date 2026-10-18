@@ -81,6 +81,9 @@ fn print(r: &ConvertReport) {
         show("at the writer", p, &p.written);
     }
     println!("passes over all parts: {:?}", r.counts);
+    for n in r.notices() {
+        println!("notice: {n}");
+    }
     for (k, v) in &r.written {
         println!("{k}: {v}");
     }
@@ -116,7 +119,16 @@ pub fn run(args: &[String]) -> Result<()> {
     println!("select: {select}");
     println!("passes: {passes}");
     let manager = PassManager::new(registry);
-    let report = convert(reader.as_mut(), writer, &manager, &select, &passes)?;
+    let report = match convert(reader.as_mut(), writer, &manager, &select, &passes) {
+        Ok(report) => report,
+        Err(e) => {
+            // what was done before the failure, then the failure
+            if let Some(failed) = e.downcast_ref::<primase_core::convert::ConvertError>() {
+                print(&failed.partial);
+            }
+            return Err(e);
+        }
+    };
     print(&report);
     Ok(())
 }
