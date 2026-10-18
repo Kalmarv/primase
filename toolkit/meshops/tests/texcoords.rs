@@ -18,6 +18,8 @@ const U: UvTransform = UvTransform {
     rotation: 0.0,
 };
 const UV: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.25, 1.0]];
+/// `T` applied by hand: `uv * [2, 4] + [0.5, -0.25]`.
+const T_UV: [[f32; 2]; 3] = [[0.5, -0.25], [2.5, -0.25], [1.0, 3.75]];
 
 fn primitive(material: Entity, uv: bool) -> Primitive {
     let mut streams = BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3]))]);
@@ -89,10 +91,8 @@ fn a_shared_material_bakes_into_every_primitive_using_it() {
         },
     );
     let log = bake_texture_transforms(&mut w);
-    let want: Vec<[f32; 2]> = UV.iter().map(|&x| T.apply(x)).collect();
-    assert_eq!(want[2], [1.0, 3.75]);
     for (e, i) in [(a, 0), (b, 0), (b, 1)] {
-        assert_eq!(uv(&w, e, i), want);
+        assert_eq!(uv(&w, e, i), T_UV);
     }
     assert_eq!(base_transform(&w, m), None);
     assert_eq!(
@@ -115,7 +115,8 @@ fn variants_must_agree() {
         let log = bake_texture_transforms(&mut w);
         assert_eq!(base_transform(&w, m), (!baked).then_some(T), "{variant:?}");
         if baked {
-            assert_eq!(uv(&w, a, 0)[1], T.apply(UV[1]));
+            // T applied by hand to UV[1] = [1, 0]: [1*2 + 0.5, 0*4 - 0.25].
+            assert_eq!(uv(&w, a, 0), T_UV);
             assert_eq!(base_transform(&w, v), None);
         } else {
             assert_eq!(uv(&w, a, 0), UV.to_vec());
