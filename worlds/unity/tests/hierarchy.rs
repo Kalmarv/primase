@@ -270,7 +270,16 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
         Tolerance::Exact,
     );
     let mut corners = 0u64;
-    for (_, mesh, u) in w.iter2::<Mesh, UnityMesh>() {
+    for (e, mesh, u) in w.iter2::<Mesh, UnityMesh>() {
+        // its provenance names the mesh (and slice) it was read from
+        let want = match u.submeshes {
+            Some((a, n)) => format!("unity mesh {}/{} submeshes {a}+{n}", u.mesh.file, u.mesh.path_id),
+            None => format!("unity mesh {}/{}", u.mesh.file, u.mesh.path_id),
+        };
+        assert_eq!(
+            w.get::<primase_core::Source>(e).map(|s| s.0.as_str()),
+            Some(want.as_str())
+        );
         let r = ObjRef {
             file: u.mesh.file.clone(),
             path_id: u.mesh.path_id,

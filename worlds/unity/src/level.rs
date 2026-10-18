@@ -2,7 +2,8 @@
 //! prototype, its GameObject path as [`Name`], its [`Shadows`], the `unity.*` details), Unity's frame converted. The
 //! renderer's shadow casting mode is the cast (off, on, shadows only as only; two-sided as on, counted) and
 //! `m_ReceiveShadows` the receive. A prototype is a
-//! mesh, or the slice of a combined mesh a static-batched renderer draws, with its geometry as a [`Mesh`]; one entity
+//! mesh, or the slice of a combined mesh a static-batched renderer draws, with its geometry as a [`Mesh`] and that mesh
+//! as its [`Source`] (`unity mesh <file>/<path id>`, with `submeshes <first>+<count>` for a slice); one entity
 //! per material (`unity.material`) and per texture it uses (`unity.texture`, and `core.texture` when decoded).
 //!
 //! Materials follow Unity's rule: material i draws submesh i. Renderers of one prototype that use other materials are
@@ -32,7 +33,8 @@ use std::collections::BTreeMap;
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Transform, World,
+    Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Source, Transform,
+    World,
 };
 
 use crate::Result;
@@ -59,6 +61,17 @@ pub const UNITY: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::N
 /// package's line, disc, triangle and sphere shaders).
 pub fn procedural(shader: &str) -> bool {
     shader.starts_with("Shapes/")
+}
+
+/// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
+fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {
+    Source(match submeshes {
+        Some((first, count)) => format!(
+            "unity mesh {}/{} submeshes {first}+{count}",
+            mesh.file, mesh.path_id
+        ),
+        None => format!("unity mesh {}/{}", mesh.file, mesh.path_id),
+    })
 }
 
 fn unity_renderer(r: &Renderer) -> UnityRenderer {
@@ -976,6 +989,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                         drawn: drawn.clone(),
                     },
                 );
+                w.insert(e, mesh_source(&r.mesh, r.submeshes));
                 prototypes.insert(
                     key.clone(),
                     Proto {
@@ -1107,6 +1121,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                         drawn,
                     },
                 );
+                w.insert(f, mesh_source(mesh, None));
                 forms.push(LodForm {
                     detail: u8::try_from(level + 1).unwrap_or(u8::MAX),
                     form: f,
