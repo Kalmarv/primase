@@ -48,8 +48,8 @@ pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
 }
 
 /// A destination. It plans from the selected world, then asks for its parts one at a time: the loop loads each (the
-/// closure of its roots, through the passes, with every entity the passes made) and hands it back to
-/// [`Writer::write`] before asking for the next.
+/// closure of its roots, through the passes, with what the passes placed) and hands it back to [`Writer::write`]
+/// before asking for the next.
 pub trait Writer {
     /// What it accepts: every loaded part is checked against it ([`PassManager::convert`], [`Mode::Full`]) before
     /// it is written.
@@ -59,8 +59,9 @@ pub trait Writer {
     fn plan(&mut self, world: &World, boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()>;
     /// The roots of the next part to load, `None` when every part is written.
     fn next_part(&mut self) -> Result<Option<BTreeSet<Entity>>>;
-    /// Write the part last asked for, loaded: the closure of its roots and of every entity the passes made (a pass
-    /// may make part content nothing references, such as a marker it places).
+    /// Write the part last asked for, loaded: the closure of its roots and of every entity a pass placed (content
+    /// nothing references, such as a marker; [`crate::pass::PassLog::place`]). Other entities the passes made are in
+    /// it only where something in it references them.
     fn write(&mut self, part: &World) -> Result<()>;
     fn finish(self: Box<Self>) -> Result<Report>;
 }
@@ -147,26 +148,39 @@ pub fn convert(
         let mut run = RunReport::default();
         let loaded: BTreeSet<Entity> = part.entities().collect();
         manager.run(&mut part, passes, &mut run)?;
-        // what the passes left unreferenced of what was loaded (materials of dropped geometry, of a discarded level
-        // of detail) is not part of the part; what they made is, referenced or not (a marker a pass places stands on
-        // its own): kept with the roots' closure, and named in the counts by its components
-        let made: Vec<Entity> = part.entities().filter(|e| !loaded.contains(e)).collect();
+        // the part is the closure of the roots and of what the passes placed (content of its own nothing need
+        // reference, as a marker; PassLog::place). What the passes left unreferenced of what was loaded (materials of
+        // dropped geometry, of a discarded level of detail) is not part of it, nor is what they made that nothing kept
+        // reaches: dropped, and named in the counts by its components, as are the placed entities
+        let placed: BTreeSet<Entity> = run
+            .steps
+            .iter()
+            .flat_map(|s| s.log.placed.iter().copied())
+            .filter(|&e| part.is_alive(e))
+            .collect();
+        let keep = part.closure(roots.iter().copied().chain(placed.iter().copied()));
         let names: Vec<String> = part.component_names().into_iter().map(str::to_owned).collect();
-        for &e in &made {
-            let kinds: Vec<&str> = names
+        let kinds = |e: Entity| {
+            names
                 .iter()
                 .filter(|n| part.entity_has_named(e, n))
                 .map(String::as_str)
-                .collect();
+                .collect::<Vec<_>>()
+                .join(" + ")
+        };
+        for e in part.entities().filter(|e| !loaded.contains(e)) {
+            let what = if placed.contains(&e) {
+                "entities the passes placed"
+            } else if keep.contains(&e) {
+                continue;
+            } else {
+                "made entities nothing keeps, dropped"
+            };
             *report
                 .counts
-                .entry(format!(
-                    "convert: entities the passes made ({})",
-                    kinds.join(" + ")
-                ))
+                .entry(format!("convert: {what} ({})", kinds(e)))
                 .or_default() += 1;
         }
-        let keep = part.closure(roots.iter().copied().chain(made));
         part.retain(&keep);
         let checked = manager.convert(&mut part, &target, Mode::Full, &PassOptions::new())?;
         tally(&mut report.counts, run);

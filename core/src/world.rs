@@ -714,6 +714,12 @@ impl World {
         self.alive.contains(&e)
     }
 
+    /// The index the next spawned entity gets: an entity with an index at or above it was made after this call
+    /// (ids are handed out in order and never reused).
+    pub(crate) fn next_index(&self) -> u32 {
+        self.next
+    }
+
     /// `roots` and every alive entity they reach through [`Component::references`], transitively. Opaque
     /// components declare no references: an entity's opaque components travel with it in [`World::subset`], but
     /// nothing they may name is followed.

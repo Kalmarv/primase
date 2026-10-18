@@ -44,7 +44,7 @@ pub type Options = BTreeMap<String, String>;
 /// ([`PassRegistry::parse`]).
 pub type PassOptions = BTreeMap<String, Options>;
 
-/// Counts a pass logs while it runs: what it changed and what it approximated.
+/// Counts a pass logs while it runs: what it changed and what it approximated, and the entities it placed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PassLog {
     pub counts: BTreeMap<String, u64>,
@@ -53,6 +53,10 @@ pub struct PassLog {
     /// hook dropped, as [`World::apply_linear`] reports): accepted as removals only for a pass that opts in with
     /// [`Pass::removes_by_log`].
     pub removed: BTreeSet<String>,
+    /// Entities the pass made that stand on their own: content nothing need reference (a marker it places). A
+    /// conversion keeps them with the writer's roots ([`crate::convert`]); any other entity a pass makes is kept only
+    /// while something kept references it. The manager refuses an entity here that the pass did not make.
+    pub placed: BTreeSet<Entity>,
 }
 
 impl PassLog {
@@ -68,6 +72,11 @@ impl PassLog {
     /// Record `n` items lowered with an approximation (`"layer blend baked at 1024 px"`).
     pub fn approximate(&mut self, what: &str, n: u64) {
         *self.approximations.entry(what.to_owned()).or_default() += n;
+    }
+
+    /// Record that the pass made `e` as content of its own (see [`PassLog::placed`]).
+    pub fn place(&mut self, e: Entity) {
+        self.placed.insert(e);
     }
 }
 
@@ -744,10 +753,26 @@ impl PassManager {
             BTreeMap::new()
         };
         let mut log = PassLog::default();
+        let first_made = w.next_index();
         p.run(w, &mut log).map_err(|message| Error::Pass {
             pass: text.to_owned(),
             message,
         })?;
+        // what it placed it made, and it is there
+        if let Some(e) = log
+            .placed
+            .iter()
+            .find(|e| e.index() < first_made || !w.is_alive(**e))
+        {
+            return Err(Error::Pass {
+                pass: text.to_owned(),
+                message: if e.index() < first_made {
+                    format!("placed {e:?}, which it did not make")
+                } else {
+                    format!("placed {e:?}, which is not alive after it")
+                },
+            });
+        }
         let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
         let resources_after: BTreeSet<String> = w.resource_names().into_iter().map(str::to_owned).collect();
         let mut added: Vec<String> = after.difference(&before).cloned().collect();
@@ -1738,6 +1763,44 @@ mod tests {
         // vanished unrecorded, or recorded by a pass that did not opt in: an error as ever
         assert_eq!(run(true, false).unwrap_err().to_string(), undeclared);
         assert_eq!(run(false, true).unwrap_err().to_string(), undeclared);
+    }
+
+    /// Places what `which` says: a new entity, the world's first (not its own) or a new one it despawns again.
+    struct Placer {
+        which: &'static str,
+    }
+    impl Pass for Placer {
+        fn name(&self) -> &'static str {
+            "placer"
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            let e = match self.which {
+                "old" => w.entities().next().expect("an entity"),
+                _ => w.spawn(),
+            };
+            if self.which == "gone" {
+                w.despawn(e);
+            }
+            log.place(e);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_pass_places_only_what_it_made_and_what_is_alive() {
+        let run = |which| {
+            let pipeline = Pipeline {
+                passes: vec![Box::new(Placer { which })],
+            };
+            let mut report = RunReport::default();
+            PassManager::new(PassRegistry::new())
+                .run(&mut world(), &pipeline, &mut report)
+                .map(|()| report.steps[0].log.placed.len())
+                .map_err(|e| e.to_string())
+        };
+        assert_eq!(run("new"), Ok(1));
+        assert!(run("old").unwrap_err().contains("which it did not make"));
+        assert!(run("gone").unwrap_err().contains("which is not alive after it"));
     }
 
     /// One entity with toy.layered, toy.file and game.thing (culled), one with toy.mesh and toy.file (kept).

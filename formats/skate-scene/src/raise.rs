@@ -583,6 +583,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 other: Other::new(),
             },
         );
+        // content of its own: nothing references a marker
+        log.place(e);
         log.count("markers", 1);
     }
     let has_lights = world.iter::<SkateLight>().next().is_some();
@@ -714,6 +716,7 @@ impl primase_core::pass::Pass for RaiseSkate {
         let l = raise_skate(w, &self.options).map_err(|e| e.to_string())?;
         log.counts.extend(l.counts);
         log.approximations.extend(l.approximations);
+        log.placed.extend(l.placed);
         Ok(())
     }
 }

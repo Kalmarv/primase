@@ -149,7 +149,8 @@ impl Pass for ToySelect {
     }
 }
 
-/// The passes: record that they ran and make an entity nothing references (as a pass placing a marker does).
+/// The passes: record that they ran, place an entity nothing references (as a pass placing a marker does) and make
+/// another that nothing references and they don't place (a stray, as a texture derived for a discarded form).
 struct ToyPass;
 impl Pass for ToyPass {
     fn name(&self) -> &'static str {
@@ -160,9 +161,12 @@ impl Pass for ToyPass {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         event("passes");
-        let orphan = w.spawn();
-        w.insert(orphan, Name("made, unreferenced".into()));
-        w.insert(orphan, ToyMesh(5));
+        let marker = w.spawn();
+        w.insert(marker, Name("placed, unreferenced".into()));
+        w.insert(marker, ToyMesh(5));
+        log.place(marker);
+        let stray = w.spawn();
+        w.insert(stray, ToyMesh(3));
         log.count("orphans", 1);
         Ok(())
     }
@@ -221,18 +225,24 @@ fn reads_selects_plans_then_loads_passes_checks_and_writes_each_part() {
     );
     assert_eq!(report.loads.len(), 2);
     assert_eq!(report.counts.get("toy-pass: orphans"), Some(&2));
-    // what the passes made is named in the counts by its components
+    // what the passes placed is kept, what they made that nothing keeps is dropped: both named by their components
     assert_eq!(
         report
             .counts
-            .get("convert: entities the passes made (core.name + toy.mesh)"),
+            .get("convert: entities the passes placed (core.name + toy.mesh)"),
+        Some(&2)
+    );
+    assert_eq!(
+        report
+            .counts
+            .get("convert: made entities nothing keeps, dropped (toy.mesh)"),
         Some(&2)
     );
     assert_eq!(report.written, vec![("toy".to_string(), "2 parts".to_string())]);
-    // each part is its placement and prototype, loaded, and the entity the pass made though nothing references it
+    // each part is its placement and prototype, loaded, and the entity the pass placed though nothing references it
     assert_eq!(*written.borrow(), vec![(3, true), (3, true)]);
     // each part's payload as loaded and as written (its one root, the placement, the prototype it reaches and the
-    // pass's entity with its 5 bytes)
+    // placed entity with its 5 bytes; not the stray's 3)
     let size = PartSize {
         roots: 1,
         loaded: BTreeMap::from([("toy.mesh".to_string(), 7)]),
