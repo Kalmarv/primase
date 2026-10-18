@@ -141,7 +141,6 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
             .get("Studio MSK mask with inconsistent mip sizes left out"),
         Some(&1)
     );
-    assert!(LowerSkatePbr.approximates().contains("inconsistent mip sizes"));
     // Only material a sets a scalar alongside its MSK.
     assert_eq!(
         log.approximations

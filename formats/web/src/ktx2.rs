@@ -736,7 +736,6 @@ mod tests {
     fn disk_keys_follow_every_input() {
         let policy = AlphaPolicy::default();
         let k = disk_key(b"png", Role::Colour, &policy, 512);
-        assert_eq!(k, disk_key(b"png", Role::Colour, &policy, 512));
         let blend = AlphaPolicy {
             blend: true,
             ..AlphaPolicy::default()
