@@ -66,14 +66,6 @@ fn emissive_strength_is_written_as_khr_materials_emissive_strength() {
 }
 
 #[test]
-fn a_negative_strength_is_invalid() {
-    let w = world(-1.0);
-    assert!(!w.verify_components().is_empty());
-    let w = world(f32::INFINITY);
-    assert!(!w.verify_components().is_empty());
-}
-
-#[test]
 fn a_data_texture_is_sampled_nearest_and_its_image_marked_data() {
     use primase_core::pbr::TextureRef;
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};

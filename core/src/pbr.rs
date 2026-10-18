@@ -244,7 +244,7 @@ impl PbrMaterial {
 
 #[cfg(test)]
 mod tests {
-    use super::UvTransform;
+    use super::{PbrMaterial, UvTransform};
 
     #[test]
     fn bottom_left_tiling_samples_the_same_texels() {
@@ -271,5 +271,36 @@ mod tests {
         let [u, v] = t.apply([1.0, 0.0]);
         assert!(u.abs() < 1e-7 && (v - 1.5).abs() < 1e-7, "{u} {v}");
         assert_eq!(UvTransform::IDENTITY.apply([0.3, 0.7]), [0.3, 0.7]);
+    }
+
+    /// The rule the glTF writer relies on its callers to enforce: a negative, infinite or NaN strength fails
+    /// verification, and the zero and default strengths pass.
+    #[test]
+    fn emissive_strength_is_finite_and_non_negative() {
+        use crate::World;
+
+        let failures = |strength: f32| {
+            let mut w = World::new();
+            let e = w.spawn();
+            w.insert(
+                e,
+                PbrMaterial {
+                    emissive_strength: strength,
+                    ..PbrMaterial::default()
+                },
+            );
+            w.verify_components()
+                .into_iter()
+                .map(|(name, _, detail)| (name.to_owned(), detail))
+                .collect::<Vec<_>>()
+        };
+        for strength in [-1.0, -0.001, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            let failures = failures(strength);
+            assert_eq!(failures.len(), 1, "{strength}");
+            assert_eq!(failures[0].0, "pbr.material", "{strength}");
+            assert!(failures[0].1.contains("emissive strength"), "{:?}", failures[0]);
+        }
+        assert!(failures(0.0).is_empty());
+        assert!(failures(1.0).is_empty());
     }
 }
