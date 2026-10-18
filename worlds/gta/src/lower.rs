@@ -54,7 +54,8 @@ pub fn draw_order(bucket: u8) -> Option<DrawOrder> {
         1 | 6 => (DrawLayer::Transparent, DrawOrder::TRANSPARENT),
         _ => return None,
     };
-    Some(DrawOrder { layer, queue })
+    // GTA states the bucket, not the depth write: the layer's convention
+    Some(DrawOrder::conventional(layer, queue))
 }
 
 /// The queue [`draw_order`] gives GTA's decals: after the cutouts, before the blended surfaces (UNVERIFIED).

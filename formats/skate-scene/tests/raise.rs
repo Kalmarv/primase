@@ -406,13 +406,7 @@ fn material_usage_makes_water_and_foliage() {
     let mut w = world();
     let rock = named(&w, "rock");
     w.insert(rock, MaterialUsage::Foliage);
-    w.insert(
-        rock,
-        DrawOrder {
-            layer: DrawLayer::Decal,
-            queue: 2500,
-        },
-    );
+    w.insert(rock, DrawOrder::conventional(DrawLayer::Decal, 2500));
     let log = scene::raise_skate(&mut w, &options()).unwrap();
     let m = w.get::<SkateMaterial>(rock).unwrap();
     assert_eq!(
@@ -434,13 +428,7 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
         .find(|(_, n)| n.0 == "plain")
         .map(|(e, _)| e)
         .unwrap();
-    w.insert(
-        plain,
-        DrawOrder {
-            layer: DrawLayer::Decal,
-            queue: 2500,
-        },
-    );
+    w.insert(plain, DrawOrder::conventional(DrawLayer::Decal, 2500));
     let log = scene::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["materials raised as decals (core.draw_order)"], 1);
     let mats: BTreeMap<&str, &SkateMaterial> = w

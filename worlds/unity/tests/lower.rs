@@ -319,13 +319,7 @@ fn draw_order_follows_the_render_queue() {
         })
         .map(|(e, _)| *w.get::<DrawOrder>(e).unwrap())
         .collect();
-    assert_eq!(
-        water,
-        vec![DrawOrder {
-            layer: DrawLayer::Opaque,
-            queue: 2050
-        }]
-    );
+    assert_eq!(water, vec![DrawOrder::conventional(DrawLayer::Opaque, 2050)]);
     // every lowered material has one
     assert!(w.iter::<UnityMaterial>().all(|(e, _)| w.has::<DrawOrder>(e)));
 }

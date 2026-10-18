@@ -667,7 +667,8 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
             AlphaMode::Mask { .. } => DrawLayer::Cutout,
             AlphaMode::Blend => DrawLayer::Transparent,
         };
-        w.insert(e, DrawOrder { layer, queue });
+        // the depth write by the layer's convention until the draw pass's ZWrite is read (known debt)
+        w.insert(e, DrawOrder::conventional(layer, queue));
         let shader = m.shader.as_deref().unwrap_or("no shader");
         match m.shader.as_deref() {
             Some(s) if IGNORES_VERTEX_COLOR.contains(&s) => {
