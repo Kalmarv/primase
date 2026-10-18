@@ -49,6 +49,8 @@ pub fn ybn_detail(file_name: &str) -> Option<String> {
 
 impl Component for GtaBounds {
     const NAME: &'static str = "gta.bounds";
+    /// 2: `detail` added.
+    const VERSION: u32 = 2;
     /// Bulk data (a bound's every vertex and polygon): not shown.
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
         Ok(None)
