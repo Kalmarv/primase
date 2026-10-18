@@ -1,15 +1,20 @@
 //! `gta-pose-fragments`: a fragment's models drawn at their bones' poses, as the game draws a fragment at rest.
 //!
-//! The reader keeps each primitive's pose as stored ([`GtaPoses`], rows in GTA's frame). The pass places the posed
-//! primitives' positions by the pose, turns their normals and tangents with it ([`Turn`]: as positions under a
+//! The reader keeps the bones as stored: each primitive's bone ([`GtaBones`]) and the prototype's skeleton and
+//! fragment pose ([`GtaSkeleton`]). The pass composes each bone's pose ([`crate::drawable::Bones::pose`]: a fragment's
+//! own pose of the bone, else the skeleton's rest pose up to the root; rows in GTA's frame), places the posed
+//! primitives' positions by it, turns their normals and tangents with it ([`Turn`]: as positions under a
 //! rotation, normals by the inverse transpose and tangents by the pose at their stored length otherwise, a mirror
 //! flipping the handedness and reversing the triangles; a pose with no inverse flattens the model, and its normals
 //! and tangents are left out), in GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with posing before it), and removes
-//! `gta.poses`. Every other GTA pass on meshes refuses a mesh still holding poses, so this one runs first.
+//! `gta.bones` (the skeleton stays). A primitive on a bone that has no pose is left as stored, counted. Every other
+//! GTA pass on meshes refuses a mesh still holding bones, so this one runs first.
 use primase_core::pass::{Pass, PassLog};
-use primase_core::{Mesh, Semantic, Stream, World};
+use std::collections::BTreeMap;
 
-use crate::components::GtaPoses;
+use primase_core::{Entity, Lods, Mesh, Semantic, Stream, World};
+
+use crate::components::{GtaBones, GtaSkeleton};
 use crate::region::GTA;
 
 /// A model's transform in GTA's frame: rows `[x, y, z, translation]`.
@@ -143,27 +148,42 @@ impl Pass for PoseFragments {
         &[]
     }
     fn removes(&self) -> &[&'static str] {
-        &["gta.poses"]
+        &["gta.bones"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let holders: Vec<_> = w.iter::<GtaPoses>().map(|(e, _)| e).collect();
+        // a level-of-detail form's bones are its prototype's
+        let owner: BTreeMap<Entity, Entity> = w
+            .iter::<Lods>()
+            .flat_map(|(proto, l)| l.forms.iter().map(move |f| (f.form, proto)))
+            .collect();
+        let holders: Vec<_> = w.iter::<GtaBones>().map(|(e, _)| e).collect();
         for e in holders {
-            let poses = w.remove::<GtaPoses>(e).expect("poses").0;
+            let bones = w.remove::<GtaBones>(e).expect("bones").0;
+            let skeleton = [Some(e), owner.get(&e).copied()]
+                .into_iter()
+                .flatten()
+                .find_map(|h| w.get::<GtaSkeleton>(h))
+                .ok_or_else(|| format!("{e:?}: gta.bones without its prototype's gta.skeleton"))?;
+            let poses = skeleton.0.pose();
             let mut mesh = w
                 .remove::<Mesh>(e)
-                .ok_or("gta.poses on an entity without core.mesh")?;
-            if poses.len() != mesh.primitives().len() {
+                .ok_or("gta.bones on an entity without core.mesh")?;
+            if bones.len() != mesh.primitives().len() {
                 return Err(format!(
-                    "{e:?}: {} poses for {} primitives",
-                    poses.len(),
+                    "{e:?}: {} bones for {} primitives",
+                    bones.len(),
                     mesh.primitives().len()
                 ));
             }
-            for (p, pose) in mesh.primitives_mut().iter_mut().zip(poses) {
-                let Some(pose) = pose else { continue };
+            for (p, bone) in mesh.primitives_mut().iter_mut().zip(bones) {
+                let Some(bone) = bone else { continue };
+                let Some(&pose) = poses.get(usize::from(bone)) else {
+                    log.count("primitives on a bone without a pose, left as stored", 1);
+                    continue;
+                };
                 let t = Placing::new(pose);
                 log.count("primitives posed", 1);
                 match t.turn {
@@ -296,14 +316,14 @@ mod tests {
                 material: None,
             }]),
         );
-        // mirrored in x: the triangle now lies the other way round, its normals still +z
+        // on bone 0, which a fragment pose mirrors in x: the triangle now lies the other way round, its normals still +z
+        w.insert(e, GtaBones(vec![Some(0)]));
         w.insert(
             e,
-            GtaPoses(vec![Some(pose([
-                [-1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ]))]),
+            GtaSkeleton(crate::drawable::Bones {
+                skeleton: None,
+                fragment_pose: vec![pose([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])],
+            }),
         );
         let mut log = PassLog::default();
         PoseFragments.run(&mut w, &mut log).expect("posed");

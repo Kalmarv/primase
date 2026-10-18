@@ -6,8 +6,10 @@
 //!
 //! Per light: an entity with `core.transform` (the placement's transform times the light's position, its local -Z along
 //! the light's direction, [`Transform::facing`]) and `core.light`. A record's position and direction are in the space
-//! of the bone its `bone_id` tags, as CodeWalker places them: they are taken into the model's space by that bone's pose
-//! ([`GtaLights::bones`]), and left as stored when the drawable has no skeleton or no bone has the tag (counted).
+//! of the bone its `bone_id` tags, as CodeWalker places them: they are taken into the model's space by that bone's pose,
+//! composed from the prototype's bones as stored ([`GtaSkeleton`], [`crate::drawable::Bones::pose`]: a fragment's own
+//! pose of the bone, else the skeleton's rest pose up to the root), and left as stored when the drawable has no
+//! skeleton or no bone has the tag (counted).
 //! Then:
 //! - kind: point; spot with cones from the record's inner and outer angles (degrees; the outer at most 89.5°);
 //!   capsule as a point (its length left out: approximated, counted);
@@ -23,7 +25,7 @@
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
 
-use crate::components::{GtaLight, GtaLights};
+use crate::components::{GtaLight, GtaLights, GtaSkeleton};
 use crate::pose::Pose;
 use crate::region::GTA;
 
@@ -117,6 +119,9 @@ impl Pass for LowerGtaLights {
             let Some(lights) = w.get::<GtaLights>(i.prototype) else {
                 continue;
             };
+            // each record's bone pose, from the prototype's bones
+            let bones = w.get::<GtaSkeleton>(i.prototype).map(|s| &s.0);
+            let poses = bones.map(crate::drawable::Bones::pose).unwrap_or_default();
             let t = w.get::<Transform>(e).ok_or("a placement without a transform")?;
             let scale = (0..3)
                 .map(|c| {
@@ -132,7 +137,10 @@ impl Pass for LowerGtaLights {
                 .get::<Name>(i.prototype)
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
-            for (k, (l, bone)) in lights.records.iter().zip(&lights.bones).enumerate() {
+            for (k, l) in lights.records.iter().enumerate() {
+                let bone = bones
+                    .and_then(|b| b.bone_of_tag(l.bone_id))
+                    .and_then(|b| poses.get(b));
                 let hours = l.time_flags & 0x00FF_FFFF;
                 if self.hour.is_some_and(|h| hours != 0 && hours & (1 << h) == 0) {
                     log.count("lights off at this hour", 1);
@@ -256,11 +264,21 @@ mod tests {
             proto,
             GtaLights {
                 records: vec![record(0x1234), record(0x9999)],
-                bones: vec![
-                    Some([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 6.0]]),
-                    None,
-                ],
             },
+        );
+        // the head bone (tag 0x1234) 6 m up from the root, as stored: the pose is composed from it
+        let rest = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let up = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 6.0]];
+        w.insert(
+            proto,
+            crate::components::GtaSkeleton(crate::drawable::Bones {
+                skeleton: Some(crate::drawable::Skeleton {
+                    local: vec![rest, up],
+                    parents: vec![None, Some(0)],
+                    tags: Some(vec![0, 0x1234]),
+                }),
+                fragment_pose: Vec::new(),
+            }),
         );
         let placed = w.spawn();
         w.insert(placed, Transform::IDENTITY);

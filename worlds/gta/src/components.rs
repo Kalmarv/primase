@@ -251,57 +251,56 @@ impl Component for GtaSources {
     }
 }
 
-/// Per primitive of the entity's mesh, the pose its model is drawn at (a fragment's bone, rows `[x, y, z,
-/// translation]` in GTA's frame), `None` for models drawn as stored. `gta-pose-fragments` places them and removes this.
+/// Per primitive of the entity's mesh, the bone its model is bound to (the model's skeleton binding), `None` for a
+/// skinned model or a drawable without a skeleton: drawn as stored. The bones are the prototype's `gta.skeleton`;
+/// `gta-pose-fragments` places the models by their bones' poses and removes this.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaPoses(pub Vec<Option<crate::pose::Pose>>);
+pub struct GtaBones(pub Vec<Option<u16>>);
 
-impl Component for GtaPoses {
-    const NAME: &'static str = "gta.poses";
+impl Component for GtaBones {
+    const NAME: &'static str = "gta.bones";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
-        Some(primase_core::remap_list(&self.0, from).map(GtaPoses))
+        Some(primase_core::remap_list(&self.0, from).map(GtaBones))
     }
-    /// One pose per primitive of the entity's mesh.
+    /// One bone (or none) per primitive of the entity's mesh.
     fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
         let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives().len());
         if n != self.0.len() {
-            return Err(format!("{n} primitives, {} poses", self.0.len()));
+            return Err(format!("{n} primitives, {} bones", self.0.len()));
         }
         Ok(())
+    }
+}
+
+/// A prototype's bones as its drawable and fragment store them ([`crate::drawable::Bones`]: the skeleton, each bone
+/// in its parent's space with its parent and tag, and a fragment's own bone pose). The passes compose a bone's pose
+/// from it: `gta-pose-fragments` for the models on bones (`gta.bones`), `lower-gta-lights` for the light records.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaSkeleton(pub crate::drawable::Bones);
+
+impl Component for GtaSkeleton {
+    const NAME: &'static str = "gta.skeleton";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
     }
 }
 
 /// A prototype's light sources as its drawable or fragment stores them, every record raw, each in the space of the bone
-/// its `bone_id` tags.
+/// its `bone_id` tags (the bones are the prototype's `gta.skeleton`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaLights {
     pub records: Vec<crate::drawable::LightAttr>,
-    /// Per record, the pose of its bone (rows `[x, y, z, translation]` into the model's space, GTA's frame;
-    /// [`crate::drawable::BoneLight`]); `None`: the record is at its model-space position (no skeleton, or no bone has
-    /// its tag).
-    pub bones: Vec<Option<crate::pose::Pose>>,
 }
 
 impl Component for GtaLights {
     const NAME: &'static str = "gta.lights";
-    /// 2: each record's bone pose.
-    const VERSION: u32 = 2;
+    /// 3: the records alone (their bones are `gta.skeleton`); 2 held each record's bone pose.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
-    }
-    /// One bone pose (or none) per record.
-    fn verify(&self, _: Entity, _: &primase_core::World) -> Result<(), String> {
-        if self.records.len() != self.bones.len() {
-            return Err(format!(
-                "{} records, {} bone poses",
-                self.records.len(),
-                self.bones.len()
-            ));
-        }
-        Ok(())
     }
 }
 

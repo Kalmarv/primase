@@ -305,29 +305,45 @@ impl LightAttr {
     }
 }
 
-/// A light record and the pose of the bone it is on.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BoneLight {
-    pub light: LightAttr,
-    /// The pose of the bone whose tag is the record's `bone_id` (three rows `[x, y, z, translation]` into the model's
-    /// space, as the models on that bone are posed: a fragment's bone pose, else the skeleton's rest pose composed up
-    /// to the root); `None` when the drawable has no skeleton or no bone has that tag.
-    pub bone: Option<[[f32; 4]; 3]>,
+/// A drawable's bones as stored: its skeleton (each bone in its parent's space, with its parent and tag) and, for a
+/// fragment, the fragment's own bone pose (by bone index, into the model's space).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Bones {
+    pub skeleton: Option<Skeleton>,
+    /// A fragment's bone pose (the list at 0xA8 of its header); empty for a drawable or a dictionary entry.
+    pub fragment_pose: Vec<[[f32; 4]; 3]>,
 }
 
-/// The records of `lights` with their bones' poses in `skeleton`, posed by `pose` (by bone index) when it has the
-/// bone, else by the skeleton's rest pose.
-fn on_bones(lights: Vec<LightAttr>, skeleton: Option<&Skeleton>, pose: &[[[f32; 4]; 3]]) -> Vec<BoneLight> {
-    let rest = skeleton.map(Skeleton::pose).unwrap_or_default();
-    lights
-        .into_iter()
-        .map(|light| {
-            let bone = skeleton
-                .and_then(|s| s.bone_of_tag(light.bone_id))
-                .and_then(|b| pose.get(b).or(rest.get(b)).copied());
-            BoneLight { light, bone }
-        })
-        .collect()
+impl Bones {
+    /// Neither a skeleton nor a fragment pose.
+    pub fn is_empty(&self) -> bool {
+        self.skeleton.is_none() && self.fragment_pose.is_empty()
+    }
+
+    /// Each bone's transform into the model's space, by bone index: the fragment's pose of it where it has one, else
+    /// the skeleton's rest pose composed up to the root ([`Skeleton::pose`]).
+    pub fn pose(&self) -> Vec<[[f32; 4]; 3]> {
+        let rest = self.skeleton.as_ref().map(Skeleton::pose).unwrap_or_default();
+        (0..rest.len().max(self.fragment_pose.len()))
+            .filter_map(|b| self.fragment_pose.get(b).or(rest.get(b)).copied())
+            .collect()
+    }
+
+    /// The index of the bone tagged `tag` (the skeleton's).
+    pub fn bone_of_tag(&self, tag: u16) -> Option<usize> {
+        self.skeleton.as_ref()?.bone_of_tag(tag)
+    }
+}
+
+/// Light records with their bones, read by `bones` only when there are records.
+fn on_bones(
+    lights: Vec<LightAttr>,
+    bones: impl FnOnce() -> Result<Bones>,
+) -> Result<(Vec<LightAttr>, Bones)> {
+    if lights.is_empty() {
+        return Ok((lights, Bones::default()));
+    }
+    Ok((lights, bones()?))
 }
 
 /// The skeleton of the drawable at `pointer`, if it has one.
@@ -355,11 +371,11 @@ fn fragment_pose(r: &Resource, h: &[u8]) -> Result<Vec<[[f32; 4]; 3]>> {
     })
 }
 
-/// The light records of a resource's root without reading its drawables' geometry: a ydr's (list at 0xB0 of its
-/// gtaDrawable), a yft's (the fragment's list at 0x110, on its main drawable's skeleton), or a ydd entry's (`entry`: the
-/// name hash), each with its bone's pose ([`BoneLight`]), after checking the resource's layout version. `kind`: `ydr`,
-/// `yft` or `ydd`.
-pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<BoneLight>> {
+/// The light records of a resource's root without reading its drawables' geometry, with the bones they are on as
+/// stored ([`Bones`]): a ydr's (list at 0xB0 of its gtaDrawable), a yft's (the fragment's list at 0x110, on its main
+/// drawable's skeleton and the fragment's pose), or a ydd entry's (`entry`: the name hash), after checking the
+/// resource's layout version. `kind`: `ydr`, `yft` or `ydd`. A resource without records has no bones read.
+pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<(Vec<LightAttr>, Bones)> {
     let want = if kind == "yft" { FRAGMENT_VERSION } else { VERSION };
     if r.version != want {
         return Err(err(
@@ -368,22 +384,23 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<BoneL
         ));
     }
     match kind {
-        "ydr" => Ok(on_bones(
-            read_lights(r, 0x5000_00B0)?,
-            skeleton_at(r, 0x5000_0000)?.as_ref(),
-            &[],
-        )),
+        "ydr" => on_bones(read_lights(r, 0x5000_00B0)?, || {
+            Ok(Bones {
+                skeleton: skeleton_at(r, 0x5000_0000)?,
+                fragment_pose: Vec::new(),
+            })
+        }),
         "yft" => {
             let h = r.at(0x5000_0000, 0x130)?;
-            let lights = read_lights(r, 0x5000_0110)?;
-            if lights.is_empty() {
-                return Ok(Vec::new());
-            }
-            let skeleton = match le::u64(h, 0x30)? {
-                0 => None,
-                d => skeleton_at(r, d)?,
-            };
-            Ok(on_bones(lights, skeleton.as_ref(), &fragment_pose(r, h)?))
+            on_bones(read_lights(r, 0x5000_0110)?, || {
+                Ok(Bones {
+                    skeleton: match le::u64(h, 0x30)? {
+                        0 => None,
+                        d => skeleton_at(r, d)?,
+                    },
+                    fragment_pose: fragment_pose(r, h)?,
+                })
+            })
         }
         "ydd" => {
             let hashes = pointer_list_u32(r, 0x5000_0020)?;
@@ -395,12 +412,13 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<Vec<BoneL
                 ));
             }
             match hashes.iter().zip(&ptrs).find(|&(&h, _)| h == entry) {
-                Some((_, &p)) => Ok(on_bones(
-                    read_lights(r, offset(p, 0xB0)?)?,
-                    skeleton_at(r, p)?.as_ref(),
-                    &[],
-                )),
-                None => Ok(Vec::new()),
+                Some((_, &p)) => on_bones(read_lights(r, offset(p, 0xB0)?)?, || {
+                    Ok(Bones {
+                        skeleton: skeleton_at(r, p)?,
+                        fragment_pose: Vec::new(),
+                    })
+                }),
+                None => Ok((Vec::new(), Bones::default())),
             }
         }
         _ => Err(err(0, format!("lights of a {kind}"))),
@@ -423,7 +441,7 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
 }
 
 /// A skeleton's bones: each one's transform in its parent's space, its parent and its tag.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Skeleton {
     /// Per bone, three rows `[x, y, z, translation]` of its transform into its parent's space.
     pub local: Vec<[[f32; 4]; 3]>,
@@ -1145,6 +1163,23 @@ mod tests {
 
     /// A bone's pose is its own transform, then its parents' up to the root: a child turned a quarter about z and moved
     /// 1 along its parent's x, under a root moved 10 along z, takes (1, 0, 0) to (1, 1, 10).
+    /// A fragment's own pose of a bone replaces the skeleton's rest pose of it; the others stay at rest.
+    #[test]
+    fn a_fragment_pose_replaces_the_rest_pose_of_its_bones() {
+        let moved = [[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let rest = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let bones = Bones {
+            skeleton: Some(Skeleton {
+                local: vec![rest, rest],
+                parents: vec![None, Some(0)],
+                tags: None,
+            }),
+            fragment_pose: vec![moved],
+        };
+        assert_eq!(bones.pose(), vec![moved, rest]);
+        assert!(Bones::default().is_empty() && Bones::default().pose().is_empty());
+    }
+
     #[test]
     fn bone_poses_compose_up_the_parent_chain() {
         let s = Skeleton {
@@ -1177,8 +1212,8 @@ mod tests {
         }
     }
 
-    /// A ydr's light records come with the pose of the bone their `bone_id` tags: a root (tag 0) at rest and a child
-    /// tagged 0x1234 moved (1, 2, 3); a record naming no tag has none.
+    /// A ydr's light records come with its bones as stored; the bone a record's `bone_id` tags has its pose: a root
+    /// (tag 0) at rest and a child tagged 0x1234 moved (1, 2, 3); a record naming no tag has no bone.
     #[test]
     fn light_records_take_the_pose_of_the_bone_they_tag() {
         let p = |o: u64| (0x5000_0000u64 + o).to_le_bytes();
@@ -1216,14 +1251,15 @@ mod tests {
                 (0x600 + 168, &b),
             ],
         );
-        let lights = resource_lights(&r, "ydr", 0).unwrap();
+        let (lights, bones) = resource_lights(&r, "ydr", 0).unwrap();
         assert_eq!(lights.len(), 2);
-        assert_eq!(lights[0].light.position, [0.0, 0.0, 1.0]);
+        assert_eq!(lights[0].position, [0.0, 0.0, 1.0]);
+        let pose = bones.pose();
         assert_eq!(
-            lights[0].bone,
+            bones.bone_of_tag(lights[0].bone_id).map(|b| pose[b]),
             Some([[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 2.0], [0.0, 0.0, 1.0, 3.0]])
         );
-        assert_eq!(lights[1].bone, None);
+        assert_eq!(bones.bone_of_tag(lights[1].bone_id), None);
     }
 
     #[test]

@@ -4,8 +4,8 @@
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
 //!   converted), 16-bit indices widened;
-//!   [`GtaSources`] (LOD 0, each primitive's model and geometry), [`GtaPoses`] when a model is drawn at its bone's
-//!   pose (a fragment's; `gta-pose-fragments` places it), and [`GtaDrawable`] with the drawable's box, sphere, LOD
+//!   [`GtaSources`] (LOD 0, each primitive's model and geometry), [`GtaBones`] when a model is bound to a bone (its
+//!   bones the prototype's [`GtaSkeleton`], as stored; `gta-pose-fragments` places it), and [`GtaDrawable`] with the drawable's box, sphere, LOD
 //!   distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
 //!   `core.lods` form of the prototype at its level (1 to 3): an unplaced entity with that LOD's `core.mesh` and
 //!   [`GtaSources`]. GTA draws by distance and authors no level of its own choice, so `core.lods` has no default
@@ -33,12 +33,15 @@ use primase_core::{LodForm, Lods, Origin, Provenance};
 
 use crate::archive_set::ArchiveSet;
 use crate::collision::GtaEmbeddedBounds;
-use crate::components::{GtaArchetype, GtaDrawable, GtaLights, GtaParam, GtaPoses, GtaShader, GtaSources};
-use crate::drawable::{Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights};
+use crate::components::{
+    GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
+};
+use crate::drawable::{
+    Bones, Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights,
+};
 use crate::gtxd::TextureParents;
 use crate::keys::Keys;
 use crate::le;
-use crate::pose::Pose;
 use crate::region::GTA;
 use crate::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
@@ -60,7 +63,7 @@ pub struct AssetReport {
     /// Of `drawables`, those that are a fragment's main drawable and a drawable dictionary's entry.
     pub fragments: usize,
     pub dictionary_entries: usize,
-    /// High-LOD models with a bone's pose to be drawn at (a fragment's models; `gta-pose-fragments` places them).
+    /// High-LOD models bound to a bone, to be drawn at its pose (`gta-pose-fragments` places them).
     pub posed_models: usize,
     /// Prototypes whose archetype names no live file or entry.
     pub asset_missing: usize,
@@ -138,9 +141,9 @@ fn u8x4(b: &[u8]) -> Vec<[u8; 4]> {
     b.as_chunks::<4>().0.to_vec()
 }
 
-/// Each model's transform: its bone's pose (a fragment's), none for skinned models (bound to bone weights) or without a
-/// pose. As the game draws a fragment at rest; only for drawables with a skeleton.
-fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose>> {
+/// Each model's bone, from its skeleton binding: none for skinned models (bound to bone weights) or a drawable without
+/// a skeleton.
+fn model_bones(d: &Drawable, models: &[Model]) -> Vec<Option<u16>> {
     models
         .iter()
         .map(|m| {
@@ -148,11 +151,7 @@ fn model_poses(d: &Drawable, models: &[Model], pose: &[Pose]) -> Vec<Option<Pose
                 (m.skeleton_binding >> 24) & 0xFF,
                 (m.skeleton_binding >> 8) & 0xFF != 0,
             );
-            if d.skeleton.is_none() || skinned {
-                None
-            } else {
-                pose.get(bone as usize).copied()
-            }
+            (d.skeleton.is_some() && !skinned).then_some(bone as u16)
         })
         .collect()
 }
@@ -346,8 +345,8 @@ pub struct LightsReport {
     pub asset_missing: usize,
 }
 
-/// The light records ([`GtaLights`]) of every prototype in `w`, read from its live drawable, fragment or drawable
-/// dictionary entry without its geometry or textures. A writer that plans lights before it loads geometry (the web
+/// The light records ([`GtaLights`]) of every prototype in `w`, with the bones they are on ([`GtaSkeleton`], as stored),
+/// read from its live drawable, fragment or drawable dictionary entry without its geometry or textures. A writer that plans lights before it loads geometry (the web
 /// writer plans scene-wide) has them from the read world.
 pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<LightsReport> {
     let mut report = LightsReport::default();
@@ -424,18 +423,21 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
     all.sort_by_key(|(e, _)| *e);
     for (proto, lights) in all {
         report.prototypes_read += 1;
-        if !lights.is_empty() {
+        if !lights.0.is_empty() {
             report.prototypes_with_lights += 1;
-            report.lights += lights.len();
-            let (records, bones) = lights.into_iter().map(|l| (l.light, l.bone)).unzip();
-            w.insert(proto, GtaLights { records, bones });
+            report.lights += lights.0.len();
+            let (records, bones) = lights;
+            w.insert(proto, GtaLights { records });
+            if !bones.is_empty() {
+                w.insert(proto, GtaSkeleton(bones));
+            }
         }
     }
     Ok(report)
 }
 
 /// A prototype and the light records read for it.
-type ProtoLights = (Entity, Vec<crate::drawable::BoneLight>);
+type ProtoLights = (Entity, (Vec<crate::drawable::LightAttr>, Bones));
 
 /// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
 enum Job {
@@ -470,7 +472,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             continue;
         };
         let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
-        let mut pose: Vec<Pose> = Vec::new();
+        let mut fragment_pose = Vec::new();
         // a fragment's physics bound (what it collides with); a drawable's own otherwise
         let mut bound = None;
         let (path, d) = match a.asset_type {
@@ -494,7 +496,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     ctx.report.asset_missing += 1;
                     continue;
                 };
-                pose = frag.pose;
+                fragment_pose = frag.pose;
                 ctx.report.fragments += 1;
                 (set.path(f).to_string(), d)
             }
@@ -563,13 +565,15 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             materials.push(m);
             ctx.report.materials += 1;
         }
-        // a drawable's models at their bones' rest pose (a fragment's own pose replaces it)
-        if pose.is_empty()
-            && let Some(s) = &d.skeleton
-        {
-            pose = s.pose();
+        // the bones as stored; a model on a bone is drawn at its pose, which gta-pose-fragments composes
+        let bones = Bones {
+            skeleton: d.skeleton.clone(),
+            fragment_pose,
+        };
+        if !bones.is_empty() {
+            w.insert(proto, GtaSkeleton(bones));
         }
-        let poses: [Vec<Option<Pose>>; 4] = std::array::from_fn(|i| model_poses(&d, &d.lods[i], &pose));
+        let on_bones: [Vec<Option<u16>>; 4] = std::array::from_fn(|i| model_bones(&d, &d.lods[i]));
         // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the
         // others are its forms
         let mut forms = Vec::new();
@@ -578,12 +582,12 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                 continue;
             }
             let m = mesh(&path, models, &materials, &mut ctx.report.non_finite_streams)?;
-            // per primitive its model's pose, for gta-pose-fragments
-            let posed = (models.iter().zip(&poses[lod]))
+            // per primitive its model's bone, for gta-pose-fragments
+            let posed = (models.iter().zip(&on_bones[lod]))
                 .flat_map(|(model, p)| std::iter::repeat_n(*p, model.geometries.len()))
                 .collect::<Vec<_>>();
             if lod == 0 {
-                ctx.report.posed_models += poses[0].iter().flatten().count();
+                ctx.report.posed_models += on_bones[0].iter().flatten().count();
             }
             let sources = GtaSources {
                 lod: lod as u8,
@@ -619,7 +623,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             w.insert(holder, sources);
             w.insert(holder, provenance);
             if posed.iter().any(Option::is_some) {
-                w.insert(holder, GtaPoses(posed));
+                w.insert(holder, GtaBones(posed));
             }
         }
         if !forms.is_empty() {

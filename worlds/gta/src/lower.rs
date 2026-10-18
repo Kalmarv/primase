@@ -363,14 +363,14 @@ pub fn drop_hidden_models(w: &mut World, log: &mut PassLog) -> Result<(), String
 
 /// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms);
 /// where `f` rebuilds the primitives it gives each one's old index, and the entity's per-primitive components follow
-/// ([`World::remap_primitives`]). An error for a mesh still holding `gta.poses` (`gta-pose-fragments` runs first).
+/// ([`World::remap_primitives`]). An error for a mesh still holding `gta.bones` (`gta-pose-fragments` runs first).
 pub fn for_each_mesh(
     w: &mut World,
     mut f: impl FnMut(&mut Mesh) -> Result<Option<Vec<usize>>, String>,
 ) -> Result<(), String> {
     let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
     for e in holders {
-        if w.has::<crate::components::GtaPoses>(e) {
+        if w.has::<crate::components::GtaBones>(e) {
             return Err(format!(
                 "{e:?}: a mesh still at its stored pose: gta-pose-fragments runs first"
             ));
