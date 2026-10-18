@@ -28,9 +28,11 @@
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
 //!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]); a surface with
 //!   neither, whose name is no skate surface, is refused (never guessed); a water class has no solid skate surface:
-//!   a prototype whose collision is all water gets skate's water collision (Studio's water mode) and a material drawn
-//!   only on such prototypes skate's water class (Studio's ocean); water triangles in a solid soup or the world's
-//!   collision stay solid, counted;
+//!   a prototype whose collision is all water gets skate's water collision (Studio's water mode); water triangles in
+//!   a solid soup or the world's collision stay solid, counted;
+//! - what the source says a material's surfaces are (`core.material_usage`): water is skate's water class (Studio's
+//!   ocean); foliage is skate's leaves class in the foliage domain, except a material the source draws over the
+//!   surface beneath (`core.draw_order` decal), which stays a decal (counted);
 //! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`];
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - a spawn marker where the caller says (a point, or the per-axis median of the placements' positions), snapped to
@@ -48,8 +50,9 @@ use primase_core::json::f32_decimal;
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, Wrap as PbrWrap};
 use primase_core::{
-    Collision, ColorSpace, Entity, Instance, LayeredMaterial, Light, LightKind, MaterialVariants, Mesh, Name,
-    NormalConvention, NormalGreen, NormalZ, SurfaceClass, Surfaces, TexRole, Texture, Transform, World,
+    Collision, ColorSpace, Entity, Instance, LayeredMaterial, Light, LightKind, MaterialUsage,
+    MaterialVariants, Mesh, Name, NormalConvention, NormalGreen, NormalZ, SurfaceClass, Surfaces, TexRole,
+    Texture, Transform, World,
 };
 
 use crate::components::{
@@ -267,8 +270,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             drawn.extend(v.0.iter().flat_map(|o| o.values().copied()));
         }
     }
-    // a prototype whose collision is all water is skate water (its soup in water mode), and a material drawn only on
-    // such prototypes is skate's water class (Studio's ocean)
+    // a prototype whose collision is all water is skate water (its soup in water mode)
     let all_water =
         |c: &Collision| !c.surfaces.is_empty() && c.surfaces.iter().all(|s| water_surfaces.contains(s));
     let water_protos: BTreeSet<Entity> = placed
@@ -276,21 +278,6 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         .copied()
         .filter(|&p| world.get::<Collision>(p).is_some_and(all_water))
         .collect();
-    let mut on_water: BTreeMap<Entity, bool> = BTreeMap::new();
-    for &p in &placed {
-        let mut ms: Vec<Entity> = world
-            .get::<Mesh>(p)
-            .map(|mesh| mesh.primitives().iter().filter_map(|q| q.material).collect())
-            .unwrap_or_default();
-        if let Some(v) = world.get::<MaterialVariants>(p) {
-            ms.extend(v.0.iter().flat_map(|o| o.values().copied()));
-        }
-        for m in ms {
-            *on_water.entry(m).or_insert(true) &= water_protos.contains(&p);
-        }
-    }
-    let water_materials: BTreeSet<Entity> =
-        on_water.into_iter().filter(|&(_, w)| w).map(|(m, _)| m).collect();
     // a drawn blend (core.layered) is a layered material; its layers' materials are drawn through it
     let layered: Vec<Entity> = world
         .iter::<LayeredMaterial>()
@@ -422,17 +409,29 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(f32_decimal(cutoff))),
             PbrAlpha::Blend => (MaterialClass::Alpha, AlphaMode::Blend, None),
         };
+        // what the source says the surface is (core.material_usage): water is skate's water class (Studio's ocean);
+        // foliage is skate's leaves class in the foliage domain, unless the source draws it over the surface beneath
+        // (a decal), which keeps it layered there
+        let usage = world.get::<MaterialUsage>(e).copied();
+        let water = usage == Some(MaterialUsage::Water);
         // a surface the source draws over the one beneath it is skate's decal (its class and domain)
-        let decal = primase_core::DrawOrder::of(world, e).layer == primase_core::DrawLayer::Decal;
-        if decal {
-            class = MaterialClass::Decal;
-            log.count("materials raised as decals (core.draw_order)", 1);
-        }
-        // drawn only on water: skate's water, Studio's ocean
-        let water = water_materials.contains(&e);
+        let decal = !water && primase_core::DrawOrder::of(world, e).layer == primase_core::DrawLayer::Decal;
+        let foliage = usage == Some(MaterialUsage::Foliage) && !decal;
         if water {
             class = MaterialClass::Water;
-            log.count("materials raised as water (drawn only on water collision)", 1);
+            log.count("materials raised as water (core.material_usage)", 1);
+        } else if decal {
+            class = MaterialClass::Decal;
+            log.count("materials raised as decals (core.draw_order)", 1);
+            if usage == Some(MaterialUsage::Foliage) {
+                log.count(
+                    "foliage materials kept as decals (drawn over the surface beneath)",
+                    1,
+                );
+            }
+        } else if foliage {
+            class = MaterialClass::Leaves;
+            log.count("materials raised as foliage (core.material_usage)", 1);
         }
         let rgb = [m.base_color[0], m.base_color[1], m.base_color[2]];
         let (base_color, tint) = match m.base_color_texture {
@@ -475,7 +474,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 alpha: Some(alpha),
                 cutoff,
                 two_sided: Some(m.double_sided),
-                domain: decal.then_some(Domain::Decal),
+                domain: if decal {
+                    Some(Domain::Decal)
+                } else {
+                    foliage.then_some(Domain::Foliage)
+                },
                 metallic: mask.is_none().then(|| f32_decimal(m.metallic)),
                 roughness: mask.is_none().then(|| {
                     // the reflectance skate cannot carry, folded (materials::fold_reflectance)

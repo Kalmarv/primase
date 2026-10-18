@@ -311,10 +311,11 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
     assert_eq!(raised(Some(SurfaceClass::Water), &[]).unwrap(), "default");
 }
 
-/// A prototype whose collision is all on a water surface gets water collision and its material skate's water
-/// (Studio's ocean); the world's water triangles stay solid, counted; a mixed prototype soup stays solid, counted.
+/// A prototype whose collision is all on a water surface gets water collision; the world's water triangles stay solid,
+/// counted; a mixed prototype soup stays solid, counted. Its material's class is not inferred from the collision: only
+/// `core.material_usage` makes a material water (`material_usage_makes_water_and_foliage`).
 #[test]
-fn water_collision_and_water_materials() {
+fn water_collision() {
     use primase_core::SurfaceClass;
     for mixed in [false, true] {
         let mut w = world();
@@ -342,24 +343,78 @@ fn water_collision_and_water_materials() {
         let mode = p.collision.as_ref().unwrap().mode;
         let material = mesh.primitives()[0].material.unwrap();
         let class = w.get::<SkateMaterial>(material).unwrap().class;
+        assert_ne!(class, MaterialClass::Water);
         assert_eq!(
             log.approximations["water triangles in the world's collision kept solid"],
             1
         );
         if mixed {
             assert_eq!(mode, Some(scene::CollisionMode::TriangleMesh));
-            assert_ne!(class, MaterialClass::Water);
             assert_eq!(
                 log.approximations["water triangles in a solid collision soup kept solid"],
                 1
             );
         } else {
             assert_eq!(mode, Some(scene::CollisionMode::Water));
-            assert_eq!(class, MaterialClass::Water);
-            assert_eq!(w.get::<SkateMaterial>(material).unwrap().ocean, Some(true));
             assert_eq!(log.counts["prototypes with water collision"], 1);
         }
     }
+}
+
+/// `core.material_usage` says what a material's surfaces are: water is skate's water class with Studio's ocean; foliage
+/// is skate's leaves in the foliage domain (alpha and sidedness from the source); foliage the source draws over the
+/// surface beneath (a decal draw order) stays a decal, counted.
+#[test]
+fn material_usage_makes_water_and_foliage() {
+    use primase_core::{DrawLayer, DrawOrder, MaterialUsage};
+    let mut w = world();
+    let named = |w: &World, name: &str| {
+        w.iter::<Name>()
+            .find(|(_, n)| n.0 == name)
+            .map(|(e, _)| e)
+            .unwrap()
+    };
+    let (rock, plain) = (named(&w, "rock"), named(&w, "plain"));
+    w.insert(rock, MaterialUsage::Foliage);
+    w.insert(plain, MaterialUsage::Water);
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let m = |e| w.get::<SkateMaterial>(e).unwrap();
+    assert_eq!(
+        (m(rock).class, m(rock).domain, m(rock).alpha, m(rock).two_sided),
+        (
+            MaterialClass::Leaves,
+            Some(scene::Domain::Foliage),
+            Some(AlphaMode::Mask),
+            Some(true)
+        )
+    );
+    assert_eq!(
+        (m(plain).class, m(plain).domain, m(plain).ocean),
+        (MaterialClass::Water, None, Some(true))
+    );
+    assert_eq!(log.counts["materials raised as foliage (core.material_usage)"], 1);
+    assert_eq!(log.counts["materials raised as water (core.material_usage)"], 1);
+    // foliage drawn as a decal over the ground keeps the decal
+    let mut w = world();
+    let rock = named(&w, "rock");
+    w.insert(rock, MaterialUsage::Foliage);
+    w.insert(
+        rock,
+        DrawOrder {
+            layer: DrawLayer::Decal,
+            queue: 2500,
+        },
+    );
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let m = w.get::<SkateMaterial>(rock).unwrap();
+    assert_eq!(
+        (m.class, m.domain),
+        (MaterialClass::Decal, Some(scene::Domain::Decal))
+    );
+    assert_eq!(
+        log.counts["foliage materials kept as decals (drawn over the surface beneath)"],
+        1
+    );
 }
 
 #[test]
