@@ -28,12 +28,7 @@ const SRC_ALPHA: f32 = 5.0;
 
 /// The forward pass's (source, destination) blend factors of a material's shader; `None` when it has none.
 pub fn forward_blend(m: &UnityMaterial) -> Option<(f32, f32)> {
-    let sub = m.shader_state.iter().find(|s| {
-        s.tags
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("RenderPipeline"))
-            .is_none_or(|(_, v)| v == "UniversalPipeline")
-    })?;
+    let sub = m.urp_subshader()?;
     let pass = sub.passes.iter().find(|p| {
         p.light_mode
             .as_deref()

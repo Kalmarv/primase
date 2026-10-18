@@ -30,6 +30,7 @@ use primase_core::{
     ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
     World,
 };
+use primase_core::{DrawLayer, DrawOrder};
 use primase_image::{linear_to_srgb, srgb_to_linear};
 
 use crate::components::{UnityMaterial, UnityTexEnv, UnityTexture};
@@ -417,6 +418,15 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
         w.iter::<UnityMaterial>().map(|(e, m)| (e, m.clone())).collect();
     for (e, m) in materials {
         let p = l.lower(w, &m)?;
+        // where it comes in the draw sequence: Unity's render queue; the layer its lowered alpha mode is
+        let (queue, from) = m.render_queue();
+        l.log.count(&format!("draw order from {from}"), 1);
+        let layer = match p.alpha_mode {
+            AlphaMode::Opaque => DrawLayer::Opaque,
+            AlphaMode::Mask { .. } => DrawLayer::Cutout,
+            AlphaMode::Blend => DrawLayer::Transparent,
+        };
+        w.insert(e, DrawOrder { layer, queue });
         w.insert(e, p);
         l.log.count("materials lowered", 1);
     }
@@ -435,7 +445,7 @@ impl Pass for LowerUnityPbr {
         &["unity.material"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material", "core.texture"]
+        &["pbr.material", "core.texture", "core.draw_order"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]

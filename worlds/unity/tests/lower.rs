@@ -265,6 +265,44 @@ fn lowering_matches_the_port() {
     }
 }
 
+/// Draw order as Unity's render queue, on a fact an independent reader (UnityPy) states for this level: the ice-fishing
+/// water (FlatKit/Water) has `m_CustomRenderQueue` 2050 (Geometry plus URP's `_QueueOffset` 50) and lowers opaque.
+/// The queue rules themselves are gated by the unit cases in `components.rs`.
+#[test]
+fn draw_order_follows_the_render_queue() {
+    use primase_core::{DrawLayer, DrawOrder, Name};
+    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+        return;
+    };
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut w = World::new();
+    read_level(&player, "level1", &mut w).unwrap();
+    as_stored(&mut w);
+    lower_unity_pbr(&mut w).unwrap();
+    let water: Vec<_> = w
+        .iter::<UnityMaterial>()
+        .filter(|(e, m)| {
+            m.shader.as_deref() == Some("FlatKit/Water")
+                && w.get::<Name>(*e)
+                    .is_some_and(|n| n.0 == "My Water for Icefishing")
+        })
+        .map(|(e, _)| *w.get::<DrawOrder>(e).unwrap())
+        .collect();
+    assert_eq!(
+        water,
+        vec![DrawOrder {
+            layer: DrawLayer::Opaque,
+            queue: 2050
+        }]
+    );
+    // every lowered material has one
+    assert!(w.iter::<UnityMaterial>().all(|(e, _)| w.has::<DrawOrder>(e)));
+}
+
 /// URP Lit samples every map through `_BaseMap`'s tiling (one `TRANSFORM_TEX` in its vertex pass), so each lowered
 /// slot carries that transform whatever its own property's tiling says. Counts the slots whose own tiling differs
 /// (the case a per-property reading gets wrong).

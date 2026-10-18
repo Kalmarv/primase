@@ -110,6 +110,31 @@ pub struct UnityTexEnv {
     pub offset: [f32; 2],
 }
 
+/// A shader `Queue` tag's value: `Background` 1000, `Geometry` 2000, `AlphaTest` 2450, `GeometryLast` 2500,
+/// `Transparent` 3000, `Overlay` 4000, each optionally `+n` or `-n`, or a number (ShaderLab's queue syntax); `None`
+/// for anything else.
+pub fn queue_tag(v: &str) -> Option<i32> {
+    let v = v.trim();
+    if let Ok(n) = v.parse() {
+        return Some(n);
+    }
+    let split = v.find(['+', '-']).unwrap_or(v.len());
+    let base: i32 = match v[..split].trim().to_ascii_lowercase().as_str() {
+        "background" => 1000,
+        "geometry" => 2000,
+        "alphatest" => 2450,
+        "geometrylast" => 2500,
+        "transparent" => 3000,
+        "overlay" => 4000,
+        _ => return None,
+    };
+    let offset: i32 = match &v[split..] {
+        "" => 0,
+        o => o.trim().parse().ok()?,
+    };
+    base.checked_add(offset)
+}
+
 /// A material as Unity stores it: its shader's name and render state (its subshaders, as
 /// [`crate::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored), keywords,
 /// tags and render queue.
@@ -128,6 +153,36 @@ pub struct UnityMaterial {
 }
 
 impl UnityMaterial {
+    /// The subshader URP draws with: the first whose `RenderPipeline` tag is `UniversalPipeline` or absent (Unity
+    /// takes the first subshader its pipeline supports).
+    pub fn urp_subshader(&self) -> Option<&crate::material::SubShader> {
+        self.shader_state.iter().find(|s| {
+            s.tags
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("RenderPipeline"))
+                .is_none_or(|(_, v)| v == "UniversalPipeline")
+        })
+    }
+
+    /// The render queue it draws in: its own (`m_CustomRenderQueue`), else its URP subshader's `Queue` tag
+    /// ([`queue_tag`]), else Geometry (2000); and which of the three said so.
+    pub fn render_queue(&self) -> (i32, &'static str) {
+        if self.render_queue >= 0 {
+            return (
+                i32::try_from(self.render_queue).unwrap_or(i32::MAX),
+                "the material's render queue",
+            );
+        }
+        let tag = self
+            .urp_subshader()
+            .and_then(|s| s.tags.iter().find(|(k, _)| k.eq_ignore_ascii_case("Queue")))
+            .and_then(|(_, v)| queue_tag(v));
+        match tag {
+            Some(q) => (q, "the shader's Queue tag"),
+            None => (2000, "Geometry (no queue stated)"),
+        }
+    }
+
     /// A shader render-state value: the bound material property's float where it names one the material has, else
     /// the shader's own value.
     pub fn state_value(&self, v: &crate::material::ShaderValue) -> f32 {
@@ -524,5 +579,78 @@ impl Component for UnityCollider {
     }
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material::{ShaderPass, ShaderValue, SubShader};
+
+    #[test]
+    fn queue_tags_read_as_shaderlab_writes_them() {
+        for (tag, q) in [
+            ("Geometry", Some(2000)),
+            ("AlphaTest", Some(2450)),
+            ("Transparent", Some(3000)),
+            ("Transparent-1", Some(2999)),
+            ("Geometry+50", Some(2050)),
+            ("geometrylast", Some(2500)),
+            ("Overlay", Some(4000)),
+            ("Background", Some(1000)),
+            ("2100", Some(2100)),
+            ("Sky", None),
+            ("Geometry+x", None),
+        ] {
+            assert_eq!(queue_tag(tag), q, "{tag}");
+        }
+    }
+
+    fn material(render_queue: i64, subshaders: Vec<SubShader>) -> UnityMaterial {
+        UnityMaterial {
+            material: UnityObject {
+                file: "sharedassets1.assets".into(),
+                path_id: 1,
+            },
+            shader: Some("Shader Graphs/Example".into()),
+            shader_state: subshaders,
+            textures: Vec::new(),
+            floats: Vec::new(),
+            ints: Vec::new(),
+            colors: Vec::new(),
+            keywords: Vec::new(),
+            tags: Vec::new(),
+            render_queue,
+        }
+    }
+
+    fn sub(tags: &[(&str, &str)]) -> SubShader {
+        let v = |value| ShaderValue {
+            value,
+            property: None,
+        };
+        SubShader {
+            tags: tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            passes: vec![ShaderPass {
+                light_mode: None,
+                src_blend: v(1.0),
+                dst_blend: v(0.0),
+                zwrite: v(1.0),
+                cull: v(2.0),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_materials_queue_is_its_own_else_its_urp_subshaders_tag_else_geometry() {
+        let urp = sub(&[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Transparent")]);
+        let hdrp = sub(&[("RenderPipeline", "HDRenderPipeline"), ("QUEUE", "Overlay")]);
+        // its own queue wins (URP writes _QueueOffset into it: the water's 2050)
+        assert_eq!(material(2050, vec![urp.clone()]).render_queue().0, 2050);
+        // -1: the tag of the subshader URP takes, skipping another pipeline's
+        assert_eq!(material(-1, vec![hdrp.clone(), urp]).render_queue().0, 3000);
+        // no URP subshader with a tag, or none at all: Geometry
+        assert_eq!(material(-1, vec![hdrp]).render_queue().0, 2000);
+        assert_eq!(material(-1, Vec::new()).render_queue().0, 2000);
     }
 }
