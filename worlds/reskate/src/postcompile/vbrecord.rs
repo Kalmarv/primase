@@ -517,6 +517,14 @@ fn resolve_by(
             o.push(s.key);
         }
     }
+    // every key of the Patch with the weights of all its sections, wherever they are: the last resort for a primitive
+    // whose pieces Studio merged into prototypes named after no object (its cell prototypes, d2_x<i>_z<j>_<n>)
+    let mut all: BTreeMap<u64, HashSet<u16>> = BTreeMap::new();
+    for set in sets.values() {
+        for (k, w) in set {
+            all.entry(*k).or_default().extend(w.iter().copied());
+        }
+    }
     // MeshSets are matched to GLBs by lowercase file stem: two recorded GLBs with one stem would share a candidate set
     let mut stems: BTreeMap<String, &str> = BTreeMap::new();
     for (mesh, _) in record.materials.values().flatten() {
@@ -558,17 +566,6 @@ fn resolve_by(
                             m.entry(*k).or_default().extend(w.iter().copied());
                         }
                     }
-                    if m.is_empty() {
-                        return Err(bad(
-                            W,
-                            0,
-                            format!(
-                                "{at}: no MeshSet of {mesh} (nor of an object at its placement) has a vertex-blend \
-                                 section (TexCoord0:Half4); the compile did not carry the weights (vertex_blend needs \
-                                 {STUDIO_BUILD} or a build checked against it)"
-                            ),
-                        ));
-                    }
                     merged = m;
                     &merged
                 }
@@ -578,29 +575,40 @@ fn resolve_by(
                 .map(|&w| half_choices(w))
                 .filter(|b| distinctive(b[0]))
                 .collect();
-            let contained: Vec<(u64, usize)> = candidates
-                .iter()
-                .map(|(&k, set)| {
-                    (
-                        k,
-                        weights
-                            .iter()
-                            .filter(|w| w.iter().any(|b| set.contains(b)))
-                            .count(),
-                    )
-                })
-                .collect();
-            let full: BTreeSet<u64> = contained
-                .iter()
-                .filter(|&&(_, n)| n == weights.len())
-                .map(|&(k, _)| k)
-                .collect();
+            let contain = |candidates: &BTreeMap<u64, HashSet<u16>>| -> (Vec<(u64, usize)>, BTreeSet<u64>) {
+                let contained: Vec<(u64, usize)> = candidates
+                    .iter()
+                    .map(|(&k, set)| {
+                        (
+                            k,
+                            weights
+                                .iter()
+                                .filter(|w| w.iter().any(|b| set.contains(b)))
+                                .count(),
+                        )
+                    })
+                    .collect();
+                let full = contained
+                    .iter()
+                    .filter(|&&(_, n)| n == weights.len())
+                    .map(|&(k, _)| k)
+                    .collect();
+                (contained, full)
+            };
+            // its GLB's (or placement peers') keys; else every key of the Patch: the stage treats every key alike, so
+            // only which keys a material claims matters, and each key still belongs to one material
+            let (mut contained, mut full) = contain(candidates);
+            if full.is_empty() {
+                (contained, full) = contain(&all);
+            }
             if full.is_empty() {
                 return Err(bad(
                     W,
                     0,
                     format!(
-                        "{at}: 0 vertex-blend keys of {mesh} contain all {} of its weights",
+                        "{at}: 0 vertex-blend keys contain all {} of its weights, in its MeshSets, its placement \
+                         peers' or the whole Patch (the compile did not carry the weights? vertex_blend needs \
+                         {STUDIO_BUILD} or a build checked against it)",
                         weights.len()
                     ),
                 ));
@@ -861,7 +869,8 @@ mod tests {
     }
 
     /// Studio merges the pieces of objects at one placement into one MeshSet named after one of them: a GLB with no
-    /// MeshSet of its own is resolved in its placement peers' MeshSets (and refused without peers).
+    /// MeshSet of its own is resolved in its placement peers' MeshSets, and failing those (Studio's cell prototypes,
+    /// named after no object) among every key of the Patch; weights no section holds are refused.
     #[test]
     fn a_glb_merged_into_a_peers_meshset_is_found_there() {
         let sections = [
@@ -881,8 +890,13 @@ mod tests {
         ]);
         let r = resolve_by(&rec, &sections, &BTreeMap::new(), &peers, weights).unwrap();
         assert_eq!((r.keys["ma"], r.keys["mb"]), (7, 9));
-        let e = resolve_by(&rec, &sections, &BTreeMap::new(), &Peers::new(), weights).unwrap_err();
-        assert!(e.to_string().contains("nor of an object at its placement"), "{e}");
+        // without peers: found among every key of the Patch
+        let r = resolve_by(&rec, &sections, &BTreeMap::new(), &Peers::new(), weights).unwrap();
+        assert_eq!((r.keys["ma"], r.keys["mb"]), (7, 9));
+        // a weight no section holds: refused
+        let none = |_: &str, _: usize| -> Result<Vec<f32>> { Ok(vec![0.0, 0.375, 1.0]) };
+        let e = resolve_by(&rec, &sections, &BTreeMap::new(), &peers, none).unwrap_err();
+        assert!(e.to_string().contains("or the whole Patch"), "{e}");
     }
 
     /// [`resolve_by`] for a map whose objects are named after their GLBs (no map.json names).
@@ -925,6 +939,7 @@ mod tests {
             ("meshes/t_0.glb", 2) => vec![0.0, 0.25, 0.5, 1.0],
             ("meshes/t_0.glb", 3) => vec![0.0, 0.75, 1.0],
             ("meshes/t_1.glb", 0) => vec![0.75, 0.125],
+            ("meshes/t_1.glb", 7) => vec![0.6],
             ("meshes/t_1.glb", 9) | ("meshes/t_0.glb", 9) => vec![0.0, 1.0, 1.0],
             _ => vec![0.25],
         })
@@ -1061,9 +1076,12 @@ mod tests {
             e.contains("keys no recorded material resolves to: 000000000000000b"),
             "{e}"
         );
-        // no containing key
-        let e = message(resolve_by_files(&record(&[("a", "t_1", 5)]), &s, weights));
-        assert!(e.contains("0 vertex-blend keys of meshes/t_1.glb contain"), "{e}");
+        // no containing key in the GLB's MeshSets nor anywhere in the Patch
+        let e = message(resolve_by_files(&record(&[("a", "t_1", 7)]), &s, weights));
+        assert!(
+            e.contains("0 vertex-blend keys contain all 1 of its weights"),
+            "{e}"
+        );
         // two keys contain a's weights, one material for them: the other key is left unclaimed
         let mut two = s.clone();
         two.push(section("t_0", 0xc, &[0.25, 0.5]));
@@ -1096,8 +1114,8 @@ mod tests {
             e.contains("keys no recorded material resolves to: 000000000000000b"),
             "{e}"
         );
-        // a recorded GLB without vertex-blend sections names the Studio build
-        let e = message(resolve_by_files(&record(&[("a", "t_9", 0)]), &s, weights));
+        // a Patch without vertex-blend sections names the Studio build
+        let e = message(resolve_by_files(&record(&[("a", "t_9", 0)]), &[], weights));
         assert!(e.contains(STUDIO_BUILD), "{e}");
     }
 
