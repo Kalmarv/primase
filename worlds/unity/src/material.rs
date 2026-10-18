@@ -71,6 +71,23 @@ fn strings(v: &Value, k: &str) -> Result<Vec<String>> {
         .collect()
 }
 
+/// A material's enabled keywords: `m_ValidKeywords` (Unity 2021.2 on; `m_InvalidKeywords`, those its shader does not
+/// declare, are not enabled), else `m_ShaderKeywords`, one string separated by spaces (earlier versions).
+fn keywords(m: &Value) -> Result<Vec<String>> {
+    if m.get("m_ValidKeywords").is_some() {
+        return strings(m, "m_ValidKeywords");
+    }
+    match m.get("m_ShaderKeywords") {
+        None => Ok(Vec::new()),
+        Some(v) => Ok(v
+            .as_str()
+            .ok_or_else(|| invalid("material: m_ShaderKeywords is not a string"))?
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()),
+    }
+}
+
 impl UnityMaterialData {
     /// Read the Material `r` of `player`.
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
@@ -123,11 +140,24 @@ impl UnityMaterialData {
                     c.get("a")?.as_f32()?,
                 ])
             })?,
-            keywords: strings(&m, "m_ValidKeywords")?,
+            keywords: keywords(&m)?,
             tags: pairs(&m, "stringTagMap", |s| s.as_str().map(str::to_owned))?,
             render_queue: m.get("m_CustomRenderQueue").and_then(Value::as_i64).unwrap_or(-1),
         })
     }
+}
+
+/// Unity's `BlendMode` values (`UnityEngine.Rendering.BlendMode`) the lowering names.
+pub mod blend_mode {
+    pub const ZERO: u8 = 0;
+    pub const ONE: u8 = 1;
+    pub const DST_COLOR: u8 = 2;
+    pub const SRC_COLOR: u8 = 3;
+    pub const SRC_ALPHA: u8 = 5;
+    pub const ONE_MINUS_SRC_COLOR: u8 = 6;
+    pub const ONE_MINUS_SRC_ALPHA: u8 = 10;
+    /// The last value, `OneMinusSrcAlpha`.
+    pub const LAST: u8 = 10;
 }
 
 /// A render-state value of a shader pass: the value the shader declares, and the material property it is bound to
@@ -138,10 +168,22 @@ pub struct ShaderValue {
     pub property: Option<String>,
 }
 
-/// A shader pass's render state: its `LightMode` tag, the first render target's blend factors (Unity's `BlendMode`:
-/// 0 Zero, 1 One, 5 SrcAlpha, 10 OneMinusSrcAlpha, ...), depth writes and culling (0 off, 1 front, 2 back).
+/// What a pass is (`m_Type`): one with its own state and programs, a `UsePass` naming another shader's pass
+/// (`m_UseName`, its state not here), or a `GrabPass` copying the screen to a texture (it draws nothing).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PassKind {
+    Normal,
+    Use(String),
+    Grab,
+}
+
+/// A shader pass's kind and render state: its `LightMode` tag as stored (Unity upper-cases some: `FORWARDBASE`), the
+/// first render target's blend factors (Unity's `BlendMode`: 0 Zero, 1 One, 5 SrcAlpha, 10 OneMinusSrcAlpha, ...),
+/// depth writes and culling (0 off, 1 front, 2 back).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShaderPass {
+    pub kind: PassKind,
     pub light_mode: Option<String>,
     pub src_blend: ShaderValue,
     pub dst_blend: ShaderValue,
@@ -221,7 +263,21 @@ impl ShaderData {
                     let rt = st
                         .get("rtBlend0")
                         .ok_or_else(|| invalid(format!("shader {name}: a pass without rtBlend0")))?;
+                    let kind = match p.get("m_Type").and_then(Value::as_i64) {
+                        Some(0) => PassKind::Normal,
+                        Some(1) => PassKind::Use(
+                            p.get("m_UseName")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    invalid(format!("shader {name}: a UsePass without m_UseName"))
+                                })?
+                                .to_owned(),
+                        ),
+                        Some(2) => PassKind::Grab,
+                        t => return Err(invalid(format!("shader {name}: pass type {t:?}"))),
+                    };
                     passes.push(ShaderPass {
+                        kind,
                         light_mode: tag_list(st.get("m_Tags"))?
                             .into_iter()
                             .find(|(k, _)| k.eq_ignore_ascii_case("LightMode"))
@@ -253,4 +309,67 @@ fn shader_name_of(s: &Value) -> Option<String> {
 pub fn shader_name(player: &Player, r: &ObjRef) -> Result<String> {
     shader_name_of(&player.decode(r)?)
         .ok_or_else(|| invalid(format!("shader {}/{}: no name", r.file, r.path_id)))
+}
+
+/// Hand-written shader state for tests.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use super::*;
+
+    /// A render-state value: the shader's own, or bound to a material property.
+    pub fn value(value: f32, property: Option<&str>) -> ShaderValue {
+        ShaderValue {
+            value,
+            property: property.map(str::to_owned),
+        }
+    }
+
+    /// A pass of `kind` with `LightMode` `light_mode` blending `src` `dst`, writing depth, culling back faces.
+    pub fn pass(kind: PassKind, light_mode: Option<&str>, src: ShaderValue, dst: ShaderValue) -> ShaderPass {
+        ShaderPass {
+            kind,
+            light_mode: light_mode.map(str::to_owned),
+            src_blend: src,
+            dst_blend: dst,
+            zwrite: value(1.0, None),
+            cull: value(2.0, None),
+        }
+    }
+
+    /// A normal pass with its own blend factors.
+    pub fn own(light_mode: Option<&str>, src: f32, dst: f32) -> ShaderPass {
+        pass(PassKind::Normal, light_mode, value(src, None), value(dst, None))
+    }
+
+    pub fn sub(tags: &[(&str, &str)], passes: Vec<ShaderPass>) -> SubShader {
+        SubShader {
+            tags: tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            passes,
+        }
+    }
+
+    /// Built-in Standard's first subshader as stored: a base pass blending `[_SrcBlend] [_DstBlend]` (One One where
+    /// the material has neither), an additive per-light pass (`[_SrcBlend] One`), a shadow caster and a deferred pass.
+    pub fn standard() -> SubShader {
+        let bound = |p| value(1.0, Some(p));
+        sub(
+            &[("RenderType", "Opaque")],
+            vec![
+                pass(
+                    PassKind::Normal,
+                    Some("FORWARDBASE"),
+                    bound("_SrcBlend"),
+                    bound("_DstBlend"),
+                ),
+                pass(
+                    PassKind::Normal,
+                    Some("FORWARDADD"),
+                    bound("_SrcBlend"),
+                    value(1.0, None),
+                ),
+                own(Some("SHADOWCASTER"), 1.0, 0.0),
+                own(Some("DEFERRED"), 1.0, 0.0),
+            ],
+        )
+    }
 }

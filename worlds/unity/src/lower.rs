@@ -5,13 +5,21 @@
 //!   and 1 - A x `_Smoothness` (re-encoded as a glTF metallic-roughness texture, B and G); occlusion from the map's G,
 //!   lerped from white by `_OcclusionStrength` (moved to R); `_BumpMap` x `_BumpScale` with `_NORMALMAP`;
 //!   `_EmissionColor` x `_EmissionMap` with `_EMISSION` (HDR colour above 1: normalised, the rest as
-//!   `emissive_strength`); `_Surface` 1 blended, `_AlphaClip` cut out at `_Cutoff`;
-//!   `_Cull` 0 double-sided.
+//!   `emissive_strength`); `_Cull` 0 double-sided.
 //! - **Universal Render Pipeline/Unlit**: `_BaseMap` x `_BaseColor`, drawn lit (counted).
-//! - **Universal Render Pipeline/Nature/SpeedTree7**: `_MainTex` x `_Color`, cut out at `_Cutoff` with
-//!   `_ALPHATEST_ON`, a rough dielectric (counted).
+//! - **Universal Render Pipeline/Nature/SpeedTree7**: `_MainTex` x `_Color`, a rough dielectric (counted).
 //! - **any other shader** (not modelled, counted by name): the base colour only, from Unity's usual property
 //!   names ([`other_base`]).
+//!
+//! Every shader's alpha mode is what Unity draws it with: the draw pass of the subshader the player's pipeline takes
+//! ([`UnityMaterial::draw_pass`]: URP's forward pass, built-in's `ForwardBase`, not a per-light or shadow pass) and
+//! its blend factors, bound ones read from the material. One Zero is opaque; any other blending is alpha blending
+//! (other than SrcAlpha OneMinusSrcAlpha counted). One case is drawn opaque, counted, as before this rule: a pass
+//! that blends while writing depth in Unity's opaque queue range (up to 2500). Lowering it as Blend needs the fact
+//! core cannot carry yet, the depth write, beside `core.draw_order`, so that targets choose their own approximation;
+//! until then the blend factors stay in `unity.material` and the queue in `core.draw_order`. Cut out at `_Cutoff`
+//! with the `_ALPHATEST_ON` keyword, URP's `_AlphaClip`, or the render type `TransparentCutout` (the material's tag,
+//! else its subshader's: legacy cutout shaders clip in their programs).
 //!
 //! Colour properties are gamma-encoded as stored and become linear. The base map's tiling becomes every slot's
 //! [`UvTransform`] (origin moved to top-left): URP Lit's vertex pass computes one coordinate,
@@ -36,7 +44,9 @@ use primase_core::{
 use primase_core::{DrawLayer, DrawOrder, MaterialUsage};
 use primase_image::{linear_to_srgb, srgb_to_linear};
 
-use crate::components::{UnityMaterial, UnityTexEnv, UnityTexture};
+use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
+use crate::material::SubShader;
+use crate::player::RenderPipeline;
 use crate::{Result, invalid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +144,48 @@ enum Derived {
 struct Lowering {
     log: PassLog,
     derived: BTreeMap<(Entity, Derived), Entity>,
+    /// The player's render pipeline (`unity.render_settings`), which decides the pass a material draws with.
+    pipeline: Option<RenderPipeline>,
+}
+
+/// The last render queue Unity draws with the opaque objects (`RenderQueue.GeometryLast`; `RenderQueueRange.opaque`
+/// is 0 to 2500, transparent 2501 to 5000), in both the built-in renderer and URP.
+const GEOMETRY_LAST: i32 = 2500;
+
+/// How a draw pass's blend factors (source, destination; `None` when not `BlendMode` values) are drawn: `None` for
+/// One Zero (opaque: the surface replaces what is behind); SrcAlpha OneMinusSrcAlpha is alpha blending (`Some(None)`);
+/// any other blending is drawn as alpha blending, named for the count (`Some(Some(name))`).
+fn blending(factors: Option<(u8, u8)>) -> Option<Option<&'static str>> {
+    use crate::material::blend_mode::{
+        DST_COLOR, ONE, ONE_MINUS_SRC_ALPHA, ONE_MINUS_SRC_COLOR, SRC_ALPHA, SRC_COLOR, ZERO,
+    };
+    let Some((src, dst)) = factors else {
+        return Some(Some(
+            "blend factors that are not BlendMode values as alpha blending",
+        ));
+    };
+    Some(match (src, dst) {
+        (ONE, ZERO) => return None,
+        (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) => None,
+        (ONE, ONE_MINUS_SRC_ALPHA) => Some("premultiplied blending (One OneMinusSrcAlpha) as alpha blending"),
+        (_, ONE) => Some("additive blending (destination One) as alpha blending"),
+        (ONE, ONE_MINUS_SRC_COLOR) => Some("soft additive blending (One OneMinusSrcColor) as alpha blending"),
+        (DST_COLOR, ZERO) | (ZERO, SRC_COLOR) | (DST_COLOR, SRC_COLOR) => {
+            Some("multiplicative blending as alpha blending")
+        }
+        _ => Some("other blend factors as alpha blending"),
+    })
+}
+
+/// A material's render type: its own `RenderType` tag (`stringTagMap`, which Unity's material editors set, Standard's
+/// `TransparentCutout` among them), else its subshader's.
+fn render_type<'a>(m: &'a UnityMaterial, sub: Option<&'a SubShader>) -> Option<&'a str> {
+    let find = |tags: &'a [(String, String)]| {
+        tags.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("RenderType"))
+            .map(|(_, v)| v.as_str())
+    };
+    find(&m.tags).or_else(|| sub.and_then(|s| find(&s.tags)))
 }
 
 impl Lowering {
@@ -320,27 +372,59 @@ impl Lowering {
         if let Some(env) = m.texture(tex) {
             p.base_color_texture = self.color(w, env, tiling)?;
         }
-        let clip = f("_AlphaClip", 0.0) == 1.0 || m.keyword("_ALPHATEST_ON");
-        let blend = f("_Surface", 0.0) == 1.0;
+        let sub = self.pipeline.as_ref().and_then(|pl| m.subshader(pl));
+        let pass = self.pipeline.as_ref().and_then(|pl| m.draw_pass(pl));
+        let clip = if m.keyword("_ALPHATEST_ON") {
+            Some("the _ALPHATEST_ON keyword")
+        } else if f("_AlphaClip", 0.0) == 1.0 {
+            Some("_AlphaClip")
+        } else if render_type(m, sub).is_some_and(|t| t.eq_ignore_ascii_case("TransparentCutout")) {
+            Some("render type TransparentCutout")
+        } else {
+            None
+        };
+        let blend = match pass {
+            Some(pass) => blending(m.blend_factors(pass)),
+            None => {
+                self.log.count(
+                    match (&self.pipeline, sub) {
+                        (None, _) => "alpha: render pipeline not known, blending not read",
+                        (Some(RenderPipeline::Other(_)), _) => {
+                            "alpha: render pipeline not modelled, blending not read"
+                        }
+                        (Some(_), None) => "alpha: no subshader for the pipeline, blending not read",
+                        (Some(_), Some(_)) => "alpha: no draw pass in the subshader, blending not read",
+                    },
+                    1,
+                );
+                None
+            }
+        };
         p.alpha_mode = match (clip, blend) {
-            (true, b) => {
-                if b {
-                    self.log.approximate("transparent and cut out: drawn cut out", 1);
+            (Some(by), b) => {
+                self.log.count(&format!("cut out by {by}"), 1);
+                if b.is_some() {
+                    self.log.approximate("blended and cut out: drawn cut out", 1);
                 }
                 AlphaMode::Mask {
                     cutoff: f("_Cutoff", 0.5),
                 }
             }
-            (false, true) => {
-                if f("_Blend", 0.0) != 0.0 {
-                    self.log.approximate(
-                        "premultiplied, additive or multiply blending as alpha blending",
-                        1,
-                    );
+            // blending that writes depth among the opaque objects: kept opaque until core carries depth writes
+            (None, Some(_))
+                if pass.is_some_and(|p| m.state_value(&p.zwrite) != 0.0)
+                    && m.render_queue(self.pipeline.as_ref()).0 <= GEOMETRY_LAST =>
+            {
+                self.log.approximate("blending that writes depth in the opaque queue range (glTF blending neither writes depth nor draws with opaque surfaces): drawn opaque", 1);
+                AlphaMode::Opaque
+            }
+            (None, Some(other)) => {
+                if let Some(what) = other {
+                    self.log.approximate(what, 1);
                 }
                 AlphaMode::Blend
             }
-            (false, false) => AlphaMode::Opaque,
+            (None, None) => AlphaMode::Opaque,
         };
         match f("_Cull", 2.0) as i64 {
             0 => p.double_sided = true,
@@ -442,13 +526,16 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
     let mut l = Lowering {
         log: PassLog::default(),
         derived: BTreeMap::new(),
+        pipeline: w
+            .resource::<UnityRenderSettings>()
+            .and_then(|s| s.pipeline.clone()),
     };
     let materials: Vec<(Entity, UnityMaterial)> =
         w.iter::<UnityMaterial>().map(|(e, m)| (e, m.clone())).collect();
     for (e, m) in materials {
         let p = l.lower(w, &m)?;
         // where it comes in the draw sequence: Unity's render queue; the layer its lowered alpha mode is
-        let (queue, from) = m.render_queue();
+        let (queue, from) = m.render_queue(l.pipeline.as_ref());
         l.log.count(&format!("draw order from {from}"), 1);
         let layer = match p.alpha_mode {
             AlphaMode::Opaque => DrawLayer::Opaque,
@@ -518,6 +605,7 @@ mod tests {
 
     use super::*;
     use crate::components::UnityObject;
+    use crate::material::fixture;
 
     fn material(path_id: i64, shader: Option<&str>, keywords: &[&str]) -> UnityMaterial {
         UnityMaterial {
@@ -587,5 +675,272 @@ mod tests {
         );
         assert_eq!(count("materials without a usage (Shader Graphs/ocean)"), Some(1));
         assert_eq!(count("materials without a usage (no shader)"), Some(1));
+    }
+    /// A material of `shader` with subshaders `subs`, saved floats `floats` and keywords `keywords`.
+    fn stated(
+        shader: &str,
+        subs: Vec<SubShader>,
+        floats: &[(&str, f32)],
+        keywords: &[&str],
+    ) -> UnityMaterial {
+        let mut m = material(1, Some(shader), keywords);
+        m.shader_state = subs;
+        m.floats = floats.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        m
+    }
+
+    /// Lower `materials` under `pipeline`: each one's alpha mode, and the log.
+    fn alpha(materials: &[UnityMaterial], pipeline: Option<RenderPipeline>) -> (Vec<AlphaMode>, PassLog) {
+        let mut w = World::new();
+        w.insert_resource(UnityRenderSettings { sun: None, pipeline });
+        let es: Vec<Entity> = materials
+            .iter()
+            .map(|m| {
+                let e = w.spawn();
+                w.insert(e, m.clone());
+                e
+            })
+            .collect();
+        let log = lower_unity_pbr(&mut w).unwrap();
+        (
+            es.iter()
+                .map(|e| w.get::<PbrMaterial>(*e).unwrap().alpha_mode)
+                .collect(),
+            log,
+        )
+    }
+
+    /// Built-in Standard's modes as its editor stores them (`_Mode`, keywords, `_SrcBlend`/`_DstBlend` bound by the
+    /// base pass, the render queue: -1 for Opaque, 2450 for Cutout, 3000 for Fade and Transparent): Opaque One Zero
+    /// stays opaque although the per-light pass adds (`[_SrcBlend] One`); Cutout clips; Fade blends; Transparent blends
+    /// premultiplied (counted).
+    #[test]
+    fn standard_takes_its_alpha_from_the_base_pass() {
+        let standard = |queue: i64, floats: &[(&str, f32)], keywords: &[&str]| {
+            let mut m = stated("Standard", vec![fixture::standard()], floats, keywords);
+            m.render_queue = queue;
+            m
+        };
+        let opaque = standard(
+            -1,
+            &[("_Mode", 0.0), ("_SrcBlend", 1.0), ("_DstBlend", 0.0)],
+            &["_NORMALMAP"],
+        );
+        let cutout = standard(
+            2450,
+            &[
+                ("_Mode", 1.0),
+                ("_SrcBlend", 1.0),
+                ("_DstBlend", 0.0),
+                ("_Cutoff", 0.3),
+            ],
+            &["_ALPHATEST_ON"],
+        );
+        let fade = standard(
+            3000,
+            &[("_Mode", 2.0), ("_SrcBlend", 5.0), ("_DstBlend", 10.0)],
+            &["_ALPHABLEND_ON"],
+        );
+        let transparent = standard(
+            3000,
+            &[("_Mode", 3.0), ("_SrcBlend", 1.0), ("_DstBlend", 10.0)],
+            &["_ALPHAPREMULTIPLY_ON"],
+        );
+        let (modes, log) = alpha(
+            &[opaque, cutout, fade, transparent],
+            Some(RenderPipeline::BuiltIn),
+        );
+        assert_eq!(
+            modes,
+            [
+                AlphaMode::Opaque,
+                AlphaMode::Mask { cutoff: 0.3 },
+                AlphaMode::Blend,
+                AlphaMode::Blend
+            ]
+        );
+        assert_eq!(
+            log.approximations
+                .get("premultiplied blending (One OneMinusSrcAlpha) as alpha blending")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            log.counts.get("cut out by the _ALPHATEST_ON keyword").copied(),
+            Some(1)
+        );
+    }
+
+    /// Shaders whose base pass states its own blending: a legacy transparent one blends; a legacy cutout one clips by
+    /// its render type; an unlit additive one, whose only pass has no light mode, blends (counted); an opaque base
+    /// after a GrabPass stays opaque. A material's own `RenderType` tag overrides its subshader's.
+    #[test]
+    fn built_in_shaders_state_their_blending_in_the_base_pass() {
+        use crate::material::PassKind;
+        let legacy = |tags: &[(&str, &str)], src, dst| {
+            fixture::sub(
+                tags,
+                vec![
+                    fixture::own(Some("FORWARDBASE"), src, dst),
+                    fixture::own(Some("FORWARDADD"), src, 1.0),
+                ],
+            )
+        };
+        let transparent = stated(
+            "Legacy Shaders/Transparent/Diffuse",
+            vec![legacy(
+                &[("QUEUE", "Transparent"), ("RenderType", "Transparent")],
+                5.0,
+                10.0,
+            )],
+            &[],
+            &[],
+        );
+        let cutout = stated(
+            "Legacy Shaders/Transparent/Cutout/Diffuse",
+            vec![legacy(
+                &[("QUEUE", "AlphaTest"), ("RenderType", "TransparentCutout")],
+                1.0,
+                0.0,
+            )],
+            &[("_Cutoff", 0.4)],
+            &[],
+        );
+        let additive = stated(
+            "Legacy Shaders/Particles/Additive",
+            vec![fixture::sub(
+                &[("QUEUE", "Transparent")],
+                vec![fixture::own(None, 5.0, 1.0)],
+            )],
+            &[],
+            &[],
+        );
+        let grab = fixture::pass(
+            PassKind::Grab,
+            None,
+            fixture::value(5.0, None),
+            fixture::value(10.0, None),
+        );
+        let glass = stated(
+            "Dirty Glass",
+            vec![fixture::sub(
+                &[("QUEUE", "Transparent+0")],
+                vec![grab, fixture::own(Some("FORWARDBASE"), 1.0, 0.0)],
+            )],
+            &[],
+            &[],
+        );
+        let mut tagged = stated(
+            "Standard",
+            vec![fixture::standard()],
+            &[("_SrcBlend", 1.0), ("_DstBlend", 0.0)],
+            &[],
+        );
+        tagged.tags = vec![("RenderType".into(), "TransparentCutout".into())];
+        let (modes, log) = alpha(
+            &[transparent, cutout, additive, glass, tagged],
+            Some(RenderPipeline::BuiltIn),
+        );
+        assert_eq!(
+            modes,
+            [
+                AlphaMode::Blend,
+                AlphaMode::Mask { cutoff: 0.4 },
+                AlphaMode::Blend,
+                AlphaMode::Opaque,
+                AlphaMode::Mask { cutoff: 0.5 }
+            ]
+        );
+        assert_eq!(
+            log.approximations
+                .get("additive blending (destination One) as alpha blending")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            log.counts
+                .get("cut out by render type TransparentCutout")
+                .copied(),
+            Some(2)
+        );
+    }
+
+    /// URP takes its forward pass in its own subshader; a built-in subshader's base pass is not URP's, so a Standard
+    /// material under URP has no draw pass (counted) and is opaque. SrcAlpha OneMinusSrcAlpha in the Geometry queue
+    /// writing depth (Sledding's snow shader) is drawn opaque, counted; the same without depth writes blends. Without a
+    /// known pipeline nothing is read.
+    #[test]
+    fn urp_takes_its_forward_pass_and_an_unknown_pipeline_reads_none() {
+        let urp = fixture::sub(
+            &[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Transparent")],
+            vec![
+                fixture::pass(
+                    crate::material::PassKind::Normal,
+                    Some("UniversalForward"),
+                    fixture::value(1.0, Some("_SrcBlend")),
+                    fixture::value(0.0, Some("_DstBlend")),
+                ),
+                fixture::own(Some("ShadowCaster"), 1.0, 0.0),
+            ],
+        );
+        let lit = stated(
+            "Universal Render Pipeline/Lit",
+            vec![urp, fixture::standard()],
+            &[("_Surface", 1.0), ("_SrcBlend", 5.0), ("_DstBlend", 10.0)],
+            &[],
+        );
+        let mut fade = stated(
+            "Standard",
+            vec![fixture::standard()],
+            &[("_SrcBlend", 5.0), ("_DstBlend", 10.0)],
+            &[],
+        );
+        fade.render_queue = 3000;
+        let snow = |zwrite: f32| {
+            let mut pass = fixture::own(Some("UniversalForward"), 5.0, 10.0);
+            pass.zwrite = fixture::value(zwrite, None);
+            stated(
+                "BruteForce/URP/SnowIceURP",
+                vec![fixture::sub(
+                    &[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Geometry")],
+                    vec![pass],
+                )],
+                &[],
+                &[],
+            )
+        };
+        let (modes, log) = alpha(
+            &[lit.clone(), fade.clone(), snow(1.0), snow(0.0)],
+            Some(RenderPipeline::Universal),
+        );
+        assert_eq!(
+            modes,
+            [
+                AlphaMode::Blend,
+                AlphaMode::Opaque,
+                AlphaMode::Opaque,
+                AlphaMode::Blend
+            ]
+        );
+        assert_eq!(
+            log.counts
+                .get("alpha: no draw pass in the subshader, blending not read")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            log.approximations
+                .get("blending that writes depth in the opaque queue range (glTF blending neither writes depth nor draws with opaque surfaces): drawn opaque")
+                .copied(),
+            Some(1)
+        );
+        let (modes, log) = alpha(&[lit, fade], None);
+        assert_eq!(modes, [AlphaMode::Opaque, AlphaMode::Opaque]);
+        assert_eq!(
+            log.counts
+                .get("alpha: render pipeline not known, blending not read")
+                .copied(),
+            Some(2)
+        );
     }
 }

@@ -70,8 +70,8 @@ fn materials_match_the_oracle() {
 }
 
 /// Shader render state against an independent reader (`PRIMASE_UNITY_SHADERS`, JSON: `materials` each `file`,
-/// `path_id`, `shader` (its name or null) and `subshaders`, each `tags` as [key, value] and `passes`, each
-/// `light_mode` (or null), `src_blend`, `dst_blend`, `zwrite`, `cull` as [value, bound property or null]): every
+/// `path_id`, `shader` (its name or null) and `subshaders`, each `tags` as [key, value] and `passes`, each `kind`
+/// (`"normal"`, `{"use": name}` or `"grab"`), `light_mode` (or null), `src_blend`, `dst_blend`, `zwrite`, `cull` as [value, bound property or null]): every
 /// material's shader exactly.
 #[test]
 fn shader_state_matches_the_oracle() {
@@ -107,7 +107,7 @@ fn shader_state_matches_the_oracle() {
                 json!({"file": r.file, "path_id": r.path_id, "shader": s.name,
                     "subshaders": s.subshaders.iter().map(|x| json!({
                         "tags": x.tags.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
-                        "passes": x.passes.iter().map(|p| json!({"light_mode": p.light_mode,
+                        "passes": x.passes.iter().map(|p| json!({"kind": p.kind, "light_mode": p.light_mode,
                             "src_blend": v(&p.src_blend), "dst_blend": v(&p.dst_blend), "zwrite": v(&p.zwrite),
                             "cull": v(&p.cull)})).collect::<Vec<_>>(),
                     })).collect::<Vec<_>>()})

@@ -5,42 +5,30 @@
 //!   ([`procedural`]): its mesh is a placeholder, and the GameObject's MonoBehaviours (`unity.behaviours`) hold the
 //!   shape;
 //! - every one of its primitives' materials is on a shader the lowering does not model ([`crate::lower`]) whose
-//!   forward pass blends additively (destination factor One, source One or SrcAlpha): it adds light over what is
+//!   draw pass blends additively (destination factor One, source One or SrcAlpha): it adds light over what is
 //!   behind and has no surface a metal-rough material can stand for.
 //!
-//! The forward pass is URP's: the first subshader whose `RenderPipeline` tag is `UniversalPipeline` or absent, and in
-//! it the first pass URP draws in its forward passes (`LightMode` absent, `SRPDefaultUnlit`, `UniversalForward` or
-//! `UniversalForwardOnly`: the shader tags of URP's DrawObjectsPass). A blend factor bound to a material property is
-//! that property's value.
+//! The draw pass is the one the player's render pipeline draws the surface with ([`UnityMaterial::draw_pass`]: URP's
+//! forward pass, built-in's `ForwardBase`), in the subshader that pipeline takes. A blend factor bound to a material
+//! property is that property's value.
 
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, MeshFile, World};
 
-use crate::components::{UnityMaterial, UnityMesh};
+use crate::components::{UnityMaterial, UnityMesh, UnityRenderSettings};
 use crate::level::procedural;
 use crate::lower::modelled;
+use crate::player::RenderPipeline;
 
-/// Unity's `BlendMode` values the rule reads.
-const ONE: f32 = 1.0;
-const SRC_ALPHA: f32 = 5.0;
-
-/// The forward pass's (source, destination) blend factors of a material's shader; `None` when it has none.
-pub fn forward_blend(m: &UnityMaterial) -> Option<(f32, f32)> {
-    let sub = m.urp_subshader()?;
-    let pass = sub.passes.iter().find(|p| {
-        p.light_mode
-            .as_deref()
-            .is_none_or(|l| matches!(l, "SRPDefaultUnlit" | "UniversalForward" | "UniversalForwardOnly"))
-    })?;
-    Some((m.state_value(&pass.src_blend), m.state_value(&pass.dst_blend)))
-}
-
-/// Whether a material is on a shader the lowering does not model that blends additively.
-fn additive_unmodelled(m: &UnityMaterial) -> bool {
+/// Whether a material is on a shader the lowering does not model whose draw pass under `pipeline` blends additively.
+fn additive_unmodelled(m: &UnityMaterial, pipeline: &RenderPipeline) -> bool {
+    use crate::material::blend_mode::{ONE, SRC_ALPHA};
     !modelled(m.shader.as_deref())
-        && forward_blend(m).is_some_and(|(src, dst)| dst == ONE && (src == ONE || src == SRC_ALPHA))
+        && m.draw_pass(pipeline)
+            .and_then(|p| m.blend_factors(p))
+            .is_some_and(|(src, dst)| dst == ONE && (src == ONE || src == SRC_ALPHA))
 }
 
 /// The materials a placement draws: each primitive's, by its variant.
@@ -66,6 +54,10 @@ fn materials(w: &World, prototype: Entity, variant: u32) -> Vec<Option<Entity>> 
 pub fn unity_drawn(w: &mut World) -> PassLog {
     let mut log = PassLog::default();
     let mut gone: BTreeMap<Entity, String> = BTreeMap::new();
+    // without a known pipeline no draw pass is known, and nothing is left out for its blending
+    let pipeline = w
+        .resource::<UnityRenderSettings>()
+        .and_then(|s| s.pipeline.clone());
     for (e, i) in w.iter::<Instance>() {
         let p = i.prototype;
         if !w.has::<Mesh>(p) && !w.has::<MeshFile>(p) {
@@ -101,7 +93,8 @@ pub fn unity_drawn(w: &mut World) -> PassLog {
             gone.insert(e, String::new());
             continue;
         }
-        if !ms.is_empty() && ms.iter().all(|m| m.is_some_and(additive_unmodelled)) {
+        let additive = |m: &&UnityMaterial| pipeline.as_ref().is_some_and(|pl| additive_unmodelled(m, pl));
+        if !ms.is_empty() && ms.iter().all(|m| m.as_ref().is_some_and(additive)) {
             let shader = ms[0].and_then(|m| m.shader.clone()).unwrap_or_default();
             gone.insert(
                 e,

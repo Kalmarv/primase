@@ -145,6 +145,11 @@ fn lowering_matches_the_port() {
                 *rules
                     .entry("port draws untextured opaque-alpha blends opaque".into())
                     .or_default() += 1;
+            } else if alpha == "blend" && port_alpha == "opaque" && um.float("_Surface") != Some(1.0) {
+                // the port reads blending from URP Lit's `_Surface` alone; the material's draw pass blends
+                *rules
+                    .entry("port takes blending from _Surface only: a blending draw pass drawn opaque".into())
+                    .or_default() += 1;
             } else {
                 fields_differ.push(format!("{}: alpha {alpha} vs {port_alpha}", j["key"]));
             }

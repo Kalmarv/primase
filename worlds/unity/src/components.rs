@@ -3,7 +3,8 @@
 use primase_core::{Component, Entity, JsonError, World};
 use serde::Serialize;
 
-use crate::player::ObjRef;
+use crate::material::{PassKind, ShaderPass, SubShader};
+use crate::player::{ObjRef, RenderPipeline};
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -110,6 +111,38 @@ pub struct UnityTexEnv {
     pub offset: [f32; 2],
 }
 
+/// The pass of a subshader that draws the surface under `pipeline`: the first with its own state (not a `UsePass` or
+/// `GrabPass`) among the passes the pipeline draws objects with, by `LightMode` (compared ignoring case: Unity stores
+/// some upper-cased).
+/// - URP: absent, `SRPDefaultUnlit`, `UniversalForward` or `UniversalForwardOnly` (the shader tags of URP's
+///   `DrawObjectsPass`).
+/// - Built-in forward: the base pass, `ForwardBase`, which draws the surface once with the main light; additive
+///   `ForwardAdd` passes only add further lights over it. Without one, the first unlit pass (`LightMode` absent or
+///   `Always`), else the first vertex-lit one (`Vertex`, `VertexLMRGBM`, `VertexLM`), which Unity draws for shaders
+///   without forward passes.
+///
+/// `None` under another pipeline or when no pass qualifies.
+pub fn draw_pass<'a>(sub: &'a SubShader, pipeline: &RenderPipeline) -> Option<&'a ShaderPass> {
+    let own = || sub.passes.iter().filter(|p| p.kind == PassKind::Normal);
+    let mode_in = |p: &ShaderPass, modes: &[&str]| match &p.light_mode {
+        None => modes.contains(&""),
+        Some(l) => modes.iter().any(|m| l.eq_ignore_ascii_case(m)),
+    };
+    match pipeline {
+        RenderPipeline::Universal => own().find(|p| {
+            mode_in(
+                p,
+                &["", "SRPDefaultUnlit", "UniversalForward", "UniversalForwardOnly"],
+            )
+        }),
+        RenderPipeline::BuiltIn => own()
+            .find(|p| mode_in(p, &["ForwardBase"]))
+            .or_else(|| own().find(|p| mode_in(p, &["", "Always"])))
+            .or_else(|| own().find(|p| mode_in(p, &["Vertex", "VertexLMRGBM", "VertexLM"]))),
+        RenderPipeline::Other(_) => None,
+    }
+}
+
 /// A shader `Queue` tag's value: `Background` 1000, `Geometry` 2000, `AlphaTest` 2450, `GeometryLast` 2500,
 /// `Transparent` 3000, `Overlay` 4000, each optionally `+n` or `-n`, or a number (ShaderLab's queue syntax); `None`
 /// for anything else.
@@ -153,28 +186,52 @@ pub struct UnityMaterial {
 }
 
 impl UnityMaterial {
-    /// The subshader URP draws with: the first whose `RenderPipeline` tag is `UniversalPipeline` or absent (Unity
-    /// takes the first subshader its pipeline supports).
-    pub fn urp_subshader(&self) -> Option<&crate::material::SubShader> {
+    /// The subshader `pipeline` draws with: Unity takes the first subshader the pipeline supports, and a subshader
+    /// with a `RenderPipeline` tag only under the pipeline it names. URP: the first tagged `UniversalPipeline` or
+    /// untagged; built-in: the first untagged. `None` under another pipeline, whose tag is not known. (Hardware
+    /// support and `Shader.maximumLOD` also skip subshaders; neither is read, so the first is taken.)
+    pub fn subshader(&self, pipeline: &RenderPipeline) -> Option<&SubShader> {
+        let wanted = match pipeline {
+            RenderPipeline::Universal => Some("UniversalPipeline"),
+            RenderPipeline::BuiltIn => None,
+            RenderPipeline::Other(_) => return None,
+        };
         self.shader_state.iter().find(|s| {
             s.tags
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case("RenderPipeline"))
-                .is_none_or(|(_, v)| v == "UniversalPipeline")
+                .is_none_or(|(_, v)| wanted == Some(v.as_str()))
         })
     }
 
-    /// The render queue it draws in: its own (`m_CustomRenderQueue`), else its URP subshader's `Queue` tag
-    /// ([`queue_tag`]), else Geometry (2000); and which of the three said so.
-    pub fn render_queue(&self) -> (i32, &'static str) {
+    /// A pass's blend factors (source, destination) as `BlendMode` values ([`crate::material::blend_mode`]), each the
+    /// bound property's value where it has one ([`Self::state_value`]); `None` when one is not a `BlendMode`.
+    pub fn blend_factors(&self, pass: &ShaderPass) -> Option<(u8, u8)> {
+        let mode = |v: &crate::material::ShaderValue| {
+            let x = self.state_value(v);
+            (x.fract() == 0.0 && (0.0..=f32::from(crate::material::blend_mode::LAST)).contains(&x))
+                .then_some(x as u8)
+        };
+        Some((mode(&pass.src_blend)?, mode(&pass.dst_blend)?))
+    }
+
+    /// The pass that draws the material's surface under `pipeline` ([`draw_pass`] in its [`Self::subshader`]).
+    pub fn draw_pass(&self, pipeline: &RenderPipeline) -> Option<&ShaderPass> {
+        draw_pass(self.subshader(pipeline)?, pipeline)
+    }
+
+    /// The render queue it draws in under `pipeline`: its own (`m_CustomRenderQueue`), else its subshader's `Queue`
+    /// tag ([`queue_tag`]; no subshader when the pipeline is not known), else Geometry (2000); and which of the three
+    /// said so.
+    pub fn render_queue(&self, pipeline: Option<&RenderPipeline>) -> (i32, &'static str) {
         if self.render_queue >= 0 {
             return (
                 i32::try_from(self.render_queue).unwrap_or(i32::MAX),
                 "the material's render queue",
             );
         }
-        let tag = self
-            .urp_subshader()
+        let tag = pipeline
+            .and_then(|p| self.subshader(p))
             .and_then(|s| s.tags.iter().find(|(k, _)| k.eq_ignore_ascii_case("Queue")))
             .and_then(|(_, v)| queue_tag(v));
         match tag {
@@ -214,8 +271,8 @@ impl UnityMaterial {
 
 impl Component for UnityMaterial {
     const NAME: &'static str = "unity.material";
-    /// 2: `shader_state`.
-    const VERSION: u32 = 2;
+    /// 2: `shader_state`; 3: each shader pass's `kind`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -585,7 +642,7 @@ impl Component for UnityCollider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::material::{ShaderPass, ShaderValue, SubShader};
+    use crate::material::fixture;
 
     #[test]
     fn queue_tags_read_as_shaderlab_writes_them() {
@@ -625,32 +682,114 @@ mod tests {
     }
 
     fn sub(tags: &[(&str, &str)]) -> SubShader {
-        let v = |value| ShaderValue {
-            value,
-            property: None,
-        };
-        SubShader {
-            tags: tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            passes: vec![ShaderPass {
-                light_mode: None,
-                src_blend: v(1.0),
-                dst_blend: v(0.0),
-                zwrite: v(1.0),
-                cull: v(2.0),
-            }],
-        }
+        fixture::sub(tags, vec![fixture::own(None, 1.0, 0.0)])
     }
 
     #[test]
-    fn a_materials_queue_is_its_own_else_its_urp_subshaders_tag_else_geometry() {
+    fn a_materials_queue_is_its_own_else_its_subshaders_tag_else_geometry() {
         let urp = sub(&[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Transparent")]);
         let hdrp = sub(&[("RenderPipeline", "HDRenderPipeline"), ("QUEUE", "Overlay")]);
+        let builtin = sub(&[("QUEUE", "AlphaTest")]);
+        let u = Some(&RenderPipeline::Universal);
+        let b = Some(&RenderPipeline::BuiltIn);
         // its own queue wins (URP writes _QueueOffset into it: the water's 2050)
-        assert_eq!(material(2050, vec![urp.clone()]).render_queue().0, 2050);
-        // -1: the tag of the subshader URP takes, skipping another pipeline's
-        assert_eq!(material(-1, vec![hdrp.clone(), urp]).render_queue().0, 3000);
-        // no URP subshader with a tag, or none at all: Geometry
-        assert_eq!(material(-1, vec![hdrp]).render_queue().0, 2000);
-        assert_eq!(material(-1, Vec::new()).render_queue().0, 2000);
+        assert_eq!(material(2050, vec![urp.clone()]).render_queue(u).0, 2050);
+        // -1: the tag of the subshader the pipeline takes, skipping another pipeline's
+        assert_eq!(
+            material(-1, vec![hdrp.clone(), urp.clone()]).render_queue(u).0,
+            3000
+        );
+        assert_eq!(
+            material(-1, vec![urp.clone(), builtin.clone()]).render_queue(b).0,
+            2450
+        );
+        // no subshader of the pipeline with a tag, none at all, or no pipeline known: Geometry
+        assert_eq!(material(-1, vec![hdrp]).render_queue(u).0, 2000);
+        assert_eq!(material(-1, Vec::new()).render_queue(u).0, 2000);
+        assert_eq!(material(-1, vec![urp]).render_queue(None).0, 2000);
+        let other = RenderPipeline::Other(vec!["HDRenderPipelineAsset".into()]);
+        assert_eq!(material(-1, vec![builtin]).render_queue(Some(&other)).0, 2000);
+    }
+
+    /// Each pipeline takes the first subshader it supports: URP its own or an untagged one, built-in an untagged one,
+    /// another pipeline none (its tag is not known).
+    #[test]
+    fn each_pipeline_takes_the_first_subshader_it_supports() {
+        let urp = sub(&[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "1")]);
+        let untagged = sub(&[("QUEUE", "2")]);
+        let m = material(-1, vec![urp, untagged]);
+        let queue = |p| m.subshader(&p).map(|s| s.tags[s.tags.len() - 1].1.clone());
+        assert_eq!(queue(RenderPipeline::Universal).as_deref(), Some("1"));
+        assert_eq!(queue(RenderPipeline::BuiltIn).as_deref(), Some("2"));
+        assert_eq!(queue(RenderPipeline::Other(Vec::new())), None);
+    }
+
+    /// The draw pass: built-in's base pass even when a GrabPass, a UsePass, an unlit or a per-light pass comes first
+    /// (light modes compared ignoring case); without one the first unlit pass, else a vertex-lit one; URP's first
+    /// forward pass, not its shadow caster; none under another pipeline.
+    #[test]
+    fn the_draw_pass_is_the_pipelines_surface_pass() {
+        use crate::material::PassKind;
+        let b = RenderPipeline::BuiltIn;
+        let u = RenderPipeline::Universal;
+        let picked = |passes: Vec<ShaderPass>, p: &RenderPipeline| {
+            let s = fixture::sub(&[], passes);
+            draw_pass(&s, p).cloned()
+        };
+        let one_zero = || (fixture::value(1.0, None), fixture::value(0.0, None));
+        let (s, d) = one_zero();
+        let grab = fixture::pass(PassKind::Grab, None, s, d);
+        let (s, d) = one_zero();
+        let used = fixture::pass(
+            PassKind::Use("Legacy Shaders/VertexLit/SHADOWCASTER".into()),
+            None,
+            s,
+            d,
+        );
+        let unlit = fixture::own(None, 1.0, 0.0);
+        let add = fixture::own(Some("FORWARDADD"), 1.0, 1.0);
+        let base = fixture::own(Some("FORWARDBASE"), 5.0, 10.0);
+        assert_eq!(
+            picked(
+                vec![
+                    grab.clone(),
+                    used.clone(),
+                    unlit.clone(),
+                    add.clone(),
+                    base.clone()
+                ],
+                &b
+            ),
+            Some(base.clone())
+        );
+        assert_eq!(
+            picked(vec![grab.clone(), add.clone(), unlit.clone()], &b),
+            Some(unlit.clone())
+        );
+        let always = fixture::own(Some("Always"), 5.0, 1.0);
+        assert_eq!(picked(vec![always.clone(), unlit.clone()], &b), Some(always));
+        let vertex = fixture::own(Some("Vertex"), 5.0, 10.0);
+        assert_eq!(picked(vec![add.clone(), vertex.clone()], &b), Some(vertex));
+        assert_eq!(picked(vec![grab, used, add], &b), None);
+        let shadow = fixture::own(Some("ShadowCaster"), 1.0, 0.0);
+        let forward = fixture::own(Some("UniversalForward"), 5.0, 10.0);
+        assert_eq!(picked(vec![shadow.clone(), forward.clone()], &u), Some(forward));
+        assert_eq!(picked(vec![shadow, base], &u), None);
+        assert_eq!(picked(vec![unlit], &RenderPipeline::Other(Vec::new())), None);
+    }
+
+    /// Bound factors take the material's value, else the shader's; one that is not a `BlendMode` gives none.
+    #[test]
+    fn blend_factors_take_the_bound_properties() {
+        let mut m = material(-1, vec![fixture::standard()]);
+        let base = m.draw_pass(&RenderPipeline::BuiltIn).unwrap().clone();
+        assert_eq!(base.light_mode.as_deref(), Some("FORWARDBASE"));
+        assert_eq!(m.blend_factors(&base), Some((1, 1)));
+        m.floats = vec![("_SrcBlend".into(), 5.0), ("_DstBlend".into(), 10.0)];
+        assert_eq!(m.blend_factors(&base), Some((5, 10)));
+        m.floats[1].1 = 10.5;
+        assert_eq!(m.blend_factors(&base), None);
+        m.floats[1].1 = 11.0;
+        assert_eq!(m.blend_factors(&base), None);
     }
 }
