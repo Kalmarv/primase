@@ -689,6 +689,7 @@ impl Builder<'_> {
             trigger: c.trigger,
             physic_material,
             rigidbody: c.rigidbody,
+            lowered: false,
         })
     }
 

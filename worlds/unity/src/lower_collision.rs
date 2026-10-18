@@ -244,6 +244,10 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
         let t = *w
             .get::<Transform>(e)
             .ok_or_else(|| invalid("a collider without a transform"))?;
+        // its collision is made here, or it has none
+        if let Some(u) = w.get_mut::<UnityCollider>(e) {
+            u.lowered = true;
+        }
         let Some(lowered) = lower(&c, &t, &mut log) else {
             continue;
         };
@@ -327,8 +331,11 @@ impl Pass for LowerUnityCollision {
             "core.surfaces",
         ]
     }
-    /// It lowers Unity colliders and keeps them.
+    /// It lowers Unity colliders and keeps them, marked `lowered`.
     fn legalizes(&self) -> &[&'static str] {
+        &["unity.collider"]
+    }
+    fn modifies(&self) -> &[&'static str] {
         &["unity.collider"]
     }
     fn approximates(&self) -> &'static str {
@@ -363,7 +370,39 @@ mod tests {
             trigger: false,
             physic_material: None,
             rigidbody: None,
+            lowered: false,
         }
+    }
+
+    #[test]
+    fn a_collider_is_dropped_from_mapped_geometry_only_once_nothing_is_lost() {
+        use primase_core::{Component, Linear, Linearity};
+        let mut c = collider(UnityColliderShape::Sphere {
+            center: [0.0; 3],
+            radius: 1.0,
+        });
+        let l = Linear::mirror_x();
+        // colliding, not yet lowered: kept (its collision is not made)
+        assert!(matches!(c.apply_linear(&l), Linearity::Unsupported));
+        c.lowered = true;
+        assert!(matches!(c.apply_linear(&l), Linearity::Drop));
+        // a trigger makes no collision
+        let mut t = collider(UnityColliderShape::Sphere {
+            center: [0.0; 3],
+            radius: 1.0,
+        });
+        t.trigger = true;
+        assert!(matches!(t.apply_linear(&l), Linearity::Drop));
+        // the pass marks every collider that collides
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Transform::IDENTITY);
+        w.insert(e, c.clone());
+        let mut fresh = c;
+        fresh.lowered = false;
+        w.insert(e, fresh);
+        lower_unity_collision(&mut w).unwrap();
+        assert!(w.get::<UnityCollider>(e).unwrap().lowered);
     }
 
     /// A transform with these columns (world axes) and translation.

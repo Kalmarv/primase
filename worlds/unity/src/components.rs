@@ -485,7 +485,7 @@ pub struct UnityPhysicMaterial {
 /// A collider as Unity stores it, on an entity placed by its Transform: its shape, whether it is a trigger (triggers
 /// detect, they do not collide), its physic material and the Rigidbody on it or an ancestor (`Some(true)`: kinematic,
 /// it moves only when scripted). Whether its GameObject is active and it is enabled is the entity's state
-/// (`core.condition`).
+/// (`core.condition`). `lowered`: `lower-unity-collision` has made its collision (false as read).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityCollider {
     pub collider: UnityObject,
@@ -494,6 +494,7 @@ pub struct UnityCollider {
     pub trigger: bool,
     pub physic_material: Option<UnityPhysicMaterial>,
     pub rigidbody: Option<bool>,
+    pub lowered: bool,
 }
 
 impl UnityCollider {
@@ -506,15 +507,20 @@ impl UnityCollider {
 
 impl Component for UnityCollider {
     const NAME: &'static str = "unity.collider";
-    /// 2: `active` left to the entity's state.
-    const VERSION: u32 = 2;
-    /// Removed when its entity's local space is mapped (`bake-nonrigid`): its shape is the collider as stored,
-    /// relative to the stored transform, and no longer describes the entity once the transform's non-rigid part is
-    /// baked away. The collision `lower-unity-collision` made from it (a `core.collider`, or `core.collision` for a
-    /// concave mesh, with the physic material as its surface) carries the geometry; so `bake-nonrigid` runs after
-    /// `lower-unity-collision`.
+    /// 2: `active` left to the entity's state; 3: `lowered`.
+    const VERSION: u32 = 3;
+    /// Removed when its entity's local space is mapped (`bake-nonrigid`), once nothing is lost with it: its shape is the
+    /// collider as stored, relative to the stored transform, and no longer describes the entity once the transform's
+    /// non-rigid part is baked away. A collider that collides is dropped only after `lower-unity-collision` has made
+    /// its collision (`lowered`), which carries the geometry and is mapped; before that it is unsupported, so the
+    /// entity keeps its transform. One that does not collide (a trigger, one moved by physics) makes no collision and
+    /// is dropped.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
-        primase_core::Linearity::Drop
+        if self.lowered || !self.collides() {
+            primase_core::Linearity::Drop
+        } else {
+            primase_core::Linearity::Unsupported
+        }
     }
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
