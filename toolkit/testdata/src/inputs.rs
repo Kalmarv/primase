@@ -73,6 +73,12 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`)"#,
     },
     Variable {
+        name: "PRIMASE_GTA_PARITY",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"optional: a folder holding `dump.jsonl`, an independent reader's decoding of every file the gate regions' placements reach (the CodeWalker harness's `batch` mode over the list `parity_list` writes; schema in `worlds/gta/tests/parity.rs`)"#,
+    },
+    Variable {
         name: "PRIMASE_GTA_GTXD",
         kind: Kind::Input,
         gate: true,

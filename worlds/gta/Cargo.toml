@@ -24,5 +24,6 @@ serde_json.workspace = true
 [dev-dependencies]
 primase-testdata.workspace = true
 sha2.workspace = true
+toml.workspace = true
 [lints]
 workspace = true

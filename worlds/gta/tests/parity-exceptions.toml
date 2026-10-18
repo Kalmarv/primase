@@ -1,0 +1,9 @@
+# Reviewed differences between the GTA reader and CodeWalker's reading of the same files (worlds/gta/tests/parity.rs).
+# Each entry takes the differences of the files whose path contains `path` and whose field starts with `field`, and
+# says why it is not a reader bug (where the game decides, a game-sync shot backs it). An entry that matches nothing
+# fails the test.
+#
+# [[exception]]
+# path = "..."
+# field = "..."
+# reason = "..."

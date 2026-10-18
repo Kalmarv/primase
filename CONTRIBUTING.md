@@ -200,6 +200,7 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_GTA_LISTING` | input | optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`) |
 | `PRIMASE_GTA_ACTIVE` | input | optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`) |
 | `PRIMASE_GTA_RESOURCES` | input | optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`) |
+| `PRIMASE_GTA_PARITY` | input | optional: a folder holding `dump.jsonl`, an independent reader's decoding of every file the gate regions' placements reach (the CodeWalker harness's `batch` mode over the list `parity_list` writes; schema in `worlds/gta/tests/parity.rs`) |
 | `PRIMASE_GTA_GTXD` | input | optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`) |
 | `PRIMASE_GTA_FILTER` | filter | optional: only archives whose path contains this text |
 | `PRIMASE_SCENES_SEKIRO` | input | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
