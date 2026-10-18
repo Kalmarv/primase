@@ -6,6 +6,14 @@
 //!   lerped from white by `_OcclusionStrength` (moved to R); `_BumpMap` x `_BumpScale` with `_NORMALMAP`;
 //!   `_EmissionColor` x `_EmissionMap` with `_EMISSION` (HDR colour above 1: normalised, the rest as
 //!   `emissive_strength`); `_Cull` 0 double-sided.
+//! - **Standard** and **Standard (Specular setup)** (built-in), as `UnityStandardInput.cginc` reads them: base colour
+//!   `_MainTex` x `_Color`; metallic `_Metallic` and roughness 1 - `_Glossiness`, or with `_METALLICGLOSSMAP` the map's
+//!   R (it replaces `_Metallic`) and 1 - A x `_GlossMapScale` (re-encoded as for URP Lit); smoothness in the base
+//!   map's alpha (`_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A`) from `_GlossMapScale` only (counted); occlusion from the
+//!   map's G whenever it has one (Standard has no keyword for it), strength `_OcclusionStrength`; `_BumpMap` x
+//!   `_BumpScale` with `_NORMALMAP`; emission as URP Lit; the specular setup as a dielectric (counted). Every map is
+//!   sampled through `_MainTex`'s tiling (`TexCoords`: `texcoord.xy = TRANSFORM_TEX(uv0, _MainTex)`); detail maps,
+//!   on `_DetailAlbedoMap`'s, are not represented (counted).
 //! - **Universal Render Pipeline/Unlit**: `_BaseMap` x `_BaseColor`, drawn lit (counted).
 //! - **Universal Render Pipeline/Nature/SpeedTree7**: `_MainTex` x `_Color`, a rough dielectric (counted).
 //! - **any other shader** (not modelled, counted by name): the base colour only, from Unity's usual property
@@ -54,6 +62,8 @@ enum Family {
     Lit,
     Unlit,
     SpeedTree,
+    /// Built-in Standard; `true` for its specular setup.
+    Standard(bool),
     Other,
 }
 
@@ -62,11 +72,14 @@ fn family(shader: Option<&str>) -> Family {
         Some("Universal Render Pipeline/Lit") => Family::Lit,
         Some("Universal Render Pipeline/Unlit") => Family::Unlit,
         Some("Universal Render Pipeline/Nature/SpeedTree7") => Family::SpeedTree,
+        Some("Standard") => Family::Standard(false),
+        Some("Standard (Specular setup)") => Family::Standard(true),
         _ => Family::Other,
     }
 }
 
-/// Whether the lowering models a shader (URP Lit, URP Unlit, SpeedTree 7) rather than taking its base colour only.
+/// Whether the lowering models a shader (URP Lit, URP Unlit, SpeedTree 7, built-in Standard) rather than taking its
+/// base colour only.
 pub fn modelled(shader: Option<&str>) -> bool {
     family(shader) != Family::Other
 }
@@ -358,7 +371,7 @@ impl Lowering {
         };
         let (tex, color) = match fam {
             Family::Lit | Family::Unlit => ("_BaseMap", Some("_BaseColor")),
-            Family::SpeedTree => ("_MainTex", Some("_Color")),
+            Family::SpeedTree | Family::Standard(_) => ("_MainTex", Some("_Color")),
             Family::Other => other_base(m),
         };
         p.base_color = linear(color.and_then(|c| m.color(c)).unwrap_or([1.0; 4]));
@@ -435,6 +448,7 @@ impl Lowering {
         }
         match fam {
             Family::Lit => self.lit(w, m, tiling, &mut p)?,
+            Family::Standard(specular) => self.standard(w, m, tiling, specular, &mut p)?,
             Family::Unlit => self.log.approximate("unlit materials drawn lit", 1),
             Family::SpeedTree => self
                 .log
@@ -481,9 +495,64 @@ impl Lowering {
                 }
             }
         }
-        if m.keyword("_OCCLUSIONMAP")
-            && let Some(env) = m.texture("_OcclusionMap")
-        {
+        self.maps(w, m, tiling, m.keyword("_OCCLUSIONMAP"), p)
+    }
+
+    /// Built-in Standard's metallic and smoothness (see the module documentation), then its other maps.
+    fn standard(
+        &mut self,
+        w: &mut World,
+        m: &UnityMaterial,
+        tiling: Option<UvTransform>,
+        specular: bool,
+        p: &mut PbrMaterial,
+    ) -> Result<()> {
+        let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
+        let scale = f("_GlossMapScale", 1.0);
+        let albedo_alpha = m.keyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+        if albedo_alpha {
+            self.log
+                .approximate("smoothness in the base map's alpha: from _GlossMapScale only", 1);
+        }
+        let smoothness = if albedo_alpha {
+            scale
+        } else {
+            f("_Glossiness", 0.5)
+        };
+        p.roughness = 1.0 - smoothness;
+        if specular {
+            self.log.approximate("specular setup as a dielectric", 1);
+        } else {
+            p.metallic = f("_Metallic", 0.0);
+            if m.keyword("_METALLICGLOSSMAP")
+                && let Some(env) = m.texture("_MetallicGlossMap")
+            {
+                if albedo_alpha {
+                    p.metallic_roughness_texture = None;
+                } else if let Some(r) =
+                    self.derived(w, env, tiling, Derived::MetallicRoughness(scale.to_bits()))?
+                {
+                    p.metallic_roughness_texture = Some(r);
+                    p.metallic = 1.0;
+                    p.roughness = 1.0;
+                }
+            }
+        }
+        self.maps(w, m, tiling, true, p)
+    }
+
+    /// The maps URP Lit and Standard share, all through the base map's `tiling`: occlusion (when `occlusion` and a
+    /// texture), normal, emission; detail and height maps counted.
+    fn maps(
+        &mut self,
+        w: &mut World,
+        m: &UnityMaterial,
+        tiling: Option<UvTransform>,
+        occlusion: bool,
+        p: &mut PbrMaterial,
+    ) -> Result<()> {
+        let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
+        if occlusion && let Some(env) = m.texture("_OcclusionMap") {
             p.occlusion_texture = self.derived(w, env, tiling, Derived::Occlusion)?;
             p.occlusion_strength = f("_OcclusionStrength", 1.0);
         }
@@ -942,5 +1011,119 @@ mod tests {
                 .copied(),
             Some(2)
         );
+    }
+
+    /// A 1x1 RGBA8 texture entity (linear, as Unity marks a data map) read from the player as `format`.
+    fn texel(w: &mut World, rgba: [u8; 4]) -> Entity {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Texture {
+                width: 1,
+                height: 1,
+                format: primase_core::TexFormat::Rgba8Unorm,
+                levels: vec![rgba.to_vec()],
+                color_space: ColorSpace::Linear,
+                role: TexRole::Other,
+                normal: None,
+            },
+        );
+        w.insert(
+            e,
+            UnityTexture {
+                texture: UnityObject {
+                    file: "sharedassets1.assets".into(),
+                    path_id: 100,
+                },
+                format: 4,
+                srgb: false,
+                usage: 0,
+                wrap: [0, 0],
+                filter: 1,
+                not_decoded: None,
+            },
+        );
+        e
+    }
+
+    /// Built-in Standard as `UnityStandardInput.cginc` (2019.4.20f1) samples it: every main map, the normal map
+    /// included, through `_MainTex`'s tiling whatever its own (`TexCoords`: `TRANSFORM_TEX(uv0, _MainTex)`); the
+    /// metallic map's R replaces `_Metallic` and its A x `_GlossMapScale` is the smoothness (`MetallicGloss`); without
+    /// the map `_Metallic` and `_Glossiness`; the occlusion map without a keyword.
+    #[test]
+    fn standard_samples_every_map_through_the_main_texture_tiling() {
+        let mut w = World::new();
+        let env = |name: &str, texture: Option<Entity>, scale: f32, offset: [f32; 2]| UnityTexEnv {
+            name: name.into(),
+            texture,
+            scale: [scale; 2],
+            offset,
+        };
+        let base = texel(&mut w, [255, 255, 255, 255]);
+        let bump = texel(&mut w, [128, 128, 255, 255]);
+        let gloss = texel(&mut w, [64, 0, 0, 128]);
+        let occlusion = texel(&mut w, [0, 200, 0, 255]);
+        let mut mapped = stated(
+            "Standard",
+            vec![fixture::standard()],
+            &[],
+            &["_NORMALMAP", "_METALLICGLOSSMAP"],
+        );
+        mapped.floats = vec![
+            ("_SrcBlend".into(), 1.0),
+            ("_DstBlend".into(), 0.0),
+            ("_Metallic".into(), 0.5),
+            ("_GlossMapScale".into(), 0.5),
+            ("_BumpScale".into(), 0.8),
+            ("_OcclusionStrength".into(), 0.7),
+        ];
+        // the koa table: the base map at 0.1 offset 0.9, the normal map's own tiling 1, the detail map's 3
+        mapped.textures = vec![
+            env("_MainTex", Some(base), 0.1, [0.0, 0.9]),
+            env("_BumpMap", Some(bump), 1.0, [0.0, 0.0]),
+            env("_MetallicGlossMap", Some(gloss), 1.0, [0.0, 0.0]),
+            env("_OcclusionMap", Some(occlusion), 1.0, [0.0, 0.0]),
+            env("_DetailAlbedoMap", None, 3.0, [0.0, 0.0]),
+        ];
+        let mut plain = stated(
+            "Standard",
+            vec![fixture::standard()],
+            &[
+                ("_SrcBlend", 1.0),
+                ("_DstBlend", 0.0),
+                ("_Metallic", 0.25),
+                ("_Glossiness", 0.75),
+            ],
+            &[],
+        );
+        plain.material.path_id = 2;
+        w.insert_resource(UnityRenderSettings {
+            sun: None,
+            pipeline: Some(RenderPipeline::BuiltIn),
+        });
+        let (a, b) = (w.spawn(), w.spawn());
+        w.insert(a, mapped);
+        w.insert(b, plain);
+        lower_unity_pbr(&mut w).unwrap();
+        let p = w.get::<PbrMaterial>(a).unwrap().clone();
+        let main = Some(UvTransform::from_bottom_left([0.1; 2], [0.0, 0.9]));
+        for (slot, r) in [
+            ("base", p.base_color_texture),
+            ("normal", p.normal_texture),
+            ("metallic-roughness", p.metallic_roughness_texture),
+            ("occlusion", p.occlusion_texture),
+        ] {
+            assert_eq!(r.map(|r| r.transform), Some(main), "{slot}");
+        }
+        assert_eq!(p.normal_scale, 0.8);
+        assert_eq!(p.occlusion_strength, 0.7);
+        assert_eq!((p.metallic, p.roughness), (1.0, 1.0));
+        // R 64 replaces _Metallic 0.5 (B); A 128 x 0.5 is the smoothness, roughness 1 - 0.251 (G)
+        let mr = w
+            .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
+            .unwrap();
+        assert_eq!(mr.levels[0], vec![255, 191, 64, 255]);
+        let q = w.get::<PbrMaterial>(b).unwrap();
+        assert_eq!((q.metallic, q.roughness), (0.25, 0.25));
     }
 }
