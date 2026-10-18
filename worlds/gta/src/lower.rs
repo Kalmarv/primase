@@ -3,7 +3,8 @@
 //!
 //! - `lower-gta-pbr`: the geometry of shaders with nothing a surface material can draw is dropped (counted by
 //!   reason), and so is night-only geometry unless the pass is told it is night; every other shader but terrain's
-//!   (`gta-terrain-layers`) gets a `pbr.material`.
+//!   (`gta-terrain-layers`) gets a `pbr.material`, and a `core.draw_order` from its shader's render bucket
+//!   ([`draw_order`]).
 //!
 //!   Specular, as GTA's shaders and deferred lights compute it: a shader's G-buffer intensity is
 //!   I = `SpecularColor` x dot((s.r^2, s.g^2, s.b), `SpecularMapIntensityMask`) for its specular map s (`SpecularTex`),
@@ -25,13 +26,32 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Entity, LayeredMaterial, Lods, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
-    NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
+    ColorSpace, DrawLayer, DrawOrder, Entity, LayeredMaterial, Lods, Mesh, Name, NormalBasis,
+    NormalConvention, NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole,
+    Texture, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::{GtaDrawable, GtaParam, GtaShader, GtaSources};
 use crate::shader_class::{Class, ShaderClass, Skip, classify};
+
+/// A shader's render bucket (`grmShader` +0x39) as core's draw order: 0 opaque, 1 alpha, 2 decal, 3 cutout and 6 water
+/// (blended) as the layers, on the conventional queues with the decals after the cutouts; `None` for the other
+/// buckets. UNVERIFIED: the layers are the buckets' names in the game's list and the queues are not GTA's own pass
+/// sequence, which is not read.
+pub fn draw_order(bucket: u8) -> Option<DrawOrder> {
+    let (layer, queue) = match bucket {
+        0 => (DrawLayer::Opaque, DrawOrder::OPAQUE),
+        3 => (DrawLayer::Cutout, DrawOrder::CUTOUT),
+        2 => (DrawLayer::Decal, DECAL_QUEUE),
+        1 | 6 => (DrawLayer::Transparent, DrawOrder::TRANSPARENT),
+        _ => return None,
+    };
+    Some(DrawOrder { layer, queue })
+}
+
+/// The queue [`draw_order`] gives GTA's decals: after the cutouts, before the blended surfaces (UNVERIFIED).
+pub const DECAL_QUEUE: i32 = 2500;
 
 /// The alpha-test reference cutouts and foliage are given.
 pub const CUTOFF: f32 = 0.5;
@@ -409,7 +429,7 @@ impl Pass for LowerGtaPbr {
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material"]
+        &["pbr.material", "core.draw_order"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "gta.sources", "core.texture"]
@@ -422,7 +442,8 @@ impl Pass for LowerGtaPbr {
         "alpha tested at 0.5 (the game's reference is a render state); distance-map sign text cut at the field's \
          half (the game blends a smoothstep band around it); the Blinn-Phong lobe as GGX of the same highlight, dry \
          (no wetness); detail maps not carried; water a blended flat colour; UV animation at its stored (rest) \
-         transform; per-vertex emission (vertex colour blue) per triangle, in 16 levels"
+         transform; per-vertex emission (vertex colour blue) per triangle, in 16 levels; the draw order's bucket \
+         table (unverified)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         drop_hidden_models(w, log)?;
@@ -458,6 +479,7 @@ impl Pass for LowerGtaPbr {
         }
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
+        let mut orders = Vec::new();
         // per distance field, its text texture
         let mut fields: BTreeMap<Entity, Option<Entity>> = BTreeMap::new();
         // per specular map, mask and power (bits), its derived texture
@@ -474,6 +496,38 @@ impl Pass for LowerGtaPbr {
             }
             let s = w.get::<GtaShader>(e).expect("shader");
             let anim = anim_uv(s, log);
+            match draw_order(s.render_bucket) {
+                Some(d) => {
+                    // the bucket's layer against the shader's class (effect name and bucket), where they disagree
+                    let class_layer = match c.class {
+                        Class::Decal => DrawLayer::Decal,
+                        Class::Cutout | Class::Foliage => DrawLayer::Cutout,
+                        Class::Alpha | Class::Glass | Class::Water => DrawLayer::Transparent,
+                        Class::Opaque | Class::Terrain => DrawLayer::Opaque,
+                    };
+                    if class_layer != d.layer {
+                        log.count(
+                            &format!(
+                                "draw order: render bucket {} drawn {:?}, its shader's class {:?}",
+                                s.render_bucket, d.layer, c.class
+                            ),
+                            1,
+                        );
+                    }
+                    log.count(
+                        &format!("draw order {:?} (render bucket {})", d.layer, s.render_bucket),
+                        1,
+                    );
+                    orders.push((e, d));
+                }
+                None => log.count(
+                    &format!(
+                        "render bucket {}: no draw order (not in the table)",
+                        s.render_bucket
+                    ),
+                    1,
+                ),
+            }
             let (mut m, map, distance) = self.material(s, c, log);
             if let Some(t) = distance {
                 let derived = match fields.get(&t) {
@@ -625,6 +679,9 @@ impl Pass for LowerGtaPbr {
             .collect();
         for (e, m) in lowered {
             w.insert(e, m);
+        }
+        for (e, d) in orders {
+            w.insert(e, d);
         }
         for t in normals {
             if let Some(tex) = w.get_mut::<Texture>(t) {
@@ -1086,6 +1143,61 @@ mod tests {
         // red and green kept, blue the rebuilt z of (1, 0): 0 encoded as 128 (blue 77 ignored), alpha kept
         assert_eq!(t.levels[0][..2], [255, 128]);
         assert!(t.levels[0][2].abs_diff(128) <= 1, "z {}", t.levels[0][2]);
+    }
+
+    /// Each material's draw order is its shader's render bucket's; a decal-named shader outside the decal bucket is
+    /// drawn by its bucket and counted, and a bucket outside the table gets none.
+    #[test]
+    fn materials_draw_in_their_render_buckets_order() {
+        use crate::components::GtaShader;
+        use primase_core::pass::{Pass, PassLog};
+        use primase_core::{DrawLayer, DrawOrder};
+        let mut w = primase_core::World::new();
+        let mut shader = |effect: &[u8], render_bucket: u8| {
+            let m = w.spawn();
+            w.insert(
+                m,
+                GtaShader {
+                    drawable: "d".into(),
+                    index: 0,
+                    name: primase_hash::joaat(effect),
+                    preset: 0,
+                    render_bucket,
+                    bucket_mask: 0,
+                    params: Vec::new(),
+                },
+            );
+            m
+        };
+        let decal = shader(b"decal", 2);
+        let named = shader(b"normal_decal", 0);
+        let cutout = shader(b"normal_spec", 3);
+        let alpha = shader(b"normal_spec", 1);
+        let other = shader(b"default", 5);
+        let mut log = PassLog::default();
+        super::LowerGtaPbr::default().run(&mut w, &mut log).unwrap();
+        let layer = |e| w.get::<DrawOrder>(e).map(|d| d.layer);
+        assert_eq!(
+            [decal, named, cutout, alpha, other].map(layer),
+            [
+                Some(DrawLayer::Decal),
+                Some(DrawLayer::Opaque),
+                Some(DrawLayer::Cutout),
+                Some(DrawLayer::Transparent),
+                None
+            ]
+        );
+        assert_eq!(w.get::<DrawOrder>(decal).unwrap().queue, super::DECAL_QUEUE);
+        assert_eq!(
+            log.counts
+                .get("draw order: render bucket 0 drawn Opaque, its shader's class Decal"),
+            Some(&1)
+        );
+        assert_eq!(
+            log.counts
+                .get("render bucket 5: no draw order (not in the table)"),
+            Some(&1)
+        );
     }
 
     /// A texture a shader binds as its base colour and another as its bump map: the normal gets its own copy.
