@@ -18,7 +18,8 @@
 //! - `writers_read_only`: a writer's entry points take the world read-only.
 //! - `real_data_variables_are_declared`: every `PRIMASE_*` name in the workspace's sources is declared in the
 //!   real-data registry (`toolkit/testdata/src/inputs.rs`), every declared name is read somewhere, and
-//!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry.
+//!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry. Names are whole string
+//!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` lists as `parse_crate`, every module that decodes
 //!   bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file says are
 //!   there and are not are its error, never a panic or a wrapped size.
@@ -877,9 +878,10 @@ fn code_of(src: &str) -> Vec<Tok> {
 
 // ---- real-data variables ----
 
-/// Every `"PRIMASE_..."` string literal's name in a source text.
-fn variable_literals(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
+/// Every `"PRIMASE_..."` string literal's name in a source text, and every name a format string builds
+/// (`PRIMASE_{x}`, `PRIMASE_GTA_{}` in a literal), which the scan could not check.
+fn variable_literals(text: &str) -> (Vec<String>, Vec<String>) {
+    let (mut names, mut built) = (Vec::new(), Vec::new());
     let mut rest = text;
     while let Some(p) = rest.find("\"PRIMASE_") {
         let tail = &rest[p + 1..];
@@ -887,11 +889,24 @@ fn variable_literals(text: &str) -> Vec<String> {
             .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
             .unwrap_or(tail.len());
         if tail[end..].starts_with('"') && end > "PRIMASE_".len() {
-            out.push(tail[..end].to_owned());
+            names.push(tail[..end].to_owned());
+        } else if tail[end..].starts_with('{') {
+            built.push(tail[..end].to_owned());
         }
         rest = &tail[end..];
     }
-    out
+    (names, built)
+}
+
+#[test]
+fn variable_literals_see_built_names() {
+    // assembled, so this file's own text holds no such literal
+    let q = '"';
+    let src =
+        format!("real_data({q}PRIMASE_GTA_DIR{q}); format!({q}PRIMASE_{{x}}{q}); {q}PRIMASE_* names{q}");
+    let (names, built) = variable_literals(&src);
+    assert_eq!(names, ["PRIMASE_GTA_DIR"]);
+    assert_eq!(built, ["PRIMASE_"]);
 }
 
 #[test]
@@ -900,17 +915,24 @@ fn real_data_variables_are_declared() {
     let declared: BTreeSet<&str> = VARIABLES.iter().map(|v| v.name).collect();
     // names read by sources: every member crate's .rs files
     let mut found: BTreeMap<String, String> = BTreeMap::new();
+    let mut built = Vec::new();
     for m in members() {
         // the registry itself names every variable: it declares, it does not read
         for file in rust_files(&root().join(&m.path))
             .into_iter()
             .filter(|f| f != "toolkit/testdata/src/inputs.rs")
         {
-            for name in variable_literals(&read(&root().join(&file))) {
+            let (names, templates) = variable_literals(&read(&root().join(&file)));
+            for name in names {
                 found.entry(name).or_insert_with(|| file.clone());
             }
+            built.extend(templates.into_iter().map(|t| format!("{t} ({file})")));
         }
     }
+    assert!(
+        built.is_empty(),
+        "PRIMASE_* names a format string completes, which the registry check cannot see (write each name as a literal): {built:?}"
+    );
     let undeclared: Vec<String> = found
         .iter()
         .filter(|(n, _)| !declared.contains(n.as_str()))
@@ -937,7 +959,7 @@ fn real_data_variables_are_declared() {
         .filter_map(|l| l.strip_prefix("| `PRIMASE_"))
         .map(|l| {
             let mut cells = l.splitn(3, " | ");
-            let name = format!("PRIMASE_{}", cells.next().unwrap().trim_end_matches('`'));
+            let name = String::from("PRIMASE_") + cells.next().unwrap().trim_end_matches('`');
             let kind = cells.next().unwrap_or("").to_owned();
             let about = cells.next().unwrap_or("").trim_end_matches(" |").to_owned();
             (name, kind, about)
