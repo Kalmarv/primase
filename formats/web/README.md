@@ -6,7 +6,10 @@ materials to PBR before export.
 
 A scene too large to hold loaded at once goes through the same writer one cell at
 a time. `plan(&World, &Options)` assigns placements, viewer records and the
-world's collision to cells without loading anything; `TilePlan::split` files the
+world's collision to cells without loading anything; collision is filed by its
+anchor and held only by reference (the holder is one of the cell's roots, and its
+soup is made from the cell's world when the cell is written), so the plan holds no
+geometry. `TilePlan::split` files the
 triangles of each `split_by_tile` placement from a world holding its prototype
 loaded. Then, per cell, the driver takes the world's `World::closure` of
 `TilePlan::roots(cell)` as a `World::subset`, loads its meshes and textures,

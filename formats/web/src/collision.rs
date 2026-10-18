@@ -14,40 +14,83 @@ struct Soup {
     names: Vec<String>,
 }
 
-/// The world's `core.collision` as collision items in world space: a prototype's once per instance through the
-/// placement's transform, any other entity's through its own (or none), triangles as they are. A mirrored or sheared
-/// transform is refused (`bake-nonrigid` makes them rigid first). Surfaces are the world's indices, named.
-pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
-    items(world, None)
+/// A collision record planned by reference: which entity's `core.collision` it is, placed by which transform, under
+/// which name and anchor. The soup itself is made from the cell's world when the cell is written ([`made`]), so the
+/// plan holds no geometry.
+#[derive(Clone, Debug)]
+pub(super) struct Planned {
+    /// The entity holding the `core.collision` (a prototype, or an entity placed as itself).
+    pub holder: Entity,
+    /// The record's name: its placement's (or the holder's) `core.name`.
+    pub name: String,
+    /// Into world space: the placement's transform, or the holder's own.
+    pub transform: Transform,
+    /// Its first triangle's first vertex in world space: where it is filed.
+    pub anchor: [f64; 3],
 }
 
-/// [`world_items`] of the prototypes `placements` place, once per placement of them in `placements`: the collision
-/// a cell's world brought with its prototypes.
+/// The world's `core.collision` as collision records by reference: a prototype's once per instance through the
+/// placement's transform, any other entity's through its own (or none). A mirrored or sheared transform is refused
+/// (`bake-nonrigid` makes them rigid first).
+pub(super) fn world_refs(world: &World) -> Result<Vec<Planned>> {
+    let mut out = Vec::new();
+    for (holder, c, at, transform) in placed_collision(world, None)? {
+        out.push(Planned {
+            holder,
+            name: name(world, at),
+            transform,
+            anchor: anchor(c, transform)?,
+        });
+    }
+    Ok(out)
+}
+
+/// The collision record `r` from the cell's world `world` (where `r.holder` is loaded), its surfaces named by
+/// `names` (the planned world's).
+pub(super) fn made(world: &World, r: &Planned, names: &[String]) -> Result<ViewerItem> {
+    let c = world.get::<Collision>(r.holder).ok_or_else(|| {
+        Error::Invalid(format!(
+            "collision of {:?} planned but not in the cell's world",
+            r.holder
+        ))
+    })?;
+    Ok(item(r.name.clone(), r.anchor, c, r.transform, names))
+}
+
+/// The collision of the prototypes `placements` place, once per placement of them in `placements`, as records: the
+/// collision a cell's world brought with its prototypes.
 pub(super) fn placement_items(world: &World, placements: &BTreeSet<Entity>) -> Result<Vec<ViewerItem>> {
     if placements.is_empty() {
         return Ok(Vec::new());
     }
-    items(world, Some(placements))
+    let names = surface_names(world);
+    placed_collision(world, Some(placements))?
+        .into_iter()
+        .map(|(_, c, at, t)| Ok(item(name(world, at), anchor(c, t)?, c, t, &names)))
+        .collect()
 }
 
-/// The collision items of `world`, or with `only` just those of prototypes placed by these placements.
-fn items(world: &World, only: Option<&BTreeSet<Entity>>) -> Result<Vec<ViewerItem>> {
-    let names: Vec<String> = world
+/// The names of `world`'s surfaces, by index.
+pub(super) fn surface_names(world: &World) -> Vec<String> {
+    world
         .resource::<Surfaces>()
         .map(|s| s.0.iter().map(|x| x.name.clone()).collect())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// Every soup of `world` with what places it: (holder, its collision, the entity placing it, the transform), a
+/// prototype's once per placement (with `only`, of those placements alone), any other entity's through its own.
+fn placed_collision<'w>(
+    world: &'w World,
+    only: Option<&BTreeSet<Entity>>,
+) -> Result<Vec<(Entity, &'w Collision, Entity, Transform)>> {
     let mut placed: BTreeMap<Entity, Vec<Entity>> = BTreeMap::new();
     for (e, i) in world.iter::<Instance>() {
         if only.is_none_or(|o| o.contains(&e)) {
             placed.entry(i.prototype).or_default().push(e);
         }
     }
-    let name = |e: Entity| {
-        world
-            .get::<Name>(e)
-            .map_or_else(|| format!("collision {e:?}"), |n| n.0.clone())
-    };
-    let mut items = Vec::new();
+    let mut out = Vec::new();
     for (e, c) in world.iter::<Collision>() {
         if c.triangles.is_empty() {
             continue;
@@ -75,17 +118,37 @@ fn items(world: &World, only: Option<&BTreeSet<Entity>>) -> Result<Vec<ViewerIte
                     "collision of {at:?}: a non-rigid transform; run bake-nonrigid first"
                 )));
             }
-            let positions: Vec<[f32; 3]> = c.positions.iter().map(|&p| t.apply(p)).collect();
-            let triangles = c.triangles.clone();
-            items.push(ViewerItem {
-                name: name(at),
-                kind: "collision".into(),
-                anchor: positions[c.triangles[0][0] as usize].map(f64::from),
-                data: json!({"positions": positions, "triangles": triangles, "surfaces": c.surfaces, "names": names}),
-            });
+            out.push((e, c, at, t));
         }
     }
-    Ok(items)
+    Ok(out)
+}
+
+fn name(world: &World, e: Entity) -> String {
+    world
+        .get::<Name>(e)
+        .map_or_else(|| format!("collision {e:?}"), |n| n.0.clone())
+}
+
+/// A soup's first triangle's first vertex through `t`.
+fn anchor(c: &Collision, t: Transform) -> Result<[f64; 3]> {
+    let first = c
+        .triangles
+        .first()
+        .and_then(|tri| c.positions.get(tri[0] as usize))
+        .ok_or_else(|| Error::Invalid("collision whose first triangle names no vertex".into()))?;
+    Ok(t.apply(*first).map(f64::from))
+}
+
+/// The record of soup `c` in world space through `t`.
+fn item(name: String, anchor: [f64; 3], c: &Collision, t: Transform, names: &[String]) -> ViewerItem {
+    let positions: Vec<[f32; 3]> = c.positions.iter().map(|&p| t.apply(p)).collect();
+    ViewerItem {
+        name,
+        kind: "collision".into(),
+        anchor,
+        data: json!({"positions": positions, "triangles": c.triangles, "surfaces": c.surfaces, "names": names}),
+    }
 }
 
 /// Exact collision geometry with one surface index (u16) per triangle, the names in the extras. A surface is a
