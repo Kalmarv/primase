@@ -9,6 +9,8 @@ use crate::{Error, Result};
 
 pub(super) struct Materials {
     pub masks: Vec<Texture>,
+    /// Each mask's name: its source texture's and what was derived from it ([`mask_name`]).
+    pub mask_names: Vec<String>,
     pub bindings: BTreeMap<Entity, usize>,
     pub wraps: BTreeMap<Entity, Wrap>,
     pub log: PassLog,
@@ -25,6 +27,46 @@ struct MaskKey {
     wrap: Wrap,
     /// The folded reflectance ([`fold_reflectance`]): F0 (bits) and whether the mask source's A scales it per texel.
     fold: Option<(u64, bool)>,
+}
+
+/// A mask's name: `<source texture's name>_msk_<16 hex>`, the hex the first 64 bits of SHA-256 over the source's
+/// pixels (size, block layout and every level's bytes) and what was derived from them (the factors, wrap and fold of
+/// its [`MaskKey`]), each in a fixed encoding. It is the same wherever the mask is made, and equal names mean equal
+/// masks (an index would differ between a whole map and a map written in parts).
+fn mask_name(world: &World, key: &MaskKey, source: &Texture) -> String {
+    use sha2::{Digest, Sha256};
+    let name = world
+        .get::<primase_core::Name>(key.source)
+        .map_or("mask", |n| n.0.as_str());
+    let mut h = Sha256::new();
+    let (bw, bh) = source.format.block_dims();
+    for x in [source.width, source.height, bw, bh, source.format.block_bytes()] {
+        h.update(x.to_le_bytes());
+    }
+    h.update((source.levels.len() as u64).to_le_bytes());
+    for level in &source.levels {
+        h.update((level.len() as u64).to_le_bytes());
+        h.update(level);
+    }
+    h.update([u8::from(key.mr), u8::from(key.ao)]);
+    for x in [key.metallic, key.roughness, key.strength] {
+        h.update(x.to_le_bytes());
+    }
+    h.update([match key.wrap {
+        Wrap::Repeat => 0u8,
+        Wrap::Clamp => 1,
+        Wrap::Mirror => 2,
+    }]);
+    match key.fold {
+        None => h.update([0]),
+        Some((f0, per_texel)) => {
+            h.update([1, u8::from(per_texel)]);
+            h.update(f0.to_le_bytes());
+        }
+    }
+    let d = h.finalize();
+    let hex: String = d[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("{name}_msk_{hex}")
 }
 
 /// Skate's reflectance at normal incidence for every dielectric surface: Studio's MSK holds metallic, smoothness,
@@ -86,6 +128,7 @@ fn sampling(entity: Entity, slot: TextureRef) -> Result<Wrap> {
 pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Result<Materials> {
     let mut plan = Materials {
         masks: Vec::new(),
+        mask_names: Vec::new(),
         bindings: BTreeMap::new(),
         wraps: BTreeMap::new(),
         log: PassLog::default(),
@@ -267,6 +310,7 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             .map_err(|error| bad(entity, format!("mask source {:?}: {error}", slot.texture)))?;
             let index = plan.masks.len();
             plan.masks.push(texture);
+            plan.mask_names.push(mask_name(world, &key, source));
             cache.insert(key, (index, quantized));
             (index, quantized)
         };

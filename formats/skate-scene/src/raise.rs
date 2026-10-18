@@ -376,10 +376,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         log.count("textures", 1);
     }
     let mut mask_entities = Vec::new();
-    for (index, pixels) in plan.masks.into_iter().enumerate() {
+    for (pixels, name) in plan.masks.into_iter().zip(plan.mask_names) {
         let t = world.spawn();
-        let k = key(&format!("mask_{index}"), &mut taken);
-        world.insert(t, Name(k.clone()));
+        // the key unique in this world; the name the mask's own (its file's stem wherever it is written)
+        let k = key(&name, &mut taken);
+        world.insert(t, Name(name));
         world.insert(t, pixels);
         world.insert(
             t,
