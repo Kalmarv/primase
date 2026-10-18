@@ -120,12 +120,6 @@ reason = "Sekiro material lowering is a function, not yet a pass"
 removed_when = "it runs as a declared pass"
 
 [[pass]]
-file = "worlds/reskate/src/layered.rs"
-what = "pass lower-layered-reskate is not registered"
-reason = "worlds/reskate has no register() yet"
-removed_when = "worlds/reskate exports register()"
-
-[[pass]]
 file = "worlds/unity/src/drawn.rs"
 what = "pass unity-drawn is not registered"
 reason = "worlds/unity has no register() yet"

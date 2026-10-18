@@ -65,11 +65,21 @@ enum Kind {
     Bgrx,
 }
 
-/// A texture file of a scene: a PNG (one level) or a DDS (DXT1/3/5 passed through, BC5 and 32-bit RGBA/BGRA
-/// decoded), the chain of smaller levels completed with the 2 x 2 box filter where the file does not hold them.
+/// Where a [`TexSource`]'s stored levels are.
+#[derive(Debug)]
+enum Origin {
+    /// A texture file (its levels from `data_offset` on).
+    File(PathBuf),
+    /// A texture of the world: its levels as stored, labelled by `name`.
+    Memory { name: String, levels: Vec<Vec<u8>> },
+}
+
+/// A source texture: a texture file of a scene (a PNG, one level, or a DDS: DXT1/3/5 passed through, BC5 and 32-bit
+/// RGBA/BGRA decoded) or a texture of the world (`core.texture`, [`TexSource::from_texture`]), the chain of smaller
+/// levels completed with the 2 x 2 box filter where the source does not hold them.
 #[derive(Debug)]
 pub struct TexSource {
-    pub path: PathBuf,
+    origin: Origin,
     pub width: u32,
     pub height: u32,
     /// The full chain down to 1 x 1.
@@ -203,7 +213,7 @@ impl TexSource {
             }
             let format_name = format_name.to_owned();
             return Ok(Self::finish(
-                path,
+                Origin::File(path.to_owned()),
                 width,
                 height,
                 kind,
@@ -216,7 +226,7 @@ impl TexSource {
             ));
         }
         Ok(Self::finish(
-            path,
+            Origin::File(path.to_owned()),
             width,
             height,
             kind,
@@ -229,9 +239,68 @@ impl TexSource {
         ))
     }
 
+    /// A texture of the world, its levels as stored: BC1/2/3 passed through as DXT1/3/5, BC5 and 8-bit RGBA/BGRA
+    /// decoded as a DDS file's are, any other format decoded to RGBA8 level by level. `name` labels its errors.
+    pub fn from_texture(
+        name: &str,
+        t: &Texture,
+        source_format: Option<&str>,
+        source_size: Option<[i32; 2]>,
+    ) -> Result<TexSource> {
+        let stored =
+            |kind, fourcc, format_name: &str| (kind, fourcc, format_name.to_owned(), t.levels.clone());
+        let (kind, fourcc, format_name, levels) = match t.format {
+            TexFormat::Bc1 => stored(Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1"),
+            TexFormat::Bc2 => stored(Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3"),
+            TexFormat::Bc3 => stored(Kind::Dxt, Some("DXT5"), "D3DFMT_DXT5"),
+            TexFormat::Bc5Unorm => stored(Kind::Bc5, None, "D3DFMT_ATI2"),
+            TexFormat::Rgba8Unorm => stored(Kind::Rgba, None, "R8G8B8A8"),
+            TexFormat::Bgra8Unorm => stored(Kind::Bgra, None, "B8G8R8A8"),
+            TexFormat::Bgrx8Unorm => stored(Kind::Bgrx, None, "X8R8G8B8"),
+            other => {
+                let dec = Decoder::default();
+                let (mut w, mut h) = (t.width, t.height);
+                let mut levels = Vec::with_capacity(t.levels.len());
+                for level in &t.levels {
+                    levels.push(
+                        dec.decode_rgba8(other, w, h, level)
+                            .map_err(|e| Error::Texture(format!("{name}: {e}")))?,
+                    );
+                    w = (w >> 1).max(1);
+                    h = (h >> 1).max(1);
+                }
+                (Kind::Rgba, None, format!("{other:?}"), levels)
+            }
+        };
+        let file_levels = levels.len() as u32;
+        Ok(Self::finish(
+            Origin::Memory {
+                name: name.to_owned(),
+                levels,
+            },
+            t.width,
+            t.height,
+            kind,
+            fourcc,
+            format_name,
+            file_levels,
+            0,
+            source_format,
+            source_size,
+        ))
+    }
+
+    /// The source's name in messages: its file, or its name in the world.
+    pub fn label(&self) -> String {
+        match &self.origin {
+            Origin::File(path) => path.display().to_string(),
+            Origin::Memory { name, .. } => name.clone(),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finish(
-        path: &Path,
+        origin: Origin,
         width: u32,
         height: u32,
         kind: Kind,
@@ -250,7 +319,7 @@ impl TexSource {
             levels += 1;
         }
         TexSource {
-            path: path.to_owned(),
+            origin,
             width,
             height,
             levels,
@@ -284,11 +353,16 @@ impl TexSource {
         if self.kind != Kind::Dxt {
             return Ok(None);
         }
-        let b = std::fs::read(&self.path).map_err(|source| Error::Io {
-            path: self.path.clone(),
-            source,
-        })?;
-        Ok(Some(b[self.data_offset.min(b.len())..].to_vec()))
+        match &self.origin {
+            Origin::File(path) => {
+                let b = std::fs::read(path).map_err(|source| Error::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                Ok(Some(b[self.data_offset.min(b.len())..].to_vec()))
+            }
+            Origin::Memory { levels, .. } => Ok(Some(levels.concat())),
+        }
     }
 
     fn level_size(&self, w: u32, h: u32) -> u64 {
@@ -299,32 +373,39 @@ impl TexSource {
         }
     }
 
-    /// A level the file holds, decoded; `None` when it is not in the data.
+    /// Level `mip` (`w` x `h`) as the source stores it (a PNG decoded to RGBA8); `None` when it does not hold it.
     #[allow(
         clippy::disallowed_methods,
         clippy::disallowed_types,
         reason = "exception: the writer reads source texture files"
     )]
-    fn file_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
-        let b = std::fs::read(&self.path).map_err(|source| Error::Io {
-            path: self.path.clone(),
+    fn stored_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
+        if mip >= self.file_levels {
+            return Ok(None);
+        }
+        let len = self.level_size(w, h);
+        let path = match &self.origin {
+            Origin::Memory { levels, .. } => {
+                return Ok(levels
+                    .get(mip as usize)
+                    .filter(|l| l.len() as u64 >= len)
+                    .map(|l| l[..len as usize].to_vec()));
+            }
+            Origin::File(path) => path,
+        };
+        let b = std::fs::read(path).map_err(|source| Error::Io {
+            path: path.clone(),
             source,
         })?;
         if self.kind == Kind::Png {
-            if mip != 0 {
-                return Ok(None);
-            }
             let png = primase_image::read_png(&b)
-                .map_err(|e| Error::Texture(format!("{}: {e}", self.path.display())))?;
+                .map_err(|e| Error::Texture(format!("{}: {e}", path.display())))?;
             return match png.image.samples {
                 primase_image::Samples::U8(v) => Ok(Some(v)),
                 primase_image::Samples::U16(_) => {
-                    Err(Error::Texture(format!("{}: 16-bit PNG", self.path.display())))
+                    Err(Error::Texture(format!("{}: 16-bit PNG", path.display())))
                 }
             };
-        }
-        if mip >= self.file_levels {
-            return Ok(None);
         }
         let mut off = self.data_offset as u64;
         let (mut lw, mut lh) = (self.width, self.height);
@@ -333,13 +414,22 @@ impl TexSource {
             lw = (lw >> 1).max(1);
             lh = (lh >> 1).max(1);
         }
-        let len = self.level_size(w, h);
         if off + len > b.len() as u64 {
             return Ok(None);
         }
-        let mut d = b[off as usize..(off + len) as usize].to_vec();
+        Ok(Some(b[off as usize..(off + len) as usize].to_vec()))
+    }
+
+    /// A level the source holds, decoded; `None` when it is not in the data.
+    fn file_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
+        let Some(mut d) = self.stored_level(mip, w, h)? else {
+            return Ok(None);
+        };
+        if self.kind == Kind::Png {
+            return Ok(Some(d));
+        }
         let dec = Decoder::default();
-        let err = |e: primase_texcodec::Error| Error::Texture(format!("{}: {e}", self.path.display()));
+        let err = |e: primase_texcodec::Error| Error::Texture(format!("{}: {e}", self.label()));
         Ok(Some(match self.kind {
             Kind::Dxt => {
                 let f = match self.fourcc {
@@ -799,7 +889,7 @@ impl TexLib {
                     role: TexRole::Color,
                     normal: None,
                 })
-                .map_err(|e| Error::Texture(format!("{}: {e}", tex.path.display())))?;
+                .map_err(|e| Error::Texture(format!("{}: {e}", tex.label())))?;
                 return Ok(self.add(
                     &r.name,
                     w,

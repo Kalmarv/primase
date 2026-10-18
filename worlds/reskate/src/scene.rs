@@ -14,7 +14,7 @@ use primase_core::{
 use primase_skate_scene::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
-    SkateScene, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, Wrap,
+    SkateScene, SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
 };
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -513,17 +513,34 @@ impl Scene {
         let mut textures = BTreeMap::new();
         let mut tex_keys = HashMap::new();
         for (e, t) in world.iter::<SkateTexture>() {
-            let path = world
-                .get::<TextureFile>(e)
-                .ok_or_else(|| Error::Scene(format!("texture '{}' has no file", t.key)))?
-                .path
-                .clone();
-            let name = world.get::<Name>(e).map(|n| n.0.clone()).unwrap_or_else(|| {
-                path.file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            });
-            let src = TexSource::open(&path, t.source_format.as_deref(), t.source_size)?;
+            // the pixels in the world (`core.texture`, from a reader's load step) where it has them, else the file
+            let (name, src) = match (world.get::<primase_core::Texture>(e), world.get::<TextureFile>(e)) {
+                (Some(tex), _) => {
+                    let name = world
+                        .get::<Name>(e)
+                        .map_or_else(|| t.key.clone(), |n| n.0.clone());
+                    let src = TexSource::from_texture(&name, tex, t.source_format.as_deref(), t.source_size)?;
+                    (name, src)
+                }
+                (None, Some(file)) => {
+                    let path = &file.path;
+                    let name = world.get::<Name>(e).map(|n| n.0.clone()).unwrap_or_else(|| {
+                        path.file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    });
+                    (
+                        name,
+                        TexSource::open(path, t.source_format.as_deref(), t.source_size)?,
+                    )
+                }
+                (None, None) => {
+                    return Err(Error::Scene(format!(
+                        "texture '{}' has neither pixels (core.texture) nor a file",
+                        t.key
+                    )));
+                }
+            };
             textures.insert(
                 t.key.clone(),
                 TexDef {
@@ -663,12 +680,20 @@ impl Scene {
             });
         }
         let mut placements = Vec::new();
+        // a placement of a prototype without geometry (no skate.prototype: raise-skate raises those with a mesh) draws
+        // nothing: left out, counted
+        let mut no_geometry = 0usize;
         for (e, inst) in world.iter::<Instance>() {
+            // a non-rigid placement is refused whatever its prototype holds
             let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
             if matches!(t.classify(), TransformKind::Mirrored | TransformKind::Sheared) {
                 return Err(Error::Scene(format!(
                     "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
                 )));
+            }
+            if !proto_index.contains_key(&inst.prototype) && !world.has::<SkatePrototype>(inst.prototype) {
+                no_geometry += 1;
+                continue;
             }
             let sp = world.get::<SkatePlacement>(e).cloned().unwrap_or_default();
             let c = t.cols;
@@ -691,34 +716,59 @@ impl Scene {
                 split: sp.split_by_tile,
             });
         }
+        let soup_def = |file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
+            file,
+            mode: mode_of(c.and_then(|c| c.mode)),
+            ground: c.and_then(|c| c.ground).unwrap_or(true),
+            region_cut: c.and_then(|c| c.region_cut).unwrap_or(true),
+            pos: s.positions.iter().flatten().copied().collect(),
+            idx: s.triangles.iter().flatten().copied().collect(),
+            surf: s
+                .surfaces
+                .iter()
+                .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
+                .collect(),
+            read: 0,
+            cut: 0,
+            kept: 0,
+        };
         let mut soups = Vec::new();
         for (e, c) in world.iter::<SkateCollision>() {
             let s = primase_skate_scene::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| Error::Scene(format!("collision {e:?} has no soup")))?;
-            let s = &s;
-            soups.push(SoupDef {
-                file: c
-                    .0
-                    .table
+            let file =
+                c.0.table
                     .files
                     .first()
                     .map(|f| f.path.clone())
-                    .unwrap_or_default(),
-                mode: mode_of(c.0.mode),
-                ground: c.0.ground.unwrap_or(true),
-                region_cut: c.0.region_cut.unwrap_or(true),
-                pos: s.positions.iter().flatten().copied().collect(),
-                idx: s.triangles.iter().flatten().copied().collect(),
-                surf: s
-                    .surfaces
-                    .iter()
-                    .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
-                    .collect(),
-                read: 0,
-                cut: 0,
-                kept: 0,
-            });
+                    .unwrap_or_default();
+            soups.push(soup_def(file, Some(&c.0), &s));
+        }
+        // collision placed by an entity of its own (a reader's world collision, not raised into a soup): a world
+        // soup in scene space through its transform, as the scene writer files it
+        // (a prototype's own collision is placed by its instances, not filed here)
+        let prototypes: std::collections::BTreeSet<primase_core::Entity> =
+            world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        for (e, _) in world.iter::<primase_core::Collision>() {
+            if world.has::<SkateCollision>(e) || world.has::<SkatePrototype>(e) || prototypes.contains(&e) {
+                continue;
+            }
+            let mut s = primase_skate_scene::soup(world, e, Some(sc))
+                .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
+                .expect("core.collision");
+            if let Some(t) = world.get::<Transform>(e) {
+                for p in &mut s.positions {
+                    *p = t.apply(*p);
+                }
+                // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
+                if t.determinant() < 0.0 {
+                    for tri in &mut s.triangles {
+                        tri.swap(1, 2);
+                    }
+                }
+            }
+            soups.push(soup_def(format!("collision/world_{}.bin", soups.len()), None, &s));
         }
         let lights = world
             .iter::<SkateLight>()
@@ -813,7 +863,11 @@ impl Scene {
                 transform: m.m,
             });
         }
-        let _ = &mut report_warnings;
+        if no_geometry > 0 {
+            report_warnings.push(format!(
+                "{no_geometry} placements of prototypes without geometry left out"
+            ));
+        }
         Ok(Scene {
             dir: dir.to_owned(),
             name: sc.name.clone(),
@@ -866,7 +920,11 @@ impl Scene {
             max_render_edge: sc.max_render_edge.unwrap_or(0.0) as f32,
             trainer_note: sc.trainer_note.clone(),
             light_prefix: sc.light_prefix.clone(),
-            warnings: sc.warnings.clone().unwrap_or_default(),
+            warnings: {
+                let mut w = sc.warnings.clone().unwrap_or_default();
+                w.extend(report_warnings.iter().cloned());
+                w
+            },
             stats: sc.stats.clone(),
             texture_keys_by_entity: tex_keys,
             labels,

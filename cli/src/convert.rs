@@ -14,7 +14,8 @@ readers:
   gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H]
         [--min-size M] [--max-priority N] [--interiors none|all]
 writers:
-  web   [--ktx2] [--budget-mib N | --no-budget] [--plain]";
+  web      [--ktx2] [--budget-mib N | --no-budget] [--plain]
+  reskate  [--name N] [--blend-objects N] (after --passes \"<reader's>, bake-normal-scale, raise-skate{name=N,spawn=centre}, lower-layered-reskate\")";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -26,6 +27,8 @@ pub fn registry() -> PassRegistry {
     primase_image::register(&mut r);
     primase_meshops::register(&mut r);
     primase_gta::register(&mut r);
+    primase_skate_scene::register(&mut r);
+    primase_reskate::register(&mut r);
     r
 }
 
@@ -35,7 +38,8 @@ type WriterFactory = fn(&Path, &[String]) -> Result<Box<dyn Writer>>;
 /// The readers, by `--from` name.
 pub const READERS: &[(&str, ReaderFactory)] = &[("gta", crate::gta::reader)];
 /// The writers, by `--to` name.
-pub const WRITERS: &[(&str, WriterFactory)] = &[("web", crate::web::writer)];
+pub const WRITERS: &[(&str, WriterFactory)] =
+    &[("web", crate::web::writer), ("reskate", crate::reskate::writer)];
 
 /// The entry of `table` named `name`.
 fn find<T: Copy>(table: &[(&str, T)], name: &str, kind: &str) -> Result<T> {

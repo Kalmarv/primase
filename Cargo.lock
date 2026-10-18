@@ -793,6 +793,8 @@ dependencies = [
  "primase-gta",
  "primase-image",
  "primase-meshops",
+ "primase-reskate",
+ "primase-skate-scene",
  "primase-web",
  "toml",
 ]

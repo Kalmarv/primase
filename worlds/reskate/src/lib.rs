@@ -25,6 +25,11 @@ use std::path::PathBuf;
 
 pub use build::{BuildOptions, BuildReport, build, leave_out_optional, lod_choice, select_lod};
 
+/// The passes of the ReSkate target, by name.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.register("lower-layered-reskate", layered::lower_layered_reskate);
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{}: {source}", path.display())]

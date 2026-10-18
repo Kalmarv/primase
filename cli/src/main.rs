@@ -7,6 +7,7 @@
 //! (the reader's defaults without `--select` and `--passes`).
 mod convert;
 mod gta;
+mod reskate;
 mod web;
 
 fn main() {
