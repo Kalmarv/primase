@@ -15,7 +15,7 @@
 //! Writers that cannot toggle declare `core.condition` and `core.state_override` illegal, so the planner runs
 //! `resolve-state` before them. A world without state components is never touched.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -151,10 +151,18 @@ pub struct Literal {
 pub struct Clause(pub Vec<Literal>);
 
 impl Clause {
-    fn holds(&self, values: &BTreeMap<Entity, u32>) -> bool {
-        self.0
-            .iter()
-            .all(|l| values.get(&l.axis).is_some_and(|&v| l.values & (1u64 << v) != 0))
+    /// The clause with its literals on the axes in `values` evaluated: `None` when one of them fails, else the
+    /// literals on the other axes (empty: the clause holds whatever they are).
+    fn reduce(&self, values: &BTreeMap<Entity, u32>) -> Option<Clause> {
+        let mut rest = Vec::new();
+        for l in &self.0 {
+            match values.get(&l.axis) {
+                Some(&v) if l.values & (1u64 << v) == 0 => return None,
+                Some(_) => {}
+                None => rest.push(*l),
+            }
+        }
+        Some(Clause(rest))
     }
 
     fn verify(&self, w: &World) -> Result<(), String> {
@@ -283,17 +291,36 @@ impl Resource for StateAssignment {
 /// Every axis, condition, override and the assignment resource are removed. A despawned entity that something else
 /// still references (a self-placed mesh used as another instance's prototype) leaves that reference dangling, and the
 /// verifier after the pass fails on it.
+///
+/// `keep=key;key` leaves those axes unresolved, for a consumer that switches them itself (a time of day): they stay,
+/// and so do the conditions and overrides that depend on them, reduced to their literals on kept axes (every literal
+/// on a resolved axis evaluated: a clause one of them fails is dropped, a clause left with no literal holds in every
+/// state). An entity whose condition keeps no clause is despawned, one with a clause that always holds loses its
+/// condition; an override list keeps its order up to the first clause that always holds, which applies now when it is
+/// the first. The snapshot's ([`StateAssignment`]) values for kept axes stay, as the resource's only entries. A kept
+/// key without an axis, one also assigned, or one scoped to an entity (which a resolved condition may despawn), is
+/// an error.
 #[derive(Clone, Debug, Default)]
 pub struct ResolveState {
     /// key -> value text, as given.
     pub assign: BTreeMap<String, String>,
+    /// The keys of the axes left unresolved.
+    pub keep: BTreeSet<String>,
 }
 
 /// The pass factory (`PassRegistry::register("resolve-state", resolve_state)`).
 pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
     let mut assign = BTreeMap::new();
+    let mut keep = BTreeSet::new();
     for (k, v) in o {
         match k.as_str() {
+            "keep" => {
+                for key in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                    if !keep.insert(key.to_owned()) {
+                        return Err(format!("keep: {key} twice"));
+                    }
+                }
+            }
             "assign" => {
                 for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
                     let (key, value) = item
@@ -310,7 +337,10 @@ pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
             _ => return Err(format!("unknown option {k}")),
         }
     }
-    Ok(Box::new(ResolveState { assign }))
+    if let Some(k) = keep.iter().find(|k| assign.contains_key(*k)) {
+        return Err(format!("{k} is both assigned and kept"));
+    }
+    Ok(Box::new(ResolveState { assign, keep }))
 }
 
 impl Pass for ResolveState {
@@ -318,11 +348,16 @@ impl Pass for ResolveState {
         "resolve-state"
     }
     fn options(&self) -> Options {
-        if self.assign.is_empty() {
-            return Options::new();
+        let mut o = Options::new();
+        if !self.assign.is_empty() {
+            let items: Vec<String> = self.assign.iter().map(|(k, v)| format!("{k}:{v}")).collect();
+            o.insert("assign".to_owned(), items.join(";"));
         }
-        let items: Vec<String> = self.assign.iter().map(|(k, v)| format!("{k}:{v}")).collect();
-        Options::from([("assign".to_owned(), items.join(";"))])
+        if !self.keep.is_empty() {
+            let keys: Vec<&str> = self.keep.iter().map(String::as_str).collect();
+            o.insert("keep".to_owned(), keys.join(";"));
+        }
+        o
     }
     /// The state model's components, and the `core.state_assignment` resource it applied.
     fn removes(&self) -> &[&'static str] {
@@ -370,6 +405,34 @@ impl Pass for ResolveState {
                 .ok_or_else(|| format!("assign {k}:{text} is not one of its values"))?;
             values.insert(e, v);
         }
+        // the kept axes: no value, their literals stay
+        let mut kept = BTreeSet::new();
+        // the snapshot's values for kept axes stay with them, for whoever resolves them later
+        let mut kept_assignment = StateAssignment::default();
+        for k in &self.keep {
+            let &(e, a) = by_key
+                .get(k.as_str())
+                .ok_or_else(|| format!("keep names {k}, which no axis has"))?;
+            // a resolved condition may despawn the entity a local axis is scoped to
+            if let Scope::Local(_) = a.scope {
+                return Err(format!(
+                    "keep names {k}, which is scoped to an entity: only global axes are kept"
+                ));
+            }
+            values.remove(&e);
+            kept.insert(e);
+            if let Some(&v) = resource.0.get(k) {
+                kept_assignment.0.insert(k.clone(), v);
+            }
+            log.count(&format!("axis {k} kept unresolved"), 1);
+        }
+        if !kept_assignment.0.is_empty() {
+            log.count(
+                "snapshot values kept for kept axes",
+                kept_assignment.0.len() as u64,
+            );
+            w.insert_resource(kept_assignment);
+        }
         // run() may see an unverified world: every literal must name an axis
         for (e, mut axes_named) in w
             .iter::<Condition>()
@@ -388,7 +451,7 @@ impl Pass for ResolveState {
                 )
             })
         {
-            axes_named.retain(|a| !values.contains_key(a));
+            axes_named.retain(|a| !values.contains_key(a) && !kept.contains(a));
             if let Some(a) = axes_named.first() {
                 return Err(format!("{e:?}: a literal names {a:?}, which is not an axis"));
             }
@@ -396,14 +459,20 @@ impl Pass for ResolveState {
         let axis_of: BTreeMap<Entity, &StateAxis> = axes.iter().map(|(e, a)| (*e, a)).collect();
         let label = |e: &Entity| {
             let a = axis_of[e];
-            format!("{}={}", a.key, a.domain.name(values[e]).unwrap_or("?"))
+            match values.get(e) {
+                Some(&v) => format!("{}={}", a.key, a.domain.name(v).unwrap_or("?")),
+                None => format!("{} (kept)", a.key),
+            }
         };
 
         // conditions: despawn what does not exist in this state
         let conditions: Vec<(Entity, Condition)> =
             w.iter::<Condition>().map(|(e, c)| (e, c.clone())).collect();
         for (e, c) in &conditions {
-            let present = c.0.iter().any(|cl| cl.holds(&values));
+            // the clauses on kept axes that may still hold; one with no literal left always holds
+            let reduced: Vec<Clause> = c.0.iter().filter_map(|cl| cl.reduce(&values)).collect();
+            let always = reduced.iter().any(|cl| cl.0.is_empty());
+            let present = always || !reduced.is_empty();
             if c.0.is_empty() {
                 log.count("never present", 1);
             }
@@ -417,8 +486,11 @@ impl Pass for ResolveState {
                     1,
                 );
             }
-            if present {
+            if always {
                 w.remove::<Condition>(*e);
+            } else if present {
+                w.insert(*e, Condition(reduced));
+                log.count("conditions kept on kept axes", 1);
             } else {
                 w.despawn(*e);
             }
@@ -429,8 +501,25 @@ impl Pass for ResolveState {
             w.iter::<StateOverride>().map(|(e, o)| (e, o.clone())).collect();
         for (e, o) in overrides {
             w.remove::<StateOverride>(e);
-            let Some((_, ov)) = o.0.iter().find(|(c, _)| c.holds(&values)) else {
-                continue;
+            // in order, the clauses that may still hold, up to the first that always holds
+            let mut reduced: Vec<(Clause, Override)> = Vec::new();
+            for (c, ov) in &o.0 {
+                if let Some(r) = c.reduce(&values) {
+                    let last = r.0.is_empty();
+                    reduced.push((r, *ov));
+                    if last {
+                        break;
+                    }
+                }
+            }
+            let ov = match reduced.as_slice() {
+                [] => continue,
+                [(c, ov)] if c.0.is_empty() => ov,
+                _ => {
+                    w.insert(e, StateOverride(reduced));
+                    log.count("overrides kept on kept axes", 1);
+                    continue;
+                }
             };
             match *ov {
                 Override::Transform(t) => {
@@ -451,7 +540,9 @@ impl Pass for ResolveState {
         }
 
         for (e, _) in &axes {
-            w.remove::<StateAxis>(*e);
+            if !kept.contains(e) {
+                w.remove::<StateAxis>(*e);
+            }
         }
         Ok(())
     }
@@ -551,6 +642,115 @@ mod tests {
         w.iter::<Instance>()
             .map(|(e, _)| w.get::<Name>(e).unwrap().0.clone())
             .collect()
+    }
+
+    fn run_keep(w: &mut World, assign: &str, keep: &str) -> Result<PassLog, String> {
+        let mut opts = Options::from([("keep".to_owned(), keep.to_owned())]);
+        if !assign.is_empty() {
+            opts.insert("assign".to_owned(), assign.to_owned());
+        }
+        let mut log = PassLog::default();
+        resolve_state(&opts)?.run(w, &mut log)?;
+        Ok(log)
+    }
+
+    /// Keeping 8302 (8301 and 8306 at their defaults, off): the intact walls keep only their 8302 literal, the
+    /// charcoal walls their whole condition, the 8301 piece is despawned; 8302 stays an axis, the others go. A later
+    /// resolve-state with 8302 on finishes the job as resolving everything at once would.
+    #[test]
+    fn kept_axes_stay_with_the_conditions_reduced_to_them() {
+        let mut c = castle();
+        let f8302 =
+            c.w.iter::<StateAxis>()
+                .find(|(_, a)| a.key == "fromsoft.flag.8302")
+                .unwrap()
+                .0;
+        let log = run_keep(&mut c.w, "", "fromsoft.flag.8302").unwrap();
+        assert_eq!(log.counts["axis fromsoft.flag.8302 kept unresolved"], 1);
+        assert_eq!(
+            c.w.get::<Condition>(c.intact),
+            Some(&Condition(vec![Clause(vec![off(f8302)])]))
+        );
+        assert_eq!(
+            c.w.get::<Condition>(c.burnt),
+            Some(&Condition(vec![Clause(vec![on(f8302)])]))
+        );
+        assert!(!c.w.is_alive(c.f8301) || !c.w.has::<StateAxis>(c.f8301));
+        assert_eq!(names(&c.w), vec!["m003312_3802", "m003412_3902"]);
+        let keys: Vec<String> = c.w.iter::<StateAxis>().map(|(_, a)| a.key.clone()).collect();
+        assert_eq!(keys, vec!["fromsoft.flag.8302"]);
+        run(&mut c.w, "fromsoft.flag.8302:on");
+        assert_eq!(names(&c.w), vec!["m003412_3902"]);
+        assert!(c.w.iter::<Condition>().next().is_none());
+    }
+
+    /// An override list keeps its order on the kept axis up to the clause that always holds; when a resolved axis
+    /// makes the first clause always hold, it applies now.
+    #[test]
+    fn overrides_on_kept_axes_stay_in_order() {
+        for (assign, want) in [("", None), ("a:on", Some(1))] {
+            let mut w = World::new();
+            let a = axis(&mut w, "a");
+            let k = axis(&mut w, "k");
+            let proto = w.spawn();
+            let e = placement(&mut w, proto, "p");
+            w.insert(
+                e,
+                StateOverride(vec![
+                    (Clause(vec![on(a)]), Override::Variant(1)),
+                    (Clause(vec![on(k), off(a)]), Override::Variant(2)),
+                    (Clause(vec![]), Override::Variant(3)),
+                    (Clause(vec![on(k)]), Override::Variant(4)),
+                ]),
+            );
+            run_keep(&mut w, assign, "k").unwrap();
+            match want {
+                None => assert_eq!(
+                    w.get::<StateOverride>(e),
+                    Some(&StateOverride(vec![
+                        (Clause(vec![on(k)]), Override::Variant(2)),
+                        (Clause(vec![]), Override::Variant(3)),
+                    ]))
+                ),
+                Some(v) => {
+                    assert!(!w.has::<StateOverride>(e));
+                    assert_eq!(w.get::<Instance>(e).unwrap().variant, v);
+                }
+            }
+        }
+    }
+
+    /// A save snapshot's value for a kept axis stays (as the only entry of core.state_assignment), so resolving the
+    /// axis later reads it: 8302 saved on, kept, then resolved without an assignment leaves the charcoal walls.
+    #[test]
+    fn a_kept_axis_keeps_its_snapshot_value() {
+        let mut c = castle();
+        c.w.insert_resource(StateAssignment(BTreeMap::from([
+            ("fromsoft.flag.8302".to_owned(), 1),
+            ("fromsoft.flag.8306".to_owned(), 0),
+        ])));
+        let log = run_keep(&mut c.w, "", "fromsoft.flag.8302").unwrap();
+        assert_eq!(log.counts["snapshot values kept for kept axes"], 1);
+        assert_eq!(
+            c.w.resource::<StateAssignment>(),
+            Some(&StateAssignment(BTreeMap::from([(
+                "fromsoft.flag.8302".to_owned(),
+                1
+            )])))
+        );
+        run(&mut c.w, "");
+        assert_eq!(names(&c.w), vec!["m003412_3902"]);
+    }
+
+    #[test]
+    fn keeping_a_missing_or_assigned_axis_is_an_error() {
+        let mut c = castle();
+        assert!(run_keep(&mut c.w, "", "fromsoft.flag.9999").is_err());
+        let both = Options::from([
+            ("keep".to_owned(), "fromsoft.flag.8302".to_owned()),
+            ("assign".to_owned(), "fromsoft.flag.8302:on".to_owned()),
+        ]);
+        assert!(resolve_state(&both).is_err());
     }
 
     #[test]
