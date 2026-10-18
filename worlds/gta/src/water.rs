@@ -26,7 +26,8 @@
 //!
 //! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
 //! material: the earlier exporter's blended colour ([`crate::lower::WATER`], as water shaders get), roughness from the
-//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated), and
+//! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated), marked
+//! `core.material_usage` water (what the water file states), and
 //! its `core.collision`: the same outline as triangles at the water's height, every one on surface `WATER` (class
 //! water, from the surface table), so a writer that knows water surfaces makes it water to fall into, not ground.
 //! An invisible quad gets neither (counted); the corner values and the depth and stencil flags are not drawn:
@@ -37,8 +38,8 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Collision, Component, Entity, Instance, JsonError, Mesh, Name, Primitive, Resource, Semantic, Source,
-    Stream, Surfaces, Topology, Transform, World,
+    Collision, Component, Entity, Instance, JsonError, MaterialUsage, Mesh, Name, Primitive, Resource,
+    Semantic, Source, Stream, Surfaces, Topology, Transform, World,
 };
 
 use crate::archive_set::Install;
@@ -575,6 +576,7 @@ impl Pass for LowerGtaWater {
         &[
             "core.mesh",
             "pbr.material",
+            "core.material_usage",
             "core.name",
             "core.collision",
             "core.surfaces",
@@ -617,6 +619,7 @@ impl Pass for LowerGtaWater {
                 .or_insert_with(|| {
                     let m = w.spawn();
                     w.insert(m, water_material(s.specular_falloff));
+                    w.insert(m, MaterialUsage::Water);
                     w.insert(m, Name("gta_water".into()));
                     log.approximate("water drawn as a blended flat colour", 1);
                     m
@@ -947,6 +950,10 @@ mod tests {
             .unwrap();
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
         assert!((m.roughness - (2.0f32 / 1120.0).powf(0.25)).abs() < 1e-6);
+        assert_eq!(
+            w.get::<MaterialUsage>(mesh.primitives()[0].material.unwrap()),
+            Some(&MaterialUsage::Water)
+        );
         // its collision: the same two triangles at the sea's height, facing up, on surface WATER of class water
         let c = w.get::<Collision>(protos[0]).unwrap();
         assert_eq!(c.triangles.len(), 2);
