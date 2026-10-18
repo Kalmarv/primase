@@ -72,6 +72,9 @@ pub struct RegionReport {
     pub maps: usize,
     pub placements: usize,
     pub prototypes: usize,
+    /// Prototypes named by their archetype's hash: a drawable dictionary's entry (the dictionary stores entries by
+    /// hash) or an asset with no live file. The others are named by their drawable's or fragment's file.
+    pub prototypes_named_by_hash: usize,
     /// Placements by condition: `both`, `story`, `online`.
     pub by_state: BTreeMap<&'static str, usize>,
     /// Archetype names defined by more than one live map types file.
@@ -421,15 +424,23 @@ pub fn read_region(
             w.insert(p, Source(ytyp.clone()));
             let archetype = format!("archetype {:#010x}", a.name);
             w.insert(p, Provenance::new(crate::assets::origin(ytyp, Some(&archetype))));
-            let name = story
-                .tables
-                .get("ydr")
-                .and_then(|t| t.get(&a.asset_name))
-                .map(|&f| story.path(f))
-                .and_then(|path| path.rsplit('\\').next())
-                .and_then(|n| n.strip_suffix(".ydr"))
-                .map_or_else(|| format!("{:#010x}", a.name), str::to_string);
-            w.insert(p, Name(name));
+            // its asset's file name, in the archive set its archetype is read from: a drawable's or a fragment's; a
+            // drawable dictionary's entry (stored by hash) or an asset with no live file keeps the archetype's hash
+            let ext = match a.asset_type {
+                1 => Some("yft"),
+                2 => Some("ydr"),
+                _ => None,
+            };
+            let name = ext.and_then(|ext| {
+                let set = online.unwrap_or(story);
+                let path = set.path(*set.tables.get(ext)?.get(&a.asset_name)?);
+                let file = path.rsplit('\\').next()?;
+                Some(file.strip_suffix(ext)?.strip_suffix('.')?.to_string())
+            });
+            if name.is_none() {
+                report.prototypes_named_by_hash += 1;
+            }
+            w.insert(p, Name(name.unwrap_or_else(|| format!("{:#010x}", a.name))));
             p
         });
         let p = w.spawn();
