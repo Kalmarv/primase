@@ -92,7 +92,7 @@ fn missing_albedo_uses_available_layer() {
     assert!(m.bindings.contains_key("Texture2D_8_AlbedoMap"));
 }
 #[test]
-fn foliage_cutoff_and_writer_fallback() {
+fn foliage_cutoff_and_missing_albedo() {
     let mut d = definition();
     d.shader = "M[Translucency]_e.sps".into();
     d.parameters.push(Parameter {
@@ -103,12 +103,8 @@ fn foliage_cutoff_and_writer_fallback() {
     assert_eq!(m.class, "leaves");
     assert_eq!(m.cutoff, 128. / 255.);
     assert_eq!(m.surface, "default");
-    let output = m.skate_material("synthetic".into(), |_, _| None);
-    assert_eq!(output.base_color, Some([128, 128, 128, 255]));
-    assert_eq!(output.cutoff, Some(0.5019608));
-    assert_eq!((output.cutoff.unwrap() as f32).to_bits(), m.cutoff.to_bits());
-    assert_eq!(output.class, primase_reskate::dialect::MaterialClass::Leaves);
-    assert_eq!(output.domain, Some(primase_reskate::dialect::Domain::Surface));
+    // A target's class, domain and fallback colour are gated by its own tests.
+    assert!(m.albedo.is_none());
     assert!(m.layered.is_none());
 }
 

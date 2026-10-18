@@ -9,13 +9,6 @@
 # ---- crate dependencies ----
 
 [[dependency]]
-from = "worlds/fromsoft"
-to = "worlds/reskate"
-section = "dependencies"
-reason = "the Sekiro area reader still attaches skate.* components and skate scene policy"
-removed_when = "the reader attaches core and fromsoft.* only, and skate shaping runs as passes"
-
-[[dependency]]
 from = "worlds/reskate"
 to = "formats/gltf"
 section = "dependencies"
@@ -40,12 +33,6 @@ removed_when = "it moves into the Forza reader when one exists, or is deleted"
 crate = "worlds/fromsoft"
 word = "skate"
 reason = "the Sekiro area reader builds skate.* components (materials, collision, markers, lights, grind curves)"
-removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
-
-[[name]]
-crate = "worlds/fromsoft"
-word = "reskate"
-reason = "the Sekiro area reader builds skate.* components, now through primase_reskate (the dialect's owner since skate-scene folded into it)"
 removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
 
 [[name]]
@@ -99,24 +86,6 @@ file = "toolkit/image/src/texture.rs"
 what = "pass load-textures is not registered"
 reason = "a loader written as a pass; loading is a reader's load step"
 removed_when = "texture loading is a reader function, not a pass"
-
-[[pass]]
-file = "worlds/fromsoft/src/rigid.rs"
-what = "pass fromsoft-apply-rigid-skinning is not registered"
-reason = "the area reader applies skinning itself, so nothing runs the pass"
-removed_when = "the reader keeps bone-space geometry and worlds/fromsoft registers the pass"
-
-[[pass]]
-file = "worlds/fromsoft/src/sekiro/normals.rs"
-what = "lower returns a PassLog but no pass of worlds/fromsoft runs it"
-reason = "consumer normal conversion is a function drivers call"
-removed_when = "it runs as a declared pass"
-
-[[pass]]
-file = "worlds/fromsoft/src/sekiro/pbr.rs"
-what = "lower returns a PassLog but no pass of worlds/fromsoft runs it"
-reason = "Sekiro material lowering is a function, not yet a pass"
-removed_when = "it runs as a declared pass"
 
 [[pass]]
 file = "worlds/unity/src/drawn.rs"

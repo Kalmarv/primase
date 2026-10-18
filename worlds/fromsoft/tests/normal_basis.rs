@@ -2,6 +2,7 @@
 //! not an exporter-selected green convention. Curl verdicts are measurements only.
 use primase_fromsoft::{flver::tangent_to_scene, sekiro::normals::consumer_basis};
 use primase_testdata::real_data;
+mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
@@ -233,9 +234,8 @@ fn gx_emissive_basis_rebuilds_z_independent_of_blue() {
 }
 
 #[test]
-#[allow(unsafe_code)]
 fn castle_gx_emissive_geometry() -> Result<()> {
-    use primase_core::{Instance, Mesh, Name, TexRole, Texture, World};
+    use primase_core::{Instance, Mesh, Name, World};
     use primase_fromsoft::{dcx::Decoder, materials::Material, sekiro};
     let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
         return Ok(());
@@ -243,14 +243,14 @@ fn castle_gx_emissive_geometry() -> Result<()> {
     let Some(dll) = real_data("PRIMASE_OODLE6") else {
         return Ok(());
     };
-    // SAFETY: caller supplies a trusted native library.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll = common::oodle(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
     };
     let mut world = World::default();
     let report = sekiro::read_area(root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
+    common::run(&mut world, common::LEGACY_GEOMETRY)?;
     let mut parts = 0;
     let mut triangles = 0;
     let mut placed = 0;
@@ -273,9 +273,6 @@ fn castle_gx_emissive_geometry() -> Result<()> {
         }
     }
     assert_eq!((parts, triangles, placed), (1, 2638, 1));
-    for (_, t) in world.iter::<Texture>().filter(|(_, t)| t.role == TexRole::Normal) {
-        assert_eq!(t.normal, Some(sekiro::normals::SOURCE));
-    }
     println!(
         "castle assembly {} placements; evidenced GX emissive: {parts} part, {triangles} triangles, {placed} placement",
         report.placements

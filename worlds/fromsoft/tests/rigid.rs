@@ -48,7 +48,11 @@ fn rigid_points_normals_tangents_and_declared_pass() {
     assert_eq!(pass.requires(), ["fromsoft.flver"]);
     assert_eq!(pass.provides(), ["fromsoft.rigid_model"]);
     pass.run(&mut world, &mut log).unwrap();
-    assert!(world.get::<SourceModel>(e).is_none());
+    // the raw model stays beside the posed one
+    assert_eq!(
+        world.get::<SourceModel>(e).unwrap().0.meshes[0].vertices[0].position,
+        [1.; 3]
+    );
     let v = &world.get::<RigidModel>(e).unwrap().0.meshes[0].vertices[0];
     assert_eq!(v.position, [3., 5., 7.]);
     assert_eq!(v.normal, [0., 1. / 3., 0.]);

@@ -15,7 +15,6 @@ primase-texcodec.workspace = true
 primase-image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-primase-reskate.workspace = true
 encoding_rs.workspace = true
 primase-core.workspace = true
 primase-dds.workspace = true

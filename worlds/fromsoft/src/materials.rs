@@ -4,9 +4,20 @@ use crate::{
     flver,
     mtd::{MaterialDefinition, Value},
 };
-use primase_core::world::{Component, Entity};
-use primase_reskate::dialect::{MaterialClass, SkateMaterial};
+use primase_core::world::Component;
 use std::collections::BTreeMap;
+
+/// The source material classes [`resolve`] names in [`Material::skip`] (materials the game draws as sky or cloud
+/// cards, additive light volumes and shadow-only proxies), by the word a pass option uses for each.
+pub const SKIP_CLASSES: [(&str, &str); 3] = [
+    ("sky", "sky / cloud / fog card"),
+    ("light-volume", "additive light volume"),
+    ("shadow", "shadow proxy"),
+];
+/// The option word of a [`Material::skip`] class.
+pub fn skip_class(skip: &str) -> Option<&'static str> {
+    SKIP_CLASSES.iter().find(|(_, s)| *s == skip).map(|(w, _)| *w)
+}
 
 pub fn stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
@@ -28,6 +39,24 @@ pub struct LayeredMaterial {
     pub definition: MaterialDefinition,
     pub bindings: BTreeMap<String, Binding>,
 }
+impl LayeredMaterial {
+    /// The G-buffer program file its shader and static switch select (`<shader>_<switch>_Gbuf.ppo`).
+    pub fn program_name(&self) -> crate::Result<String> {
+        let leaf = self.definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
+        let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
+        let switch = self
+            .definition
+            .parameters
+            .iter()
+            .find(|p| p.name == "GXFT_SATStaticSwitch")
+            .and_then(|p| match &p.value {
+                Value::Int(v) => v.first().copied(),
+                _ => None,
+            })
+            .ok_or_else(|| crate::invalid("layer shader", 0, "missing static switch"))?;
+        Ok(format!("{shader}_{switch}_Gbuf.ppo"))
+    }
+}
 impl Component for LayeredMaterial {
     const NAME: &'static str = "fromsoft.layered_material";
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
@@ -44,6 +73,8 @@ pub struct Material {
     pub gx: Vec<flver::GxItem>,
     pub shader: String,
     pub class: String,
+    /// The source class of a material the game draws as something other than a surface ([`SKIP_CLASSES`]); a
+    /// program chooses whether to leave such meshes out.
     pub skip: Option<String>,
     pub albedo: Option<String>,
     pub normal: Option<String>,
@@ -194,11 +225,11 @@ pub fn resolve(
     }
     let sh = &m.shader;
     if sh.starts_with("M[Sky]") || sh.contains("CloudFog") || sh.contains("GroundFog") {
-        m.skip = Some("sky / cloud / fog card".into());
+        m.skip = Some(SKIP_CLASSES[0].1.into());
     } else if sh.starts_with("VolumeTest") || blend == 4 {
-        m.skip = Some("additive light volume".into());
+        m.skip = Some(SKIP_CLASSES[1].1.into());
     } else if sh.starts_with("GXFlver_Shadow") || m.mtd.starts_with("M[Shadow]") {
-        m.skip = Some("shadow proxy".into());
+        m.skip = Some(SKIP_CLASSES[2].1.into());
     } else if sh.contains("Tessellation_Water") {
         m.class = "water".into();
     } else if sh.contains("MeshDecal") || m.mtd.ends_with("_md") {
@@ -269,52 +300,4 @@ pub fn surface(mtd: &str, albedo: &str, class: &str) -> (String, bool) {
         }
     }
     ("default".into(), false)
-}
-impl Material {
-    /// Resolve roles separately: a normal and colour use of the same file need
-    /// different texture metadata. Missing base data gets a deterministic colour.
-    pub fn skate_material(
-        &self,
-        key: String,
-        lookup: impl Fn(&str, bool) -> Option<Entity>,
-    ) -> SkateMaterial {
-        let base = self.albedo.as_deref().and_then(|n| lookup(n, false));
-        let normal = self.normal.as_deref().and_then(|n| lookup(n, true));
-        let class = match self.class.as_str() {
-            "cutout" => MaterialClass::Cutout,
-            "leaves" => MaterialClass::Leaves,
-            "decal" => MaterialClass::Decal,
-            "alpha" => MaterialClass::Alpha,
-            "water" => MaterialClass::Water,
-            _ => MaterialClass::Opaque,
-        };
-        let masked = matches!(class, MaterialClass::Cutout | MaterialClass::Leaves);
-        SkateMaterial {
-            key,
-            class,
-            base,
-            normal,
-            mask: None,
-            base_color: base.is_none().then_some(if self.class == "water" {
-                [48, 98, 122, 190]
-            } else {
-                [128, 128, 128, 255]
-            }),
-            tint: None,
-            alpha: None,
-            cutoff: masked.then_some(primase_core::json::f32_decimal(self.cutoff)),
-            two_sided: (self.two_sided != masked).then_some(self.two_sided),
-            // Consumer comparison: these leaves render lit in the surface
-            // domain and black in the foliage domain. Keep the leaves class.
-            domain: (self.class == "leaves").then_some(primase_reskate::dialect::Domain::Surface),
-            metallic: None,
-            roughness: None,
-            wrap: None,
-            ocean: None,
-            cast_shadows: None,
-            emissive: self.is_emissive.then_some(true),
-            vertex_alpha: None,
-            other: Default::default(),
-        }
-    }
 }

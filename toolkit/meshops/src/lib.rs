@@ -1,8 +1,10 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod curves;
 mod distance;
 mod layered;
+pub use curves::{Chain, SurfaceIndex, chain};
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};
 pub use layered::{SelectionPolicy, strongest_layer_parts};
 mod layered_plan;

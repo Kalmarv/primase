@@ -4,9 +4,9 @@
 use primase_core::World;
 use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_testdata::real_data;
+mod common;
 use std::collections::BTreeSet;
 #[test]
-#[allow(unsafe_code)]
 fn installed_blocker_cards() -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
         return Ok(());
@@ -18,8 +18,7 @@ fn installed_blocker_cards() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(oracle.join("cases.json"))?)?;
-    // SAFETY: explicitly supplied trusted native version-6 decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll = common::oodle(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
@@ -31,25 +30,14 @@ fn installed_blocker_cards() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
         let area = case["area"].as_str().ok_or("area")?;
-        let cards = sekiro::read_blocker_cards(&root, area, &decoder, &options)?;
         let mut world = World::default();
-        if case["assemble"].as_bool().unwrap_or(false) {
-            sekiro::read_area(&root, area, &decoder, &options, &mut world)?;
-            let retained = world
-                .resource::<sekiro::blockers::BlockerCards>()
-                .ok_or("retained")?;
-            assert_eq!(
-                primase_core::json::to_value(retained)?,
-                primase_core::json::to_value(&cards)?
-            );
-            let scene = world
-                .resource::<primase_reskate::dialect::SkateScene>()
-                .ok_or("scene")?;
-            assert_eq!(
-                scene.other["extensions"]["sekiro"]["blocker_cards"]["drawn"],
-                false
-            );
-        }
+        sekiro::read_area(&root, area, &decoder, &options, &mut world)?;
+        common::run(&mut world, common::LEGACY_GEOMETRY)?;
+        // none recorded: an empty inventory
+        let cards = world
+            .resource::<sekiro::blockers::BlockerCards>()
+            .cloned()
+            .unwrap_or_default();
         let got: BTreeSet<_> = cards.placements.iter().map(|p| p.source.clone()).collect();
         let want: BTreeSet<String> = serde_json::from_value(case["placements"].clone())?;
         assert_eq!(got, want, "{name}: placement identities");
@@ -73,11 +61,16 @@ fn installed_blocker_cards() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         let want: BTreeSet<(String, usize)> = serde_json::from_value(case["mesh_identities"].clone())?;
         assert_eq!(got, want, "{name}: FLVER mesh identities");
-        for (_, material) in world.iter::<primase_fromsoft::materials::Material>() {
-            assert!(
-                !sekiro::blockers::is_card(material),
-                "{name}: card still has render material"
-            );
+        for (_, mesh) in world.iter::<primase_core::Mesh>() {
+            for p in mesh.primitives() {
+                let material = p
+                    .material
+                    .and_then(|m| world.get::<primase_fromsoft::materials::Material>(m));
+                assert!(
+                    !material.is_some_and(sekiro::blockers::is_card),
+                    "{name}: a card is drawn"
+                );
+            }
         }
         println!(
             "{name}: {} meshes, {} prototypes, {} placements, {} triangles retained outside render meshes",

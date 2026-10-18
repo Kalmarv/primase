@@ -148,24 +148,23 @@ fn area_materials_and_scene() -> Result<()> {
                 let m = &resolved[part.material];
                 let name = want["material"].as_str().ok_or("material key")?;
                 let expected = &scene["materials"][name];
-                let output = m.skate_material(name.to_owned(), |n, is_normal| {
-                    let texture = if is_normal {
-                        format!("{n}@normal")
-                    } else {
-                        n.to_owned()
-                    };
-                    (!scene["textures"][&texture].is_null())
-                        .then_some(primase_core::world::Entity::from_index(u32::from(is_normal)))
+                // The preview policy for a material without a base texture, now applied in source PBR
+                // lowering; checked here against the reference exporter's bytes.
+                let has_base = m
+                    .albedo
+                    .as_deref()
+                    .is_some_and(|n| !scene["textures"][n].is_null());
+                let fallback = (!has_base).then_some(if m.class == "water" {
+                    [48, 98, 122, 190]
+                } else {
+                    [128, 128, 128, 255]
                 });
                 assert_eq!(
-                    serde_json::to_value(output.base_color)?,
+                    serde_json::to_value(fallback)?,
                     expected["base_color"],
                     "{key}/{name}: fallback colour"
                 );
-                assert_eq!(
-                    output.emissive.unwrap_or(false),
-                    expected["emissive"].as_bool().unwrap_or(false)
-                );
+                assert_eq!(m.is_emissive, expected["emissive"].as_bool().unwrap_or(false));
                 let base = m.albedo.as_deref().filter(|n| !scene["textures"][*n].is_null());
                 let normal = m
                     .normal

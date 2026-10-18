@@ -9,16 +9,21 @@ use primase_core::{
     pass::{Pass, PassLog},
 };
 
+/// A prototype's FLVER as the file stores it (`fromsoft.flver`): skeleton, every mesh with its face sets (levels of
+/// detail and motion-blur variants), original material indices and every vertex channel, in the file's frame.
 #[derive(Clone, Debug)]
 pub struct SourceModel(pub Model);
 impl Component for SourceModel {
     const NAME: &'static str = "fromsoft.flver";
 }
+/// The same model statically posed by [`lower_model`] (`fromsoft.rigid_model`), beside the source it came from.
 #[derive(Clone, Debug)]
 pub struct RigidModel(pub Model);
 impl Component for RigidModel {
     const NAME: &'static str = "fromsoft.rigid_model";
 }
+/// `fromsoft-apply-rigid-skinning`: pose every `fromsoft.flver` into a `fromsoft.rigid_model` beside it (the raw
+/// model stays; a later pass or the program removes what it no longer needs).
 #[derive(Debug)]
 pub struct ApplyRigidSkinning;
 impl Pass for ApplyRigidSkinning {
@@ -31,8 +36,8 @@ impl Pass for ApplyRigidSkinning {
     fn provides(&self) -> &[&'static str] {
         &[RigidModel::NAME]
     }
-    fn removes(&self) -> &[&'static str] {
-        &[SourceModel::NAME]
+    fn modifies(&self) -> &[&'static str] {
+        &[RigidModel::NAME]
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let staged = world
@@ -40,7 +45,6 @@ impl Pass for ApplyRigidSkinning {
             .map(|(e, m)| lower_model(&m.0, log).map(|m| (e, m)))
             .collect::<Result<Vec<_>, _>>()?;
         for (e, m) in staged {
-            world.remove::<SourceModel>(e);
             world.insert(e, RigidModel(m));
         }
         Ok(())
@@ -107,6 +111,75 @@ fn normal_matrix(m: &Matrix) -> Result<(Matrix, f64), String> {
         det,
     ))
 }
+/// Each bone's model-space matrix, through its parents.
+fn bone_matrices(bones: &[Bone]) -> Result<Vec<Matrix>, String> {
+    let mut worlds = Vec::with_capacity(bones.len());
+    for i in 0..bones.len() {
+        let mut m = local(&bones[i]);
+        let mut parent = bones[i].parent;
+        let mut seen = vec![i];
+        while parent >= 0 {
+            let p = parent as usize;
+            if p >= bones.len() || seen.contains(&p) {
+                return Err(format!("invalid rigid bone hierarchy at {i}"));
+            }
+            seen.push(p);
+            m = compose(&local(&bones[p]), &m);
+            parent = bones[p].parent;
+        }
+        worlds.push(m);
+    }
+    Ok(worlds)
+}
+
+/// Every vertex of every mesh in model space (file frame): static vertices posed by the bone their NORMAL.w names,
+/// as [`lower_model`] poses them but whatever their weights; dynamic and unbound ones as stored. For measurements a
+/// reader makes before any pass runs (a model's extent), not a lowering.
+pub fn posed_positions(source: &Model) -> Result<Vec<Vec<[f32; 3]>>, String> {
+    let worlds = bone_matrices(&source.bones)?;
+    Ok(source
+        .meshes
+        .iter()
+        .map(|m| {
+            m.vertices
+                .iter()
+                .map(|v| {
+                    let matrix = (!m.dynamic)
+                        .then(|| usize::try_from(v.normal_w).ok().and_then(|i| worlds.get(i)))
+                        .flatten()
+                        .filter(|m| **m != ID);
+                    match matrix {
+                        Some(matrix) => point(matrix, v.position.map(f64::from)).map(|x| x as f32),
+                        None => v.position,
+                    }
+                })
+                .collect()
+        })
+        .collect())
+}
+
+/// The model-space box (file frame) of every vertex a face set uses, posed as [`posed_positions`]. `None` for a
+/// model whose face sets use no vertex.
+pub fn posed_bounds(source: &Model) -> Result<Option<[[f32; 3]; 2]>, String> {
+    let posed = posed_positions(source)?;
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for (m, positions) in source.meshes.iter().zip(&posed) {
+        for f in &m.faces {
+            for &i in &f.indices {
+                let Some(p) = positions.get(i as usize).filter(|_| !(f.strip && i == 0xffff)) else {
+                    continue;
+                };
+                for k in 0..3 {
+                    min[k] = min[k].min(p[k]);
+                    max[k] = max[k].max(p[k]);
+                }
+            }
+        }
+    }
+    Ok(min[0].is_finite().then_some([min, max]))
+}
+
 /// The same implementation used by the declared world pass. The input is never
 /// mutated; errors count refused vertices before returning any lowered geometry.
 pub fn lower_model(source: &Model, log: &mut PassLog) -> Result<Model, String> {
@@ -128,22 +201,7 @@ pub fn lower_model(source: &Model, log: &mut PassLog) -> Result<Model, String> {
             "rigid skinning refused {refused} vertices: requires one bone with weight 1"
         ));
     }
-    let mut worlds = Vec::with_capacity(source.bones.len());
-    for i in 0..source.bones.len() {
-        let mut m = local(&source.bones[i]);
-        let mut parent = source.bones[i].parent;
-        let mut seen = vec![i];
-        while parent >= 0 {
-            let p = parent as usize;
-            if p >= source.bones.len() || seen.contains(&p) {
-                return Err(format!("invalid rigid bone hierarchy at {i}"));
-            }
-            seen.push(p);
-            m = compose(&local(&source.bones[p]), &m);
-            parent = source.bones[p].parent;
-        }
-        worlds.push(m);
-    }
+    let worlds = bone_matrices(&source.bones)?;
     let mut output = source.clone();
     for m in &mut output.meshes {
         let mut mirrored = Vec::with_capacity(m.vertices.len());

@@ -1,13 +1,15 @@
 //! Object collision lowering: main HKX only, dynamic bodies at rest, motion 2
 //! omitted and named. Convex material is the dominant colliding render surface.
-use crate::{Archive, Binder, Result, collision, dcx::Decoder, invalid, materials::Material};
+use super::source::{MaterialSlots, PrototypeSource};
+use crate::{
+    Archive, Binder, Result, collision, dcx::Decoder, invalid, materials::Material, rigid::SourceModel,
+};
 use primase_core::state::Condition;
 use primase_core::{
-    Collision, Instance, Mesh, Semantic, Source, Stream, Surfaces, Transform, World,
+    Collision, Instance, Source, Surfaces, Transform, World,
     frame::{Axis, SourceFrame},
 };
 use primase_meshops::vector::Vec3;
-use primase_reskate::dialect::SkatePrototype;
 use std::collections::BTreeMap;
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
@@ -33,30 +35,43 @@ pub struct Batch {
     pub start: usize,
     pub count: usize,
 }
+/// The surface of the largest colliding render area of a prototype's model: the first level-0 face set of each mesh
+/// whose material is drawn as opaque or cutout (not a skipped class, not a blocker card), its triangles posed as the
+/// rigid lowering poses them, degenerate ones (doubled area squared at most 1e-14) not counted.
 fn main_material(world: &World, prototype: primase_core::Entity) -> Result<i32> {
-    let mesh = world
-        .get::<Mesh>(prototype)
-        .ok_or_else(|| invalid("object collision", 0, "missing prototype mesh"))?;
+    let (Some(SourceModel(model)), Some(MaterialSlots(slots))) = (
+        world.get::<SourceModel>(prototype),
+        world.get::<MaterialSlots>(prototype),
+    ) else {
+        return Err(invalid(
+            "object collision",
+            0,
+            "prototype without its source model",
+        ));
+    };
+    let posed = crate::rigid::posed_positions(model).map_err(|e| invalid("object collision", 0, e))?;
     let mut areas = BTreeMap::<String, f64>::new();
-    for p in mesh.primitives() {
-        let Some(m) = p.material.and_then(|e| world.get::<Material>(e)) else {
-            continue;
+    for (mesh, positions) in model.meshes.iter().zip(&posed) {
+        let Some(m) = slots.get(mesh.material).and_then(|e| world.get::<Material>(*e)) else {
+            return Err(invalid("object collision", 0, "material slot"));
         };
-        if !["opaque", "cutout"].contains(&m.class.as_str()) {
+        if m.skip.is_some()
+            || super::blockers::is_card(m)
+            || !["opaque", "cutout"].contains(&m.class.as_str())
+        {
             continue;
         }
-        let Some(Stream::F32x3(pos)) = p.streams.get(&Semantic::Position) else {
-            return Err(invalid("object collision", 0, "missing position stream"));
+        let Some(face_set) = mesh.faces.iter().find(|f| f.is_lod0()) else {
+            continue;
         };
-        let indices = p
-            .indices
-            .clone()
-            .unwrap_or_else(|| (0..pos.len() as u32).collect());
+        let mut indices = face_set.triangulate();
+        indices.truncate(indices.len() / 3 * 3);
         for tri in indices.as_chunks::<3>().0 {
-            let a = Vec3::from(pos[tri[0] as usize]);
-            let b = Vec3::from(pos[tri[1] as usize]);
-            let c = Vec3::from(pos[tri[2] as usize]);
-            *areas.entry(m.surface.clone()).or_default() += f64::from((b - a).cross(c - a).length()) * 0.5;
+            let [a, b, c] = tri.map(|i| Vec3::from(FRAME.point(positions[i as usize])));
+            let cross = (b - a).cross(c - a);
+            if cross.length_squared() > 1e-14 {
+                *areas.entry(m.surface.clone()).or_default() += f64::from(cross.length()) * 0.5;
+            }
         }
     }
     let dominant = areas
@@ -91,7 +106,7 @@ pub fn assemble(
     // collision of objects present only in some world states, by the placement's condition (states read)
     let mut conditioned: BTreeMap<String, (Condition, Collision)> = BTreeMap::new();
     for (e, instance) in world.iter::<Instance>() {
-        let Some(proto) = world.get::<SkatePrototype>(instance.prototype) else {
+        let Some(proto) = world.get::<PrototypeSource>(instance.prototype) else {
             continue;
         };
         let Some(model) = proto.id.strip_prefix("obj/") else {
@@ -181,16 +196,10 @@ pub fn assemble(
         }
     }
     world.insert_resource(surfaces);
-    super::collision::attach(world, soup, "collision/objects.bin", false);
+    super::collision::attach(world, soup, "objects", false);
     for (n, (condition, soup)) in conditioned.into_values().enumerate() {
         report.conditioned_soups += 1;
-        super::collision::attach_when(
-            world,
-            soup,
-            &format!("collision/objects_state{n}.bin"),
-            false,
-            &condition,
-        );
+        super::collision::attach_when(world, soup, &format!("objects_state{n}"), false, &condition);
     }
     Ok(report)
 }

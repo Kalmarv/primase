@@ -1,65 +1,253 @@
-//! Sekiro area assembly: geometry, raw collision, ledges, lights and markers.
+//! Sekiro area reading: each placed model as its FLVER as stored, its materials as resolved source records, the
+//! texture files and layered-shader programs they bind, raw collision, lights, hang edges and spawn points, with
+//! typed source identities ([`source`]). Reading lowers nothing: geometry, materials, lights and extras become core
+//! data through the passes in [`passes`], which a program chooses and orders.
 pub mod blockers;
 pub mod collision;
 pub mod extras;
-pub mod ledges;
 pub mod lights;
 pub mod normals;
 pub mod objects;
+pub mod passes;
 pub mod pbr;
 mod shadows;
+pub mod source;
 pub mod states;
 mod textures;
 use crate::{
     Archive, Binder, Result,
     dcx::Decoder,
-    flver::{MaterialGeometry, Model},
+    flver::Model,
     invalid, materials,
     msb::{MapLayout, PartKind},
     mtd::MaterialDefinition,
 };
-use primase_core::{
-    ColorSpace, Instance, Mesh, Name, NormalGreen, NormalZ, Primitive, Semantic, Source, Stream, TexRole,
-    Topology, Transform, World,
-};
-use primase_reskate::dialect::{
-    FileRef, MinHeight, Part, SkateParts, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
-};
-pub use primase_reskate::interchange::prepare_assets;
+use primase_core::{Instance, Name, Source, Transform, World};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
 
-struct AreaGeometry {
-    area: String,
-    archive: Archive,
-    layout: MapLayout,
-    catalog: textures::Catalog,
-    report: Report,
-    prototypes: BTreeMap<String, Prototype>,
-    selected: Vec<(String, usize, Transform)>,
-    used: BTreeSet<String>,
-    blocker_cards: blockers::BlockerCards,
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// East/north rectangle in the source map frame that the read keeps: placements whose model's extent reaches it
+    /// within `region_margin`, collision triangles whose centre is within 50 m of it, lights and spawn points inside
+    /// it. None reads the whole area.
+    pub region: Option<[f32; 4]>,
+    /// Metres around the region within which a placement's extent must reach (the caller's choice; 30 m by default).
+    pub region_margin: f32,
+    /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
+    /// block's script, as axes and conditions for `resolve-state`.
+    pub states: StateClasses,
+}
+/// The state axis classes a read produces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StateClasses {
+    #[default]
+    None,
+    /// Event flags (`fromsoft.flag.<id>`) from the block's part-state common functions.
+    Event,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            region: None,
+            region_margin: 30.,
+            states: StateClasses::None,
+        }
+    }
+}
+/// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
+#[derive(Default, Debug)]
+pub struct Report {
+    /// The full area name read (`m11_01_00_00`).
+    pub area: String,
+    /// Selected placements' source shadow controls mapped to `core.shadows`
+    /// (units: placements). Counts contradictory cast/only controls left unknown
+    /// and names the renderer-specific controls kept only as `fromsoft.shadow_flags`.
+    pub shadows: primase_core::pass::PassLog,
+    pub extras: extras::Report,
+    pub collision: collision::Report,
+    pub object_collision: objects::Report,
+    pub prototypes: usize,
+    /// Prototypes of the distant-backdrop series (`fromsoft.prototype` `far`), and their placements.
+    pub far_prototypes: usize,
+    pub far_placements: usize,
+    pub placements: usize,
+    pub materials: usize,
+    /// Texture files kept as source payloads.
+    pub textures: usize,
+    /// Layered-shader programs kept.
+    pub shader_programs: usize,
+    pub missing_models: Vec<String>,
+    /// With `states: Event`: the rules read and the parts decided or left at their default.
+    pub states: Option<states::Report>,
+    /// Placements of models whose face sets use no vertex.
+    pub skipped_empty: usize,
+    /// Placements outside the region and its margin.
+    pub skipped_outside: usize,
+    /// Material slots of the kept prototypes, by source shader.
+    pub shader_parts: BTreeMap<String, usize>,
+}
+impl Report {
+    /// What the read left out or could not find, as notices for a conversion's report.
+    pub fn notices(&self) -> Vec<primase_core::convert::Notice> {
+        use primase_core::convert::{Notice, NoticeKind};
+        let stage = "fromsoft reader";
+        let mut out = Vec::new();
+        if !self.missing_models.is_empty() {
+            let mut n = Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "placed models not found in the archive",
+                self.missing_models.len() as u64,
+            );
+            for m in &self.missing_models {
+                n = n.example(m.clone());
+            }
+            out.push(n);
+        }
+        for (count, reason) in [
+            (
+                self.skipped_outside,
+                "placements outside the region and its margin",
+            ),
+            (
+                self.collision.outside_region_triangles,
+                "map collision triangles more than 50 m outside the region",
+            ),
+            (
+                self.object_collision.outside_region_triangles,
+                "object collision triangles more than 50 m outside the region",
+            ),
+        ] {
+            if count > 0 {
+                out.push(Notice::new(stage, NoticeKind::Selection, reason, count as u64));
+            }
+        }
+        for (count, reason) in [
+            (
+                self.skipped_empty,
+                "placements of models whose face sets use no vertex",
+            ),
+            (
+                self.collision.excluded_material_triangles,
+                "map collision triangles of blocker, cloud or water-surface materials not kept as ground",
+            ),
+            (
+                self.object_collision.excluded_material_triangles,
+                "object collision triangles of blocker, cloud or water-surface materials not kept",
+            ),
+            (
+                self.object_collision.keyframed_left_out.len(),
+                "keyframed object bodies (motion type 2) not kept",
+            ),
+            (
+                self.collision.omitted_filters.values().sum::<usize>(),
+                "collision parts of other hit filters than 8 and 27 not kept",
+            ),
+        ] {
+            if count > 0 {
+                out.push(Notice::new(stage, NoticeKind::Unsupported, reason, count as u64));
+            }
+        }
+        if !self.collision.missing_files.is_empty() {
+            let mut n = Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "collision files named by the MSB but not in the area's binder",
+                self.collision.missing_files.len() as u64,
+            );
+            for f in &self.collision.missing_files {
+                n = n.example(f.clone());
+            }
+            out.push(n);
+        }
+        if self.extras.missing_light_bank {
+            out.push(Notice::new(stage, NoticeKind::Unsupported, "no light bank 0", 1));
+        }
+        if self.extras.missing_edge_binder {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "no hang-edge binder",
+                1,
+            ));
+        }
+        out
+    }
 }
 
-/// Read the same selected geometry as `read_area`, retaining only blocker records.
-/// This inventory does not decode texture pixels or choose a consumer normal basis.
-pub fn read_blocker_cards(
+fn area_name(area: &str) -> Result<String> {
+    let value = if area.len() == 6 {
+        format!("{area}_00_00")
+    } else {
+        area.to_owned()
+    };
+    if value.len() != 12
+        || !value.bytes().enumerate().all(|(i, b)| match i {
+            0 => b == b'm',
+            3 | 6 | 9 => b == b'_',
+            _ => b.is_ascii_digit(),
+        })
+    {
+        return Err(invalid("Sekiro area", 0, "expected mNN_NN or mNN_NN_NN_NN"));
+    }
+    Ok(value)
+}
+fn point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| t.cols[0][i] * p[0] + t.cols[1][i] * p[1] + t.cols[2][i] * p[2] + t.cols[3][i])
+}
+/// Whether a placement of a model with world-frame box `[min, max]` reaches the region within its margin.
+fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
+    let Some(r) = o.region else { return true };
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for mask in 0..8 {
+        let p = point(
+            t,
+            std::array::from_fn(|i| bounds[usize::from(mask & (1 << i) != 0)][i]),
+        );
+        let p = [p[0], p[1], -p[2]];
+        for i in 0..3 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    max[0] >= r[0] - o.region_margin
+        && min[0] < r[2] + o.region_margin
+        && max[2] >= r[1] - o.region_margin
+        && min[2] < r[3] + o.region_margin
+}
+
+/// A read model: the FLVER as stored, its resolved materials, and its posed extent in the world frame.
+struct Prototype {
+    model: Model,
+    materials: Vec<materials::Material>,
+    bounds: Option<[[f32; 3]; 2]>,
+}
+
+/// Read an area directly from installed archives into an empty world. The caller supplies its trusted
+/// decompressor; no environment variables or install paths are guessed. On failure the destination world is
+/// unchanged.
+///
+/// Each prototype holds its model as stored (`fromsoft.flver`), its source identity (`fromsoft.prototype`, with the
+/// distant-backdrop class) and the material entity of each of its FLVER materials (`fromsoft.material_slots`, each
+/// holding `fromsoft.material`). Placements are `core.instance` with their MSB transform, source label, shadow
+/// controls and, with states read, conditions. Every texture a kept material binds is kept as stored
+/// (`fromsoft.texture_payloads`), and the G-buffer programs of its layered materials (`fromsoft.shader_programs`).
+/// Collision soups carry `fromsoft.collision`; lights are `fromsoft.light` records where they stand; hang edges and
+/// spawn points are `fromsoft.area_extras`.
+pub fn read_area(
     install: impl AsRef<Path>,
     area: &str,
     decoder: &Decoder<'_>,
     options: &Options,
-) -> Result<blockers::BlockerCards> {
-    Ok(select_geometry(install.as_ref(), area, decoder, options)?.blocker_cards)
-}
-
-fn select_geometry(
-    install: &Path,
-    area: &str,
-    decoder: &Decoder<'_>,
-    options: &Options,
-) -> Result<AreaGeometry> {
+    destination: &mut World,
+) -> Result<Report> {
+    if destination.entities().next().is_some() {
+        return Err(invalid("Sekiro area", 0, "destination must be empty"));
+    }
     if !options.region_margin.is_finite()
         || options.region_margin < 0.
         || options
@@ -69,7 +257,7 @@ fn select_geometry(
         return Err(invalid("Sekiro area", 0, "invalid region"));
     }
     let area = area_name(area)?;
-    let archive = Archive::open(install)?;
+    let archive = Archive::open(install.as_ref())?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let mut catalog = textures::Catalog::discover(&archive, decoder, &area[..3])?;
     let mut definitions = BTreeMap::new();
@@ -90,10 +278,6 @@ fn select_geometry(
             let Some(model) = p.model.map(|i| layout.models[i].name.as_str()) else {
                 continue;
             };
-            if kind == PartKind::MapPiece && !options.include_far && model.starts_with("m9") {
-                report.skipped_far += 1;
-                continue;
-            }
             let key = format!("{}/{model}", if kind == PartKind::Object { "obj" } else { &area });
             requests.insert(key.clone());
             placements.push((key, p));
@@ -134,9 +318,7 @@ fn select_geometry(
             continue;
         };
         let model = Model::read(&f.bytes)?;
-        let model = crate::rigid::lower_model(&model, &mut report.rigid_skinning)
-            .map_err(|e| invalid("rigid skinning", 0, e))?;
-        let resolved: Vec<_> = model
+        let materials = model
             .materials
             .iter()
             .map(|m| {
@@ -145,281 +327,53 @@ fn select_geometry(
                 })
             })
             .collect();
-        let choices: Vec<_> = resolved
-            .iter()
-            .map(|m| MaterialGeometry {
-                skip: m.skip.is_some(),
-                uv_scale: m.uv_scale,
-            })
-            .collect();
-        let parts = model.geometry(&choices)?;
-        let mut min = [f32::INFINITY; 3];
-        let mut max = [f32::NEG_INFINITY; 3];
-        let mut materials = Vec::new();
-        let mut primitives = Vec::new();
-        let mut cards = Vec::new();
-        for part in parts {
-            for p in &part.mesh.positions {
-                for i in 0..3 {
-                    min[i] = min[i].min(p[i]);
-                    max[i] = max[i].max(p[i]);
-                }
-            }
-            if blockers::is_card(&resolved[part.material]) {
-                let material = resolved[part.material].clone();
-                cards.push(blockers::Card::from_part(part, material));
-                continue;
-            }
-            materials.push(resolved[part.material].clone());
-            let tangents = part.tangents;
-            primitives.push(Primitive {
-                topology: Topology::Triangles,
-                streams: BTreeMap::from([
-                    (Semantic::Position, Stream::F32x3(part.mesh.positions)),
-                    (Semantic::Normal, Stream::F32x3(part.mesh.normals)),
-                    (Semantic::TexCoord(0), Stream::F32x2(part.mesh.uv)),
-                ]),
-                indices: Some(part.mesh.indices),
-                material: None,
-            });
-            if !tangents.is_empty() {
-                primitives
-                    .last_mut()
-                    .expect("inserted primitive")
-                    .streams
-                    .insert(Semantic::Tangent, Stream::F32x4(tangents));
-            }
-        }
+        let bounds = crate::rigid::posed_bounds(&model)
+            .map_err(|e| invalid("Sekiro model", 0, format!("{key}: {e}")))?
+            .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]);
         prototypes.insert(
             key,
             Prototype {
-                cards,
-                mesh: Mesh::new(primitives),
+                model,
                 materials,
-                min,
-                max,
+                bounds,
             },
         );
     }
-    let mut blocker_cards = blockers::BlockerCards::default();
     let mut selected = Vec::new();
     let mut used = BTreeSet::new();
     for (key, p) in placements {
-        let Some(proto) = prototypes
-            .get(&key)
-            .filter(|p| !p.mesh.primitives().is_empty() || !p.cards.is_empty())
-        else {
+        let Some(bounds) = prototypes.get(&key).and_then(|p| p.bounds.as_ref()) else {
             report.skipped_empty += 1;
             continue;
         };
         let transform = p.transform()?;
-        if !inside(proto, &transform, options) {
+        if !inside(bounds, &transform, options) {
             report.skipped_outside += 1;
-            continue;
-        }
-        blocker_cards.record(&key, format!("{area}:{}", p.name), &transform, &proto.cards);
-        if proto.mesh.primitives().is_empty() {
-            report.skipped_empty += 1;
             continue;
         }
         used.insert(key.clone());
         selected.push((key, p.index, transform));
     }
-    Ok(AreaGeometry {
-        area,
-        archive,
-        layout,
-        catalog,
-        report,
-        prototypes,
-        selected,
-        used,
-        blocker_cards,
-    })
-}
+    prototypes.retain(|key, _| used.contains(key));
 
-#[derive(Clone, Debug)]
-pub struct Options {
-    /// East/north rectangle in the source map frame. None imports the whole area.
-    pub region: Option<[f32; 4]>,
-    pub region_margin: f32,
-    pub include_far: bool,
-    /// Pin the source floor in metres for a shared scene lift to 100.01 m.
-    /// None emits no floor policy; geometry stays in the source world frame.
-    pub floor: Option<f64>,
-    /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
-    /// block's script, as axes and conditions for `resolve-state`.
-    pub states: StateClasses,
-}
-/// The state axis classes a read produces.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum StateClasses {
-    #[default]
-    None,
-    /// Event flags (`fromsoft.flag.<id>`) from the block's part-state common functions.
-    Event,
-}
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            region: None,
-            region_margin: 30.,
-            include_far: false,
-            floor: None,
-            states: StateClasses::None,
-        }
-    }
-}
-impl Options {
-    fn min_height(&self) -> Result<Option<MinHeight>> {
-        self.floor
-            .map(|floor| {
-                if !floor.is_finite() || !(-1e6..=1e6).contains(&floor) {
-                    return Err(invalid(
-                        "Sekiro area",
-                        0,
-                        "floor must be finite and within +/-1000000 metres",
-                    ));
-                }
-                Ok(MinHeight {
-                    height: Some(100.01),
-                    stub_below: Some(250.),
-                    floor: Some(floor),
-                    other: Default::default(),
-                })
-            })
-            .transpose()
-    }
-}
-#[derive(Default, Debug)]
-pub struct Report {
-    pub blocker_meshes: usize,
-    pub blocker_placements: usize,
-    pub blocker_triangles: usize,
-    pub rigid_skinning: primase_core::pass::PassLog,
-    /// Selected placements' source shadow controls mapped to `core.shadows`
-    /// (units: placements). Counts contradictory cast/only controls left unknown
-    /// and names the renderer-specific controls kept only as `fromsoft.shadow_flags`.
-    pub shadows: primase_core::pass::PassLog,
-    pub extras: extras::Report,
-    pub collision: collision::Report,
-    pub object_collision: objects::Report,
-    pub prototypes: usize,
-    pub placements: usize,
-    pub materials: usize,
-    pub textures: usize,
-    pub missing_models: Vec<String>,
-    /// With `states: Event`: the rules read and the parts decided or left at their default.
-    pub states: Option<states::Report>,
-    pub skipped_far: usize,
-    pub skipped_empty: usize,
-    pub skipped_outside: usize,
-    pub normal_basis_assumptions: BTreeMap<String, usize>,
-    pub shader_parts: BTreeMap<String, usize>,
-}
-struct Prototype {
-    cards: Vec<blockers::Card>,
-    mesh: Mesh,
-    materials: Vec<materials::Material>,
-    min: [f32; 3],
-    max: [f32; 3],
-}
-fn file(path: String) -> FileRef {
-    FileRef { path, sha256: None }
-}
-fn area_name(area: &str) -> Result<String> {
-    let value = if area.len() == 6 {
-        format!("{area}_00_00")
-    } else {
-        area.to_owned()
-    };
-    if value.len() != 12
-        || !value.bytes().enumerate().all(|(i, b)| match i {
-            0 => b == b'm',
-            3 | 6 | 9 => b == b'_',
-            _ => b.is_ascii_digit(),
-        })
-    {
-        return Err(invalid("Sekiro area", 0, "expected mNN_NN or mNN_NN_NN_NN"));
-    }
-    Ok(value)
-}
-fn point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| t.cols[0][i] * p[0] + t.cols[1][i] * p[1] + t.cols[2][i] * p[2] + t.cols[3][i])
-}
-fn inside(proto: &Prototype, t: &Transform, o: &Options) -> bool {
-    let Some(r) = o.region else { return true };
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for mask in 0..8 {
-        let p = point(
-            t,
-            std::array::from_fn(|i| {
-                if mask & (1 << i) == 0 {
-                    proto.min[i]
-                } else {
-                    proto.max[i]
-                }
-            }),
-        );
-        let p = [p[0], p[1], -p[2]];
-        for i in 0..3 {
-            min[i] = min[i].min(p[i]);
-            max[i] = max[i].max(p[i]);
-        }
-    }
-    max[0] >= r[0] - o.region_margin
-        && min[0] < r[2] + o.region_margin
-        && max[2] >= r[1] - o.region_margin
-        && min[2] < r[3] + o.region_margin
-}
-/// Read an area directly from installed archives into an empty world. The caller
-/// supplies its trusted decompressor; no environment variables or install paths
-/// are guessed. On failure the destination world is unchanged.
-pub fn read_area(
-    install: impl AsRef<Path>,
-    area: &str,
-    decoder: &Decoder<'_>,
-    options: &Options,
-    destination: &mut World,
-) -> Result<Report> {
-    if destination.entities().next().is_some() {
-        return Err(invalid("Sekiro area", 0, "destination must be empty"));
-    }
-    let min_height = options.min_height()?;
-    let AreaGeometry {
-        area,
-        archive,
-        layout,
-        catalog,
-        mut report,
-        mut prototypes,
-        selected,
-        used,
-        blocker_cards,
-    } = select_geometry(install.as_ref(), area, decoder, options)?;
     let mut wanted = BTreeSet::new();
-    let mut roles = BTreeSet::new();
-    for key in &used {
-        for m in &prototypes[key].materials {
+    let mut layered = Vec::new();
+    for proto in prototypes.values() {
+        for m in &proto.materials {
             *report.shader_parts.entry(m.shader.clone()).or_default() += 1;
-            if !normals::consumer_basis(&m.shader)? {
-                *report
-                    .normal_basis_assumptions
-                    .entry(m.shader.clone())
-                    .or_default() += 1;
-            }
-            for (name, normal) in [(&m.albedo, false), (&m.normal, true)] {
-                if let Some(name) = name
-                    && catalog.entries.contains_key(name)
-                {
-                    wanted.insert(name.clone());
-                    roles.insert((name.clone(), normal));
+            for b in m.bindings.values() {
+                if catalog.entries.contains_key(&b.texture) {
+                    wanted.insert(b.texture.clone());
                 }
             }
+            layered.extend(m.layered.as_ref());
         }
     }
     let payloads = catalog.load(&archive, decoder, &wanted)?;
+    let programs = shader_programs(&archive, decoder, layered.into_iter())?;
+    report.textures = payloads.len();
+    report.shader_programs = programs.len();
+
     let mut world = World::default();
     let mut states = match options.states {
         StateClasses::None => None,
@@ -431,52 +385,11 @@ pub fn read_area(
             Some(s)
         }
     };
-    report.blocker_meshes = blocker_cards.meshes();
-    report.blocker_placements = blocker_cards.placements.len();
-    report.blocker_triangles = blocker_cards.triangles();
-    world.insert_resource(blocker_cards);
-    let mut texture_entities = BTreeMap::new();
-    for (name, normal) in roles {
-        let mut texture = primase_dds::read(&payloads[&name]).map_err(|e| invalid("Sekiro DDS", 0, e))?;
-        texture.role = if normal { TexRole::Normal } else { TexRole::Color };
-        texture.color_space = if normal {
-            ColorSpace::Linear
-        } else {
-            ColorSpace::Srgb
-        };
-        texture.normal = normal.then_some(normals::SOURCE);
-        let key = if normal {
-            format!("{name}@normal")
-        } else {
-            name.clone()
-        };
-        let output = format!("textures/{key}.png");
-        let e = world.spawn();
-        world.insert(e, Name(key.clone()));
-        world.insert(e, texture);
-        world.insert(
-            e,
-            SkateTexture {
-                key,
-                file: file(output),
-                stem: None,
-                source_format: None,
-                source_size: None,
-                linear: Some(normal),
-                green: normal.then_some(NormalGreen::Up),
-                z: normal.then_some(NormalZ::Rebuild),
-                other: Default::default(),
-            },
-        );
-        texture_entities.insert((name, normal), e);
-        report.textures += 1;
-    }
     let mut proto_entities = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
-    for key in used {
-        let mut proto = prototypes.remove(&key).expect("selected");
-        let mut parts = Vec::new();
-        for (primitive, m) in proto.mesh.primitives_mut().iter_mut().zip(proto.materials) {
+    for (key, proto) in prototypes {
+        let mut slots = Vec::with_capacity(proto.materials.len());
+        for m in proto.materials {
             let identity = primase_core::json::to_value(&m)
                 .map_err(|e| invalid("Sekiro material", 0, e))?
                 .to_string();
@@ -484,50 +397,32 @@ pub fn read_area(
                 *e
             } else {
                 let e = world.spawn();
-                let material_key = format!("material_{:06}", material_entities.len());
-                world.insert(
-                    e,
-                    m.skate_material(material_key, |n, normal| {
-                        texture_entities.get(&(n.to_owned(), normal)).copied()
-                    }),
-                );
                 world.insert(e, Name(m.albedo.clone().unwrap_or_else(|| m.mtd.clone())));
                 if let Some(layered) = &m.layered {
                     world.insert(e, layered.clone());
                 }
-                world.insert(e, m.clone());
+                world.insert(e, m);
                 material_entities.insert(identity, e);
                 report.materials += 1;
                 e
             };
-            primitive.material = Some(e);
-            parts.push(Part {
-                source: Some(serde_json::json!({"shader":format!("{} / {}",m.shader,m.mtd)})),
-                ..Default::default()
-            });
+            slots.push(e);
         }
+        let far = key.starts_with(&format!("{area}/m9"));
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
-        world.insert(e, proto.mesh);
-        world.insert(
-            e,
-            SkatePrototype {
-                id: key.clone(),
-                glb: Some(file(format!("prototypes/{}.glb", key.replace('/', "_")))),
-                key: None,
-                foliage: None,
-                ground: None,
-                collision: None,
-                other: Default::default(),
-            },
-        );
-        world.insert(e, SkateParts(parts));
-        proto_entities.insert(key, e);
+        world.insert(e, crate::rigid::SourceModel(proto.model));
+        world.insert(e, source::MaterialSlots(slots));
+        world.insert(e, source::PrototypeSource { id: key.clone(), far });
+        proto_entities.insert(key, (e, far));
         report.prototypes += 1;
+        report.far_prototypes += usize::from(far);
     }
+    world.insert_resource(source::TexturePayloads(payloads));
+    world.insert_resource(source::ShaderPrograms(programs));
     for (key, index, transform) in selected {
         let part = &layout.parts[index];
-        let name = &part.name;
+        let (prototype, far) = proto_entities[&key];
         let e = world.spawn();
         if let Some(s) = states.as_mut()
             && let Some(clause) = s.clause(part)
@@ -537,15 +432,15 @@ pub fn read_area(
         world.insert(
             e,
             Instance {
-                prototype: proto_entities[&key],
+                prototype,
                 variant: 0,
             },
         );
         world.insert(e, transform);
-        world.insert(e, Source(format!("{area}:{name}")));
+        world.insert(e, Source(format!("{area}:{}", part.name)));
         shadows::attach(&mut world, e, part.shadows, &mut report.shadows);
-        world.insert(e, SkatePlacement::default());
         report.placements += 1;
+        report.far_placements += usize::from(far);
     }
     report.collision = collision::assemble(
         &archive,
@@ -558,65 +453,80 @@ pub fn read_area(
     )?;
     report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
     report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
-    let cards = world
-        .resource::<blockers::BlockerCards>()
-        .expect("recorded cards");
-    let extension = primase_core::json::to_value(cards).map_err(|e| invalid("blocker cards", 0, e))?;
-    let other = serde_json::Map::from_iter([(
-        "extensions".into(),
-        serde_json::json!({
-            "sekiro": { "blocker_cards": {
-                "rule": blockers::RULE, "drawn": false,
-                "placement_count": report.blocker_placements,
-                "triangles": report.blocker_triangles,
-                "records": extension
-            }}
-        }),
-    )]);
-    world.insert_resource(SkateScene {
-        name: format!("sekiro_{area}"),
-        generator: Some("primase".into()),
-        region: options.region,
-        min_height,
-        other,
-        placements: Some(TableRef::single("tables/placements.bin")),
-        lights: Some(TableRef::single("tables/lights.bin")),
-        grind_curves: Some(TableRef::single("tables/grind.bin")),
-        warnings: Some(vec![
-            "Unbaked geometry and raw collision; roof smoothing and opened-up surfaces are not imported. Lights use the named sRGB/intensity/spot-axis conversion policy.".into(),
-        ]),
-        ..Default::default()
-    });
     report.states = states.map(|s| s.report);
+    report.area = area;
     *destination = world;
     Ok(report)
 }
 
+/// The G-buffer programs of the given layered materials, from the installed shader bundles.
+fn shader_programs<'a>(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    materials: impl Iterator<Item = &'a materials::LayeredMaterial>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let wanted = materials
+        .map(materials::LayeredMaterial::program_name)
+        .collect::<Result<BTreeSet<_>>>()?;
+    let mut programs = BTreeMap::new();
+    if wanted.is_empty() {
+        return Ok(programs);
+    }
+    let outer = Binder::read(
+        &archive.read("/shader/shaderbdle.shaderbdlebnd.dcx", decoder)?,
+        decoder,
+    )?;
+    let leaf = |name: Option<&str>| {
+        name.unwrap_or("")
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .to_owned()
+    };
+    for file in outer.files {
+        if !matches!(
+            leaf(file.name.as_deref()).as_str(),
+            "M[Multiple].shaderbdle" | "M[MultipleGround].shaderbdle" | "M[Multiple]_Emissive.shaderbdle"
+        ) {
+            continue;
+        }
+        for shader in Binder::read(&file.bytes, decoder)?.files {
+            let name = leaf(shader.name.as_deref());
+            if wanted.contains(&name) {
+                programs.insert(name, shader.bytes);
+            }
+        }
+    }
+    Ok(programs)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Options;
+    use super::Report;
+    use primase_core::convert::NoticeKind;
+
     #[test]
-    fn floor_policy_preserves_the_shared_height_without_rounding() {
-        assert!(Options::default().min_height().unwrap().is_none());
-        let policy = Options {
-            floor: Some(-81.60212345),
-            ..Options::default()
-        }
-        .min_height()
-        .unwrap()
-        .unwrap();
-        assert_eq!(policy.floor, Some(-81.60212345));
-        assert_eq!(policy.height, Some(100.01));
-        assert_eq!(policy.stub_below, Some(250.));
-        for floor in [f64::NAN, f64::INFINITY, -1000001., 1000001.] {
-            assert!(
-                Options {
-                    floor: Some(floor),
-                    ..Options::default()
-                }
-                .min_height()
-                .is_err()
-            );
-        }
+    fn notices_name_what_the_read_left_out_by_kind() {
+        let mut report = Report {
+            missing_models: vec!["obj/o000001".into()],
+            skipped_outside: 7,
+            ..Report::default()
+        };
+        report.collision.missing_files = vec!["h11_00_00_00_009500.hkx".into()];
+        report.extras.missing_light_bank = true;
+        let notices = report.notices();
+        let find = |reason: &str| notices.iter().find(|n| n.reason.starts_with(reason)).unwrap();
+        let models = find("placed models not found");
+        assert_eq!((models.kind, models.count), (NoticeKind::Unsupported, 1));
+        assert_eq!(models.examples, ["obj/o000001"]);
+        let outside = find("placements outside the region");
+        assert_eq!((outside.kind, outside.count), (NoticeKind::Selection, 7));
+        assert_eq!(
+            find("collision files named").examples,
+            ["h11_00_00_00_009500.hkx"]
+        );
+        assert_eq!(find("no light bank").count, 1);
+        assert_eq!(notices.len(), 4, "{notices:?}");
+        assert!(Report::default().notices().is_empty());
     }
 }

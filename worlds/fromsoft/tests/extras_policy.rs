@@ -1,10 +1,11 @@
-use primase_core::Transform;
+use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::{Light, LightKind, Transform, World};
 use primase_fromsoft::{
-    btl::{Kind, Light},
-    sekiro::lights::SrgbLightPolicy,
+    btl::{Kind, Light as BtlLight},
+    sekiro::{extras::light_record, passes, source::LightSource},
 };
-fn light() -> Light {
-    Light {
+fn light() -> BtlLight {
+    BtlLight {
         name: "fixture".into(),
         kind: Kind::Spot,
         diffuse: [0, 128, 255],
@@ -19,69 +20,101 @@ fn light() -> Light {
         auxiliary: Default::default(),
     }
 }
+const IDENTITY: Transform = Transform {
+    cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
+};
+/// The records of `lights` lowered by `pipeline`, with the report.
+fn lowered(lights: &[BtlLight], pipeline: &str) -> Result<(World, RunReport), String> {
+    let mut world = World::default();
+    for l in lights {
+        let (t, record) = light_record(l, &IDENTITY).map_err(|e| e.to_string())?;
+        let e = world.spawn();
+        world.insert(e, t);
+        world.insert(e, record);
+    }
+    let mut registry = PassRegistry::new();
+    passes::register(&mut registry);
+    let manager = PassManager::new(registry);
+    let mut report = RunReport::default();
+    manager
+        .run(
+            &mut world,
+            &manager.registry.parse(pipeline).map_err(|e| e.to_string())?,
+            &mut report,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((world, report))
+}
 #[test]
-fn named_srgb_energy_and_axis_policy() {
-    let identity = Transform {
-        cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
-    };
-    let l = SrgbLightPolicy::default().convert(&light(), &identity).unwrap();
-    assert_eq!(l.position, [1., 2., -3.]);
-    assert_eq!(l.direction, [0., 0., -1.]);
-    assert_eq!(l.tangent, [1., 0., 0.]);
-    assert_eq!(l.energy, 200.);
-    assert_eq!(l.range, 5.);
-    assert!(l.cast_shadow);
-    assert_eq!(l.color[0], 0.);
-    assert_eq!(l.color[2], 1.);
-    assert!((l.color[1] - 0.2158605).abs() < 1e-7);
-    let reference = (128f64 / 255.).powf(2.2);
-    assert!((f64::from(l.color[1]) - reference).abs() > 0.003);
-    let mut l = light();
-    l.rotation = [0., 90., 0.];
-    let out = SrgbLightPolicy::default().convert(&l, &identity).unwrap();
-    assert!((out.direction[0] - 1.).abs() < 1e-6);
-    assert!(out.direction[2].abs() < 1e-6);
-    l.kind = Kind::Point;
-    let point = SrgbLightPolicy::default().convert(&l, &identity).unwrap();
-    assert_eq!(point.spot_size, 0.);
-    assert_eq!(point.spot_blend, 0.);
-    assert_eq!(point.time_of_day, 127);
-    assert!(
-        SrgbLightPolicy {
-            watts_per_power: f32::NAN
-        }
-        .convert(&l, &identity)
-        .is_err()
+fn source_light_records_and_their_lowering() {
+    // the record: where the light stands (Z mirrored into the world frame), what it stores
+    let (t, record) = light_record(&light(), &IDENTITY).unwrap();
+    assert_eq!(t.cols[3], [1., 2., -3.]);
+    // the beam is the transform's local -Z
+    assert_eq!(t.cols[2].map(|x| -x), [0., 0., -1.]);
+    assert_eq!(record.tangent, [1., 0., 0.]);
+    assert_eq!(
+        (record.diffuse_power, record.radius, record.cone_angle),
+        (2., 5., 30.)
     );
-    l.kind = Kind::Directional;
-    assert!(SrgbLightPolicy::default().convert(&l, &identity).is_err());
+    let mut turned = light();
+    turned.rotation = [0., 90., 0.];
+    let (t, record) = light_record(&turned, &IDENTITY).unwrap();
+    assert!((-t.cols[2][0] - 1.).abs() < 1e-6 && t.cols[2][2].abs() < 1e-6);
+    assert!((record.tangent[2] - 1.).abs() < 1e-6, "{:?}", record.tangent);
+
+    // the old route's calibration, as a program states it: 100 Studio watts per unit, P = 4 pi^2 I
+    let calibration = 100. / (4. * std::f64::consts::PI * std::f64::consts::PI);
+    let mut point = light();
+    point.kind = Kind::Point;
+    point.radius = 0.25;
+    let mut directional = light();
+    directional.kind = Kind::Directional;
+    let (world, report) = lowered(
+        &[light(), point, directional],
+        &format!("lower-fromsoft-lights{{candela-per-power={calibration},min-range=0.5}}"),
+    )
+    .unwrap();
+    let lights: Vec<&Light> = world.iter::<Light>().map(|(_, l)| l).collect();
+    assert_eq!(lights.len(), 2);
+    let spot = lights[0];
+    assert_eq!(spot.intensity, (2. * calibration) as f32);
+    assert_eq!(spot.range, Some(5.));
+    assert_eq!(spot.cast_shadows, Some(true));
+    assert_eq!(
+        spot.kind,
+        LightKind::Spot {
+            inner_cone: 60f32.to_radians() / 2. * 0.85,
+            outer_cone: 60f32.to_radians() / 2.
+        }
+    );
+    // exact sRGB, not a 2.2 power
+    assert_eq!(spot.color[0], 0.);
+    assert_eq!(spot.color[2], 1.);
+    assert!((spot.color[1] - 0.2158605).abs() < 1e-7);
+    assert!((f64::from(spot.color[1]) - (128f64 / 255.).powf(2.2)).abs() > 0.003);
+    assert_eq!(lights[1].kind, LightKind::Point);
+    assert_eq!(lights[1].range, Some(0.5));
+    // the raw record stays beside the core light
+    assert_eq!(world.iter::<LightSource>().count(), 3);
+    let log = &report.steps[0].log;
+    assert_eq!(log.counts["lights lowered"], 2);
+    assert_eq!(log.counts["directional lights not lowered"], 1);
+    assert_eq!(log.counts["ranges raised to the minimum"], 1);
+    assert_eq!(log.approximations["colour bytes read as sRGB"], 2);
+    assert_eq!(log.approximations["spot inner cone from the fixed blend"], 1);
+
+    // the calibration is the program's: no default, and bad numbers are refused
+    for pipeline in [
+        "lower-fromsoft-lights",
+        "lower-fromsoft-lights{candela-per-power=nan}",
+        "lower-fromsoft-lights{candela-per-power=1,spot-blend=2}",
+        "lower-fromsoft-lights{candela-per-power=-1}",
+    ] {
+        assert!(lowered(&[light()], pipeline).is_err(), "{pipeline}");
+    }
 }
 
-#[test]
-fn ledge_join_uses_distance_across_cells_not_cell_identity() {
-    use primase_fromsoft::sekiro::ledges::{GameSurfaceIndex, chain};
-    let surface = GameSurfaceIndex::new(&[], &primase_core::Surfaces::default()).unwrap();
-    let joined = chain(
-        &[[[-1., 0., 0.], [0.009, 0., 0.]], [[0.011, 0., 0.], [1., 0., 0.]]],
-        0.,
-        |_| true,
-        &surface,
-    )
-    .unwrap();
-    assert_eq!(joined.len(), 1);
-    assert_eq!(joined[0].points, [[-1., 0., 0.], [0.009, 0., 0.], [1., 0., 0.]]);
-    let separate = chain(
-        &[
-            [[-1., 0., 0.], [0.001, 0.001, 0.001]],
-            [[0.009, 0.009, 0.009], [1., 0., 0.]],
-        ],
-        0.,
-        |_| true,
-        &surface,
-    )
-    .unwrap();
-    assert_eq!(separate.len(), 2);
-}
 #[test]
 fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     use primase_fromsoft::msb::{MapLayout, Section};
@@ -107,46 +140,78 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     assert_eq!(p[0].position, [1., 2., 3.]);
     assert_eq!(p[0].rotation_degrees, [4., 5., 6.]);
 }
+
 #[test]
-fn ledges_chain_closed_and_open_segments_and_use_only_supplied_map_surfaces() {
-    use primase_core::{Collision, Surfaces};
-    use primase_fromsoft::sekiro::ledges::{GameSurfaceIndex, chain};
-    let mut surfaces = Surfaces::default();
-    let wood = surfaces.index("wood").unwrap();
-    let map = Collision {
-        positions: vec![[-5., 0., -5.], [5., 0., -5.], [0., 0., 5.]],
-        triangles: vec![[0, 1, 2]],
-        surfaces: vec![wood],
-    };
-    let surface = GameSurfaceIndex::new(&[&map], &surfaces).unwrap();
-    let curves = chain(
-        &[
-            [[0., 1., 0.], [1., 1., 0.]],
-            [[1., 1., 0.], [1., 1., 1.]],
-            [[1., 1., 1.], [0., 1., 0.]],
+fn extras_become_ledge_curves_and_travel_markers_in_source_order() {
+    use primase_core::{Curve, Marker, Name, Source};
+    use primase_fromsoft::sekiro::source::{AreaExtras, HangSegment, SpawnPoint, SpawnRotation};
+    let mut world = World::default();
+    world.insert_resource(AreaExtras {
+        hang_segments: vec![
+            HangSegment {
+                file: "a.edge".into(),
+                points: [[0., 1., 0.], [1., 1., 0.]],
+            },
+            HangSegment {
+                file: "b.edge".into(),
+                points: [[5., 0., 0.], [5., 0., 2.]],
+            },
+            HangSegment {
+                file: "a.edge".into(),
+                points: [[1., 1., 0.], [1., 1., 1.]],
+            },
         ],
-        1.,
-        |_| true,
-        &surface,
-    )
-    .unwrap();
-    assert_eq!(curves.len(), 1);
-    assert!(curves[0].closed);
-    assert_eq!(curves[0].points.len(), 3);
-    assert_eq!(curves[0].surface, 4);
-    let empty = GameSurfaceIndex::new(&[], &primase_core::Surfaces::default()).unwrap();
+        spawn_points: vec![SpawnPoint {
+            name: "チェックポイント_1".into(),
+            position: [1., 2., -3.],
+            rotation_degrees: [0., 90., 0.],
+        }],
+    });
+    let mut registry = PassRegistry::new();
+    passes::register(&mut registry);
+    let manager = PassManager::new(registry);
+    let mut report = RunReport::default();
+    manager
+        .run(
+            &mut world,
+            &manager.registry.parse("lower-fromsoft-extras").unwrap(),
+            &mut report,
+        )
+        .unwrap();
+    assert!(world.resource::<AreaExtras>().is_none());
+    let curves: Vec<(&Curve, &str)> = world
+        .iter::<Curve>()
+        .map(|(e, c)| (c, world.get::<Source>(e).unwrap().0.as_str()))
+        .collect();
+    // one curve per stored segment, unjoined, labelled by its place in its file
+    assert_eq!(curves.len(), 3);
+    assert_eq!(curves[0].0.points, [[0., 1., 0.], [1., 1., 0.]]);
+    assert_eq!(curves[0].0.kind, "ledge");
+    assert!(!curves[0].0.closed);
     assert_eq!(
-        chain(&[[[0., 0., 0.], [2., 0., 0.]]], 1., |_| true, &empty).unwrap()[0].surface,
-        3
+        curves.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
+        ["a.edge:0", "b.edge:0", "a.edge:1"]
     );
-    assert!(
-        chain(&[[[0., 0., 0.], [0.5, 0., 0.]]], 1., |_| true, &empty)
-            .unwrap()
-            .is_empty()
+    let (e, marker) = world.iter::<Marker>().next().unwrap();
+    assert_eq!(
+        (marker.kind.as_str(), marker.ground, marker.yaw),
+        ("travel", None, None)
     );
-    assert!(
-        chain(&[[[0., 0., 0.], [2., 0., 0.]]], 1., |_| false, &empty)
-            .unwrap()
-            .is_empty()
+    // placed, not turned: the stored rotation stays as source data; the name as stored
+    assert_eq!(
+        world.get::<Transform>(e).unwrap().cols,
+        [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [1., 2., -3.]]
     );
+    assert_eq!(
+        world.get::<SpawnRotation>(e).unwrap().rotation_degrees,
+        [0., 90., 0.]
+    );
+    assert_eq!(world.get::<Name>(e).unwrap().0, "チェックポイント_1");
+    assert_eq!(world.verify_components(), vec![]);
+    let log = &report.steps[0].log;
+    assert_eq!(
+        (log.counts["ledge segments"], log.counts["travel markers"]),
+        (3, 1)
+    );
+    assert_eq!(log.placed.len(), 4);
 }

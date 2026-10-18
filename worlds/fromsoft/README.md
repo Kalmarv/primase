@@ -113,14 +113,9 @@ position f32x3, normal f32x3, normal W i32, UV count u32 and f32x3 values,
 tangent count u32 and f32x4 values, colour count u32 and RGBA f32x4 values,
 repeated for every vertex. Indices are u32. Digests are uppercase SHA256.
 
-`PRIMASE_FROMSOFT_MODEL_ORACLE` supplies independently exported, pre-bake area
-geometry. Its `models.jsonl` records model key (`area/model` or `obj/model`),
-missing-model status, per-material exclusion and UV scale, and ordered parts.
-Each part names its binary file and SHA256. A binary part starts with u32 vertex
-and index counts, followed by positions f32x3, normals f32x3, UVs f32x2, and u32
-indices, all little-endian. Generate these directly from the reference model
-builder before any layered-material bake. Baked scene comparisons must report
-part splitting, UV rescaling and material replacement as separate differences.
+Area geometry is checked against the SoulsFormats dump of every placed model
+(`PRIMASE_FROMSOFT_RIGID_ORACLE`, `tests/rigid_census.rs` and `tests/sekiro_scene.rs`);
+the earlier exporter's pre-bake geometry, once compared here, is retired with its input.
 
 Packed normal/tangent bytes follow the consumer shader operation:
 `(v - 127) * f32::from_bits(0x3c010204)`. G-buffer shader signatures and
@@ -210,10 +205,7 @@ an independent implementation with `extensions.sekiro.world_state` (`parts`: `so
 rules decide, counts and prints the parts we leave at their default because something uninterpreted also names them,
 and fails on a part decided by only one side otherwise.
 
-`PRIMASE_FROMSOFT_SCENE` supplies a reference skate-scene folder. Its source
-labels connect `tables/placements.bin` to MSB parts. The gate checks prototype
-references, exact translations and bases under the same stated tolerance.
-Both gates also require `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.
+The area's placements are checked against a SoulsFormats dump of its MSB in `tests/sekiro_scene.rs` (below).
 
 ## Material definitions and preview lowering
 
@@ -239,10 +231,10 @@ The selected albedo's positive FLVER tiling scale is kept for geometry lowering.
 `fromsoft.layered_material` additionally retains the complete MTD parameters,
 texture declarations, selected static switch, UV indices and binding scales
 for the later shader-aware bake. The preview does not execute layered shaders.
-`Material::skate_material` resolves colour and normal roles independently into
-texture entities, with deterministic fallback colours for missing base data.
-Metallic and emissive source slots survive even when the target preview does
-not consume them. `sekiro::pbr::lower` takes metallic only from a traced source
+Metallic and emissive source slots survive even when the preview does not
+consume them. `skip` names the source classes the game draws as something other
+than a surface (sky and cloud cards, additive light volumes, shadow proxies); a
+program chooses whether to leave them out (`lower-fromsoft-geometry{leave-out=}`). `sekiro::pbr::lower` takes metallic only from a traced source
 constant or map; without either, a material is dielectric (metallic 0), not
 glTF's default of 1, and is counted as an approximation. Material identity is chosen by the caller, independently of
 any reference exporter's string formatting or key hashing.
@@ -259,51 +251,77 @@ the material references on each part in `PRIMASE_FROMSOFT_SCENE`. It is not a
 gate of archive texture discovery, which belongs to area assembly. Both require
 `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`; absent inputs skip explicitly.
 
-## Area assembly and scene proof
+## Area reading and its passes
 
-`sekiro::read_area` assembles a selected map into an empty `World`, preserving
-unbaked geometry, materials, source labels and explicit texture conventions.
-It takes an install root, a trusted decoder and options; it never guesses paths.
-A failed read leaves the destination unchanged. Region selection uses source
-map east/north coordinates and transformed prototype bounds with an explicit
-margin. Far map pieces are excluded by default. Missing model IDs are reported.
+`sekiro::read_area` reads a selected map into an empty `World`. It takes an
+install root, a trusted decoder and options; it never guesses paths, and a failed
+read leaves the destination unchanged. Reading lowers nothing:
 
-`sekiro::prepare_assets` writes prototype GLBs and PNG images through
-the toolkit into an empty asset directory, attaching file components required
-by `primase_reskate::interchange::write`. The scene output directory is separate.
-Normal maps retain the source convention until explicit consumer lowering:
-glTF uses the stored tangents and swapped R/G; the skate path uses the
-UV-derived frame, keeps R unswapped and inverts G. Both rebuild positive Z.
-Raw map/object collision, ledges, lights and travel/spawn markers are assembled.
-Layered shader baking, roof smoothing and opened-up surfaces remain separate passes.
+- each placed model is a prototype holding its FLVER as stored (`fromsoft.flver`:
+  skeleton, every mesh with all its face sets, original material indices and every
+  vertex channel), its source identity (`fromsoft.prototype`, `far` for the
+  distant-backdrop `m9xxxxx` series) and the material entity of each FLVER
+  material (`fromsoft.material_slots`), each holding `fromsoft.material`;
+- placements are `core.instance` with their MSB transform, source label, shadow
+  controls and, with states read, conditions;
+- every texture a kept material binds is kept as stored
+  (`fromsoft.texture_payloads`), and the G-buffer programs of its layered
+  materials (`fromsoft.shader_programs`);
+- map and object collision are `core.collision` soups with `fromsoft.collision`
+  (source group, water); lights are `fromsoft.light` records where they stand
+  (stored colours, powers, cone, radius and tangent); hang-edge segments and
+  spawn points are the `fromsoft.area_extras` resource.
 
-Extras use named lowering policies. Ledges join endpoints within one centimetre
-in Euclidean distance, retain chains at least one metre long, and select wood
-or concrete from nearby game-map collision. The reference's quantized joining
-leaves two additional near-closed castle curves open; retained points and all
-326 surface assignments match. Lights use exact sRGB conversion; the intensity
-multiplier of 100 and local +Z spot axis remain unverified conversion policies.
-The castle comparison counts 70 channels differing from power-2.2 conversion
-(maximum 0.008515), with 34 lights, 326 curves and 11 markers. Marker positions
-are exact; yaw is compared within 0.0051 degrees of the rounded reference.
+A region (source east/north rectangle) is an explicit partial read: a placement
+is kept when its model's extent (every vertex a face set uses, static vertices
+posed by their bones) reaches the region within `region_margin`; collision
+triangles whose centre lies more than 50 m outside it, and lights and spawn points
+outside it, are not read. `Report::notices` returns what the read left out or could
+not find. Object collision takes a convex body's material from the model's largest
+colliding render surface, measured on the stored level-0 face sets.
 
-The installed-area integration gate uses `PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6`,
-`PRIMASE_FROMSOFT_SCENE`, `PRIMASE_SCENE_SKATE` (independent validator executable
-or DLL), and `PRIMASE_FROMSOFT_OUTPUT` (a fresh output directory). Outputs remain
-for review. It checks the written folder, not only the in-memory model:
-prototype selection, topology and positions exactly; normalized normal
-components within absolute 1e-6; UV differences only when explained by the
-selected material's tiling, within four f32 epsilon scaled by magnitude;
-material texture bindings and classes exactly; placement translations exactly
-and bases within 1e-6 per unit scale. It counts tolerance matches separately.
+Passes (`sekiro::passes::register`), each choosing explicitly:
 
-`written_manifest_values` additionally audits a retained output folder supplied
-by `PRIMASE_FROMSOFT_WRITTEN_SCENE` against `PRIMASE_FROMSOFT_SCENE`: every
-per-part material field, cutoff at consumer f32 precision, texture identities,
-source labels and region. Material deduplication retains full source bindings,
-so material counts can exceed the reference's preview-only identities. Texture
-pixel parity with the reference's normal-processing heuristic is not asserted;
-source decoding is covered separately by the texture gates.
+- `drop-fromsoft-far` leaves out the distant-backdrop placements and prototypes.
+- `fromsoft-apply-rigid-skinning` poses `fromsoft.flver` into `fromsoft.rigid_model`
+  beside it (below).
+- `lower-fromsoft-geometry` makes `core.mesh`: one primitive per mesh and face set,
+  level 0 on the prototype and levels 1 and 2 as `core.lods` forms for
+  `select-lod`; positions, unit normals, stored tangents and UV0 in the world frame,
+  a layered material's Byte4C members as raw `Color(n)` streams listed by
+  `fromsoft.layer_inputs`. Its options default to the faithful reading:
+  `pose=rigid|stored`, `uv-tiling=keep|apply` (recorded per material as
+  `fromsoft.uv_tiling`), `winding=stored|normals`, `degenerates=keep|drop`,
+  `leave-out=sky+light-volume+shadow`, `blocker-cards=draw|record`. Motion-blur
+  face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
+- `lower-fromsoft-lights{candela-per-power=...}` makes `core.light` from the BTL
+  records: colour bytes read as sRGB, intensity by the program's calibration (no
+  default), range the stored radius (at least `min-range`), a spot's cone from the
+  stored angle with an inner cone at `1 - spot-blend` (0.15). The records stay.
+- `lower-fromsoft-extras` makes each hang segment a two-point `core.curve` of kind
+  `ledge` and each spawn point a `core.marker` of kind `travel`, in source order,
+  named as stored. Joining ledges (`primase_meshops::chain`), the surface under
+  them (`primase_meshops::SurfaceIndex`), choosing a spawn and naming markers are
+  a program's.
+
+The geometry the earlier reader produced by itself is this explicit composition:
+`drop-fromsoft-far, fromsoft-apply-rigid-skinning,
+lower-fromsoft-geometry{uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
+select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
+(streams, indices, material identities), collision, lights, joined ledges and
+travel markers exactly.
+
+`tests/sekiro_scene.rs` reads slice A with that composition and checks it against
+a SoulsFormats dump of the area (`PRIMASE_FROMSOFT_RIGID_ORACLE`): every placement
+is an MSB part with its model, translation exact and basis within 1e-5; every
+lowered vertex is a vertex of its FLVER in model space within 0.2 mm; four
+material fixtures worked out by hand from the dump keep their class, base and
+normal texture. `cli/tests/fromsoft_collision_scene.rs` compares the read collision
+with the scene our earlier C# exporter wrote (`PRIMASE_FROMSOFT_SCENE`, a regression
+baseline, read through the ReSkate interchange tables): all non-roof triangles and
+the water table agree exactly. The light, ledge and marker passes are checked by
+hand-worked cases (`tests/extras_policy.rs`, primase-meshops' curve tests); the
+earlier exporter's extras and object scenes they were once compared with are retired.
 
 ## Consumer normal-map frame
 
@@ -376,10 +394,10 @@ Container parsing does not imply geometry support for every observed shape.
 
 ## Rigid FLVER lowering
 
-`fromsoft-apply-rigid-skinning` requires and consumes `fromsoft.flver`, and
-provides `fromsoft.rigid_model`. Raw FLVER parsing and raw geometry remain
-available unchanged. Area assembly lowers before constructing render geometry
-and selecting an object's dominant render-area collision material.
+`fromsoft-apply-rigid-skinning` requires `fromsoft.flver` and provides
+`fromsoft.rigid_model` beside it; the raw model stays. `lower-fromsoft-geometry`
+lowers the posed model (or, with `pose=stored`, the raw one) and removes the posed
+copy it consumed.
 
 Static meshes use the implicit unit-weight binding in NORMAL.w. The pass applies
 the bone hierarchy's scale, X/Z/Y rotation and translation to positions, the
@@ -400,25 +418,22 @@ surface IDs enforced, independent of convex triangulation.
 
 ### Interior blocker cards
 
-The area reader excludes only meshes whose non-skipped resolved material uses a
+`lower-fromsoft-geometry{blocker-cards=record}` leaves out of the drawn geometry only meshes whose non-skipped resolved material uses a
 `GXFlver_Col*` shader and an exact `m[0-9][0-9]_black_a` main albedo. Other meshes
 in the same prototype remain renderable. Ordinary unlit ground fills and missing
 albedos do not match. This is an explicit export policy: the source game draws
-these black interior blockers, but exported worlds omit them from render geometry.
-Their local geometry, material, original FLVER mesh index and placed transforms
-remain in the `fromsoft.blocker_cards` resource. Scene output also records them in
-`extensions.sekiro.blocker_cards`, with the rule, `drawn: false`, placement and
-triangle counts, and `records`. They never become collision geometry.
+these black interior blockers; a program that omits them records them instead.
+Their level-0 geometry, material, original FLVER mesh index and placed transforms
+are kept in the `fromsoft.blocker_cards` resource. They never become collision geometry.
 
 `PRIMASE_FROMSOFT_BLOCKER_ORACLE` points to a directory with `cases.json`, an array
 of objects containing `name`, `area`, `region` (null or source rectangle),
 `placements` (source labels), `prototypes` (identity strings), `mesh_identities`
 (array of `[prototype, original_flver_mesh_index]`), `meshes` and `triangles`.
-The gate checks the shared geometry-selection stage used by the area reader.
-Cases with `assemble: true` also run full area assembly, compare its retained
-records and verify no matching material is attached to render geometry. This
-allows inventories without choosing a normal basis for unrelated shaders. Exported part indices must be mapped
-back to original FLVER mesh indices when layer splitting changes them.
+The gate reads each case's area and region, lowers it with the explicit legacy
+composition above, compares the recorded cards and verifies no matching material
+is drawn. Exported part indices must be mapped back to original FLVER mesh indices
+when layer splitting changes them.
 
 ### Bounded layered-material pilot
 

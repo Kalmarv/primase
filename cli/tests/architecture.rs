@@ -1065,7 +1065,6 @@ fn real_data_variables_are_declared() {
 /// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
-    "dependency: from=worlds/fromsoft section=dependencies to=worlds/reskate",
     "dependency: from=worlds/reskate section=dependencies to=formats/gltf",
     "entry_point: file=cli/examples/scene_to_tiles.rs what=queries or edits world components",
     "entry_point: file=cli/examples/scene_to_tiles.rs what=runs a pass outside the pass manager",
@@ -1083,14 +1082,10 @@ const KNOWN_BREAKS: &[&str] = &[
     "io: file=worlds/reskate/src/texture.rs role=exception",
     "name: crate=toolkit/hash word=forza",
     "name: crate=toolkit/hash word=fromsoft",
-    "name: crate=worlds/fromsoft word=reskate",
     "name: crate=worlds/fromsoft word=skate",
     "name: crate=worlds/gta word=skate",
     "name: crate=worlds/reskate word=gta",
     "pass: file=toolkit/image/src/texture.rs what=pass load-textures is not registered",
-    "pass: file=worlds/fromsoft/src/rigid.rs what=pass fromsoft-apply-rigid-skinning is not registered",
-    "pass: file=worlds/fromsoft/src/sekiro/normals.rs what=lower returns a PassLog but no pass of worlds/fromsoft runs it",
-    "pass: file=worlds/fromsoft/src/sekiro/pbr.rs what=lower returns a PassLog but no pass of worlds/fromsoft runs it",
     "pass: file=worlds/unity/src/drawn.rs what=pass unity-drawn is not registered",
     "pass: file=worlds/unity/src/lower.rs what=pass lower-unity-pbr is not registered",
     "pass: file=worlds/unity/src/lower_collision.rs what=pass lower-unity-collision is not registered",

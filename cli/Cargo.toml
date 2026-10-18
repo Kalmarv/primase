@@ -24,6 +24,8 @@ primase-web.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+primase-compress.workspace = true
+primase-fromsoft.workspace = true
 primase-gltf.workspace = true
 meshopt.workspace = true
 serde_json.workspace = true

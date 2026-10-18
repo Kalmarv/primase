@@ -791,7 +791,9 @@ version = "0.1.0"
 dependencies = [
  "meshopt",
  "primase-cache",
+ "primase-compress",
  "primase-core",
+ "primase-fromsoft",
  "primase-gltf",
  "primase-gta",
  "primase-image",
@@ -874,7 +876,6 @@ dependencies = [
  "primase-havok",
  "primase-image",
  "primase-meshops",
- "primase-reskate",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",

@@ -12,7 +12,6 @@ use primase_core::{
     frame::{Axis, SourceFrame},
 };
 use primase_havok::Compendium;
-use primase_reskate::dialect::{CollisionMode, SkateCollision, SoupRef, TableRef};
 use std::collections::{BTreeMap, BTreeSet};
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]
@@ -27,6 +26,8 @@ pub struct Report {
     pub excluded_material_triangles: usize,
     pub outside_region_triangles: usize,
     pub unmapped_materials: usize,
+    /// Collision files the MSB's selected parts name that the area's binder does not hold.
+    pub missing_files: Vec<String>,
 }
 /// Rideable-map lowering policy: hundreds digits retain the base material;
 /// blockers/cloud/water do not become solid surfaces. Water has its own soup.
@@ -71,11 +72,11 @@ pub(super) fn push(soup: &mut Collision, vertices: [[f32; 3]; 3], surface: u16) 
 pub(super) fn attach_when(
     world: &mut World,
     soup: Collision,
-    path: &str,
+    group: &str,
     water: bool,
     condition: &Condition,
 ) {
-    let Some(e) = attach(world, soup, path, water) else {
+    let Some(e) = attach(world, soup, group, water) else {
         return;
     };
     world.insert(e, condition.clone());
@@ -86,10 +87,11 @@ pub(super) fn attach_when(
         },
     );
 }
+/// A non-empty soup as its own entity, with the source group it was selected into.
 pub(super) fn attach(
     world: &mut World,
     soup: Collision,
-    path: &str,
+    group: &str,
     water: bool,
 ) -> Option<primase_core::Entity> {
     if soup.triangles.is_empty() {
@@ -97,19 +99,13 @@ pub(super) fn attach(
     }
     let entity = world.spawn();
     world.insert(entity, soup);
+    world.insert(entity, primase_core::Name(group.to_owned()));
     world.insert(
         entity,
-        SkateCollision(SoupRef {
-            table: TableRef::single(path),
-            mode: Some(if water {
-                CollisionMode::Water
-            } else {
-                CollisionMode::TriangleMesh
-            }),
-            ground: Some(!water),
-            region_cut: Some(true),
-            other: Default::default(),
-        }),
+        super::source::CollisionSource {
+            group: group.to_owned(),
+            water,
+        },
     );
     Some(entity)
 }
@@ -237,32 +233,14 @@ pub fn assemble(
             }
         }
     }
-    if !selected.is_empty() {
-        return Err(invalid(
-            "collision",
-            0,
-            format!("missing selected files {selected:?}"),
-        ));
-    }
+    report.missing_files = selected.into_iter().collect();
     world.insert_resource(surfaces);
-    attach(world, solid, "collision/game.bin", false);
-    attach(world, water, "collision/water.bin", true);
+    attach(world, solid, "game", false);
+    attach(world, water, "water", true);
     for (n, (condition, solid, water)) in conditioned.into_values().enumerate() {
         report.conditioned_soups += 1;
-        attach_when(
-            world,
-            solid,
-            &format!("collision/game_state{n}.bin"),
-            false,
-            &condition,
-        );
-        attach_when(
-            world,
-            water,
-            &format!("collision/water_state{n}.bin"),
-            true,
-            &condition,
-        );
+        attach_when(world, solid, &format!("game_state{n}"), false, &condition);
+        attach_when(world, water, &format!("water_state{n}"), true, &condition);
     }
     Ok(report)
 }
