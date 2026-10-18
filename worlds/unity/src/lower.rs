@@ -41,7 +41,9 @@
 //! every level: metallic-roughness and occlusion as above, and colour textures Unity samples as linear encoded as sRGB.
 //!
 //! Each material also gets its draw order (Unity's render queue, the layer its alpha mode is) and, where its shader
-//! states it, its usage (`core.material_usage`, the named table [`SHADER_USAGE`]); the rest are counted by shader.
+//! states it, its usage (`core.material_usage`, the named table [`SHADER_USAGE`]) and whether it ignores the vertex
+//! colour (`core.vertex_color`, [`IGNORES_VERTEX_COLOR`]; [`TAKES_VERTEX_COLOR`] keep the glTF convention); the rest
+//! are counted by shader.
 
 use std::collections::BTreeMap;
 
@@ -51,7 +53,7 @@ use primase_core::{
     ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
     World,
 };
-use primase_core::{DrawLayer, DrawOrder, MaterialUsage};
+use primase_core::{DrawLayer, DrawOrder, MaterialUsage, VertexColor};
 use primase_image::{linear_to_srgb, srgb_to_linear};
 
 use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
@@ -101,6 +103,52 @@ const SHADER_USAGE: [(&str, MaterialUsage); 2] = [
 /// SpeedTree 7's geometry-type keywords for branches (bark and its detail layer), which the importer sets on the
 /// material it makes for each geometry type; leaf, frond and mesh geometry stay vegetation.
 const SPEEDTREE_BARK: [&str; 2] = ["GEOM_TYPE_BRANCH", "GEOM_TYPE_BRANCH_DETAIL"];
+
+/// Shaders whose programs multiply the mesh's vertex colour (`COLOR_0`) into the surface, as their source shows it:
+/// Unity's built-in UI, sprite and particle shaders (2019.4 built-in source: `UI-Default.shader`'s `v.color * _Color`,
+/// `UnitySprites.cginc`, the particle shaders' `color : COLOR` binding, `UnityStandardParticles.cginc`'s colour modes,
+/// the default Multiply among them), TextMesh Pro's (face colour times the vertex colour) and SideFX's
+/// `Houdini/SpecularVertexColor` (its compiled fragment program multiplies albedo by `_Color` and `COLOR0`). These
+/// keep the glTF convention, which is what an unmarked material means.
+const TAKES_VERTEX_COLOR: [&str; 15] = [
+    "Houdini/SpecularVertexColor",
+    "UI/Default",
+    "Sprites/Default",
+    "Legacy Shaders/Particles/Additive",
+    "Legacy Shaders/Particles/Additive (Soft)",
+    "Legacy Shaders/Particles/Alpha Blended",
+    "Legacy Shaders/Particles/Alpha Blended Premultiply",
+    "Legacy Shaders/Particles/VertexLit Blended",
+    "Mobile/Particles/Additive",
+    "Mobile/Particles/Alpha Blended",
+    "Particles/Standard Unlit",
+    "Particles/Standard Surface",
+    "TextMeshPro/Distance Field",
+    "TextMeshPro/Mobile/Distance Field",
+    "TextMeshPro/Sprite",
+];
+
+/// Shaders whose programs take no vertex colour (no `COLOR` input), as their source shows it: built-in Standard
+/// (`UnityStandardInput.cginc`'s `VertexInput`), the legacy surface shaders (their `Input` has no colour), Unlit/Texture,
+/// and URP's Lit and Unlit (their `Attributes` have none). Their materials are [`VertexColor::Ignored`].
+const IGNORES_VERTEX_COLOR: [&str; 16] = [
+    "Standard",
+    "Standard (Specular setup)",
+    "Universal Render Pipeline/Lit",
+    "Universal Render Pipeline/Unlit",
+    "Legacy Shaders/Diffuse",
+    "Legacy Shaders/Bumped Diffuse",
+    "Legacy Shaders/Bumped Specular",
+    "Legacy Shaders/Specular",
+    "Legacy Shaders/Self-Illumin/Diffuse",
+    "Legacy Shaders/Transparent/Diffuse",
+    "Legacy Shaders/Transparent/Bumped Diffuse",
+    "Legacy Shaders/Transparent/Bumped Specular",
+    "Legacy Shaders/Transparent/Cutout/Diffuse",
+    "Legacy Shaders/Transparent/Cutout/Bumped Diffuse",
+    "Legacy Shaders/Transparent/Cutout/Bumped Specular",
+    "Unlit/Texture",
+];
 
 /// What a material's surfaces are, as its shader states it ([`SHADER_USAGE`]); `None` for an ordinary surface.
 pub fn usage(m: &UnityMaterial) -> Option<MaterialUsage> {
@@ -621,6 +669,17 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
         };
         w.insert(e, DrawOrder { layer, queue });
         let shader = m.shader.as_deref().unwrap_or("no shader");
+        match m.shader.as_deref() {
+            Some(s) if IGNORES_VERTEX_COLOR.contains(&s) => {
+                l.log.count("vertex colour ignored by the shader", 1);
+                w.insert(e, VertexColor::Ignored);
+            }
+            Some(s) if TAKES_VERTEX_COLOR.contains(&s) => l.log.count("vertex colour taken by the shader", 1),
+            _ => l.log.count(
+                &format!("vertex colour: shader in neither table, COLOR_0 multiplies (default) ({shader})"),
+                1,
+            ),
+        }
         match usage(&m) {
             Some(u) => {
                 l.log.count(&format!("material usage {u:?} ({shader})"), 1);
@@ -651,6 +710,7 @@ impl Pass for LowerUnityPbr {
             "core.texture",
             "core.draw_order",
             "core.material_usage",
+            "core.vertex_color",
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -1202,5 +1262,39 @@ mod tests {
         );
         // no pipeline known, so no draw pass: the material's `_Cull`
         assert_eq!(sided(&[leaves, two_sided, standard], None), [false, true, true]);
+    }
+
+    /// Shaders that take no vertex colour mark their materials ignored; those that multiply it and those not in either
+    /// table are unmarked (the glTF convention), the unknown counted by shader.
+    #[test]
+    fn shaders_state_whether_they_take_the_vertex_colour() {
+        let mut w = World::new();
+        let names = ["Standard", "Houdini/SpecularVertexColor", "Shader Graphs/ocean"];
+        let es: Vec<Entity> = names
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let e = w.spawn();
+                w.insert(e, material(i as i64, Some(s), &[]));
+                e
+            })
+            .collect();
+        let log = lower_unity_pbr(&mut w).unwrap();
+        let marks: Vec<Option<VertexColor>> = es.iter().map(|e| w.get::<VertexColor>(*e).copied()).collect();
+        assert_eq!(marks, [Some(VertexColor::Ignored), None, None]);
+        assert_eq!(
+            log.counts.get("vertex colour ignored by the shader").copied(),
+            Some(1)
+        );
+        assert_eq!(
+            log.counts.get("vertex colour taken by the shader").copied(),
+            Some(1)
+        );
+        assert_eq!(
+            log.counts
+                .get("vertex colour: shader in neither table, COLOR_0 multiplies (default) (Shader Graphs/ocean)")
+                .copied(),
+            Some(1)
+        );
     }
 }
