@@ -865,3 +865,96 @@ fn a_centre_spawn_without_placements_is_counted() {
     assert_eq!(log.counts["spawn=centre without placements: no spawn marker"], 1);
     assert_eq!(w.iter::<scene::SkateMarker>().count(), 0);
 }
+
+/// Skate reflects every dielectric at F0 0.04: a source reflecting less is folded into roughness so its highlight
+/// peaks no higher (alpha' = alpha sqrt(0.04 / F0)); 0.04 or more keeps its roughness; nothing reflected is rough.
+#[test]
+fn reflectance_folds_into_roughness_by_the_highlight_peak() {
+    assert_eq!(scene::raise::fold_reflectance(0.5, 0.04), 0.5);
+    assert_eq!(scene::raise::fold_reflectance(0.5, 0.2), 0.5);
+    assert_eq!(scene::raise::fold_reflectance(0.5, 0.0), 1.0);
+    // F0 0.01: alpha 0.25 x 2 = 0.5, roughness sqrt(0.5)
+    assert!((scene::raise::fold_reflectance(0.5, 0.01) - 0.5f64.sqrt()).abs() < 1e-12);
+    assert_eq!(scene::raise::fold_reflectance(0.1, 1e-9), 1.0);
+}
+
+/// A scalar material: specular factor 0.25 (F0 0.01) at roughness 0.5 is raised at roughness sqrt(0.5); the same with
+/// metal in it keeps its roughness (its reflectance is its base colour's).
+#[test]
+fn scalar_materials_fold_their_specular_reflectance() {
+    for (metallic, want) in [(0.0, std::f64::consts::FRAC_1_SQRT_2), (1.0, 0.5)] {
+        let mut w = world();
+        let plain = w
+            .iter::<PbrMaterial>()
+            .find(|(_, m)| m.base_color_texture.is_none())
+            .unwrap()
+            .0;
+        let m = w.get_mut::<PbrMaterial>(plain).unwrap();
+        m.metallic = metallic;
+        m.roughness = 0.5;
+        m.specular = Some(primase_core::pbr::Specular {
+            factor: 0.25,
+            ..primase_core::pbr::Specular::default()
+        });
+        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let r = w.get::<SkateMaterial>(plain).unwrap().roughness.unwrap();
+        assert!((r - want).abs() < 1e-4, "roughness {r}");
+        assert_eq!(
+            log.approximations.contains_key(
+                "specular reflectance below skate's 0.04 folded into roughness (GGX highlight peak kept)"
+            ),
+            metallic == 0.0
+        );
+    }
+}
+
+/// The mask folds per texel when the strength texture is its source (lower-gta-pbr's derived texture: A strength,
+/// G roughness): colour 0.5 (F0 0.02 x A). Literal: texel G 128, A 17 -> roughness 0.2510, F0 0.001333 -> 0.5874,
+/// green 105; texel G 31, A 99 -> 0.0608, F0 0.007765 -> 0.0916, green 232. With another strength texture the factor
+/// alone folds: F0 0.02 -> green 179.
+#[test]
+fn masks_fold_reflectance_per_texel() {
+    for (same, level0) in [(true, [0, 105, 64, 255]), (false, [0, 179, 64, 255])] {
+        let (mut w, material, image) = masked_world();
+        let other = w.spawn();
+        w.insert(other, texture(TexRole::Mask));
+        let m = w.get_mut::<PbrMaterial>(material).unwrap();
+        m.metallic = 0.0;
+        m.roughness = 0.5;
+        m.specular = Some(primase_core::pbr::Specular {
+            factor: 1.0,
+            texture: Some(TextureRef::new(if same { image } else { other })),
+            color: [0.5; 3],
+            color_texture: None,
+        });
+        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
+        let levels = &w.get::<Texture>(mask).unwrap().levels;
+        assert_eq!(levels[0], level0.repeat(4));
+        if same {
+            assert_eq!(levels[1], vec![0, 232, 200, 255]);
+        }
+        assert_eq!(
+            log.approximations.contains_key(
+                "specular strength textures other than the mask source not folded (their factor only)"
+            ),
+            !same
+        );
+    }
+}
+
+/// A material without specular keeps the unfolded mask bytes: roughness 0.3 gives greens 255 - 0.3 x 128 = 216.6 -> 217
+/// and 255 - 0.3 x 31 = 245.7 -> 246, as before the fold existed.
+#[test]
+fn masks_without_specular_keep_their_bytes() {
+    let (mut w, material, _) = masked_world();
+    let m = w.get_mut::<PbrMaterial>(material).unwrap();
+    m.metallic = 0.0;
+    m.roughness = 0.3;
+    m.specular = None;
+    scene::raise_skate(&mut w, &options()).unwrap();
+    let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
+    let levels = &w.get::<Texture>(mask).unwrap().levels;
+    assert_eq!(levels[0], [0, 217, 64, 255].repeat(4));
+    assert_eq!(levels[1], vec![0, 246, 200, 255]);
+}

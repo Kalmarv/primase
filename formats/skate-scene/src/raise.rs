@@ -17,6 +17,10 @@
 //!   material, independently of derived texture counts;
 //! - emission texture bindings and nonzero emissive radiance have no established target representation and
 //!   are named, counted losses in the returned log (per material, overlapping categories). Source PBR is retained;
+//! - specular reflectance (`KHR_materials_specular`): skate's MSK has no reflectance channel, so every dielectric
+//!   reflects at F0 0.04 ([`SKATE_F0`]); a dielectric reflecting less (0.04 x colour x factor, x the strength texture's
+//!   A per texel when it is the mask source) is folded into roughness so its highlight peaks no higher
+//!   ([`fold_reflectance`]): a named, counted approximation; metals and reflectance of 0.04 or more are kept as they are;
 //! - every instanced `core.mesh`: a `skate.prototype` (`prototypes/<id>.glb`, a part per primitive; its own
 //!   `core.collision`, placed by each instance, as a triangle-mesh soup); every placement a default `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
@@ -53,6 +57,7 @@ use crate::{Error, Result};
 
 #[path = "raise_materials.rs"]
 mod materials;
+pub use materials::{SKATE_F0, fold_reflectance};
 
 /// What [`raise_skate`] needs from the caller.
 #[derive(Clone, Debug, Default)]
@@ -382,7 +387,13 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 two_sided: Some(m.double_sided),
                 domain: decal.then_some(Domain::Decal),
                 metallic: mask.is_none().then(|| f32_decimal(m.metallic)),
-                roughness: mask.is_none().then(|| f32_decimal(m.roughness)),
+                roughness: mask.is_none().then(|| {
+                    // the reflectance skate cannot carry, folded (materials::fold_reflectance)
+                    let folded = materials::specular_f0(&m).map_or(f64::from(m.roughness), |f0| {
+                        materials::fold_reflectance(f64::from(m.roughness), f0)
+                    });
+                    f32_decimal(folded as f32)
+                }),
                 wrap: w.map(|w| wrap(w[0])),
                 ocean: None,
                 cast_shadows: m.cast_shadows,

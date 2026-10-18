@@ -23,6 +23,40 @@ struct MaskKey {
     roughness: u32,
     strength: u32,
     wrap: Wrap,
+    /// The folded reflectance ([`fold_reflectance`]): F0 (bits) and whether the mask source's A scales it per texel.
+    fold: Option<(u64, bool)>,
+}
+
+/// Skate's reflectance at normal incidence for every dielectric surface: Studio's MSK holds metallic, smoothness,
+/// occlusion and opacity, no reflectance or specular level, so a surface reflects as F0 0.04 whatever its source says.
+pub const SKATE_F0: f64 = 0.04;
+
+/// The roughness at which a GGX highlight at skate's [`SKATE_F0`] peaks as high as the source's highlight of
+/// reflectance `f0` at `roughness` (perceptual): the peak goes as F0 / alpha^2 (alpha = roughness^2), so
+/// alpha' = alpha sqrt(0.04 / f0), at most 1. A source at or above 0.04 keeps its roughness (never sharpened);
+/// reflectance 0 is roughness 1. The PEAK is kept, not the energy: GGX's distribution is normalised, so the widened
+/// lobe still reflects 0.04 in total, more than the source; a low-reflectance surface becomes a broad sheen (a lawn
+/// at roughness 1 still reflects 4 % diffusely) rather than a mirror.
+pub fn fold_reflectance(roughness: f64, f0: f64) -> f64 {
+    if f0.is_nan() || f0 >= SKATE_F0 {
+        return roughness;
+    }
+    if f0 <= 0.0 {
+        return 1.0;
+    }
+    (roughness * roughness * (SKATE_F0 / f0).sqrt()).min(1.0).sqrt()
+}
+
+/// A dielectric material's reflectance at normal incidence by `KHR_materials_specular` without its textures:
+/// 0.04 x the largest colour channel x factor (at most 1: the largest channel, an upper bound, folds no more than
+/// any channel needs); `None` for a material without the extension or not exactly dielectric (metallic not exactly
+/// 0: its F0 comes from its base colour, which skate keeps).
+pub fn specular_f0(m: &PbrMaterial) -> Option<f64> {
+    let s = m.specular?;
+    (m.metallic == 0.0).then(|| {
+        let colour = s.color.iter().fold(0f32, |a, &c| a.max(c));
+        (SKATE_F0 * f64::from(colour) * f64::from(s.factor)).clamp(0.0, 1.0)
+    })
 }
 
 fn bad(entity: Entity, message: impl std::fmt::Display) -> Error {
@@ -113,9 +147,24 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             plan.log
                 .approximate("PBR emissive radiance not representable in skate-scene", 1);
         }
-        if m.specular.is_some() {
-            plan.log
-                .approximate("PBR specular reflectance not representable in skate-scene", 1);
+        let f0 = specular_f0(m);
+        match (m.specular, f0) {
+            (Some(_), None) => plan
+                .log
+                .approximate("PBR specular reflectance not representable in skate-scene", 1),
+            (Some(s), Some(f0)) => {
+                if f0 < SKATE_F0 {
+                    plan.log.approximate(
+                        "specular reflectance below skate's 0.04 folded into roughness (GGX highlight peak kept)",
+                        1,
+                    );
+                }
+                if s.color_texture.is_some() {
+                    plan.log
+                        .approximate("specular colour textures not folded (their factor only)", 1);
+                }
+            }
+            (None, _) => {}
         }
         let Some(slot) = m.metallic_roughness_texture.or(m.occlusion_texture) else {
             continue;
@@ -152,6 +201,17 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                 "mask source requires linear pixels and at least one mip",
             ));
         }
+        // the strength texture folds per texel when it is the mask source (lower-gta-pbr derives one texture for both)
+        let per_texel = m
+            .specular
+            .and_then(|s| s.texture)
+            .is_some_and(|t| t.texture == slot.texture && m.metallic_roughness_texture.is_some());
+        if f0.is_some() && m.specular.is_some_and(|s| s.texture.is_some()) && !per_texel {
+            plan.log.approximate(
+                "specular strength textures other than the mask source not folded (their factor only)",
+                1,
+            );
+        }
         let key = MaskKey {
             source: slot.texture,
             mr: m.metallic_roughness_texture.is_some(),
@@ -160,6 +220,7 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             roughness: m.roughness.to_bits(),
             strength: m.occlusion_strength.to_bits(),
             wrap,
+            fold: f0.filter(|f| *f < SKATE_F0).map(|f| (f.to_bits(), per_texel)),
         };
         let (index, quantized) = if let Some(&entry) = cache.get(&key) {
             entry
@@ -176,9 +237,22 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                 |p| {
                     let mr = if key.mr { p.rgba } else { [255; 4] };
                     let ao = if key.ao { p.rgba[0] } else { 255 };
+                    // smoothness: the unfolded expression unchanged (byte-identical masks), the folded one per texel
+                    let smoothness = match f0.filter(|f| *f < SKATE_F0) {
+                        None => 255.0 - f64::from(m.roughness) * f64::from(mr[1]),
+                        Some(f0) => {
+                            let strength = if per_texel {
+                                f64::from(p.rgba[3]) / 255.0
+                            } else {
+                                1.0
+                            };
+                            let roughness = f64::from(m.roughness) * f64::from(mr[1]) / 255.0;
+                            255.0 - fold_reflectance(roughness, f0 * strength) * 255.0
+                        }
+                    };
                     let values = [
                         f64::from(m.metallic) * f64::from(mr[2]),
-                        255.0 - f64::from(m.roughness) * f64::from(mr[1]),
+                        smoothness,
                         255.0 - f64::from(m.occlusion_strength) * (255.0 - f64::from(ao)),
                     ];
                     let mut pixel = [255; 4];
