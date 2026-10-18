@@ -220,6 +220,32 @@ impl Linear {
         self.det < 0.0
     }
 
+    /// The uniform scale `s` when the map is a rotation or mirror times `s` (columns orthogonal and of one length, to
+    /// a relative 1e-6): a sphere stays a sphere of `s` times its radius. `None` for any other map.
+    pub fn similarity(&self) -> Option<f64> {
+        let len: [f64; 3] = self.c.map(|v| dot(v, v).sqrt());
+        let s = len[0];
+        let tol = 1e-6 * s;
+        let orthogonal = [(0, 1), (0, 2), (1, 2)]
+            .iter()
+            .all(|&(i, j)| dot(self.c[i], self.c[j]).abs() <= tol * s);
+        (s > 0.0 && orthogonal && len.iter().all(|l| (l - s).abs() <= tol)).then_some(s)
+    }
+
+    /// For each local axis, the world axis it maps onto, when every column has exactly one nonzero entry (a signed,
+    /// scaled permutation): an axis-aligned box stays one. `None` for any other map.
+    pub fn axis_map(&self) -> Option<[usize; 3]> {
+        let mut out = [0; 3];
+        for (k, col) in self.c.iter().enumerate() {
+            let nonzero: Vec<usize> = (0..3).filter(|&r| col[r] != 0.0).collect();
+            match nonzero[..] {
+                [r] => out[k] = r,
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
     fn apply(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
         std::array::from_fn(|r| m[0][r] * v[0] + m[1][r] * v[1] + m[2][r] * v[2])
     }

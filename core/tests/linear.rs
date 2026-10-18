@@ -214,3 +214,122 @@ fn a_component_that_cannot_follow_leaves_the_entity_unchanged() {
         .expect("transform is invariant");
     assert_eq!(w.get::<Transform>(t), Some(&Transform::IDENTITY));
 }
+
+/// Colliders under a map, by hand: a box (centre (1, 2, 3), half extents (1, 0.5, 2)) mirrored in x is the box
+/// centred at (-1, 2, 3) with the same half extents; sheared (x -> (1, 1, 0)) it is the hull of its corners
+/// (x, x + y, z); a sphere of radius 1 at (1, 2, 3) under diag(-2, 2, 2) is radius 2 at (-2, 4, 6); under the shear it
+/// is an ellipsoid, unsupported; a convex shape's points map as points; a heightfield follows only a positive scale
+/// per axis.
+#[test]
+fn colliders_map_exactly_or_not_at_all() {
+    use primase_core::{Collider, Diagonal, Heightfield, Shape, Surface, Surfaces};
+    let collider = |shape| Collider { shape, surface: 0 };
+    let shear = Linear::new([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    let mut w = World::new();
+    w.insert_resource(Surfaces(vec![Surface {
+        name: "stone".into(),
+        class: None,
+    }]));
+    let b = w.spawn();
+    w.insert(
+        b,
+        collider(Shape::Box {
+            center: [1.0, 2.0, 3.0],
+            half_extents: [1.0, 0.5, 2.0],
+        }),
+    );
+    w.apply_linear(b, &Linear::mirror_x()).unwrap();
+    assert_eq!(
+        w.get::<Collider>(b).unwrap().shape,
+        Shape::Box {
+            center: [-1.0, 2.0, 3.0],
+            half_extents: [1.0, 0.5, 2.0],
+        }
+    );
+    let s = w.spawn();
+    w.insert(
+        s,
+        collider(Shape::Box {
+            center: [1.0, 2.0, 3.0],
+            half_extents: [1.0, 0.5, 2.0],
+        }),
+    );
+    w.apply_linear(s, &shear).unwrap();
+    // corners (x in {0, 2}, y in {1.5, 2.5}, z in {1, 5}), each to (x, x + y, z), in the order x fastest, then y, z
+    let mut want = Vec::new();
+    for z in [1.0, 5.0] {
+        for y in [1.5, 2.5] {
+            for x in [0.0, 2.0] {
+                want.push([x, x + y, z]);
+            }
+        }
+    }
+    assert_eq!(
+        w.get::<Collider>(s).unwrap().shape,
+        Shape::Convex { points: want }
+    );
+    let sp = w.spawn();
+    w.insert(
+        sp,
+        collider(Shape::Sphere {
+            center: [1.0, 2.0, 3.0],
+            radius: 1.0,
+        }),
+    );
+    let mut sp2 = w.clone();
+    w.apply_linear(
+        sp,
+        &Linear::new([[-2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]]),
+    )
+    .unwrap();
+    assert_eq!(
+        w.get::<Collider>(sp).unwrap().shape,
+        Shape::Sphere {
+            center: [-2.0, 4.0, 6.0],
+            radius: 2.0,
+        }
+    );
+    assert_eq!(sp2.apply_linear(sp, &shear).unwrap_err(), ["core.collider"]);
+    let c = w.spawn();
+    w.insert(
+        c,
+        collider(Shape::Convex {
+            points: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 2.0]],
+        }),
+    );
+    w.apply_linear(c, &shear).unwrap();
+    assert_eq!(
+        w.get::<Collider>(c).unwrap().shape,
+        Shape::Convex {
+            points: vec![[1.0, 1.0, 0.0], [0.0, 1.0, 2.0]],
+        }
+    );
+    let h = w.spawn();
+    w.insert(h, collider(Shape::Heightfield));
+    w.insert(
+        h,
+        Heightfield {
+            columns: 2,
+            rows: 2,
+            spacing: [1.0, 1.0],
+            heights: vec![0.0; 4],
+            diagonal: Diagonal::Main,
+            holes: None,
+            surfaces: None,
+        },
+    );
+    assert_eq!(
+        w.apply_linear(h, &Linear::mirror_x()).unwrap_err(),
+        ["core.heightfield"]
+    );
+    // a positive scale per axis keeps the grid: spacing (1, 1) -> (2, 3), heights times 0.5
+    w.get_mut::<Heightfield>(h).unwrap().heights = vec![0.0, 1.0, 2.0, 4.0];
+    w.apply_linear(
+        h,
+        &Linear::new([[2.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 3.0]]),
+    )
+    .unwrap();
+    let hf = w.get::<Heightfield>(h).unwrap();
+    assert_eq!(hf.spacing, [2.0, 3.0]);
+    assert_eq!(hf.heights, [0.0, 0.5, 1.0, 2.0]);
+}

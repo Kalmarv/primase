@@ -112,6 +112,68 @@ fn surface_known(w: &World, s: u16) -> Result<(), String> {
 
 impl Component for Collider {
     const NAME: &'static str = "core.collider";
+    /// Exact or not at all: a convex shape's points mapped; a box under a map that keeps axes a box, under any other
+    /// the convex hull of its eight mapped corners; a sphere, capsule or cylinder under a similarity (a rotation or
+    /// mirror times a uniform scale) mapped with its radius scaled, under any other unsupported (a sheared sphere is
+    /// an ellipsoid, no shape: tessellate it first); a heightfield shape follows its `core.heightfield`.
+    fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
+        use crate::world::Linearity;
+        let scaled = |r: f32, s: f64| (f64::from(r) * s) as f32;
+        let shape = match &self.shape {
+            Shape::Convex { points } => Shape::Convex {
+                points: points.iter().map(|&p| l.point(p)).collect(),
+            },
+            Shape::Box { center, half_extents } => {
+                let corners: Vec<[f32; 3]> = (0..8)
+                    .map(|k| {
+                        let sign = |bit: usize| if k & (1 << bit) == 0 { -1.0 } else { 1.0 };
+                        l.point(std::array::from_fn(|i| center[i] + sign(i) * half_extents[i]))
+                    })
+                    .collect();
+                if l.axis_map().is_some() {
+                    let lo: [f32; 3] =
+                        std::array::from_fn(|i| corners.iter().map(|c| c[i]).fold(f32::INFINITY, f32::min));
+                    let hi: [f32; 3] = std::array::from_fn(|i| {
+                        corners.iter().map(|c| c[i]).fold(f32::NEG_INFINITY, f32::max)
+                    });
+                    Shape::Box {
+                        center: l.point(*center),
+                        half_extents: std::array::from_fn(|i| (hi[i] - lo[i]) / 2.0),
+                    }
+                } else {
+                    Shape::Convex { points: corners }
+                }
+            }
+            Shape::Sphere { center, radius } => match l.similarity() {
+                Some(s) => Shape::Sphere {
+                    center: l.point(*center),
+                    radius: scaled(*radius, s),
+                },
+                None => return Linearity::Unsupported,
+            },
+            Shape::Capsule { a, b, radius } => match l.similarity() {
+                Some(s) => Shape::Capsule {
+                    a: l.point(*a),
+                    b: l.point(*b),
+                    radius: scaled(*radius, s),
+                },
+                None => return Linearity::Unsupported,
+            },
+            Shape::Cylinder { a, b, radius } => match l.similarity() {
+                Some(s) => Shape::Cylinder {
+                    a: l.point(*a),
+                    b: l.point(*b),
+                    radius: scaled(*radius, s),
+                },
+                None => return Linearity::Unsupported,
+            },
+            Shape::Heightfield => return Linearity::Invariant,
+        };
+        Linearity::Applied(Collider {
+            shape,
+            surface: self.surface,
+        })
+    }
     /// The shape in full, a convex shape's points as a count.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         let shape = match &self.shape {
@@ -158,6 +220,23 @@ impl Component for Collider {
 
 impl Component for Heightfield {
     const NAME: &'static str = "core.heightfield";
+    /// A grid along +X and +Z with heights along +Y stays one exactly under a positive scale along each axis
+    /// (`diag(sx, sy, sz)`, all positive): spacing times (sx, sz), heights times sy. Under any other map (a mirror, a
+    /// rotation, a shear) unsupported: tessellate it first.
+    fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
+        use crate::world::Linearity;
+        let col = |k: usize| l.point(std::array::from_fn(|i| if i == k { 1.0 } else { 0.0 }));
+        let (x, y, z) = (col(0), col(1), col(2));
+        let diagonal = x[1] == 0.0 && x[2] == 0.0 && y[0] == 0.0 && y[2] == 0.0 && z[0] == 0.0 && z[1] == 0.0;
+        if !(diagonal && x[0] > 0.0 && y[1] > 0.0 && z[2] > 0.0) {
+            return Linearity::Unsupported;
+        }
+        let scale = |v: f32, s: f32| (f64::from(v) * f64::from(s)) as f32;
+        let mut h = self.clone();
+        h.spacing = [scale(h.spacing[0], x[0]), scale(h.spacing[1], z[2])];
+        h.heights.iter_mut().for_each(|v| *v = scale(*v, y[1]));
+        Linearity::Applied(h)
+    }
     /// The grid's shape and options, the heights, holes and surfaces as counts.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(json!({
