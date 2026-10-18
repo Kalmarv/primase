@@ -77,6 +77,8 @@ pub struct WriteResult {
     pub instanced_tris: i64,
     pub prototype_tris: i64,
     pub empty_mesh: i64,
+    /// Placements of prototypes that collide without drawing (their collision placed, nothing drawn).
+    pub collision_only: i64,
     pub peak_mesh_bytes: i64,
     pub far_dropped: i64,
     pub clipped: i64,
@@ -863,6 +865,65 @@ impl MapWriter {
         })
     }
 
+    /// One placement's prototype collision: a hull written whole, else its triangles into the tile's solid or water
+    /// soups (clipped to `edge` when given).
+    #[allow(clippy::too_many_arguments)]
+    fn add_collision(
+        &mut self,
+        m: &SrcMesh,
+        s: &Placement,
+        (tx, ty): (i32, i32),
+        hull_no: &mut usize,
+        soups: &mut BTreeMap<(i32, i32), PropSoup>,
+        water_soups: &mut BTreeMap<(i32, i32), PropSoup>,
+        soup_order: &mut Vec<(i32, i32)>,
+        edge: Option<[f32; 4]>,
+    ) {
+        let (Some(cp), Some(ci)) = (&m.col_pos, &m.col_idx) else {
+            return;
+        };
+        if m.col_mode == CollisionMode::Hull {
+            let name = format!("h_{tx}_{ty}_{hull_no}_{}", m.name);
+            *hull_no += 1;
+            let mut w = vec![0f32; cp.len()];
+            for v in (0..w.len().saturating_sub(2)).step_by(3) {
+                let (x, y, z) = (cp[v], cp[v + 1], cp[v + 2]);
+                w[v] = s.pos.x + s.ex.x * x + s.ey.x * y + s.ez.x * z;
+                w[v + 1] = s.pos.y + s.ex.y * x + s.ey.y * y + s.ez.y * z;
+                w[v + 2] = s.pos.z + s.ex.z * x + s.ey.z * y + s.ez.z * z;
+            }
+            self.prop_hulls.push(Hull {
+                name,
+                pos: w,
+                idx: ci.clone(),
+                surface: m.col_surf.first().map_or(0, |b| (b & 0x7F) as usize),
+                ground: m.col_ground,
+            });
+            return;
+        }
+        let target = if m.col_mode == CollisionMode::Water {
+            water_soups
+        } else {
+            soups
+        };
+        let n = collision::add_prop(
+            target,
+            soup_order,
+            cp,
+            ci,
+            &m.col_surf,
+            m.col_ground,
+            s.pos,
+            s.ex,
+            s.ey,
+            s.ez,
+            edge,
+        );
+        if n > 0 {
+            *self.r.prop_col_tris.entry(m.name.clone()).or_default() += n;
+        }
+    }
+
     fn make_proto(&mut self, m: &SrcMesh, row: u32, source: &mut dyn MeshSource) -> Result<Proto> {
         let mut parts: BTreeMap<usize, Acc> = BTreeMap::new();
         for (order, p) in m.parts.iter().enumerate() {
@@ -1002,13 +1063,34 @@ impl MapWriter {
                         .then(cmp(a.pos.z, b.pos.z))
                 });
                 for s in g {
-                    let Some(m) = meshes.get(&s.proto).filter(|m| m.tris != 0) else {
+                    // a mesh without triangles draws nothing; one with collision still collides (its collision
+                    // clipped to the region's edge when the placement is outside it)
+                    let Some(m) = meshes
+                        .get(&s.proto)
+                        .filter(|m| m.tris != 0 || m.col_pos.is_some())
+                    else {
                         self.r.empty_mesh += 1;
                         continue;
                     };
                     let sh = shape_of(s);
                     if sh.degenerate {
                         self.r.degenerate += 1;
+                        continue;
+                    }
+                    if m.tris == 0 {
+                        self.r.collision_only += 1;
+                        if !s.no_collision {
+                            self.add_collision(
+                                m,
+                                s,
+                                (tx, ty),
+                                &mut hull_no,
+                                &mut soups,
+                                &mut water_soups,
+                                &mut soup_order,
+                                s.outside.then_some(edge),
+                            );
+                        }
                         continue;
                     }
                     let mut inst = arch_count[&m.hash] >= o.min_instances && m.tris >= o.min_instance_tris;
@@ -1048,51 +1130,17 @@ impl MapWriter {
                         self.r.clipped += 1;
                         continue;
                     }
-                    if !s.no_collision
-                        && let (Some(cp), Some(ci)) = (&m.col_pos, &m.col_idx)
-                    {
-                        if m.col_mode == CollisionMode::Hull {
-                            let name = format!("h_{tx}_{ty}_{hull_no}_{}", m.name);
-                            hull_no += 1;
-                            let mut w = vec![0f32; cp.len()];
-                            for v in (0..w.len().saturating_sub(2)).step_by(3) {
-                                let (x, y, z) = (cp[v], cp[v + 1], cp[v + 2]);
-                                w[v] = s.pos.x + s.ex.x * x + s.ey.x * y + s.ez.x * z;
-                                w[v + 1] = s.pos.y + s.ex.y * x + s.ey.y * y + s.ez.y * z;
-                                w[v + 2] = s.pos.z + s.ex.z * x + s.ey.z * y + s.ez.z * z;
-                            }
-                            let ii = ci.clone();
-                            let surf = m.col_surf.first().map_or(0, |b| (b & 0x7F) as usize);
-                            self.prop_hulls.push(Hull {
-                                name,
-                                pos: w,
-                                idx: ii,
-                                surface: surf,
-                                ground: m.col_ground,
-                            });
-                        } else {
-                            let target = if m.col_mode == CollisionMode::Water {
-                                &mut water_soups
-                            } else {
-                                &mut soups
-                            };
-                            let n = collision::add_prop(
-                                target,
-                                &mut soup_order,
-                                cp,
-                                ci,
-                                &m.col_surf,
-                                m.col_ground,
-                                s.pos,
-                                s.ex,
-                                s.ey,
-                                s.ez,
-                                kept_parts.as_ref().map(|_| edge),
-                            );
-                            if n > 0 {
-                                *self.r.prop_col_tris.entry(m.name.clone()).or_default() += n;
-                            }
-                        }
+                    if !s.no_collision {
+                        self.add_collision(
+                            m,
+                            s,
+                            (tx, ty),
+                            &mut hull_no,
+                            &mut soups,
+                            &mut water_soups,
+                            &mut soup_order,
+                            kept_parts.as_ref().map(|_| edge),
+                        );
                     }
                     let m = m.clone();
                     if inst {

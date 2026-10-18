@@ -890,6 +890,70 @@ fn unclassified_surfaces_prototype_collision_and_a_median_spawn() {
     assert!(e.contains("unclassified=lava"), "{e}");
 }
 
+/// A placed prototype with collision and no mesh collides without drawing: a prototype with no GLB and no parts, its
+/// soup kept through the scene file (counted); one with neither is left out.
+#[test]
+fn a_prototype_that_collides_without_drawing() {
+    let mut w = world();
+    let place = |w: &mut World, proto| {
+        let at = w.spawn();
+        w.insert(
+            at,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(at, Transform::IDENTITY);
+        at
+    };
+    let fence = w.spawn();
+    w.insert(fence, Name("fence".into()));
+    let mut c = Collision::default();
+    c.extend(
+        &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+        &[[0, 1, 2]],
+        0,
+        |p| p,
+    );
+    w.insert(fence, c);
+    place(&mut w, fence);
+    let nothing = w.spawn();
+    w.insert(nothing, Name("nothing".into()));
+    let nothing_at = place(&mut w, nothing);
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(log.counts["prototypes"], 2);
+    assert_eq!(log.counts["prototypes that collide without drawing"], 1);
+    assert_eq!(log.counts["prototypes with their own collision"], 1);
+    assert!(!w.has::<SkatePrototype>(nothing));
+    let p = w.get::<SkatePrototype>(fence).unwrap();
+    assert_eq!(
+        (p.glb.is_none(), p.collision.as_ref().unwrap().mode),
+        (true, Some(scene::CollisionMode::TriangleMesh))
+    );
+    assert!(w.get::<scene::SkateParts>(fence).unwrap().0.is_empty());
+    // through the scene file (which takes placements of skate prototypes only): no GLB, the soup kept on its
+    // asphalt surface
+    w.despawn(nothing_at);
+    let assets = tmp("collision_only_assets");
+    scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    let out = tmp("collision_only_scene");
+    scene::write(&w, &out).unwrap();
+    let mut back = World::new();
+    scene::read(&out, &mut back).unwrap();
+    let (e, p) = back
+        .iter::<SkatePrototype>()
+        .find(|(_, p)| p.id == "fence")
+        .unwrap();
+    assert!(p.glb.is_none() && p.collision.is_some());
+    let c = back.get::<Collision>(e).unwrap();
+    assert_eq!(c.triangles.len(), 1);
+    assert_eq!(
+        back.resource::<Surfaces>().unwrap().0[c.surfaces[0] as usize].name,
+        "asphalt"
+    );
+}
+
 /// The pass's options: a point spawn, a yaw, a surface map and the unclassified surface round-trip; what does not
 /// make sense is refused.
 #[test]

@@ -1,5 +1,6 @@
 //! The writer's two geometry inputs agree: a scene built from its prototypes' `core.mesh` (each GLB loaded into the
-//! world first) writes the same files as the same scene built from the GLB files. A synthetic scene, made here.
+//! world first) writes the same files as the same scene built from the GLB files; a prototype without geometry that
+//! collides is written as collision. A synthetic scene, made here.
 
 #![allow(clippy::unwrap_used)]
 
@@ -233,4 +234,76 @@ fn a_spawn_over_no_ground_is_refused() {
     assert!((y - 0.3).abs() < 1e-4, "spawn height {y}");
     let e = build([300.0, 300.0], "off").unwrap_err();
     assert!(e.contains("no ground under it"), "{e}");
+}
+
+/// A prototype that collides without drawing (collision, no mesh) is placed as collision: its triangles in the map's
+/// collision, counted, and nothing drawn for it.
+#[test]
+fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
+    let mut w = world();
+    let fence = w.spawn();
+    w.insert(fence, Name("fence".into()));
+    let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
+    let mut c = Collision::default();
+    c.extend(
+        &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+        &[[0, 1, 2]],
+        concrete,
+        |p| p,
+    );
+    w.insert(fence, c);
+    let at = w.spawn();
+    w.insert(
+        at,
+        Instance {
+            prototype: fence,
+            variant: 0,
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [10.0, 0.0, 10.0];
+    w.insert(at, t);
+    primase_skate_scene::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            name: "collides".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let assets = tmp("collides-assets");
+    primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    let scene = tmp("collides-scene");
+    primase_skate_scene::write(&w, &scene).unwrap();
+    let mut w = World::new();
+    primase_skate_scene::read(&scene, &mut w).unwrap();
+    let out_root = tmp("collides-out");
+    primase_reskate::build(
+        &w,
+        &scene,
+        &BuildOptions {
+            out_root: out_root.clone(),
+            ..BuildOptions::default()
+        },
+    )
+    .unwrap();
+    let stats: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out_root.join("collides/stats.json")).unwrap()).unwrap();
+    assert_eq!(
+        stats["totals"]["placements_collision_only"], 1,
+        "{}",
+        stats["totals"]
+    );
+    assert_eq!(stats["totals"]["placements_with_empty_mesh"], 0);
+    assert_eq!(
+        stats["prop_collision_top"]["fence"], 1,
+        "{}",
+        stats["prop_collision_top"]
+    );
+    // drawn: the wall's two placements only
+    assert!(
+        !files(&out_root).keys().any(|k| k.contains("fence")),
+        "{:?}",
+        files(&out_root).keys()
+    );
 }

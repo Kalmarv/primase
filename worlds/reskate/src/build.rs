@@ -663,6 +663,7 @@ fn stats_json(
             mesh_file_bytes: r.mesh_bytes,
             textures_unsupported: writer.ctx.tex.unsupported,
             placements_with_empty_mesh: r.empty_mesh,
+            placements_collision_only: r.collision_only,
             lights_written: r.lights_written,
             lights_dropped_by_cell_cap: r.lights_dropped,
             lights_without_tangent: r.lights_without_tangent,

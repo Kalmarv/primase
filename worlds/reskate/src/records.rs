@@ -319,6 +319,7 @@ pub struct Totals {
     pub mesh_file_bytes: u64,
     pub textures_unsupported: u64,
     pub placements_with_empty_mesh: i64,
+    pub placements_collision_only: i64,
     pub lights_written: usize,
     pub lights_dropped_by_cell_cap: usize,
     pub lights_without_tangent: usize,

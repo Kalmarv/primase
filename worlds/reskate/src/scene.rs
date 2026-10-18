@@ -126,8 +126,8 @@ pub struct ProtoDef {
     pub ground: bool,
     pub collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)>,
     pub parts: Vec<PartDef>,
-    /// Local box (glTF space): the `core.mesh` positions, else the GLB's POSITION accessors;
-    /// `None`: no geometry.
+    /// Local box (glTF space): the `core.mesh` positions, else the GLB's POSITION accessors, else (a prototype that
+    /// collides without drawing) its collision's; `None`: neither.
     pub min: Option<[f32; 3]>,
     pub max: Option<[f32; 3]>,
 }
@@ -625,6 +625,19 @@ impl Scene {
                     }
                 })
                 .collect();
+            let soup = primase_skate_scene::soup(world, e, Some(sc))
+                .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
+            let collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)> = match (soup.as_ref(), &p.collision) {
+                (Some(s), Some(_)) => Some((
+                    s.positions.iter().flatten().copied().collect(),
+                    s.triangles.iter().flatten().copied().collect(),
+                    s.surfaces
+                        .iter()
+                        .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
+                        .collect(),
+                )),
+                _ => None,
+            };
             let (min, max) = match (mesh, mf) {
                 (Some(m), _) => mesh_bounds(m).map_or((None, None), |(a, b)| (Some(a), Some(b))),
                 (None, Some(mf)) => {
@@ -637,20 +650,11 @@ impl Scene {
                     let (a, b) = proto_bounds(&g, mf.mesh as usize)?;
                     (Some(a), Some(b))
                 }
-                (None, None) => (None, None),
-            };
-            let soup = primase_skate_scene::soup(world, e, Some(sc))
-                .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
-            let collision = match (soup.as_ref(), &p.collision) {
-                (Some(s), Some(_)) => Some((
-                    s.positions.iter().flatten().copied().collect(),
-                    s.triangles.iter().flatten().copied().collect(),
-                    s.surfaces
-                        .iter()
-                        .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
-                        .collect(),
-                )),
-                _ => None,
+                // collision without geometry: the collision's box (same local frame as a mesh's positions)
+                (None, None) => collision
+                    .as_ref()
+                    .and_then(|(pos, _, _)| box_of(pos.as_chunks::<3>().0))
+                    .map_or((None, None), |(a, b)| (Some(a), Some(b))),
             };
             protos.push(ProtoDef {
                 index: i,
@@ -680,8 +684,8 @@ impl Scene {
             });
         }
         let mut placements = Vec::new();
-        // a placement of a prototype without geometry (no skate.prototype: raise-skate raises those with a mesh) draws
-        // nothing: left out, counted
+        // a placement of a prototype with neither geometry nor collision (no skate.prototype: raise-skate raises those
+        // with a mesh or a collision) does nothing: left out, counted
         let mut no_geometry = 0usize;
         for (e, inst) in world.iter::<Instance>() {
             // a non-rigid placement is refused whatever its prototype holds
@@ -1001,11 +1005,16 @@ pub fn glb_prim(pr: &primase_core::Primitive) -> GlbPrim {
 
 /// The box of a mesh's positions; `None` when it has none.
 fn mesh_bounds(m: &Mesh) -> Option<([f32; 3], [f32; 3])> {
-    let mut it = m
-        .primitives()
-        .iter()
-        .flat_map(|p| p.positions().unwrap_or(&[]).iter())
-        .peekable();
+    box_of(
+        m.primitives()
+            .iter()
+            .flat_map(|p| p.positions().unwrap_or(&[]).iter()),
+    )
+}
+
+/// The box of some positions; `None` when there are none.
+fn box_of<'a>(positions: impl IntoIterator<Item = &'a [f32; 3]>) -> Option<([f32; 3], [f32; 3])> {
+    let mut it = positions.into_iter().peekable();
     it.peek()?;
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for v in it {
@@ -1253,7 +1262,12 @@ pub fn build_mesh(
     tex: &mut TexLib,
     counters: &mut MeshCounters,
 ) -> Result<Option<SrcMesh>> {
-    let Some(prims) = p.prims()? else { return Ok(None) };
+    // a prototype that collides without drawing is a mesh without parts
+    let prims = match p.prims()? {
+        Some(prims) => prims,
+        None if p.collision.is_some() => std::borrow::Cow::Borrowed(&[][..]),
+        None => return Ok(None),
+    };
     let has_variants = p.parts.iter().any(|x| x.variants.is_some());
     let mut mesh = SrcMesh {
         hash: p.key,

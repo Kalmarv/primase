@@ -22,7 +22,9 @@
 //!   A per texel when it is the mask source) is folded into roughness so its highlight peaks no higher
 //!   ([`fold_reflectance`]): a named, counted approximation; metals and reflectance of 0.04 or more are kept as they are;
 //! - every instanced `core.mesh`: a `skate.prototype` (`prototypes/<id>.glb`, a part per primitive; its own
-//!   `core.collision`, placed by each instance, as a triangle-mesh soup); every placement a default `skate.placement`;
+//!   `core.collision`, placed by each instance, as a triangle-mesh soup); an instanced `core.collision` without a mesh
+//!   a `skate.prototype` that collides without drawing (no GLB, no parts), counted; every placement a default
+//!   `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
 //!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]); a surface with
 //!   neither, whose name is no skate surface, is refused (never guessed); a water class has no solid skate surface:
@@ -524,9 +526,11 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // prototypes and placements
     let mut taken = BTreeSet::new();
     for p in placed {
-        let Some(parts) = world.get::<Mesh>(p).map(|m| m.primitives().len()) else {
+        // a prototype with collision and no mesh collides without drawing (no GLB); one with neither is left out
+        let parts = world.get::<Mesh>(p).map(|m| m.primitives().len());
+        if parts.is_none() && !world.has::<Collision>(p) {
             continue;
-        };
+        }
         let id = key(&name(world, p, "prototype"), &mut taken);
         // its own collision (core.collision on the prototype, placed by each instance): a triangle-mesh soup, or water
         // when every triangle is on a water surface (a mixed soup stays solid, its water triangles counted)
@@ -554,10 +558,13 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         if water {
             log.count("prototypes with water collision", 1);
         }
+        if parts.is_none() {
+            log.count("prototypes that collide without drawing", 1);
+        }
         world.insert(
             p,
             SkatePrototype {
-                glb: Some(FileRef {
+                glb: parts.map(|_| FileRef {
                     path: format!("prototypes/{id}.glb"),
                     sha256: None,
                 }),
@@ -569,7 +576,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 other: Other::new(),
             },
         );
-        world.insert(p, SkateParts(vec![Part::default(); parts]));
+        world.insert(p, SkateParts(vec![Part::default(); parts.unwrap_or(0)]));
         log.count("prototypes", 1);
     }
     let placements: Vec<Entity> = world.iter::<Instance>().map(|(e, _)| e).collect();
