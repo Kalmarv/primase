@@ -151,7 +151,9 @@ pub type PassFactory = fn(&Options) -> Result<Box<dyn Pass>, String>;
 /// The passes a manager knows, by name.
 #[derive(Default)]
 pub struct PassRegistry {
-    factories: BTreeMap<&'static str, PassFactory>,
+    /// Each pass's factory and the options it is made with when nobody gives any (none, or the example of a pass
+    /// whose options have no defaults: [`PassRegistry::register_requiring`]).
+    factories: BTreeMap<&'static str, (PassFactory, Options)>,
 }
 
 impl fmt::Debug for PassRegistry {
@@ -172,8 +174,8 @@ impl PassRegistry {
     }
 
     /// Register a pass whose options have no defaults (a choice the program makes, as a partition's cell size): the
-    /// declaration checks of [`PassRegistry::register`] make it with `example` options; a pipeline that leaves them
-    /// out fails to parse with the factory's reason.
+    /// declaration checks of [`PassRegistry::register`], and the planner reading its declarations, make it with
+    /// `example` options; a pipeline that leaves them out fails to parse with the factory's reason.
     pub fn register_requiring(&mut self, name: &'static str, factory: PassFactory, example: &[(&str, &str)]) {
         let options: Options = example
             .iter()
@@ -193,13 +195,13 @@ impl PassRegistry {
             );
         }
         assert!(
-            self.factories.insert(name, factory).is_none(),
+            self.factories.insert(name, (factory, options)).is_none(),
             "pass {name} registered twice"
         );
     }
 
     pub fn make(&self, name: &str, options: &Options) -> Result<Box<dyn Pass>, Error> {
-        let f = self
+        let (f, _) = self
             .factories
             .get(name)
             .ok_or_else(|| Error::UnknownPass(name.to_owned()))?;
@@ -218,16 +220,15 @@ impl PassRegistry {
         Ok(Pipeline { passes })
     }
 
-    /// Every registered pass, by name, made with its options in `options` (none when it is not listed there).
-    /// Options for a pass that is not registered are an error.
+    /// Every registered pass, by name, made with its options in `options` (its registered example when it is not
+    /// listed there). Options for a pass that is not registered are an error.
     fn instances(&self, options: &PassOptions) -> Result<Vec<Box<dyn Pass>>, Error> {
         if let Some(name) = options.keys().find(|n| !self.factories.contains_key(n.as_str())) {
             return Err(Error::UnknownPass(name.clone()));
         }
-        let none = Options::new();
         self.factories
-            .keys()
-            .map(|name| self.make(name, options.get(*name).unwrap_or(&none)))
+            .iter()
+            .map(|(name, (_, example))| self.make(name, options.get(*name).unwrap_or(example)))
             .collect()
     }
 }
