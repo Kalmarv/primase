@@ -544,53 +544,71 @@ mod tests {
         );
     }
 
+    /// A placement on GTA Online's map shown at noon stays in Online at 12 and goes in story mode or at 13; one with
+    /// an empty hour mask goes in every state; the world with them verifies.
     #[test]
-    fn an_empty_hour_mask_never_holds_and_the_world_verifies() {
-        let mut w = World::new();
-        let (map, hour) = (w.spawn(), w.spawn());
-        for (e, key, n) in [(map, "gta.map", 2), (hour, "gta.hour", 24)] {
-            w.insert(
-                e,
-                StateAxis {
-                    key: key.into(),
-                    domain: Domain::Enum((0..n).map(|v: i32| v.to_string()).collect()),
-                    default: 0,
-                    scope: Scope::Global,
-                    class: "test".into(),
-                    source: "test".into(),
+    fn a_condition_keeps_its_placement_in_its_map_and_hours_only() {
+        use primase_core::pass::{Pass, PassLog};
+        for (assign, kept) in [
+            ("gta.map:online;gta.hour:12", true),
+            ("gta.map:story;gta.hour:12", false),
+            ("gta.map:online;gta.hour:13", false),
+        ] {
+            let mut w = World::new();
+            let (map, hour) = (w.spawn(), w.spawn());
+            for (e, key, values) in [
+                (map, "gta.map", vec!["story".to_string(), "online".to_string()]),
+                (hour, "gta.hour", (0..24).map(|h| h.to_string()).collect()),
+            ] {
+                w.insert(
+                    e,
+                    StateAxis {
+                        key: key.into(),
+                        domain: Domain::Enum(values),
+                        default: 0,
+                        scope: Scope::Global,
+                        class: "test".into(),
+                        source: "test".into(),
+                    },
+                );
+            }
+            let at_noon_online = condition(vec![
+                Literal {
+                    axis: map,
+                    values: 0b10,
                 },
-            );
-        }
-        let online = Literal { axis: map, values: 2 };
-        assert_eq!(condition(Vec::new()), None);
-        assert_eq!(
-            condition(vec![
-                online,
                 Literal {
                     axis: hour,
-                    values: 1 << 12
-                }
-            ]),
-            Some(Condition(vec![Clause(vec![
-                online,
-                Literal {
-                    axis: hour,
-                    values: 1 << 12
-                }
-            ])]))
-        );
-        let never = condition(vec![
-            online,
-            Literal {
+                    values: 1 << 12,
+                },
+            ])
+            .expect("a condition");
+            let never = condition(vec![Literal {
                 axis: hour,
                 values: 0,
-            },
-        ])
-        .expect("a condition");
-        assert_eq!(never, Condition(Vec::new()));
-        let p = w.spawn();
-        w.insert(p, Transform::IDENTITY);
-        w.insert(p, never);
-        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+            }])
+            .expect("a condition");
+            let (p, q) = (w.spawn(), w.spawn());
+            for (e, c) in [(p, at_noon_online), (q, never)] {
+                w.insert(e, Transform::IDENTITY);
+                w.insert(e, c);
+            }
+            assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+            let values = assign
+                .split(';')
+                .map(|kv| {
+                    kv.split_once(':')
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .unwrap()
+                })
+                .collect();
+            primase_core::state::ResolveState {
+                assign: values,
+                ..Default::default()
+            }
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+            assert_eq!((w.is_alive(p), w.is_alive(q)), (kept, false), "{assign}");
+        }
     }
 }

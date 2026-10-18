@@ -122,11 +122,36 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
 
 #[cfg(test)]
 mod tests {
-    /// Every pass registers: the registry makes each with no options, and a pass that refuses them panics there.
+    /// GTA registers exactly these passes, and each is made with no options under its own name.
     #[test]
-    fn every_pass_registers() {
+    fn the_gta_passes_register_by_name_and_need_no_options() {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
+        let names = [
+            "gta-leave-out-interiors",
+            "gta-pose-fragments",
+            "gta-select-collision",
+            "gta-select-region",
+            "gta-select-stand-ins",
+            "gta-select-water",
+            "gta-terrain-layers",
+            "gta-tint",
+            "gta-vertex-colours",
+            "gta-winding",
+            "lower-gta-collision",
+            "lower-gta-embedded-collision",
+            "lower-gta-lights",
+            "lower-gta-pbr",
+            "lower-gta-surfaces",
+            "lower-gta-water",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        for name in names {
+            let pass = reg
+                .make(name, &primase_core::pass::Options::new())
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(pass.name(), name);
+        }
     }
 
     /// The selection passes that leave entities out declare it, so the pass manager accepts a name that only the
