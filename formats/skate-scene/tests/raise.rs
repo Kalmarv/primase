@@ -155,6 +155,9 @@ fn options() -> RaiseOptions {
     RaiseOptions {
         name: "raised".into(),
         surfaces: BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]),
+        spawn: Some(scene::Spawn::At([2.0, -1.0])),
+        spawn_yaw: 0.0,
+        unclassified: None,
     }
 }
 
@@ -184,6 +187,17 @@ fn a_core_world_becomes_a_scene() {
     assert_eq!(log.counts["textures"], 2);
     assert_eq!(log.counts["prototypes"], 1);
     assert_eq!(log.counts["lights"], 1);
+    assert_eq!(log.counts["markers"], 1);
+    let spawn: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
+    assert_eq!(spawn.len(), 1);
+    assert_eq!(
+        (spawn[0].kind, spawn[0].position, spawn[0].snap.clone()),
+        (
+            scene::MarkerKind::Spawn,
+            Some(([2.0, -1.0], None)),
+            Some(scene::Snap::Mode(scene::SnapMode::Ground))
+        )
+    );
     assert_eq!(
         log.counts["directional lights not raised (skate lights itself by its time of day)"],
         1
@@ -258,6 +272,7 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
             &RaiseOptions {
                 name: "x".into(),
                 surfaces: map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect(),
+                ..RaiseOptions::default()
             },
         );
         r.map(|_| w.resource::<Surfaces>().unwrap().0[0].name.clone())
@@ -314,6 +329,9 @@ fn what_skate_cannot_take_is_refused() {
         &RaiseOptions {
             name: "x".into(),
             surfaces: BTreeMap::new(),
+            spawn: None,
+            spawn_yaw: 0.0,
+            unclassified: None,
         },
     )
     .unwrap_err();
@@ -625,4 +643,225 @@ fn explicit_raise_uses_pbr_and_counts_shared_quantization_per_material() {
     );
     assert_eq!((a.metallic, a.roughness, a.emissive), (None, None, None));
     assert_eq!(w.get::<PbrMaterial>(first), Some(&pbr));
+}
+
+/// A blend (`core.layered`) a placed primitive is drawn with: a layered skate material, the blend kept, its layers'
+/// materials raised although no primitive draws them directly, and a layer with no `pbr.material` refused.
+#[test]
+fn a_drawn_blend_becomes_a_layered_material() {
+    use primase_core::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
+    let mut w = world();
+    let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
+    let mats: Vec<primase_core::Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
+    // two layer-only materials, a blend of them (and a null slot) drawn by the prototype's second primitive
+    let (base, _) = w.iter::<Texture>().next().unwrap();
+    let mut layers = Vec::new();
+    for n in ["dirt", "grass"] {
+        let e = w.spawn();
+        w.insert(e, Name(n.into()));
+        w.insert(
+            e,
+            PbrMaterial {
+                base_color_texture: Some(TextureRef::new(base)),
+                ..PbrMaterial::default()
+            },
+        );
+        layers.push(e);
+    }
+    let blend = w.spawn();
+    w.insert(blend, Name("terrain".into()));
+    w.insert(
+        blend,
+        LayeredMaterial {
+            layers: vec![
+                Some(Layer {
+                    material: layers[0],
+                    texcoord: None,
+                    transform: None,
+                }),
+                None,
+                Some(Layer {
+                    material: layers[1],
+                    texcoord: None,
+                    transform: None,
+                }),
+            ],
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
+        },
+    );
+    let mut mesh = w.get::<Mesh>(proto).unwrap().clone();
+    mesh.primitives_mut()[1].material = Some(blend);
+    w.insert(proto, mesh);
+    // a layer with no pbr.material is refused, the world unchanged
+    let orphan = w.spawn();
+    let mut l = w.get::<LayeredMaterial>(blend).unwrap().clone();
+    l.layers[1] = Some(Layer {
+        material: orphan,
+        texcoord: None,
+        transform: None,
+    });
+    w.insert(blend, l.clone());
+    let e = scene::raise_skate(&mut w, &options()).unwrap_err().to_string();
+    assert!(e.contains("has no pbr.material"), "{e}");
+    assert!(w.iter::<SkateMaterial>().next().is_none());
+    l.layers[1] = None;
+    w.insert(blend, l);
+    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    assert_eq!(log.counts["layered materials"], 1);
+    // rock (drawn), dirt and grass (layers); plain is no longer drawn
+    assert_eq!(log.counts["materials"], 3);
+    let m = w.get::<SkateMaterial>(blend).unwrap();
+    assert_eq!((m.key.as_str(), m.class), ("terrain", MaterialClass::Layered));
+    assert!(w.has::<LayeredMaterial>(blend));
+    for e in layers {
+        assert_eq!(w.get::<SkateMaterial>(e).unwrap().class, MaterialClass::Opaque);
+    }
+    assert!(!w.has::<SkateMaterial>(mats[1]), "plain is drawn by nothing now");
+}
+
+/// `spawn=centre`: one spawn marker at the centre of the placements' positions, snapped to the ground; as a pass from
+/// its options.
+#[test]
+fn the_spawn_at_the_centre_of_the_placements() {
+    use primase_core::pass::{Options, PassLog};
+    let mut w = world();
+    // a second placement of the boulder: the placements at x 3 and 9, z 0 and -4
+    let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
+    let at = w.spawn();
+    w.insert(
+        at,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [9.0, 0.0, -4.0];
+    w.insert(at, t);
+    let mut o = Options::from([
+        ("name".to_owned(), "raised".to_owned()),
+        ("spawn".to_owned(), "centre".to_owned()),
+    ]);
+    let pass = scene::raise_skate_pass(&o).unwrap();
+    assert_eq!(pass.options(), o);
+    // the world's Snow surface is not skate's: the pass alone (no surface map) refuses it
+    let mut log = PassLog::default();
+    let e = pass.run(&mut w, &mut log).unwrap_err();
+    assert!(e.contains("Snow"), "{e}");
+    w.remove_resource::<Surfaces>();
+    pass.run(&mut w, &mut log).unwrap();
+    let m: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].position, Some(([6.0, -2.0], None)));
+    o.insert("spawn_x".into(), "1".into());
+    o.insert("spawn_z".into(), "2".into());
+    assert!(scene::raise_skate_pass(&o).is_err(), "spawn=centre and a point");
+}
+
+/// A surface with no class and no map entry takes `unclassified` (counted by name); a prototype's own
+/// `core.collision` becomes its triangle-mesh soup (counted); the median spawn is not moved by a far placement.
+#[test]
+fn unclassified_surfaces_prototype_collision_and_a_median_spawn() {
+    let mut w = world();
+    let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
+    w.insert(
+        proto,
+        primase_core::Collision {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            surfaces: vec![0],
+        },
+    );
+    // placements at x 3 (the world's), 9 and 1000: the median x is 9, not the mean
+    for x in [9.0, 1000.0] {
+        let at = w.spawn();
+        w.insert(
+            at,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [x, 0.0, 0.0];
+        w.insert(at, t);
+    }
+    let log = scene::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            name: "x".into(),
+            spawn: Some(scene::Spawn::Centre),
+            unclassified: Some("concrete".into()),
+            ..RaiseOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(log.counts["unclassified surfaces made concrete: Snow"], 1);
+    assert_eq!(w.resource::<Surfaces>().unwrap().0[0].name, "concrete");
+    assert_eq!(log.counts["prototypes with their own collision"], 1);
+    let p = w.get::<scene::SkatePrototype>(proto).unwrap();
+    let soup = p.collision.as_ref().unwrap();
+    assert_eq!(soup.mode, Some(scene::CollisionMode::TriangleMesh));
+    let m: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
+    assert_eq!(m[0].position.unwrap().0[0], 9.0);
+    // an unclassified surface that is no skate surface is refused
+    let e = scene::raise_skate(
+        &mut world(),
+        &RaiseOptions {
+            name: "x".into(),
+            unclassified: Some("lava".into()),
+            ..RaiseOptions::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("unclassified=lava"), "{e}");
+}
+
+/// The pass's options: a point spawn, a yaw, a surface map and the unclassified surface round-trip; what does not
+/// make sense is refused.
+#[test]
+fn raise_skate_pass_options() {
+    use primase_core::pass::Options;
+    let o = Options::from([
+        ("name".to_owned(), "m".to_owned()),
+        ("spawn_x".to_owned(), "1.5".to_owned()),
+        ("spawn_z".to_owned(), "-2".to_owned()),
+        ("spawn_yaw".to_owned(), "180".to_owned()),
+        ("map".to_owned(), "PUDDLE:default;SNOW:asphalt".to_owned()),
+        ("unclassified".to_owned(), "default".to_owned()),
+    ]);
+    let pass = scene::raise_skate_pass(&o).unwrap();
+    assert_eq!(
+        scene::raise_skate_pass(&pass.options()).unwrap().options(),
+        pass.options()
+    );
+    for bad in [
+        vec![("spawn_x", "1")],
+        vec![("spawn", "north")],
+        vec![("spawn_x", "nan"), ("spawn_z", "1")],
+        vec![("name", "a b")],
+        vec![("map", "PUDDLE")],
+        vec![("colour", "red")],
+    ] {
+        let o: Options = bad.iter().map(|&(k, v)| (k.to_owned(), v.to_owned())).collect();
+        assert!(scene::raise_skate_pass(&o).is_err(), "{bad:?}");
+    }
+}
+
+/// `spawn=centre` with no placements makes no marker and says so.
+#[test]
+fn a_centre_spawn_without_placements_is_counted() {
+    let mut w = primase_core::World::new();
+    let log = scene::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            name: "empty".into(),
+            spawn: Some(scene::Spawn::Centre),
+            ..RaiseOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(log.counts["spawn=centre without placements: no spawn marker"], 1);
+    assert_eq!(w.iter::<scene::SkateMarker>().count(), 0);
 }

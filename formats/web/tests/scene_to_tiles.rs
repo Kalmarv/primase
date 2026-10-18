@@ -96,6 +96,7 @@ fn scene(name: &str) -> PathBuf {
         &primase_skate_scene::RaiseOptions {
             name: "lights".into(),
             surfaces: BTreeMap::new(),
+            ..Default::default()
         },
     )
     .unwrap();

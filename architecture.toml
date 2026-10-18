@@ -120,12 +120,6 @@ reason = "Sekiro material lowering is a function, not yet a pass"
 removed_when = "it runs as a declared pass"
 
 [[pass]]
-file = "formats/skate-scene/src/raise.rs"
-what = "raise_skate returns a PassLog but no pass of formats/skate-scene runs it"
-reason = "raise-skate is a function, not yet a declared pass"
-removed_when = "it runs as a declared pass"
-
-[[pass]]
 file = "worlds/reskate/src/layered.rs"
 what = "pass lower-layered-reskate is not registered"
 reason = "worlds/reskate has no register() yet"

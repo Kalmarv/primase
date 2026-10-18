@@ -144,6 +144,7 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
         &RaiseOptions {
             name: "mesh_input".into(),
             surfaces: BTreeMap::new(),
+            ..Default::default()
         },
     )
     .unwrap();

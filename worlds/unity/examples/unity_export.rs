@@ -163,6 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "_",
                 ),
                 surfaces,
+                ..Default::default()
             },
         )?,
     );

@@ -73,6 +73,9 @@ fn raise_then_lower_restores_core_lights() {
         &RaiseOptions {
             name: "lights".into(),
             surfaces: BTreeMap::new(),
+            spawn: None,
+            spawn_yaw: 0.0,
+            unclassified: None,
         },
     )
     .unwrap();
