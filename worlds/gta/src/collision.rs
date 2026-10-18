@@ -14,7 +14,8 @@
 //! cylinders tessellated (approximated, counted); composite children placed by their transforms; children flagged
 //! foliage (type flag bit 19) or river (bit 27) left out, as the earlier exporter did (counted). Each triangle's
 //! surface is its material's name in the install's material table (`materials.dat`), in the world's `Surfaces`.
-//! Given a region, only triangles whose centre lies in it are kept.
+//! Given a region, only triangles whose centre lies in it are kept. The raw bound is removed once lowered, and an
+//! entity left with no triangle in the region goes (counted).
 //!
 //! `lower-gta-embedded-collision`: every prototype's [`GtaEmbeddedBounds`] becomes its `core.collision`, in its own
 //! space (its placements place it), lowered as above (no region: its placements were selected). A placement whose
@@ -655,6 +656,13 @@ impl Pass for LowerGtaCollision {
     fn provides(&self) -> &[&'static str] {
         &["core.collision", "core.transform", "core.surfaces"]
     }
+    fn removes(&self) -> &[&'static str] {
+        &["gta.bounds"]
+    }
+    /// The bounds entities with no triangle in the region.
+    fn despawns_entities(&self) -> bool {
+        true
+    }
     fn approximates(&self) -> &'static str {
         "boxes, spheres, capsules and cylinders tessellated; foliage and river volumes left out"
     }
@@ -671,10 +679,12 @@ impl Pass for LowerGtaCollision {
         };
         for e in holders {
             let mut soup = Soup::default();
-            soup.bound(&w.get::<GtaBounds>(e).expect("bounds").bound, &IDENTITY, log);
+            let raw = w.remove::<GtaBounds>(e).expect("bounds");
+            soup.bound(&raw.bound, &IDENTITY, log);
             let c = soup.collision(&names, &mut surfaces, inside, log)?;
             if c.triangles.is_empty() {
-                log.count("bounds with no triangle in the region", 1);
+                log.count("bounds with no triangle in the region, left out", 1);
+                w.despawn(e);
                 continue;
             }
             w.insert(e, c);
@@ -831,6 +841,46 @@ mod tests {
                 assert!((0..3).map(|i| n[i] * out[i]).sum::<f32>() > 0.0, "x {x}: {tri:?}");
             }
         }
+    }
+
+    /// A map bound inside the region becomes collision and loses its raw bound; one with no triangle in the region
+    /// goes, counted.
+    #[test]
+    fn map_bounds_are_lowered_and_their_raw_bound_removed() {
+        let mut w = World::new();
+        w.insert_resource(GtaMaterials(vec!["DEFAULT".into(), "TARMAC".into()]));
+        let raw = |w: &mut World| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                GtaBounds {
+                    path: "m.ybn".into(),
+                    detail: None,
+                    bound: box_bound(),
+                },
+            );
+            e
+        };
+        let (inside, outside) = (raw(&mut w), raw(&mut w));
+        // the second is moved out of the region: its box's GTA x from 100
+        if let Some(b) = w.get_mut::<GtaBounds>(outside) {
+            b.bound.header.box_min[0] = 100.0;
+            b.bound.header.box_max[0] = 101.0;
+        }
+        let mut log = PassLog::default();
+        LowerGtaCollision {
+            region: Some([-10.0, -10.0, 10.0, 10.0]),
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
+        assert_eq!(w.get::<Collision>(inside).map(|c| c.triangles.len()), Some(12));
+        assert!(w.get::<GtaBounds>(inside).is_none());
+        assert!(!w.is_alive(outside));
+        assert_eq!(
+            log.counts.get("bounds with no triangle in the region, left out"),
+            Some(&1)
+        );
+        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
     }
 
     /// A box bound from GTA's (0, 0, 0) to (1, 2, 3), of material 1.

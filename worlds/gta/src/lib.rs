@@ -161,7 +161,7 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
         let p = reg
-            .parse("gta-select-region, gta-select-stand-ins, gta-select-collision, gta-leave-out-interiors, gta-select-water")
+            .parse("gta-select-region, gta-select-stand-ins, gta-select-collision, gta-leave-out-interiors, gta-select-water, lower-gta-collision")
             .unwrap();
         for pass in &p.passes {
             assert!(pass.despawns_entities(), "{}", pass.name());
