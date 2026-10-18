@@ -927,13 +927,18 @@ mod tests {
         );
     }
 
-    /// One failing world per rule `verify()` enforces.
+    /// One failing world per rule `verify()` enforces, each asserting the exact (component, entity, message) that
+    /// rule reports: a world that fails some other rule does not pass here.
     #[test]
     fn verify_rejects_each_rule() {
-        let failing = |build: &dyn Fn(&mut World)| {
+        let failing = |build: &dyn Fn(&mut World) -> (&'static str, Entity, String)| {
             let mut w = World::new();
-            build(&mut w);
-            assert!(!w.verify_components().is_empty(), "should fail");
+            let (component, entity, message) = build(&mut w);
+            assert_eq!(
+                w.verify_components(),
+                [(component, entity, message)],
+                "one failure, the rule's own"
+            );
         };
         let mut good = StateAxis {
             key: "k".into(),
@@ -950,25 +955,35 @@ mod tests {
         };
         // the axis
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     key: String::new(),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                r#"key "" is empty or holds ':' or ';' (the assign syntax)"#.to_owned(),
+            )
         });
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     default: 2,
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                "k: default 2 outside its 2 values".to_owned(),
+            )
         });
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     domain: Domain::Enum(vec![]),
@@ -976,54 +991,84 @@ mod tests {
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                "k: 0 values, the domain holds 1..=64".to_owned(),
+            )
         });
         failing(&|w| {
             let names = (0..65).map(|i| format!("v{i}")).collect();
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     domain: Domain::Enum(names),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                "k: 65 values, the domain holds 1..=64".to_owned(),
+            )
         });
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     domain: Domain::Enum(vec!["a".into(), "a".into()]),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                r#"k: value name "a" empty, repeated or holding ':' or ';'"#.to_owned(),
+            )
         });
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     domain: Domain::Enum(vec!["a:b".into()]),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                r#"k: value name "a:b" empty, repeated or holding ':' or ';'"#.to_owned(),
+            )
         });
         failing(&|w| {
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     key: "k;x".into(),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                r#"key "k;x" is empty or holds ':' or ';' (the assign syntax)"#.to_owned(),
+            )
         });
         failing(&|w| {
             let gone = w.spawn();
             w.despawn(gone);
-            with_axis(
+            let e = with_axis(
                 w,
                 StateAxis {
                     scope: Scope::Local(gone),
                     ..good.clone()
                 },
             );
+            (
+                "core.state_axis",
+                e,
+                format!("refers to {gone:?}, which is not alive"),
+            )
         });
         // literals
         let cond = |w: &mut World, lit: Literal, transform: bool| {
@@ -1032,14 +1077,16 @@ mod tests {
                 w.insert(e, Transform::IDENTITY);
             }
             w.insert(e, Condition(vec![Clause(vec![lit])]));
+            e
         };
         failing(&|w| {
             let a = with_axis(w, good.clone());
-            cond(w, Literal { axis: a, values: 0 }, true);
+            let e = cond(w, Literal { axis: a, values: 0 }, true);
+            ("core.condition", e, "k: empty value mask".to_owned())
         });
         failing(&|w| {
             let a = with_axis(w, good.clone());
-            cond(
+            let e = cond(
                 w,
                 Literal {
                     axis: a,
@@ -1047,11 +1094,16 @@ mod tests {
                 },
                 true,
             );
+            (
+                "core.condition",
+                e,
+                "k: mask 0x4 has values beyond its 2".to_owned(),
+            )
         });
         failing(&|w| {
             let not_axis = w.spawn();
             w.insert(not_axis, Name("x".into()));
-            cond(
+            let e = cond(
                 w,
                 Literal {
                     axis: not_axis,
@@ -1059,16 +1111,31 @@ mod tests {
                 },
                 true,
             );
+            (
+                "core.condition",
+                e,
+                format!("literal on {not_axis:?}, which is not a live axis"),
+            )
         });
         failing(&|w| {
             let a = with_axis(w, good.clone());
-            cond(w, on(a), false);
+            let e = cond(w, on(a), false);
+            (
+                "core.condition",
+                e,
+                "on an entity without a transform: only placed things carry state".to_owned(),
+            )
         });
         // overrides
         failing(&|w| {
             let e = w.spawn();
             w.insert(e, Transform::IDENTITY);
             w.insert(e, StateOverride(vec![(Clause::default(), Override::Variant(1))]));
+            (
+                "core.state_override",
+                e,
+                "variant override on an entity without an instance".to_owned(),
+            )
         });
         failing(&|w| {
             let proto = w.spawn();
@@ -1079,6 +1146,11 @@ mod tests {
                 e,
                 StateOverride(vec![(Clause::default(), Override::Prototype(gone))]),
             );
+            (
+                "core.state_override",
+                e,
+                format!("refers to {gone:?}, which is not alive"),
+            )
         });
         failing(&|w| {
             let proto = w.spawn();
@@ -1089,6 +1161,11 @@ mod tests {
                 e,
                 StateOverride(vec![(Clause::default(), Override::Transform(t))]),
             );
+            (
+                "core.state_override",
+                e,
+                "transform: value 9 is NaN, not finite".to_owned(),
+            )
         });
         // and a 64-value enum with a full mask is fine
         good.domain = Domain::Enum((0..64).map(|i| format!("v{i}")).collect());
