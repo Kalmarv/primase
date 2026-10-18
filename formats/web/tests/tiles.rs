@@ -719,8 +719,14 @@ fn compressed_plain_nodes_omit_absent_matrix() {
     let set = write(&w, &Options::default()).unwrap();
     let chunks = primase_gltf::glb::parse(set.files.values().next().unwrap()).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
-    assert!(doc["nodes"][0].get("matrix").is_none_or(|m| m.is_array()));
-    assert!(doc["nodes"][0]["scale"].is_array() || doc["nodes"][0]["matrix"].is_array());
+    let node = &doc["nodes"][0];
+    // 1 m across: the frame is centred on (0.5, 0, 0.5) with step 0.5/32767, the smallest f32 at or above it
+    // (1.5259257e-05, widening to 1.525925654277671e-05). A compressed node keeps translation and scale; it never
+    // gains the matrix the source transform did not have.
+    assert!(node.get("matrix").is_none(), "{node}");
+    assert_eq!(node["translation"], serde_json::json!([0.5, 0.0, 0.5]));
+    let step = f64::from(1.525_925_7e-5_f32);
+    assert_eq!(node["scale"], serde_json::json!([step, step, step]));
 }
 
 #[test]
