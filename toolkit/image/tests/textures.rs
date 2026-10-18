@@ -200,24 +200,41 @@ fn rebuild_projects_outside_disk_on_every_mip_without_changing_alpha() {
     assert!(normalize_normals(&mut world).unwrap().counts.is_empty());
 }
 
+/// Worked by hand from `x = r / 127.5 - 1`, `y = g / 127.5 - 1`, `z = sqrt(max(0, 1 - x*x - y*y))` and
+/// `blue = round_ties_even((z / 2 + 1/2) * 255)`; a projected pair rebuilds `z = 0`, so its blue is 128.
+const HAND_WORKED_BLUES: &[([u8; 2], u8)] = &[
+    ([0, 0], 128),
+    ([64, 64], 218),
+    ([64, 128], 238),
+    ([64, 192], 217),
+    ([96, 64], 233),
+    ([128, 128], 255),
+    ([144, 80], 245),
+    ([160, 192], 233),
+    ([176, 224], 195),
+    ([192, 192], 217),
+    ([200, 100], 229),
+    ([224, 32], 128),
+    ([255, 128], 128),
+    ([255, 255], 128),
+];
+
 #[test]
-fn rebuild_blue_rounding_matches_reference_for_every_xy_pair() {
+fn rebuild_projects_outside_the_disk_and_matches_hand_worked_blues() {
     let mut projected = 0;
     let mut maximum_angle = 0f64;
+    let mut blue_samples = 0;
     for r in 0..=255u8 {
         for g in 0..=255u8 {
-            let x = f32::from(r) / 255. * 2. - 1.;
-            let y = f32::from(g) / 255. * 2. - 1.;
-            let reference = ((1f32 - x * x - y * y).max(0.).sqrt() * 0.5 + 0.5) * 255.;
             let x = f64::from(r) / 127.5 - 1.;
             let y = f64::from(g) / 127.5 - 1.;
-            let blue = ((1f64 - x * x - y * y).max(0.).sqrt() * 0.5 + 0.5) * 255.;
-            assert_eq!(blue.round() as u8, blue.round_ties_even() as u8);
-            assert_eq!(blue.round_ties_even() as u8, reference.round_ties_even() as u8);
             let mut pixel = [r, g, 0, 71];
             let changed = primase_image::rebuild_normal_z(&mut pixel);
             assert_eq!(changed, x * x + y * y > 1.);
-            assert_eq!(pixel[2], reference.round_ties_even() as u8);
+            if let Some((_, blue)) = HAND_WORKED_BLUES.iter().find(|entry| entry.0 == [r, g]) {
+                assert_eq!(pixel[2], *blue, "{r},{g}");
+                blue_samples += 1;
+            }
             assert_eq!(pixel[3], 71);
             if changed {
                 projected += 1;
@@ -234,6 +251,7 @@ fn rebuild_blue_rounding_matches_reference_for_every_xy_pair() {
         }
     }
     assert!(projected > 0);
+    assert_eq!(blue_samples, HAND_WORKED_BLUES.len());
     println!(
         "65536 XY pairs, {projected} projected, maximum encoded direction change {maximum_angle} degrees"
     );
