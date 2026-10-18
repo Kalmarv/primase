@@ -7,7 +7,9 @@
 //! column): a triangle goes with its first vertex's colour, at full precision, and each colour's triangles become a
 //! primitive of their own drawn with a copy of the material tinted by that colour (the material's own tint multiplied
 //! in, in linear light), one copy per (material, colour); the primitive's material variants ([`MaterialVariants`])
-//! get tinted copies alike. Per-primitive components follow the split (`World::rebuild_primitives`). Only a
+//! get tinted copies alike. A material whose source does not take `COLOR_0` (`core.vertex_color` `ignored`) is not
+//! tinted, counted: a primitive no material of which takes it is left whole, and one drawn also with a material that
+//! takes it is split for that one. Per-primitive components follow the split (`World::rebuild_primitives`). Only a
 //! triangle list is split; a primitive of another topology keeps its material, counted.
 //! A primitive spreading its triangles over more than [`MAX_COLOURS`] colours (vegetation and clutter gradients) keeps
 //! one tint, their mean weighted by triangles: counted, with its triangles. `COLOR_0`'s alpha (a fade) is left for
@@ -101,7 +103,8 @@ impl Pass for LowerTintReskate {
             let mut any = false;
             let mut per: Vec<Option<Split>> = Vec::with_capacity(mesh.primitives().len());
             for (i, p) in mesh.primitives().iter().enumerate() {
-                let plan = plan(world, e, p, log).map_err(|m| format!("{e:?} primitive {i}: {m}"))?;
+                let drawn = primase_core::color0_drawn(world, e, mesh, i);
+                let plan = plan(world, e, p, drawn, log).map_err(|m| format!("{e:?} primitive {i}: {m}"))?;
                 any |= plan.is_some();
                 per.push(plan);
             }
@@ -154,6 +157,13 @@ impl Pass for LowerTintReskate {
                 let (Some(colour), Some(m)) = (colour, p.material) else {
                     continue;
                 };
+                if !primase_core::uses_color0(world, m) {
+                    log.count(
+                        "tinted primitives whose own material ignores COLOR_0, material kept",
+                        1,
+                    );
+                    continue;
+                }
                 match self.copy(world, &mut made, m, *colour, log) {
                     Some(c) => {
                         p.material = Some(c);
@@ -170,6 +180,10 @@ impl Pass for LowerTintReskate {
                 for (map, colour) in v.0.iter_mut().zip(&colours) {
                     let Some(colour) = colour else { continue };
                     for m in map.values_mut() {
+                        if !primase_core::uses_color0(world, *m) {
+                            log.count("variant materials ignoring COLOR_0, kept untinted", 1);
+                            continue;
+                        }
                         match self.copy(world, &mut made, *m, *colour, log) {
                             Some(c) => {
                                 *m = c;
@@ -186,14 +200,28 @@ impl Pass for LowerTintReskate {
     }
 }
 
-/// How primitive `p` of mesh `e` splits (`None`: it keeps its material).
-fn plan(world: &World, e: Entity, p: &Primitive, log: &mut PassLog) -> Result<Option<Split>, String> {
+/// How primitive `p` of mesh `e` splits (`None`: it keeps its material). `drawn`: some material drawing it, variants
+/// included, takes `COLOR_0` ([`primase_core::color0_drawn`]).
+fn plan(
+    world: &World,
+    e: Entity,
+    p: &Primitive,
+    drawn: bool,
+    log: &mut PassLog,
+) -> Result<Option<Split>, String> {
     if !p.material.is_some_and(|m| world.has::<SkateMaterial>(m)) {
         return Ok(None);
     }
     let Some(c) = colours(p)? else {
         return Ok(None);
     };
+    if !drawn {
+        log.count(
+            "tinted primitives whose materials ignore COLOR_0 (core.vertex_color), not tinted",
+            1,
+        );
+        return Ok(None);
+    }
     if p.topology != Topology::Triangles {
         log.count("tinted primitives not a triangle list, tint not applied", 1);
         return Ok(None);
@@ -481,6 +509,46 @@ mod tests {
         assert_ne!(copy, variant);
         assert_eq!(w.get::<SkateMaterial>(copy).unwrap().tint, Some([188, 255, 255]));
         assert_eq!(log.counts["tinted variant materials of primitives"], 1);
+    }
+
+    /// A material whose source ignores COLOR_0 (`core.vertex_color`) is not tinted; a primitive drawn also with a
+    /// variant that takes it is tinted for the variant only, and one no material of which takes it is left whole.
+    #[test]
+    fn materials_ignoring_vertex_colour_are_not_tinted() {
+        let mut w = World::new();
+        let ignores = material(&mut w);
+        w.insert(ignores, primase_core::VertexColor::Ignored);
+        let takes = material(&mut w);
+        let red = Stream::U8x4(vec![[255, 0, 0, 255]; 4]);
+        let alone = w.spawn();
+        w.insert(alone, Mesh::new(vec![quad(ignores, Some(red.clone()))]));
+        let mixed = w.spawn();
+        w.insert(mixed, Mesh::new(vec![quad(ignores, Some(red))]));
+        w.insert(
+            mixed,
+            primase_core::MaterialVariants(vec![BTreeMap::from([(1, takes)])]),
+        );
+        let mut log = PassLog::default();
+        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        assert_eq!(
+            w.get::<Mesh>(alone).unwrap().primitives()[0].material,
+            Some(ignores)
+        );
+        assert_eq!(
+            log.counts["tinted primitives whose materials ignore COLOR_0 (core.vertex_color), not tinted"],
+            1
+        );
+        assert_eq!(
+            w.get::<Mesh>(mixed).unwrap().primitives()[0].material,
+            Some(ignores)
+        );
+        assert_eq!(
+            log.counts["tinted primitives whose own material ignores COLOR_0, material kept"],
+            1
+        );
+        let copy = w.get::<primase_core::MaterialVariants>(mixed).unwrap().0[0][&1];
+        assert_ne!(copy, takes);
+        assert_eq!(w.get::<SkateMaterial>(copy).unwrap().tint, Some([255, 0, 0]));
     }
 
     /// Only a triangle list splits (another topology keeps its material, counted); an index past the colour stream

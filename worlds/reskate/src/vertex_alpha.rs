@@ -8,7 +8,8 @@
 //! ([`BlendOpacity`]; 1 where a primitive has no `COLOR_0`). The writer emits it with Studio's `vertex_blend`, and
 //! the post-compile stage writes the opacity onto the stock decal row
 //! ([`crate::postcompile::vblend::decal_opacity`], never the all-zero sentinel). Materials already marked (a lowered
-//! blend's overlays) are left alone.
+//! blend's overlays) are left alone, and so are materials whose source does not take `COLOR_0`
+//! (`core.vertex_color` `ignored`), counted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,11 +72,20 @@ impl Pass for LowerVertexAlphaReskate {
         "decals fade through the game's mask-shaped dissolve, not linear alpha"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let decals: BTreeSet<Entity> = world
+        let mut decals: BTreeSet<Entity> = world
             .iter::<SkateMaterial>()
             .filter(|(e, m)| m.class == MaterialClass::Decal && !world.has::<VertexBlend>(*e))
             .map(|(e, _)| e)
             .collect();
+        let ignoring = decals.len();
+        decals.retain(|&m| primase_core::uses_color0(world, m));
+        let ignoring = ignoring - decals.len();
+        if ignoring > 0 {
+            log.count(
+                "decal materials ignoring COLOR_0 (core.vertex_color), not faded",
+                ignoring as u64,
+            );
+        }
         if decals.is_empty() {
             return Ok(());
         }
