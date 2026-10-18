@@ -259,13 +259,34 @@ fn a_core_world_becomes_a_scene() {
 #[test]
 fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
     use primase_core::SurfaceClass;
-    // every class but water has a standard surface
-    for c in SurfaceClass::ALL {
-        match scene::class_to_skate(c) {
-            Some(to) => assert!(scene::STANDARD_SURFACES.contains(&to), "{c:?} -> {to}"),
-            None => assert_eq!(c, SurfaceClass::Water),
-        }
+    // The hand-worked table of `class_to_skate`: a class names the standard surface a skater feels; water has none.
+    let table = [
+        (SurfaceClass::Concrete, Some("concrete")),
+        (SurfaceClass::Asphalt, Some("asphalt")),
+        (SurfaceClass::Stone, Some("marble")),
+        (SurfaceClass::Brick, Some("brick")),
+        (SurfaceClass::Tile, Some("roofing")),
+        (SurfaceClass::Metal, Some("metal")),
+        (SurfaceClass::Wood, Some("wood")),
+        (SurfaceClass::Glass, Some("glass")),
+        (SurfaceClass::Plastic, Some("plastic")),
+        (SurfaceClass::Rubber, Some("rubber")),
+        (SurfaceClass::Fabric, Some("default")),
+        (SurfaceClass::Grass, Some("grass")),
+        (SurfaceClass::Dirt, Some("earth")),
+        (SurfaceClass::Gravel, Some("gravel")),
+        (SurfaceClass::Sand, Some("sand")),
+        (SurfaceClass::Mud, Some("earth")),
+        (SurfaceClass::Snow, Some("earth")),
+        (SurfaceClass::Ice, Some("marble")),
+        (SurfaceClass::Water, None),
+        (SurfaceClass::Other, Some("default")),
+    ];
+    for (class, skate) in table {
+        assert_eq!(scene::class_to_skate(class), skate, "{class:?}");
     }
+    let classes: Vec<_> = table.iter().map(|(class, _)| *class).collect();
+    assert_eq!(classes, SurfaceClass::ALL);
     let raised = |class, map: &[(&str, &str)]| {
         let mut w = world();
         w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
