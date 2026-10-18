@@ -17,7 +17,7 @@ use std::path::{Component as PathComponent, Path, PathBuf};
 
 use primase_core::{
     Collision, Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
-    Priority, Source, Texture, TextureFile, Tile, Transform, TransformKind, World,
+    Priority, Source, Texture, TextureFile, Tile, Transform, World,
 };
 
 use crate::components::*;
@@ -731,11 +731,6 @@ impl Writer<'_> {
             let t = w
                 .get::<Transform>(e)
                 .ok_or_else(|| bad(format!("placement {e:?}: no core.transform")))?;
-            if matches!(t.classify(), TransformKind::Mirrored | TransformKind::Sheared) {
-                return Err(bad(format!(
-                    "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
-                )));
-            }
             let sp = w.get::<SkatePlacement>(e).cloned().unwrap_or_default();
             let tile = w.get::<Tile>(e);
             let priority = w.get::<Priority>(e).map_or(0, |p| p.0);
@@ -818,13 +813,14 @@ impl Writer<'_> {
                 .map_err(|m| bad(format!("collision {e:?}: {m}")))?
                 .expect("core.collision");
             if let Some(t) = w.get::<Transform>(e) {
-                if matches!(t.classify(), TransformKind::Mirrored | TransformKind::Sheared) {
-                    return Err(bad(format!(
-                        "collision {e:?}: a non-rigid transform; run bake-nonrigid first"
-                    )));
-                }
                 for p in &mut soup.positions {
                     *p = t.apply(*p);
+                }
+                // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
+                if t.determinant() < 0.0 {
+                    for tri in &mut soup.triangles {
+                        tri.swap(1, 2);
+                    }
                 }
             }
             let r = SoupRef {

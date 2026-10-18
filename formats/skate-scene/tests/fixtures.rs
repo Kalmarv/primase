@@ -621,6 +621,46 @@ fn edits_are_written() {
     assert_eq!(w2.get::<SkateLight>(le2).unwrap().group, "street");
 }
 
+/// PLAC holds any 3x4 matrix: a mirrored and a sheared placement are written and read back bit for bit (the format
+/// carries them; a target that needs rigid ones declares it and is given bake-nonrigid).
+#[test]
+fn mirrored_and_sheared_placements_round_trip() {
+    let (mut w, _) = read(&fixture("nonrigid_src"));
+    let placements: Vec<_> = w.iter::<Instance>().map(|(e, _)| e).take(2).collect();
+    assert_eq!(placements.len(), 2, "the fixture has two placements");
+    let mirrored = Transform {
+        cols: [
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 2.0, 3.0],
+        ],
+    };
+    let sheared = Transform {
+        cols: [
+            [1.0, 0.0, 0.0],
+            [0.5, 1.0, 0.0],
+            [0.0, 0.25, 1.0],
+            [-4.0, 0.0, 2.5],
+        ],
+    };
+    w.insert(placements[0], mirrored);
+    w.insert(placements[1], sheared);
+    let out = tmp("nonrigid_out");
+    scene::write(&w, &out).unwrap();
+    let (w2, _) = read(&out);
+    let got: Vec<Transform> = w2
+        .iter::<Instance>()
+        .map(|(e, _)| *w2.get::<Transform>(e).unwrap())
+        .take(2)
+        .collect();
+    let bits = |t: &Transform| t.cols.map(|c| c.map(f32::to_bits));
+    assert_eq!(
+        got.iter().map(bits).collect::<Vec<_>>(),
+        [bits(&mirrored), bits(&sheared)]
+    );
+}
+
 /// The oracle is the PLAC byte layout: flags are the little-endian u32 at
 /// record offset 68, with priority occupying bits 8 through 11.
 #[test]
@@ -1359,10 +1399,6 @@ fn mirrored_collision_keeps_its_fronts() {
     t.cols[0] = [-1.0, 0.0, 0.0];
     w.insert(e, t);
     let out = tmp("collision_mirror_out");
-    // the writer takes rigid transforms: refused until bake-nonrigid moves the mirror into the soup
-    let refused = scene::write(&w, &out).unwrap_err().to_string();
-    assert!(refused.contains("bake-nonrigid"), "{refused}");
-    primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
     scene::write(&w, &out).unwrap();
     let m = manifest(&out);
     let entry = &m["collision"][before];
