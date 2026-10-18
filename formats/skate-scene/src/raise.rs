@@ -35,8 +35,11 @@
 //!   surface beneath (`core.draw_order` decal), which stays a decal (counted);
 //! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`];
 //!   directional lights are left out (skate lights itself by its time of day), counted;
-//! - a spawn marker where the caller says (a point, or the per-axis median of the placements' positions), snapped to
-//!   the ground (`spawn=centre` without placements: no marker, counted);
+//! - the world's `core.marker` points of a kind skate has (spawn, travel, trainer, vfx, trigger effect):
+//!   `skate.marker`s on the same entities; a ground marker (no height) snaps to the ground and keeps its yaw, one
+//!   with a transform keeps its position and faces its local +Z; other kinds are left out, counted by kind. A spawn
+//!   is placed before the writer plans (`place-spawn` at selection), so one spawn serves every part of a map written
+//!   in parts;
 //! - the `skate.scene` resource, named by the caller.
 //!
 //! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`); so is
@@ -73,10 +76,6 @@ pub struct RaiseOptions {
     pub name: String,
     /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`).
     pub surfaces: BTreeMap<String, String>,
-    /// Where a spawn marker goes, its height found by snapping to the ground; `None`: no marker.
-    pub spawn: Option<Spawn>,
-    /// The spawn marker's yaw, degrees (0 faces +Z, clockwise seen from above).
-    pub spawn_yaw: f64,
     /// The skate surface for a surface with no class and no entry in `surfaces` (counted per name); `None`: refused.
     pub unclassified: Option<String>,
     /// Every light's intensity (physical candela) times this before [`studio_watts`]: skate's calibration,
@@ -89,8 +88,6 @@ impl Default for RaiseOptions {
         RaiseOptions {
             name: String::new(),
             surfaces: BTreeMap::new(),
-            spawn: None,
-            spawn_yaw: 0.0,
             unclassified: None,
             light_scale: SKATE_LIGHT_SCALE,
         }
@@ -106,15 +103,6 @@ impl Default for RaiseOptions {
 /// lumens (inferred from its 683 x watts); one scale matches at one distance (the source's falloff window and
 /// inverse-square differ: 4 m chosen, the ground under a lamp).
 pub const SKATE_LIGHT_SCALE: f64 = 3.007e-4;
-
-/// Where [`raise_skate`] puts the spawn marker.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Spawn {
-    /// This scene-space (x, z).
-    At([f32; 2]),
-    /// The median of the placements' positions (x, z, each its own median); none without placements.
-    Centre,
-}
 
 /// CLASS_TO_SKATE: the skate surface of a surface class, the named policy of [`raise_skate`] (a target refinement such
 /// as `metal_grate` comes only from the caller's map). `None`: no solid skate surface (water).
@@ -660,58 +648,58 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             );
         }
     }
-    let spawn = match options.spawn {
-        Some(Spawn::At(p)) => Some(p),
-        Some(Spawn::Centre) => {
-            // the median position, so a few placements far from the rest do not move it off the map
-            let (mut xs, mut zs): (Vec<f32>, Vec<f32>) = world
-                .iter::<Instance>()
-                .map(|(e, _)| {
-                    let [x, _, z] = world
-                        .get::<Transform>(e)
-                        .copied()
-                        .unwrap_or(Transform::IDENTITY)
-                        .cols[3];
-                    (x, z)
-                })
-                .unzip();
-            xs.sort_by(f32::total_cmp);
-            zs.sort_by(f32::total_cmp);
-            let median = |v: &[f32]| {
-                let n = v.len();
-                if n % 2 == 1 {
-                    v[n / 2]
-                } else {
-                    (v[n / 2 - 1] + v[n / 2]) / 2.0
-                }
-            };
-            if xs.is_empty() {
-                log.count("spawn=centre without placements: no spawn marker", 1);
+    // the world's markers (a spawn among them placed at selection by place-spawn), on their own entities
+    let markers: Vec<(Entity, primase_core::Marker)> = world
+        .iter::<primase_core::Marker>()
+        .filter(|(e, _)| !world.has::<SkateMarker>(*e))
+        .map(|(e, m)| (e, m.clone()))
+        .collect();
+    for (e, m) in markers {
+        let kind = match m.kind.as_str() {
+            "spawn" => MarkerKind::Spawn,
+            "travel" => MarkerKind::Travel,
+            "trainer" => MarkerKind::Trainer,
+            "vfx" => MarkerKind::Vfx,
+            "trigger_effect" => MarkerKind::TriggerEffect,
+            other => {
+                log.count(
+                    &format!("markers of kind '{other}' not raised (no skate marker kind)"),
+                    1,
+                );
+                continue;
             }
-            (!xs.is_empty()).then(|| [median(&xs), median(&zs)])
-        }
-        None => None,
-    };
-    if let Some([x, z]) = spawn {
-        let e = world.spawn();
-        world.insert(e, Name("spawn".into()));
+        };
+        let (position, yaw, snap) = match (m.ground, world.get::<Transform>(e)) {
+            // a ground marker: (east, north) is scene space (x, -z); its height is the ground's
+            (Some([east, north]), _) => (
+                ([east, -north], None),
+                m.yaw.map(f64::from),
+                Some(Snap::Mode(SnapMode::Ground)),
+            ),
+            (None, t) => {
+                let t = t.copied().unwrap_or(Transform::IDENTITY);
+                let [x, y, z] = t.cols[3];
+                // it faces its local +Z: degrees about +Y, 0 facing +Z, 90 facing +X
+                let f = t.cols[2];
+                let yaw = f64::from(f[0]).atan2(f64::from(f[2])).to_degrees();
+                (([x, z], Some(y)), Some(yaw), None)
+            }
+        };
         world.insert(
             e,
             SkateMarker {
-                kind: MarkerKind::Spawn,
-                position: Some(([x, z], None)),
-                yaw: Some(options.spawn_yaw),
+                kind,
+                position: Some(position),
+                yaw,
                 m: None,
                 blueprint: None,
-                snap: Some(Snap::Mode(SnapMode::Ground)),
+                snap,
                 lift: None,
                 shelter: None,
                 trainer: None,
                 other: Other::new(),
             },
         );
-        // content of its own: nothing references a marker
-        log.place(e);
         log.count("markers", 1);
     }
     let has_lights = world.iter::<SkateLight>().next().is_some();
@@ -725,8 +713,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     Ok(log)
 }
 
-/// `raise-skate{name=N[,spawn=centre | spawn_x=X,spawn_z=Z][,spawn_yaw=DEGREES][,map=NAME:surface;...]
-/// [,unclassified=surface]}`:
+/// `raise-skate{name=N[,map=NAME:surface;...][,unclassified=surface][,light_scale=S]}`:
 /// [`raise_skate`] as a pass; `map` is the caller's map of source surface names (it wins over the class,
 /// [`class_to_skate`]).
 #[derive(Debug)]
@@ -742,14 +729,7 @@ pub fn raise_skate_pass(
         name: "scene".into(),
         ..RaiseOptions::default()
     };
-    let (mut x, mut z) = (None, None);
     for (k, v) in o {
-        let number = |v: &str| {
-            v.parse::<f32>()
-                .ok()
-                .filter(|n| n.is_finite())
-                .ok_or_else(|| format!("{k}={v} is not a finite number"))
-        };
         match k.as_str() {
             "name"
                 if !v.is_empty()
@@ -759,9 +739,12 @@ pub fn raise_skate_pass(
                 options.name.clone_from(v);
             }
             "name" => return Err(format!("name={v} is not [A-Za-z0-9_-]+")),
-            "spawn" if v == "centre" => options.spawn = Some(Spawn::Centre),
-            "spawn" => return Err(format!("spawn={v}: only spawn=centre (or spawn_x, spawn_z)")),
-            "spawn_yaw" => options.spawn_yaw = f64::from(number(v)?),
+            "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
+                return Err(format!(
+                    "{k}: the spawn is placed before the writer plans, at selection: \
+                     place-spawn{{at=centre | east=E,north=N[,yaw=DEGREES]}} (raise-skate raises it)"
+                ));
+            }
             "unclassified" => options.unclassified = Some(v.clone()),
             "light_scale" => {
                 options.light_scale = v
@@ -779,16 +762,8 @@ pub fn raise_skate_pass(
                     options.surfaces.insert(from.to_owned(), to.to_owned());
                 }
             }
-            "spawn_x" => x = Some(number(v)?),
-            "spawn_z" => z = Some(number(v)?),
             _ => return Err(format!("unknown option {k}")),
         }
-    }
-    match (x, z, options.spawn) {
-        (Some(x), Some(z), None) => options.spawn = Some(Spawn::At([x, z])),
-        (None, None, _) => {}
-        (Some(_), Some(_), Some(_)) => return Err("spawn=centre or spawn_x, spawn_z: not both".into()),
-        _ => return Err("spawn_x and spawn_z go together".into()),
     }
     Ok(Box::new(RaiseSkate { options }))
 }
@@ -799,19 +774,6 @@ impl primase_core::pass::Pass for RaiseSkate {
     }
     fn options(&self) -> primase_core::pass::Options {
         let mut o = primase_core::pass::Options::from([("name".to_owned(), self.options.name.clone())]);
-        match self.options.spawn {
-            Some(Spawn::At([x, z])) => {
-                o.insert("spawn_x".into(), x.to_string());
-                o.insert("spawn_z".into(), z.to_string());
-            }
-            Some(Spawn::Centre) => {
-                o.insert("spawn".into(), "centre".into());
-            }
-            None => {}
-        }
-        if self.options.spawn_yaw != 0.0 {
-            o.insert("spawn_yaw".into(), self.options.spawn_yaw.to_string());
-        }
         if let Some(u) = &self.options.unclassified {
             o.insert("unclassified".into(), u.clone());
         }

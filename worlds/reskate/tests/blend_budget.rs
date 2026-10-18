@@ -115,12 +115,20 @@ fn world() -> World {
         |p| p,
     );
     w.insert(ground, c);
+    // on the ground beside the left triangle (east 20, north 20 = scene x 20, z -20)
+    let spawn = w.spawn();
+    w.insert(
+        spawn,
+        primase_core::Marker {
+            kind: "spawn".into(),
+            ground: Some([20.0, 20.0]),
+            yaw: None,
+        },
+    );
     primase_skate_scene::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "budget".into(),
-            // scene space (x, z): on the ground beside the left triangle
-            spawn: Some(primase_skate_scene::Spawn::At([20.0, -20.0])),
             ..Default::default()
         },
     )

@@ -200,11 +200,20 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
 fn a_spawn_over_no_ground_is_refused() {
     let build = |at: [f32; 2], tag: &str| {
         let mut w = world();
+        // the spawn as place-spawn puts it at selection: a ground marker at (east, north)
+        let spawn = w.spawn();
+        w.insert(
+            spawn,
+            primase_core::Marker {
+                kind: "spawn".into(),
+                ground: Some(at),
+                yaw: None,
+            },
+        );
         primase_skate_scene::raise_skate(
             &mut w,
             &RaiseOptions {
                 name: "spawned".into(),
-                spawn: Some(primase_skate_scene::Spawn::At(at)),
                 ..Default::default()
             },
         )

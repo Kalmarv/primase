@@ -16,7 +16,7 @@ readers:
 writers:
   web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--plain]
-  reskate  [--name N] [--blend-objects N] (after --passes \"<reader's>, bake-normal-scale, raise-skate{name=N,spawn=centre}, lower-layered-reskate\")";
+  reskate  [--name N] [--blend-objects N] (after --passes \"<reader's>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate\"; a spawn from place-spawn at --select)";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -140,9 +140,8 @@ mod tests {
                     s.hour = hour;
                     s.interiors = interiors;
                     let (select, passes) = (select_passes(&s), default_passes(&s));
-                    let reskate = format!(
-                        "{passes}, bake-normal-scale, raise-skate{{name=n,spawn=centre}}, lower-layered-reskate"
-                    );
+                    let reskate =
+                        format!("{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate");
                     pipelines.push(format!("{select}, {passes}"));
                     pipelines.extend([select, passes, reskate]);
                 }

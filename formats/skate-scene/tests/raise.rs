@@ -155,8 +155,6 @@ fn options() -> RaiseOptions {
     RaiseOptions {
         name: "raised".into(),
         surfaces: BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]),
-        spawn: Some(scene::Spawn::At([2.0, -1.0])),
-        spawn_yaw: 0.0,
         unclassified: None,
         light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
     }
@@ -176,6 +174,16 @@ fn a_core_world_becomes_a_scene() {
                 ..TextureRef::new(base)
             }),
             ..PbrMaterial::default()
+        },
+    );
+    // the spawn, as place-spawn puts it at selection: a ground marker at (east 2, north 1)
+    let spawn = w.spawn();
+    w.insert(
+        spawn,
+        primase_core::Marker {
+            kind: "spawn".into(),
+            ground: Some([2.0, 1.0]),
+            yaw: None,
         },
     );
     let log = scene::raise_skate(&mut w, &options()).unwrap();
@@ -455,8 +463,6 @@ fn what_skate_cannot_take_is_refused() {
         &RaiseOptions {
             name: "x".into(),
             surfaces: BTreeMap::new(),
-            spawn: None,
-            spawn_yaw: 0.0,
             unclassified: None,
             light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
         },
@@ -846,49 +852,71 @@ fn a_drawn_blend_becomes_a_layered_material() {
     assert!(!w.has::<SkateMaterial>(mats[1]), "plain is drawn by nothing now");
 }
 
-/// `spawn=centre`: one spawn marker at the centre of the placements' positions, snapped to the ground; as a pass from
-/// its options.
+/// The world's markers become skate markers on the same entities: a ground marker (the spawn place-spawn puts at
+/// selection) snaps to the ground and keeps its yaw; one with a transform keeps its position and height and faces its
+/// local +Z; a kind skate has no marker for is left out, counted.
 #[test]
-fn the_spawn_at_the_centre_of_the_placements() {
-    use primase_core::pass::{Options, PassLog};
+fn markers_are_raised_from_core_markers() {
+    use primase_core::Marker;
     let mut w = world();
-    // a second placement of the boulder: the placements at x 3 and 9, z 0 and -4
-    let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
-    let at = w.spawn();
-    w.insert(
-        at,
-        Instance {
-            prototype: proto,
-            variant: 0,
-        },
-    );
-    let mut t = Transform::IDENTITY;
-    t.cols[3] = [9.0, 0.0, -4.0];
-    w.insert(at, t);
-    let mut o = Options::from([
-        ("name".to_owned(), "raised".to_owned()),
-        ("spawn".to_owned(), "centre".to_owned()),
-    ]);
-    let pass = scene::raise_skate_pass(&o).unwrap();
-    assert_eq!(pass.options(), o);
-    // the world's Snow surface is not skate's: the pass alone (no surface map) refuses it
-    let mut log = PassLog::default();
-    let e = pass.run(&mut w, &mut log).unwrap_err();
-    assert!(e.contains("Snow"), "{e}");
     w.remove_resource::<Surfaces>();
-    pass.run(&mut w, &mut log).unwrap();
-    let m: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
-    assert_eq!(m.len(), 1);
-    assert_eq!(m[0].position, Some(([6.0, -2.0], None)));
-    o.insert("spawn_x".into(), "1".into());
-    o.insert("spawn_z".into(), "2".into());
-    assert!(scene::raise_skate_pass(&o).is_err(), "spawn=centre and a point");
+    let marker = |w: &mut World, kind: &str, ground: Option<[f32; 2]>, yaw: Option<f32>| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Marker {
+                kind: kind.into(),
+                ground,
+                yaw,
+            },
+        );
+        e
+    };
+    let spawn = marker(&mut w, "spawn", Some([6.0, 2.0]), Some(90.0));
+    let travel = marker(&mut w, "travel", None, None);
+    // local +Z onto world +X: facing 90 degrees
+    let mut t = Transform::IDENTITY;
+    t.cols[0] = [0.0, 0.0, -1.0];
+    t.cols[2] = [1.0, 0.0, 0.0];
+    t.cols[3] = [4.0, 1.5, -3.0];
+    w.insert(travel, t);
+    let waypoint = marker(&mut w, "waypoint", Some([0.0, 0.0]), None);
+    let log = scene::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            name: "m".into(),
+            ..RaiseOptions::default()
+        },
+    )
+    .unwrap();
+    let s = w.get::<scene::SkateMarker>(spawn).unwrap();
+    assert_eq!(
+        (s.kind, s.position, s.yaw, s.snap.clone()),
+        (
+            scene::MarkerKind::Spawn,
+            Some(([6.0, -2.0], None)),
+            Some(90.0),
+            Some(scene::Snap::Mode(scene::SnapMode::Ground))
+        )
+    );
+    let t = w.get::<scene::SkateMarker>(travel).unwrap();
+    assert_eq!(
+        (t.kind, t.position, t.snap.clone()),
+        (scene::MarkerKind::Travel, Some(([4.0, -3.0], Some(1.5))), None)
+    );
+    assert!((t.yaw.unwrap() - 90.0).abs() < 1e-9, "{:?}", t.yaw);
+    assert!(!w.has::<scene::SkateMarker>(waypoint));
+    assert_eq!(log.counts["markers"], 2);
+    assert_eq!(
+        log.counts["markers of kind 'waypoint' not raised (no skate marker kind)"],
+        1
+    );
 }
 
 /// A surface with no class and no map entry takes `unclassified` (counted by name); a prototype's own
-/// `core.collision` becomes its triangle-mesh soup (counted); the median spawn is not moved by a far placement.
+/// `core.collision` becomes its triangle-mesh soup (counted).
 #[test]
-fn unclassified_surfaces_prototype_collision_and_a_median_spawn() {
+fn unclassified_surfaces_and_prototype_collision() {
     let mut w = world();
     let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
     w.insert(
@@ -899,25 +927,10 @@ fn unclassified_surfaces_prototype_collision_and_a_median_spawn() {
             surfaces: vec![0],
         },
     );
-    // placements at x 3 (the world's), 9 and 1000: the median x is 9, not the mean
-    for x in [9.0, 1000.0] {
-        let at = w.spawn();
-        w.insert(
-            at,
-            Instance {
-                prototype: proto,
-                variant: 0,
-            },
-        );
-        let mut t = Transform::IDENTITY;
-        t.cols[3] = [x, 0.0, 0.0];
-        w.insert(at, t);
-    }
     let log = scene::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "x".into(),
-            spawn: Some(scene::Spawn::Centre),
             unclassified: Some("concrete".into()),
             ..RaiseOptions::default()
         },
@@ -929,8 +942,6 @@ fn unclassified_surfaces_prototype_collision_and_a_median_spawn() {
     let p = w.get::<scene::SkatePrototype>(proto).unwrap();
     let soup = p.collision.as_ref().unwrap();
     assert_eq!(soup.mode, Some(scene::CollisionMode::TriangleMesh));
-    let m: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
-    assert_eq!(m[0].position.unwrap().0[0], 9.0);
     // an unclassified surface that is no skate surface is refused
     let e = scene::raise_skate(
         &mut world(),
@@ -1009,16 +1020,13 @@ fn a_prototype_that_collides_without_drawing() {
     );
 }
 
-/// The pass's options: a point spawn, a yaw, a surface map and the unclassified surface round-trip; what does not
-/// make sense is refused.
+/// The pass's options: a surface map and the unclassified surface round-trip; what does not make sense is refused,
+/// and so is a spawn (placed at selection by place-spawn, not per part by raise-skate).
 #[test]
 fn raise_skate_pass_options() {
     use primase_core::pass::Options;
     let o = Options::from([
         ("name".to_owned(), "m".to_owned()),
-        ("spawn_x".to_owned(), "1.5".to_owned()),
-        ("spawn_z".to_owned(), "-2".to_owned()),
-        ("spawn_yaw".to_owned(), "180".to_owned()),
         ("map".to_owned(), "PUDDLE:default;SNOW:asphalt".to_owned()),
         ("unclassified".to_owned(), "default".to_owned()),
     ]);
@@ -1027,10 +1035,14 @@ fn raise_skate_pass_options() {
         scene::raise_skate_pass(&pass.options()).unwrap().options(),
         pass.options()
     );
+    let spawn: Options = [("spawn".to_owned(), "centre".to_owned())].into();
+    let Err(e) = scene::raise_skate_pass(&spawn) else {
+        panic!("spawn is not a raise-skate option");
+    };
+    assert!(e.contains("place-spawn"), "{e}");
     for bad in [
-        vec![("spawn_x", "1")],
-        vec![("spawn", "north")],
-        vec![("spawn_x", "nan"), ("spawn_z", "1")],
+        vec![("spawn_x", "1"), ("spawn_z", "1")],
+        vec![("spawn_yaw", "180")],
         vec![("name", "a b")],
         vec![("map", "PUDDLE")],
         vec![("colour", "red")],
@@ -1038,23 +1050,6 @@ fn raise_skate_pass_options() {
         let o: Options = bad.iter().map(|&(k, v)| (k.to_owned(), v.to_owned())).collect();
         assert!(scene::raise_skate_pass(&o).is_err(), "{bad:?}");
     }
-}
-
-/// `spawn=centre` with no placements makes no marker and says so.
-#[test]
-fn a_centre_spawn_without_placements_is_counted() {
-    let mut w = primase_core::World::new();
-    let log = scene::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "empty".into(),
-            spawn: Some(scene::Spawn::Centre),
-            ..RaiseOptions::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(log.counts["spawn=centre without placements: no spawn marker"], 1);
-    assert_eq!(w.iter::<scene::SkateMarker>().count(), 0);
 }
 
 /// Skate reflects every dielectric at F0 0.04: a source reflecting less is folded into roughness so its highlight
