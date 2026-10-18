@@ -359,9 +359,9 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
 
 #[test]
 fn scene_folders_round_trip() {
-    let roots: Vec<PathBuf> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
+    let roots: Vec<(&str, PathBuf)> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
         .iter()
-        .filter_map(|v| real_data(v))
+        .filter_map(|v| real_data(v).map(|path| (*v, path)))
         .collect();
     if roots.is_empty() {
         return;
@@ -378,10 +378,16 @@ fn scene_folders_round_trip() {
         .unwrap_or_else(std::env::temp_dir)
         .join("skate-scene-gate");
     let mut folders = Vec::new();
-    for r in &roots {
-        scene_folders(r, &mut folders);
+    for (name, root) in &roots {
+        let before = folders.len();
+        scene_folders(root, &mut folders);
+        primase_testdata::expect_items(name, "scene folders", folders.len() - before);
     }
     folders.retain(|f| f.to_string_lossy().contains(&filter));
+    assert!(
+        filter.is_empty() || !folders.is_empty(),
+        "PRIMASE_SCENE_FILTER={filter:?} matched no scene folder under {roots:?}"
+    );
 
     let mut total = Gates::new();
     let mut changed: Vec<String> = Vec::new();
@@ -516,16 +522,18 @@ fn number_texts(b: &[u8]) -> Vec<&str> {
 /// now needs more than plain serde_json.
 #[test]
 fn manifests_need_only_plain_json() {
-    let roots: Vec<PathBuf> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
+    let roots: Vec<(&str, PathBuf)> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
         .iter()
-        .filter_map(|v| real_data(v))
+        .filter_map(|v| real_data(v).map(|path| (*v, path)))
         .collect();
     if roots.is_empty() {
         return;
     }
     let mut folders = Vec::new();
-    for r in &roots {
-        scene_folders(r, &mut folders);
+    for (name, root) in &roots {
+        let before = folders.len();
+        scene_folders(root, &mut folders);
+        primase_testdata::expect_items(name, "scene folders", folders.len() - before);
     }
     let mut gate = GateReport::new(
         "manifests: strict JSON, unique keys, every number the same f32 through f64",
