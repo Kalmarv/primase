@@ -1,5 +1,5 @@
-//! `primase_core::convert`: the loop's order, the closure it keeps of each part, the reader's namespaces and the
-//! target check, with a toy reader and writer.
+//! `primase_core::convert`: the loop's order, what it keeps of each part (the roots' closure and what the passes
+//! made), the reader's namespaces and the target check, with a toy reader and writer.
 #![allow(clippy::unwrap_used)]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,7 +149,7 @@ impl Pass for ToySelect {
     }
 }
 
-/// The passes: record that they ran and leave an entity nothing references.
+/// The passes: record that they ran and make an entity nothing references (as a pass placing a marker does).
 struct ToyPass;
 impl Pass for ToyPass {
     fn name(&self) -> &'static str {
@@ -161,7 +161,7 @@ impl Pass for ToyPass {
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         event("passes");
         let orphan = w.spawn();
-        w.insert(orphan, Name("left unreferenced".into()));
+        w.insert(orphan, Name("made, unreferenced".into()));
         w.insert(orphan, ToyMesh(5));
         log.count("orphans", 1);
         Ok(())
@@ -221,15 +221,22 @@ fn reads_selects_plans_then_loads_passes_checks_and_writes_each_part() {
     );
     assert_eq!(report.loads.len(), 2);
     assert_eq!(report.counts.get("toy-pass: orphans"), Some(&2));
+    // what the passes made is named in the counts by its components
+    assert_eq!(
+        report
+            .counts
+            .get("convert: entities the passes made (core.name + toy.mesh)"),
+        Some(&2)
+    );
     assert_eq!(report.written, vec![("toy".to_string(), "2 parts".to_string())]);
-    // each part is its placement and prototype, loaded; the pass's orphan is not part of it
-    assert_eq!(*written.borrow(), vec![(2, true), (2, true)]);
-    // each part's payload as loaded and as written (its one root, the placement, and the prototype it reaches): the
-    // orphan's 5 bytes are not the writer's
+    // each part is its placement and prototype, loaded, and the entity the pass made though nothing references it
+    assert_eq!(*written.borrow(), vec![(3, true), (3, true)]);
+    // each part's payload as loaded and as written (its one root, the placement, the prototype it reaches and the
+    // pass's entity with its 5 bytes)
     let size = PartSize {
         roots: 1,
         loaded: BTreeMap::from([("toy.mesh".to_string(), 7)]),
-        written: BTreeMap::from([("toy.mesh".to_string(), 7)]),
+        written: BTreeMap::from([("toy.mesh".to_string(), 12)]),
     };
     assert_eq!(report.part_sizes, vec![size.clone(), size]);
 }
