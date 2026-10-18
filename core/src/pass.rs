@@ -6,7 +6,9 @@
 //!   resource's, never both). After a pass runs, the names that actually
 //!   appeared and disappeared must be among those it declared. A pass that declares it **despawns entities** (leaves
 //!   placements out, discards forms) may also make a name disappear that only despawned entities held: no
-//!   surviving entity lost it. The planner does not count on that; it plans by the declared removals alone. A pass
+//!   surviving entity lost it. A pass that **removes by log** may make a component name disappear that it recorded
+//!   as removed ([`PassLog::removed`]: what a hook dropped, known only when it runs). The planner counts on neither;
+//!   it plans by the declared removals alone. A pass
 //!   also declares the names it **legalizes** (lowers: removed, rewritten in place, or lowered into what it provides
 //!   while kept), by default what it removes.
 //! - A [`Target`] (a writer's declaration) gives each component name a [`Legality`]: legal, dynamic (a predicate on
@@ -116,9 +118,9 @@ pub trait Pass: Send + Sync {
         false
     }
     /// Whether the components it removes are not all known in advance (a hook decides, as
-    /// [`crate::Component::apply_linear`] does). If so, a name that disappears is accepted when the pass recorded it in
-    /// [`PassLog::removed`] as well as when it is declared in [`Pass::removes`]; a name that disappears unrecorded and
-    /// undeclared is an error as ever.
+    /// [`crate::Component::apply_linear`] does). If so, a component name that disappears is accepted when the pass
+    /// recorded it in [`PassLog::removed`] as well as when it is declared in [`Pass::removes`]; a name that disappears
+    /// unrecorded and undeclared is an error as ever, and a resource it removes must be declared as for any pass.
     fn removes_by_log(&self) -> bool {
         false
     }
