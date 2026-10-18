@@ -128,4 +128,18 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
     }
+
+    /// The selection passes that leave entities out declare it, so the pass manager accepts a name that only the
+    /// entities they despawned held disappearing.
+    #[test]
+    fn passes_that_leave_entities_out_declare_it() {
+        let mut reg = primase_core::pass::PassRegistry::new();
+        super::register(&mut reg);
+        let p = reg
+            .parse("gta-select-region, gta-select-stand-ins, gta-select-collision, gta-leave-out-interiors")
+            .unwrap();
+        for pass in &p.passes {
+            assert!(pass.despawns_entities(), "{}", pass.name());
+        }
+    }
 }

@@ -137,6 +137,10 @@ impl Pass for SelectRegion {
     fn requires(&self) -> &[&'static str] {
         &[GtaEntity::NAME, GtaArchetype::NAME]
     }
+    /// The placements the rules leave out.
+    fn despawns_entities(&self) -> bool {
+        true
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut all = Vec::new();
         for (e, inst) in w.iter::<Instance>() {
@@ -331,6 +335,10 @@ impl Pass for SelectStandIns {
     }
     fn requires(&self) -> &[&'static str] {
         &[GtaEntity::NAME]
+    }
+    /// Every placement but the stand-ins kept.
+    fn despawns_entities(&self) -> bool {
+        true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut drop = Vec::new();

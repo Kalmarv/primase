@@ -230,6 +230,10 @@ impl Pass for SelectCollision {
         o.insert("detail".to_string(), d.join(";"));
         o
     }
+    /// The map bounds of the details not kept.
+    fn despawns_entities(&self) -> bool {
+        true
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let mut drop = Vec::new();
         for (e, b) in w.iter::<GtaBounds>() {
