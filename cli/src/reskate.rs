@@ -99,7 +99,7 @@ impl Writer for Reskate {
             .push(("blend order".into(), format!("{:?}", report.blend)));
         Ok(())
     }
-    fn finish(self: Box<Self>) -> Result<Report> {
-        Ok(self.report)
+    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
+        Ok(self.report.into())
     }
 }

@@ -720,6 +720,29 @@ impl World {
         self.next
     }
 
+    /// The entities `e`'s components refer to (not its resources'), in no particular order, repeats possible.
+    pub fn references(&self, e: Entity) -> Vec<Entity> {
+        let mut out = Vec::new();
+        for c in self.columns.values() {
+            c.references(e, &mut out);
+        }
+        out
+    }
+
+    /// The entities nothing in the world refers to (through any entity's components): its independent content,
+    /// placements, markers, standalone soups, rather than the prototypes, materials and textures they reach.
+    pub fn unreferenced(&self) -> BTreeSet<Entity> {
+        let mut referenced = BTreeSet::new();
+        for &e in &self.alive {
+            referenced.extend(self.references(e));
+        }
+        self.alive
+            .iter()
+            .copied()
+            .filter(|e| !referenced.contains(e))
+            .collect()
+    }
+
     /// `roots` and every alive entity they reach through [`Component::references`], transitively. Opaque
     /// components declare no references: an entity's opaque components travel with it in [`World::subset`], but
     /// nothing they may name is followed.

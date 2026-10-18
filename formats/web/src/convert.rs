@@ -168,7 +168,7 @@ impl Writer for TileWriter {
         }
         Ok(())
     }
-    fn finish(self: Box<Self>) -> Result<Report> {
+    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
         let TileWriter { tiles, bytes } = *self;
         let Tiles {
             sets,
@@ -212,6 +212,6 @@ impl Writer for TileWriter {
                 index.tiles.iter().map(|t| t.lights).sum::<u64>(),
             ),
         ));
-        Ok(report)
+        Ok(report.into())
     }
 }

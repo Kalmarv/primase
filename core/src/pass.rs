@@ -57,6 +57,8 @@ pub struct PassLog {
     /// conversion keeps them with the writer's roots ([`crate::convert`]); any other entity a pass makes is kept only
     /// while something kept references it. The manager refuses an entity here that the pass did not make.
     pub placed: BTreeSet<Entity>,
+    /// Of [`PassLog::placed`], those made from one source entity, with it ([`PassLog::place_from`]).
+    pub placed_from: BTreeMap<Entity, Entity>,
 }
 
 impl PassLog {
@@ -74,9 +76,18 @@ impl PassLog {
         *self.approximations.entry(what.to_owned()).or_default() += n;
     }
 
-    /// Record that the pass made `e` as content of its own (see [`PassLog::placed`]).
+    /// Record that the pass made `e` as content of its own (see [`PassLog::placed`]): content of the whole world, as a
+    /// spawn a selection places. Content made from one source entity is [`PassLog::place_from`].
     pub fn place(&mut self, e: Entity) {
         self.placed.insert(e);
+    }
+
+    /// Record that the pass made `e` as content of its own from `source` (a marker for a placement): a conversion in
+    /// parts keeps it only in the part that owns `source`, so content made from a neighbour loaded as context is
+    /// written once, by its owner.
+    pub fn place_from(&mut self, e: Entity, source: Entity) {
+        self.placed.insert(e);
+        self.placed_from.insert(e, source);
     }
 }
 
@@ -154,6 +165,8 @@ pub struct PassRegistry {
     /// Each pass's factory and the options it is made with when nobody gives any (none, or the example of a pass
     /// whose options have no defaults: [`PassRegistry::register_requiring`]).
     factories: BTreeMap<&'static str, (PassFactory, Options)>,
+    /// The passes registered with required options ([`PassRegistry::register_requiring`]).
+    requiring: BTreeSet<&'static str>,
 }
 
 impl fmt::Debug for PassRegistry {
@@ -175,7 +188,8 @@ impl PassRegistry {
 
     /// Register a pass whose options have no defaults (a choice the program makes, as a partition's cell size): the
     /// declaration checks of [`PassRegistry::register`], and the planner reading its declarations, make it with
-    /// `example` options; a pipeline that leaves them out fails to parse with the factory's reason.
+    /// `example` options; a pipeline that leaves them out fails to parse with the factory's reason, and a plan that
+    /// chooses it without the caller's options for it is an error: the example is never run.
     pub fn register_requiring(&mut self, name: &'static str, factory: PassFactory, example: &[(&str, &str)]) {
         let options: Options = example
             .iter()
@@ -194,10 +208,19 @@ impl PassRegistry {
                 "pass {name} legalizes {n}, which it neither requires, removes nor modifies"
             );
         }
+        if !options.is_empty() {
+            self.requiring.insert(name);
+        }
         assert!(
             self.factories.insert(name, (factory, options)).is_none(),
             "pass {name} registered twice"
         );
+    }
+
+    /// Whether `name` was registered with required options: made with its example only to read its declarations,
+    /// never to run.
+    pub fn requires_options(&self, name: &str) -> bool {
+        self.requiring.contains(name)
     }
 
     pub fn make(&self, name: &str, options: &Options) -> Result<Box<dyn Pass>, Error> {
@@ -493,9 +516,11 @@ impl Target {
     }
 
     /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
-    /// unless carried, an unlisted name: [`Prepared::unsupported`], entity counts by name), and values of names it
-    /// writes that its value rule refuses ([`Prepared::invalid`], by name with the rule's words) or resources it
-    /// refuses ([`Prepared::invalid_resources`]).
+    /// unless carried, an unlisted name: [`Prepared::unsupported`], entity counts by name; a resource it neither
+    /// lists, rules on nor carries: [`Prepared::unsupported_resources`]; the conversion's own resources,
+    /// [`crate::convert::OPERATIONAL_RESOURCES`], aside), and values of names it writes that its value rule refuses
+    /// ([`Prepared::invalid`], by name with the rule's words) or resources it refuses ([`Prepared::invalid_resources`]).
+    /// A resource is listed like a component ([`Target::legal`], [`Target::illegal`]).
     pub fn check_prepared(&self, w: &World) -> Prepared {
         let mut out = Prepared::default();
         for name in w.component_names() {
@@ -514,6 +539,18 @@ impl Target {
             }
         }
         out.invalid_resources = self.refused_resources(w).into_iter().map(str::to_owned).collect();
+        for name in w.resource_names() {
+            let written = crate::convert::OPERATIONAL_RESOURCES.contains(&name)
+                || self.resource_rules.contains_key(name)
+                || match self.rules.get(name) {
+                    Some(Legality::Illegal) => false,
+                    Some(_) => true,
+                    None => self.carry_unknown,
+                };
+            if !written {
+                out.unsupported_resources.push(name.to_owned());
+            }
+        }
         out
     }
 
@@ -562,6 +599,8 @@ pub struct Prepared {
     pub invalid: Vec<(String, String, Vec<Entity>)>,
     /// Resources its rule refuses.
     pub invalid_resources: Vec<String>,
+    /// Resources the writer doesn't write.
+    pub unsupported_resources: Vec<String>,
 }
 
 /// What a plan must do about one name, by the target's rule for it.
@@ -1044,6 +1083,31 @@ impl PassManager {
     /// by an earlier round and need no lowering again unless a pass of this round provides more of them. Returns the
     /// pipeline and the carried-and-lowered names lowered once it has run.
     fn plan_round(
+        &self,
+        w: &World,
+        target: &Target,
+        mode: Mode,
+        options: &PassOptions,
+        lowered_before: &BTreeSet<String>,
+        report: &mut RunReport,
+    ) -> Result<(Pipeline, BTreeSet<String>)> {
+        let planned = self.plan_round_unchecked(w, target, mode, options, lowered_before, report)?;
+        // a pass with required options runs only with the caller's: the planner doesn't choose them
+        if let Some(p) = planned
+            .0
+            .passes
+            .iter()
+            .find(|p| self.registry.requires_options(p.name()) && !options.contains_key(p.name()))
+        {
+            return Err(Error::Options {
+                pass: p.name().to_owned(),
+                message: "the plan needs it and it has required options: give them (PassOptions)".into(),
+            });
+        }
+        Ok(planned)
+    }
+
+    fn plan_round_unchecked(
         &self,
         w: &World,
         target: &Target,

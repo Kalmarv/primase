@@ -55,8 +55,10 @@ pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
 }
 
 /// One part to load: the roots it outputs, and the context its passes need around them (neighbouring placements a
-/// collision or normal operation reads). The reader loads both; only the roots' closure, with what the passes placed,
-/// goes to the writer, so content a part only reads is written by the part that owns it.
+/// collision or normal operation reads). The reader loads both; only the roots' closure, with what the passes placed
+/// for it, goes to the writer, so content a part only reads is written by the part that owns it. The passes see which
+/// is which in the part's [`PartScope`]; content they make from a context entity ([`crate::pass::PassLog::place_from`])
+/// is left to the part that owns that entity.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Part {
     pub roots: BTreeSet<Entity>,
@@ -98,7 +100,7 @@ impl PartSource for WholeWorld {
 /// `core.partition_plan`: how a pass divided the content into output parts, in order. Each group owns its roots
 /// (every root in one group) and names the context its passes need (roots of other groups, loaded but written by
 /// their owner).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartitionPlan {
     /// What made it (`partition-grid{cell=200}`).
     pub by: String,
@@ -106,13 +108,39 @@ pub struct PartitionPlan {
 }
 
 /// One part of a [`PartitionPlan`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartitionGroup {
     /// A name for reports (`cell 3,-2`).
     pub key: String,
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
+    /// The ground area `[west, south, east, north]` (metres, half-open) whose content the group's operations read:
+    /// what it owns and its halo. [`PlannedParts`] adds to the context every placement whose authored box reaches it.
+    pub area: Option<[f64; 4]>,
 }
+
+/// `core.part_scope`: which entities of a part the conversion writes (its roots, and what they reach) and which it
+/// only loaded as context, for passes that make content per source entity. Put in the part's world before its passes
+/// and taken out before writing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PartScope {
+    pub roots: BTreeSet<Entity>,
+    pub context: BTreeSet<Entity>,
+}
+
+impl Resource for PartScope {
+    const NAME: &'static str = "core.part_scope";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.roots.iter().chain(&self.context).copied());
+    }
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        self.roots.retain(|&e| keep(e));
+        self.context.retain(|&e| keep(e));
+    }
+}
+
+/// The resources a conversion makes for its own work, never content a writer is to write.
+pub const OPERATIONAL_RESOURCES: &[&str] = &[PartitionPlan::NAME, PartScope::NAME];
 
 impl Resource for PartitionPlan {
     const NAME: &'static str = "core.partition_plan";
@@ -125,6 +153,7 @@ impl Resource for PartitionPlan {
                     "key": g.key,
                     "roots": g.roots.iter().map(|e| e.index()).collect::<Vec<_>>(),
                     "context": g.context.iter().map(|e| e.index()).collect::<Vec<_>>(),
+                    "area": g.area,
                 })
             })
             .collect();
@@ -144,18 +173,55 @@ impl Resource for PartitionPlan {
 }
 
 /// The parts of the selected world's [`PartitionPlan`], in its order. A world without one is an error: the program
-/// runs the partition pass in its selection.
+/// runs the partition pass in its selection. A group with an area also reads, as context, every other placement whose
+/// prototype's authored box (the reader's, before geometry is loaded) reaches that area, so a long object whose pivot
+/// stands far off is still in its neighbours' operations.
 #[derive(Debug, Default)]
 pub struct PlannedParts {
     groups: std::vec::IntoIter<PartitionGroup>,
 }
 
+/// The ground box `[west, south, east, north]` of a placement's prototype box.
+fn ground_box(t: &crate::Transform, b: [[f64; 3]; 2]) -> [f64; 4] {
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for k in 0..8 {
+        let c = [b[k & 1][0], b[(k >> 1) & 1][1], b[(k >> 2) & 1][2]];
+        let p: [f64; 3] = std::array::from_fn(|i| {
+            (0..3).map(|j| f64::from(t.cols[j][i]) * c[j]).sum::<f64>() + f64::from(t.cols[3][i])
+        });
+        let (east, north) = (p[0], -p[2]);
+        out = [
+            out[0].min(east),
+            out[1].min(north),
+            out[2].max(east),
+            out[3].max(north),
+        ];
+    }
+    out
+}
+
 impl PartSource for PlannedParts {
-    fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
+    fn plan(&mut self, world: &World, boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
         let plan = world
             .resource::<PartitionPlan>()
             .ok_or("no core.partition_plan in the selected world: run a partition pass in the selection")?;
-        self.groups = plan.groups.clone().into_iter();
+        let placed: Vec<(Entity, [f64; 4])> = world
+            .iter::<crate::Instance>()
+            .filter_map(|(e, i)| {
+                let t = world.get::<crate::Transform>(e)?;
+                Some((e, ground_box(t, boxes(i.prototype)?)))
+            })
+            .collect();
+        let mut groups = plan.groups.clone();
+        for g in &mut groups {
+            let Some(a) = g.area else { continue };
+            for &(e, b) in &placed {
+                if !g.roots.contains(&e) && b[0] < a[2] && b[2] >= a[0] && b[1] < a[3] && b[3] >= a[1] {
+                    g.context.insert(e);
+                }
+            }
+        }
+        self.groups = groups.into_iter();
         Ok(())
     }
     fn next_part(&mut self) -> Result<Option<Part>> {
@@ -179,7 +245,25 @@ pub trait Writer {
     fn notices(&mut self) -> Vec<Notice> {
         Vec::new()
     }
-    fn finish(self: Box<Self>) -> Result<Report>;
+    /// Finish writing (indexes, manifests): its report, and what it noticed while finishing.
+    fn finish(self: Box<Self>) -> Result<Finished>;
+}
+
+/// What a writer's [`Writer::finish`] returns.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Finished {
+    pub report: Report,
+    /// What it noticed while finishing (an omission it can only tell once every part is in).
+    pub notices: Vec<Notice>,
+}
+
+impl From<Report> for Finished {
+    fn from(report: Report) -> Finished {
+        Finished {
+            report,
+            notices: Vec::new(),
+        }
+    }
 }
 
 /// What a [`Notice`] tells the program.
@@ -263,6 +347,8 @@ pub struct PartReport {
     pub explicit: RunReport,
     /// Names the writer doesn't write, with how many entities held them ([`Target::check_prepared`]).
     pub unsupported: Vec<(String, u64)>,
+    /// Resources the writer doesn't write.
+    pub unsupported_resources: Vec<String>,
     /// What the part kept and left out of what the passes made, by its components: `entities the passes placed (..)`,
     /// `made entities nothing keeps, dropped (..)`.
     pub kept: BTreeMap<String, u64>,
@@ -347,6 +433,15 @@ impl ConvertReport {
                     Some(p.ordinal),
                 );
             }
+            for name in &p.unsupported_resources {
+                add(
+                    "convert",
+                    NoticeKind::Unsupported,
+                    &format!("resource {name}: the writer doesn't write it"),
+                    1,
+                    Some(p.ordinal),
+                );
+            }
         }
         out.extend(
             derived
@@ -363,7 +458,9 @@ impl ConvertReport {
     }
 }
 
-/// A conversion that failed: the error, where, and everything reported before it (the parts written, the notices).
+/// A conversion that failed: the error, where, and everything reported before it: the parts written, the failing
+/// part's report as far as it got (the passes that ran, the target check), and every notice the reader and writer
+/// gave, those of the failing call included.
 #[derive(Debug)]
 pub struct ConvertError {
     pub error: Error,
@@ -490,9 +587,10 @@ fn run(
     during: &mut String,
 ) -> Result<()> {
     "read".clone_into(during);
-    let (mut world, read) = reader.read()?;
-    report.read = read;
+    let read = reader.read();
     report.reported.extend(reader.notices());
+    let (mut world, read) = read?;
+    report.read = read;
     check_emits(&world, reader.emits(), "read")?;
     "select".clone_into(during);
     manager.run(&mut world, select, &mut report.select)?;
@@ -503,9 +601,10 @@ fn run(
         let ordinal = report.part_reports.len();
         *during = format!("part {ordinal}: load");
         let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
-        let (mut part, loaded) = reader.load(&world, &asked)?;
-        report.loads.extend(loaded.iter().cloned());
+        let loaded = reader.load(&world, &asked);
         report.reported.extend(reader.notices());
+        let (mut part, loaded) = loaded?;
+        report.loads.extend(loaded.iter().cloned());
         let mut size = PartSize {
             roots: roots.len(),
             loaded: sizes(&part),
@@ -513,27 +612,43 @@ fn run(
         };
         check_emits(&part, reader.emits(), "load")?;
         *during = format!("part {ordinal}: passes");
-        let mut part_report = PartReport {
+        // the part's report is published before its passes run, so a failure keeps what ran
+        report.part_reports.push(PartReport {
             ordinal,
             roots: roots.clone(),
             context: context.clone(),
             load: loaded,
             ..PartReport::default()
-        };
+        });
+        let part_report = report.part_reports.last_mut().expect("pushed");
         let loaded: BTreeSet<Entity> = part.entities().collect();
+        part.insert_resource(PartScope {
+            roots: roots.clone(),
+            context: context.clone(),
+        });
         manager.run(&mut part, passes, &mut part_report.explicit)?;
-        // the part's output is the closure of its roots and of what the passes placed (content of its own nothing
-        // need reference, as a marker; PassLog::place). Its context is not output, unless the output reaches it. What
-        // the passes left unreferenced of what was loaded (materials of dropped geometry, of a discarded level of
-        // detail) is not part of it, nor is what they made that nothing kept reaches: dropped, and named in the counts
-        // by its components, as are the placed entities
-        let placed: BTreeSet<Entity> = part_report
-            .explicit
-            .steps
-            .iter()
-            .flat_map(|s| s.log.placed.iter().copied())
-            .filter(|&e| part.is_alive(e))
-            .collect();
+        part.remove_resource::<PartScope>();
+        // the part's output is the closure of its roots and of what the passes placed for it: content of its own
+        // nothing need reference (as a marker; PassLog::place), and content made from an entity the part owns
+        // (PassLog::place_from; made from its context, it is the owner's). Its context is not output, unless the
+        // output reaches it. What the passes left unreferenced of what was loaded (materials of dropped geometry, of a
+        // discarded level of detail) is not part of it, nor is what they made that nothing kept reaches: dropped, and
+        // named in the counts by its components, as are the placed entities
+        let owned = part.closure(roots.iter().copied());
+        let mut from_context = BTreeSet::new();
+        let mut placed = BTreeSet::new();
+        for s in &part_report.explicit.steps {
+            for &e in s.log.placed.iter().filter(|&&e| part.is_alive(e)) {
+                match s.log.placed_from.get(&e) {
+                    Some(source) if !owned.contains(source) => {
+                        from_context.insert(e);
+                    }
+                    _ => {
+                        placed.insert(e);
+                    }
+                }
+            }
+        }
         let keep = part.closure(roots.iter().copied().chain(placed.iter().copied()));
         let names: Vec<String> = part.component_names().into_iter().map(str::to_owned).collect();
         let kinds = |e: Entity| {
@@ -547,6 +662,8 @@ fn run(
         for e in part.entities().filter(|e| !loaded.contains(e)) {
             let what = if placed.contains(&e) {
                 "entities the passes placed"
+            } else if from_context.contains(&e) {
+                "entities placed from context, left to the part that owns their source"
             } else if keep.contains(&e) {
                 continue;
             } else {
@@ -564,6 +681,8 @@ fn run(
         *during = format!("part {ordinal}: target check");
         manager.verify(&part, "the passes")?;
         let checked = target.check_prepared(&part);
+        part_report.unsupported = checked.unsupported;
+        part_report.unsupported_resources = checked.unsupported_resources;
         if let Some((name, words, bad)) = checked.invalid.first() {
             return Err(format!(
                 "{}: {} of {name} the writer can't write ({words}), the first {:?}",
@@ -581,19 +700,21 @@ fn run(
             )
             .into());
         }
-        part_report.unsupported = checked.unsupported;
-        tally(&mut report.counts, &part_report.explicit);
+        let explicit = part_report.explicit.clone();
+        tally(&mut report.counts, &explicit);
         size.written = sizes(&part);
         report.part_sizes.push(size);
-        report.part_reports.push(part_report);
         *during = format!("part {ordinal}: write");
-        writer.write(&part)?;
-        parts.written(&part)?;
+        let written = writer.write(&part);
         report.reported.extend(writer.notices());
+        written?;
+        parts.written(&part)?;
         report.parts += 1;
     }
     "finish".clone_into(during);
     report.reported.extend(writer.notices());
-    report.written = writer.finish()?;
+    let finished = writer.finish()?;
+    report.reported.extend(finished.notices);
+    report.written = finished.report;
     Ok(())
 }

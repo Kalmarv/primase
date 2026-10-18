@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use primase_core::convert::{
-    ConvertError, Notice, NoticeKind, Part, PartSize, PartSource, PartitionGroup, PartitionPlan,
-    PlannedParts, Reader, Report, Result, Writer, convert, convert_parts,
+    ConvertError, Finished, Notice, NoticeKind, Part, PartScope, PartSize, PartSource, PartitionGroup,
+    PartitionPlan, PlannedParts, Reader, Report, Result, Writer, convert, convert_parts,
 };
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Component, Entity, Instance, Name, Resource, World};
@@ -183,12 +183,17 @@ impl Writer for ToyWriter {
             1,
         )]
     }
-    fn finish(self: Box<Self>) -> Result<Report> {
+    fn finish(self: Box<Self>) -> Result<Finished> {
         event("finish");
-        Ok(vec![(
-            "toy".into(),
-            format!("{} parts", self.written.borrow().len()),
-        )])
+        Ok(Finished {
+            report: vec![("toy".into(), format!("{} parts", self.written.borrow().len()))],
+            notices: vec![Notice::new(
+                "toy-writer",
+                NoticeKind::Unsupported,
+                "toy index fields not written",
+                1,
+            )],
+        })
     }
 }
 
@@ -289,11 +294,13 @@ impl Pass for ToyPartition {
                     key: "west".into(),
                     roots: BTreeSet::from([p[0], p[1]]),
                     context: BTreeSet::from([p[2]]),
+                    area: None,
                 },
                 PartitionGroup {
                     key: "east".into(),
                     roots: BTreeSet::from([p[2]]),
                     context: BTreeSet::new(),
+                    area: None,
                 },
             ],
         });
@@ -515,7 +522,8 @@ fn each_parts_reports_are_kept_and_summed_once() {
     );
     let dropped = find("convert", "made entities nothing keeps, dropped (toy.mesh)");
     assert_eq!((dropped.kind, dropped.count), (NoticeKind::Selection, 2));
-    assert_eq!(notices.iter().filter(|n| n.stage == "toy-writer").count(), 3);
+    // after each part, before finishing, and the one finish returns
+    assert_eq!(notices.iter().filter(|n| n.stage == "toy-writer").count(), 4);
 }
 
 /// A conversion that fails on its second part keeps the first part's reports, says where it failed, and the error
@@ -546,4 +554,316 @@ fn a_failed_conversion_keeps_what_it_had_reported() {
         failure.reason,
         "failed during part 1: write: the toy writer failed"
     );
+}
+
+/// Makes a marker for every placement it sees, from that placement (as a pass deriving content per source would),
+/// and checks it is told which placements its part owns.
+struct ToyPerPlacement;
+impl Pass for ToyPerPlacement {
+    fn name(&self) -> &'static str {
+        "toy-per-placement"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["core.name"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let scope = w.resource::<PartScope>().ok_or("no part scope")?.clone();
+        let placements: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        for p in placements {
+            assert!(scope.roots.contains(&p) || scope.context.contains(&p));
+            let m = w.spawn();
+            w.insert(m, Name(format!("marker of {}", p.index())));
+            log.place_from(m, p);
+        }
+        Ok(())
+    }
+}
+
+/// Fails, after the passes before it ran.
+struct ToyFail;
+impl Pass for ToyFail {
+    fn name(&self) -> &'static str {
+        "toy-fail"
+    }
+    fn run(&self, _w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        Err("the toy pass failed".into())
+    }
+}
+
+/// A resource of a source, which the toy writer does not write unless its target lists it.
+#[derive(Clone, Debug, PartialEq)]
+struct ToyRes;
+impl Resource for ToyRes {
+    const NAME: &'static str = "toy.res";
+}
+struct ToyAddRes;
+impl Pass for ToyAddRes {
+    fn name(&self) -> &'static str {
+        "toy-add-res"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["toy.res"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        w.insert_resource(ToyRes);
+        Ok(())
+    }
+}
+
+fn manager_with(select: &str, passes: &str) -> (PassManager, Pipeline, Pipeline) {
+    let mut r = PassRegistry::new();
+    r.register("toy-select", |_| Ok(Box::new(ToySelect)));
+    r.register("toy-pass", |_| Ok(Box::new(ToyPass)));
+    r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
+    r.register("toy-per-placement", |_| Ok(Box::new(ToyPerPlacement)));
+    r.register("toy-fail", |_| Ok(Box::new(ToyFail)));
+    r.register("toy-add-res", |_| Ok(Box::new(ToyAddRes)));
+    r.register("two-cells", |_| Ok(Box::new(TwoCells)));
+    let (select, passes) = (r.parse(select).unwrap(), r.parse(passes).unwrap());
+    (PassManager::new(r), select, passes)
+}
+
+/// Writes nothing; keeps the names of the markers it is given.
+struct Names(Rc<RefCell<Vec<String>>>);
+impl Writer for Names {
+    fn target(&self) -> Target {
+        Target::new("names").legal("core.instance").legal("core.name")
+    }
+    fn write(&mut self, part: &World) -> Result<()> {
+        assert!(part.resource::<PartScope>().is_none());
+        self.0.borrow_mut().extend(
+            part.iter::<Name>()
+                .filter(|(_, n)| n.0.starts_with("marker"))
+                .map(|(_, n)| n.0.clone()),
+        );
+        Ok(())
+    }
+    fn finish(self: Box<Self>) -> Result<Finished> {
+        Ok(Finished::default())
+    }
+}
+
+/// Content a pass makes from a placement loaded as context is the owner's: every placement's marker is written once,
+/// as by the whole world in one part, and the part scope is gone before writing.
+#[test]
+fn content_made_from_context_is_written_by_its_owner() {
+    let (m, select, passes) = manager_with("toy-select, toy-partition", "toy-per-placement");
+    let markers = Rc::new(RefCell::new(Vec::<String>::new()));
+    let report = convert_parts(
+        &mut reader(3),
+        &mut PlannedParts::default(),
+        Box::new(Names(markers.clone())),
+        &m,
+        &select,
+        &passes,
+    )
+    .unwrap();
+    events();
+    let mut parted = markers.borrow().clone();
+    parted.sort();
+    assert_eq!(parted.len(), 3, "{parted:?}");
+    parted.dedup();
+    assert_eq!(parted.len(), 3, "a marker written twice: {parted:?}");
+    assert_eq!(
+        report.part_reports[0]
+            .kept
+            .get("entities placed from context, left to the part that owns their source (core.name)"),
+        Some(&1)
+    );
+    let whole = Rc::new(RefCell::new(Vec::<String>::new()));
+    let (m, select, passes) = manager_with("toy-select", "toy-per-placement");
+    convert(
+        &mut reader(3),
+        Box::new(Names(whole.clone())),
+        &m,
+        &select,
+        &passes,
+    )
+    .unwrap();
+    events();
+    let mut whole = whole.borrow().clone();
+    whole.sort();
+    assert_eq!(parted, whole);
+}
+
+/// A failure keeps the failing part's report as far as it got: the passes that ran before a failing pass; the whole
+/// pipeline when the target check refuses the part; and the notices a writer gave on the call that failed.
+#[test]
+fn a_failing_part_keeps_what_its_passes_and_writer_reported() {
+    let (m, select, passes) = manager_with("toy-select", "toy-pass, toy-fail");
+    let (w, _) = writer(target());
+    let e = convert_parts(&mut reader(1), &mut ToyParts::default(), w, &m, &select, &passes).unwrap_err();
+    events();
+    let e = e.downcast::<ConvertError>().unwrap();
+    assert_eq!(e.during, "part 0: passes");
+    let part = &e.partial.part_reports[0];
+    assert_eq!(part.explicit.steps.len(), 1);
+    assert_eq!(
+        part.explicit.steps[0]
+            .log
+            .approximations
+            .get("toy meshes rounded"),
+        Some(&2)
+    );
+    // the target refuses the part after its passes ran
+    let (m, select, passes) = manager_with("toy-select", "toy-pass");
+    let (w, _) = writer(target().dynamic_typed::<ToyMesh>(|m| m.0 < 6));
+    let e = convert_parts(&mut reader(1), &mut ToyParts::default(), w, &m, &select, &passes).unwrap_err();
+    events();
+    let e = e.downcast::<ConvertError>().unwrap();
+    assert_eq!(e.during, "part 0: target check");
+    assert_eq!(e.partial.part_reports[0].explicit.steps.len(), 1);
+    // the writer reports an omission on the write that fails
+    let (mut w, _) = writer(target());
+    w.fail_at = Some(0);
+    let e = convert_parts(&mut reader(1), &mut ToyParts::default(), w, &m, &select, &passes).unwrap_err();
+    events();
+    let e = e.downcast::<ConvertError>().unwrap();
+    assert_eq!(
+        e.partial
+            .reported
+            .iter()
+            .filter(|n| n.stage == "toy-writer")
+            .count(),
+        1
+    );
+}
+
+/// A resource the writer does not write is a notice; one its target lists is not; the conversion's own resources
+/// (the partition plan a planned part carries) never are.
+#[test]
+fn resources_the_writer_doesnt_write_are_reported() {
+    let (m, select, passes) = manager_with("toy-select, toy-partition", "toy-pass, toy-add-res");
+    let (w, _) = writer(target());
+    let report = convert_parts(
+        &mut reader(3),
+        &mut PlannedParts::default(),
+        w,
+        &m,
+        &select,
+        &passes,
+    )
+    .unwrap();
+    events();
+    for p in &report.part_reports {
+        assert_eq!(p.unsupported_resources, vec!["toy.res".to_string()]);
+    }
+    assert!(
+        report
+            .notices()
+            .iter()
+            .any(|n| n.reason == "resource toy.res: the writer doesn't write it" && n.count == 2)
+    );
+    let (w, _) = writer(target().legal("toy.res"));
+    let report = convert_parts(
+        &mut reader(3),
+        &mut PlannedParts::default(),
+        w,
+        &m,
+        &select,
+        &passes,
+    )
+    .unwrap();
+    events();
+    assert!(
+        report
+            .part_reports
+            .iter()
+            .all(|p| p.unsupported_resources.is_empty())
+    );
+}
+
+/// Placements standing at given ground positions, each with a prototype of its own whose authored box is given.
+struct PlacedReader {
+    at: Vec<([f32; 2], [[f64; 3]; 2])>,
+    loads: Vec<BTreeSet<Entity>>,
+}
+impl Reader for PlacedReader {
+    fn read(&mut self) -> Result<(World, Report)> {
+        let mut w = World::new();
+        for (k, (p, _)) in self.at.iter().enumerate() {
+            let proto = w.spawn();
+            w.insert(proto, Name(format!("proto {k}")));
+            let e = w.spawn();
+            w.insert(
+                e,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            let mut t = primase_core::Transform::IDENTITY;
+            t.cols[3] = [p[0], 0.0, -p[1]];
+            w.insert(e, t);
+        }
+        Ok((w, Report::new()))
+    }
+    fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
+        self.loads.push(roots.clone());
+        Ok((world.subset(&world.closure(roots.iter().copied())), Report::new()))
+    }
+    fn emits(&self) -> &'static [&'static str] {
+        &["core"]
+    }
+    fn prototype_box(&self, _world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
+        // the prototypes are the even entities, in order
+        self.at.get(prototype.index() as usize / 2).map(|(_, b)| *b)
+    }
+}
+
+/// Two parts by area; the second owns a placement whose pivot stands far east and whose authored box reaches back
+/// west into the first part's area.
+struct TwoCells;
+impl Pass for TwoCells {
+    fn name(&self) -> &'static str {
+        "two-cells"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[PartitionPlan::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[PartitionPlan::NAME]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let p: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        w.insert_resource(PartitionPlan {
+            by: "two-cells".into(),
+            groups: vec![
+                PartitionGroup {
+                    key: "west".into(),
+                    roots: BTreeSet::from([p[0]]),
+                    context: BTreeSet::new(),
+                    area: Some([-5.0, -5.0, 105.0, 105.0]),
+                },
+                PartitionGroup {
+                    key: "east".into(),
+                    roots: BTreeSet::from([p[1], p[2]]),
+                    context: BTreeSet::new(),
+                    area: Some([395.0, -5.0, 605.0, 105.0]),
+                },
+            ],
+        });
+        Ok(())
+    }
+}
+
+/// A part reads, as context, a placement whose authored box reaches its area though its pivot stands far off.
+#[test]
+fn planned_parts_read_what_reaches_them_by_its_authored_box() {
+    let (m, select, _) = manager_with("two-cells", "toy-pass");
+    let passes = Pipeline::default();
+    let unit = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
+    // a 450 m long object standing at 500 east, reaching back to 50 east
+    let long = [[-450.0, 0.0, -1.0], [1.0, 1.0, 1.0]];
+    let mut reader = PlacedReader {
+        at: vec![([10.0, 10.0], unit), ([500.0, 10.0], long), ([510.0, 10.0], unit)],
+        loads: Vec::new(),
+    };
+    let (w, written) = writer(Target::new("t").carry_unknown());
+    convert_parts(&mut reader, &mut PlannedParts::default(), w, &m, &select, &passes).unwrap();
+    events();
+    // the west part loaded its own placement and the long one, and wrote only its own
+    assert_eq!(reader.loads[0].len(), 2);
+    assert_eq!(written.borrow()[0].placements.len(), 1);
+    assert_eq!(reader.loads[1].len(), 2);
 }

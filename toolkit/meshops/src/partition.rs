@@ -1,18 +1,22 @@
 //! `partition-grid`: divide a world's content into output parts by a ground grid, as a [`PartitionPlan`] the
 //! conversion loop takes its parts from ([`primase_core::convert::PlannedParts`]).
 //!
-//! What is placed (placements, markers, curves, lights) is filed by where it stands: a placement, marker or light by
-//! its position, a curve by the middle of its points' bounds, in the ground frame (`east`, `north`:
+//! Every piece of independent content (an entity nothing else refers to: a placement, a marker, a curve, a light, a
+//! standalone collision soup or mesh) is in exactly one part; what it reaches (prototypes, materials, textures) comes
+//! with it. Content is filed by where it stands: a marker by its ground position, a curve by the middle of its points'
+//! bounds, anything else with a transform by its position, in the ground frame (`east`, `north`:
 //! [`primase_core::frame::ground`]). Cells are half-open, `[origin + k * cell, origin + (k + 1) * cell)` on each axis,
-//! so a point on a border belongs to the cell above it. Content with no position (a world soup) is its own last part.
-//! A part's context is what other cells place within `halo` metres of its cell: loaded with it, written by its owner.
+//! so a point on a border belongs to the cell above it. Content with no position (a world soup with no transform) is
+//! its own last part, `unplaced`. A part's context is the content of other cells standing within `halo` metres of its
+//! cell, outside the region too (an operation may need to read a neighbour the region leaves out); the part's area
+//! (its cell and halo) lets [`primase_core::convert::PlannedParts`] add what reaches it by its authored box.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::convert::{PartitionGroup, PartitionPlan};
 use primase_core::frame::ground;
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Curve, Entity, Instance, Light, Marker, Resource, Transform, World};
+use primase_core::{Curve, Entity, Marker, Resource, Transform, World};
 
 /// `partition-grid{cell=C[,origin=E,N][,halo=H][,region=E0,N0,E1,N1]}`: see the module documentation. `cell` has no
 /// default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
@@ -149,30 +153,29 @@ impl Pass for PartitionGrid {
         &[PartitionPlan::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        // placed content: what stands somewhere on its own (placements, markers, curves, lights)
-        let placed: BTreeSet<Entity> = w
-            .iter::<Instance>()
-            .map(|(e, _)| e)
-            .chain(w.iter::<Marker>().map(|(e, _)| e))
-            .chain(w.iter::<Curve>().map(|(e, _)| e))
-            .chain(w.iter::<Light>().map(|(e, _)| e))
+        // independent content: what nothing refers to (entities with no component are nothing)
+        let names = w.component_names();
+        let content: Vec<Entity> = w
+            .unreferenced()
+            .into_iter()
+            .filter(|&e| names.iter().any(|n| w.entity_has_named(e, n)))
             .collect();
         let mut cells: BTreeMap<(i64, i64), BTreeSet<Entity>> = BTreeMap::new();
         let mut at: Vec<(Entity, [f64; 2])> = Vec::new();
         let mut unplaced = BTreeSet::new();
-        for &e in &placed {
+        for e in content {
             let Some(p) = position(w, e) else {
                 unplaced.insert(e);
                 continue;
             };
+            at.push((e, p));
             if let Some(r) = self.region
                 && !(p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3])
             {
-                log.count("placed content outside the region, left out", 1);
+                log.count("content outside the region, left out", 1);
                 continue;
             }
             cells.entry(self.cell_of(p)).or_default().insert(e);
-            at.push((e, p));
         }
         let mut groups = Vec::new();
         let mut shared = 0;
@@ -183,21 +186,29 @@ impl Pass for PartitionGrid {
                 .map(|(e, _)| *e)
                 .collect();
             shared += context.len();
+            let (w0, s0) = (
+                self.origin[0] + c.0 as f64 * self.cell,
+                self.origin[1] + c.1 as f64 * self.cell,
+            );
             groups.push(PartitionGroup {
                 key: format!("cell {},{}", c.0, c.1),
                 roots: roots.clone(),
                 context,
+                area: Some([
+                    w0 - self.halo,
+                    s0 - self.halo,
+                    w0 + self.cell + self.halo,
+                    s0 + self.cell + self.halo,
+                ]),
             });
         }
         if !unplaced.is_empty() {
-            log.count(
-                "placed content with no position, in its own part",
-                unplaced.len() as u64,
-            );
+            log.count("content with no position, in its own part", unplaced.len() as u64);
             groups.push(PartitionGroup {
                 key: "unplaced".into(),
                 roots: unplaced,
                 context: BTreeSet::new(),
+                area: None,
             });
         }
         log.count("parts", groups.len() as u64);
@@ -213,6 +224,7 @@ impl Pass for PartitionGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use primase_core::Instance;
 
     fn placement(w: &mut World, proto: Entity, east: f32, north: f32) -> Entity {
         let e = w.spawn();
@@ -270,12 +282,136 @@ mod tests {
             .run(&mut w2, &mut log)
             .unwrap();
         assert_eq!(w2.resource::<PartitionPlan>().unwrap().groups.len(), 1);
-        assert_eq!(log.counts["placed content outside the region, left out"], 1);
+        assert_eq!(log.counts["content outside the region, left out"], 1);
     }
 
     #[test]
     fn the_cell_size_is_required() {
         assert!(PartitionGrid::from_options(&Options::new()).is_err());
         assert!(PartitionGrid::from_options(&Options::from([("cell".to_owned(), "0".to_owned())])).is_err());
+    }
+
+    /// Standalone content (a collision soup nothing places, with or without a transform) is in exactly one part, as
+    /// placements are: every piece of independent content of the world, none twice, none lost.
+    #[test]
+    fn every_piece_of_independent_content_is_in_one_part() {
+        use primase_core::Collision;
+        let soup = |w: &mut World, at: Option<[f32; 3]>| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                Collision {
+                    positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    triangles: vec![[0, 1, 2]],
+                    surfaces: vec![0],
+                },
+            );
+            if let Some(p) = at {
+                let mut t = Transform::IDENTITY;
+                t.cols[3] = p;
+                w.insert(e, t);
+            }
+            e
+        };
+        let parted = |w: &mut World| {
+            let mut log = PassLog::default();
+            grid(&[("cell", "100")]).run(w, &mut log).unwrap();
+            let plan = w.resource::<PartitionPlan>().unwrap();
+            let mut all: Vec<Entity> = plan.groups.iter().flat_map(|g| g.roots.iter().copied()).collect();
+            all.sort();
+            all
+        };
+        // collision only: one soup placed at a transform, one with none
+        let mut w = World::new();
+        let placed = soup(&mut w, Some([150.0, 0.0, -10.0]));
+        let world_soup = soup(&mut w, None);
+        assert_eq!(parted(&mut w), vec![placed, world_soup]);
+        let plan = w.resource::<PartitionPlan>().unwrap();
+        assert_eq!(plan.groups.last().unwrap().key, "unplaced");
+        // mixed: placements with their prototype (reached, not a root of its own) and a soup
+        let mut w = World::new();
+        let proto = w.spawn();
+        w.insert(proto, primase_core::Name("proto".into()));
+        let a = placement(&mut w, proto, 10.0, 10.0);
+        let b = placement(&mut w, proto, 210.0, 10.0);
+        let s = soup(&mut w, None);
+        assert_eq!(parted(&mut w), vec![a, b, s]);
+        let whole: Vec<Entity> = w.unreferenced().into_iter().filter(|e| *e != proto).collect();
+        assert!(whole.iter().all(|e| [a, b, s].contains(e)));
+    }
+
+    /// A part's context reads a neighbour the region leaves out of the output.
+    #[test]
+    fn context_reads_neighbours_outside_the_region() {
+        let mut w = World::new();
+        let proto = w.spawn();
+        let inside = placement(&mut w, proto, 98.0, 10.0);
+        let outside = placement(&mut w, proto, 102.0, 10.0);
+        let mut log = PassLog::default();
+        grid(&[("cell", "100"), ("halo", "5"), ("region", "0,0,100,100")])
+            .run(&mut w, &mut log)
+            .unwrap();
+        let plan = w.resource::<PartitionPlan>().unwrap();
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].roots, BTreeSet::from([inside]));
+        assert_eq!(plan.groups[0].context, BTreeSet::from([outside]));
+        assert_eq!(plan.groups[0].area, Some([-5.0, -5.0, 105.0, 105.0]));
+        assert_eq!(log.counts["content outside the region, left out"], 1);
+    }
+
+    /// A raw form a target refuses, lowered by a pass that needs a partition plan.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Raw;
+    impl primase_core::Component for Raw {
+        const NAME: &'static str = "test.raw";
+    }
+    struct LowerRaw;
+    impl Pass for LowerRaw {
+        fn name(&self) -> &'static str {
+            "lower-raw"
+        }
+        fn requires(&self) -> &[&'static str] {
+            &["test.raw", PartitionPlan::NAME]
+        }
+        fn removes(&self) -> &[&'static str] {
+            &["test.raw"]
+        }
+        fn legalizes(&self) -> &[&'static str] {
+            &["test.raw"]
+        }
+        fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
+            let raw: Vec<Entity> = w.iter::<Raw>().map(|(e, _)| e).collect();
+            for e in raw {
+                w.remove::<Raw>(e);
+            }
+            Ok(())
+        }
+    }
+
+    /// The planner never runs a required-option pass on its registered example: a plan that needs partition-grid is
+    /// an error without the caller's cell size, and uses the caller's when given.
+    #[test]
+    fn the_planner_needs_the_callers_options_for_a_required_option_pass() {
+        use primase_core::pass::{Mode, PassManager, PassOptions, PassRegistry, RunReport, Target};
+        let mut reg = PassRegistry::new();
+        crate::register(&mut reg);
+        reg.register("lower-raw", |_| Ok(Box::new(LowerRaw)));
+        let manager = PassManager::new(reg);
+        let target = Target::new("t").illegal("test.raw").carry_unknown();
+        let mut w = World::new();
+        let proto = w.spawn();
+        let e = placement(&mut w, proto, 10.0, 10.0);
+        w.insert(e, Raw);
+        let plan = |options: &PassOptions| {
+            manager.plan(&w, &target, Mode::Partial, options, &mut RunReport::default())
+        };
+        let e = plan(&PassOptions::new()).map(|p| p.to_string()).unwrap_err();
+        assert!(e.to_string().contains("partition-grid"), "{e}");
+        let given = PassOptions::from([(
+            "partition-grid".to_owned(),
+            Options::from([("cell".to_owned(), "250".to_owned())]),
+        )]);
+        let p = plan(&given).unwrap().to_string();
+        assert!(p.contains("partition-grid{cell=250}"), "{p}");
     }
 }
