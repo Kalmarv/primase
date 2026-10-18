@@ -699,11 +699,13 @@ fn pass_impls(t: &[Tok]) -> Vec<(std::ops::Range<usize>, Option<String>)> {
     out
 }
 
-/// The names given to `register("...", ...)` calls.
+/// The names given to `register("...", ...)` and `register_requiring("...", ...)` calls.
 fn registered(t: &[Tok]) -> BTreeSet<String> {
     t.windows(3)
         .filter_map(|w| match (&w[0], &w[1], &w[2]) {
-            (Tok::Ident(f), Tok::Punct('('), Tok::Str(s)) if f == "register" => Some(s.clone()),
+            (Tok::Ident(f), Tok::Punct('('), Tok::Str(s)) if f == "register" || f == "register_requiring" => {
+                Some(s.clone())
+            }
             _ => None,
         })
         .collect()

@@ -168,7 +168,18 @@ impl PassRegistry {
     /// Register a pass. Panics when the name is taken, the factory does not make that pass with no options, or the
     /// pass legalizes a name it neither requires, removes nor modifies.
     pub fn register(&mut self, name: &'static str, factory: PassFactory) {
-        let made = factory(&Options::new()).unwrap_or_else(|e| panic!("pass {name} with no options: {e}"));
+        self.register_requiring(name, factory, &[]);
+    }
+
+    /// Register a pass whose options have no defaults (a choice the program makes, as a partition's cell size): the
+    /// declaration checks of [`PassRegistry::register`] make it with `example` options; a pipeline that leaves them
+    /// out fails to parse with the factory's reason.
+    pub fn register_requiring(&mut self, name: &'static str, factory: PassFactory, example: &[(&str, &str)]) {
+        let options: Options = example
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let made = factory(&options).unwrap_or_else(|e| panic!("pass {name} with options {options:?}: {e}"));
         assert_eq!(
             made.name(),
             name,

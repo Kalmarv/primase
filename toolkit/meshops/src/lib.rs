@@ -19,9 +19,11 @@ pub use parametric::{FlattenCurves, TessellateColliders};
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
-    reg.register("partition-grid", |o| {
-        Ok(Box::new(PartitionGrid::from_options(o)?))
-    });
+    reg.register_requiring(
+        "partition-grid",
+        |o| Ok(Box::new(PartitionGrid::from_options(o)?)),
+        &[("cell", "100")],
+    );
 }
 mod partition;
 pub use partition::PartitionGrid;
