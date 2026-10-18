@@ -425,30 +425,44 @@ pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result
             glbs.insert(mesh, load_glb(&map_file(map, mesh)?)?);
         }
     }
-    let names = object_glbs(map)?;
-    resolve_by(record, sections, &names, |mesh, primitive| {
+    let (names, peers) = object_glbs(map)?;
+    resolve_by(record, sections, &names, &peers, |mesh, primitive| {
         glb_weights(&glbs[mesh], primitive)
     })
 }
 
+/// Per GLB stem, the stems of the other GLBs drawn by objects at the same placement (the same 12 transform numbers):
+/// Studio merges the pieces of objects at one placement into one MeshSet named after one of them, so a GLB's sections
+/// can be in a peer's MeshSet.
+type Peers = BTreeMap<String, BTreeSet<String>>;
+
 /// The map's object names as Studio writes them into a MeshSet's name (`" / "` and spaces as `___` and `_`, lower case,
 /// before any `___section`), each with the stem of the GLB it draws (from `map.json`): an instance's objects are named
-/// after their tile and prototype, not after its GLB. An object name drawing two GLBs is refused.
+/// after their tile and prototype, not after its GLB. An object name drawing two GLBs is refused. With them, each GLB's
+/// placement [`Peers`].
 #[allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
     reason = "exception: the post-compile step reads the map's vertex-blend record and GLBs"
 )]
-fn object_glbs(map: &Path) -> Result<BTreeMap<String, String>> {
+fn object_glbs(map: &Path) -> Result<(BTreeMap<String, String>, Peers)> {
     let path = map.join("map.json");
     let bytes = std::fs::read(&path).map_err(|source| Error::Io { path, source })?;
     let v: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| bad(W, 0, format!("map.json: {e}")))?;
     let mut out = BTreeMap::new();
+    let mut placed: BTreeMap<Vec<u64>, BTreeSet<String>> = BTreeMap::new();
     for o in v["objects"].as_array().into_iter().flatten() {
         let (Some(name), Some(mesh)) = (o["name"].as_str(), o["mesh"].as_str()) else {
             continue;
         };
+        let at: Vec<u64> = o["transform"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|x| x.as_f64().map_or(u64::MAX, f64::to_bits))
+            .collect();
+        placed.entry(at).or_default().insert(glb_stem(mesh));
         let base = name
             .split(" / ")
             .next()
@@ -466,7 +480,16 @@ fn object_glbs(map: &Path) -> Result<BTreeMap<String, String>> {
             ));
         }
     }
-    Ok(out)
+    let mut peers = Peers::new();
+    for glbs in placed.values().filter(|g| g.len() > 1) {
+        for g in glbs {
+            peers
+                .entry(g.clone())
+                .or_default()
+                .extend(glbs.iter().filter(|o| *o != g).cloned());
+        }
+    }
+    Ok((out, peers))
 }
 
 /// [`resolve`] with the recorded primitives' weights from `weights_of(mesh, primitive)`.
@@ -474,6 +497,7 @@ fn resolve_by(
     record: &Record,
     sections: &[BlendSection],
     names: &BTreeMap<String, String>,
+    peers: &Peers,
     weights_of: impl Fn(&str, usize) -> Result<Vec<f32>>,
 ) -> Result<Resolution> {
     // stem -> key -> the weights of its sections; and each stem's keys in section order
@@ -522,16 +546,33 @@ fn resolve_by(
         for (mesh, primitive) in pairs {
             let at = format!("material {material} in {mesh} primitive {primitive}");
             let stem = glb_stem(mesh);
-            let candidates = sets.get(&stem).ok_or_else(|| {
-                bad(
-                    W,
-                    0,
-                    format!(
-                        "{at}: no MeshSet of {mesh} has a vertex-blend section (TexCoord0:Half4); the compile did \
-                         not carry the weights (vertex_blend needs {STUDIO_BUILD} or a build checked against it)"
-                    ),
-                )
-            })?;
+            // its own MeshSets, else (Studio merged them into a MeshSet named after another object at the same
+            // placement) its placement peers': the weights below pick the keys
+            let merged: BTreeMap<u64, HashSet<u16>>;
+            let candidates = match sets.get(&stem) {
+                Some(c) => c,
+                None => {
+                    let mut m: BTreeMap<u64, HashSet<u16>> = BTreeMap::new();
+                    for p in peers.get(&stem).into_iter().flatten() {
+                        for (k, w) in sets.get(p).into_iter().flatten() {
+                            m.entry(*k).or_default().extend(w.iter().copied());
+                        }
+                    }
+                    if m.is_empty() {
+                        return Err(bad(
+                            W,
+                            0,
+                            format!(
+                                "{at}: no MeshSet of {mesh} (nor of an object at its placement) has a vertex-blend \
+                                 section (TexCoord0:Half4); the compile did not carry the weights (vertex_blend needs \
+                                 {STUDIO_BUILD} or a build checked against it)"
+                            ),
+                        ));
+                    }
+                    merged = m;
+                    &merged
+                }
+            };
             let weights: BTreeSet<[u16; 2]> = weights_of(mesh, *primitive)?
                 .iter()
                 .map(|&w| half_choices(w))
@@ -819,13 +860,38 @@ mod tests {
         assert_eq!(glb_stem("meshes/T_0_-6.glb"), "t_0_-6");
     }
 
+    /// Studio merges the pieces of objects at one placement into one MeshSet named after one of them: a GLB with no
+    /// MeshSet of its own is resolved in its placement peers' MeshSets (and refused without peers).
+    #[test]
+    fn a_glb_merged_into_a_peers_meshset_is_found_there() {
+        let sections = [
+            section("t_a", 7, &[0.0, 0.25, 1.0]),
+            section("t_a", 9, &[0.0, 0.5, 1.0]),
+        ];
+        let rec = record(&[("ma", "t_a", 0), ("mb", "t_b", 0)]);
+        let weights = |mesh: &str, _: usize| -> Result<Vec<f32>> {
+            Ok(match mesh {
+                "meshes/t_a.glb" => vec![0.0, 0.25, 1.0],
+                _ => vec![0.0, 0.5, 1.0],
+            })
+        };
+        let peers = Peers::from([
+            ("t_a".to_owned(), BTreeSet::from(["t_b".to_owned()])),
+            ("t_b".to_owned(), BTreeSet::from(["t_a".to_owned()])),
+        ]);
+        let r = resolve_by(&rec, &sections, &BTreeMap::new(), &peers, weights).unwrap();
+        assert_eq!((r.keys["ma"], r.keys["mb"]), (7, 9));
+        let e = resolve_by(&rec, &sections, &BTreeMap::new(), &Peers::new(), weights).unwrap_err();
+        assert!(e.to_string().contains("nor of an object at its placement"), "{e}");
+    }
+
     /// [`resolve_by`] for a map whose objects are named after their GLBs (no map.json names).
     fn resolve_by_files(
         record: &Record,
         sections: &[BlendSection],
         weights_of: impl Fn(&str, usize) -> Result<Vec<f32>>,
     ) -> Result<Resolution> {
-        resolve_by(record, sections, &BTreeMap::new(), weights_of)
+        resolve_by(record, sections, &BTreeMap::new(), &Peers::new(), weights_of)
     }
 
     fn h(w: &[f32]) -> Vec<u16> {
