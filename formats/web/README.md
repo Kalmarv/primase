@@ -9,7 +9,9 @@ a time. `plan(&World, &Options)` assigns placements, viewer records and the
 world's collision to cells without loading anything; collision is filed by its
 anchor and held only by reference (the holder is one of the cell's roots, and its
 soup is made from the cell's world when the cell is written), so the plan holds no
-geometry. `TilePlan::split` files the
+geometry. With KTX2, encodings are held in memory between tiles up to
+`Options::encoding_memory` (least recently used dropped, then read from the disk
+cache or encoded again); the bytes are the same at any bound. `TilePlan::split` files the
 triangles of each `split_by_tile` placement from a world holding its prototype
 loaded. Then, per cell, the driver takes the world's `World::closure` of
 `TilePlan::roots(cell)` as a `World::subset`, loads its meshes and textures,

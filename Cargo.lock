@@ -789,6 +789,7 @@ dependencies = [
 name = "primase-cli"
 version = "0.1.0"
 dependencies = [
+ "primase-cache",
  "primase-core",
  "primase-gta",
  "primase-image",

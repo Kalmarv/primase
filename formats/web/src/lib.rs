@@ -54,6 +54,11 @@ pub struct Options {
     /// KTX2 lowering: encode on every cache hit as well and fail when the stored value differs.
     #[cfg(feature = "ktx2")]
     pub cache_verify: bool,
+    /// KTX2 lowering: at most this many bytes of encodings held in memory between tiles, the least recently used
+    /// dropped first ([`ktx2::DEFAULT_ENCODING_MEMORY`]); a dropped one comes back from the disk cache or is encoded
+    /// again.
+    #[cfg(feature = "ktx2")]
+    pub encoding_memory: usize,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
@@ -91,6 +96,8 @@ impl Default for Options {
             cache: None,
             #[cfg(feature = "ktx2")]
             cache_verify: false,
+            #[cfg(feature = "ktx2")]
+            encoding_memory: ktx2::DEFAULT_ENCODING_MEMORY,
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
@@ -583,7 +590,8 @@ pub fn plan_with_geometry(
             options.texture_caps_by_name.clone(),
             options.cache.clone(),
             options.cache_verify,
-        )?,
+        )?
+        .with_memory(options.encoding_memory),
     };
     for p in placements.into_values() {
         match p.transform.classify() {
@@ -803,6 +811,12 @@ impl TilePlan {
             });
         }
         Ok(())
+    }
+    /// KTX2 encodings dropped from memory to stay within [`Options::encoding_memory`], so far (each made again or
+    /// read from the disk cache when a later tile used it).
+    #[cfg(feature = "ktx2")]
+    pub fn encodings_dropped(&self) -> u64 {
+        self.textures.dropped_from_memory()
     }
     /// The planned cells, in order.
     pub fn cells(&self) -> Vec<(i32, i32)> {

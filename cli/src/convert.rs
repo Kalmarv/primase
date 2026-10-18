@@ -14,7 +14,8 @@ readers:
   gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H]
         [--min-size M] [--max-priority N] [--interiors none|all]
 writers:
-  web      [--ktx2] [--budget-mib N | --no-budget] [--plain]
+  web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
+           [--budget-mib N | --no-budget] [--plain]
   reskate  [--name N] [--blend-objects N] (after --passes \"<reader's>, bake-normal-scale, raise-skate{name=N,spawn=centre}, lower-layered-reskate\")";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.

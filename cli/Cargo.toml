@@ -11,10 +11,11 @@ publish.workspace = true
 [features]
 default = []
 # KTX2 textures in web tiles (`convert --to web --ktx2`); builds the Basis Universal encoder.
-ktx2 = ["primase-web/ktx2"]
+ktx2 = ["primase-web/ktx2", "dep:primase-cache"]
 
 [dependencies]
 primase-core.workspace = true
+primase-cache = { workspace = true, optional = true }
 primase-gta.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true

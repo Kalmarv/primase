@@ -123,6 +123,13 @@ impl Writer for TileWriter {
         } = *self;
         let mut indexes = Vec::new();
         for (plan, (_, out)) in plans.into_iter().zip(&sets) {
+            #[cfg(feature = "ktx2")]
+            if plan.encodings_dropped() > 0 {
+                report.push((
+                    "KTX2 encodings dropped from memory (made again or read from the disk cache)".into(),
+                    format!("{}: {}", out.display(), plan.encodings_dropped()),
+                ));
+            }
             for o in plan.over_budget() {
                 report.push((
                     "over the budget".into(),

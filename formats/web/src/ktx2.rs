@@ -77,10 +77,68 @@ impl Role {
     }
 }
 
-/// Cache final compressed images across tiles, never decoded source pixels; and across runs in `disk`, when given.
+/// The default bound of [`TextureEncoder`]'s encodings held in memory, 512 MiB.
+pub const DEFAULT_ENCODING_MEMORY: usize = 512 << 20;
+
+/// Encodings held in memory, so a texture several tiles use is encoded once: at most `cap` bytes, the least recently
+/// used dropped first (encoded again, or read from the disk cache, when it comes back; counted).
+struct Memory {
+    entries: BTreeMap<CacheKey, (Vec<u8>, Value, u64)>,
+    /// The entries by last use.
+    order: BTreeMap<u64, CacheKey>,
+    tick: u64,
+    bytes: usize,
+    cap: usize,
+    dropped: u64,
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Memory {
+            entries: BTreeMap::new(),
+            order: BTreeMap::new(),
+            tick: 0,
+            bytes: 0,
+            cap: DEFAULT_ENCODING_MEMORY,
+            dropped: 0,
+        }
+    }
+}
+
+impl Memory {
+    fn get(&mut self, key: &CacheKey) -> Option<(Vec<u8>, Value)> {
+        let (encoded, metadata, used) = self.entries.get_mut(key)?;
+        self.order.remove(used);
+        self.tick += 1;
+        *used = self.tick;
+        self.order.insert(self.tick, key.clone());
+        Some((encoded.clone(), metadata.clone()))
+    }
+    fn put(&mut self, key: CacheKey, encoded: Vec<u8>, metadata: Value) {
+        self.tick += 1;
+        self.bytes += encoded.len();
+        self.order.insert(self.tick, key.clone());
+        if let Some((old, _, used)) = self.entries.insert(key, (encoded, metadata, self.tick)) {
+            self.bytes -= old.len();
+            self.order.remove(&used);
+        }
+        while self.bytes > self.cap {
+            let Some((_, k)) = self.order.pop_first() else {
+                break;
+            };
+            if let Some((e, _, _)) = self.entries.remove(&k) {
+                self.bytes -= e.len();
+                self.dropped += 1;
+            }
+        }
+    }
+}
+
+/// Cache final compressed images across tiles, never decoded source pixels, in memory up to a bound; and across runs
+/// in `disk`, when given.
 #[derive(Default)]
 pub(super) struct TextureEncoder {
-    cache: BTreeMap<CacheKey, (Vec<u8>, Value)>,
+    memory: Memory,
     disk: Option<Arc<primase_cache::Cache>>,
     /// Encode on every disk hit as well and fail when the stored value differs (the cache's gate mode).
     verify_disk: bool,
@@ -187,12 +245,23 @@ impl TextureEncoder {
             caps.check()?;
         }
         Ok(Self {
-            cache: BTreeMap::new(),
+            memory: Memory::default(),
             disk,
             verify_disk,
             caps,
             caps_by_name,
         })
+    }
+
+    /// At most `bytes` of encodings held in memory ([`DEFAULT_ENCODING_MEMORY`] by default).
+    pub(super) fn with_memory(mut self, bytes: usize) -> Self {
+        self.memory.cap = bytes;
+        self
+    }
+
+    /// Encodings dropped from memory to stay within its bound, so far.
+    pub(super) fn dropped_from_memory(&self) -> u64 {
+        self.memory.dropped
     }
 
     /// [`encode_image`] through the disk cache, when there is one.
@@ -404,11 +473,15 @@ impl TextureEncoder {
                 let digest: [u8; 32] = Sha256::digest(png).into();
                 let cap = self.caps_for(image["name"].as_str()).get(role);
                 let cache_key = (digest, role, alpha_policy, cap);
-                if !self.cache.contains_key(&cache_key) {
-                    let encoded = self.encode_cached(png, &cache_key)?;
-                    self.cache.insert(cache_key.clone(), encoded);
-                }
-                let (encoded, metadata) = &self.cache[&cache_key];
+                let (encoded, metadata) = match self.memory.get(&cache_key) {
+                    Some(held) => held,
+                    None => {
+                        let (encoded, metadata) = self.encode_cached(png, &cache_key)?;
+                        self.memory
+                            .put(cache_key.clone(), encoded.clone(), metadata.clone());
+                        (encoded, metadata)
+                    }
+                };
                 while !bin.len().is_multiple_of(4) {
                     bin.push(0);
                 }
@@ -422,7 +495,7 @@ impl TextureEncoder {
                 image["bufferView"] = json!(views.len());
                 image["extras"]["primase.web_texture"] = metadata.clone();
                 views.push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":encoded.len()}));
-                bin.extend_from_slice(encoded);
+                bin.extend_from_slice(&encoded);
                 images.push(image);
                 image_variants.insert(key, index);
                 index
@@ -732,6 +805,24 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A memory bound smaller than one encoding keeps nothing between tiles: the same bytes, each image encoded
+    /// again, the drops counted; the default bound keeps them.
+    #[test]
+    fn a_memory_bound_changes_no_byte() {
+        let input = three_roles();
+        let mut held = TextureEncoder::default();
+        let mut bounded = TextureEncoder::default().with_memory(1);
+        for _ in 0..2 {
+            assert_eq!(
+                glb(&mut bounded, input.clone()).unwrap(),
+                glb(&mut held, input.clone()).unwrap()
+            );
+        }
+        assert_eq!(held.dropped_from_memory(), 0);
+        // three encodings (colour, mask, normal), dropped as made, made again on the second pass
+        assert_eq!(bounded.dropped_from_memory(), 6);
+    }
+
     #[test]
     fn disk_keys_follow_every_input() {
         let policy = AlphaPolicy::default();
@@ -933,7 +1024,7 @@ mod tests {
         let mut encoder = TextureEncoder::default();
         let output = glb(&mut encoder, bytes.clone()).unwrap();
         assert_eq!(output, glb(&mut encoder, bytes).unwrap());
-        assert_eq!(encoder.cache.len(), 3);
+        assert_eq!(encoder.memory.entries.len(), 3);
         let chunks = primase_gltf::glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         assert_eq!(doc["images"].as_array().unwrap().len(), 3);
@@ -1013,7 +1104,7 @@ mod tests {
                 ("wall".into(), "colour".into(), json!([64, 64]), json!(512)),
             ]
         );
-        assert_eq!(encoder.cache.len(), 3);
+        assert_eq!(encoder.memory.entries.len(), 3);
         assert!(
             TextureEncoder::new(
                 TextureCaps {
