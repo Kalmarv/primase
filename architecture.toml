@@ -2,6 +2,9 @@
 #
 # Every entry gives its reason; an exception that is to go says what removes it (`removed_when`). The test fails on a
 # violation not listed here and on an entry that no longer occurs, so fixing a violation means deleting its entry.
+#
+# The list only shrinks. A new entry needs Caleb's approval, recorded as `approved = "Caleb, YYYY-MM-DD"`; agents do
+# not add exceptions to make a check pass (`exceptions_are_approved_or_shrinking`).
 
 # ---- crate dependencies ----
 

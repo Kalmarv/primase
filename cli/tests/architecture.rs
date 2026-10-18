@@ -993,3 +993,43 @@ fn real_data_variables_are_declared() {
         );
     }
 }
+
+/// The exceptions agreed before approvals were recorded. The list only shrinks: lower this number when one goes.
+const UNAPPROVED_EXCEPTIONS: usize = 36;
+
+/// An exception is new only with Caleb's approval (`approved = "Caleb, YYYY-MM-DD"`); the unapproved ones only go.
+#[test]
+fn exceptions_are_approved_or_shrinking() {
+    let mut unapproved = 0;
+    for (table, list) in exceptions() {
+        for e in list.as_array().into_iter().flatten() {
+            let e = e.as_table().unwrap();
+            if table == "io" && e.get("role").and_then(|r| r.as_str()) != Some("exception") {
+                continue;
+            }
+            match e.get("approved").map(|a| a.as_str().unwrap_or_default()) {
+                Some(a) => {
+                    let date = a.strip_prefix("Caleb, ").unwrap_or_default();
+                    assert!(
+                        date.len() == 10
+                            && date
+                                .bytes()
+                                .enumerate()
+                                .all(|(i, b)| matches!(i, 4 | 7) == (b == b'-')),
+                        "architecture.toml: {table} entry approved as {a:?}, not \"Caleb, YYYY-MM-DD\""
+                    );
+                }
+                None => unapproved += 1,
+            }
+        }
+    }
+    assert!(
+        unapproved <= UNAPPROVED_EXCEPTIONS,
+        "architecture.toml has {unapproved} exceptions without an approval, more than {UNAPPROVED_EXCEPTIONS}: a new \
+         exception needs Caleb's approval (approved = \"Caleb, YYYY-MM-DD\")"
+    );
+    assert!(
+        unapproved == UNAPPROVED_EXCEPTIONS,
+        "architecture.toml has {unapproved} unapproved exceptions: lower UNAPPROVED_EXCEPTIONS to {unapproved}"
+    );
+}
