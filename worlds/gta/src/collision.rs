@@ -295,6 +295,13 @@ fn place(t: &[[f32; 3]; 4], p: [f32; 3]) -> [f32; 3] {
     })
 }
 
+/// The determinant of a transform's linear part (columns x, y, z).
+fn determinant(t: &[[f32; 3]; 4]) -> f64 {
+    let c = |j: usize, i: usize| f64::from(t[j][i]);
+    c(0, 0) * (c(1, 1) * c(2, 2) - c(2, 1) * c(1, 2)) - c(1, 0) * (c(0, 1) * c(2, 2) - c(2, 1) * c(0, 2))
+        + c(2, 0) * (c(0, 1) * c(1, 2) - c(1, 1) * c(0, 2))
+}
+
 const IDENTITY: [[f32; 3]; 4] = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 0.]];
 
 fn compose(a: &[[f32; 3]; 4], b: &[[f32; 3]; 4]) -> [[f32; 3]; 4] {
@@ -490,13 +497,17 @@ impl Soup {
         }
     }
 
-    /// `local`'s triangles placed by `t`, into this soup.
+    /// `local`'s triangles placed by `t`, into this soup; through a mirror (a negative determinant) each triangle's
+    /// order is reversed, so its front stays counter-clockwise.
     fn place_from(&mut self, local: &Soup, t: &[[f32; 3]; 4]) {
         let base = self.positions.len() as u32;
         self.positions
             .extend(local.positions.iter().map(|p| place(t, *p)));
-        self.triangles
-            .extend(local.triangles.iter().map(|tri| tri.map(|i| i + base)));
+        let mirrored = determinant(t) < 0.0;
+        self.triangles.extend(local.triangles.iter().map(|tri| {
+            let [a, b, c] = tri.map(|i| i + base);
+            if mirrored { [a, c, b] } else { [a, b, c] }
+        }));
         self.materials.extend_from_slice(&local.materials);
     }
 
@@ -788,6 +799,36 @@ mod tests {
             },
         );
         e
+    }
+
+    /// A sphere placed through a mirror (x to -x) and through no mirror: every triangle faces away from the centre
+    /// (counter-clockwise seen from outside) both ways.
+    #[test]
+    fn triangles_placed_through_a_mirror_keep_their_front() {
+        let mut sphere = box_bound();
+        sphere.header.kind = 0;
+        sphere.header.sphere_centre = [0.0; 3];
+        sphere.header.sphere_radius = 1.0;
+        for x in [1.0, -1.0] {
+            let t = [[x, 0., 0.], [0., 1., 0.], [0., 0., 1.], [5., 0., 0.]];
+            let mut soup = Soup::default();
+            soup.bound(&sphere, &t, &mut PassLog::default());
+            assert_eq!(soup.triangles.len(), 32);
+            for tri in &soup.triangles {
+                let [a, b, c] = tri.map(|i| soup.positions[i as usize]);
+                let (u, v): ([f32; 3], [f32; 3]) = (
+                    std::array::from_fn(|i| b[i] - a[i]),
+                    std::array::from_fn(|i| c[i] - a[i]),
+                );
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                let out: [f32; 3] = std::array::from_fn(|i| (a[i] + b[i] + c[i]) / 3.0 - [5., 0., 0.][i]);
+                assert!((0..3).map(|i| n[i] * out[i]).sum::<f32>() > 0.0, "x {x}: {tri:?}");
+            }
+        }
     }
 
     /// A box bound from GTA's (0, 0, 0) to (1, 2, 3), of material 1.
