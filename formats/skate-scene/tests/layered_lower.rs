@@ -1,64 +1,108 @@
+// Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
+#![allow(clippy::unwrap_used)]
+
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     Layer, LayerWeights, LayeredMaterial, Mesh, Primitive, Semantic, Stream, Topology, WeightMapping, World,
 };
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-/// Real scene gate: source GLBs remain untouched; every source triangle occurs
-/// once after strongest-layer splitting and every resulting material is PBR.
+/// Every folder under `root` holding a `scene.json`: the documented layout of `PRIMASE_SCENES_GTA` is a folder of
+/// scene folders, themselves allowed to sit below intermediate folders.
+fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {
+    if root.join("scene.json").is_file() {
+        out.push(root.to_owned());
+    }
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    let mut dirs: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    dirs.sort();
+    for d in dirs {
+        scene_folders(&d, out);
+    }
+}
+
+fn triangles(w: &World) -> usize {
+    w.iter::<Mesh>()
+        .flat_map(|(_, m)| m.primitives())
+        .map(|p| {
+            p.indices
+                .as_ref()
+                .map_or_else(|| p.positions().unwrap().len(), Vec::len)
+                / 3
+        })
+        .sum()
+}
+
+/// Real scene gate over every scene folder under `PRIMASE_SCENES_GTA` that has layered materials: every source
+/// triangle occurs once after strongest-layer splitting and every resulting material is PBR. At least one folder and
+/// one `LayeredMaterial` must be seen, so a root of the documented (nested) layout never passes without testing.
 #[test]
 fn installed_layered_scene() {
     let Some(root) = primase_testdata::real_data("PRIMASE_SCENES_GTA") else {
         return;
     };
-    if !root.join("scene.json").is_file() {
-        return;
-    }
-    let mut world = World::default();
-    primase_skate_scene::read(&root, &mut world).unwrap();
-    let layered = world.iter::<LayeredMaterial>().count();
-    if layered == 0 {
-        return;
-    }
-    primase_gltf::load_mesh_files(&mut world, &root).unwrap();
-    let triangles = |w: &World| {
-        w.iter::<Mesh>()
-            .flat_map(|(_, m)| m.primitives())
-            .map(|p| {
-                p.indices
-                    .as_ref()
-                    .map_or_else(|| p.positions().unwrap().len(), Vec::len)
-                    / 3
-            })
-            .sum::<usize>()
-    };
-    let before = triangles(&world);
-    primase_skate_scene::LowerSkatePbr
-        .run(&mut world, &mut PassLog::default())
-        .unwrap();
-    // Exercise the exact-closure contract of a prepared cell.
-    let roots: Vec<_> = world.iter::<Mesh>().map(|(entity, _)| entity).collect();
-    let mut cell = world.subset(&world.closure(roots.iter().copied()));
-    primase_skate_scene::LowerLayeredPbr
-        .run(&mut cell, &mut PassLog::default())
-        .unwrap();
-    assert_eq!(cell.closure(roots).len(), cell.entity_count());
-    let mut log = PassLog::default();
-    primase_skate_scene::LowerLayeredPbr
-        .run(&mut world, &mut log)
-        .unwrap();
-    assert_eq!(triangles(&world), before);
-    for (_, mesh) in world.iter::<Mesh>() {
-        for p in mesh.primitives() {
-            if let Some(m) = p.material {
-                assert!(world.has::<PbrMaterial>(m));
+    let mut folders = Vec::new();
+    scene_folders(&root, &mut folders);
+    primase_testdata::expect_items("PRIMASE_SCENES_GTA", "scene folders", folders.len());
+    let (mut scenes, mut layered_total, mut triangles_total) = (0usize, 0usize, 0usize);
+    for folder in &folders {
+        let mut world = World::default();
+        primase_skate_scene::read(folder, &mut world).unwrap();
+        let layered = world.iter::<LayeredMaterial>().count();
+        if layered == 0 {
+            continue;
+        }
+        primase_gltf::load_mesh_files(&mut world, folder).unwrap();
+        let before = triangles(&world);
+        primase_skate_scene::LowerSkatePbr
+            .run(&mut world, &mut PassLog::default())
+            .unwrap();
+        // Exercise the exact-closure contract of a prepared cell.
+        let roots: Vec<_> = world.iter::<Mesh>().map(|(entity, _)| entity).collect();
+        let mut cell = world.subset(&world.closure(roots.iter().copied()));
+        primase_skate_scene::LowerLayeredPbr
+            .run(&mut cell, &mut PassLog::default())
+            .unwrap();
+        assert_eq!(cell.closure(roots).len(), cell.entity_count());
+        let mut log = PassLog::default();
+        primase_skate_scene::LowerLayeredPbr
+            .run(&mut world, &mut log)
+            .unwrap();
+        assert_eq!(triangles(&world), before, "{}", folder.display());
+        for (_, mesh) in world.iter::<Mesh>() {
+            for p in mesh.primitives() {
+                if let Some(m) = p.material {
+                    assert!(
+                        world.has::<PbrMaterial>(m),
+                        "{}: a lowered primitive has no PBR material",
+                        folder.display()
+                    );
+                }
             }
         }
+        scenes += 1;
+        layered_total += layered;
+        triangles_total += before;
+        println!(
+            "{}: {layered} layered materials, {before} triangles; {:?}",
+            folder.display(),
+            log.counts
+        );
     }
+    assert!(
+        scenes > 0,
+        "no LayeredMaterial in any of the {} scene folders under {}",
+        folders.len(),
+        root.display()
+    );
     println!(
-        "{layered} layered materials, {before} total triangles preserved; {:?}",
-        log.counts
+        "{scenes} scene folders: {layered_total} layered materials, {triangles_total} triangles preserved"
     );
 }
 
