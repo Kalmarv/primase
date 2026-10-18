@@ -996,6 +996,7 @@ impl TilePlan {
                         ));
                     }
                     let mut chunk = Vec::new();
+                    let mut from = Vec::with_capacity(parts.len());
                     for (part, tris) in parts {
                         let prim = &mesh.primitives()[*part];
                         let all = indices(prim);
@@ -1009,11 +1010,12 @@ impl TilePlan {
                             .and_then(|v| v.0[*part].get(&p.variant).copied())
                             .or(prim.material);
                         chunk.push(sub);
+                        from.push(*part);
                     }
-                    Some(Mesh::new(chunk))
+                    Some((Mesh::new(chunk), from))
                 }
             };
-            let drawn = piece.as_ref().unwrap_or(mesh);
+            let drawn = piece.as_ref().map_or(mesh, |(chunk, _)| chunk);
             for prim in drawn.primitives() {
                 let pos = prim
                     .positions()
@@ -1036,7 +1038,7 @@ impl TilePlan {
             selection.placements.insert(
                 p.entity,
                 primase_gltf::Selected {
-                    piece: piece.map(|m| (m, name)),
+                    piece: piece.map(|(mesh, from)| primase_gltf::Piece { mesh, name, from }),
                     extras: vec![("web.placement_key".into(), 1, serde_json::json!(p.entity.index()))],
                 },
             );

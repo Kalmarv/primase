@@ -9,7 +9,7 @@ use primase_core::{
     Environment, Instance, Light, LightKind, Mesh, Name, Opaque, OpaqueData, Primitive, Resource, Semantic,
     Stream, Topology, Transform, World,
 };
-use primase_gltf::{GroupBy, Selected, Selection, WriteOptions};
+use primase_gltf::{GroupBy, Piece, Selected, Selection, WriteOptions};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -124,7 +124,11 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
             (
                 placed[1],
                 Selected {
-                    piece: Some((quad(Some(m), vec![0, 2, 3]), "crate.piece".into())),
+                    piece: Some(Piece {
+                        mesh: quad(Some(m), vec![0, 2, 3]),
+                        name: "crate.piece".into(),
+                        from: vec![0],
+                    }),
                     extras: vec![("test.key".into(), 1, json!(7))],
                 },
             ),
@@ -141,12 +145,13 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
     );
     assert_eq!(names(&doc, "nodes"), ["placed_0", "placed_1", "light_0"]);
     assert_eq!(names(&doc, "meshes"), ["crate", "crate.piece"]);
-    // the prototype's mesh carries the prototype's components; the piece none of them
-    assert_eq!(
-        doc["meshes"][0]["extras"]["primase"]["test.prototype_note"]["value"],
-        "prototype"
-    );
-    assert!(doc["meshes"][1].get("extras").is_none());
+    // the prototype's mesh and the piece cut from it both carry the prototype's components
+    for mesh in [0, 1] {
+        assert_eq!(
+            doc["meshes"][mesh]["extras"]["primase"]["test.prototype_note"]["value"],
+            "prototype"
+        );
+    }
     let piece = &doc["meshes"][1]["primitives"][0];
     assert_eq!(
         doc["accessors"][piece["indices"].as_u64().unwrap() as usize]["count"],
@@ -172,4 +177,102 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("not a placement"), "{err}");
+}
+
+/// A dialect's per-primitive data, as a reader would type it.
+#[derive(Clone, Debug, PartialEq)]
+struct Parts(Vec<String>);
+impl primase_core::Component for Parts {
+    const NAME: &'static str = "test.parts";
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        Ok(Some(json!(self.0)))
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(Parts))
+    }
+}
+
+#[test]
+fn a_piece_keeps_its_prototypes_per_primitive_components_remapped() {
+    let mut w = World::new();
+    let m = w.spawn();
+    w.insert(m, PbrMaterial::default());
+    let proto = w.spawn();
+    let three = Mesh::new(
+        (0..3)
+            .map(|_| quad(Some(m), vec![0, 1, 2, 0, 2, 3]).into_primitives().remove(0))
+            .collect(),
+    );
+    w.insert(proto, three);
+    w.insert(proto, Name("slab".into()));
+    w.insert(proto, Parts(vec!["a".into(), "b".into(), "c".into()]));
+    let mut provenance = primase_core::Provenance::default();
+    for item in ["mesh 0", "mesh 1", "mesh 2"] {
+        provenance.push_part(primase_core::Origin::new(
+            Some("area.bnd"),
+            "slab.flver",
+            Some(item),
+        ));
+    }
+    w.insert(proto, provenance);
+    let placed = w.spawn();
+    w.insert(
+        placed,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    w.insert(placed, Transform::IDENTITY);
+    // the piece: primitive 2's triangles, then primitive 0's
+    let piece = Mesh::new(vec![
+        quad(Some(m), vec![0, 1, 2]).into_primitives().remove(0),
+        quad(Some(m), vec![0, 2, 3]).into_primitives().remove(0),
+    ]);
+    let selection = Selection {
+        placements: BTreeMap::from([(
+            placed,
+            Selected {
+                piece: Some(Piece {
+                    mesh: piece,
+                    name: "slab.piece".into(),
+                    from: vec![2, 0],
+                }),
+                extras: Vec::new(),
+            },
+        )]),
+        ..Selection::default()
+    };
+    let before = format!("{:?}", w.components_json(proto).unwrap());
+    let doc = document(&w, Some(selection.clone()));
+    assert_eq!(
+        before,
+        format!("{:?}", w.components_json(proto).unwrap()),
+        "the world is unchanged"
+    );
+    assert_eq!(names(&doc, "meshes"), ["slab.piece"]);
+    let extras = &doc["meshes"][0]["extras"]["primase"];
+    assert_eq!(extras["test.parts"]["value"], json!(["c", "a"]));
+    assert_eq!(extras["core.provenance"]["value"]["parts"], json!([2, 0]));
+    assert_eq!(extras["core.provenance"]["value"]["origins"][2]["item"], "mesh 2");
+
+    // a piece that does not say where each of its primitives came from is refused
+    let mut wrong = selection;
+    wrong
+        .placements
+        .get_mut(&placed)
+        .unwrap()
+        .piece
+        .as_mut()
+        .unwrap()
+        .from = vec![2];
+    let err = primase_gltf::write(
+        &w,
+        &WriteOptions {
+            selection: Some(wrong),
+            ..WriteOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("2 primitives with 1 sources"), "{err}");
 }

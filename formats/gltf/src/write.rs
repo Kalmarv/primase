@@ -103,13 +103,24 @@ pub struct Selection {
 /// One selected placement.
 #[derive(Clone, Debug, Default)]
 pub struct Selected {
-    /// A mesh of its own instead of its prototype's (the triangles of it a tile holds), with the name its glTF mesh
-    /// is given. Its primitives' materials are final (no variants apply) and none of the prototype's components is
-    /// written with it.
-    pub piece: Option<(Mesh, String)>,
+    /// A mesh of its own instead of its prototype's (the triangles of it a tile holds).
+    pub piece: Option<Piece>,
     /// Extra entries of the node's `extras.primase`: (name, schema version, value), placed among the placement's own
     /// components in name order.
     pub extras: Vec<(String, u32, Value)>,
+}
+
+/// A placement's own piece of its prototype's mesh: the triangles of it a tile holds.
+#[derive(Clone, Debug, Default)]
+pub struct Piece {
+    /// Its geometry; its primitives' materials are final (no variants apply).
+    pub mesh: Mesh,
+    /// The name its glTF mesh is given.
+    pub name: String,
+    /// For each of its primitives, the prototype primitive it is cut from. The prototype's components are written
+    /// with the piece as with the prototype's own mesh; those that follow primitives
+    /// ([`primase_core::Component::remap_primitives`]: provenance parts, dialect per-primitive data) remapped by it.
+    pub from: Vec<usize>,
 }
 
 /// What the writer did, with counts of everything it skipped or approximated.
@@ -303,7 +314,16 @@ struct Place {
 struct MeshFrom {
     src: Src,
     name: String,
-    extras_of: Option<Entity>,
+    extras_of: ExtrasOf,
+}
+
+/// Whose components a written mesh's extras show.
+#[derive(Clone, Debug)]
+enum ExtrasOf {
+    /// The prototype's, as they are.
+    Prototype(Entity),
+    /// The prototype's, per-primitive ones remapped to a piece cut from it ([`Piece::from`]).
+    Piece { prototype: Entity, from: Vec<usize> },
 }
 
 /// Where a written mesh's geometry comes from: a prototype's mesh, or a selected placement's own piece.
@@ -594,13 +614,16 @@ impl Writer<'_> {
             .as_ref()
             .and_then(|s| s.placements.get(&place.entity));
         let (mesh, from) = match selected.and_then(|s| s.piece.as_ref()) {
-            // a piece: its own geometry, its own name, none of the prototype's components
-            Some((mesh, name)) => (
-                mesh,
+            // a piece: its own geometry and name, the prototype's components remapped to its primitives
+            Some(piece) => (
+                &piece.mesh,
                 MeshFrom {
                     src: Src::Piece(place.entity),
-                    name: name.clone(),
-                    extras_of: None,
+                    name: piece.name.clone(),
+                    extras_of: ExtrasOf::Piece {
+                        prototype: place.prototype,
+                        from: piece.from.clone(),
+                    },
                 },
             ),
             None => {
@@ -613,7 +636,7 @@ impl Writer<'_> {
                     MeshFrom {
                         src: Src::Prototype(place.prototype),
                         name: self.name_of(place.prototype, "prototype"),
-                        extras_of: Some(place.prototype),
+                        extras_of: ExtrasOf::Prototype(place.prototype),
                     },
                 )
             }
@@ -748,14 +771,14 @@ impl Writer<'_> {
         if key.1 != base {
             name = format!("{name}.v{variant}");
         }
-        let index = self.push_mesh(from.extras_of, name, &accessors, &key.1, mesh)?;
+        let index = self.push_mesh(&from.extras_of, name, &accessors, &key.1, mesh)?;
         self.mesh_index.insert(key, index);
         Ok(index)
     }
 
     fn push_mesh(
         &mut self,
-        extras_of: Option<Entity>,
+        extras_of: &ExtrasOf,
         name: String,
         accessors: &[PrimAccessors],
         materials: &[Option<Entity>],
@@ -818,9 +841,11 @@ impl Writer<'_> {
         let mut m = Map::new();
         m.insert("name".into(), Value::String(name));
         m.insert("primitives".into(), Value::Array(prims));
-        if let Some(e) = extras_of
-            && let Some(extras) = self.extras(e, CONSUMED_PROTOTYPE)?
-        {
+        let extras = match extras_of {
+            ExtrasOf::Prototype(e) => self.extras(*e, CONSUMED_PROTOTYPE)?,
+            ExtrasOf::Piece { prototype, from } => self.piece_extras(*prototype, from, mesh)?,
+        };
+        if let Some(extras) = extras {
             m.insert("extras".into(), extras);
         }
         self.meshes.push(Value::Object(m));
@@ -1470,6 +1495,24 @@ impl Writer<'_> {
             detail: err.to_string(),
         })?;
         Ok(self.primase_extras(shown, consumed))
+    }
+
+    /// The extras of a piece cut from `prototype`: the prototype's components on a copy of it rebuilt to the piece
+    /// ([`World::rebuild_primitives`]: per-primitive components remapped by `from`; the world itself is unchanged).
+    fn piece_extras(&mut self, prototype: Entity, from: &[usize], piece: &Mesh) -> Result<Option<Value>> {
+        let failed = |detail: String| Error::World {
+            entity: prototype,
+            detail,
+        };
+        // the one way to change a primitive list: the copy's mesh becomes the piece and every per-primitive
+        // component follows `from`, checked (count and index range) by the world
+        let mut copy = self.world.subset(&BTreeSet::from([prototype]));
+        copy.rebuild_primitives(prototype, |_| Ok((piece.primitives().to_vec(), from.to_vec())))
+            .map_err(failed)?;
+        let shown = copy
+            .components_json(prototype)
+            .map_err(|err| failed(err.to_string()))?;
+        Ok(self.primase_extras(shown, CONSUMED_PROTOTYPE))
     }
 
     fn primase_extras(&mut self, shown: Vec<ComponentJson<'_>>, consumed: &[&str]) -> Option<Value> {

@@ -22,7 +22,7 @@ use primase_core::Entity;
 pub use load::{LoadMeshFiles, LoadReport, load_mesh_files, mesh_file_box, register};
 pub use read::{Gltf, ReadMesh, ReadPrimitive};
 pub use write::{
-    GroupBy, Selected, Selection, WriteOptions, WriteReport, fallback_material, write, write_document,
+    GroupBy, Piece, Selected, Selection, WriteOptions, WriteReport, fallback_material, write, write_document,
     write_file,
 };
 
