@@ -4,6 +4,17 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+mod inputs;
+pub use inputs::{Kind, VARIABLES, Variable, declared};
+
+/// Refuse a name the registry ([`VARIABLES`]) does not declare: a typo must not skip quietly.
+#[track_caller]
+fn checked(name: &str) -> &'static Variable {
+    declared(name).unwrap_or_else(|| {
+        panic!("{name} is not declared in toolkit/testdata/src/inputs.rs: declare it there (and in CONTRIBUTING.md)")
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DataConfigError {
     #[error("resolving {name}: cannot read PRIMASE_DATA file {}: {source}", path.display())]
@@ -72,7 +83,9 @@ fn lookup(name: &str) -> Result<Lookup, DataConfigError> {
 /// TOML file, then None. Every file value must be a string; partial files are normal.
 /// No defaults, expansion, or relative-path rewriting is performed. Environment values
 /// retain their native OS encoding. The file is read afresh when it is needed.
+#[track_caller]
 pub fn try_real_data_value(name: &str) -> Result<Option<OsString>, DataConfigError> {
+    checked(name);
     Ok(lookup(name)?.value)
 }
 
@@ -83,32 +96,51 @@ pub fn real_data_value(name: &str) -> Option<OsString> {
     try_real_data_value(name).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// Resolve an existing real-data path. A name that is not set prints SKIPPED and returns None,
-/// unless `PRIMASE_REQUIRE_REAL_DATA` is "1" (environment or the PRIMASE_DATA file), in which case
-/// a missing name fails the gate. A name that is set but whose path does not exist always fails
+/// Resolve an existing real-data path. A name that is not set prints a SKIP line naming the test and returns None,
+/// unless `PRIMASE_REQUIRE_REAL_DATA` (environment or the PRIMASE_DATA file) is "1", or "gate" and the variable is one
+/// the landing gate must have ([`Variable::gate`]), in which case a missing name fails the gate. A name that is set but whose path does not exist always fails
 /// the gate: a configured input that is gone is never a skip. A named but unreadable or invalid
 /// configuration also fails. See CONTRIBUTING.md for the names and the optional local TOML file.
 #[track_caller]
 pub fn real_data(name: &str) -> Option<PathBuf> {
+    let variable = checked(name);
     let found = lookup(name).unwrap_or_else(|error| panic!("{error}"));
     let require = lookup(REQUIRE)
         .unwrap_or_else(|error| panic!("{error}"))
         .value
-        .is_some_and(|value| value == "1");
+        .is_some_and(|value| value == "1" || (value == "gate" && variable.gate));
     existing_path(name, found, require).unwrap_or_else(|message| panic!("{message}"))
 }
 
 const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
 
+/// A configured input that yields nothing is a failure, not a pass: call it after enumerating what `name` gave
+/// (`what`: "scene folders", "drawables"), with how many were found.
+#[track_caller]
+pub fn expect_items(name: &str, what: &str, n: usize) {
+    let variable = checked(name);
+    if n == 0 {
+        panic!(
+            "{name} is set but yielded 0 {what} (expected: {})",
+            variable.about
+        );
+    }
+}
+
 fn existing_path(name: &str, found: Lookup, require: bool) -> Result<Option<PathBuf>, String> {
     match found.value.map(PathBuf::from) {
         Some(path) if path.exists() => Ok(Some(path)),
         Some(path) => Err(format!("{name}={} is set but does not exist", path.display())),
-        None if require => Err(format!("{name} is not set and {REQUIRE}=1")),
+        None if require => Err(format!("{name} is not set and {REQUIRE} requires it")),
         None => {
+            // one line per skip, naming the test (the harness names its thread after it), for the gate's summary
+            let test = std::thread::current().name().unwrap_or("?").to_owned();
             match found.file {
-                Some(file) => eprintln!("SKIPPED: {name} not set and not in {}", file.display()),
-                None => eprintln!("SKIPPED: {name} not set"),
+                Some(file) => eprintln!(
+                    "primase-testdata: SKIP {test} ({name} unset, not in {})",
+                    file.display()
+                ),
+                None => eprintln!("primase-testdata: SKIP {test} ({name} unset)"),
             }
             Ok(None)
         }
@@ -229,5 +261,24 @@ mod tests {
         assert_eq!(existing_path("PRIMASE_TEST", unset(), false), Ok(None));
         let error = existing_path("PRIMASE_TEST", unset(), true).unwrap_err();
         assert!(error.contains("PRIMASE_TEST") && error.contains("PRIMASE_REQUIRE_REAL_DATA"));
+    }
+    #[test]
+    fn undeclared_names_and_empty_inputs_fail() {
+        let undeclared = std::panic::catch_unwind(|| real_data_value(concat!("PRIMASE", "_NOT_DECLARED")));
+        assert!(undeclared.is_err());
+        let empty = std::panic::catch_unwind(|| expect_items("PRIMASE_SCENES_GTA", "scene folders", 0));
+        assert!(empty.is_err());
+        expect_items("PRIMASE_SCENES_GTA", "scene folders", 1);
+        // every variable has something to say and a unique name
+        let mut names: Vec<&str> = VARIABLES.iter().map(|v| v.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), VARIABLES.len());
+        assert!(
+            VARIABLES
+                .iter()
+                .all(|v| v.name.starts_with("PRIMASE_") && !v.about.is_empty())
+        );
+        assert!(VARIABLES.iter().all(|v| !v.gate || v.kind == Kind::Input));
     }
 }

@@ -758,10 +758,9 @@ despawned 0
     /// The child half of [`prints_are_identical_across_processes`]: writes its prints, one after another, to the file
     /// the variable names.
     #[test]
+    #[ignore = "run by prints_are_identical_across_processes"]
     fn print_child() {
-        let Some(path) = std::env::var_os("PRIMASE_PRINT_CHILD_FILE") else {
-            return;
-        };
+        let path = std::env::var_os("PRIMASE_PRINT_CHILD_FILE").expect("set by its parent test");
         let options = PrintOptions {
             dump: Some(EntityFilter::parse("all").unwrap()),
             ..PrintOptions::default()
@@ -787,7 +786,12 @@ despawned 0
         let texts = ["a", "b"].map(|run| {
             let path = std::env::temp_dir().join(format!("primase-print-{run}-{}.txt", std::process::id()));
             let status = std::process::Command::new(&exe)
-                .args(["--exact", "print::tests::print_child", "--test-threads=1"])
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "print::tests::print_child",
+                    "--test-threads=1",
+                ])
                 .env("PRIMASE_PRINT_CHILD_FILE", &path)
                 .status()
                 .unwrap();

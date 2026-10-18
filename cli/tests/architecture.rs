@@ -8,12 +8,17 @@
 //! - `io_opt_ins_are_declared`: every library crate denies `clippy::disallowed_methods`/`disallowed_types`
 //!   (file, environment and process access, listed in `clippy.toml`), and every module that opts back in names its
 //!   role.
-//! - `game_names`: no game or engine names in the identifiers or strings of core, toolkit and formats code.
+//! - `game_names`: no game or engine names in the identifiers or strings of core, toolkit and formats code, except
+//!   the test-input registry (`toolkit/testdata`), whose role is to describe each game's inputs and which may only be
+//!   a dev-dependency.
 //! - `entry_points`: examples, bins, the cli and pipelines compose library entry points; no world data or format
 //!   handling of their own.
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
+//! - `real_data_variables_are_declared`: every `PRIMASE_*` name in the workspace's sources is declared in the
+//!   real-data registry (`toolkit/testdata/src/inputs.rs`), every declared name is read somewhere, and
+//!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` lists as `parse_crate`, every module that decodes
 //!   bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file says are
 //!   there and are not are its error, never a panic or a wrapped size.
@@ -330,10 +335,16 @@ fn code(path: &str) -> Vec<Tok> {
 
 // ---- dependencies ----
 
+/// The test-input registry: `toolkit/testdata` resolves and declares the real-data inputs tests read. It may name
+/// games and third-party tools (each game's inputs are described there, so `game_names` skips it), holds no game
+/// logic (it depends on no workspace crate) and may not be a normal dependency of any crate, so nothing it says
+/// reaches a library build. `dependencies` checks both, and `architecture.toml` cannot excuse either.
+const TEST_INPUT_REGISTRY: &str = "toolkit/testdata";
+
 /// Whether a crate in `from_layer` may depend on `to` (a member path); `dev` for dev-dependencies.
 fn edge_allowed(from: &Member, to: &str, dev: bool) -> bool {
     let to_layer = to.split('/').next().unwrap();
-    if to == "toolkit/testdata" {
+    if to == TEST_INPUT_REGISTRY {
         return dev;
     }
     let normal = match from.layer() {
@@ -366,6 +377,18 @@ fn dependencies() {
             for (key, spec) in deps {
                 let package = spec.get("package").and_then(|p| p.as_str()).unwrap_or(key);
                 let Some(to) = by_name.get(package) else { continue };
+                assert!(
+                    m.path != TEST_INPUT_REGISTRY,
+                    "{} depends on {}: the test-input registry depends on no workspace crate",
+                    m.path,
+                    to.path
+                );
+                assert!(
+                    to.path != TEST_INPUT_REGISTRY || dev,
+                    "{} has {} in [{section}]: the test-input registry is only ever a dev-dependency",
+                    m.path,
+                    to.path
+                );
                 if !edge_allowed(m, &to.path, dev) {
                     found.insert(format!("{} -> {} ({section})", m.path, to.path));
                 }
@@ -524,6 +547,8 @@ fn game_names() {
     for m in members()
         .iter()
         .filter(|m| matches!(m.layer(), "core" | "toolkit" | "formats"))
+        // the test-input registry describes each game's inputs by role (see TEST_INPUT_REGISTRY)
+        .filter(|m| m.path != TEST_INPUT_REGISTRY)
     {
         for file in rust_files(&root().join(&m.path).join("src")) {
             for t in code(&file) {
@@ -848,4 +873,101 @@ fn lexer_drops_comments_and_tests() {
 
 fn code_of(src: &str) -> Vec<Tok> {
     without_tests(lex(src))
+}
+
+// ---- real-data variables ----
+
+/// Every `"PRIMASE_..."` string literal's name in a source text.
+fn variable_literals(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(p) = rest.find("\"PRIMASE_") {
+        let tail = &rest[p + 1..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(tail.len());
+        if tail[end..].starts_with('"') && end > "PRIMASE_".len() {
+            out.push(tail[..end].to_owned());
+        }
+        rest = &tail[end..];
+    }
+    out
+}
+
+#[test]
+fn real_data_variables_are_declared() {
+    use primase_testdata::{Kind, VARIABLES};
+    let declared: BTreeSet<&str> = VARIABLES.iter().map(|v| v.name).collect();
+    // names read by sources: every member crate's .rs files
+    let mut found: BTreeMap<String, String> = BTreeMap::new();
+    for m in members() {
+        // the registry itself names every variable: it declares, it does not read
+        for file in rust_files(&root().join(&m.path))
+            .into_iter()
+            .filter(|f| f != "toolkit/testdata/src/inputs.rs")
+        {
+            for name in variable_literals(&read(&root().join(&file))) {
+                found.entry(name).or_insert_with(|| file.clone());
+            }
+        }
+    }
+    let undeclared: Vec<String> = found
+        .iter()
+        .filter(|(n, _)| !declared.contains(n.as_str()))
+        .map(|(n, f)| format!("{n} ({f})"))
+        .collect();
+    assert!(
+        undeclared.is_empty(),
+        "PRIMASE_* names read but not declared in toolkit/testdata/src/inputs.rs: {undeclared:?}"
+    );
+    let stale: Vec<&str> = declared
+        .iter()
+        .filter(|n| !found.contains_key(**n))
+        .copied()
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "declared but read nowhere (remove them): {stale:?}"
+    );
+
+    // CONTRIBUTING.md's table, row by row, is the registry without the test-internal kinds
+    let contributing = read(&root().join("CONTRIBUTING.md"));
+    let rows: Vec<(String, String, String)> = contributing
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `PRIMASE_"))
+        .map(|l| {
+            let mut cells = l.splitn(3, " | ");
+            let name = format!("PRIMASE_{}", cells.next().unwrap().trim_end_matches('`'));
+            let kind = cells.next().unwrap_or("").to_owned();
+            let about = cells.next().unwrap_or("").trim_end_matches(" |").to_owned();
+            (name, kind, about)
+        })
+        .collect();
+    let want: Vec<(String, String, String)> = VARIABLES
+        .iter()
+        .filter(|v| !matches!(v.kind, Kind::Test | Kind::Child))
+        .map(|v| {
+            (
+                v.name.to_owned(),
+                format!("{:?}", v.kind).to_lowercase(),
+                v.about.to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows, want,
+        "CONTRIBUTING.md's real-data table differs from the registry"
+    );
+
+    // the example configuration only names declared variables a person sets
+    let example = read(&root().join("primase-data.example.toml"));
+    for line in example.lines().filter(|l| l.starts_with("PRIMASE_")) {
+        let name = line.split_whitespace().next().unwrap();
+        let v = primase_testdata::declared(name)
+            .unwrap_or_else(|| panic!("primase-data.example.toml names undeclared {name}"));
+        assert!(
+            !matches!(v.kind, Kind::Test | Kind::Child | Kind::Runtime),
+            "primase-data.example.toml sets {name}, which a person does not set"
+        );
+    }
 }

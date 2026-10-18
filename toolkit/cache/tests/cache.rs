@@ -109,10 +109,9 @@ fn trim_keeps_the_most_recently_used_under_the_cap() {
 
 /// The child half of [`processes_share_a_directory`].
 #[test]
+#[ignore = "run by processes_share_a_directory"]
 fn cache_child() {
-    let Some(dir) = std::env::var_os("PRIMASE_CACHE_CHILD_DIR") else {
-        return;
-    };
+    let dir = std::env::var_os("PRIMASE_CACHE_CHILD_DIR").expect("set by its parent test");
     let cache = Cache::open(&dir, 1 << 30).unwrap();
     for round in 0..20 {
         for n in 0..16u32 {
@@ -132,7 +131,7 @@ fn processes_share_a_directory() {
     let children: Vec<_> = (0..4)
         .map(|_| {
             std::process::Command::new(&exe)
-                .args(["--exact", "cache_child", "--test-threads=1"])
+                .args(["--ignored", "--exact", "cache_child", "--test-threads=1"])
                 .env("PRIMASE_CACHE_CHILD_DIR", &dir)
                 .spawn()
                 .unwrap()

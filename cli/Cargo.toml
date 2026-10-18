@@ -24,6 +24,7 @@ primase-web.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+primase-testdata.workspace = true
 
 [lints]
 workspace = true

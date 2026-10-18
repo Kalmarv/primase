@@ -5,12 +5,9 @@ use basisu::{DecodeFlags, TargetFormat, Transcoder};
 use primase_web::ktx2::encode_rgba8;
 
 #[test]
+#[ignore = "run by separate_process_determinism"]
 fn encode_in_child_process() {
-    let Some(path) = primase_testdata::real_data_value("PRIMASE_KTX2_TEST_OUTPUT")
-        .and_then(|value| value.into_string().ok())
-    else {
-        return;
-    };
+    let path = std::env::var("PRIMASE_KTX2_TEST_OUTPUT").expect("set by its parent test");
     let rgba: Vec<u8> = (0..16 * 16)
         .flat_map(|i| [(i % 256) as u8, 128, 255, ((i * 37) % 256) as u8])
         .collect();
@@ -25,7 +22,7 @@ fn separate_process_determinism() {
     for run in 0..3 {
         let path = std::env::temp_dir().join(format!("primase-ktx2-{}-{run}.ktx2", std::process::id()));
         let child = std::process::Command::new(&exe)
-            .args(["--exact", "encode_in_child_process"])
+            .args(["--ignored", "--exact", "encode_in_child_process"])
             .env("PRIMASE_KTX2_TEST_OUTPUT", &path)
             .output()
             .unwrap();

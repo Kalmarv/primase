@@ -1,0 +1,590 @@
+//! Every `PRIMASE_*` variable the workspace reads, with what it is: the one registry. The architecture test
+//! fails on a `PRIMASE_*` name in a source file that is not declared here, and on an entry nothing reads;
+//! CONTRIBUTING.md's real-data table is checked against it. Descriptions are generic: no local paths.
+
+/// What a variable is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Real data a test reads (an install, a dump folder, a scene).
+    Input,
+    /// Narrows an input (a path or region filter).
+    Filter,
+    /// Where a test may write.
+    Output,
+    /// A behaviour flag or parameter.
+    Switch,
+    /// The configuration file itself.
+    Config,
+    /// An option a command reads (not a test).
+    Runtime,
+    /// A parent test's handoff to its own child process.
+    Child,
+    /// A made-up name in primase-testdata's own tests.
+    Test,
+}
+
+/// One variable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Variable {
+    pub name: &'static str,
+    pub kind: Kind,
+    /// The landing gate must have it set (`PRIMASE_REQUIRE_REAL_DATA=gate`).
+    pub gate: bool,
+    /// What it is and the layout it must have.
+    pub about: &'static str,
+}
+
+/// Every variable, in the order of the CONTRIBUTING table.
+pub const VARIABLES: &[Variable] = &[
+    Variable {
+        name: "PRIMASE_SCENES_GTA",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_DIR",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a GTA V install folder (Enhanced or Legacy; the folder holding the executable and the `.rpf` archives)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_KEYS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder of the user's own GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); checked against published digests, never committed"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_LISTING",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_ACTIVE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_RESOURCES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_GTXD",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_FILTER",
+        kind: Kind::Filter,
+        gate: false,
+        about: r#"optional: only archives whose path contains this text"#,
+    },
+    Variable {
+        name: "PRIMASE_SCENES_SEKIRO",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`)"#,
+    },
+    Variable {
+        name: "PRIMASE_SCENE_FILTER",
+        kind: Kind::Filter,
+        gate: false,
+        about: r#"optional: only scene folders whose path contains this text"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_PATCH",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_SKATE_DATA",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_VBLEND_SPEC",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_VBLEND_CHECK",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_VBLEND_REF",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: the same Patch blended by a reference patcher whose output was checked in game, for the checker's comparison"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_BLEND_MAP",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_BLEND_PATCH",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012)"#,
+    },
+    Variable {
+        name: "PRIMASE_RESKATE_BLEND_SPEC",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent resolution of that record against that Patch, in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_DATA",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_TPK",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_SCAN",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_MESHES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's decoded meshes of that folder (JSON; schema in `worlds/unity/tests/mesh.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_TEXTURES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_MATERIALS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's materials of that folder (JSON; schema in `worlds/unity/tests/material.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_PORT",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_PORT_MATERIALS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_PORT_TERRAIN",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`)"#,
+    },
+    Variable {
+        name: "PRIMASE_OUT",
+        kind: Kind::Output,
+        gate: false,
+        about: r#"optional: where real-data tests write their outputs (default: the OS temporary directory)"#,
+    },
+    Variable {
+        name: "PRIMASE_ALLOW_LIVE",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: `1` lets a real-data gate report input folders that changed during the run and continue"#,
+    },
+    Variable {
+        name: "PRIMASE_MAPS_GTA",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a root containing exported map folders with `textures/` PNG images"#,
+    },
+    Variable {
+        name: "PRIMASE_SCENE_SKATE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable)"#,
+    },
+    Variable {
+        name: "PRIMASE_GLTF_VALIDATOR",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build)"#,
+    },
+    Variable {
+        name: "PRIMASE_OODLE5",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"explicit trusted Oodle version-5 game DLL path"#,
+    },
+    Variable {
+        name: "PRIMASE_OODLE6",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"explicit trusted Oodle version-6 game DLL path"#,
+    },
+    Variable {
+        name: "PRIMASE_OODLE9",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"explicit trusted Oodle version-9 game DLL path"#,
+    },
+    Variable {
+        name: "PRIMASE_DCX",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"folder recursively containing loose KRAK DCX files"#,
+    },
+    Variable {
+        name: "PRIMASE_CAS_SAMPLES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"directory of indexed individual `.casblock` frames"#,
+    },
+    Variable {
+        name: "PRIMASE_SEKIRO_DIR",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"install folder containing Data1 through Data5 BHD/BDT pairs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_RIGID_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_OBJECT_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independently decoded main-HKX body fixtures for reference bd77fcb; worlds/fromsoft/tests/object_collision.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_OBJECT_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"reference scene folder with scene.json, export_report.json and collision/objects.bin from corrected convex decoding; worlds/fromsoft/tests/object_scene.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_OUTPUT",
+        kind: Kind::Output,
+        gate: false,
+        about: r#"fresh output folder for written scene and object-collision gates; worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_EXTRAS_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent stored EDGE/BTL records and loose fixtures; worlds/fromsoft/tests/extras_census.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_EXTRAS_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"reference scene folder with lights/grind tables and markers; worlds/fromsoft/tests/extras_scene.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_EXTRAS_OUTPUT",
+        kind: Kind::Output,
+        gate: false,
+        about: r#"fresh extras scene output folder; worlds/fromsoft/tests/extras_scene.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_NAMES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"caller-provided UTF-8 Sekiro path dictionary"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_NORMAL_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"reference normal PNGs and scene.json for offline cached-DDS comparison; worlds/fromsoft/tests/normal_images.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_DDS_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_MODEL_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_MSB_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent map models, parts and transforms; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_SHADOW_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_STATE_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_STATE_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_BLOCKER_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"blocker-card reference cases.json; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_MATERIAL_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_PBR_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_LAYER_PILOT",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"bounded layered-shader pilot inputs and reference pixels; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"reference area skate-scene folder containing placement sources and tables"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_BHD_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"reference archive outputs; schema in worlds/fromsoft/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_HAVOK_CORPUS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_UV_FRAME_CENSUS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions"#,
+    },
+    Variable {
+        name: "PRIMASE_CODEC_CORPUS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"TSV: codec, compressed path, oracle decoded path (tab-separated)"#,
+    },
+    Variable {
+        name: "PRIMASE_DXBC_SHADERS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md"#,
+    },
+    Variable {
+        name: "PRIMASE_SKATE_MASK_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"PNGs and independent mask pixel hashes in `cases.json`; schema below"#,
+    },
+    Variable {
+        name: "PRIMASE_DATA",
+        kind: Kind::Config,
+        gate: false,
+        about: r#"the absolute path of a local TOML file mapping these names to string values (see above)"#,
+    },
+    Variable {
+        name: "PRIMASE_REQUIRE_REAL_DATA",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: `1` makes every unset input fail its test; `gate` only the inputs the landing gate must have"#,
+    },
+    Variable {
+        name: "PRIMASE_CACHE",
+        kind: Kind::Runtime,
+        gate: false,
+        about: r#"optional: the disk cache folder of KTX2 encodings that `scene_to_tiles` (and a command with the same `--cache` option) uses when no `--cache` is given; read by commands, not tests"#,
+    },
+    Variable {
+        name: "PRIMASE_DXC",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"Microsoft's `dxc` shader compiler executable, for the DXIL evaluator's comparison with WARP; `toolkit/dxil/tests/warp.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_WARP",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the WARP oracle program that runs a shader on Microsoft's WARP rasterizer; `toolkit/dxil/tests/common/warp.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_WARP_SCRATCH",
+        kind: Kind::Output,
+        gate: false,
+        about: r#"a folder for the WARP comparison's case files and results"#,
+    },
+    Variable {
+        name: "PRIMASE_DXIL_FUZZ_RUNS",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: how many mutated fixtures the DXIL fuzz test runs (default 3000)"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_FRAMES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder holding `frames.jsonl`: SoulsFormats' reading of a few Sekiro models as stored (per mesh its LOD0 face set, per vertex position, normal, tangents and UV0); `worlds/fromsoft/tests/handedness.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_NORMAL_FRAMES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder holding `frames.jsonl`: independently stored tangent frames (`n`, `t`, `w` per sample key) of Sekiro normal-mapped surfaces; `worlds/fromsoft/tests/normal_basis.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_NORMAL_CURL",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a JSON list of independent curl measurements of Sekiro normal maps (`name`, `verdict` per map); `worlds/fromsoft/tests/normal_basis.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_WRITTEN_SCENE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a scene folder written by the FromSoft reader for the same area as `PRIMASE_FROMSOFT_SCENE`, compared with it; `worlds/fromsoft/tests/collision_scene.rs`, `sekiro_scene.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_FRAMES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"one ydr's high-detail geometries as an independent reader (CodeWalker) reads them, as stored in GTA's frame: one JSON file `{path, value: {models: [{geometries: [{positions, normals, tangents (xyzw), texcoords, indices}]}]}}`; the frame change, triangle fronts and bitangent sign are checked against it (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/handedness.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_BOUNDS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"props' embedded collision bounds (a ydr's own, a yft's first physics LOD's) as an independent reader (CodeWalker) reads them: a folder of JSON files, one per prop, `{path, leaves: [{type, flags, polygons: [{type, material, vertices (placed)}] or corners (8, placed)}]}`; `lower-gta-embedded-collision`'s triangles are checked against them (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/embedded_bounds.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_GTA_REGION",
+        kind: Kind::Filter,
+        gate: false,
+        about: r#"optional: only this named gate region in `worlds/gta/tests/region_pipeline.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_HAVOK_OBJECT_CORPUS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_SUN",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) record of the scan level's RenderSettings sun as stored, the render-pipeline asset classes, the shining directional lights and the main-light choice; `worlds/unity/tests/light.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_SHADERS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) shader render state of every material (subshader tags; per pass LightMode, blend factors, zwrite and cull with their bound properties); `worlds/unity/tests/material.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_PROGRAMS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) compiled fragment programs of every shader (per pass the player variants, keywords, program type and code hash, and the constant buffers, textures and samplers); `worlds/unity/tests/program.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_UNITY_FRAMES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) decoding of a few meshes in Unity's own frame (vertices, normals, tangents, UV0, submesh triangles); `worlds/unity/tests/handedness.rs`"#,
+    },
+    Variable {
+        name: "PRIMASE_KTX2_TEST_OUTPUT",
+        kind: Kind::Child,
+        gate: false,
+        about: r#"set by the web KTX2 test for its child half: where the child writes its encoded file"#,
+    },
+    Variable {
+        name: "PRIMASE_PRINT_CHILD_FILE",
+        kind: Kind::Child,
+        gate: false,
+        about: r#"set by core's print test for its child half: where the child writes its prints"#,
+    },
+    Variable {
+        name: "PRIMASE_CACHE_CHILD_DIR",
+        kind: Kind::Child,
+        gate: false,
+        about: r#"set by the cache crate's process test for its child halves: the cache folder they share"#,
+    },
+    Variable {
+        name: "PRIMASE_TEST",
+        kind: Kind::Test,
+        gate: false,
+        about: r#"a name primase-testdata's own tests resolve from a fake environment; never set"#,
+    },
+    Variable {
+        name: "PRIMASE_OTHER",
+        kind: Kind::Test,
+        gate: false,
+        about: r#"a name primase-testdata's own tests resolve from a fake environment; never set"#,
+    },
+    Variable {
+        name: "PRIMASE_FLAG",
+        kind: Kind::Test,
+        gate: false,
+        about: r#"a name primase-testdata's own tests resolve from a fake environment; never set"#,
+    },
+    Variable {
+        name: "PRIMASE_FILTER",
+        kind: Kind::Test,
+        gate: false,
+        about: r#"a name primase-testdata's own tests resolve from a fake environment; never set"#,
+    },
+];
+
+/// The declared variable of this name.
+pub fn declared(name: &str) -> Option<&'static Variable> {
+    VARIABLES.iter().find(|v| v.name == name)
+}
