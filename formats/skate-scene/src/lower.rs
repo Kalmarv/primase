@@ -208,7 +208,10 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
     } else {
         LightKind::Point
     };
-    let intensity = (f64::from(l.energy) / (4.0 * std::f64::consts::PI * std::f64::consts::PI)) as f32;
+    // the inverse of raise-skate's default calibration (crate::raise::SKATE_LIGHT_SCALE)
+    let intensity = (f64::from(l.energy)
+        / (4.0 * std::f64::consts::PI * std::f64::consts::PI)
+        / crate::raise::SKATE_LIGHT_SCALE) as f32;
     let light = Light {
         kind,
         color: l.color,

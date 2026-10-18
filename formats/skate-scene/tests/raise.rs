@@ -158,6 +158,7 @@ fn options() -> RaiseOptions {
         spawn: Some(scene::Spawn::At([2.0, -1.0])),
         spawn_yaw: 0.0,
         unclassified: None,
+        light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
     }
 }
 
@@ -222,7 +223,8 @@ fn a_core_world_becomes_a_scene() {
     assert_eq!(l.len(), 1);
     assert!(l[0].spot && (l[0].spot_size - 1.0).abs() < 1e-6 && (l[0].spot_blend - 0.5).abs() < 1e-6);
     assert_eq!(l[0].direction, [0.0, -1.0, 0.0]);
-    assert!((l[0].energy - scene::studio_watts(10.0)).abs() < 1e-3);
+    // 10 cd through raise-skate's calibration
+    assert!((l[0].energy - scene::studio_watts((10.0 * scene::SKATE_LIGHT_SCALE) as f32)).abs() < 1e-6);
     // assets, the scene, and back
     let assets = tmp("assets");
     scene::prepare_scene_assets(&mut w, &assets).unwrap();
@@ -332,6 +334,7 @@ fn what_skate_cannot_take_is_refused() {
             spawn: None,
             spawn_yaw: 0.0,
             unclassified: None,
+            light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
         },
     )
     .unwrap_err();

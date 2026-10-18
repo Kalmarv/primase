@@ -60,7 +60,7 @@ mod materials;
 pub use materials::{SKATE_F0, fold_reflectance};
 
 /// What [`raise_skate`] needs from the caller.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RaiseOptions {
     /// The scene's name, `[A-Za-z0-9_-]+`.
     pub name: String,
@@ -72,7 +72,33 @@ pub struct RaiseOptions {
     pub spawn_yaw: f64,
     /// The skate surface for a surface with no class and no entry in `surfaces` (counted per name); `None`: refused.
     pub unclassified: Option<String>,
+    /// Every light's intensity (physical candela) times this before [`studio_watts`]: skate's calibration,
+    /// [`SKATE_LIGHT_SCALE`] by default; finite and above 0. Recorded as an approximation when not the default.
+    pub light_scale: f64,
 }
+
+impl Default for RaiseOptions {
+    fn default() -> Self {
+        RaiseOptions {
+            name: String::new(),
+            surfaces: BTreeMap::new(),
+            spawn: None,
+            spawn_yaw: 0.0,
+            unclassified: None,
+            light_scale: SKATE_LIGHT_SCALE,
+        }
+    }
+}
+
+/// skate's light calibration: Studio watts per candela of a source light are `4 pi^2 x SKATE_LIGHT_SCALE` (Studio
+/// writes 683 lm per watt). Fitted against San Vansterdam's own lights (street lamps, plaza lights, wall sconces) by
+/// illuminance 4 m along a spot's axis, a source light taken as physical (GTA's sun-calibrated): stock / source
+/// geometric mean 0.177, class residuals 1.11, 1.28, 0.70. Named assumptions: skate's engine draws punctual lights
+/// by the model of its published physically based rendering course notes (spot I = lumens / pi, E = I / d^2 x
+/// (1 - (d/r)^4)^2: Lagarde and de Rousiers, SIGGRAPH 2014), not measured; Studio's LightUnit 0 is
+/// lumens (inferred from its 683 x watts); one scale matches at one distance (the source's falloff window and
+/// inverse-square differ: 4 m chosen, the ground under a lamp).
+pub const SKATE_LIGHT_SCALE: f64 = 3.007e-4;
 
 /// Where [`raise_skate`] puts the spawn marker.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,6 +181,12 @@ fn wrap(w: PbrWrap) -> Wrap {
 /// successful conversion does not imply that every PBR feature is represented by the target.
 pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog> {
     let bad = |m: String| Error::Scene(format!("raise-skate: {m}"));
+    if !(options.light_scale.is_finite() && options.light_scale > 0.0) {
+        return Err(bad(format!(
+            "light_scale {} is not a finite number above 0",
+            options.light_scale
+        )));
+    }
     if world.resource::<SkateScene>().is_some() {
         return Err(bad("the world is already a skate scene".into()));
     }
@@ -516,7 +548,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 },
                 tangent: [0.0; 3],
                 color: l.color,
-                energy: studio_watts(l.intensity),
+                energy: studio_watts((f64::from(l.intensity) * options.light_scale) as f32),
                 range: l.range.unwrap_or(0.0),
                 radius: 0.0,
                 spot_size: size,
@@ -531,7 +563,20 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         log.count("lights", 1);
     }
     if !lights.is_empty() {
-        log.approximate("light energy as Studio watts (4 pi^2 candela)", 1);
+        log.approximate(
+            "light energy as Studio watts (4 pi^2 candela x light_scale; skate's calibration fitted at 4 m, \
+             assuming the engine's published punctual light model)",
+            1,
+        );
+        if options.light_scale != SKATE_LIGHT_SCALE {
+            log.approximate(
+                &format!(
+                    "light_scale {} instead of skate's fitted calibration",
+                    options.light_scale
+                ),
+                lights.len() as u64,
+            );
+        }
     }
     let spawn = match options.spawn {
         Some(Spawn::At(p)) => Some(p),
@@ -636,6 +681,13 @@ pub fn raise_skate_pass(
             "spawn" => return Err(format!("spawn={v}: only spawn=centre (or spawn_x, spawn_z)")),
             "spawn_yaw" => options.spawn_yaw = f64::from(number(v)?),
             "unclassified" => options.unclassified = Some(v.clone()),
+            "light_scale" => {
+                options.light_scale = v
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|n| n.is_finite() && *n > 0.0)
+                    .ok_or_else(|| format!("light_scale={v} is not a finite number above 0"))?;
+            }
             // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
             "map" => {
                 for pair in v.split(';').filter(|p| !p.is_empty()) {
@@ -680,6 +732,9 @@ impl primase_core::pass::Pass for RaiseSkate {
         }
         if let Some(u) = &self.options.unclassified {
             o.insert("unclassified".into(), u.clone());
+        }
+        if self.options.light_scale != SKATE_LIGHT_SCALE {
+            o.insert("light_scale".into(), self.options.light_scale.to_string());
         }
         if !self.options.surfaces.is_empty() {
             let map: Vec<String> = self

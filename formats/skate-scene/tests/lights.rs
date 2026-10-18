@@ -76,6 +76,7 @@ fn raise_then_lower_restores_core_lights() {
             spawn: None,
             spawn_yaw: 0.0,
             unclassified: None,
+            light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
         },
     )
     .unwrap();
@@ -127,7 +128,11 @@ fn pass_lowers_once_and_builds_an_orthonormal_basis() {
             direction: [0.0, -1.0, 0.0], // straight down: world +Y can't be the up hint
             tangent: [0.0; 3],
             color: [1.0; 3],
-            energy: (4.0 * std::f64::consts::PI * std::f64::consts::PI) as f32,
+            // 1 cd through raise-skate's calibration
+            energy: (4.0
+                * std::f64::consts::PI
+                * std::f64::consts::PI
+                * primase_skate_scene::SKATE_LIGHT_SCALE) as f32,
             range: 0.0,
             radius: 0.1,
             spot_size: 1.0,
@@ -175,4 +180,65 @@ fn pass_lowers_once_and_builds_an_orthonormal_basis() {
         })
         .is_err()
     );
+}
+
+/// raise-skate's light calibration, worked by hand: 1,000 cd x SKATE_LIGHT_SCALE 3.007e-4 = 0.3007 cd-equivalent,
+/// x 4 pi^2 = 11.871 Studio watts; light_scale=0.5 gives 19.739 W and is recorded as an approximation; a scale that
+/// is not finite and above 0 is refused.
+#[test]
+fn raise_skate_calibrates_light_energy() {
+    let light = |w: &mut World| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Light {
+                kind: LightKind::Point,
+                color: [1.0; 3],
+                intensity: 1000.0,
+                range: None,
+                cast_shadows: None,
+            },
+        );
+        w.insert(e, Transform::IDENTITY);
+        e
+    };
+    for (scale, watts, recorded) in [
+        (primase_skate_scene::SKATE_LIGHT_SCALE, 11.871_f32, false),
+        (0.5e-3, 19.739, true),
+    ] {
+        let mut w = World::new();
+        let e = light(&mut w);
+        let log = raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: "lit".into(),
+                light_scale: scale,
+                ..RaiseOptions::default()
+            },
+        )
+        .unwrap();
+        let energy = w.get::<SkateLight>(e).unwrap().energy;
+        assert!((energy - watts).abs() < 1e-3, "{energy}");
+        assert_eq!(
+            log.approximations.keys().any(
+                |k| k.starts_with("light_scale ") && k.ends_with("instead of skate's fitted calibration")
+            ),
+            recorded
+        );
+    }
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut w = World::new();
+        light(&mut w);
+        let e = raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: "bad".into(),
+                light_scale: bad,
+                ..RaiseOptions::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("light_scale"), "{e}");
+    }
 }
