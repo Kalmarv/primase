@@ -289,6 +289,13 @@ A material may carry `extras.primase["core.material_usage"]` = `{"version": 1, "
 its surfaces are, as the source states it (vegetation; a water surface), for a consumer that treats them differently
 whatever their shading (wind, two-sided lighting, its own water). Without the extra, a material is ordinary.
 
+## Vertex colour
+
+A primitive's `COLOR_0` multiplies its material's base colour, as glTF has it. A material whose source shader does not
+take vertex colour carries `extras.primase["core.vertex_color"]` = `{"version": 1, "value": "ignored"}`, and the
+primitives drawn with it are written without `COLOR_0` (a layered material whose weights read `COLOR_0` keeps it). A
+consumer needs nothing for it; the extra says why a source mesh's colours are absent.
+
 ## Shadows
 
 What the source states about shadows is carried as glTF extras, `extras["primase.shadows"]`, an object with

@@ -16,6 +16,10 @@
 //! - **Materials** come from `pbr.material` ([`PbrMaterial`]); a material entity without one is written as
 //!   [`fallback_material`] (light grey, dielectric, rough) and counted. A primitive with no material has none in
 //!   glTF (the reader's default material) and is counted.
+//! - **Vertex colour**: `COLOR_0` is written for a primitive whose material takes it (glTF multiplies it in). A
+//!   written primitive whose material is `core.vertex_color` `ignored` (the source's shader does not take it) is
+//!   written without it, counted; a prototype's `COLOR_0` accessor is not written at all when no material drawing
+//!   that primitive, variants included, reads it ([`primase_core::color0_drawn`]).
 //! - **Layered materials** (`core.layered`) become one glTF material with the `PRIMASE_layered_material` extension:
 //!   the weight attribute (`COLOR_n`), the mapping and up to four layers, each an index of an ordinary material in
 //!   the same file (the layer materials are written like any other; their images are shared) with the layer's UV
@@ -156,6 +160,8 @@ pub struct WriteReport {
     pub primitives_layered_without_weights: u64,
     /// Primitives given zero texture coordinates for a set their material samples but they lack.
     pub primitives_texcoords_zero_filled: u64,
+    /// Written primitives with a `COLOR_0` stream drawn without it: their material is `core.vertex_color` `ignored`.
+    pub primitives_color0_ignored: u64,
     /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
     pub textures_skipped: BTreeMap<String, u64>,
     /// Material texture slots left empty because their texture was skipped.
@@ -196,12 +202,13 @@ impl fmt::Display for WriteReport {
         writeln!(
             f,
             "materials fallback {}, primitives without material {}, layered materials {} (primitives without \
-             weights {}), primitives with zero-filled texcoords {}, texture slots dropped {}",
+             weights {}), primitives with zero-filled texcoords {}, primitives drawn without their COLOR_0 (material              ignores it) {}, texture slots dropped {}",
             self.materials_fallback,
             self.primitives_without_material,
             self.layered_materials,
             self.primitives_layered_without_weights,
             self.primitives_texcoords_zero_filled,
+            self.primitives_color0_ignored,
             self.texture_slots_dropped
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
@@ -796,6 +803,13 @@ impl Writer<'_> {
                 .iter()
                 .map(|(n, i)| (n.clone(), json!(i)))
                 .collect();
+            if let Some(m) = material
+                && prim.streams.contains_key(&Semantic::Color(0))
+                && !primase_core::uses_color0(self.world, *m)
+            {
+                attrs.remove("COLOR_0");
+                self.report.primitives_color0_ignored += 1;
+            }
             let material_index = match material {
                 Some(m) => {
                     let (index, sets) = self.material(*m)?;
@@ -871,17 +885,31 @@ impl Writer<'_> {
         }
         let mut out = Vec::with_capacity(mesh.primitives().len());
         for (i, prim) in mesh.primitives().iter().enumerate() {
-            let a = self.primitive_accessors(prim).map_err(|detail| Error::World {
-                entity: prototype,
-                detail: format!("primitive {i}: {detail}"),
-            })?;
+            // a piece's materials are final; a prototype's primitive is also drawn with its variants' materials
+            let color0 = match src {
+                Src::Prototype(_) => primase_core::color0_drawn(self.world, prototype, mesh, i),
+                Src::Piece(_) => prim
+                    .material
+                    .is_none_or(|m| primase_core::uses_color0(self.world, m)),
+            };
+            let a = self
+                .primitive_accessors(prim, color0)
+                .map_err(|detail| Error::World {
+                    entity: prototype,
+                    detail: format!("primitive {i}: {detail}"),
+                })?;
             out.push(a);
         }
         self.proto_accessors.insert(src, out.clone());
         Ok(out)
     }
 
-    fn primitive_accessors(&mut self, prim: &Primitive) -> std::result::Result<PrimAccessors, String> {
+    /// `color0`: whether `COLOR_0` is written (some drawing of the primitive reads it).
+    fn primitive_accessors(
+        &mut self,
+        prim: &Primitive,
+        color0: bool,
+    ) -> std::result::Result<PrimAccessors, String> {
         let count = prim.vertex_count();
         if !matches!(prim.streams.get(&Semantic::Position), Some(Stream::F32x3(_))) {
             return Err("no f32x3 Position stream".into());
@@ -919,6 +947,9 @@ impl Writer<'_> {
         }
         let mut attributes = Vec::new();
         for (semantic, stream) in &prim.streams {
+            if *semantic == Semantic::Color(0) && !color0 {
+                continue;
+            }
             let (name, index) = match (semantic, stream) {
                 (Semantic::Position, Stream::F32x3(p)) => ("POSITION".to_owned(), self.positions_accessor(p)),
                 (Semantic::Normal, Stream::F32x3(v)) => (
