@@ -101,16 +101,18 @@ fn lowering_matches_the_port() {
     let mut images: BTreeMap<String, Images> = BTreeMap::new();
     let mut fields_differ = Vec::new();
     let mut not_modelled = Vec::new();
-    for j in joined["joined"].as_array().unwrap() {
+    let joined = joined["joined"].as_array().unwrap();
+    assert!(!joined.is_empty(), "the port's material list is empty");
+    let mut compared = 0usize;
+    let mut missing: Vec<String> = Vec::new();
+    for j in joined {
         let key = (
             j["file"].as_str().unwrap().to_owned(),
             j["path_id"].as_i64().unwrap(),
         );
         let port = &j["port"];
         let Some(&(e, um)) = ours.get(&key) else {
-            *rules
-                .entry("port material not drawn by our level (terrain trees come with terrain)".into())
-                .or_default() += 1;
+            missing.push(j["key"].as_str().unwrap().to_owned());
             continue;
         };
         if port.get("skip").is_some() {
@@ -120,6 +122,7 @@ fn lowering_matches_the_port() {
             continue;
         }
         let p: &PbrMaterial = w.get(e).unwrap();
+        compared += 1;
         let shader = port["shader"].as_str().unwrap().to_owned();
         let family = if port["exact"].as_bool().unwrap() {
             shader.clone()
@@ -257,6 +260,25 @@ fn lowering_matches_the_port() {
     println!("not modelled, per material: {not_modelled:#?}");
     println!("fields that differ: {fields_differ:#?}");
     assert!(fields_differ.is_empty());
+    // every material the port exported is one our level draws, and each not skipped by the port was compared
+    let skipped: u64 = rules
+        .iter()
+        .filter(|(k, _)| k.starts_with("port skips"))
+        .map(|(_, n)| n)
+        .sum();
+    println!("port materials not among our level's: {missing:?}");
+    // the one the port exported that no renderer or terrain of the level references (an independent reader finds
+    // none; the port picked it up elsewhere): anything else missing is ours to explain
+    assert_eq!(
+        missing,
+        vec!["SnowURP01_medium_coverage_on_objects_1c6c4e".to_owned()],
+        "port materials missing from our level"
+    );
+    assert_eq!(
+        compared as u64 + skipped + missing.len() as u64,
+        joined.len() as u64
+    );
+    assert!(compared > 0, "no material compared");
     // URP Lit and SpeedTree7 within 1: the port decodes BC1-3 with another palette rounding (the texture gate)
     for (f, i) in &images {
         if f != "not modelled" {

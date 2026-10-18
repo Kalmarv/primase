@@ -51,6 +51,10 @@ fn rgba8(t: &Texture) -> Vec<u8> {
         .unwrap()
 }
 
+/// What the texture reader leaves undecoded on purpose (its `Unsupported` reasons): textures without pixels, and
+/// crunched formats (a second compression the reader does not unpack). Any other decode failure fails the gate.
+const NOT_DECODED: [&str; 2] = ["an empty texture", "crunched texture format"];
+
 #[test]
 fn textures_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
@@ -103,11 +107,20 @@ fn textures_match_the_oracle() {
         }
         let ours = match u.texture() {
             Ok(x) => x,
-            Err(e) => {
+            // the header is right; pixels the reader does not decode on purpose are counted, any other failure fails
+            Err(primase_unity::Error::Unsupported(why))
+                if NOT_DECODED
+                    .iter()
+                    .any(|p| why.rsplit(": ").next().unwrap().starts_with(p)) =>
+            {
                 *not_read
-                    .entry(e.to_string().split(": ").last().unwrap().to_owned())
+                    .entry(why.rsplit(": ").next().unwrap().to_owned())
                     .or_default() += 1;
                 header.record(&item, 0.0);
+                continue;
+            }
+            Err(e) => {
+                header.fail(&item, format!("not decoded: {e}"));
                 continue;
             }
         };
@@ -119,7 +132,7 @@ fn textures_match_the_oracle() {
         }
         header.record(&item, 0.0);
         let Some(png) = t["png"].as_str() else {
-            *not_read.entry("no oracle image".into()).or_default() += 1;
+            header.fail(&item, "decoded, but the oracle has no image for it".to_owned());
             continue;
         };
         let image = read_png(&std::fs::read(Path::new(&oracle).join(png)).unwrap())
@@ -166,6 +179,15 @@ fn textures_match_the_oracle() {
         );
     }
     header.assert_passed();
+    // pixels were compared, and only the named cases were left undecoded
+    let compared: u64 = pixels.values().map(|p| p.textures).sum();
+    assert!(compared > 0, "no texture's pixels compared");
+    assert!(
+        not_read
+            .keys()
+            .all(|k| NOT_DECODED.iter().any(|p| k.starts_with(p))),
+        "not decoded for another reason: {not_read:?}"
+    );
     for (f, p) in &pixels {
         assert!(
             p.max <= tolerance(*f),

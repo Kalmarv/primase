@@ -287,20 +287,76 @@ mod tests {
         bytes
     }
 
-    /// Independent hand-encoded LZ4 literal-only block, against uncompressed TPK parsing.
+    /// An LZ4 block of one literal run (no matches), encoded by hand: the token's high nibble 15, then the rest of the
+    /// length in bytes of 255 and a final byte.
+    fn literal_lz4(blob: &[u8]) -> Vec<u8> {
+        let mut out = vec![0xf0];
+        let mut rest = blob.len() - 15;
+        while rest >= 255 {
+            out.push(255);
+            rest -= 255;
+        }
+        out.push(rest as u8);
+        out.extend(blob);
+        out
+    }
+
+    /// A format-2 package encoded by hand: one listed version, class 1 named by string 0 ("Base") from version 0
+    /// with release root node 0, no common strings, one node (type and name string 0, size -1, version 1), one string.
+    fn one_class_blob() -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend(0x0102_0304_0506_0708i64.to_le_bytes()); // created
+        b.extend(1i32.to_le_bytes()); // versions
+        b.extend(0u64.to_le_bytes());
+        b.extend(1i32.to_le_bytes()); // classes
+        b.extend(1i32.to_le_bytes()); // class id
+        b.extend(1i32.to_le_bytes()); // its versions
+        b.extend(0u64.to_le_bytes()); // from version 0
+        b.push(1); // present
+        b.extend(0u16.to_le_bytes()); // name: string 0
+        b.extend(0u16.to_le_bytes()); // base
+        b.push(HAS_RELEASE_ROOT);
+        b.extend(0u16.to_le_bytes()); // release root: node 0
+        b.extend(0i32.to_le_bytes()); // common string versions
+        b.extend(1i32.to_le_bytes()); // nodes
+        b.extend(0u16.to_le_bytes()); // type name: string 0
+        b.extend(0u16.to_le_bytes()); // name: string 0
+        b.extend((-1i32).to_le_bytes()); // byte size
+        b.extend(1i16.to_le_bytes()); // version
+        b.push(0); // type flags
+        b.extend(0u32.to_le_bytes()); // meta flag
+        b.extend(0u16.to_le_bytes()); // children
+        b.extend(1i32.to_le_bytes()); // strings
+        b.push(4);
+        b.extend(b"Base");
+        b
+    }
+
+    /// The stored and the LZ4 package decode to the same classes, nodes and strings, the ones encoded; wrong sizes
+    /// and a cut block are refused.
     #[test]
     fn literal_lz4_package_matches_uncompressed_and_rejects_bad_sizes() {
-        // Timestamp and five empty tables for format 2.
-        let blob = [0u8; 28];
-        let mut packed = vec![0xf0, 13];
-        packed.extend(blob);
-        let raw = TypeTreePackage::parse(&package(0, &blob, 28)).unwrap();
-        let compressed = TypeTreePackage::parse(&package(1, &packed, 28)).unwrap();
-        assert_eq!(format!("{raw:?}"), format!("{compressed:?}"));
-        for expected in [0, 27, 29] {
+        let blob = one_class_blob();
+        let n = blob.len() as u32;
+        let packed = literal_lz4(&blob);
+        let raw = TypeTreePackage::parse(&package(0, &blob, n)).unwrap();
+        let compressed = TypeTreePackage::parse(&package(1, &packed, n)).unwrap();
+        for p in [&raw, &compressed] {
+            assert_eq!(p.class_name(1, UnityVersion(1)), Some("Base"));
+            assert_eq!(p.class_name(2, UnityVersion(1)), None);
+            assert_eq!(p.classes[&1][0].1.as_ref().unwrap().release_root, Some(0));
+            assert_eq!(&*p.strings, &[std::sync::Arc::<str>::from("Base")]);
+            let node = &p.nodes[0];
+            assert_eq!(
+                (node.type_name, node.name, node.byte_size, node.version),
+                (0, 0, -1, 1)
+            );
+            assert!(p.type_tree(1, UnityVersion(1)).is_ok());
+        }
+        for expected in [0, n - 1, n + 1] {
             assert!(TypeTreePackage::parse(&package(1, &packed, expected)).is_err());
         }
-        assert!(TypeTreePackage::parse(&package(1, &packed[..packed.len() - 1], 28)).is_err());
+        assert!(TypeTreePackage::parse(&package(1, &packed[..packed.len() - 1], n)).is_err());
         assert!(TypeTreePackage::parse(&package(1, &[], 0)).is_err());
     }
 }

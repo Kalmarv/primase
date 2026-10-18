@@ -108,5 +108,7 @@ fn values_match_the_oracle() {
         per_class.len(),
         oracle["oracle"].as_str().unwrap_or("the oracle")
     );
+    assert!(checked > 0, "no sampled object checked");
+    assert!(numbers > 0, "no value compared");
     assert_eq!(failed, 0);
 }
