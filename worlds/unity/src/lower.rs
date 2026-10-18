@@ -761,7 +761,10 @@ mod tests {
     /// Lower `materials` under `pipeline`: each one's alpha mode, and the log.
     fn alpha(materials: &[UnityMaterial], pipeline: Option<RenderPipeline>) -> (Vec<AlphaMode>, PassLog) {
         let mut w = World::new();
-        w.insert_resource(UnityRenderSettings { sun: None, pipeline });
+        w.insert_resource(UnityRenderSettings {
+            pipeline,
+            ..Default::default()
+        });
         let es: Vec<Entity> = materials
             .iter()
             .map(|m| {
@@ -1098,8 +1101,8 @@ mod tests {
         );
         plain.material.path_id = 2;
         w.insert_resource(UnityRenderSettings {
-            sun: None,
             pipeline: Some(RenderPipeline::BuiltIn),
+            ..Default::default()
         });
         let (a, b) = (w.spawn(), w.spawn());
         w.insert(a, mapped);

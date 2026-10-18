@@ -1215,7 +1215,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         b.report.tree_colliders += 1;
     }
     let lights = scene.lights(player)?;
-    let sun = scene.render_settings_sun(player)?;
+    let settings = scene.render_settings(player)?;
+    let sun = settings.as_ref().and_then(|s| s.sun.clone());
     let mut sun_entity = None;
     for l in &lights {
         let e = w.spawn();
@@ -1254,6 +1255,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     w.insert_resource(UnityRenderSettings {
         sun: sun_entity,
         pipeline: player.render_pipeline()?,
+        ambient: settings.and_then(|s| s.ambient),
     });
     b.report.renderers = renderers.iter().filter(|r| !role_of(r).folded).count();
     b.report.tree_renderers = trees.iter().filter(|(_, r)| !role_of(r).folded).count();

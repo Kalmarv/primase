@@ -522,21 +522,35 @@ impl Component for UnityLight {
     }
 }
 
+/// A scene's ambient lighting as RenderSettings stores it: `mode` (`m_AmbientMode`: 0 skybox, 1 trilight, a gradient
+/// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored, and
+/// `intensity` (`m_AmbientIntensity`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityAmbient {
+    pub mode: i64,
+    pub sky: [f32; 4],
+    pub equator: [f32; 4],
+    pub ground: [f32; 4],
+    pub intensity: f32,
+}
+
 /// The scene's RenderSettings as far as they are read, with the player's render pipeline (`unity.render_settings`, a
 /// world resource). `lower-unity-lights` chooses `core.environment`'s sun from them.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct UnityRenderSettings {
     /// The light entity `m_Sun` names, when it is one of the lights read (it shines); `None` when it names none or one
     /// that does not shine.
     pub sun: Option<Entity>,
     /// The player's render pipeline; `None` when the player has no GraphicsSettings.
     pub pipeline: Option<crate::player::RenderPipeline>,
+    /// Its ambient lighting; `None` when the scene has no RenderSettings or they store no ambient mode.
+    pub ambient: Option<UnityAmbient>,
 }
 
 impl primase_core::Resource for UnityRenderSettings {
     const NAME: &'static str = "unity.render_settings";
-    /// 2: `pipeline`.
-    const VERSION: u32 = 2;
+    /// 2: `pipeline`; 3: `ambient`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

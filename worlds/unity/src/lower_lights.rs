@@ -14,6 +14,10 @@
 //! - direction: a Unity light shines along its local +Z, which the frame conversion makes the world's local -Z, as
 //!   `core.light` wants: the transform is used as it is.
 //!
+//! Under another pipeline (built-in) the same conversion is applied and counted as an approximation: built-in
+//! attenuates point and spot lights by its own falloff, not the inverse square, and in a linear-colour project
+//! without linear light intensity it applies the intensity in gamma space; neither is modelled.
+//!
 //! Area lights (rectangle, disc) are baked-only in URP and have no punctual form: not lowered, counted.
 //!
 //! The sun, `core.environment`'s: the light the Universal Render Pipeline makes its main light, as its
@@ -92,7 +96,18 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
             1,
         );
     }
-    log.approximate("URP intensity taken as candela (lux for directional lights)", 1);
+    let urp = w
+        .resource::<UnityRenderSettings>()
+        .is_some_and(|s| s.pipeline == Some(RenderPipeline::Universal));
+    log.approximate(
+        if urp {
+            "URP intensity taken as candela (lux for directional lights)"
+        } else {
+            "intensity of a pipeline other than URP taken as URP's (built-in's attenuation and gamma-space intensity \
+             not modelled)"
+        },
+        1,
+    );
     if let Some(sun) = sun(w, &mut log) {
         w.insert_resource(primase_core::Environment { sun: Some(sun) });
     }
@@ -214,7 +229,11 @@ mod tests {
     }
 
     fn settings(sun: Option<Entity>, pipeline: Option<RenderPipeline>) -> UnityRenderSettings {
-        UnityRenderSettings { sun, pipeline }
+        UnityRenderSettings {
+            sun,
+            pipeline,
+            ambient: None,
+        }
     }
 
     fn environment_sun(w: &mut World) -> (Option<Entity>, PassLog) {

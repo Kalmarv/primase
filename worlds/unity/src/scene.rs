@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::components::UnityAmbient;
 use crate::player::{ObjRef, Player};
 use crate::value::{Array, Value};
 use crate::{Result, invalid};
@@ -668,9 +669,10 @@ impl Scene {
         Ok(out)
     }
 
-    /// The Light the scene's RenderSettings names as its sun (`m_Sun`); `None` when it names none (Unity then lights
-    /// its procedural sky by the brightest directional light, a choice of the engine's, not the scene's).
-    pub fn render_settings_sun(&self, player: &Player) -> Result<Option<ObjRef>> {
+    /// The scene's RenderSettings: the Light it names as its sun (`m_Sun`; `None` when it names none: Unity then
+    /// lights its procedural sky by the brightest directional light, a choice of the engine's, not the scene's) and
+    /// its ambient lighting. `None` when the scene has no RenderSettings.
+    pub fn render_settings(&self, player: &Player) -> Result<Option<SceneRenderSettings>> {
         let file = self.file.as_str();
         let f = player.file(file)?;
         let r = |pid: i64| ObjRef {
@@ -686,12 +688,34 @@ impl Scene {
                 return Err(invalid(format!("{file}: more than one RenderSettings")));
             }
             let settings = player.decode(&r(o.path_id))?;
-            found = Some(match settings.get("m_Sun") {
+            let sun = match settings.get("m_Sun") {
                 Some(p) => player.resolve(file, p)?,
                 None => None,
-            });
+            };
+            let rgba = |k: &str| -> Result<[f32; 4]> {
+                let c = settings
+                    .get(k)
+                    .ok_or_else(|| invalid(format!("{file}: RenderSettings without {k}")))?;
+                Ok([num(c, "r")?, num(c, "g")?, num(c, "b")?, num(c, "a")?].map(|x| x as f32))
+            };
+            let ambient = match settings.get("m_AmbientMode").and_then(Value::as_i64) {
+                None => None,
+                Some(mode) => Some(UnityAmbient {
+                    mode,
+                    sky: rgba("m_AmbientSkyColor")?,
+                    equator: rgba("m_AmbientEquatorColor")?,
+                    ground: rgba("m_AmbientGroundColor")?,
+                    intensity: settings
+                        .get("m_AmbientIntensity")
+                        .and_then(Value::as_f32)
+                        .ok_or_else(|| {
+                            invalid(format!("{file}: RenderSettings without m_AmbientIntensity"))
+                        })?,
+                }),
+            };
+            found = Some(SceneRenderSettings { sun, ambient });
         }
-        Ok(found.flatten())
+        Ok(found)
     }
 
     /// The lights, whatever their state, in the order of the scene's object table.
@@ -914,4 +938,11 @@ pub struct TerrainComponent {
     pub draw_trees: bool,
     pub collider: Option<TerrainColliderComponent>,
     pub off: Vec<OffFlag>,
+}
+
+/// A scene's RenderSettings as read ([`Scene::render_settings`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneRenderSettings {
+    pub sun: Option<ObjRef>,
+    pub ambient: Option<UnityAmbient>,
 }

@@ -194,10 +194,19 @@ fn the_sun_matches_the_independent_reader() {
     .unwrap();
     let level = scan["level"].as_str().unwrap();
     assert_eq!(oracle["level"], level, "the oracle's level");
-    let named = Scene::read(&player, level)
+    let settings = Scene::read(&player, level)
         .unwrap()
-        .render_settings_sun(&player)
+        .render_settings(&player)
+        .unwrap()
         .unwrap();
+    let named = settings.sun.clone();
+    // the level's ambient as stored (read with UnityPy): skybox mode, its trilight colours, intensity 1
+    let ambient = settings.ambient.unwrap();
+    assert_eq!(ambient.mode, 0);
+    assert_eq!(ambient.sky, [0.212, 0.227, 0.259, 1.0]);
+    assert_eq!(ambient.equator, [0.114, 0.125, 0.133, 1.0]);
+    assert_eq!(ambient.ground, [0.047, 0.043, 0.035, 1.0]);
+    assert_eq!(ambient.intensity, 1.0);
     let path_id = oracle["m_Sun"]["m_PathID"].as_i64().unwrap();
     assert_eq!(named.as_ref().map_or(0, |r| r.path_id), path_id, "m_Sun");
     let pipelines: Vec<String> = oracle["pipelines"]
