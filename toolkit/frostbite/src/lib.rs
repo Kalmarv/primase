@@ -143,28 +143,32 @@ pub fn align(v: usize, a: usize) -> usize {
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
+    /// The fields of a format error, or a panic for any other kind: the constructors must choose both the kind and
+    /// the offset, not only the message text.
+    fn format_error(error: Error) -> (&'static str, usize, String) {
+        match error {
+            Error::Format { what, offset, detail } => (what, offset, detail),
+            other => panic!("expected a format error, got {other}"),
+        }
+    }
     #[test]
     fn wrapper_retains_bounds_and_error_context() {
         let rd = Rd::new(&[1, 2, 3, 4], "bounds fixture");
         assert!(rd.bytes(4, 0).unwrap().is_empty());
         assert_eq!(rd.u32be(0).unwrap(), 0x01020304);
         for (offset, length) in [(4, 1), (5, 0), (usize::MAX, 1)] {
-            assert_eq!(
-                rd.bytes(offset, length).unwrap_err().to_string(),
-                bad(rd.what, offset, format!("{length} bytes past the end (4 bytes)")).to_string()
-            );
+            let (what, at, detail) = format_error(rd.bytes(offset, length).unwrap_err());
+            assert_eq!((what, at), ("bounds fixture", offset));
+            assert_eq!(detail, format!("{length} bytes past the end (4 bytes)"));
         }
         assert_eq!(capacity("table", 2, 2, 4).unwrap(), 2);
         assert_eq!(capacity("table", usize::MAX, 0, 0).unwrap(), usize::MAX);
         for (count, stride) in [(3, 2), (usize::MAX, 2)] {
+            let (what, at, detail) = format_error(capacity("table", count, stride, 4).unwrap_err());
+            assert_eq!((what, at), ("table", 0));
             assert_eq!(
-                capacity("table", count, stride, 4).unwrap_err().to_string(),
-                bad(
-                    "table",
-                    0,
-                    format!("{count} entries of at least {stride} bytes in 4 bytes")
-                )
-                .to_string()
+                detail,
+                format!("{count} entries of at least {stride} bytes in 4 bytes")
             );
         }
     }
