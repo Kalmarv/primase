@@ -128,8 +128,9 @@ glTF 2.0 and the declared extensions. Supported output extensions include
 extension's defaults; used, never required: a consumer that ignores it draws glTF's default specular). Read
 `extensionsRequired`; never silently ignore an unsupported required extension.
 
-GPU instancing applies only to compatible placements. Mirrored transforms stay
-ordinary nodes so consumers can handle their winding correctly. Materials retain
+GPU instancing applies only to compatible placements. Every placement is rigid (a rotation, positive per-axis
+scale and translation): the writer refuses mirrored and sheared ones, which `bake-nonrigid` moves into geometry
+first. Materials retain
 their alpha modes, cutoffs and double-sided flags. Texture transforms belong to
 the specified UV set and must be applied by the consumer.
 

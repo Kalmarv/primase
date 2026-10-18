@@ -15,8 +15,8 @@ struct Soup {
 }
 
 /// The world's `core.collision` as collision items in world space: a prototype's once per instance through the
-/// placement's transform, any other entity's through its own (or none), triangles flipped under a mirroring transform
-/// so fronts stay counter-clockwise. Surfaces are the world's indices, named.
+/// placement's transform, any other entity's through its own (or none), triangles as they are. A mirrored or sheared
+/// transform is refused (`bake-nonrigid` makes them rigid first). Surfaces are the world's indices, named.
 pub(super) fn world_items(world: &World) -> Result<Vec<ViewerItem>> {
     items(world, None)
 }
