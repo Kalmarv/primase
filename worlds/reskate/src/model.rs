@@ -154,6 +154,9 @@ pub struct MapObject {
     pub collision_mode: &'static str,
     pub collision_packed: i32,
     pub grind_source: Option<String>,
+    /// How many of Studio's 200 m cells the object's box meets ([`studio_cells`]): Studio cuts an object at their
+    /// borders into entities of their own, each taking a cull ID. 1 where the box is not known.
+    pub cells: u32,
 }
 
 impl MapObject {
@@ -173,7 +176,15 @@ impl MapObject {
             collision_mode: "none",
             collision_packed: 32,
             grind_source: None,
+            cells: 1,
         }
+    }
+
+    /// The object with [`Self::cells`] counted from its positions (flat xyz, in the frame of `at`).
+    #[must_use]
+    pub fn meeting(mut self, pos: &[f32], at: Vec3) -> MapObject {
+        self.cells = cells_met(pos, at);
+        self
     }
 
     /// Studio's 12 numbers for a z-up basis and position: conv(v) = (x, z, -y).
@@ -224,4 +235,29 @@ pub fn content_key(parts: &[SrcPart]) -> [u8; 16] {
     let mut k = [0u8; 16];
     k.copy_from_slice(&d[..16]);
     k
+}
+
+/// Studio's WorldPartition cell, in metres. Its grid's corner (-4800 m) is a multiple of it, so in the map's frame a
+/// cell is `floor(x / 200)` along x and y.
+pub const STUDIO_CELL: f32 = 200.0;
+
+/// How many Studio cells the map-frame box from `lo` to `hi` (x, y) meets.
+pub fn studio_cells(lo: [f32; 2], hi: [f32; 2]) -> u32 {
+    let span = |a: f32, b: f32| ((b / STUDIO_CELL).floor() - (a / STUDIO_CELL).floor()).max(0.0) as u32 + 1;
+    span(lo[0], hi[0]) * span(lo[1], hi[1])
+}
+
+/// [`studio_cells`] of positions (flat xyz) moved by `at`; 1 without positions.
+pub fn cells_met(pos: &[f32], at: Vec3) -> u32 {
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for v in pos.as_chunks::<3>().0 {
+        for k in 0..2 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    if lo[0] > hi[0] {
+        return 1;
+    }
+    studio_cells([lo[0] + at.x, lo[1] + at.y], [hi[0] + at.x, hi[1] + at.y])
 }

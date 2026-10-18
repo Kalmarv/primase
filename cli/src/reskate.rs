@@ -40,9 +40,11 @@ pub fn writer(out: &Path, args: &[String]) -> Result<Box<dyn Writer>> {
                     .map_err(|_| "reskate: --min-instances is a number")?
             }
             "--blend-objects" => {
-                options.blend_objects = value()?
-                    .parse()
-                    .map_err(|_| "reskate: --blend-objects is a number")?
+                options.blend_objects = Some(
+                    value()?
+                        .parse()
+                        .map_err(|_| "reskate: --blend-objects is a number")?,
+                )
             }
             "--blend-grid" => {
                 options.blend_grid = value()?

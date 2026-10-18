@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::Result;
 use crate::glb::{self, GlbPrim};
-use crate::model::MapObject;
+use crate::model::{MapObject, cells_met};
 use crate::scene::{SnapMode, SnapSpec, SurfaceTable, WaterQuad};
 use primase_meshops::vector::Vec3;
 
@@ -314,6 +314,10 @@ impl<'a> Collision<'a> {
             local[v + 1] = pos[v + 1] - origin.y;
             local[v + 2] = pos[v + 2] - origin.z;
         }
+        let cells = cells_met(
+            &local,
+            Vec3::new(origin.x + self.off_x, origin.y + self.off_y, 0.0),
+        );
         let file = format!("{name}.glb");
         files.insert(
             file.clone(),
@@ -330,6 +334,7 @@ impl<'a> Collision<'a> {
             )?,
         );
         let mut ob = MapObject::new(name.to_owned(), self.at(origin));
+        ob.cells = cells;
         ob.collision_mesh = Some(format!("meshes/{file}"));
         ob.render = false;
         ob.collision_mode = "hull";
@@ -679,6 +684,7 @@ impl<'a> Collision<'a> {
                 };
                 let file = format!("{stem_c}.glb");
                 let tris = (i.len() / 3) as i64;
+                let cells = cells_met(&p, Vec3::new(origin.x + self.off_x, origin.y + self.off_y, 0.0));
                 files.insert(
                     file.clone(),
                     glb::write(
@@ -694,6 +700,7 @@ impl<'a> Collision<'a> {
                     )?,
                 );
                 let mut ob = MapObject::new(stem_c, self.at(origin));
+                ob.cells = cells;
                 ob.collision_mesh = Some(format!("meshes/{file}"));
                 ob.render = false;
                 ob.collision_mode = if water { "water" } else { "triangle_mesh" };

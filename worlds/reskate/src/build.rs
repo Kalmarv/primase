@@ -35,8 +35,9 @@ pub struct BuildOptions {
     pub min_instance_tris: i64,
     pub overlay_step: f32,
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
-    /// and takes a cull ID: released ReSkate has 40,000, so a map near that should lower it).
-    pub blend_objects: usize,
+    /// and takes a cull ID). `None`: the level's share of ReSkate 2.1.0-pre's cull-ID pool less what the rest of the
+    /// map takes ([`crate::map::CULL_ID_POOL`]).
+    pub blend_objects: Option<usize>,
     /// The grid the blend-chain objects are cut on ([`crate::map::WriterOptions::blend_grid`]): Studio's 200 m
     /// WorldPartition cell by default.
     pub blend_grid: f32,
@@ -69,7 +70,7 @@ impl Default for BuildOptions {
             min_instances: 3,
             min_instance_tris: 150,
             overlay_step: 0.004,
-            blend_objects: 1000,
+            blend_objects: None,
             blend_grid: 200.0,
             piece_log: false,
             limit: 4780.0,

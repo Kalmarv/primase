@@ -39,8 +39,8 @@ pub struct WriterOptions {
     pub overlay_step: f32,
     /// The most objects the writer adds to draw blend-chain overlays in chain order (one per tile, dominant axis and
     /// chain rank: [`crate::blend_order`]); past it a tile's chain overlays stay in its mesh, in an unstable order.
-    /// 0: none added.
-    pub blend_objects: usize,
+    /// 0: none added. `None`: the level's share of the cull-ID pool less the rest of the map ([`CULL_ID_POOL`]).
+    pub blend_objects: Option<usize>,
     /// The grid the blend-chain objects are cut on, in metres ([`blend_order::split_by_cell`]): Studio's
     /// WorldPartition cell (200) or a size dividing it. Studio cuts an object crossing a cell border into pieces with
     /// bounds of their own, which sort by view depth and swap chain ranks; cut here, every rank of a (cell, axis) is
@@ -111,14 +111,31 @@ pub struct WriteResult {
 /// A blend-chain object's place: its grid cell (column, row), dominant axis and chain rank.
 type ChainKey = ((i32, i32), u8, u8);
 
-/// A tile's blend-chain overlays as objects of their own ([`MapWriter::chain_layers`]): the parts of each (axis,
-/// rank), and each axis's lift step.
-#[derive(Debug, Default)]
-struct ChainLayers {
-    /// Per (grid cell, axis, rank): the parts.
-    groups: BTreeMap<ChainKey, BTreeMap<usize, Acc>>,
-    steps: BTreeMap<u8, f32>,
+/// A tile's blend-chain overlays written in both forms [`MapWriter::finish`] chooses between in key order
+/// ([`MapWriter::chain_candidates`]): objects of their own ([`crate::blend_order`]) or one plain object. Only the
+/// records stay in memory; the form not taken has its files deleted.
+#[derive(Debug)]
+struct PendingChain {
+    /// The chain form: its objects and their files.
+    objects: Vec<MapObject>,
+    files: Vec<String>,
+    /// The plain form: its objects (a section per material) and its file.
+    plain: Vec<MapObject>,
+    plain_file: String,
+    /// What the chain form counts in the stats: objects (one per cell, axis and rank), lift steps widened past
+    /// [`blend_order::LIFT_STEP`] and the largest, overlay triangles and those clipped at the grid's borders.
+    groups: usize,
+    widened: usize,
+    max_step: f32,
+    tris: usize,
+    clipped: usize,
 }
+
+/// ReSkate 2.1.0-pre's cull-ID pool per spatial queue (`SpatialQueryManager.InitialCullIdListSize`).
+pub const CULL_ID_POOL: usize = 262_144;
+
+/// The share of [`CULL_ID_POOL`] a map may fill (a 20% margin).
+pub const CULL_ID_SHARE: f64 = 0.8;
 
 /// One merged part: its geometry and its pieces (one per append).
 #[derive(Clone, Debug, Default)]
@@ -499,6 +516,8 @@ pub struct MapWriter {
     prop_parts: PropParts,
     water_parts: PropParts,
     prop_hulls: Vec<Hull>,
+    /// Tiles' chain overlays waiting for finish, by (row, column).
+    pending_chains: BTreeMap<(i32, i32), PendingChain>,
     piece_log: Option<Vec<PieceRec>>,
     /// Mesh files (meshes/<name>), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
@@ -511,6 +530,8 @@ struct Proto {
     info: usize,
     materials: Vec<String>,
     origins: Vec<Option<[f32; 3]>>,
+    /// Each primitive's local box (`None`: no positions), for the Studio cells a placement meets.
+    boxes: Vec<Option<(Vec3, Vec3)>>,
     area: Option<HashMap<usize, f64>>,
 }
 
@@ -561,16 +582,22 @@ impl MapWriter {
             prop_parts: BTreeMap::new(),
             water_parts: BTreeMap::new(),
             prop_hulls: Vec::new(),
+            pending_chains: BTreeMap::new(),
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
     }
 
-    /// Take a tile's blend-chain overlays out of its parts as objects of their own ([`blend_order`]): per grid cell
-    /// ([`WriterOptions::blend_grid`]), dominant axis and chain rank, every rank of a (cell, axis) padded to the box
-    /// of all of them, with each axis's lift step for the tile's translation `at`. Leaves them in the tile (counted) when the objects would pass the cap or an axis has
-    /// no lift step there.
-    fn chain_layers(&mut self, parts: &mut BTreeMap<usize, Acc>, at: Vec3) -> Result<ChainLayers> {
+    /// Take a tile's blend-chain overlays out of its parts and write both forms finish may choose between
+    /// ([`PendingChain`]): objects of their own per grid cell ([`WriterOptions::blend_grid`]), dominant axis and chain
+    /// rank, and one plain object. Leaves them in the tile (counted) when an axis has no lift step at the tile's
+    /// translation `at`; `None` then, or when the tile has none.
+    fn chain_candidates(
+        &mut self,
+        parts: &mut BTreeMap<usize, Acc>,
+        at: Vec3,
+        tile: &str,
+    ) -> Result<Option<PendingChain>> {
         let mut ranks: Vec<(usize, u8)> = Vec::new();
         for &k in parts.keys() {
             let m = self.ctx.mats.by_id(k);
@@ -581,7 +608,7 @@ impl MapWriter {
             }
         }
         if ranks.is_empty() {
-            return Ok(ChainLayers::default());
+            return Ok(None);
         }
         let mut groups: BTreeMap<ChainKey, BTreeMap<usize, Geometry>> = BTreeMap::new();
         let (mut tris, mut clipped) = (0, 0);
@@ -609,32 +636,51 @@ impl MapWriter {
                 }
             }
         }
-        let st = &mut self.r.blend;
-        st.cap = self.o.blend_objects;
-        if st.objects + groups.len() > self.o.blend_objects {
-            st.tiles_shared += 1;
-            st.overlay_triangles_shared += tris;
-            return Ok(ChainLayers::default());
-        }
         let axes: BTreeSet<u8> = groups.keys().map(|&(_, axis, _)| axis).collect();
         let mut steps = BTreeMap::new();
         for &axis in &axes {
             let Some(step) = blend_order::lift_step(at, axis) else {
+                let st = &mut self.r.blend;
                 st.tiles_unliftable += 1;
                 st.overlay_triangles_unliftable += tris;
-                return Ok(ChainLayers::default());
+                return Ok(None);
             };
             steps.insert(axis, step);
         }
-        for &step in steps.values() {
-            st.steps_widened += usize::from(step > blend_order::LIFT_STEP);
-            st.max_step_m = st.max_step_m.max(step);
+        let seq: BTreeMap<usize, usize> = ranks.iter().map(|&(k, _)| (k, parts[&k].seq)).collect();
+        for (k, _) in ranks {
+            parts.remove(&k);
         }
-        st.objects += groups.len();
-        st.tiles_split += 1;
-        st.overlay_triangles_split += tris;
-        st.grid_m = self.o.blend_grid;
-        st.triangles_clipped += clipped;
+        let acc = |k: usize, h: Geometry| Acc {
+            seq: seq[&k],
+            pos: h.pos,
+            nrm: h.nrm,
+            uv: h.uv,
+            blend: h.blend,
+            idx: h.idx,
+            ..Acc::default()
+        };
+        // the plain form: every rank's part of a material merged, unpadded, at the tile's translation
+        let mut merged: BTreeMap<usize, Acc> = BTreeMap::new();
+        for group in groups.values() {
+            for (&k, g) in group {
+                let m = merged.entry(k).or_insert_with(|| acc(k, Geometry::default()));
+                let base = (m.pos.len() / 3) as u32;
+                m.pos.extend_from_slice(&g.pos);
+                m.nrm.extend_from_slice(&g.nrm);
+                m.uv.extend_from_slice(&g.uv);
+                m.blend.extend_from_slice(&g.blend);
+                m.idx.extend(g.idx.iter().map(|i| base + i));
+            }
+        }
+        let mats = &self.ctx.mats;
+        let order = draw_order(&merged, |k| draw_class(mats.by_id(k)), &[]);
+        let (pr, _) = prims(&merged, mats, &order);
+        drop(merged);
+        let plain_stem = format!("{tile}_overlays");
+        let plain = self.write_mesh(&plain_stem, &pr, at)?;
+        // the chain form: every rank of a (cell, axis) padded to the box of all of them, into the rank's first part in
+        // draw order (first use)
         let boxes: BTreeSet<((i32, i32), u8)> = groups.keys().map(|&(cell, axis, _)| (cell, axis)).collect();
         for (cell, axis) in boxes {
             let span = (cell, axis, 0)..=(cell, axis, u8::MAX);
@@ -644,74 +690,110 @@ impl MapWriter {
                 continue;
             };
             for (_, g) in groups.range_mut(span) {
-                // into the rank's first part in draw order (first use)
-                let first = *g
-                    .keys()
-                    .min_by_key(|&k| parts[k].seq)
-                    .expect("a group has a part");
+                let first = *g.keys().min_by_key(|&k| seq[k]).expect("a group has a part");
                 blend_order::pad(g.get_mut(&first).expect("its part"), lo, hi, axis);
             }
         }
-        let groups = groups
-            .into_iter()
-            .map(|(key, g)| {
-                let accs = g
-                    .into_iter()
-                    .map(|(k, h)| {
-                        let acc = Acc {
-                            seq: parts[&k].seq,
-                            pos: h.pos,
-                            nrm: h.nrm,
-                            uv: h.uv,
-                            blend: h.blend,
-                            idx: h.idx,
-                            ..Acc::default()
-                        };
-                        (k, acc)
-                    })
-                    .collect();
-                (key, accs)
-            })
-            .collect();
-        for (k, _) in ranks {
-            parts.remove(&k);
-        }
-        Ok(ChainLayers { groups, steps })
-    }
-
-    /// Write a tile's [`Self::chain_layers`]: one GLB and object per (cell, axis, rank), named
-    /// `<tile>_v<axis><rank>` (with a grid: `<tile>_c<column>_<row>_v<axis><rank>`), placed at the tile's translation
-    /// `at` lifted along the axis by the rank's lift.
-    fn emit_chain_layers(&mut self, layers: &ChainLayers, tile: &str, at: Vec3) -> Result<()> {
-        for (&((cx, cy), axis, rank), group) in &layers.groups {
-            let step = layers.steps[&axis];
+        let n = groups.len();
+        let mut objects = Vec::new();
+        let mut files = Vec::new();
+        for (((cx, cy), axis, rank), group) in groups {
+            let group: BTreeMap<usize, Acc> = group.into_iter().map(|(k, h)| (k, acc(k, h))).collect();
             let mats = &self.ctx.mats;
-            let order = draw_order(group, |k| draw_class(mats.by_id(k)), &[]);
-            let (pr, lifts) = prims(group, mats, &order);
-            let p = at + blend_order::axis_vector(axis) * blend_order::lift(rank, step);
-            let rows = MapObject::translation(p.x, p.y, p.z);
+            let order = draw_order(&group, |k| draw_class(mats.by_id(k)), &[]);
+            let (pr, _) = prims(&group, mats, &order);
             let stem = if self.o.blend_grid > 0.0 {
                 format!("{tile}_c{cx}_{cy}_v{axis}{rank}")
             } else {
                 format!("{tile}_v{axis}{rank}")
             };
-            let file = format!("{stem}.glb");
-            record_lifts(&mut self.r, format!("meshes/{file}"), lifts);
-            self.mesh_files.insert(file.clone(), glb::write(&stem, &pr)?);
-            for (i, q) in pr.iter().enumerate() {
-                let name = if pr.len() == 1 {
-                    stem.clone()
-                } else {
-                    format!("{stem} / section {}", i + 1)
-                };
-                let mut ob = MapObject::new(name, rows);
-                ob.mesh = Some(format!("meshes/{file}"));
-                ob.primitive = i;
-                ob.material = q.material.clone();
-                self.objects.push(ob);
+            let lifted = at + blend_order::axis_vector(axis) * blend_order::lift(rank, steps[&axis]);
+            objects.extend(self.write_mesh(&stem, &pr, lifted)?);
+            files.push(format!("{stem}.glb"));
+        }
+        Ok(Some(PendingChain {
+            objects,
+            files,
+            plain,
+            plain_file: format!("{plain_stem}.glb"),
+            groups: n,
+            widened: steps.values().filter(|&&s| s > blend_order::LIFT_STEP).count(),
+            max_step: steps.values().copied().fold(0.0, f32::max),
+            tris,
+            clipped,
+        }))
+    }
+
+    /// Decides every tile's pending chain overlays in key order (row, then column): its objects of their own while
+    /// they fit the budget, else its plain object (drawn in an unstable order); the form not taken is deleted. The
+    /// budget is `--blend-objects` when given, else the level's share of the cull-ID pool ([`CULL_ID_POOL`] x
+    /// [`CULL_ID_SHARE`]) less `other`, the cull IDs the rest of the map takes; with the pool's budget one ID is held
+    /// back for every tile not yet decided, so the plain fallbacks always fit.
+    fn emit_chains(&mut self, other: usize) -> Result<()> {
+        let pending = std::mem::take(&mut self.pending_chains);
+        let from_pool = self.o.blend_objects.is_none();
+        let budget = match self.o.blend_objects {
+            Some(cap) => cap,
+            None => ((CULL_ID_POOL as f64 * CULL_ID_SHARE) as usize).saturating_sub(other),
+        };
+        let st = &mut self.r.blend;
+        st.cap = budget;
+        st.cap_from_pool = from_pool;
+        st.other_cull_ids = other;
+        st.grid_m = self.o.blend_grid;
+        let mut left = pending.len();
+        for (_, p) in pending {
+            left -= 1;
+            let held = if from_pool { left } else { 0 };
+            let st = &mut self.r.blend;
+            if st.objects + p.groups + held <= budget {
+                st.objects += p.groups;
+                st.tiles_split += 1;
+                st.overlay_triangles_split += p.tris;
+                st.triangles_clipped += p.clipped;
+                st.steps_widened += p.widened;
+                st.max_step_m = st.max_step_m.max(p.max_step);
+                self.objects.extend(p.objects);
+                self.discard_file(&p.plain_file);
+            } else {
+                st.tiles_shared += 1;
+                st.overlay_triangles_shared += p.tris;
+                self.objects.extend(p.plain);
+                for f in &p.files {
+                    self.discard_file(f);
+                }
             }
         }
         Ok(())
+    }
+
+    /// Drops a mesh file written for a form finish did not take.
+    fn discard_file(&mut self, file: &str) {
+        self.mesh_files.remove(file);
+    }
+
+    /// Writes `meshes/<stem>.glb` and returns an object per primitive (`<stem>`, or `<stem> / section N`) at
+    /// translation `at`, each counting the Studio cells it meets.
+    fn write_mesh(&mut self, stem: &str, pr: &[GlbPrim], at: Vec3) -> Result<Vec<MapObject>> {
+        let rows = MapObject::translation(at.x, at.y, at.z);
+        let file = format!("{stem}.glb");
+        self.mesh_files.insert(file.clone(), glb::write(stem, pr)?);
+        Ok(pr
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let name = if pr.len() == 1 {
+                    stem.to_owned()
+                } else {
+                    format!("{stem} / section {}", i + 1)
+                };
+                let mut ob = MapObject::new(name, rows).meeting(&q.pos, at);
+                ob.mesh = Some(format!("meshes/{file}"));
+                ob.primitive = i;
+                ob.material = q.material.clone();
+                ob
+            })
+            .collect())
     }
 
     /// OverlayStack over a set of merged parts; logs the overlay pieces with --piece-log.
@@ -997,7 +1079,7 @@ impl MapWriter {
         record_lifts(&mut self.r, format!("meshes/{stem}.glb"), lifts);
         self.mesh_files
             .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
-        let origins = pr
+        let boxes: Vec<Option<(Vec3, Vec3)>> = pr
             .iter()
             .map(|p| {
                 let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -1006,9 +1088,16 @@ impl MapWriter {
                     lo = lo.min(q);
                     hi = hi.max(q);
                 }
+                (!p.pos.is_empty()).then_some((lo, hi))
+            })
+            .collect();
+        let origins = boxes
+            .iter()
+            .map(|b| {
+                let (lo, hi) = (*b)?;
                 let half = (hi - lo) * 0.5;
                 let c = (hi + lo) * 0.5;
-                (!p.pos.is_empty() && half.x.max(half.y.max(half.z)) <= 32.0).then_some([c.x, c.z, -c.y])
+                (half.x.max(half.y.max(half.z)) <= 32.0).then_some([c.x, c.z, -c.y])
             })
             .collect();
         Ok(Proto {
@@ -1018,6 +1107,7 @@ impl MapWriter {
                 .map(|p| p.material.clone().unwrap_or_default())
                 .collect(),
             origins,
+            boxes,
             area,
         })
     }
@@ -1246,6 +1336,19 @@ impl MapWriter {
                                 format!("{iname} / section {}", i + 1)
                             };
                             let mut ob = MapObject::new(name, rows);
+                            if let Some((lo, hi)) = pr.boxes[i] {
+                                // the placed box: its eight corners through the placement
+                                let (mut a, mut b) = ([f32::MAX; 2], [f32::MIN; 2]);
+                                for c in 0..8 {
+                                    let x = if c & 1 != 0 { hi.x } else { lo.x };
+                                    let y = if c & 2 != 0 { hi.y } else { lo.y };
+                                    let z = if c & 4 != 0 { hi.z } else { lo.z };
+                                    let w = s.pos + off + s.ex * x + s.ey * y + s.ez * z;
+                                    a = [a[0].min(w.x), a[1].min(w.y)];
+                                    b = [b[0].max(w.x), b[1].max(w.y)];
+                                }
+                                ob.cells = crate::model::studio_cells(a, b);
+                            }
                             ob.mesh = Some(format!("meshes/{file}"));
                             ob.primitive = i;
                             ob.material = Some(mat.clone());
@@ -1365,29 +1468,49 @@ impl MapWriter {
                         origin.y + off.y,
                         if off.z != 0.0 { origin.z + off.z } else { origin.z },
                     );
-                    let layers = self.chain_layers(&mut parts, at)?;
+                    // the chain overlays' materials and triangles count as the tile's, whichever form finish takes
+                    let mut chained: BTreeMap<usize, (i64, i64, f64)> = BTreeMap::new();
+                    for (&k, a) in &parts {
+                        if self
+                            .ctx
+                            .mats
+                            .by_id(k)
+                            .vertex_blend
+                            .and_then(|v| v.chain_rank())
+                            .is_some()
+                        {
+                            chained.insert(
+                                k,
+                                (
+                                    (a.idx.len() / 3) as i64,
+                                    (a.pos.len() / 3) as i64,
+                                    area(&a.pos, &a.idx),
+                                ),
+                            );
+                        }
+                    }
+                    let tile = format!("t_{tx}_{ty}");
+                    let chain = self.chain_candidates(&mut parts, at, &tile)?;
+                    if chain.is_none() {
+                        // left in the tile: counted with its parts below
+                        chained.clear();
+                    }
                     let mats = &self.ctx.mats;
                     let (pr, lifts) = prims(&parts, mats, &order);
-                    let rows = MapObject::translation(at.x, at.y, at.z);
-                    let file = to.mesh.clone().expect("mesh");
-                    record_lifts(&mut self.r, format!("meshes/{file}"), lifts);
-                    self.mesh_files
-                        .insert(file.clone(), glb::write(&format!("t_{tx}_{ty}"), &pr)?);
-                    for (i, p) in pr.iter().enumerate() {
-                        let name = if pr.len() == 1 {
-                            format!("t_{tx}_{ty}")
-                        } else {
-                            format!("t_{tx}_{ty} / section {}", i + 1)
-                        };
-                        let mut ob = MapObject::new(name, rows);
-                        ob.mesh = Some(format!("meshes/{file}"));
-                        ob.primitive = i;
-                        ob.material = p.material.clone();
-                        self.objects.push(ob);
-                    }
+                    record_lifts(&mut self.r, format!("meshes/{tile}.glb"), lifts);
+                    let obs = self.write_mesh(&tile, &pr, at)?;
+                    self.objects.extend(obs);
                     to.parts = pr.len();
-                    self.emit_chain_layers(&layers, &format!("t_{tx}_{ty}"), at)?;
-                    for (k, a) in parts.iter().chain(layers.groups.values().flatten()) {
+                    for (&k, &(t, v, ar)) in &chained {
+                        to.tris += t;
+                        to.verts += v;
+                        *self.mat_tris.entry(k).or_default() += t;
+                        self.mat_used.insert(k);
+                        if let Some(ia) = &mut inst_area {
+                            *ia.entry(k).or_default() += ar;
+                        }
+                    }
+                    for (k, a) in &parts {
                         to.tris += (a.idx.len() / 3) as i64;
                         to.verts += (a.pos.len() / 3) as i64;
                         *self.mat_tris.entry(*k).or_default() += (a.idx.len() / 3) as i64;
@@ -1397,6 +1520,9 @@ impl MapWriter {
                         }
                     }
                     self.r.merged_tris += to.tris;
+                    if let Some(c) = chain {
+                        self.pending_chains.insert((ty, tx), c);
+                    }
                 }
                 if let Some(ia) = inst_area {
                     self.tile_area.insert((tx, ty), ia);
@@ -2145,6 +2271,19 @@ impl MapWriter {
             None
         };
 
+        // the chain overlays, within what the rest of the level leaves of the cull-ID pool: an ID per entity Studio
+        // makes (each object once per 200 m cell it meets) and per light
+        let kept_lights = keep_lights(&x.lights, o.lights_max_per_cell);
+        let other = self
+            .objects
+            .iter()
+            .chain(&col.objects)
+            .chain(&water)
+            .map(|ob| ob.cells as usize)
+            .sum::<usize>()
+            + kept_lights.len();
+        self.emit_chains(other)?;
+
         // textures
         self.ctx.tex.finish();
         if o.tex_budget > 0 {
@@ -2176,7 +2315,6 @@ impl MapWriter {
         cobjs.sort_by(|a, b| a.name.cmp(&b.name));
         let obj_arr: Vec<MapObject> = objs.into_iter().chain(cobjs).chain(water.clone()).collect();
         self.r.object_records = obj_arr.len();
-        let kept_lights = keep_lights(&x.lights, o.lights_max_per_cell);
         self.r.lights_written = kept_lights.len();
         self.r.lights_dropped = x.lights.len() - kept_lights.len();
 

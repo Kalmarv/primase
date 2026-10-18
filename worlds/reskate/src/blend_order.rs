@@ -34,14 +34,20 @@ const PAD: f32 = 0.01;
 /// What the split did over a map (`stats.json`'s `blend_order`).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Stats {
-    /// The cap on objects added ([`crate::map::WriterOptions::blend_objects`]).
+    /// The budget of objects added: `--blend-objects` ([`crate::map::WriterOptions::blend_objects`]), or the
+    /// level's share of the cull-ID pool less the IDs the rest of the map takes ([`crate::map::CULL_ID_POOL`]).
     pub cap: usize,
+    /// Whether the budget came from the cull-ID pool (not `--blend-objects`).
+    pub cap_from_pool: bool,
+    /// The cull IDs the rest of the map takes, as counted for the budget: an ID per object per Studio cell it
+    /// meets, and per light.
+    pub other_cull_ids: usize,
     /// Objects added: one per (tile, axis, rank), each a MeshSet of its own.
     pub objects: usize,
     pub tiles_split: usize,
     pub overlay_triangles_split: usize,
-    /// Tiles whose chain overlays stayed in the tile mesh (drawn in an unstable order) because the cap was reached,
-    /// and their overlay triangles.
+    /// Tiles past the budget, whose chain overlays are one plain object each (`<tile>_overlays`, drawn in an unstable
+    /// order), and their overlay triangles.
     pub tiles_shared: usize,
     pub overlay_triangles_shared: usize,
     /// Tiles whose chain overlays stayed in the tile mesh because no lift up to [`MAX_LIFT_STEP`] stays distinct as
