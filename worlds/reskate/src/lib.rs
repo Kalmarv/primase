@@ -20,6 +20,7 @@ pub mod postcompile;
 pub mod records;
 pub mod scene;
 pub mod texture;
+pub mod vertex_alpha;
 
 use std::path::PathBuf;
 
@@ -28,6 +29,10 @@ pub use build::{BuildOptions, BuildReport, build, leave_out_optional, lod_choice
 /// The passes of the ReSkate target, by name.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("lower-layered-reskate", layered::lower_layered_reskate);
+    reg.register("lower-vertex-alpha-reskate", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(vertex_alpha::LowerVertexAlphaReskate)),
+    });
 }
 
 #[derive(Debug, thiserror::Error)]
