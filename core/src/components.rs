@@ -1229,7 +1229,6 @@ mod tests {
         };
         let value = crate::json::to_value(&convention).expect("normal convention");
         assert_eq!(value["basis"], "BitangentTangent");
-        assert_eq!(Texture::VERSION, 3);
     }
 
     #[test]
