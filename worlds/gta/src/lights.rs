@@ -1,6 +1,8 @@
-//! `lower-gta-lights{hour,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as placed
-//! `core.light` entities, each with its record as `gta.light` (its hours among them: a viewer with a time of day uses
-//! them), every light or, given `hour`, only those on then, and, given a region, those inside it (GTA ground
+//! `lower-gta-lights{hour,state,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
+//! placed `core.light` entities, each with its record as `gta.light` (its hours among them), every light or, given
+//! `hour`, only those on then, or, with `state=true` (the hour kept as state), every light with its hours as a
+//! `core.condition` on the global `gta.hour` axis ([`crate::region::hour_axis`], made when the region has none; a light
+//! on every hour, or whose mask is 0 (always on, as GTA reads it), has none), and, given a region, those inside it (GTA ground
 //! coordinates; the light's own position decides, as the earlier exporter did). Runs on the read world after the selection (map state and hour
 //! resolved, region rules applied), so each light belongs to a placement that is drawn.
 //!
@@ -23,6 +25,7 @@
 //!
 //! An hour mask of zero means always on, as GTA does.
 use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::state::{Clause, Condition, Literal};
 use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
 
 use crate::components::{GtaLight, GtaLights, GtaSkeleton};
@@ -34,6 +37,8 @@ use crate::region::GTA;
 pub struct LowerGtaLights {
     /// Only the lights on at this hour; `None`: every light (each keeps its hours in its `gta.light`).
     pub hour: Option<u8>,
+    /// Every light with its hours as a condition on `gta.hour` (the hour kept as state); not with `hour`.
+    pub state: bool,
     /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every light of the placements.
     pub region: Option<[f32; 4]>,
 }
@@ -46,7 +51,7 @@ impl LowerGtaLights {
                 .transpose()
         };
         for k in o.keys() {
-            if !["hour", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+            if !["hour", "state", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
@@ -59,8 +64,17 @@ impl LowerGtaLights {
             [None, None, None, None] => None,
             _ => return Err("x0, y0, x1 and y1 go together".into()),
         };
+        let state = match o.get("state").map(String::as_str) {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(v) => return Err(format!("state: not true or false: {v}")),
+        };
+        if state && hour.is_some() {
+            return Err("hour and state=true: the hour is either resolved or kept".into());
+        }
         Ok(LowerGtaLights {
             hour: hour.map(|h| h as u8),
+            state,
             region,
         })
     }
@@ -93,6 +107,9 @@ impl Pass for LowerGtaLights {
         if let Some(h) = self.hour {
             o.insert("hour".to_string(), h.to_string());
         }
+        if self.state {
+            o.insert("state".to_string(), "true".to_string());
+        }
         if let Some([x0, y0, x1, y1]) = self.region {
             for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
                 o.insert(k.to_string(), v.to_string());
@@ -107,6 +124,8 @@ impl Pass for LowerGtaLights {
             "core.name",
             "core.source",
             "gta.light",
+            "core.condition",
+            "core.state_axis",
         ]
     }
     fn approximates(&self) -> &'static str {
@@ -221,17 +240,33 @@ impl Pass for LowerGtaLights {
                     GtaLight(l.clone()),
                     format!("{name} light {k}"),
                     format!("{source}/light {k}"),
+                    hours,
                 ));
             }
         }
         log.count("lights placed", made.len() as u64);
-        for (t, l, g, n, s) in made {
+        // the hour as state: the axis (made when the region has none) and each light's hours on it
+        let axis = self.state.then(|| crate::region::hour_axis(w));
+        for (t, l, g, n, s, hours) in made {
             let e: Entity = w.spawn();
             w.insert(e, t);
             w.insert(e, l);
             w.insert(e, g);
             w.insert(e, Name(n));
             w.insert(e, Source(s));
+            if let Some(axis) = axis
+                && hours != 0
+                && hours != 0x00FF_FFFF
+            {
+                w.insert(
+                    e,
+                    Condition(vec![Clause(vec![Literal {
+                        axis,
+                        values: u64::from(hours),
+                    }])]),
+                );
+                log.count("lights on some hours only: conditioned on gta.hour", 1);
+            }
         }
         Ok(())
     }
@@ -292,6 +327,7 @@ mod tests {
         let mut log = PassLog::default();
         super::LowerGtaLights {
             hour: None,
+            state: false,
             region: None,
         }
         .run(&mut w, &mut log)
@@ -313,5 +349,54 @@ mod tests {
                 .iter()
                 .any(|(k, &n)| k.contains("x 1,771") && n == 2)
         );
+    }
+
+    /// The hour kept as state: a street lamp's light (hours 0xF0003F: 00-05 and 20-23) is conditioned on a new
+    /// gta.hour axis; one always on (mask 0) and one on every hour are not.
+    #[test]
+    fn lights_keep_their_hours_as_conditions() {
+        use primase_core::state::{Condition, StateAxis};
+        let mut w = World::new();
+        let proto = w.spawn();
+        let record = |time_flags| LightAttr {
+            intensity: 1.0,
+            falloff: 10.0,
+            kind: 1,
+            time_flags,
+            direction: [0.0, 0.0, -1.0],
+            ..LightAttr::default()
+        };
+        w.insert(
+            proto,
+            GtaLights {
+                records: vec![record(0x00F0_003F), record(0), record(0x00FF_FFFF)],
+            },
+        );
+        let placed = w.spawn();
+        w.insert(placed, Transform::IDENTITY);
+        w.insert(
+            placed,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let mut log = PassLog::default();
+        super::LowerGtaLights {
+            hour: None,
+            state: true,
+            region: None,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
+        let axes: Vec<_> = w.iter::<StateAxis>().map(|(e, a)| (e, a.key.clone())).collect();
+        assert_eq!(axes.len(), 1);
+        assert_eq!(axes[0].1, "gta.hour");
+        let conditions: Vec<&Condition> = w.iter::<Condition>().map(|(_, c)| c).collect();
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0].0[0].0[0].axis, axes[0].0);
+        assert_eq!(conditions[0].0[0].0[0].values, 0x00F0_003F);
+        assert_eq!(w.iter::<Light>().count(), 3);
+        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
     }
 }

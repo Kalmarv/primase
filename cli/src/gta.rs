@@ -33,11 +33,12 @@ fn region_names() -> String {
     REGIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
 }
 
-/// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--map online|story] [--hour H] [--min-size M]
-/// [--max-priority N] [--interiors none|all] [--reach M]`; `--map online`, `--min-size` 0.5, `--reach` 600 and
-/// `--interiors none` unless given.
+/// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--map online|story] [--hour H | --keep-hour]
+/// [--min-size M] [--max-priority N] [--interiors none|all] [--reach M]`; `--map online`, `--min-size` 0.5, `--reach`
+/// 600 and `--interiors none` unless given. `--keep-hour` keeps the hour as state (night by `gta.hour`).
 pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let mut interiors = false;
+    let mut keep_hour = false;
     let mut reach = REACH;
     let (mut dir, mut keys, mut region, mut map, mut hour, mut min_size, mut max_priority) =
         (None, None, None, Map::Online, None, None, None);
@@ -87,6 +88,7 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
                         .ok_or("gta: --hour is 0-23")?,
                 )
             }
+            "--keep-hour" => keep_hour = true,
             "--interiors" => {
                 interiors = match value()?.as_str() {
                     "none" => false,
@@ -122,7 +124,11 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let mut selection = Selection::new(region, map);
     selection.reach = reach;
     selection.min_size = MIN_SIZE;
+    if keep_hour && hour.is_some() {
+        return Err("gta: --hour and --keep-hour: the hour is either given or kept".into());
+    }
     selection.hour = hour;
+    selection.keep_hour = keep_hour;
     selection.interiors = interiors;
     if let Some(m) = min_size {
         selection.min_size = m;

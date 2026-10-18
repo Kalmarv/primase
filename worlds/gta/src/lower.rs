@@ -301,6 +301,100 @@ pub fn retain_primitives(mesh: &mut Mesh, mut keep: impl FnMut(&Primitive) -> bo
     (from.len() < n).then_some(from)
 }
 
+/// `lower-gta-pbr{night=state}`'s night copies ([`Night::State`]): every placed prototype whose meshes (its own and
+/// its LOD forms') draw a material with night-only geometry or night emission gets a copy ([`copy_prototype`]) whose
+/// meshes draw night copies of those materials (each shader's components copied, once per material); each placement
+/// of it gets, first in its `core.state_override`, a switch to the copy while `gta.hour` is a night hour. The night
+/// material copies, which the caller lowers for night, are returned. An error without the `gta.hour` axis (the
+/// selection keeps it: `resolve-state{keep=gta.hour}`).
+pub fn night_prototypes(w: &mut World, log: &mut PassLog) -> Result<BTreeSet<Entity>, String> {
+    use primase_core::state::{Clause, Literal, Override, StateAxis, StateOverride};
+    let night: BTreeSet<Entity> = classes(w)?
+        .into_iter()
+        .filter(|(_, c)| c.night_emissive || c.skip == Some(Skip::NightOnlyGeometry))
+        .map(|(e, _)| e)
+        .collect();
+    let meshes_of = |w: &World, p: Entity| -> Vec<Entity> {
+        std::iter::once(p)
+            .chain(
+                w.get::<Lods>(p)
+                    .into_iter()
+                    .flat_map(|l| l.forms.iter().map(|f| f.form)),
+            )
+            .collect()
+    };
+    let prototypes: BTreeSet<Entity> = w
+        .iter::<primase_core::Instance>()
+        .map(|(_, i)| i.prototype)
+        .collect();
+    let with_night: Vec<Entity> = prototypes
+        .into_iter()
+        .filter(|&p| {
+            meshes_of(w, p).into_iter().any(|m| {
+                w.get::<Mesh>(m).is_some_and(|mesh| {
+                    mesh.primitives()
+                        .iter()
+                        .any(|q| q.material.is_some_and(|x| night.contains(&x)))
+                })
+            })
+        })
+        .collect();
+    if with_night.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let axis = w
+        .iter::<StateAxis>()
+        .find(|(_, a)| a.key == "gta.hour")
+        .map(|(e, _)| e)
+        .ok_or("night=state: no gta.hour axis (the selection keeps it with resolve-state{keep=gta.hour})")?;
+    let mut copies: BTreeMap<Entity, Entity> = BTreeMap::new();
+    let mut night_copy: BTreeMap<Entity, Entity> = BTreeMap::new();
+    for p in with_night {
+        let copy = crate::components::copy_prototype(w, p);
+        if let Some(n) = w.get::<Name>(p).map(|n| format!("{} night", n.0)) {
+            w.insert(copy, Name(n));
+        }
+        for m in meshes_of(w, copy) {
+            let Some(mut mesh) = w.remove::<Mesh>(m) else {
+                continue;
+            };
+            for q in mesh.primitives_mut() {
+                let Some(mat) = q.material.filter(|x| night.contains(x)) else {
+                    continue;
+                };
+                let nm = *night_copy.entry(mat).or_insert_with(|| {
+                    let nm = w.spawn();
+                    w.copy_components(mat, nm);
+                    nm
+                });
+                q.material = Some(nm);
+            }
+            w.insert(m, mesh);
+        }
+        copies.insert(p, copy);
+        log.count("prototypes copied for the night (night=state)", 1);
+    }
+    let clause = Clause(vec![Literal {
+        axis,
+        values: u64::from(crate::pipeline::NIGHT_HOURS),
+    }]);
+    let placements: Vec<(Entity, Entity)> = w
+        .iter::<primase_core::Instance>()
+        .filter_map(|(e, i)| copies.get(&i.prototype).map(|&c| (e, c)))
+        .collect();
+    for (e, copy) in placements {
+        let mut list = w.remove::<StateOverride>(e).unwrap_or_default();
+        list.0.insert(0, (clause.clone(), Override::Prototype(copy)));
+        w.insert(e, list);
+        log.count("placements switching to their night copy by gta.hour", 1);
+    }
+    log.count(
+        "materials copied for the night (night=state)",
+        night_copy.len() as u64,
+    );
+    Ok(night_copy.into_values().collect())
+}
+
 /// The render mask bit of GTA's visible pass: a model whose mask lacks it is drawn only in other passes (shadows,
 /// reflections), as trees' shadow-casting models are (census of every live drawable).
 pub const VISIBLE_PASS: u16 = 1;
@@ -405,16 +499,38 @@ pub fn for_each_mesh(
 ///   ([`specular_texture`]), its specular and metallic-roughness texture; none for water.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LowerGtaPbr {
-    /// The world is lowered for night: night-only geometry kept and night emission on.
-    pub night: bool,
+    /// Day, night, or both as state.
+    pub night: Night,
+}
+
+/// Which of GTA's times `lower-gta-pbr` lowers for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Night {
+    /// Day: night-only geometry dropped, night emission off.
+    #[default]
+    Day,
+    /// Night: night-only geometry kept, night emission on.
+    Night,
+    /// Both, the hour kept as state: a prototype with night-only geometry or night emission gets a night copy (its
+    /// LOD forms with it) that keeps the geometry and draws with night copies of those materials (emission on); the
+    /// prototype itself is lowered for day, and each of its placements switches to the night copy while `gta.hour` is
+    /// a night hour ([`crate::pipeline::NIGHT_HOURS`]; a `core.state_override`, first in its list).
+    State,
 }
 
 impl LowerGtaPbr {
     pub fn from_options(o: &Options) -> Result<LowerGtaPbr, String> {
-        let mut night = false;
+        let mut night = Night::Day;
         for (k, v) in o.iter() {
             match k.as_str() {
-                "night" => night = v.parse().map_err(|_| format!("night: not true or false: {v}"))?,
+                "night" => {
+                    night = match v.as_str() {
+                        "false" => Night::Day,
+                        "true" => Night::Night,
+                        "state" => Night::State,
+                        _ => return Err(format!("night: not true, false or state: {v}")),
+                    }
+                }
                 _ => return Err(format!("unknown option {k}")),
             }
         }
@@ -428,18 +544,24 @@ impl Pass for LowerGtaPbr {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        if self.night {
-            o.insert("night".into(), "true".into());
+        match self.night {
+            Night::Day => {}
+            Night::Night => {
+                o.insert("night".into(), "true".into());
+            }
+            Night::State => {
+                o.insert("night".into(), "state".into());
+            }
         }
         o
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material", "core.draw_order"]
+        &["pbr.material", "core.draw_order", "core.state_override"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "gta.sources", "core.texture"]
+        &["core.mesh", "gta.sources", "core.texture", "core.lods"]
     }
     /// The meshes left with no primitive.
     fn removes(&self) -> &[&'static str] {
@@ -454,11 +576,17 @@ impl Pass for LowerGtaPbr {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         drop_hidden_models(w, log)?;
+        // the hour as state: night copies of the prototypes with night features, drawing night material copies
+        let night_mats = match self.night {
+            Night::State => night_prototypes(w, log)?,
+            _ => BTreeSet::new(),
+        };
+        let night_of = |e: &Entity| self.night == Night::Night || night_mats.contains(e);
         let classes = classes(w)?;
         let dropped: BTreeMap<Entity, Skip> = classes
             .iter()
             .filter_map(|(e, c)| c.skip.map(|s| (*e, s)))
-            .filter(|(_, s)| !(self.night && *s == Skip::NightOnlyGeometry))
+            .filter(|(e, s)| !(night_of(e) && *s == Skip::NightOnlyGeometry))
             .collect();
         for_each_mesh(w, |mesh| {
             Ok(retain_primitives(mesh, |p| {
@@ -554,7 +682,7 @@ impl Pass for LowerGtaPbr {
                     1,
                 ),
             }
-            let (mut m, map, distance) = self.material(s, c, log);
+            let (mut m, map, distance) = self.material(s, c, night_of(&e), log);
             if let Some(t) = distance {
                 let derived = match fields.get(&t) {
                     Some(d) => *d,
@@ -886,6 +1014,7 @@ impl LowerGtaPbr {
         &self,
         s: &GtaShader,
         c: &ShaderClass,
+        night: bool,
         log: &mut PassLog,
     ) -> (PbrMaterial, Option<SpecularMap>, Option<Entity>) {
         let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
@@ -948,7 +1077,7 @@ impl LowerGtaPbr {
                 1.0
             }
         };
-        if c.emissive && (!c.night_emissive || self.night) {
+        if c.emissive && (!c.night_emissive || night) {
             m.emissive = [1.0; 3];
             m.emissive_texture = m.base_color_texture;
             m.emissive_strength = scalar(s, "EmissiveMultiplier")
@@ -1471,6 +1600,98 @@ mod tests {
                 .get("primitives dropped: model not drawn in the visible pass (render mask)"),
             Some(&1)
         );
+    }
+
+    /// The hour as state: a lamp prototype (an emissivenight head, a default pole) gets a night copy whose head draws
+    /// a night copy of its material; its placement switches to the copy while gta.hour is a night hour; the day head
+    /// does not emit, the night one does.
+    #[test]
+    fn night_as_state_copies_the_lamp_and_switches_its_placement() {
+        use crate::components::{GtaShader, GtaSources};
+        use primase_core::pass::Pass;
+        use primase_core::state::{Domain, Override, Scope, StateAxis, StateOverride};
+        let mut w = primase_core::World::new();
+        let hour = w.spawn();
+        w.insert(
+            hour,
+            StateAxis {
+                key: "gta.hour".into(),
+                domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
+                default: 12,
+                scope: Scope::Global,
+                class: "time".into(),
+                source: "test".into(),
+            },
+        );
+        let shader = |w: &mut primase_core::World, effect: &[u8]| {
+            let m = w.spawn();
+            w.insert(
+                m,
+                GtaShader {
+                    drawable: "d".into(),
+                    index: 0,
+                    name: primase_hash::joaat(effect),
+                    preset: 0,
+                    render_bucket: 0,
+                    bucket_mask: 0,
+                    params: vec![],
+                },
+            );
+            m
+        };
+        let (head, pole) = (shader(&mut w, b"emissivenight"), shader(&mut w, b"default"));
+        let prim = |m| primase_core::Primitive {
+            topology: primase_core::Topology::Triangles,
+            streams: std::collections::BTreeMap::from([(
+                primase_core::Semantic::Position,
+                primase_core::Stream::F32x3(vec![[0.0; 3]; 3]),
+            )]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(m),
+        };
+        let proto = w.spawn();
+        w.insert(proto, primase_core::Name("lamp".into()));
+        w.insert(proto, primase_core::Mesh::new(vec![prim(head), prim(pole)]));
+        w.insert(
+            proto,
+            GtaSources {
+                lod: 0,
+                sources: vec![[0, 0], [0, 1]],
+            },
+        );
+        let placed = w.spawn();
+        w.insert(placed, primase_core::Transform::IDENTITY);
+        w.insert(
+            placed,
+            primase_core::Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        super::LowerGtaPbr {
+            night: super::Night::State,
+        }
+        .run(&mut w, &mut primase_core::pass::PassLog::default())
+        .unwrap();
+        let o = w.get::<StateOverride>(placed).unwrap();
+        let (clause, Override::Prototype(copy)) = &o.0[0] else {
+            panic!("no prototype override")
+        };
+        assert_eq!(clause.0[0].axis, hour);
+        assert_eq!(clause.0[0].values, u64::from(crate::pipeline::NIGHT_HOURS));
+        assert_eq!(w.get::<primase_core::Name>(*copy).unwrap().0, "lamp night");
+        let night_head = w.get::<primase_core::Mesh>(*copy).unwrap().primitives()[0]
+            .material
+            .unwrap();
+        assert_ne!(night_head, head);
+        let day = w.get::<primase_core::pbr::PbrMaterial>(head).unwrap();
+        let night = w.get::<primase_core::pbr::PbrMaterial>(night_head).unwrap();
+        assert_eq!((day.emissive, night.emissive), ([0.0; 3], [1.0; 3]));
+        assert_eq!(
+            w.get::<primase_core::Mesh>(*copy).unwrap().primitives()[1].material,
+            Some(pole)
+        );
+        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
     }
 
     #[test]

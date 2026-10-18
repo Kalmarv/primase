@@ -400,7 +400,8 @@ pub fn read_region(
         }
     }
     let mut prototypes = BTreeMap::new();
-    let mut hour_axis: Option<primase_core::Entity> = None;
+    // the game's hours: always an axis (time archetypes and lights condition on it; the selection resolves or keeps it)
+    let hour_axis = self::hour_axis(&mut w);
     let mut ipl_axes: BTreeMap<String, primase_core::Entity> = BTreeMap::new();
     for Placed {
         ymap,
@@ -484,22 +485,7 @@ pub fn read_region(
         }
         // a time archetype is shown in the hours its timeFlags' low 24 bits name (none: never)
         if let Some(flags) = a.time_flags {
-            let axis = *hour_axis.get_or_insert_with(|| {
-                let e = w.spawn();
-                w.insert(
-                    e,
-                    StateAxis {
-                        key: "gta.hour".into(),
-                        domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
-                        default: 12,
-                        scope: Scope::Global,
-                        class: "time".into(),
-                        source: "time archetypes' timeFlags (CTimeArchetypeDef): the hours each is shown"
-                            .into(),
-                    },
-                );
-                e
-            });
+            let axis = hour_axis;
             let hours = u64::from(flags & 0x00FF_FFFF);
             literals.push(Literal { axis, values: hours });
             report.time_placements += 1;
@@ -541,6 +527,29 @@ pub fn read_region(
         return Err(invalid("region", 0, "no entity had an archetype"));
     }
     Ok((w, report))
+}
+
+/// The global `gta.hour` axis of `w` ({0..23}, value h is hour h, default 12, class `time`): the one there, or a new
+/// one. The reader makes it for time archetypes; a pass that keeps the hour as state (lights by their hours) makes it
+/// when the region has none.
+pub fn hour_axis(w: &mut World) -> primase_core::Entity {
+    if let Some((e, _)) = w.iter::<StateAxis>().find(|(_, a)| a.key == "gta.hour") {
+        return e;
+    }
+    let e = w.spawn();
+    w.insert(
+        e,
+        StateAxis {
+            key: "gta.hour".into(),
+            domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
+            default: 12,
+            scope: Scope::Global,
+            class: "time".into(),
+            source: "the game's hours: time archetypes' timeFlags (CTimeArchetypeDef), lights' time_flags"
+                .into(),
+        },
+    );
+    e
 }
 
 #[cfg(test)]

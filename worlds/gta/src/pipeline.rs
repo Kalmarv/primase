@@ -58,6 +58,10 @@ pub struct Selection {
     pub map: Map,
     /// The hour time archetypes are resolved at; `None`: the `gta.hour` axis's default (12).
     pub hour: Option<u8>,
+    /// Keep the hour as state instead (when no `hour` is given): `gta.hour` survives the selection, lights carry their
+    /// hours as conditions, and the loaded world carries its night as prototypes the placements switch to by
+    /// `gta.hour` (`lower-gta-pbr{night=state}`), for a consumer that picks the time itself.
+    pub keep_hour: bool,
     /// The region rules' minimum placement size ([`crate::select::SelectRegion::min_size`]).
     pub min_size: f32,
     /// The region rules' maximum priority level ([`crate::select::SelectRegion::max_priority`]; 3 keeps every
@@ -77,6 +81,7 @@ impl Selection {
             reach: 0.0,
             map,
             hour: None,
+            keep_hour: false,
             min_size: 0.0,
             max_priority: 3,
             interiors: true,
@@ -100,6 +105,8 @@ pub fn is_night(hour: u8) -> bool {
 pub fn default_passes(s: &Selection) -> String {
     if s.hour.is_some_and(is_night) {
         DEFAULT_PASSES.replacen("lower-gta-pbr", "lower-gta-pbr{night=true}", 1)
+    } else if s.keep_hour && s.hour.is_none() {
+        DEFAULT_PASSES.replacen("lower-gta-pbr", "lower-gta-pbr{night=state}", 1)
     } else {
         DEFAULT_PASSES.to_string()
     }
@@ -115,15 +122,21 @@ pub fn select_passes(s: &Selection) -> String {
         assign.push_str(&format!(";gta.hour:{h}"));
     }
     let [x0, y0, x1, y1] = s.region;
+    let keep = s.keep_hour && s.hour.is_none();
+    let kept = if keep { ",keep=gta.hour" } else { "" };
     let mut p = format!(
-        "resolve-state{{assign={assign}}}, gta-select-region{{x0={x0},y0={y0},x1={x1},y1={y1},min_size={},max_priority={}}}",
+        "resolve-state{{assign={assign}{kept}}}, gta-select-region{{x0={x0},y0={y0},x1={x1},y1={y1},min_size={},max_priority={}}}",
         s.min_size, s.max_priority
     );
     if !s.interiors {
         p.push_str(", gta-leave-out-interiors");
     }
     // every light the kept placements carry (each with its hours) unless an hour is asked for
-    let hour = s.hour.map_or(String::new(), |h| format!("hour={h},"));
+    let hour = match s.hour {
+        Some(h) => format!("hour={h},"),
+        None if keep => "state=true,".to_string(),
+        None => String::new(),
+    };
     p.push_str(&format!(
         ", lower-gta-lights{{{hour}x0={x0},y0={y0},x1={x1},y1={y1}}}"
     ));
@@ -271,7 +284,10 @@ impl GtaSource {
     /// textures of its placements' prototypes attached. Entity ids stay `world`'s; what attaching spawns (LOD forms,
     /// materials, textures) is reached through the prototypes.
     pub fn load(&self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, AssetReport)> {
-        let mut w = world.subset(&world.closure(roots.iter().copied()));
+        // the world's remaining axes (global state a consumer resolves itself, a kept gta.hour) are in every part, so
+        // a per-part pass can refer to them
+        let axes = world.iter::<primase_core::state::StateAxis>().map(|(e, _)| e);
+        let mut w = world.subset(&world.closure(roots.iter().copied().chain(axes)));
         let report = attach_assets_with(&mut w, self.assets(), &self.keys, &self.parents)?;
         Ok((w, report))
     }

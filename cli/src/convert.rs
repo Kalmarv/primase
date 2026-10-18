@@ -11,7 +11,7 @@ pub type Result<T> = primase_core::convert::Result<T>;
 pub const USAGE: &str = "usage: primase convert --from <reader> [reader options] [--select \"<pipeline>\"] [--passes \"<pipeline>\"] --to <writer> \
 <out> [writer options]
 readers:
-  gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H]
+  gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H | --keep-hour]
         [--min-size M] [--max-priority N] [--interiors none|all]
 writers:
   web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
