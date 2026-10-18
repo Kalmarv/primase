@@ -244,6 +244,7 @@ impl Pass for ToyPass {
         w.insert(stray, ToyMesh(3));
         log.count("orphans", 1);
         log.approximate("toy meshes rounded", 2);
+        log.omit("toy hats with no toy form, left out", 1);
         Ok(())
     }
 }
@@ -477,7 +478,7 @@ fn planned_parts_load_their_context_and_write_only_what_they_own() {
 }
 
 /// Every part's reports are kept whole: the same approximation in two parts is two records with the parts' ordinals,
-/// summed once; what a part dropped is a selection notice; the writer's omissions come back after each part and
+/// summed once; what a pass left out is an unsupported notice; what a part dropped is a selection notice; the writer's omissions come back after each part and
 /// before finishing.
 #[test]
 fn each_parts_reports_are_kept_and_summed_once() {
@@ -520,6 +521,9 @@ fn each_parts_reports_are_kept_and_summed_once() {
             vec!["part 0".to_string(), "part 1".to_string()]
         )
     );
+    // what a pass left out for want of a form is an unsupported notice, per part
+    let hats = find("toy-pass", "toy hats with no toy form, left out");
+    assert_eq!((hats.kind, hats.count), (NoticeKind::Unsupported, 2));
     let dropped = find("convert", "made entities nothing keeps, dropped (toy.mesh)");
     assert_eq!((dropped.kind, dropped.count), (NoticeKind::Selection, 2));
     // after each part, before finishing, and the one finish returns

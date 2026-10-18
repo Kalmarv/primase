@@ -392,8 +392,8 @@ impl ConvertReport {
         out
     }
 
-    /// Every notice: the reader's and the writer's, then the passes' approximations, what the parts left out and what
-    /// the writer doesn't write, one notice per stage and reason over all parts, with the parts as examples.
+    /// Every notice: the reader's and the writer's, then the passes' approximations and omissions, what the parts left
+    /// out and what the writer doesn't write, one notice per stage and reason over all parts, with the parts as examples.
     pub fn notices(&self) -> Vec<Notice> {
         let mut out = self.reported.clone();
         let mut derived: BTreeMap<(String, NoticeKind, String), (u64, Vec<String>)> = BTreeMap::new();
@@ -412,11 +412,17 @@ impl ConvertReport {
             for (k, v) in &step.log.approximations {
                 add(&step.pass, NoticeKind::Approximation, k, *v, None);
             }
+            for (k, v) in &step.log.omitted {
+                add(&step.pass, NoticeKind::Unsupported, k, *v, None);
+            }
         }
         for p in &self.part_reports {
             for step in &p.explicit.steps {
                 for (k, v) in &step.log.approximations {
                     add(&step.pass, NoticeKind::Approximation, k, *v, Some(p.ordinal));
+                }
+                for (k, v) in &step.log.omitted {
+                    add(&step.pass, NoticeKind::Unsupported, k, *v, Some(p.ordinal));
                 }
             }
             for (k, v) in &p.kept {

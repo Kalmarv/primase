@@ -44,11 +44,15 @@ pub type Options = BTreeMap<String, String>;
 /// ([`PassRegistry::parse`]).
 pub type PassOptions = BTreeMap<String, Options>;
 
-/// Counts a pass logs while it runs: what it changed and what it approximated, and the entities it placed.
+/// Counts a pass logs while it runs: what it changed, what it approximated and what it left out, and the entities it
+/// placed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PassLog {
     pub counts: BTreeMap<String, u64>,
     pub approximations: BTreeMap<String, u64>,
+    /// What the pass left out because what it makes has no form for it, by reason (`collision triangles on a surface
+    /// with no skate surface, left out: PHYS_CASTER`). A conversion reports each as an unsupported notice.
+    pub omitted: BTreeMap<String, u64>,
     /// Component names the pass removed from some entity without declaring them in [`Pass::removes`] (a component a
     /// hook dropped, as [`World::apply_linear`] reports): accepted as removals only for a pass that opts in with
     /// [`Pass::removes_by_log`].
@@ -74,6 +78,11 @@ impl PassLog {
     /// Record `n` items lowered with an approximation (`"layer blend baked at 1024 px"`).
     pub fn approximate(&mut self, what: &str, n: u64) {
         *self.approximations.entry(what.to_owned()).or_default() += n;
+    }
+
+    /// Record `n` items left out because what the pass makes has no form for them (see [`PassLog::omitted`]).
+    pub fn omit(&mut self, what: &str, n: u64) {
+        *self.omitted.entry(what.to_owned()).or_default() += n;
     }
 
     /// Record that the pass made `e` as content of its own (see [`PassLog::placed`]): content of the whole world, as a
@@ -786,6 +795,9 @@ impl fmt::Display for RunReport {
             }
             for (k, n) in &s.log.approximations {
                 write!(f, " ~{k}={n}")?;
+            }
+            for (k, n) in &s.log.omitted {
+                write!(f, " -{k}={n}")?;
             }
             writeln!(f)?;
         }
