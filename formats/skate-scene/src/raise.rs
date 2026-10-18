@@ -25,8 +25,10 @@
 //!   `core.collision`, placed by each instance, as a triangle-mesh soup); every placement a default `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
 //!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]); a surface with
-//!   neither, whose name is no skate surface, is refused (never guessed), as is a water class (no solid skate
-//!   surface; skate water is a reader's outline, a named gap);
+//!   neither, whose name is no skate surface, is refused (never guessed); a water class has no solid skate surface:
+//!   a prototype whose collision is all water gets skate's water collision (Studio's water mode) and a material drawn
+//!   only on such prototypes skate's water class (Studio's ocean); water triangles in a solid soup or the world's
+//!   collision stay solid, counted;
 //! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`];
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - a spawn marker where the caller says (a point, or the per-axis median of the placements' positions), snapped to
@@ -208,13 +210,22 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         return Err(bad(format!("unclassified={u} is not a skate surface")));
     }
     let mut unclassified: Vec<String> = Vec::new();
+    // the surfaces of class water: their triangles become skate's water collision (see below)
+    let mut water_surfaces: BTreeSet<u16> = BTreeSet::new();
+    let mut water_names: Vec<String> = Vec::new();
     let mut surfaces = world.resource::<Surfaces>().cloned();
     if let Some(surfaces) = surfaces.as_mut() {
         let mut unmapped = Vec::new();
-        for s in &mut surfaces.0 {
+        for (i, s) in surfaces.0.iter_mut().enumerate() {
             match (options.surfaces.get(&s.name), s.class) {
                 (Some(to), _) if STANDARD_SURFACES.contains(&to.as_str()) => s.name.clone_from(to),
                 (Some(to), _) => unmapped.push(format!("{} -> {to} (not a skate surface)", s.name)),
+                (None, Some(SurfaceClass::Water)) => {
+                    // no solid skate surface: its triangles are water collision; the name a placeholder
+                    water_surfaces
+                        .insert(u16::try_from(i).map_err(|_| bad("more than 65,536 surfaces".into()))?);
+                    water_names.push(std::mem::replace(&mut s.name, "default".to_owned()));
+                }
                 (None, Some(class)) => match class_to_skate(class) {
                     Some(to) => s.name = to.to_owned(),
                     None => unmapped.push(format!(
@@ -254,6 +265,30 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             drawn.extend(v.0.iter().flat_map(|o| o.values().copied()));
         }
     }
+    // a prototype whose collision is all water is skate water (its soup in water mode), and a material drawn only on
+    // such prototypes is skate's water class (Studio's ocean)
+    let all_water =
+        |c: &Collision| !c.surfaces.is_empty() && c.surfaces.iter().all(|s| water_surfaces.contains(s));
+    let water_protos: BTreeSet<Entity> = placed
+        .iter()
+        .copied()
+        .filter(|&p| world.get::<Collision>(p).is_some_and(all_water))
+        .collect();
+    let mut on_water: BTreeMap<Entity, bool> = BTreeMap::new();
+    for &p in &placed {
+        let mut ms: Vec<Entity> = world
+            .get::<Mesh>(p)
+            .map(|mesh| mesh.primitives().iter().filter_map(|q| q.material).collect())
+            .unwrap_or_default();
+        if let Some(v) = world.get::<MaterialVariants>(p) {
+            ms.extend(v.0.iter().flat_map(|o| o.values().copied()));
+        }
+        for m in ms {
+            *on_water.entry(m).or_insert(true) &= water_protos.contains(&p);
+        }
+    }
+    let water_materials: BTreeSet<Entity> =
+        on_water.into_iter().filter(|&(_, w)| w).map(|(m, _)| m).collect();
     // a drawn blend (core.layered) is a layered material; its layers' materials are drawn through it
     let layered: Vec<Entity> = world
         .iter::<LayeredMaterial>()
@@ -284,6 +319,21 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         .collect();
     let plan = materials::prepare(world, &materials)?;
     let mut log = plan.log;
+    for name in &water_names {
+        log.count(&format!("water surfaces kept as water collision: {name}"), 1);
+    }
+    // collision that is no prototype's (the world's soups) stays solid: its water triangles are counted
+    let world_wet: usize = world
+        .iter::<Collision>()
+        .filter(|(e, _)| !placed.contains(e))
+        .map(|(_, c)| c.surfaces.iter().filter(|s| water_surfaces.contains(s)).count())
+        .sum();
+    if world_wet > 0 {
+        log.approximate(
+            "water triangles in the world's collision kept solid",
+            world_wet as u64,
+        );
+    }
     if let Some(to) = &options.unclassified {
         for name in &unclassified {
             log.count(&format!("unclassified surfaces made {to}: {name}"), 1);
@@ -376,6 +426,12 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             class = MaterialClass::Decal;
             log.count("materials raised as decals (core.draw_order)", 1);
         }
+        // drawn only on water: skate's water, Studio's ocean
+        let water = water_materials.contains(&e);
+        if water {
+            class = MaterialClass::Water;
+            log.count("materials raised as water (drawn only on water collision)", 1);
+        }
         let rgb = [m.base_color[0], m.base_color[1], m.base_color[2]];
         let (base_color, tint) = match m.base_color_texture {
             None => (
@@ -427,7 +483,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                     f32_decimal(folded as f32)
                 }),
                 wrap: w.map(|w| wrap(w[0])),
-                ocean: None,
+                ocean: water.then_some(true),
                 cast_shadows: m.cast_shadows,
                 emissive: None,
                 vertex_alpha: None,
@@ -472,16 +528,31 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             continue;
         };
         let id = key(&name(world, p, "prototype"), &mut taken);
-        // its own collision (core.collision on the prototype, placed by each instance): a triangle-mesh soup
-        let collision = world.has::<Collision>(p).then(|| SoupRef {
-            table: TableRef::single(&format!("collision/{id}.bin")),
-            mode: Some(CollisionMode::TriangleMesh),
-            ground: None,
-            region_cut: None,
-            other: Other::new(),
+        // its own collision (core.collision on the prototype, placed by each instance): a triangle-mesh soup, or water
+        // when every triangle is on a water surface (a mixed soup stays solid, its water triangles counted)
+        let water = water_protos.contains(&p);
+        let collision = world.get::<Collision>(p).map(|c| {
+            let wet = c.surfaces.iter().filter(|s| water_surfaces.contains(s)).count();
+            if !water && wet > 0 {
+                log.approximate("water triangles in a solid collision soup kept solid", wet as u64);
+            }
+            SoupRef {
+                table: TableRef::single(&format!("collision/{id}.bin")),
+                mode: Some(if water {
+                    CollisionMode::Water
+                } else {
+                    CollisionMode::TriangleMesh
+                }),
+                ground: None,
+                region_cut: None,
+                other: Other::new(),
+            }
         });
         if collision.is_some() {
             log.count("prototypes with their own collision", 1);
+        }
+        if water {
+            log.count("prototypes with water collision", 1);
         }
         world.insert(
             p,

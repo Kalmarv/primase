@@ -286,11 +286,59 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
         raised(Some(SurfaceClass::Snow), &[("Snow", "asphalt")]).unwrap(),
         "asphalt"
     );
-    let err = raised(Some(SurfaceClass::Water), &[]).unwrap_err();
-    assert!(
-        err.contains("Snow (class water: no solid skate surface)"),
-        "{err}"
-    );
+    // a water surface is kept (its triangles water collision), its name a placeholder
+    assert_eq!(raised(Some(SurfaceClass::Water), &[]).unwrap(), "default");
+}
+
+/// A prototype whose collision is all on a water surface gets water collision and its material skate's water
+/// (Studio's ocean); the world's water triangles stay solid, counted; a mixed prototype soup stays solid, counted.
+#[test]
+fn water_collision_and_water_materials() {
+    use primase_core::SurfaceClass;
+    for mixed in [false, true] {
+        let mut w = world();
+        w.resource_mut::<Surfaces>().unwrap().0[0].class = Some(SurfaceClass::Water);
+        let rock = w.resource_mut::<Surfaces>().unwrap().index("Rock").unwrap();
+        w.resource_mut::<Surfaces>().unwrap().0[usize::from(rock)].class = Some(SurfaceClass::Stone);
+        let (proto, mesh) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
+        let mut c = Collision::default();
+        let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]];
+        c.extend(&tri, &[[0, 1, 2]], 0, |p| p);
+        if mixed {
+            c.extend(&tri, &[[0, 1, 2]], rock, |p| p);
+        }
+        w.insert(proto, c);
+        // no surface map: the water class decides
+        let log = scene::raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: "raised".into(),
+                ..RaiseOptions::default()
+            },
+        )
+        .unwrap();
+        let p = w.get::<SkatePrototype>(proto).unwrap();
+        let mode = p.collision.as_ref().unwrap().mode;
+        let material = mesh.primitives()[0].material.unwrap();
+        let class = w.get::<SkateMaterial>(material).unwrap().class;
+        assert_eq!(
+            log.approximations["water triangles in the world's collision kept solid"],
+            1
+        );
+        if mixed {
+            assert_eq!(mode, Some(scene::CollisionMode::TriangleMesh));
+            assert_ne!(class, MaterialClass::Water);
+            assert_eq!(
+                log.approximations["water triangles in a solid collision soup kept solid"],
+                1
+            );
+        } else {
+            assert_eq!(mode, Some(scene::CollisionMode::Water));
+            assert_eq!(class, MaterialClass::Water);
+            assert_eq!(w.get::<SkateMaterial>(material).unwrap().ocean, Some(true));
+            assert_eq!(log.counts["prototypes with water collision"], 1);
+        }
+    }
 }
 
 #[test]
