@@ -159,8 +159,17 @@ fn lowering_matches_the_port() {
         {
             fields_differ.push(format!("{}: cutoff {cutoff} vs {}", j["key"], port["cutoff"]));
         }
-        if p.double_sided != port["double_sided"].as_bool().unwrap() {
-            fields_differ.push(format!("{}: double sided", j["key"]));
+        let port_sided = port["double_sided"].as_bool().unwrap();
+        if p.double_sided != port_sided {
+            if p.double_sided && !port_sided && um.float("_Cull") != Some(0.0) {
+                // the port reads the material's `_Cull`; the draw pass's own `Cull Off` (independent shader state,
+                // PRIMASE_UNITY_SHADERS) draws both sides
+                *rules
+                    .entry("port takes double-sidedness from the material's _Cull: a pass culling nothing drawn one-sided".into())
+                    .or_default() += 1;
+            } else {
+                fields_differ.push(format!("{}: double sided", j["key"]));
+            }
         }
         if family == "Universal Render Pipeline/Lit" {
             if um.float("_WorkflowMode") == Some(0.0) {
