@@ -44,7 +44,11 @@ pub enum CollisionMode {
 /// A prototype: its parts in local space, in draw order.
 #[derive(Clone, Debug, Default)]
 pub struct SrcMesh {
+    /// The scene's prototype key: identity within one scene (one part) only.
     pub hash: u32,
+    /// What the prototype's parts hold ([`content_key`]): its identity across parts, with the materials a variant row
+    /// draws it with ([`crate::map`]'s prototype key).
+    pub content: [u8; 16],
     pub name: String,
     pub parts: Vec<SrcPart>,
     pub min: Vec3,
@@ -182,4 +186,42 @@ impl MapObject {
     pub fn translation(x: f32, y: f32, z: f32) -> [f32; 12] {
         [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, x, z, -y]
     }
+}
+
+/// SHA-256 (first 128 bits) of a prototype's parts in draw order: every field that reaches the output. Each part's
+/// class, emissive and cutout flags, shader, bucket, model and geometry numbers, its fixed material (as `Some(id)`/`None`;
+/// the map key adds the material names), then its positions, normals, UVs, blend weights (as f32 bits) and indices,
+/// each string and stream preceded by its length. Not `def`, the scene's own index. Two prototypes with this key draw
+/// the same thing given the same materials.
+pub fn content_key(parts: &[SrcPart]) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update((parts.len() as u64).to_le_bytes());
+    for p in parts {
+        h.update([
+            p.class.map_or(0xFF, |c| c as u8),
+            u8::from(p.emissive),
+            u8::from(p.cutout),
+            u8::from(p.material.is_some()),
+            p.bucket,
+        ]);
+        h.update((p.shader.len() as u64).to_le_bytes());
+        h.update(p.shader.as_bytes());
+        h.update(p.model.to_le_bytes());
+        h.update(p.geom.to_le_bytes());
+        for stream in [&p.pos, &p.nrm, &p.uv, &p.blend] {
+            h.update((stream.len() as u64).to_le_bytes());
+            for x in stream.iter() {
+                h.update(x.to_bits().to_le_bytes());
+            }
+        }
+        h.update((p.idx.len() as u64).to_le_bytes());
+        for i in &p.idx {
+            h.update(i.to_le_bytes());
+        }
+    }
+    let d = h.finalize();
+    let mut k = [0u8; 16];
+    k.copy_from_slice(&d[..16]);
+    k
 }

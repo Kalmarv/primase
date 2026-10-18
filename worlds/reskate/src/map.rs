@@ -728,7 +728,10 @@ impl MapWriter {
         }
         let mut pieces: Vec<Piece> = Vec::new();
         let mut src: Vec<(usize, usize)> = Vec::new();
-        let keys: Vec<usize> = parts.keys().copied().collect();
+        // the parts in first use (seq), not by material id: ids follow the order materials were first made anywhere in
+        // the map, which a map written in parts does not share
+        let mut keys: Vec<usize> = parts.keys().copied().collect();
+        keys.sort_by_key(|k| parts[k].seq);
         for (pi, mat) in keys.iter().enumerate() {
             let m = self.ctx.mats.by_id(*mat);
             let pass = overlay_pass(m);
@@ -754,6 +757,7 @@ impl MapWriter {
         let mut under: Vec<(usize, usize)> = Vec::new();
         if step > 0.0 {
             let mut accs: Vec<&mut Acc> = parts.values_mut().collect();
+            accs.sort_by_key(|a| a.seq);
             let idx: Vec<Vec<u32>> = accs.iter().map(|a| a.idx.clone()).collect();
             let mut view = Parts {
                 pos: accs.iter_mut().map(|a| &mut a.pos).collect(),
@@ -924,7 +928,31 @@ impl MapWriter {
         }
     }
 
-    fn make_proto(&mut self, m: &SrcMesh, row: u32, source: &mut dyn MeshSource) -> Result<Proto> {
+    /// The identity of a prototype drawn with variant row `row`, the same in every part: its parts' content
+    /// ([`SrcMesh::content`]) and the names of the materials the row draws them with (names end in a content hash).
+    /// SHA-256, first 128 bits.
+    fn proto_key(&mut self, m: &SrcMesh, row: u32, source: &mut dyn MeshSource) -> Result<[u8; 16]> {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(m.content);
+        for p in &m.parts {
+            let mat = source.material_of(p, row, &mut self.ctx)?;
+            let name = &self.ctx.mats.by_id(mat).name;
+            h.update((name.len() as u64).to_le_bytes());
+            h.update(name.as_bytes());
+        }
+        let mut k = [0u8; 16];
+        k.copy_from_slice(&h.finalize()[..16]);
+        Ok(k)
+    }
+
+    fn make_proto(
+        &mut self,
+        m: &SrcMesh,
+        row: u32,
+        key: [u8; 16],
+        source: &mut dyn MeshSource,
+    ) -> Result<Proto> {
         let mut parts: BTreeMap<usize, Acc> = BTreeMap::new();
         for (order, p) in m.parts.iter().enumerate() {
             let mat = source.material_of(p, row, &mut self.ctx)?;
@@ -961,7 +989,7 @@ impl MapWriter {
         });
         let area =
             (self.o.tex_budget > 0).then(|| parts.iter().map(|(k, a)| (*k, area(&a.pos, &a.idx))).collect());
-        let stem = format!("p_{:08x}_{row}", m.hash);
+        let stem = format!("p_{}", key.iter().map(|b| format!("{b:02x}")).collect::<String>());
         self.r.proto_list[info].file = format!("{stem}.glb");
         let mats = &self.ctx.mats;
         let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
@@ -1018,7 +1046,7 @@ impl MapWriter {
             }
         }
         let mut meshes: HashMap<u32, SrcMesh> = HashMap::new();
-        let mut protos: HashMap<(u32, u32), Proto> = HashMap::new();
+        let mut protos: HashMap<[u8; 16], Proto> = HashMap::new();
         let mut tiles: Vec<TileOut> = Vec::new();
         let edge = [
             r[0] as f32 - APRON,
@@ -1054,13 +1082,33 @@ impl MapWriter {
                 let mut water_soups: BTreeMap<(i32, i32), PropSoup> = BTreeMap::new();
                 let mut soup_order = Vec::new();
                 let mut inst_area: Option<HashMap<usize, f64>> = budget.then(HashMap::new);
-                let cmp = |a: f32, b: f32| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+                // a total order that every part shares: by content, not the scene's prototype key (an identity
+                // within one part only), then everything of the placement that reaches the output (position, basis,
+                // variant row, flags, parts left off); placements equal in all of these write the same thing in either
+                // order
+                let content = |s: &Placement| meshes.get(&s.proto).map(|m| m.content);
+                let place = |s: &Placement| {
+                    [
+                        s.pos.x, s.pos.y, s.pos.z, s.ex.x, s.ex.y, s.ex.z, s.ey.x, s.ey.y, s.ey.z, s.ez.x,
+                        s.ez.y, s.ez.z,
+                    ]
+                };
                 g.sort_by(|a, b| {
-                    a.proto
-                        .cmp(&b.proto)
-                        .then(cmp(a.pos.x, b.pos.x))
-                        .then(cmp(a.pos.y, b.pos.y))
-                        .then(cmp(a.pos.z, b.pos.z))
+                    content(a)
+                        .cmp(&content(b))
+                        .then_with(|| {
+                            place(a)
+                                .iter()
+                                .zip(place(b).iter())
+                                .map(|(x, y)| x.total_cmp(y))
+                                .find(|o| o.is_ne())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then(a.variant.cmp(&b.variant))
+                        .then(a.no_collision.cmp(&b.no_collision))
+                        .then(a.no_instance.cmp(&b.no_instance))
+                        .then(a.outside.cmp(&b.outside))
+                        .then_with(|| a.part_off.cmp(&b.part_off))
                 });
                 for s in g {
                     // a mesh without triangles draws nothing; one with collision still collides (its collision
@@ -1144,11 +1192,12 @@ impl MapWriter {
                     }
                     let m = m.clone();
                     if inst {
-                        if let std::collections::hash_map::Entry::Vacant(e) = protos.entry((m.hash, row)) {
-                            let p = self.make_proto(&m, row, source)?;
+                        let key = self.proto_key(&m, row, source)?;
+                        if let std::collections::hash_map::Entry::Vacant(e) = protos.entry(key) {
+                            let p = self.make_proto(&m, row, key, source)?;
                             e.insert(p);
                         }
-                        let pr = &protos[&(m.hash, row)];
+                        let pr = &protos[&key];
                         self.r.proto_list[pr.info].count += 1;
                         let iname =
                             format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[pr.info].name);
@@ -1162,7 +1211,7 @@ impl MapWriter {
                                 }
                             }
                         }
-                        let pr = &protos[&(m.hash, row)];
+                        let pr = &protos[&key];
                         if let (Some(pa), Some(ia)) = (&pr.area, &mut inst_area) {
                             let lx = s.ex.length();
                             if (s.ey.length() - lx).abs() <= 1e-4 * lx
@@ -1188,7 +1237,7 @@ impl MapWriter {
                                 }
                             }
                         }
-                        let pr = &protos[&(m.hash, row)];
+                        let pr = &protos[&key];
                         let file = self.r.proto_list[pr.info].file.clone();
                         for (i, mat) in pr.materials.iter().enumerate() {
                             let name = if pr.materials.len() == 1 {
@@ -1460,29 +1509,64 @@ fn map_vec(v: Vec3) -> [f32; 3] {
     [v.x, v.z, -v.y]
 }
 
-/// The lights a map keeps (at most `max` per 200 m cell: group "" first, then the highest priority), by position.
+/// A total order over lights by every field (position first), so which lights a cap keeps and how they are numbered
+/// never depends on the order they arrived in.
+fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
+    let v = |v: Vec3| [v.x, v.y, v.z];
+    let fields = |l: &PlacedLight| {
+        let [px, py, pz] = v(l.pos);
+        let [dx, dy, dz] = v(l.dir);
+        let [tx, ty, tz] = v(l.tan);
+        [
+            px,
+            py,
+            pz,
+            dx,
+            dy,
+            dz,
+            tx,
+            ty,
+            tz,
+            l.r,
+            l.g,
+            l.b,
+            l.energy,
+            l.range,
+            l.radius,
+            l.spot_size,
+            l.spot_blend,
+            l.priority,
+        ]
+    };
+    fields(a)
+        .iter()
+        .zip(fields(b).iter())
+        .map(|(x, y)| x.total_cmp(y))
+        .find(|o| o.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(a.spot.cmp(&b.spot))
+        .then(a.time_of_day.cmp(&b.time_of_day))
+        .then(a.cast_shadow.cmp(&b.cast_shadow))
+        .then_with(|| a.group.cmp(&b.group))
+        .then_with(|| a.source.cmp(&b.source))
+}
+
+/// The lights a map keeps (at most `max` per 200 m cell: group "" first, then the highest priority, then
+/// [`light_order`]), in [`light_order`].
 pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
     let mut keep: Vec<PlacedLight> = if max > 0 {
-        let mut groups: Vec<((i32, i32), Vec<&PlacedLight>)> = Vec::new();
-        let mut gi: HashMap<(i32, i32), usize> = HashMap::new();
+        let mut cells: BTreeMap<(i32, i32), Vec<&PlacedLight>> = BTreeMap::new();
         for l in lights {
             let k = ((l.pos.x / 200.0).floor() as i32, (l.pos.y / 200.0).floor() as i32);
-            let i = *gi.entry(k).or_insert_with(|| {
-                groups.push((k, Vec::new()));
-                groups.len() - 1
-            });
-            groups[i].1.push(l);
+            cells.entry(k).or_default().push(l);
         }
         let mut out = Vec::new();
-        for (_, mut g) in groups {
+        for (_, mut g) in cells {
             g.sort_by(|a, b| {
-                i32::from(!a.group.is_empty())
-                    .cmp(&i32::from(!b.group.is_empty()))
-                    .then(
-                        b.priority
-                            .partial_cmp(&a.priority)
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                    )
+                (!a.group.is_empty())
+                    .cmp(&!b.group.is_empty())
+                    .then(b.priority.total_cmp(&a.priority))
+                    .then_with(|| light_order(a, b))
             });
             out.extend(g.into_iter().take(max).cloned());
         }
@@ -1490,12 +1574,7 @@ pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
     } else {
         lights.to_vec()
     };
-    let cmp = |a: f32, b: f32| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
-    keep.sort_by(|a, b| {
-        cmp(a.pos.x, b.pos.x)
-            .then(cmp(a.pos.y, b.pos.y))
-            .then(cmp(a.pos.z, b.pos.z))
-    });
+    keep.sort_by(light_order);
     keep
 }
 

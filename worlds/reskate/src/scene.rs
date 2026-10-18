@@ -1365,6 +1365,7 @@ pub fn build_mesh(
         mesh.bytes += (part.pos.len() * 4 * 2 + part.uv.len() * 4 + part.idx.len() * 4) as i64;
         mesh.parts.push(part);
     }
+    mesh.content = crate::model::content_key(&mesh.parts);
     if mesh.tris == 0 {
         mn = Vec3::ZERO;
         mx = Vec3::ZERO;
