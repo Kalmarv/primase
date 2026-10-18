@@ -22,9 +22,6 @@ quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 [dev-dependencies]
-primase-dds.workspace = true
-primase-gltf.workspace = true
-primase-skate-scene.workspace = true
 primase-testdata.workspace = true
 sha2.workspace = true
 [lints]
