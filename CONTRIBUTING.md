@@ -243,99 +243,106 @@ and fails on broken configuration. `try_real_data_value` exposes a structured er
 including flags such as `"1"`, must be strings. The file is read afresh when needed, without mutating the environment.
 Ignored private names are `primase-data.toml` and `primase-data.*.toml`; only the placeholder example is tracked.
 
-Variables (the individual environment overrides remain supported):
+Variables (the individual environment overrides remain supported). `status`: `live`, the obligation stands and the
+input it names is acceptable; `blocked`, the obligation stands but no acceptable input exists yet (the existing data
+is not independent of what it checks, or its producer is gone), so its tests fail when required and never pass by
+skipping; `retired`, its owner retired the obligation, it is never a landing-gate input, and the tests still reading
+it drop it in their owner's step. `source` says where the data comes from (the game itself, a third-party reader and
+its version, another exporter, our own earlier output) and so how far it is independent: a regression baseline of
+our own output is labelled as one, never as an oracle. A name called independent must be produced by something other
+than the code it checks.
 
-| variable | kind | what |
-|---|---|---|
-| `PRIMASE_SCENES_GTA` | input | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) |
-| `PRIMASE_GTA_DIR` | input | a GTA V install folder (Enhanced or Legacy; the folder holding the executable and the `.rpf` archives) |
-| `PRIMASE_GTA_KEYS` | input | a folder of the user's own GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); checked against published digests, never committed |
-| `PRIMASE_GTA_LISTING` | input | optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`) |
-| `PRIMASE_GTA_ACTIVE` | input | optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`) |
-| `PRIMASE_GTA_RESOURCES` | input | optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`) |
-| `PRIMASE_GTA_PARITY` | input | optional: a folder holding `dump.jsonl`, an independent reader's decoding of every file the gate regions' placements reach (the CodeWalker harness's `batch` mode over the list `parity_list` writes; schema in `worlds/gta/tests/parity.rs`) |
-| `PRIMASE_GTA_GTXD` | input | optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`) |
-| `PRIMASE_GTA_FILTER` | filter | optional: only archives whose path contains this text |
-| `PRIMASE_SCENES_SEKIRO` | input | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) |
-| `PRIMASE_SCENE_FILTER` | filter | optional: only scene folders whose path contains this text |
-| `PRIMASE_RESKATE_PATCH` | input | a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs` |
-| `PRIMASE_SKATE_DATA` | input | the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only |
-| `PRIMASE_RESKATE_VBLEND_SPEC` | input | the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`) |
-| `PRIMASE_RESKATE_VBLEND_CHECK` | input | optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`) |
-| `PRIMASE_RESKATE_VBLEND_REF` | input | optional: the same Patch blended by a reference patcher whose output was checked in game, for the checker's comparison |
-| `PRIMASE_RESKATE_BLEND_MAP` | input | a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs` |
-| `PRIMASE_RESKATE_BLEND_PATCH` | input | ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012) |
-| `PRIMASE_RESKATE_BLEND_SPEC` | input | optional: an independent resolution of that record against that Patch, in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output |
-| `PRIMASE_UNITY_V21_DATA` | input | a Unity player data folder with SerializedFile version 21 containers |
-| `PRIMASE_UNITY_V21_CENSUS` | input | an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`) |
-| `PRIMASE_UNITY_DATA` | input | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
-| `PRIMASE_UNITY_TPK` | input | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
-| `PRIMASE_UNITY_ORACLE` | input | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |
-| `PRIMASE_UNITY_SCAN` | input | optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`) |
-| `PRIMASE_UNITY_MESHES` | input | optional: an independent reader's decoded meshes of that folder (JSON; schema in `worlds/unity/tests/mesh.rs`) |
-| `PRIMASE_UNITY_TEXTURES` | input | optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`) |
-| `PRIMASE_UNITY_MATERIALS` | input | optional: an independent reader's materials of that folder (JSON; schema in `worlds/unity/tests/material.rs`) |
-| `PRIMASE_UNITY_PORT` | input | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) |
-| `PRIMASE_UNITY_PORT_MATERIALS` | input | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) |
-| `PRIMASE_UNITY_PORT_TERRAIN` | input | optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`) |
-| `PRIMASE_OUT` | output | optional: where real-data tests write their outputs (default: the OS temporary directory) |
-| `PRIMASE_ALLOW_LIVE` | switch | optional: `1` lets a real-data gate report input folders that changed during the run and continue |
-| `PRIMASE_MAPS_GTA` | input | a root containing exported map folders with `textures/` PNG images |
-| `PRIMASE_SCENE_SKATE` | input | the reference skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable) |
-| `PRIMASE_GLTF_VALIDATOR` | input | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) |
-| `PRIMASE_OODLE5` | input | explicit trusted Oodle version-5 game DLL path |
-| `PRIMASE_OODLE6` | input | explicit trusted Oodle version-6 game DLL path |
-| `PRIMASE_OODLE9` | input | explicit trusted Oodle version-9 game DLL path |
-| `PRIMASE_DCX` | input | folder recursively containing loose KRAK DCX files |
-| `PRIMASE_CAS_SAMPLES` | input | directory of indexed individual `.casblock` frames |
-| `PRIMASE_SEKIRO_DIR` | input | install folder containing Data1 through Data5 BHD/BDT pairs |
-| `PRIMASE_FROMSOFT_RIGID_ORACLE` | input | independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs |
-| `PRIMASE_FROMSOFT_OBJECT_ORACLE` | input | independently decoded main-HKX body fixtures for reference bd77fcb; worlds/fromsoft/tests/object_collision.rs |
-| `PRIMASE_FROMSOFT_OBJECT_SCENE` | input | reference scene folder with scene.json, export_report.json and collision/objects.bin from corrected convex decoding; worlds/fromsoft/tests/object_scene.rs |
-| `PRIMASE_FROMSOFT_OUTPUT` | output | fresh output folder for written scene and object-collision gates; worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_EXTRAS_ORACLE` | input | independent stored EDGE/BTL records and loose fixtures; worlds/fromsoft/tests/extras_census.rs |
-| `PRIMASE_FROMSOFT_EXTRAS_SCENE` | input | reference scene folder with lights/grind tables and markers; worlds/fromsoft/tests/extras_scene.rs |
-| `PRIMASE_FROMSOFT_EXTRAS_OUTPUT` | output | fresh extras scene output folder; worlds/fromsoft/tests/extras_scene.rs |
-| `PRIMASE_FROMSOFT_NAMES` | input | caller-provided UTF-8 Sekiro path dictionary |
-| `PRIMASE_FROMSOFT_NORMAL_SCENE` | input | reference normal PNGs and scene.json for offline cached-DDS comparison; worlds/fromsoft/tests/normal_images.rs |
-| `PRIMASE_FROMSOFT_DDS_ORACLE` | input | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_MODEL_ORACLE` | input | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_MSB_ORACLE` | input | independent map models, parts and transforms; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_SHADOW_ORACLE` | input | original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs` |
-| `PRIMASE_FROMSOFT_STATE_ORACLE` | input | independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_STATE_SCENE` | input | a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs |
-| `PRIMASE_FROMSOFT_BLOCKER_ORACLE` | input | blocker-card reference cases.json; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | input | independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_PBR_ORACLE` | input | source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs` |
-| `PRIMASE_FROMSOFT_LAYER_PILOT` | input | bounded layered-shader pilot inputs and reference pixels; schema in worlds/fromsoft/README.md |
-| `PRIMASE_FROMSOFT_SCENE` | input | reference area skate-scene folder containing placement sources and tables |
-| `PRIMASE_FROMSOFT_BHD_ORACLE` | input | reference archive outputs; schema in worlds/fromsoft/README.md |
-| `PRIMASE_HAVOK_CORPUS` | input | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md |
-| `PRIMASE_FROSTBITE_EBX` | input | a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; toolkit/frostbite/tests/ebx.rs |
-| `PRIMASE_RESKATE_CLI` | input | the ReSkate CLI executable, used as an independent EBX reader and reference writer (`ebx-values`, `ebx-rewrite-diff`); toolkit/frostbite/tests/ebx.rs |
-| `PRIMASE_FROMSOFT_UV_FRAME_CENSUS` | input | independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions |
-| `PRIMASE_CODEC_CORPUS` | input | TSV: codec, compressed path, oracle decoded path (tab-separated) |
-| `PRIMASE_DXBC_SHADERS` | input | shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md |
-| `PRIMASE_SKATE_MASK_ORACLE` | input | PNGs and independent mask pixel hashes in `cases.json`; schema below |
-| `PRIMASE_DATA` | config | the absolute path of a local TOML file mapping these names to string values (see above) |
-| `PRIMASE_REQUIRE_REAL_DATA` | switch | optional: `1` makes every unset input fail its test; `gate` only the inputs the landing gate must have |
-| `PRIMASE_CACHE` | runtime | optional: the disk cache folder of KTX2 encodings that `scene_to_tiles` (and a command with the same `--cache` option) uses when no `--cache` is given; read by commands, not tests |
-| `PRIMASE_DXC` | input | Microsoft's `dxc` shader compiler executable, for the DXIL evaluator's comparison with WARP; `toolkit/dxil/tests/warp.rs` |
-| `PRIMASE_WARP` | input | the WARP oracle program that runs a shader on Microsoft's WARP rasterizer; `toolkit/dxil/tests/common/warp.rs` |
-| `PRIMASE_WARP_SCRATCH` | output | a folder for the WARP comparison's case files and results |
-| `PRIMASE_DXIL_FUZZ_RUNS` | switch | optional: how many mutated fixtures the DXIL fuzz test runs (default 3000) |
-| `PRIMASE_FROMSOFT_FRAMES` | input | a folder holding `frames.jsonl`: SoulsFormats' reading of a few Sekiro models as stored (per mesh its LOD0 face set, per vertex position, normal, tangents and UV0); `worlds/fromsoft/tests/handedness.rs` |
-| `PRIMASE_FROMSOFT_NORMAL_FRAMES` | input | a folder holding `frames.jsonl`: independently stored tangent frames (`n`, `t`, `w` per sample key) of Sekiro normal-mapped surfaces; `worlds/fromsoft/tests/normal_basis.rs` |
-| `PRIMASE_FROMSOFT_NORMAL_CURL` | input | a JSON list of independent curl measurements of Sekiro normal maps (`name`, `verdict` per map); `worlds/fromsoft/tests/normal_basis.rs` |
-| `PRIMASE_FROMSOFT_WRITTEN_SCENE` | input | a scene folder written by the FromSoft reader for the same area as `PRIMASE_FROMSOFT_SCENE`, compared with it; `worlds/fromsoft/tests/collision_scene.rs`, `sekiro_scene.rs` |
-| `PRIMASE_GTA_FRAMES` | input | one ydr's high-detail geometries as an independent reader (CodeWalker) reads them, as stored in GTA's frame: one JSON file `{path, value: {models: [{geometries: [{positions, normals, tangents (xyzw), texcoords, indices}]}]}}`; the frame change, triangle fronts and bitangent sign are checked against it (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/handedness.rs` |
-| `PRIMASE_GTA_BOUNDS` | input | props' embedded collision bounds (a ydr's own, a yft's first physics LOD's) as an independent reader (CodeWalker) reads them: a folder of JSON files, one per prop, `{path, leaves: [{type, flags, polygons: [{type, material, vertices (placed)}] or corners (8, placed)}]}`; `lower-gta-embedded-collision`'s triangles are checked against them (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/embedded_bounds.rs` |
-| `PRIMASE_GTA_REGION` | filter | optional: only this named gate region in `worlds/gta/tests/region_pipeline.rs` |
-| `PRIMASE_HAVOK_OBJECT_CORPUS` | input | a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs` |
-| `PRIMASE_UNITY_SUN` | input | an independent reader's (UnityPy) record of the scan level's RenderSettings sun as stored, the render-pipeline asset classes, the shining directional lights and the main-light choice; `worlds/unity/tests/light.rs` |
-| `PRIMASE_UNITY_SHADERS` | input | an independent reader's (UnityPy) shader render state of every material (subshader tags; per pass LightMode, blend factors, zwrite and cull with their bound properties); `worlds/unity/tests/material.rs` |
-| `PRIMASE_UNITY_PROGRAMS` | input | an independent reader's (UnityPy) compiled fragment programs of every shader (per pass the player variants, keywords, program type and code hash, and the constant buffers, textures and samplers); `worlds/unity/tests/program.rs` |
-| `PRIMASE_UNITY_FRAMES` | input | an independent reader's (UnityPy) decoding of a few meshes in Unity's own frame (vertices, normals, tangents, UV0, submesh triangles); `worlds/unity/tests/handedness.rs` |
+| variable | kind | status | what | source |
+|---|---|---|---|---|
+| `PRIMASE_SCENES_GTA` | input | retired | a folder of GTA V skate-scene folders (every folder under it holding a `scene.json`) | an earlier exporter's scenes, since deleted; retired by its owners (no replacement wanted): its census readers drop it in their own steps |
+| `PRIMASE_GTA_DIR` | input | live | a GTA V install folder (Enhanced or Legacy; the folder holding the executable and the `.rpf` archives) | the user's own install |
+| `PRIMASE_GTA_KEYS` | input | live | a folder of the user's own GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); checked against published digests, never committed | the user's own key material, checked against published digests |
+| `PRIMASE_GTA_LISTING` | input | live | optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_ACTIVE` | input | live | optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_RESOURCES` | input | live | optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_PARITY` | input | live | optional: a folder holding `dump.jsonl`, an independent reader's decoding of every file the gate regions' placements reach (the CodeWalker harness's `batch` mode over the list `parity_list` writes; schema in `worlds/gta/tests/parity.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools (`batch` mode, written when needed) |
+| `PRIMASE_GTA_GTXD` | input | live | optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_FILTER` | filter | live | optional: only archives whose path contains this text | - |
+| `PRIMASE_SCENES_SEKIRO` | input | retired | a folder of Sekiro skate-scene folders (every folder under it holding a `scene.json`) | an earlier C# exporter's scenes, since deleted; retired by its owners: its census readers drop it in their own steps |
+| `PRIMASE_SCENE_FILTER` | filter | live | optional: only scene folders whose path contains this text | - |
+| `PRIMASE_RESKATE_PATCH` | input | live | a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs` | third-party: ReSkate Studio's compile output |
+| `PRIMASE_SKATE_DATA` | input | live | the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only | the user's own install |
+| `PRIMASE_RESKATE_VBLEND_SPEC` | input | retired | the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`) | its spec, checker and reference were our own outputs; retired by the blend owner, `postcompile_vbrecord.rs` carries the remaining obligation |
+| `PRIMASE_RESKATE_VBLEND_CHECK` | input | retired | optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`) | our own checker; retired with `PRIMASE_RESKATE_VBLEND_SPEC` |
+| `PRIMASE_RESKATE_VBLEND_REF` | input | retired | optional: the same Patch blended by a reference patcher whose output was checked in game, for the checker's comparison | our own patcher's output; retired with `PRIMASE_RESKATE_VBLEND_SPEC` |
+| `PRIMASE_RESKATE_BLEND_MAP` | input | live | a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs` | our own writer's output: the stage's input, not a reference |
+| `PRIMASE_RESKATE_BLEND_PATCH` | input | live | ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012) | third-party: ReSkate Studio 20261012's compile of that map |
+| `PRIMASE_RESKATE_BLEND_SPEC` | input | live | optional: a frozen resolution of that record against that Patch (a regression baseline of our own stage), in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output | regression baseline: an earlier run of our own stage, frozen; not an independent oracle |
+| `PRIMASE_UNITY_V21_DATA` | input | live | a Unity player data folder with SerializedFile version 21 containers | the user's own install |
+| `PRIMASE_UNITY_V21_CENSUS` | input | live | an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_DATA` | input | live | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) | the user's own install |
+| `PRIMASE_UNITY_TPK` | input | live | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version | input data: class layouts for the player's Unity version (repacked with a script kept with the private oracle tools) |
+| `PRIMASE_UNITY_ORACLE` | input | live | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_SCAN` | input | live | optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_MESHES` | input | live | optional: an independent reader's decoded meshes of that folder (JSON; schema in `worlds/unity/tests/mesh.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_TEXTURES` | input | live | optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_MATERIALS` | input | live | optional: an independent reader's materials of that folder (JSON; schema in `worlds/unity/tests/material.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_PORT` | input | live | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) | another exporter's output: an appearance baseline, not a reading of the source |
+| `PRIMASE_UNITY_PORT_MATERIALS` | input | live | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) | another exporter's output, joined by a script kept with the private oracle tools |
+| `PRIMASE_UNITY_PORT_TERRAIN` | input | live | optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`) | another exporter's terrain, unpacked by a script kept with the private oracle tools |
+| `PRIMASE_OUT` | output | live | optional: where real-data tests write their outputs (default: the OS temporary directory) | - |
+| `PRIMASE_ALLOW_LIVE` | switch | live | optional: `1` lets a real-data gate report input folders that changed during the run and continue | - |
+| `PRIMASE_MAPS_GTA` | input | retired | a root containing exported map folders with `textures/` PNG images | an earlier exporter's map folders; retired by its owners: `toolkit/image/tests/census.rs` drops it in its own step |
+| `PRIMASE_SCENE_SKATE` | input | blocked | our own earlier skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable); not an independent oracle | our own earlier C# validator, a build from before its LOD checks: not normative for the current writer contract; retire it when the frozen interchange tests cover the format, or rebuild it from maintained source |
+| `PRIMASE_GLTF_VALIDATOR` | input | live | the Khronos glTF-Validator executable (`gltf_validator`, 2.0.0-dev.3.10 release build) | third-party: Khronos glTF-Validator 2.0.0-dev.3.10 |
+| `PRIMASE_OODLE5` | input | live | explicit trusted Oodle version-5 game DLL path | the game's own DLL from the user's install |
+| `PRIMASE_OODLE6` | input | live | explicit trusted Oodle version-6 game DLL path | the game's own DLL from the user's install |
+| `PRIMASE_OODLE9` | input | live | explicit trusted Oodle version-9 game DLL path | the game's own DLL from the user's install |
+| `PRIMASE_DCX` | input | live | folder recursively containing loose KRAK DCX files | the game's own files, extracted from the user's install |
+| `PRIMASE_CAS_SAMPLES` | input | live | directory of indexed individual `.casblock` frames | the game's own CAS frames, cut from the user's install |
+| `PRIMASE_SEKIRO_DIR` | input | live | install folder containing Data1 through Data5 BHD/BDT pairs | the user's own install |
+| `PRIMASE_FROMSOFT_RIGID_ORACLE` | input | live | independent rigid vertex fixtures: models.jsonl and per-model binary mesh/vertex counts followed by position and normal f32 triples; worlds/fromsoft/tests/rigid_census.rs | independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode) |
+| `PRIMASE_FROMSOFT_OBJECT_ORACLE` | input | blocked | main-HKX body fixtures for reference bd77fcb, decoded by an independent Havok reader; worlds/fromsoft/tests/object_collision.rs | the existing fixtures were decoded by our earlier C# exporter, not independently; replacement: a thin dump through Havoc (SoulsAssetPipeline d11caf9) |
+| `PRIMASE_FROMSOFT_OBJECT_SCENE` | input | retired | reference scene folder with scene.json, export_report.json and collision/objects.bin from corrected convex decoding; worlds/fromsoft/tests/object_scene.rs | an earlier C# exporter's scene, since deleted; retired: raw placement and collision obligations move to the SoulsFormats dump and pass fixtures |
+| `PRIMASE_FROMSOFT_OUTPUT` | output | live | fresh output folder for written scene and object-collision gates; worlds/fromsoft/README.md | - |
+| `PRIMASE_FROMSOFT_EXTRAS_ORACLE` | input | live | independent stored EDGE/BTL records and loose fixtures; worlds/fromsoft/tests/extras_census.rs | SoulsFormats' EDGE/BTL readings; archive access went through our earlier C# exporter |
+| `PRIMASE_FROMSOFT_EXTRAS_SCENE` | input | retired | reference scene folder with lights/grind tables and markers; worlds/fromsoft/tests/extras_scene.rs | an earlier C# exporter's scene, since deleted; retired with `PRIMASE_FROMSOFT_OBJECT_SCENE` |
+| `PRIMASE_FROMSOFT_EXTRAS_OUTPUT` | output | live | fresh extras scene output folder; worlds/fromsoft/tests/extras_scene.rs | - |
+| `PRIMASE_FROMSOFT_NAMES` | input | live | caller-provided UTF-8 Sekiro path dictionary | third-party: UXM's Sekiro path dictionary |
+| `PRIMASE_FROMSOFT_NORMAL_SCENE` | input | retired | reference normal PNGs and scene.json for offline cached-DDS comparison; worlds/fromsoft/tests/normal_images.rs | an earlier exporter's PNGs; retired: hand-worked normal pixels carry the obligation |
+| `PRIMASE_FROMSOFT_DDS_ORACLE` | input | blocked | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md | the C# oracle's decoder source is gone; replacement: a third-party DDS decoder |
+| `PRIMASE_FROMSOFT_MODEL_ORACLE` | input | retired | independent pre-bake area geometry outputs; schema in worlds/fromsoft/README.md | the existing outputs were our earlier C# exporter's; retired: `PRIMASE_FROMSOFT_RIGID_ORACLE` covers FLVER geometry |
+| `PRIMASE_FROMSOFT_MSB_ORACLE` | input | live | independent map models, parts and transforms; schema in worlds/fromsoft/README.md | SoulsFormats' MSBS reading of the install's maps |
+| `PRIMASE_FROMSOFT_SHADOW_ORACLE` | input | live | original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs` | the install's map.msb with shadows.json; the JSON's producer is not recorded yet |
+| `PRIMASE_FROMSOFT_STATE_ORACLE` | input | live | independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md | a private dump tool's MSB/EMEVD reading; only its build output is retained, so its independence is not yet shown |
+| `PRIMASE_FROMSOFT_STATE_SCENE` | input | retired | a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs | an earlier C# exporter's scene, since deleted; retired with `PRIMASE_FROMSOFT_OBJECT_SCENE` |
+| `PRIMASE_FROMSOFT_BLOCKER_ORACLE` | input | live | blocker-card reference cases.json; schema in worlds/fromsoft/README.md | cases.json; its producer is not recorded yet |
+| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | input | blocked | independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md | the earlier oracle is gone; replacement: SoulsFormats' MTD reading in the dump harness, hand-worked fixtures for assignments and availability |
+| `PRIMASE_FROMSOFT_PBR_ORACLE` | input | live | source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs` | the install's own DDS with statistics computed by a script kept with the private oracle tools |
+| `PRIMASE_FROMSOFT_LAYER_PILOT` | input | blocked | bounded layered-shader pilot inputs and reference pixels; schema in worlds/fromsoft/README.md | the existing pilot came from our earlier C# exporter's layer bake; replacement: the game's shaders on WARP |
+| `PRIMASE_FROMSOFT_SCENE` | input | live | our earlier exporter's skate-scene folder of an area, with placement sources and tables (a regression baseline, not an independent reference) | regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead |
+| `PRIMASE_FROMSOFT_BHD_ORACLE` | input | blocked | reference archive outputs; schema in worlds/fromsoft/README.md | replacement: SoulsFormats/UXM census mode of the dump harness |
+| `PRIMASE_HAVOK_CORPUS` | input | blocked | loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md | the game's own tagfiles; the `.hkx.soup` oracle needs an independent reader (Havoc or HKLib thin dump) |
+| `PRIMASE_FROSTBITE_EBX` | input | live | a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; toolkit/frostbite/tests/ebx.rs | the game's own EBX documents |
+| `PRIMASE_RESKATE_CLI` | input | live | the ReSkate CLI executable, used as an independent EBX reader and reference writer (`ebx-values`, `ebx-rewrite-diff`); toolkit/frostbite/tests/ebx.rs | third-party: ReSkate Studio's CLI (20261012) |
+| `PRIMASE_FROMSOFT_UV_FRAME_CENSUS` | input | live | independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions | a TSV whose producer is not recorded yet |
+| `PRIMASE_CODEC_CORPUS` | input | live | TSV: codec, compressed path, oracle decoded path (tab-separated) | game data with a third-party decoder's output |
+| `PRIMASE_DXBC_SHADERS` | input | blocked | shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md | the game's own shaders with third-party disassembly; the existing raw-register traces came from our own interpreter, not independently |
+| `PRIMASE_SKATE_MASK_ORACLE` | input | live | PNGs and independent mask pixel hashes in `cases.json`; schema below | independent: Pillow's decode and channel mapping of the game's own textures, generated by a script kept with the private oracle tools |
+| `PRIMASE_DATA` | config | live | the absolute path of a local TOML file mapping these names to string values (see above) | - |
+| `PRIMASE_REQUIRE_REAL_DATA` | switch | live | optional: `1` makes every unset input fail its test; `gate` only the inputs the landing gate must have | - |
+| `PRIMASE_CACHE` | runtime | live | optional: the disk cache folder of KTX2 encodings that `scene_to_tiles` (and a command with the same `--cache` option) uses when no `--cache` is given; read by commands, not tests | - |
+| `PRIMASE_DXC` | input | live | Microsoft's `dxc` shader compiler executable, for the DXIL evaluator's comparison with WARP; `toolkit/dxil/tests/warp.rs` | third-party: Microsoft's dxc |
+| `PRIMASE_WARP` | input | live | the WARP oracle program that runs a shader on Microsoft's WARP rasterizer; `toolkit/dxil/tests/common/warp.rs` | third-party: Microsoft's WARP rasterizer, through a thin host program kept with the private oracle tools |
+| `PRIMASE_WARP_SCRATCH` | output | live | a folder for the WARP comparison's case files and results | - |
+| `PRIMASE_DXIL_FUZZ_RUNS` | switch | live | optional: how many mutated fixtures the DXIL fuzz test runs (default 3000) | - |
+| `PRIMASE_FROMSOFT_FRAMES` | input | live | a folder holding `frames.jsonl`: SoulsFormats' reading of a few Sekiro models as stored (per mesh its LOD0 face set, per vertex position, normal, tangents and UV0); `worlds/fromsoft/tests/handedness.rs` | independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (frames mode) |
+| `PRIMASE_FROMSOFT_NORMAL_FRAMES` | input | live | a folder holding `frames.jsonl`: independently stored tangent frames (`n`, `t`, `w` per sample key) of Sekiro normal-mapped surfaces; `worlds/fromsoft/tests/normal_basis.rs` | a JSONL whose producer is not recorded yet |
+| `PRIMASE_FROMSOFT_NORMAL_CURL` | input | live | a JSON list of curl measurements of Sekiro normal maps by a script separate from the reader (`name`, `verdict` per map); `worlds/fromsoft/tests/normal_basis.rs` | our own measurement script over the game's normal maps (separate from the reader under test, not a third-party reader) |
+| `PRIMASE_FROMSOFT_WRITTEN_SCENE` | input | retired | a scene folder written by the FromSoft reader for the same area as `PRIMASE_FROMSOFT_SCENE`, compared with it; `worlds/fromsoft/tests/collision_scene.rs`, `sekiro_scene.rs` | our own reader's output, compared with an earlier exporter's scene; retired with that comparison |
+| `PRIMASE_GTA_FRAMES` | input | live | one ydr's high-detail geometries as an independent reader (CodeWalker) reads them, as stored in GTA's frame: one JSON file `{path, value: {models: [{geometries: [{positions, normals, tangents (xyzw), texcoords, indices}]}]}}`; the frame change, triangle fronts and bitangent sign are checked against it (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/handedness.rs` | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_BOUNDS` | input | live | props' embedded collision bounds (a ydr's own, a yft's first physics LOD's) as an independent reader (CodeWalker) reads them: a folder of JSON files, one per prop, `{path, leaves: [{type, flags, polygons: [{type, material, vertices (placed)}] or corners (8, placed)}]}`; `lower-gta-embedded-collision`'s triangles are checked against them (needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`); `worlds/gta/tests/embedded_bounds.rs` | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `PRIMASE_GTA_REGION` | filter | live | optional: only this named gate region in `worlds/gta/tests/region_pipeline.rs` | - |
+| `PRIMASE_HAVOK_OBJECT_CORPUS` | input | live | a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs` | the game's own tagfiles, checked against their own stored half-spaces |
+| `PRIMASE_UNITY_SUN` | input | live | an independent reader's (UnityPy) record of the scan level's RenderSettings sun as stored, the render-pipeline asset classes, the shining directional lights and the main-light choice; `worlds/unity/tests/light.rs` | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_SHADERS` | input | live | an independent reader's (UnityPy) shader render state of every material (subshader tags; per pass LightMode, blend factors, zwrite and cull with their bound properties); `worlds/unity/tests/material.rs` | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_PROGRAMS` | input | live | an independent reader's (UnityPy) compiled fragment programs of every shader (per pass the player variants, keywords, program type and code hash, and the constant buffers, textures and samplers); `worlds/unity/tests/program.rs` | independent: UnityPy, through dump scripts kept with the private oracle tools |
+| `PRIMASE_UNITY_FRAMES` | input | live | an independent reader's (UnityPy) decoding of a few meshes in Unity's own frame (vertices, normals, tangents, UV0, submesh triangles); `worlds/unity/tests/handedness.rs` | independent: UnityPy, through dump scripts kept with the private oracle tools |
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 

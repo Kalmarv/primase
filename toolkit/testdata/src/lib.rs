@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod inputs;
-pub use inputs::{Kind, VARIABLES, Variable, declared};
+pub use inputs::{Kind, Status, VARIABLES, Variable, declared};
 
 /// Refuse a name the registry ([`VARIABLES`]) does not declare: a typo must not skip quietly.
 #[track_caller]
@@ -280,5 +280,24 @@ mod tests {
                 .all(|v| v.name.starts_with("PRIMASE_") && !v.about.is_empty())
         );
         assert!(VARIABLES.iter().all(|v| !v.gate || v.kind == Kind::Input));
+    }
+    #[test]
+    fn every_input_states_its_source_and_retired_ones_leave_the_gate() {
+        for v in VARIABLES {
+            if v.kind == Kind::Input {
+                assert!(!v.source.is_empty(), "{}: say where its data comes from", v.name);
+            } else {
+                assert!(
+                    v.source.is_empty() && v.status == Status::Live,
+                    "{}: only inputs have a source and a status",
+                    v.name
+                );
+            }
+            assert!(
+                !(v.status == Status::Retired && v.gate),
+                "{}: a retired obligation is not a landing-gate input",
+                v.name
+            );
+        }
     }
 }

@@ -954,28 +954,29 @@ fn real_data_variables_are_declared() {
         "declared but read nowhere (remove them): {stale:?}"
     );
 
-    // CONTRIBUTING.md's table, row by row, is the registry without the test-internal kinds
+    // CONTRIBUTING.md's table, row by row, is the registry without the test-internal kinds; `-` stands for no source
     let contributing = read(&root().join("CONTRIBUTING.md"));
-    let rows: Vec<(String, String, String)> = contributing
+    let rows: Vec<[String; 5]> = contributing
         .lines()
         .filter_map(|l| l.strip_prefix("| `PRIMASE_"))
         .map(|l| {
-            let mut cells = l.splitn(3, " | ");
-            let name = String::from("PRIMASE_") + cells.next().unwrap().trim_end_matches('`');
-            let kind = cells.next().unwrap_or("").to_owned();
-            let about = cells.next().unwrap_or("").trim_end_matches(" |").to_owned();
-            (name, kind, about)
+            let mut cells = l.trim_end_matches(" |").splitn(5, " | ").map(str::to_owned);
+            let mut cell = || cells.next().unwrap_or_default();
+            let name = String::from("PRIMASE_") + cell().trim_end_matches('`');
+            [name, cell(), cell(), cell(), cell()]
         })
         .collect();
-    let want: Vec<(String, String, String)> = VARIABLES
+    let want: Vec<[String; 5]> = VARIABLES
         .iter()
         .filter(|v| !matches!(v.kind, Kind::Test | Kind::Child))
         .map(|v| {
-            (
+            [
                 v.name.to_owned(),
                 format!("{:?}", v.kind).to_lowercase(),
+                format!("{:?}", v.status).to_lowercase(),
                 v.about.to_owned(),
-            )
+                if v.source.is_empty() { "-" } else { v.source }.to_owned(),
+            ]
         })
         .collect();
     assert_eq!(
