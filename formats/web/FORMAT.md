@@ -283,6 +283,12 @@ Surfaces with the same queue draw in node order, then primitive order. `layer` i
 depth towards the viewer and doesn't cast its shadow. Without the extra, a material draws by its alpha mode and is
 never a decal.
 
+## Material usage
+
+A material may carry `extras.primase["core.material_usage"]` = `{"version": 1, "value": "foliage" | "water"}`: what
+its surfaces are, as the source states it (vegetation; a water surface), for a consumer that treats them differently
+whatever their shading (wind, two-sided lighting, its own water). Without the extra, a material is ordinary.
+
 ## Shadows
 
 What the source states about shadows is carried as glTF extras, `extras["primase.shadows"]`, an object with

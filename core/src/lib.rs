@@ -19,6 +19,8 @@ mod collider;
 pub use collider::{Collider, Diagonal, Heightfield, Shape};
 mod draw_order;
 pub use draw_order::{DrawLayer, DrawOrder};
+mod material_usage;
+pub use material_usage::MaterialUsage;
 pub mod pass;
 pub mod pbr;
 pub mod print;
