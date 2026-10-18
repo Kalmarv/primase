@@ -1,3 +1,6 @@
+//! Web tiles: placement, pivots, instancing, compression and quantization.
+// helpers outside #[test] functions unwrap too
+#![allow(clippy::unwrap_used)]
 use primase_core::{Instance, Mesh, Primitive, Semantic, Stream, Topology, Transform, World};
 use primase_web::{Options, write};
 use std::collections::BTreeMap;
@@ -339,7 +342,30 @@ fn quantized_streams_decode_exactly_and_validate() {
             ]
         })
         .collect();
-    assert_eq!(values, vec![[0, 0, 0], [32767, 0, 0], [0, 0, 32767]]);
+    // bounds x 0..1, y 0, z 0..1: centre (0.5, 0, 0.5), one step 0.5/32767 (rounded up to reach the bounds)
+    assert_eq!(
+        values,
+        vec![[-32767, 0, -32767], [32767, 0, -32767], [-32767, 0, 32767]]
+    );
+    // the two placements, instanced, carry the frame: translation by the centre, scale by the step
+    let node = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n.get("mesh").is_some())
+        .unwrap();
+    let streams = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+    let bin = chunks.bin.unwrap();
+    let translation: Vec<[f32; 3]> = stream(&doc, bin, streams["TRANSLATION"].as_u64().unwrap());
+    let scale: Vec<[f32; 3]> = stream(&doc, bin, streams["SCALE"].as_u64().unwrap());
+    assert_eq!(translation, vec![[0.5, 0., 0.5], [10.5, 0., 0.5]]);
+    let step = scale[0][0];
+    assert_eq!(scale, vec![[step; 3]; 2]);
+    assert!(f64::from(step) * 32767. >= 0.5 && f64::from(step.next_down()) * 32767. < 0.5);
+    let q = &doc["asset"]["extras"]["primase.quantization"];
+    assert_eq!(q["position_centre"], "bounds");
+    assert_eq!(q["meshes_float_positions"], 0);
+    assert!(q["position_max_world_error"].as_f64().unwrap() < 1e-6, "{q}");
     let attrs = &doc["meshes"][0]["primitives"][0]["attributes"];
     for (name, component) in [
         ("NORMAL", 5122),
@@ -377,6 +403,107 @@ fn quantized_streams_decode_exactly_and_validate() {
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["issues"]["numErrors"], 0, "{report}");
     }
+}
+
+/// The values of a meshopt-coded f32 accessor.
+fn stream<T: Default + Clone>(doc: &serde_json::Value, bin: &[u8], accessor: u64) -> Vec<T> {
+    let a = &doc["accessors"][accessor as usize];
+    let view = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+    let e = &view["extensions"]["EXT_meshopt_compression"];
+    let start = e["byteOffset"].as_u64().unwrap() as usize;
+    let end = start + e["byteLength"].as_u64().unwrap() as usize;
+    meshopt::decode_vertex_buffer::<T>(&bin[start..end], a["count"].as_u64().unwrap() as usize).unwrap()
+}
+
+/// One self-placed mesh with `positions` (triangles 0 1 2 and 0 2 3), its tile's document and BIN.
+fn one_mesh(positions: Vec<[f32; 3]>) -> (serde_json::Value, Vec<u8>) {
+    let mut w = World::new();
+    let e = w.spawn();
+    let mut m = mesh();
+    m.primitives_mut()[0].indices = Some(vec![0, 1, 2, 0, 2, 3]);
+    m.primitives_mut()[0]
+        .streams
+        .insert(Semantic::Position, Stream::F32x3(positions));
+    w.insert(e, m);
+    w.insert(e, Transform::IDENTITY);
+    let set = write(&w, &Options::default()).unwrap();
+    let bytes = set.files.values().next().unwrap();
+    let chunks = primase_gltf::glb::parse(bytes).unwrap();
+    (
+        serde_json::from_slice(chunks.json).unwrap(),
+        chunks.bin.unwrap().to_vec(),
+    )
+}
+
+#[test]
+fn positions_far_from_the_origin_are_centred_and_a_mesh_over_budget_keeps_f32() {
+    // 2 km out, 1 m across: centred on (2000.5, 0, 0.5), step 0.5/32767 (15 um), so the node is moved to the centre
+    // and scaled by the step; origin-centred it would have been 2001/32767 (61 mm)
+    let (doc, bin) = one_mesh(vec![
+        [2000., 0., 0.],
+        [2001., 0., 0.],
+        [2001., 0., 1.],
+        [2000., 0., 1.],
+    ]);
+    let node = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n.get("mesh").is_some())
+        .unwrap();
+    assert_eq!(node["translation"], serde_json::json!([2000.5, 0., 0.5]));
+    let step = node["scale"][0].as_f64().unwrap();
+    assert!(
+        step * 32767. >= 0.5 && step < 0.5 / 32767. * (1. + 1e-6),
+        "{step}"
+    );
+    let position = doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(doc["accessors"][position as usize]["componentType"], 5122);
+    let q: Vec<[i16; 4]> = stream(&doc, &bin, position);
+    assert_eq!(
+        q,
+        vec![
+            [-32767, 0, -32767, 0],
+            [32767, 0, -32767, 0],
+            [32767, 0, 32767, 0],
+            [-32767, 0, 32767, 0]
+        ]
+    );
+    let extras = &doc["asset"]["extras"]["primase.quantization"];
+    assert!(
+        extras["position_max_world_error"].as_f64().unwrap() < 1e-6,
+        "{extras}"
+    );
+
+    // 100 m across: the step is 50/32767 (1.526 mm), and the vertex 0.6 mm along x decodes to 0, 0.6 mm from where
+    // it was, over the 0.25 mm budget, so the positions stay f32 and the node as it was
+    let (doc, bin) = one_mesh(vec![
+        [0., 0., 0.],
+        [100., 0., 0.],
+        [0., 0., 100.],
+        [0.0006, 0., 0.],
+    ]);
+    let position = doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(doc["accessors"][position as usize]["componentType"], 5126);
+    let p: Vec<[f32; 3]> = stream(&doc, &bin, position);
+    assert_eq!(
+        p,
+        vec![[0., 0., 0.], [100., 0., 0.], [0., 0., 100.], [0.0006, 0., 0.]]
+    );
+    let node = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n.get("mesh").is_some())
+        .unwrap();
+    assert!(node.get("translation").is_none() && node.get("scale").is_none() && node.get("matrix").is_none());
+    let extras = &doc["asset"]["extras"]["primase.quantization"];
+    assert_eq!(extras["meshes_float_positions"], 1);
+    assert_eq!(extras["position_budget"], 0.00025);
 }
 
 #[test]

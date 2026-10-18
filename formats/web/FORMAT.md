@@ -134,11 +134,18 @@ first. Materials retain
 their alpha modes, cutoffs and double-sided flags. Texture transforms belong to
 the specified UV set and must be applied by the consumer.
 
-Compressed geometry has per-mesh 16-bit position quantization and meshopt-coded
-streams. `asset.extras["primase.quantization"]` records the approximation.
-Quantization may move positions; bounds in the index describe pre-quantization
-geometry. Consumers comparing exact vertex bounds must allow the declared step
-transformed by each placement, plus floating-point transform error.
+Compressed geometry has meshopt-coded streams and, where they stay within 0.25 mm, 16-bit positions. A mesh's
+positions are centred on their bounding box with one uniform step (so normals decode unchanged), and the centre and
+step are composed into each of its placements: a node's matrix, or its translation and scale, or the instance
+TRANSLATION and SCALE streams. A consumer decodes them by the ordinary node transform, and a quantized mesh's
+translation is its bounds' centre, not the placement's pivot. A mesh whose 16-bit positions would move a vertex more
+than 0.25 mm in the world, through any of its placements, keeps f32 positions and its placements as they were.
+`asset.extras["primase.quantization"]` records the approximation: `position_centre` (`"bounds"`),
+`position_budget` (metres), `position_max_world_error` (metres: the largest distance between a vertex as drawn and
+as written unquantized, at every vertex through every placement, from the stored numbers), `position_max_local_error`
+and `position_max_local_step` (in the meshes' own units), and `meshes_float_positions`. Bounds in the index describe
+the unquantized geometry; drawn geometry is within `position_max_world_error` of them, plus the consumer's own
+floating-point error.
 
 A data image (`extras["primase.role"] = "data"`: a palette or lookup table a shader reads exactly) is always the
 stored PNG, at full size and never block-compressed, and its textures use a NEAREST sampler without mips. A

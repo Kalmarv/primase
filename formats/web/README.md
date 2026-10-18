@@ -68,28 +68,29 @@ uses f32 accessors; source names/extras survive in `web.instances` metadata.
 `instanced_placements` reports how many placements were packed in each tile.
 
 Compression is enabled by default (`Options::compress`). Positions use signed
-16-bit integers with one positive, origin-centred uniform decode scale per mesh;
-node/instance scales absorb that scale, preserving normal directions. Normals
-and tangents use signed normalized 16-bit components. UV streams wholly in
-`[0,1]` use unsigned normalized 16-bit components; repeating UVs remain f32.
-This is an explicit lossy approximation made by the web lowering. Each position
-axis uses 16 bits (signed integer range -32767 to 32767). A mesh's largest absolute
-local coordinate M gives a uniform step M/32767; the nominal 200-m tile grid does
-not bound M, because complete triangles and pivot-assigned meshes can cross tiles.
-The index records each tile's actual extent as `max - min`.
-Positions may move by up to half a quantization step per local coordinate
-(plus floating-point rounding); the measured maximum local coordinate error is
-stored in `asset.extras["primase.quantization"]`. Scale by the placement basis
-to assess world-space error. The metadata also records `position_max_local_step`.
-For each world axis, multiply half the local step by the sum of absolute values
-in that placement basis row, allowing for f32 transform rounding. Report local
-quantization error separately from the measured world-bounds difference against
-the unquantized export. Indices retain their exact original bytes/order.
-Two real-scene gates measured maximum local steps of 9.044 mm and 11.323 mm,
-maximum local coordinate errors of 4.521 mm and 5.662 mm, and maximum world-bounds
-differences of 1.636 mm and 5.326 mm respectively. The latter scene's worst-step
-tile spans 396.052 by 235.011 by 320.626 metres, despite the 200-m grid.
-These are measured corpus results, not a universal maximum-error guarantee.
+16-bit integers in a frame per mesh: centred on the mesh's bounding box, with one
+positive uniform step that reaches its farthest coordinate (uniform decoding keeps
+normal directions). The frame is composed into every placement of the mesh (node
+matrix, node translation and scale, or the instance TRANSLATION and SCALE
+streams), so the decoded mesh lands where it was. The change in world position is
+measured at every vertex through every placement, from the numbers as stored (f32
+instance streams, node JSON as written); a mesh whose error would exceed
+`POSITION_BUDGET` (0.25 mm) keeps f32 positions and its placements unchanged.
+Meshes sharing a position accessor share a frame. Normals and tangents use signed
+normalized 16-bit components. UV streams wholly in `[0,1]` use unsigned normalized
+16-bit components; repeating UVs remain f32. This is an explicit lossy
+approximation made by the web lowering; `asset.extras["primase.quantization"]`
+records `position_max_world_error`, `position_max_local_error`,
+`position_max_local_step`, `meshes_float_positions` and the budget. Indices retain
+their exact original bytes/order.
+Measured on two GTA V regions converted with and without quantization (compressed
+set against its plain twin, every vertex through every placement, node numbers as
+the f32 values they are): Paleto Bay (6.4 km from the origin) went from a largest
+vertex error of 93.7 mm (water meshes 6.5 km across, origin-centred) to 0.249 mm,
+seams from 103.6 mm to 0.29 mm, with 243 of 566 meshes keeping f32 positions and
+3.5% more tile bytes; downtown's north-east edge went from 3.09 mm to 0.24 mm,
+seams from 3.92 mm to 0.15 mm, 93 of 239 meshes f32, 4.2% more bytes. These are
+measured corpus results; the budget is what the writer guarantees.
 Vertex and instance streams use `EXT_meshopt_compression` v0 with no filter;
 every stream is decoded and checked byte-for-byte before output. Required
 extensions include `KHR_mesh_quantization` and meshopt. PNG bytes stay unchanged.
