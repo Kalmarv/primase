@@ -548,6 +548,8 @@ fn resolve_by(
         contained: Vec<(u64, usize)>,
         full: BTreeSet<u64>,
         distinct: usize,
+        /// The primitive's distinctive weights (each with its half choices).
+        weights: BTreeSet<[u16; 2]>,
     }
     let mut found = Vec::new();
     for (material, pairs) in &record.materials {
@@ -620,6 +622,7 @@ fn resolve_by(
                 contained,
                 full,
                 distinct: weights.len(),
+                weights: weights.clone(),
             });
         }
     }
@@ -631,6 +634,23 @@ fn resolve_by(
             .entry(c.material.clone())
             .and_modify(|k| *k = k.intersection(&c.full).copied().collect())
             .or_insert_with(|| c.full.clone());
+    }
+    // a material whose primitives' own keys agree on none (one primitive's partial match among its own MeshSets can
+    // leave out the key the others hold) takes the keys holding every one of its primitives in the whole Patch
+    for (m, ks) in choices.iter_mut().filter(|(_, ks)| ks.is_empty()) {
+        let mut common: Option<BTreeSet<u64>> = None;
+        for c in found.iter().filter(|c| &c.material == m) {
+            let f: BTreeSet<u64> = all
+                .iter()
+                .filter(|(_, set)| c.weights.iter().all(|w| w.iter().any(|b| set.contains(b))))
+                .map(|(&k, _)| k)
+                .collect();
+            common = Some(match common {
+                None => f,
+                Some(i) => i.intersection(&f).copied().collect(),
+            });
+        }
+        *ks = common.unwrap_or_default();
     }
     let mut keys: BTreeMap<String, u64> = BTreeMap::new();
     let mut owner: BTreeMap<u64, String> = BTreeMap::new();
@@ -897,6 +917,26 @@ mod tests {
         let none = |_: &str, _: usize| -> Result<Vec<f32>> { Ok(vec![0.0, 0.375, 1.0]) };
         let e = resolve_by(&rec, &sections, &BTreeMap::new(), &peers, none).unwrap_err();
         assert!(e.to_string().contains("or the whole Patch"), "{e}");
+    }
+
+    /// A material's primitives may not agree on a key among their own MeshSets (one primitive's own MeshSet holds a
+    /// key of another material that fits it; the material's key is in a cell prototype named after no object): the
+    /// material then takes the key every one of its primitives fits in the whole Patch.
+    #[test]
+    fn a_material_whose_own_keys_disagree_takes_its_key_from_the_whole_patch() {
+        let sections = [
+            section("t_a", 5, &[0.0, 0.25, 1.0]),
+            section("d2_x1_z1", 8, &[0.0, 0.25, 0.5, 1.0]),
+        ];
+        let rec = record(&[("m", "t_a", 0), ("m", "t_b", 0), ("n", "t_a", 1)]);
+        let weights = |mesh: &str, p: usize| -> Result<Vec<f32>> {
+            Ok(match (mesh, p) {
+                ("meshes/t_b.glb", _) => vec![0.0, 0.5, 1.0],
+                _ => vec![0.0, 0.25, 1.0],
+            })
+        };
+        let r = resolve_by_files(&rec, &sections, weights).unwrap();
+        assert_eq!((r.keys["m"], r.keys["n"]), (8, 5));
     }
 
     /// [`resolve_by`] for a map whose objects are named after their GLBs (no map.json names).
