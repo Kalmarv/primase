@@ -328,6 +328,30 @@ impl Component for UnityTerrain {
     }
 }
 
+/// On the entity of a collision shape lowered apart from its collider (`unity.collider_of`, see
+/// [`crate::lower_collision`]): the entity of that `unity.collider` or `unity.terrain`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct UnityColliderOf(pub Entity);
+
+impl Component for UnityColliderOf {
+    const NAME: &'static str = "unity.collider_of";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.0);
+    }
+
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        if w.has::<UnityCollider>(self.0) || w.has::<UnityTerrain>(self.0) {
+            Ok(())
+        } else {
+            Err("the entity it names has no unity.collider or unity.terrain".into())
+        }
+    }
+}
+
 /// A renderer placed by a terrain's tree: the terrain's entity and the tree's index in its `unity.terrain` trees.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UnityTreeInstance {
@@ -486,8 +510,9 @@ impl Component for UnityCollider {
     const VERSION: u32 = 2;
     /// Removed when its entity's local space is mapped (`bake-nonrigid`): its shape is the collider as stored,
     /// relative to the stored transform, and no longer describes the entity once the transform's non-rigid part is
-    /// baked away. The `core.collision` soup `lower-unity-collision` made from it (with the physic material as its
-    /// surface) carries the geometry and is mapped; so `bake-nonrigid` runs after `lower-unity-collision`.
+    /// baked away. The collision `lower-unity-collision` made from it (a `core.collider`, or `core.collision` for a
+    /// concave mesh, with the physic material as its surface) carries the geometry; so `bake-nonrigid` runs after
+    /// `lower-unity-collision`.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
         primase_core::Linearity::Drop
     }

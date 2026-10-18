@@ -207,10 +207,12 @@ fn colliders_match_the_scan() {
     matrices.assert_passed();
 }
 
-/// The collision lowering checked against each collider's definition, in world space: a box's vertices are its
-/// corners through the collider's matrix; a sphere's lie at the PhysX-scaled radius from its centre; a capsule's at the
-/// scaled radius from its axis segment; every closed shape's triangles face outward; a mesh collider has its source
-/// triangles; every terrain collider its heightfield's cells. Bounds: 8 f32 steps at the coordinates' magnitude.
+/// The collision lowering, tessellated (`tessellate-colliders`), checked against each collider's definition in world
+/// space: a box's vertices are its corners through the collider's matrix; a sphere's lie at the PhysX-scaled radius
+/// from its centre; a capsule's at the scaled radius from its axis segment; every closed shape's triangles face
+/// outward; a mesh collider has its source triangles; every terrain collider its heightfield's cells, each vertex on a
+/// stored height sample. A shape lowered apart is found by its `unity.collider_of`. Bounds: 8 f32 steps at the
+/// coordinates' magnitude.
 #[test]
 fn collision_matches_the_colliders() {
     use primase_core::{Collision, Surfaces, World};
@@ -234,6 +236,21 @@ fn collision_matches_the_colliders() {
     let log = lower_unity_collision(&mut w).unwrap();
     println!("collision lowering: {:?}; {:?}", log.counts, log.approximations);
     assert_eq!(w.verify_components(), Vec::new());
+    let mut tessellated = primase_core::pass::PassLog::default();
+    primase_core::pass::Pass::run(&primase_meshops::TessellateColliders, &mut w, &mut tessellated).unwrap();
+    println!(
+        "tessellation: {:?}; {:?}",
+        tessellated.counts, tessellated.approximations
+    );
+    assert_eq!(w.verify_components(), Vec::new());
+    // the entity carrying each collider's collision: its own, or the one lowered apart for it
+    let mut carrier: BTreeMap<primase_core::Entity, primase_core::Entity> = BTreeMap::new();
+    for (e, of) in w.iter::<primase_unity::components::UnityColliderOf>() {
+        assert!(
+            carrier.insert(of.0, e).is_none(),
+            "two shapes lowered apart for one collider"
+        );
+    }
     let surfaces: Vec<String> = w
         .resource::<Surfaces>()
         .unwrap()
@@ -246,7 +263,8 @@ fn collision_matches_the_colliders() {
     let mut gate = GateReport::new("collision: shapes against their colliders", Tolerance::Exact);
     let (mut lowered, mut without_mesh) = (0usize, 0usize);
     for (e, c) in w.iter::<UnityCollider>() {
-        let col = w.get::<Collision>(e);
+        let ce = carrier.get(&e).copied().unwrap_or(e);
+        let col = w.get::<Collision>(ce);
         if !c.collides() {
             assert!(
                 col.is_none(),
@@ -265,15 +283,16 @@ fn collision_matches_the_colliders() {
         };
         lowered += 1;
         let t = w.get::<Transform>(e).unwrap();
+        let tc = w.get::<Transform>(ce).unwrap();
         let world: Vec<[f64; 3]> = col
             .positions
             .iter()
             .map(|p| {
                 let mut out = [0f64; 3];
                 for (i, o) in out.iter_mut().enumerate() {
-                    *o = f64::from(t.cols[3][i])
+                    *o = f64::from(tc.cols[3][i])
                         + (0..3)
-                            .map(|j| f64::from(t.cols[j][i]) * f64::from(p[j]))
+                            .map(|j| f64::from(tc.cols[j][i]) * f64::from(p[j]))
                             .sum::<f64>();
                 }
                 out
@@ -469,14 +488,46 @@ fn collision_matches_the_colliders() {
             gate.fail(&name, problems.join("; "));
         }
     }
-    let terrains = w
-        .iter::<primase_unity::components::UnityTerrain>()
-        .filter(|(e, t)| {
-            let n = t.resolution as usize;
-            w.get::<Collision>(*e)
-                .is_some_and(|c| c.triangles.len() == 2 * (n - 1) * (n - 1))
-        })
-        .count();
+    // terrains: every cell that is not a hole two triangles, every vertex on a stored height sample
+    let mut terrains = 0;
+    for (e, t) in w.iter::<primase_unity::components::UnityTerrain>() {
+        let (Some(&ce), Some(at)) = (carrier.get(&e), w.get::<Transform>(e)) else {
+            continue;
+        };
+        let (Some(col), Some(tc)) = (w.get::<Collision>(ce), w.get::<Transform>(ce)) else {
+            continue;
+        };
+        let n = t.resolution as usize;
+        let holes = t
+            .holes
+            .as_ref()
+            .map_or(0, |h| h.iter().filter(|&&x| x == 0).count());
+        let cells = (n - 1) * (n - 1) - holes;
+        let [sx, sy, sz] = t.scale.map(f64::from);
+        let mut off = 0f64;
+        for p in &col.positions {
+            let wp = [0, 1, 2].map(|i| f64::from(tc.cols[3][i]) + f64::from(p[i]));
+            // back to the terrain's own grid: x along +X, Unity z along the world's -Z
+            let x = (wp[0] - f64::from(at.cols[3][0])) / sx;
+            let z = -(wp[2] - f64::from(at.cols[3][2])) / sz;
+            let (xi, zi) = (x.round() as usize, z.round() as usize);
+            let h = f64::from(t.heights[zi * n + xi]) / 32766.0 * sy;
+            off = off
+                .max((x - xi as f64).abs() * sx)
+                .max((z - zi as f64).abs() * sz)
+                .max((wp[1] - f64::from(at.cols[3][1]) - h).abs());
+        }
+        let magnitude = [sx, sz].iter().fold(1f64, |m, s| m.max(s * n as f64));
+        if col.triangles.len() == 2 * cells && off <= 8.0 * eps * magnitude {
+            terrains += 1;
+        } else {
+            println!(
+                "terrain {}: {} triangles for {cells} cells, a vertex {off:e} off its sample",
+                w.get::<Name>(e).unwrap().0,
+                col.triangles.len()
+            );
+        }
+    }
     println!("{gate}\nterrain colliders with every cell: {terrains}");
     assert_eq!(lowered + without_mesh, rep.colliders);
     println!("mesh colliders with no mesh set (no collision): {without_mesh}");
