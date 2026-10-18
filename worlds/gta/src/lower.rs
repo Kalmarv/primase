@@ -16,6 +16,12 @@
 //!   the roughness of the exponent of `Specular` x s.a, per texel. A shader without `SpecularColor` writes no intensity
 //!   (dry), so its specular factor is 0.
 //!
+//!   A tinted shader's palette (`TintPaletteTex`) is data (`TexRole::Data`): the `_tnt` vertex shaders read it point
+//!   sampled at a texel indexed per vertex (u = COLOR_0's blue / 255, v = the entity's tint row, [`crate::tint`]), so
+//!   any filtering, resizing or lossy coding changes which colour a vertex gets. A texture also bound as a base colour
+//!   is left as that, counted. The terrain blend lookups (`lookupTexture`) and the sign text's distance fields
+//!   (`distanceMap`) are read filtered, as masks: not data.
+//!
 //!   Normal maps (`BumpTex`): GTA's pixel shaders take x = 2 r - 1, y = 2 g - 1 along the tangent and binormal (the
 //!   reader's TANGENT, whose w it gives glTF's meaning), rebuild z from the unscaled xy and scale xy by `Bumpiness`
 //!   before normalising: glTF's normal texture with that scale, in [`GTA_NORMALS`] (`normalize-normals` converts it).
@@ -485,6 +491,8 @@ impl Pass for LowerGtaPbr {
             .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
             .collect();
         let mut colour: BTreeSet<Entity> = BTreeSet::new();
+        // the tint palettes of the lowered materials (see the module documentation)
+        let mut palettes: BTreeSet<Entity> = BTreeSet::new();
         let mut lowered = Vec::new();
         let mut orders = Vec::new();
         // per distance field, its text texture
@@ -506,6 +514,9 @@ impl Pass for LowerGtaPbr {
                 continue;
             }
             let s = w.get::<GtaShader>(e).expect("shader");
+            if let Some(Some(p)) = texture(s, "TintPaletteTex") {
+                palettes.insert(p);
+            }
             let anim = anim_uv(s, log);
             match draw_order(s.render_bucket) {
                 Some(d) => {
@@ -706,13 +717,25 @@ impl Pass for LowerGtaPbr {
                 log.count("normal textures marked (GTA's convention)", 1);
             }
         }
-        for t in colour {
+        for &t in &colour {
             if let Some(tex) = w.get_mut::<Texture>(t)
                 && (tex.role, tex.color_space) != (TexRole::Color, ColorSpace::Srgb)
             {
                 tex.role = TexRole::Color;
                 tex.color_space = ColorSpace::Srgb;
                 log.count("base colour textures marked sRGB colour", 1);
+            }
+        }
+        for t in palettes {
+            if colour.contains(&t) {
+                log.count("tint palettes also drawn as a base colour: left as colour", 1);
+                continue;
+            }
+            if let Some(tex) = w.get_mut::<Texture>(t)
+                && tex.role != TexRole::Data
+            {
+                tex.role = TexRole::Data;
+                log.count("tint palettes marked data (read point sampled per vertex)", 1);
             }
         }
         emission_by_vertex(w, &classes, log)
@@ -1240,6 +1263,47 @@ mod tests {
         assert_eq!(
             log.counts
                 .get("render bucket 5: no draw order (not in the table)"),
+            Some(&1)
+        );
+    }
+
+    /// A tinted shader's palette is data; its base colour stays colour.
+    #[test]
+    fn a_tint_palette_is_data() {
+        use crate::components::{GtaParam, GtaShader};
+        use primase_core::pass::{Pass, PassLog};
+        let mut w = primase_core::World::new();
+        let (diffuse, palette) = (w.spawn(), w.spawn());
+        w.insert(diffuse, rgba([200, 100, 50, 255]));
+        w.insert(palette, rgba([10, 20, 30, 255]));
+        let tex = |t| GtaParam::Texture {
+            name: None,
+            texture: Some(t),
+        };
+        let m = w.spawn();
+        w.insert(
+            m,
+            GtaShader {
+                drawable: "d".into(),
+                index: 0,
+                name: primase_hash::joaat(b"normal_spec_tnt"),
+                preset: 0,
+                render_bucket: 0,
+                bucket_mask: 0,
+                params: vec![
+                    (primase_hash::joaat(b"DiffuseTex"), tex(diffuse)),
+                    (primase_hash::joaat(b"TintPaletteTex"), tex(palette)),
+                ],
+            },
+        );
+        drawn(&mut w, &[m]);
+        let mut log = PassLog::default();
+        super::LowerGtaPbr::default().run(&mut w, &mut log).unwrap();
+        assert_eq!(w.get::<Texture>(palette).unwrap().role, TexRole::Data);
+        assert_eq!(w.get::<Texture>(diffuse).unwrap().role, TexRole::Color);
+        assert_eq!(
+            log.counts
+                .get("tint palettes marked data (read point sampled per vertex)"),
             Some(&1)
         );
     }
