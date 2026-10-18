@@ -1,6 +1,94 @@
 use primase_image::{linear_to_srgb8, linear_to_srgb8_f32, srgb_to_linear, srgb_to_linear_f32};
 
-// Independent pre-extraction formulas from the scene and map writers.
+/// The exact curve leaves the f32 writer, which rounds every intermediate, at most 6 ULP away over all 256 bytes;
+/// the f64 writer rounds once and stays within 1. Bounds cover libm's last-bit variation (host `powf` is not
+/// correctly rounded everywhere).
+const F32_STANDARD_ULPS: u32 = 8;
+const F64_STANDARD_ULPS: u32 = 1;
+
+/// IEC 61966-2-1 decoded by hand for bytes around the 0.04045 knee and across the range. `c = byte / 255`;
+/// `linear = c / 12.92` below the knee, else `((c + 0.055) / 1.055)^2.4`. The expected value is the exact result
+/// rounded once to f32.
+const STANDARD_DECODES: &[(u8, f32)] = &[
+    // 0: c = 0; 0 / 12.92 = 0
+    (0, 0.0),
+    // 1: c = 0.003921569 (below the knee); 0.003921569 / 12.92 = 0.0003035270
+    (1, 0.000303527),
+    // 10: c = 0.039215686 (below the knee); 0.039215686 / 12.92 = 0.0030352698
+    (10, 0.00303527),
+    // 11: c = 0.043137255 (above the knee); ((0.043137255 + 0.055) / 1.055)^2.4 = 0.0033465358
+    (11, 0.0033465358),
+    // 12: c = 0.047058824; ((0.047058824 + 0.055) / 1.055)^2.4 = 0.0036765073
+    (12, 0.0036765074),
+    // 20: c = 0.078431373; ((c + 0.055) / 1.055)^2.4 = 0.0069954102
+    (20, 0.00699541),
+    // 64: c = 0.250980392; ((c + 0.055) / 1.055)^2.4 = 0.0512694584
+    (64, 0.051269457),
+    // 100: c = 0.392156863; ((c + 0.055) / 1.055)^2.4 = 0.1274376804
+    (100, 0.12743768),
+    // 128: c = 0.501960784; ((c + 0.055) / 1.055)^2.4 = 0.2158605001
+    (128, 0.2158605),
+    // 192: c = 0.752941176; ((c + 0.055) / 1.055)^2.4 = 0.5271151257
+    (192, 0.5271151),
+    // 200: c = 0.784313725; ((c + 0.055) / 1.055)^2.4 = 0.5775804404
+    (200, 0.57758045),
+    // 255: c = 1; ((1 + 0.055) / 1.055)^2.4 = 1
+    (255, 1.0),
+];
+
+/// The same curve encoded by hand for f32 inputs: `linear * 12.92` below 0.0031308, else
+/// `1.055 * linear^(1/2.4) - 0.055`; times 255, rounded to the nearest byte. Expected bytes are the two writers'
+/// quantized results (the f32 rounding is far from every half-byte boundary here).
+const STANDARD_ENCODES: &[(f32, u8)] = &[
+    // 0: 12.92 * 0 = 0; 0 * 255 = 0
+    (0.0, 0),
+    // 0.001: 12.92 * 0.001 = 0.012920001; * 255 = 3.2946
+    (0.001, 3),
+    // 0.0031307 (below the knee): 12.92 * c = 0.040448644; * 255 = 10.3144
+    (0.0031307, 10),
+    // 0.0031309 (above the knee): 1.055 * c^(1/2.4) - 0.055 = 0.040451177; * 255 = 10.3151
+    (0.0031309, 10),
+    // 0.01: 1.055 * 0.01^(1/2.4) - 0.055 = 0.099852821; * 255 = 25.4625
+    (0.01, 25),
+    // 0.1: 1.055 * 0.1^(1/2.4) - 0.055 = 0.349190215; * 255 = 89.0435
+    (0.1, 89),
+    // 0.25: 1.055 * 0.25^(1/2.4) - 0.055 = 0.537098730; * 255 = 136.9602
+    (0.25, 137),
+    // 0.5: 1.055 * 0.5^(1/2.4) - 0.055 = 0.735356983; * 255 = 187.5160
+    (0.5, 188),
+    // 0.75: 1.055 * 0.75^(1/2.4) - 0.055 = 0.880825021; * 255 = 224.6104
+    (0.75, 225),
+    // 1: 1.055 * 1 - 0.055 = 1; * 255 = 255
+    (1.0, 255),
+];
+
+#[test]
+fn byte_transfers_match_hand_worked_iec_61966_2_1_values() {
+    for &(i, expected) in STANDARD_DECODES {
+        let scene = srgb_to_linear(f64::from(i) / 255.) as f32;
+        assert!(
+            scene.to_bits().abs_diff(expected.to_bits()) <= F64_STANDARD_ULPS,
+            "scene decode of {i}: {scene:?} vs {expected:?}"
+        );
+        let map = srgb_to_linear_f32(f32::from(i) / 255.);
+        assert!(
+            map.to_bits().abs_diff(expected.to_bits()) <= F32_STANDARD_ULPS,
+            "map decode of {i}: {map:?} vs {expected:?}"
+        );
+    }
+    for &(linear, expected) in STANDARD_ENCODES {
+        assert_eq!(
+            linear_to_srgb8(f64::from(linear)),
+            expected,
+            "scene encode of {linear:?}"
+        );
+        assert_eq!(linear_to_srgb8_f32(linear), expected, "map encode of {linear:?}");
+    }
+}
+
+// The writers' pre-extraction formulas, recomputed here. BASELINE only: it pins the exact bits their f32/f64
+// rounding policy produces for every byte and at every half-byte boundary, so a change in our own output shows.
+// It is not a correctness oracle (a shared misreading would pass); the hand-worked values above are that check.
 fn scene_decode(i: u8) -> f32 {
     let c = f64::from(i) / 255.0;
     (if c <= 0.04045 {
@@ -35,22 +123,19 @@ fn map_encode(v: f32) -> u8 {
     ((v * 255.0 + 0.5) as i32).clamp(0, 255) as u8
 }
 #[test]
-fn all_byte_decodes_keep_each_consumers_precision_bits() {
+fn baseline_writer_rounding_matches_its_pre_extraction_formulas() {
     for i in 0..=255u8 {
         assert_eq!(
             (srgb_to_linear(f64::from(i) / 255.) as f32).to_bits(),
             scene_decode(i).to_bits(),
-            "scene byte {i}"
+            "scene decode of {i}"
         );
         assert_eq!(
             srgb_to_linear_f32(f32::from(i) / 255.).to_bits(),
             map_decode(i).to_bits(),
-            "map byte {i}"
+            "map decode of {i}"
         );
     }
-}
-#[test]
-fn encode_byte_boundaries_keep_both_quantization_policies() {
     let mut samples = vec![
         -1.,
         -0.,
