@@ -21,6 +21,9 @@
 //! on top of the base's); they are not represented, and counted. A texture's wrap mode becomes its slot's wrap. Slots
 //! whose texture has no pixels (not decoded) are left out and counted. Re-encoded maps are new texture entities, RGBA8,
 //! every level: metallic-roughness and occlusion as above, and colour textures Unity samples as linear encoded as sRGB.
+//!
+//! Each material also gets its draw order (Unity's render queue, the layer its alpha mode is) and, where its shader
+//! states it, its usage (`core.material_usage`, the named table [`SHADER_USAGE`]); the rest are counted by shader.
 
 use std::collections::BTreeMap;
 
@@ -30,7 +33,7 @@ use primase_core::{
     ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
     World,
 };
-use primase_core::{DrawLayer, DrawOrder};
+use primase_core::{DrawLayer, DrawOrder, MaterialUsage};
 use primase_image::{linear_to_srgb, srgb_to_linear};
 
 use crate::components::{UnityMaterial, UnityTexEnv, UnityTexture};
@@ -56,6 +59,32 @@ fn family(shader: Option<&str>) -> Family {
 /// Whether the lowering models a shader (URP Lit, URP Unlit, SpeedTree 7) rather than taking its base colour only.
 pub fn modelled(shader: Option<&str>) -> bool {
     family(shader) != Family::Other
+}
+
+/// The shaders whose family states what their surfaces are (`core.material_usage`): FlatKit's water shader draws a
+/// water surface; URP's SpeedTree 7 shader draws a tree's vegetation (wind sway, hue variation, alpha test), except a
+/// material whose geometry keyword is bark ([`SPEEDTREE_BARK`]). A shader's own name decides nothing else: Sledding's
+/// `Shader Graphs/ocean` draws a spray-paint bottle.
+const SHADER_USAGE: [(&str, MaterialUsage); 2] = [
+    ("FlatKit/Water", MaterialUsage::Water),
+    (
+        "Universal Render Pipeline/Nature/SpeedTree7",
+        MaterialUsage::Foliage,
+    ),
+];
+
+/// SpeedTree 7's geometry-type keywords for branches (bark and its detail layer), which the importer sets on the
+/// material it makes for each geometry type; leaf, frond and mesh geometry stay vegetation.
+const SPEEDTREE_BARK: [&str; 2] = ["GEOM_TYPE_BRANCH", "GEOM_TYPE_BRANCH_DETAIL"];
+
+/// What a material's surfaces are, as its shader states it ([`SHADER_USAGE`]); `None` for an ordinary surface.
+pub fn usage(m: &UnityMaterial) -> Option<MaterialUsage> {
+    let (_, u) = SHADER_USAGE
+        .iter()
+        .find(|(s, _)| m.shader.as_deref() == Some(*s))?;
+    let bark =
+        family(m.shader.as_deref()) == Family::SpeedTree && SPEEDTREE_BARK.iter().any(|k| m.keyword(k));
+    (!bark).then_some(*u)
 }
 
 /// The base colour properties of a shader not modelled, by Unity's usual names: the first texture property with a
@@ -427,6 +456,14 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
             AlphaMode::Blend => DrawLayer::Transparent,
         };
         w.insert(e, DrawOrder { layer, queue });
+        let shader = m.shader.as_deref().unwrap_or("no shader");
+        match usage(&m) {
+            Some(u) => {
+                l.log.count(&format!("material usage {u:?} ({shader})"), 1);
+                w.insert(e, u);
+            }
+            None => l.log.count(&format!("materials without a usage ({shader})"), 1),
+        }
         w.insert(e, p);
         l.log.count("materials lowered", 1);
     }
@@ -445,7 +482,12 @@ impl Pass for LowerUnityPbr {
         &["unity.material"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material", "core.texture", "core.draw_order"]
+        &[
+            "pbr.material",
+            "core.texture",
+            "core.draw_order",
+            "core.material_usage",
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
@@ -467,5 +509,83 @@ impl Pass for LowerUnityPbr {
             log.approximate(&k, n);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::components::UnityObject;
+
+    fn material(path_id: i64, shader: Option<&str>, keywords: &[&str]) -> UnityMaterial {
+        UnityMaterial {
+            material: UnityObject {
+                file: "sharedassets1.assets".into(),
+                path_id,
+            },
+            shader: shader.map(Into::into),
+            shader_state: Vec::new(),
+            textures: Vec::new(),
+            floats: Vec::new(),
+            ints: Vec::new(),
+            colors: Vec::new(),
+            keywords: keywords.iter().map(|k| k.to_string()).collect(),
+            tags: Vec::new(),
+            render_queue: -1,
+        }
+    }
+
+    /// Water and SpeedTree leaves state their usage; SpeedTree bark, a shader named like water but not in the table,
+    /// URP Lit and a material without a shader are ordinary, each counted by shader.
+    #[test]
+    fn water_and_tree_shaders_state_their_usage() {
+        let speedtree = Some("Universal Render Pipeline/Nature/SpeedTree7");
+        let cases = [
+            (
+                material(1, Some("FlatKit/Water"), &[]),
+                Some(MaterialUsage::Water),
+            ),
+            (
+                material(2, speedtree, &["EFFECT_HUE_VARIATION", "GEOM_TYPE_MESH"]),
+                Some(MaterialUsage::Foliage),
+            ),
+            (
+                material(3, speedtree, &["GEOM_TYPE_LEAF"]),
+                Some(MaterialUsage::Foliage),
+            ),
+            (material(4, speedtree, &["GEOM_TYPE_BRANCH"]), None),
+            (material(5, speedtree, &["GEOM_TYPE_BRANCH_DETAIL"]), None),
+            (material(6, Some("Shader Graphs/ocean"), &[]), None),
+            (material(7, Some("Universal Render Pipeline/Lit"), &[]), None),
+            (material(8, None, &[]), None),
+        ];
+        let mut w = World::new();
+        let entities: Vec<Entity> = cases
+            .iter()
+            .map(|(m, _)| {
+                let e = w.spawn();
+                w.insert(e, m.clone());
+                e
+            })
+            .collect();
+        let log = lower_unity_pbr(&mut w).unwrap();
+        for (e, (m, want)) in entities.iter().zip(&cases) {
+            assert_eq!(usage(m), *want, "{:?}", m.material);
+            assert_eq!(w.get::<MaterialUsage>(*e).copied(), *want, "{:?}", m.material);
+        }
+        let count = |k: &str| log.counts.get(k).copied();
+        assert_eq!(count("material usage Water (FlatKit/Water)"), Some(1));
+        assert_eq!(
+            count("material usage Foliage (Universal Render Pipeline/Nature/SpeedTree7)"),
+            Some(2)
+        );
+        assert_eq!(
+            count("materials without a usage (Universal Render Pipeline/Nature/SpeedTree7)"),
+            Some(2)
+        );
+        assert_eq!(count("materials without a usage (Shader Graphs/ocean)"), Some(1));
+        assert_eq!(count("materials without a usage (no shader)"), Some(1));
     }
 }

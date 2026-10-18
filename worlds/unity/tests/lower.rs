@@ -325,6 +325,45 @@ fn draw_order_follows_the_render_queue() {
     assert!(w.iter::<UnityMaterial>().all(|(e, _)| w.has::<DrawOrder>(e)));
 }
 
+/// The level's water and tree materials state their usage, and no other material does. Facts read with UnityPy:
+/// `My Water for Icefishing` (FlatKit/Water) draws the eight fishing-hole quads; `Tree Mat` (SpeedTree 7, keywords
+/// `EFFECT_HUE_VARIATION GEOM_TYPE_MESH`) draws the Evergreen trees, trunk and needles in one mesh; `sled_lvl_mat 12`
+/// (`Shader Graphs/ocean`) draws a spray-paint bottle and stays ordinary. The table's rules are gated by the unit
+/// cases in `lower.rs`.
+#[test]
+fn water_and_trees_state_their_usage() {
+    use primase_core::{MaterialUsage, Name};
+    use std::collections::BTreeSet;
+    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+        return;
+    };
+    let player = Player::open(
+        &data,
+        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut w = World::new();
+    read_level(&player, "level1", &mut w).unwrap();
+    as_stored(&mut w);
+    lower_unity_pbr(&mut w).unwrap();
+    let used: BTreeSet<(String, MaterialUsage)> = w
+        .iter::<MaterialUsage>()
+        .map(|(e, u)| (w.get::<Name>(e).unwrap().0.clone(), *u))
+        .collect();
+    assert_eq!(
+        used,
+        BTreeSet::from([
+            ("My Water for Icefishing".to_owned(), MaterialUsage::Water),
+            ("Tree Mat".to_owned(), MaterialUsage::Foliage),
+        ])
+    );
+    let ocean = w
+        .iter::<UnityMaterial>()
+        .filter(|(_, m)| m.shader.as_deref() == Some("Shader Graphs/ocean"))
+        .count();
+    assert_eq!(ocean, 1, "the spray-paint bottle's material is read");
+}
+
 /// URP Lit samples every map through `_BaseMap`'s tiling (one `TRANSFORM_TEX` in its vertex pass), so each lowered
 /// slot carries that transform whatever its own property's tiling says. Counts the slots whose own tiling differs
 /// (the case a per-property reading gets wrong).
