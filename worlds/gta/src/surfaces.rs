@@ -190,6 +190,14 @@ impl Pass for LowerGtaSurfaces {
     fn modifies(&self) -> &[&'static str] {
         &["core.surfaces"]
     }
+    /// It classifies the surfaces in place (a target's "every surface classified" rule plans it).
+    fn legalizes(&self) -> &[&'static str] {
+        &["core.surfaces"]
+    }
+    /// A pass after it that provides surfaces would add unclassified ones.
+    fn settles(&self) -> &[&'static str] {
+        &["core.surfaces"]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(surfaces) = w.resource_mut::<Surfaces>() else {
             return Ok(());
@@ -215,6 +223,26 @@ impl Pass for LowerGtaSurfaces {
 mod tests {
     use super::*;
     use primase_core::Surface;
+    use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
+
+    #[test]
+    fn surfaces_provided_after_they_are_classified_refuse_the_pipeline() {
+        let mut r = PassRegistry::new();
+        crate::register(&mut r);
+        let m = PassManager::new(r);
+        let run = |text: &str| {
+            m.run(
+                &mut World::new(),
+                &m.registry.parse(text).unwrap(),
+                &mut RunReport::default(),
+            )
+        };
+        let err = run("lower-gta-surfaces, lower-gta-embedded-collision").unwrap_err();
+        assert!(matches!(err, Error::SettledThenChanged { .. }), "{err}");
+        // the default order (embedded collision first) is not refused for that
+        let r = run("lower-gta-embedded-collision, lower-gta-surfaces");
+        assert!(!matches!(r, Err(Error::SettledThenChanged { .. })), "{r:?}");
+    }
 
     #[test]
     fn the_table_names_each_material_once() {

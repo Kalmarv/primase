@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::world::{Component, Entity, World};
+use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
 pub type Options = BTreeMap<String, String>;
@@ -132,6 +132,15 @@ pub trait Pass: Send + Sync {
     /// unrecorded and undeclared is an error as ever, and a resource it removes must be declared as for any pass.
     fn removes_by_log(&self) -> bool {
         false
+    }
+    /// Names whose values it brings to their final form (a classifier: every surface classified). A later pass in a
+    /// pipeline that provides one of them adds values that never went through this pass: unless a pass after it settles
+    /// the name again, [`PassManager::run`] refuses such a pipeline before it runs ([`Error::SettledThenChanged`]), and
+    /// the planner orders this pass after every
+    /// chosen pass that provides what it settles. Modifying settled values later is allowed. A modifier must not add
+    /// values without declaring them in [`Pass::provides`]; the target's value rules check the result.
+    fn settles(&self) -> &[&'static str] {
+        &[]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String>;
 }
@@ -339,11 +348,28 @@ pub enum Mode {
     Full,
 }
 
+/// A value rule on a resource ([`Target::check_resource`]).
+#[derive(Clone)]
+struct ResourceRule {
+    what: String,
+    check: Arc<dyn Fn(&World) -> bool + Send + Sync>,
+}
+
+impl fmt::Debug for ResourceRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ResourceRule({:?})", self.what)
+    }
+}
+
 /// A writer's declaration of what it accepts.
 #[derive(Clone, Debug)]
 pub struct Target {
     pub name: String,
     rules: BTreeMap<String, Legality>,
+    /// The words naming a component's value rule ([`Target::check`]), by component name.
+    rule_words: BTreeMap<String, String>,
+    /// Value rules on resources ([`Target::check_resource`]), by resource name.
+    resource_rules: BTreeMap<String, ResourceRule>,
     carry_unknown: bool,
 }
 
@@ -352,6 +378,8 @@ impl Target {
         Target {
             name: name.into(),
             rules: BTreeMap::new(),
+            rule_words: BTreeMap::new(),
+            resource_rules: BTreeMap::new(),
             carry_unknown: false,
         }
     }
@@ -386,6 +414,53 @@ impl Target {
         self.dynamic(T::NAME, move |w, e| w.get::<T>(e).is_some_and(&check))
     }
 
+    /// A named value rule on a typed component: as [`Target::dynamic_typed`], with `what` naming the rule in errors
+    /// ("every placement regular").
+    pub fn check<T: Component>(
+        mut self,
+        what: &str,
+        check: impl Fn(&T) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.rule_words.insert(T::NAME.to_owned(), what.to_owned());
+        self.dynamic_typed::<T>(check)
+    }
+
+    /// A named value rule on a resource: the target refuses the world while the resource is there and `check` refuses
+    /// it (`"every surface classified"`). The planner lowers a refused resource like a refused component value, with a
+    /// pass that legalizes the resource's name and modifies or removes it.
+    pub fn check_resource<R: Resource>(
+        mut self,
+        what: &str,
+        check: impl Fn(&R) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.resource_rules.insert(
+            R::NAME.to_owned(),
+            ResourceRule {
+                what: what.to_owned(),
+                check: Arc::new(move |w: &World| w.resource::<R>().is_none_or(&check)),
+            },
+        );
+        self
+    }
+
+    /// The words naming the value rule on `name` (a component's [`Target::check`] or a resource's
+    /// [`Target::check_resource`]), if it has a named one.
+    pub fn rule_words(&self, name: &str) -> Option<&str> {
+        self.rule_words
+            .get(name)
+            .or_else(|| self.resource_rules.get(name).map(|r| &r.what))
+            .map(String::as_str)
+    }
+
+    /// The resources of `w` whose value rule refuses them, by name.
+    pub fn refused_resources(&self, w: &World) -> Vec<&str> {
+        self.resource_rules
+            .iter()
+            .filter(|(_, r)| !(r.check)(w))
+            .map(|(n, _)| n.as_str())
+            .collect()
+    }
+
     /// Pass every unlisted name through (also in [`Mode::Full`]).
     pub fn carry_unknown(mut self) -> Self {
         self.carry_unknown = true;
@@ -412,6 +487,9 @@ impl Target {
     /// the values `w` has that its check refuses; values a pass will provide count as legal (the check before the
     /// writer sees them).
     fn need(&self, w: &World, name: &str, mode: Mode) -> Need {
+        if let Some(r) = self.resource_rules.get(name) {
+            return if (r.check)(w) { Need::Nothing } else { Need::Fix };
+        }
         match self.rules.get(name) {
             Some(Legality::Legal | Legality::Carry) => Need::Nothing,
             Some(Legality::LowerAndCarry) => Need::Lower,
@@ -512,15 +590,57 @@ pub enum Error {
     },
     #[error("instrument at {step}: {message}")]
     Instrument { step: String, message: String },
-    #[error("`{target}` does not accept `{name}` on {entities:?} after the pipeline")]
+    #[error("{}", illegal_text(.target, .name, .entities, .rule))]
     Illegal {
         target: String,
         name: String,
+        /// The entities refused (none for a resource).
         entities: Vec<Entity>,
+        /// The words naming the rule refused, empty when it has none.
+        rule: String,
+    },
+    #[error("{changed_by} provides `{name}` after {settled_by} settled it: its values would not be settled")]
+    SettledThenChanged {
+        settled_by: String,
+        changed_by: String,
+        name: String,
     },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+fn illegal_text(target: &str, name: &str, entities: &[Entity], rule: &str) -> String {
+    let rule = if rule.is_empty() {
+        String::new()
+    } else {
+        format!(" ({rule})")
+    };
+    if entities.is_empty() {
+        format!("`{target}` does not accept `{name}`{rule} after the pipeline")
+    } else {
+        format!("`{target}` does not accept `{name}`{rule} on {entities:?} after the pipeline")
+    }
+}
+
+/// A pipeline in which a pass provides a name an earlier pass settles ([`Pass::settles`]) and no pass after it settles
+/// the name again.
+fn check_settled(passes: &[Box<dyn Pass>]) -> Result<()> {
+    for (i, a) in passes.iter().enumerate() {
+        for &n in a.settles() {
+            for (j, b) in passes.iter().enumerate().skip(i + 1) {
+                let adds = b.provides().contains(&n) && !b.settles().contains(&n);
+                if adds && !passes[j + 1..].iter().any(|c| c.settles().contains(&n)) {
+                    return Err(Error::SettledThenChanged {
+                        settled_by: pass_text(a.as_ref()),
+                        changed_by: pass_text(b.as_ref()),
+                        name: n.to_owned(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// One pass's run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -701,6 +821,7 @@ impl PassManager {
         report: &mut RunReport,
         instrument: &mut dyn Instrument,
     ) -> Result<()> {
+        check_settled(&pipeline.passes)?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
             let step = Step {
@@ -883,7 +1004,13 @@ impl PassManager {
         let declared = passes
             .iter()
             .flat_map(|p| p.provides().iter().chain(p.legalizes()).copied());
-        for n in present.iter().copied().chain(declared) {
+        // resources the target has a value rule for are planned like components
+        let ruled: BTreeSet<&str> = resources
+            .iter()
+            .copied()
+            .filter(|n| target.resource_rules.contains_key(*n))
+            .collect();
+        for n in present.iter().chain(&ruled).copied().chain(declared) {
             needs.entry(n).or_insert_with(|| target.need(w, n, mode));
         }
         let need = |n: &str| needs.get(n).copied().unwrap_or_else(|| target.need(w, n, mode));
@@ -997,6 +1124,7 @@ impl PassManager {
         // the names the world has that must be lowered
         let roots: Vec<&str> = present
             .iter()
+            .chain(&ruled)
             .copied()
             .filter(|&n| match need(n) {
                 Need::Nothing => false,
@@ -1101,7 +1229,7 @@ impl PassManager {
         let order = order_passes(&passes, &chosen)?;
         // check the order by simulating the declarations: what is required is there, what must go has gone, and
         // what must be lowered was lowered after the last pass that provided more of it
-        let mut names = present.clone();
+        let mut names: BTreeSet<&str> = present.iter().chain(&ruled).copied().collect();
         let mut lowered: BTreeSet<&str> = present
             .iter()
             .copied()
@@ -1249,6 +1377,12 @@ impl PassManager {
                 .into_iter()
                 .map(|name| (name.to_owned(), target.illegal_entities(w, name, mode)))
                 .find(|(_, bad)| !bad.is_empty())
+                .or_else(|| {
+                    target
+                        .refused_resources(w)
+                        .first()
+                        .map(|n| ((*n).to_owned(), Vec::new()))
+                })
         };
         loop {
             let mut round = RunReport::default();
@@ -1273,6 +1407,7 @@ impl PassManager {
         if let Some((name, bad)) = refused(w) {
             return Err(Error::Illegal {
                 target: target.name.clone(),
+                rule: target.rule_words(&name).unwrap_or_default().to_owned(),
                 name,
                 entities: bad.into_iter().take(10).collect(),
             });
@@ -1308,6 +1443,10 @@ fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Ve
         pa.provides()
             .iter()
             .any(|n| uses(pb, n) && !pb.provides().contains(n))
+            || pa
+                .provides()
+                .iter()
+                .any(|n| pb.settles().contains(n) && !pa.settles().contains(n))
             || pa.modifies().iter().any(|n| {
                 !pa.provides().contains(n) && as_is(pb, n) && (reads(pb, n) || pb.removes().contains(n))
             })
@@ -2637,6 +2776,181 @@ mod tests {
             assert_eq!(report.pipeline, "bump-a, bump-b");
             assert_eq!(w.get::<Tx>(e), Some(&Tx(2)));
         }
+    }
+
+    /// A table of rows a classifier fills in: `None` is a row not classified yet.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Table(Vec<Option<u8>>);
+    impl crate::world::Resource for Table {
+        const NAME: &'static str = "toy.table";
+    }
+
+    /// Classifies every row of toy.table (in place) and settles it.
+    struct Classify;
+    impl Pass for Classify {
+        fn name(&self) -> &'static str {
+            "classify"
+        }
+        fn requires(&self) -> &[&'static str] {
+            &["toy.table"]
+        }
+        fn modifies(&self) -> &[&'static str] {
+            &["toy.table"]
+        }
+        fn legalizes(&self) -> &[&'static str] {
+            &["toy.table"]
+        }
+        fn settles(&self) -> &[&'static str] {
+            &["toy.table"]
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            if let Some(t) = w.resource_mut::<Table>() {
+                for row in t.0.iter_mut().filter(|r| r.is_none()) {
+                    *row = Some(0);
+                    log.count("rows classified", 1);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Adds an unclassified row to toy.table.
+    struct AddRow;
+    impl Pass for AddRow {
+        fn name(&self) -> &'static str {
+            "add-row"
+        }
+        fn provides(&self) -> &[&'static str] {
+            &["toy.table"]
+        }
+        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            match w.resource_mut::<Table>() {
+                Some(t) => t.0.push(None),
+                None => {
+                    w.insert_resource(Table(vec![None]));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn classified() -> Target {
+        Target::new("t").check_resource::<Table>("every row classified", |t| t.0.iter().all(Option::is_some))
+    }
+
+    fn table_world(rows: Vec<Option<u8>>) -> World {
+        let mut w = World::new();
+        w.insert_resource(Table(rows));
+        w
+    }
+
+    #[test]
+    fn a_resource_value_rule_is_planned_and_checked() {
+        let mut r = PassRegistry::new();
+        r.register("classify", |_| Ok(Box::new(Classify)));
+        let m = PassManager::new(r);
+        let mut w = table_world(vec![Some(3), None]);
+        let report = m
+            .convert(&mut w, &classified(), Mode::Partial, &PassOptions::new())
+            .unwrap();
+        assert_eq!(report.pipeline, "classify");
+        assert_eq!(w.resource::<Table>(), Some(&Table(vec![Some(3), Some(0)])));
+        // a table the rule accepts needs nothing
+        let report = m
+            .convert(
+                &mut table_world(vec![Some(1)]),
+                &classified(),
+                Mode::Partial,
+                &PassOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(report.pipeline, "");
+        // nothing classifies: no lowering
+        let err = PassManager::new(PassRegistry::new())
+            .convert(
+                &mut table_world(vec![None]),
+                &classified(),
+                Mode::Partial,
+                &PassOptions::new(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "no pass lowers `toy.table` to anything `t` accepts"
+        );
+        assert_eq!(classified().rule_words("toy.table"), Some("every row classified"));
+    }
+
+    #[test]
+    fn a_refused_value_names_its_rule() {
+        // `lazy` claims to legalize toy.mesh in place but changes nothing: the check after the pipeline names the rule
+        let mut r = PassRegistry::new();
+        r.register("lazy", |_| {
+            Ok(Box::new(Decl {
+                name: "lazy",
+                requires: &["toy.mesh"],
+                provides: &[],
+                removes: &[],
+                modifies: &["toy.mesh"],
+                legalizes: &["toy.mesh"],
+            }))
+        });
+        let t = Target::new("even").check::<Mesh>("even meshes", |m| m.0 % 2 == 0);
+        let err = PassManager::new(r)
+            .convert(&mut mesh_world(3), &t, Mode::Partial, &PassOptions::new())
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`even` does not accept `toy.mesh` (even meshes) on [e0] after the pipeline"
+        );
+        assert!(matches!(err, Error::Illegal { ref rule, .. } if rule == "even meshes"));
+    }
+
+    #[test]
+    fn a_pass_that_provides_a_settled_name_after_it_refuses_the_pipeline() {
+        let mut r = PassRegistry::new();
+        r.register("classify", |_| Ok(Box::new(Classify)));
+        r.register("add-row", |_| Ok(Box::new(AddRow)));
+        let m = PassManager::new(r);
+        // add-row after classify would leave a row unclassified: refused before anything runs
+        let mut w = table_world(vec![None]);
+        let err = m
+            .run(
+                &mut w,
+                &m.registry.parse("classify, add-row").unwrap(),
+                &mut RunReport::default(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "add-row provides `toy.table` after classify settled it: its values would not be settled"
+        );
+        assert_eq!(w.resource::<Table>(), Some(&Table(vec![None])), "nothing ran");
+        // the other way round is fine, and so is classifying again after adding
+        let mut w = table_world(vec![None]);
+        m.run(
+            &mut w,
+            &m.registry.parse("add-row, classify").unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+        assert_eq!(w.resource::<Table>(), Some(&Table(vec![Some(0), Some(0)])));
+        let mut w = table_world(vec![None]);
+        m.run(
+            &mut w,
+            &m.registry.parse("classify, add-row, classify").unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+        assert_eq!(w.resource::<Table>(), Some(&Table(vec![Some(0), Some(0)])));
+        // the planner puts the classifier after the pass that adds rows
+        let passes: Vec<Box<dyn Pass>> = vec![Box::new(Classify), Box::new(AddRow)];
+        let order: Vec<&str> = order_passes(&passes, &BTreeSet::from([0, 1]))
+            .unwrap()
+            .into_iter()
+            .map(|i| passes[i].name())
+            .collect();
+        assert_eq!(order, ["add-row", "classify"]);
     }
 
     #[test]
