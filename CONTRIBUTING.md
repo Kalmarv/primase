@@ -213,6 +213,8 @@ Variables (the individual environment overrides remain supported):
 | `PRIMASE_RESKATE_BLEND_MAP` | input | a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs` |
 | `PRIMASE_RESKATE_BLEND_PATCH` | input | ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012) |
 | `PRIMASE_RESKATE_BLEND_SPEC` | input | optional: an independent resolution of that record against that Patch, in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output |
+| `PRIMASE_UNITY_V21_DATA` | input | a Unity player data folder with SerializedFile version 21 containers |
+| `PRIMASE_UNITY_V21_CENSUS` | input | an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`) |
 | `PRIMASE_UNITY_DATA` | input | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) |
 | `PRIMASE_UNITY_TPK` | input | a type tree package (TPK, uncompressed or LZ4) with the class layouts for that player's Unity version |
 | `PRIMASE_UNITY_ORACLE` | input | optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`) |

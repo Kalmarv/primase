@@ -151,6 +151,18 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"optional: an independent resolution of that record against that Patch, in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output"#,
     },
     Variable {
+        name: "PRIMASE_UNITY_V21_DATA",
+        kind: Kind::Input,
+        gate: true,
+        about: "a Unity player data folder with SerializedFile version 21 containers",
+    },
+    Variable {
+        name: "PRIMASE_UNITY_V21_CENSUS",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`)"#,
+    },
+    Variable {
         name: "PRIMASE_UNITY_DATA",
         kind: Kind::Input,
         gate: true,

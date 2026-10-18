@@ -1,10 +1,13 @@
 //! The SerializedFile container: what `globalgamemanagers`, `*.assets` and `levelN` are.
 //!
-//! Layout (container version 22): a big-endian header (legacy fields zero, the version, an endianness byte, then
-//! the metadata size, file size and data offset as 32/64/64-bit numbers), then the metadata in the file's
+//! Layout (container versions 21 and 22): a big-endian header followed by metadata in the file's
 //! endianness: Unity version, target platform, whether type trees are embedded, the types (class id, stripped,
 //! script index, hashes), the object table (path id, data offset, size, type index), script references, external
 //! files, reference types and a user string. Objects' bytes follow at the data offset.
+//! Version 21 stores metadata size, file size and data offset as 32-bit header fields, followed by an
+//! endianness byte and three reserved bytes; metadata starts at byte 20. Version 22 repeats those sizes
+//! after the legacy fields as 32/64/64-bit numbers plus eight reserved bytes; metadata starts at byte 48.
+//! Object offsets are unsigned 32-bit in version 21 and signed 64-bit in version 22.
 //!
 //! Only versions verified against real data are read; others are refused, as are embedded type trees (player
 //! builds strip them; decode with a [`TypeTreePackage`] instead).
@@ -18,7 +21,7 @@ use crate::version::UnityVersion;
 use crate::{Error, Reader, Result, invalid};
 
 /// Container versions read (verified on real files).
-pub const VERSIONS: std::ops::RangeInclusive<u32> = 22..=22;
+pub const VERSIONS: std::ops::RangeInclusive<u32> = 21..=22;
 
 /// The MonoBehaviour class: its type tree covers the base fields; the script's own fields follow.
 pub const MONO_BEHAVIOUR: i32 = 114;
@@ -120,17 +123,28 @@ fn serialized_type(r: &mut Reader, reference: bool) -> Result<SerializedType> {
 impl SerializedFile {
     /// Whether `bytes` start like a SerializedFile of a supported version (to tell them from other files).
     pub fn looks_like(bytes: &[u8]) -> bool {
-        bytes.len() >= 48
-            && bytes[..4] == [0; 4]
-            && VERSIONS.contains(&u32::from_be_bytes(bytes[8..12].try_into().expect("4")))
+        if bytes.len() < 20 {
+            return false;
+        }
+        let be = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().expect("4"));
+        match be(8) {
+            21 => {
+                let size = u64::from(be(4));
+                let end = 20 + u64::from(be(0));
+                let offset = u64::from(be(12));
+                be(0) > 0 && size == bytes.len() as u64 && end <= offset && offset <= size
+            }
+            22 => bytes.len() >= 48 && bytes[..4] == [0; 4],
+            _ => false,
+        }
     }
 
     pub fn parse(data: Vec<u8>) -> Result<Self> {
         let mut h = Reader::new(&data, true);
-        let _legacy_metadata = h.u32()?;
-        let _legacy_size = h.u32()?;
+        let legacy_metadata = h.u32()?;
+        let legacy_size = h.u32()?;
         let version = h.u32()?;
-        let _legacy_offset = h.u32()?;
+        let legacy_offset = h.u32()?;
         if !VERSIONS.contains(&version) {
             return Err(Error::Unsupported(format!(
                 "SerializedFile version {version} (read: {}..={})",
@@ -140,17 +154,25 @@ impl SerializedFile {
         }
         let big_endian = h.bool()?;
         h.take(3)?;
-        let metadata_size = h.u32()? as usize;
-        let file_size = h.u64()?;
-        let data_offset = h.u64()?;
-        let _reserved = h.u64()?;
+        let (metadata_size, file_size, data_offset) = if version == 22 {
+            let metadata_size = h.u32()?;
+            let file_size = h.u64()?;
+            let data_offset = h.u64()?;
+            let _reserved = h.u64()?;
+            (metadata_size, file_size, data_offset)
+        } else {
+            (legacy_metadata, u64::from(legacy_size), u64::from(legacy_offset))
+        };
         if file_size != data.len() as u64 {
             return Err(invalid(format!(
                 "header file size {file_size}, file has {} bytes",
                 data.len()
             )));
         }
-        let meta_end = h.pos + metadata_size;
+        let meta_end = h
+            .pos
+            .checked_add(metadata_size as usize)
+            .ok_or_else(|| invalid("metadata size overflows its byte range"))?;
         if meta_end as u64 > data_offset || data_offset > file_size {
             return Err(invalid(format!(
                 "metadata ends at {meta_end}, data at {data_offset}, file size {file_size}"
@@ -173,7 +195,11 @@ impl SerializedFile {
         for _ in 0..count(&mut r, "object")? {
             r.align(4)?;
             let path_id = r.i64()?;
-            let start = r.i64()?;
+            let start = if version == 21 {
+                i64::from(r.u32()?)
+            } else {
+                r.i64()?
+            };
             let size = r.u32()?;
             let type_index = r.u32()?;
             let ty = types.get(type_index as usize).ok_or_else(|| {
@@ -185,7 +211,7 @@ impl SerializedFile {
             let offset = u64::try_from(start)
                 .ok()
                 .and_then(|s| s.checked_add(data_offset))
-                .filter(|&o| o + u64::from(size) <= file_size)
+                .filter(|&o| o.checked_add(u64::from(size)).is_some_and(|end| end <= file_size))
                 .ok_or_else(|| invalid(format!("object {path_id}: bytes {start}+{size} outside the file")))?;
             objects.push(ObjectInfo {
                 path_id,
