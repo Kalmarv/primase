@@ -35,7 +35,8 @@ pub use build::{BuildOptions, BuildReport, build, leave_out_optional, lod_choice
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register("raise-skate", prepare::raise_skate_pass);
+    // the scene's name has no default
+    reg.register_requiring("raise-skate", prepare::raise_skate_pass, &[("name", "n")]);
     dialect::lower::register(reg);
     reg.register("lower-layered-reskate", layered::lower_layered_reskate);
     reg.register("lower-tint-reskate", |o| {

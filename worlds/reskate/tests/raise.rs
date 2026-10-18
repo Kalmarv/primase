@@ -445,19 +445,33 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
 
 #[test]
 fn what_skate_cannot_take_is_refused() {
-    // a surface with no skate surface
-    let mut w = world();
-    let err = prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "x".into(),
-            surfaces: BTreeMap::new(),
-            unclassified: None,
-            light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
-        },
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("Snow"), "{err}");
+    // a surface map naming a surface skate does not have, and a scene without a name
+    for (name, map) in [("x", "lava"), ("", "asphalt")] {
+        let mut w = world();
+        let err = prepare::raise_skate(
+            &mut w,
+            &RaiseOptions {
+                name: name.into(),
+                surfaces: BTreeMap::from([("Snow".to_owned(), map.to_owned())]),
+                unclassified: None,
+                light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains(if name.is_empty() {
+                "scene name"
+            } else {
+                "Snow -> lava"
+            }),
+            "{err}"
+        );
+        assert!(
+            w.resource::<dialect::SkateScene>().is_none(),
+            "refused input leaves the world unchanged"
+        );
+    }
     // a texture transform still to bake
     let mut w = world();
     let (m, _) = w.iter::<PbrMaterial>().next().unwrap();
@@ -945,6 +959,61 @@ fn unclassified_surfaces_and_prototype_collision() {
     assert!(e.contains("unclassified=lava"), "{e}");
 }
 
+/// A surface with no class, no map entry and no `unclassified` surface is never guessed: its triangles are left out
+/// and reported by name (an omission, not a count), the rest of a collision kept with its rock flags, and a collision
+/// left with no triangle removed; the surface map or `unclassified` restores the triangles.
+#[test]
+fn unmapped_surfaces_are_left_out_and_reported() {
+    let mut w = world();
+    let (proto, _) = w.iter::<Mesh>().next().map(|(e, m)| (e, m.clone())).unwrap();
+    let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
+    // the prototype's own collision: a Snow triangle (natural rock) and a concrete one (not)
+    w.insert(
+        proto,
+        Collision {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2], [1, 3, 2]],
+            surfaces: vec![0, concrete],
+        },
+    );
+    w.insert(proto, dialect::SkateRock(vec![true, false]));
+    let ground = w
+        .iter::<Collision>()
+        .find(|&(e, _)| e != proto)
+        .map(|(e, _)| e)
+        .unwrap();
+    let unmapped = RaiseOptions {
+        surfaces: BTreeMap::new(),
+        ..options()
+    };
+    let log = prepare::raise_skate(&mut w, &unmapped).unwrap();
+    let reason = "collision triangles on a surface with no skate surface, left out: Snow";
+    assert_eq!(log.omitted.get(reason), Some(&2));
+    assert!(!log.counts.contains_key(reason));
+    assert_eq!(log.counts["collisions with no triangle left, removed"], 1);
+    // the world's soup was all Snow: gone; the prototype keeps its concrete triangle and that triangle's rock flag
+    assert!(!w.has::<Collision>(ground));
+    let c = w.get::<Collision>(proto).unwrap();
+    assert_eq!(
+        (c.triangles.clone(), c.surfaces.clone()),
+        (vec![[1, 3, 2]], vec![concrete])
+    );
+    assert_eq!(w.get::<dialect::SkateRock>(proto).unwrap().0, vec![false]);
+    assert!(w.get::<SkatePrototype>(proto).unwrap().collision.is_some());
+    // mapped, nothing is left out
+    let mut w = world();
+    let log = prepare::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            surfaces: BTreeMap::from([("Snow".to_owned(), "earth".to_owned())]),
+            ..options()
+        },
+    )
+    .unwrap();
+    assert!(log.omitted.is_empty());
+    assert!(w.has::<Collision>(ground));
+}
+
 /// A placed prototype with collision and no mesh collides without drawing: a prototype with no GLB and no parts, its
 /// soup kept through the scene file (counted); one with neither is left out.
 #[test]
@@ -1024,7 +1093,16 @@ fn raise_skate_pass_options() {
         prepare::raise_skate_pass(&pass.options()).unwrap().options(),
         pass.options()
     );
-    let spawn: Options = [("spawn".to_owned(), "centre".to_owned())].into();
+    // the name has no default
+    let Err(e) = prepare::raise_skate_pass(&Options::new()) else {
+        panic!("raise-skate without a name");
+    };
+    assert!(e.contains("name=N is required"), "{e}");
+    let spawn: Options = [
+        ("name".to_owned(), "m".to_owned()),
+        ("spawn".to_owned(), "centre".to_owned()),
+    ]
+    .into();
     let Err(e) = prepare::raise_skate_pass(&spawn) else {
         panic!("spawn is not a raise-skate option");
     };

@@ -220,11 +220,18 @@ fn raise_skate_calibrates_light_energy() {
         .unwrap();
         let energy = w.get::<SkateLight>(e).unwrap().energy;
         assert!((energy - watts).abs() < 1e-3, "{energy}");
+        // every raised light is an approximation by the calibration's value, the default included
+        let (reason, n) = log
+            .approximations
+            .iter()
+            .find(|(k, _)| k.starts_with("light energy as Studio watts"))
+            .unwrap();
+        assert_eq!(*n, 1);
+        assert!(reason.contains(&format!("light_scale {scale} ")), "{reason}");
         assert_eq!(
-            log.approximations.keys().any(
-                |k| k.starts_with("light_scale ") && k.ends_with("instead of skate's fitted calibration")
-            ),
-            recorded
+            reason.contains("not skate's fitted calibration"),
+            recorded,
+            "{reason}"
         );
     }
     for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {

@@ -26,14 +26,18 @@
 //!   a `skate.prototype` that collides without drawing (no GLB, no parts), counted; every placement a default
 //!   `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
-//!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]); a surface with
-//!   neither, whose name is no skate surface, is refused (never guessed); a water class has no solid skate surface:
-//!   a prototype whose collision is all water gets skate's water collision (Studio's water mode); water triangles in
-//!   a solid soup or the world's collision stay solid, counted;
+//!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]), else onto the
+//!   caller's surface for unclassified ones (`unclassified`); a surface with none of these, whose name is no skate
+//!   surface, is never guessed: its triangles are left out, reported by surface name ([`PassLog::omit`]), and a
+//!   collision left with no triangle is removed; a water class has no solid skate surface: a prototype whose
+//!   collision is all water gets skate's water collision (Studio's water mode); water triangles in a solid soup or
+//!   the world's collision stay solid, counted;
 //! - what the source says a material's surfaces are (`core.material_usage`): water is skate's water class (Studio's
 //!   ocean); foliage is skate's leaves class in the foliage domain, except a material the source draws over the
 //!   surface beneath (`core.draw_order` decal), which stays a decal (counted);
-//! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`];
+//! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`] of
+//!   the intensity times the caller's calibration (`light_scale`, [`SKATE_LIGHT_SCALE`] when not given): an
+//!   approximation reported with its value for every light, the default included (a fit, not a measurement);
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - the world's `core.marker` points of a kind skate has (spawn, travel, trainer, vfx, trigger effect):
 //!   `skate.marker`s on the same entities; a ground marker (no height) snaps to the ground and keeps its yaw, one
@@ -41,6 +45,10 @@
 //!   is placed before the writer plans (`place-spawn` at selection), so one spawn serves every part of a map written
 //!   in parts;
 //! - the `skate.scene` resource, named by the caller.
+//!
+//! It chooses no floor, spawn or region: those are the program's (`place-spawn` at selection, the writer's floor and
+//! region options) and run apart from raising. It requires no light, collision or marker: a world without them raises
+//! without them.
 //!
 //! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`); so is
 //! one with collision shapes (`core.collider`): they become triangles first (`tessellate-colliders`).
@@ -60,8 +68,8 @@ use primase_core::{
 
 use crate::dialect::{
     AlphaMode, CollisionMode, Domain, FileRef, MarkerKind, MaterialClass, Other, Part, STANDARD_SURFACES,
-    SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype, SkateScene,
-    SkateTexture, Snap, SnapMode, SoupRef, TableRef, Wrap,
+    SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype, SkateRock,
+    SkateScene, SkateTexture, Snap, SnapMode, SoupRef, TableRef, Wrap,
 };
 use crate::{Error, Result};
 
@@ -72,14 +80,16 @@ pub use materials::{SKATE_F0, fold_reflectance};
 /// What [`raise_skate`] needs from the caller.
 #[derive(Clone, Debug)]
 pub struct RaiseOptions {
-    /// The scene's name, `[A-Za-z0-9_-]+`.
+    /// The scene's name, `[A-Za-z0-9_-]+`; required (the default, empty, is refused).
     pub name: String,
     /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`).
     pub surfaces: BTreeMap<String, String>,
-    /// The skate surface for a surface with no class and no entry in `surfaces` (counted per name); `None`: refused.
+    /// The skate surface for a surface with no class and no entry in `surfaces` (counted per name); `None`: such a
+    /// surface's collision triangles are left out and reported.
     pub unclassified: Option<String>,
     /// Every light's intensity (physical candela) times this before [`studio_watts`]: skate's calibration,
-    /// [`SKATE_LIGHT_SCALE`] by default; finite and above 0. Recorded as an approximation when not the default.
+    /// [`SKATE_LIGHT_SCALE`] by default; finite and above 0. Reported as an approximation with its value, the default
+    /// included.
     pub light_scale: f64,
 }
 
@@ -171,11 +181,25 @@ fn wrap(w: PbrWrap) -> Wrap {
     }
 }
 
+/// A scene name: `[A-Za-z0-9_-]+`.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Raise `world` into the skate dialect (see the module documentation).
 /// Refused input leaves the world unchanged. Callers must retain the returned conversion/loss report;
 /// successful conversion does not imply that every PBR feature is represented by the target.
 pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog> {
     let bad = |m: String| Error::Scene(format!("raise-skate: {m}"));
+    if !valid_name(&options.name) {
+        return Err(bad(format!(
+            "the scene name {:?} is not [A-Za-z0-9_-]+",
+            options.name
+        )));
+    }
     if !(options.light_scale.is_finite() && options.light_scale > 0.0) {
         return Err(bad(format!(
             "light_scale {} is not a finite number above 0",
@@ -196,7 +220,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         )));
     }
     // surfaces onto skate's: the caller's map, else the class, else a name that is a skate surface already, else the
-    // caller's surface for unclassified ones
+    // caller's surface for unclassified ones, else none: the surface's triangles are left out
     if let Some(u) = &options.unclassified
         && !STANDARD_SURFACES.contains(&u.as_str())
     {
@@ -206,41 +230,73 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // the surfaces of class water: their triangles become skate's water collision (see below)
     let mut water_surfaces: BTreeSet<u16> = BTreeSet::new();
     let mut water_names: Vec<String> = Vec::new();
+    // the surfaces with no skate surface, by index, with what to call them: their triangles are left out
+    let mut omitted: BTreeMap<u16, String> = BTreeMap::new();
+    let index = |i: usize| u16::try_from(i).map_err(|_| bad("more than 65,536 surfaces".into()));
     let mut surfaces = world.resource::<Surfaces>().cloned();
     if let Some(surfaces) = surfaces.as_mut() {
         let mut unmapped = Vec::new();
         for (i, s) in surfaces.0.iter_mut().enumerate() {
             match (options.surfaces.get(&s.name), s.class) {
                 (Some(to), _) if STANDARD_SURFACES.contains(&to.as_str()) => s.name.clone_from(to),
-                (Some(to), _) => unmapped.push(format!("{} -> {to} (not a skate surface)", s.name)),
+                (Some(to), _) => unmapped.push(format!("{} -> {to}", s.name)),
                 (None, Some(SurfaceClass::Water)) => {
                     // no solid skate surface: its triangles are water collision; the name a placeholder
-                    water_surfaces
-                        .insert(u16::try_from(i).map_err(|_| bad("more than 65,536 surfaces".into()))?);
+                    water_surfaces.insert(index(i)?);
                     water_names.push(std::mem::replace(&mut s.name, "default".to_owned()));
                 }
                 (None, Some(class)) => match class_to_skate(class) {
                     Some(to) => s.name = to.to_owned(),
-                    None => unmapped.push(format!(
-                        "{} (class {}: no solid skate surface)",
-                        s.name,
-                        class.as_str()
-                    )),
+                    None => {
+                        omitted.insert(index(i)?, format!("{} (class {})", s.name, class.as_str()));
+                    }
                 },
                 (None, None) if STANDARD_SURFACES.contains(&s.name.as_str()) => {}
                 (None, None) => match &options.unclassified {
                     Some(to) => {
                         unclassified.push(std::mem::replace(&mut s.name, to.clone()));
                     }
-                    None => unmapped.push(s.name.clone()),
+                    None => {
+                        omitted.insert(index(i)?, s.name.clone());
+                    }
                 },
             }
         }
+        // the caller's own map naming no skate surface is a refused value, not a feature to leave out
         if !unmapped.is_empty() {
             return Err(bad(format!(
-                "surfaces with no skate surface: {}",
+                "the surface map names surfaces skate does not have: {}",
                 unmapped.join(", ")
             )));
+        }
+    }
+    // each collision without its triangles on those surfaces (and the matching rock flags), none when nothing is left
+    let mut trimmed: BTreeMap<Entity, Option<(Collision, Option<SkateRock>)>> = BTreeMap::new();
+    let mut left_out: BTreeMap<u16, u64> = BTreeMap::new();
+    if !omitted.is_empty() {
+        for (e, c) in world.iter::<Collision>() {
+            if !c.surfaces.iter().any(|s| omitted.contains_key(s)) {
+                continue;
+            }
+            let rock = world.get::<SkateRock>(e);
+            let mut kept = Collision {
+                positions: c.positions.clone(),
+                triangles: Vec::new(),
+                surfaces: Vec::new(),
+            };
+            let mut kept_rock = rock.map(|_| SkateRock(Vec::new()));
+            for (t, (&tri, &s)) in c.triangles.iter().zip(&c.surfaces).enumerate() {
+                if omitted.contains_key(&s) {
+                    *left_out.entry(s).or_default() += 1;
+                    continue;
+                }
+                kept.triangles.push(tri);
+                kept.surfaces.push(s);
+                if let (Some(out), Some(r)) = (kept_rock.as_mut(), rock) {
+                    out.0.push(r.0.get(t).copied().unwrap_or(false));
+                }
+            }
+            trimmed.insert(e, (!kept.triangles.is_empty()).then_some((kept, kept_rock)));
         }
     }
     let name = |w: &World, e: Entity, kind: &str| {
@@ -261,10 +317,15 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // a prototype whose collision is all water is skate water (its soup in water mode)
     let all_water =
         |c: &Collision| !c.surfaces.is_empty() && c.surfaces.iter().all(|s| water_surfaces.contains(s));
+    // an entity's collision as it will be raised: without the triangles left out
+    let kept_collision = |e: Entity| match trimmed.get(&e) {
+        Some(t) => t.as_ref().map(|(c, _)| c),
+        None => world.get::<Collision>(e),
+    };
     let water_protos: BTreeSet<Entity> = placed
         .iter()
         .copied()
-        .filter(|&p| world.get::<Collision>(p).is_some_and(all_water))
+        .filter(|&p| kept_collision(p).is_some_and(all_water))
         .collect();
     // a drawn blend (core.layered) is a layered material; its layers' materials are drawn through it
     let layered: Vec<Entity> = world
@@ -303,8 +364,18 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     let world_wet: usize = world
         .iter::<Collision>()
         .filter(|(e, _)| !placed.contains(e))
-        .map(|(_, c)| c.surfaces.iter().filter(|s| water_surfaces.contains(s)).count())
+        .filter_map(|(e, _)| kept_collision(e))
+        .map(|c| c.surfaces.iter().filter(|s| water_surfaces.contains(s)).count())
         .sum();
+    for (s, n) in &left_out {
+        log.omit(
+            &format!(
+                "collision triangles on a surface with no skate surface, left out: {}",
+                omitted[s]
+            ),
+            *n,
+        );
+    }
     if world_wet > 0 {
         log.approximate(
             "water triangles in the world's collision kept solid",
@@ -358,6 +429,21 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // Everything that can refuse the input is prepared before the first mutation.
     if let Some(surfaces) = surfaces {
         world.insert_resource(surfaces);
+    }
+    for (e, kept) in trimmed {
+        match kept {
+            Some((c, rock)) => {
+                world.insert(e, c);
+                if let Some(rock) = rock {
+                    world.insert(e, rock);
+                }
+            }
+            None => {
+                world.remove::<Collision>(e);
+                world.remove::<SkateRock>(e);
+                log.count("collisions with no triangle left, removed", 1);
+            }
+        }
     }
     for (t, skate) in textures {
         world.insert(t, skate);
@@ -632,21 +718,22 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         );
         log.count("lights", 1);
     }
-    if !lights.is_empty() {
+    // the calibration is a fit, not a measurement: every light raised is an approximation by its value
+    let raised = log.counts.get("lights").copied().unwrap_or(0);
+    if raised > 0 {
+        let fit = if options.light_scale == SKATE_LIGHT_SCALE {
+            "skate's fitted calibration"
+        } else {
+            "not skate's fitted calibration"
+        };
         log.approximate(
-            "light energy as Studio watts (4 pi^2 candela x light_scale; skate's calibration fitted at 4 m, \
-             assuming the engine's published punctual light model)",
-            1,
+            &format!(
+                "light energy as Studio watts: 4 pi^2 x candela x light_scale {} ({fit}, fitted at 4 m assuming the \
+                 engine's published punctual light model)",
+                options.light_scale
+            ),
+            raised,
         );
-        if options.light_scale != SKATE_LIGHT_SCALE {
-            log.approximate(
-                &format!(
-                    "light_scale {} instead of skate's fitted calibration",
-                    options.light_scale
-                ),
-                lights.len() as u64,
-            );
-        }
     }
     // the world's markers (a spawn among them placed at selection by place-spawn), on their own entities
     let markers: Vec<(Entity, primase_core::Marker)> = world
@@ -714,8 +801,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
 }
 
 /// `raise-skate{name=N[,map=NAME:surface;...][,unclassified=surface][,light_scale=S]}`:
-/// [`raise_skate`] as a pass; `map` is the caller's map of source surface names (it wins over the class,
-/// [`class_to_skate`]).
+/// [`raise_skate`] as a pass; `name` is required; `map` is the caller's map of source surface names (it wins over the
+/// class, [`class_to_skate`]).
 #[derive(Debug)]
 pub struct RaiseSkate {
     pub options: RaiseOptions,
@@ -725,19 +812,10 @@ pub struct RaiseSkate {
 pub fn raise_skate_pass(
     o: &primase_core::pass::Options,
 ) -> std::result::Result<Box<dyn primase_core::pass::Pass>, String> {
-    let mut options = RaiseOptions {
-        name: "scene".into(),
-        ..RaiseOptions::default()
-    };
+    let mut options = RaiseOptions::default();
     for (k, v) in o {
         match k.as_str() {
-            "name"
-                if !v.is_empty()
-                    && v.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') =>
-            {
-                options.name.clone_from(v);
-            }
+            "name" if valid_name(v) => options.name.clone_from(v),
             "name" => return Err(format!("name={v} is not [A-Za-z0-9_-]+")),
             "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
                 return Err(format!(
@@ -764,6 +842,9 @@ pub fn raise_skate_pass(
             }
             _ => return Err(format!("unknown option {k}")),
         }
+    }
+    if options.name.is_empty() {
+        return Err("name=N is required: the scene's name, [A-Za-z0-9_-]+".into());
     }
     Ok(Box::new(RaiseSkate { options }))
 }
@@ -805,16 +886,25 @@ impl primase_core::pass::Pass for RaiseSkate {
             "core.texture",
         ]
     }
+    /// Collision triangles on a surface with no skate surface (and their rock flags), and a collision left with none.
+    fn removes(&self) -> &[&'static str] {
+        &["core.collision", "skate.rock"]
+    }
     fn modifies(&self) -> &[&'static str] {
-        &["core.surfaces"]
+        &["core.surfaces", "core.collision", "skate.rock"]
+    }
+    /// It lowers nothing a target refuses: what it removes is what skate has no surface for.
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
     }
     fn approximates(&self) -> &'static str {
-        "light energy as Studio watts (4 pi^2 candela); base colour alpha factors with a texture not kept; emission not represented (all counted)"
+        "light energy as Studio watts (4 pi^2 candela x the calibration); base colour alpha factors with a texture not kept; emission not represented (all counted)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let l = raise_skate(w, &self.options).map_err(|e| e.to_string())?;
         log.counts.extend(l.counts);
         log.approximations.extend(l.approximations);
+        log.omitted.extend(l.omitted);
         log.placed.extend(l.placed);
         Ok(())
     }
