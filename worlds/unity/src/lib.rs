@@ -14,6 +14,7 @@
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
+//! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
 //! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
@@ -31,6 +32,7 @@ pub mod lower_terrain;
 pub mod material;
 pub mod mesh;
 pub mod player;
+pub mod program;
 pub mod resource;
 pub mod scene;
 pub mod serialized;
