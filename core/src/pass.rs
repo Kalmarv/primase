@@ -284,6 +284,15 @@ impl fmt::Debug for Pipeline {
 }
 
 /// The text form, which [`PassRegistry::parse`] reads back.
+impl Pipeline {
+    /// The checks [`PassManager::run`] makes from the passes' declarations before it runs anything: today, that no
+    /// pass provides a name an earlier pass settles ([`Pass::settles`]) unless a later one settles it again. It needs
+    /// no world, so a program's tests run it on every pipeline it composes (data-free, unlike a run).
+    pub fn check(&self) -> Result<()> {
+        check_settled(&self.passes)
+    }
+}
+
 impl fmt::Display for Pipeline {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, p) in self.passes.iter().enumerate() {
@@ -821,7 +830,7 @@ impl PassManager {
         report: &mut RunReport,
         instrument: &mut dyn Instrument,
     ) -> Result<()> {
-        check_settled(&pipeline.passes)?;
+        pipeline.check()?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
             let step = Step {

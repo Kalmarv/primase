@@ -121,6 +121,41 @@ pub fn run(args: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use primase_gta::pipeline::{Map, Selection, default_passes, select_passes};
+
+    /// Every pipeline a conversion composes from this crate's readers and writers passes the checks made from the
+    /// passes' declarations (Pipeline::check), with no game data: the reader's selection and its default passes for
+    /// the selection's variants, apart and in the order convert runs them, and the ReSkate writer's documented passes
+    /// after them.
+    #[test]
+    fn every_default_pipeline_passes_the_declaration_checks() {
+        let registry = super::registry();
+        let mut pipelines = Vec::new();
+        for map in [Map::Story, Map::Online] {
+            for hour in [None, Some(12), Some(23)] {
+                for interiors in [true, false] {
+                    let mut s = Selection::new([0.0, 0.0, 100.0, 100.0], map);
+                    s.hour = hour;
+                    s.interiors = interiors;
+                    let (select, passes) = (select_passes(&s), default_passes(&s));
+                    let reskate = format!(
+                        "{passes}, bake-normal-scale, raise-skate{{name=n,spawn=centre}}, lower-layered-reskate"
+                    );
+                    pipelines.push(format!("{select}, {passes}"));
+                    pipelines.extend([select, passes, reskate]);
+                }
+            }
+        }
+        for text in pipelines {
+            let pipeline = registry
+                .parse(&text)
+                .unwrap_or_else(|e| panic!("{text}: does not parse: {e}"));
+            if let Err(e) = pipeline.check() {
+                panic!("{text}: {e}");
+            }
+        }
+    }
+
     /// Every library pass a conversion may name or plan is registered (bake-nonrigid lowers non-rigid transforms for
     /// writers that take rigid ones).
     #[test]
