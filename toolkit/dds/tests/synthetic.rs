@@ -64,25 +64,80 @@ fn csharp_values_and_spec_header() {
     eprintln!("{gate}; C# single-level mip-flag deviations={changed_flags}");
     gate.assert_passed();
 }
+/// Microsoft's typed `DXGI_FORMAT` numbers, written out from the format specification rather than read back from
+/// the reader's tables: every format this writer supports, in both colour spaces.
+const DXGI_KNOWN: &[(u32, TexFormat, ColorSpace)] = &[
+    (2, TexFormat::Rgba32Float, ColorSpace::Linear),
+    (10, TexFormat::Rgba16Float, ColorSpace::Linear),
+    (11, TexFormat::Rgba16Unorm, ColorSpace::Linear),
+    (16, TexFormat::Rg32Float, ColorSpace::Linear),
+    (24, TexFormat::Rgb10a2Unorm, ColorSpace::Linear),
+    (28, TexFormat::Rgba8Unorm, ColorSpace::Linear),
+    (31, TexFormat::Rgba8Snorm, ColorSpace::Linear),
+    (34, TexFormat::Rg16Float, ColorSpace::Linear),
+    (35, TexFormat::Rg16Unorm, ColorSpace::Linear),
+    (37, TexFormat::Rg16Snorm, ColorSpace::Linear),
+    (41, TexFormat::R32Float, ColorSpace::Linear),
+    (49, TexFormat::Rg8Unorm, ColorSpace::Linear),
+    (51, TexFormat::Rg8Snorm, ColorSpace::Linear),
+    (54, TexFormat::R16Float, ColorSpace::Linear),
+    (56, TexFormat::R16Unorm, ColorSpace::Linear),
+    (61, TexFormat::R8Unorm, ColorSpace::Linear),
+    (63, TexFormat::R8Snorm, ColorSpace::Linear),
+    (65, TexFormat::A8Unorm, ColorSpace::Linear),
+    (71, TexFormat::Bc1, ColorSpace::Linear),
+    (74, TexFormat::Bc2, ColorSpace::Linear),
+    (77, TexFormat::Bc3, ColorSpace::Linear),
+    (80, TexFormat::Bc4Unorm, ColorSpace::Linear),
+    (81, TexFormat::Bc4Snorm, ColorSpace::Linear),
+    (83, TexFormat::Bc5Unorm, ColorSpace::Linear),
+    (84, TexFormat::Bc5Snorm, ColorSpace::Linear),
+    (85, TexFormat::B5g6r5Unorm, ColorSpace::Linear),
+    (86, TexFormat::B5g5r5a1Unorm, ColorSpace::Linear),
+    (87, TexFormat::Bgra8Unorm, ColorSpace::Linear),
+    (88, TexFormat::Bgrx8Unorm, ColorSpace::Linear),
+    (95, TexFormat::Bc6hUfloat, ColorSpace::Linear),
+    (96, TexFormat::Bc6hSfloat, ColorSpace::Linear),
+    (98, TexFormat::Bc7, ColorSpace::Linear),
+    (115, TexFormat::B4g4r4a4Unorm, ColorSpace::Linear),
+    (29, TexFormat::Rgba8Unorm, ColorSpace::Srgb),
+    (72, TexFormat::Bc1, ColorSpace::Srgb),
+    (75, TexFormat::Bc2, ColorSpace::Srgb),
+    (78, TexFormat::Bc3, ColorSpace::Srgb),
+    (91, TexFormat::Bgra8Unorm, ColorSpace::Srgb),
+    (93, TexFormat::Bgrx8Unorm, ColorSpace::Srgb),
+    (99, TexFormat::Bc7, ColorSpace::Srgb),
+];
+
 #[test]
 fn dxgi_table_roundtrips_and_rejects_unknowns() {
     let mut gate = GateReport::new("typed DXGI roundtrips", Tolerance::Exact);
-    for value in 0..=191 {
-        if let Ok((f, c)) = from_dxgi(value) {
-            for (w, h, n) in [(1, 1, 1), (7, 5, 3), (16, 8, 5)] {
-                let mut t = texture(f, w, h, n);
-                t.color_space = c;
-                let b = write_dx10(&t).unwrap();
-                assert_eq!(u32::from_le_bytes(b[128..132].try_into().unwrap()), value);
-                assert_eq!(read(&b).unwrap(), t);
-                gate.record(format!("{value}/{w}/{h}"), 0.0);
-            }
+    // Both directions against the specification values, so an empty or partly wrong table fails.
+    for &(value, f, c) in DXGI_KNOWN {
+        assert_eq!(from_dxgi(value).unwrap(), (f, c), "DXGI {value}");
+        assert_eq!(primase_dds::to_dxgi(f, c).unwrap(), value, "{f:?} {c:?}");
+        for (w, h, n) in [(1, 1, 1), (7, 5, 3), (16, 8, 5)] {
+            let mut t = texture(f, w, h, n);
+            t.color_space = c;
+            let b = write_dx10(&t).unwrap();
+            assert_eq!(u32::from_le_bytes(b[128..132].try_into().unwrap()), value);
+            assert_eq!(read(&b).unwrap(), t);
+            gate.record(format!("{value}/{w}/{h}"), 0.0);
         }
+    }
+    // Every value in the table's range maps exactly when the specification says it does.
+    for value in 0..=191u32 {
+        assert_eq!(
+            from_dxgi(value).is_ok(),
+            DXGI_KNOWN.iter().any(|&(v, _, _)| v == value),
+            "DXGI {value}"
+        );
     }
     for v in [0, 1, 27, 70, 73, 76, 79, 82, 94, 97, 999] {
         assert!(from_dxgi(v).is_err());
     }
     assert!(primase_dds::to_dxgi(TexFormat::Bc5Unorm, ColorSpace::Srgb).is_err());
+    assert_eq!(gate.checked, DXGI_KNOWN.len() as u64 * 3);
     eprintln!("{gate}");
     gate.assert_passed();
 }
