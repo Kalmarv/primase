@@ -12,9 +12,11 @@
 //! - kind: point; spot with cones from the record's inner and outer angles (degrees; the outer at most 89.5°);
 //!   capsule as a point (its length left out: approximated, counted);
 //! - colour: the sRGB bytes in linear light;
-//! - intensity: the record's own intensity, as candela (core's unit): GTA states no unit for it, so reading it as
-//!   candela is approximated; a target that needs another scale applies it in its own pass;
-//! - range: falloff times the placement's scale (at least 0.5 m);
+//! - intensity: the record's intensity times [`CANDELA_PER_GTA_UNIT`], GTA's lights against its own sun (see there;
+//!   UNVERIFIED, counted per light); a target that needs another scale applies it in its own pass;
+//! - range: falloff times the placement's scale (at least 0.5 m). GTA's light ends there in a window,
+//!   s / ((1 - k) s + k) on s = 1 - (d / range)^2, not inverse-square; the record's falloff and falloff exponent stay
+//!   in `gta.light` (the exponent's mapping to k is not read);
 //! - shadows unknown.
 //!
 //! An hour mask of zero means always on, as GTA does.
@@ -67,6 +69,15 @@ fn posed(pose: &Pose, v: [f32; 3], w: f32) -> [f32; 3] {
     pose.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2] + r[3] * w)
 }
 
+/// Candela per unit of GTA's light intensity. GTA's deferred point and sun lights both draw G x light x albedo x N.L
+/// (its own pixel shaders, `PS_pointCM_standard` and `PS_directional_just_dir`, run on WARP), so a light compares to
+/// the sun in one scale: the extrasunny noon sun (timecycle `light_dir_col` x `light_dir_mult`: luminance
+/// 0.8823 x 64 = 56.47) taken as 100,000 lux makes one GTA unit 1,771 lux, a light's candela its intensity x 1,771 lux
+/// at 1 m (where its window is about 1). UNVERIFIED, two assumptions: that the game writes colour x intensity into
+/// the light's constants with no further factor (CodeWalker doubles it; the game's own code is not read), and the
+/// 100,000 lux sun. GTA reference shots at night decide.
+pub const CANDELA_PER_GTA_UNIT: f32 = 1771.0;
+
 fn linear(c: u8) -> f32 {
     primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
 }
@@ -97,7 +108,8 @@ impl Pass for LowerGtaLights {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "GTA's light intensity read as candela (it states no unit); capsules as points"
+        "GTA's light intensity as candela by its sun (x 1,771: unverified, assumes colour x intensity with no factor \
+         and a 100,000 lux noon sun); its windowed falloff as a range; capsules as points"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut made = Vec::new();
@@ -180,7 +192,7 @@ impl Pass for LowerGtaLights {
                 let light = Light {
                     kind,
                     color: l.colour.map(linear),
-                    intensity: l.intensity.max(0.0),
+                    intensity: l.intensity.max(0.0) * CANDELA_PER_GTA_UNIT,
                     range: Some((l.falloff * scale).max(0.5)),
                     cast_shadows: None,
                 };
@@ -189,6 +201,12 @@ impl Pass for LowerGtaLights {
                     log.count("lights with values that are not finite left out", 1);
                     continue;
                 }
+                log.approximate(
+                    "light intensity as candela by GTA's noon sun (x 1,771, unverified: colour x intensity with no \
+                     factor, a 100,000 lux sun)",
+                    1,
+                );
+                log.approximate("windowed falloff as a range", 1);
                 made.push((
                     transform,
                     light,
@@ -267,5 +285,15 @@ mod tests {
         heights.sort_by(f32::total_cmp);
         assert_eq!(heights, vec![1.0, 7.0]);
         assert_eq!(log.counts.get("lights placed by their bone's pose"), Some(&1));
+        // intensity 1 by GTA's sun, range its falloff, both approximations counted per light
+        for (_, l) in w.iter::<Light>() {
+            assert_eq!((l.intensity, l.range), (1771.0, Some(10.0)));
+        }
+        assert_eq!(log.approximations.get("windowed falloff as a range"), Some(&2));
+        assert!(
+            log.approximations
+                .iter()
+                .any(|(k, &n)| k.contains("x 1,771") && n == 2)
+        );
     }
 }
