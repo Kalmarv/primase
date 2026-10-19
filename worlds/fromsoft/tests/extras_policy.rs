@@ -72,7 +72,7 @@ fn source_light_records_and_their_lowering() {
     directional.kind = Kind::Directional;
     let (world, report) = lowered(
         &[light(), point, directional],
-        &format!("lower-fromsoft-lights{{candela-per-power={calibration},min-range=0.5}}"),
+        &format!("lower-fromsoft-lights{{candela-per-power={calibration},spot-blend=0.15,min-range=0.5}}"),
     )
     .unwrap();
     let lights: Vec<&Light> = world.iter::<Light>().map(|(_, l)| l).collect();
@@ -108,6 +108,7 @@ fn source_light_records_and_their_lowering() {
     for pipeline in [
         "lower-fromsoft-lights",
         "lower-fromsoft-lights{candela-per-power=nan}",
+        "lower-fromsoft-lights{candela-per-power=1}",
         "lower-fromsoft-lights{candela-per-power=1,spot-blend=2}",
         "lower-fromsoft-lights{candela-per-power=-1}",
     ] {

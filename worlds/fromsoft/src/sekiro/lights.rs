@@ -7,8 +7,9 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Light, Transform, World};
 
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power; no default, it is a
-/// calibration), `min-range` (metres; a light's range is its stored radius, at least this; default 0) and
-/// `spot-blend` (the inner cone as `1 - blend` of the outer; default 0.15).
+/// calibration), `spot-blend` (required: the inner cone as `1 - blend` of the outer; BTL's cone falloff is not
+/// established, so the blend is the program's assumption) and `min-range` (metres; a light's range is its stored
+/// radius, at least this; default 0, the radius as stored).
 ///
 /// Colour is the diffuse bytes read as sRGB; intensity the diffuse power times `candela-per-power`; a spot's outer
 /// cone is the stored angle, its full cone clamped to 1-179 degrees; shadows as stored. The light keeps its
@@ -17,36 +18,55 @@ use primase_core::{Component, Light, Transform, World};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LowerFromSoftLights {
     /// Candela per unit of the stored diffuse power.
-    pub candela_per_power: Factor,
+    candela_per_power: Factor,
     /// The least range a light gets.
-    pub min_range: Metres,
+    min_range: Metres,
     /// The inner cone as `1 - blend` of the outer.
-    pub spot_blend: Fraction,
+    spot_blend: Fraction,
 }
 
 impl LowerFromSoftLights {
-    /// The lights at the program's calibration, ranges as stored (`min-range` 0), the inner cone at 0.85 of the outer
-    /// (`spot-blend` 0.15).
-    pub fn new(candela_per_power: Factor) -> Self {
+    /// The lights at the program's calibration and spot blend, ranges as stored (`min-range` 0).
+    pub fn new(candela_per_power: Factor, spot_blend: Fraction) -> Self {
         LowerFromSoftLights {
             candela_per_power,
             min_range: Metres::new(0.).expect("zero"),
-            spot_blend: Fraction::new(0.15).expect("a fraction"),
+            spot_blend,
         }
     }
+    /// The least range a light gets.
+    pub fn with_min_range(mut self, min_range: Metres) -> Self {
+        self.min_range = min_range;
+        self
+    }
+    pub fn candela_per_power(&self) -> Factor {
+        self.candela_per_power
+    }
+    pub fn min_range(&self) -> Metres {
+        self.min_range
+    }
+    pub fn spot_blend(&self) -> Fraction {
+        self.spot_blend
+    }
 
+    /// From its options, through [`LowerFromSoftLights::new`] and its setter.
     pub fn from_options(o: &Options) -> Result<Self, String> {
         let candela = o
             .get("candela-per-power")
             .ok_or("candela-per-power is required: the program calibrates BTL power")?;
-        let mut pass = Self::new(Factor::parse("candela-per-power", candela)?);
+        let blend = o.get("spot-blend").ok_or(
+            "spot-blend is required: BTL's cone falloff is not established, the blend is the program's",
+        )?;
+        let mut pass = Self::new(
+            Factor::parse("candela-per-power", candela)?,
+            Fraction::parse("spot-blend", blend)?,
+        );
         for (k, v) in o {
-            match k.as_str() {
-                "candela-per-power" => {}
-                "min-range" => pass.min_range = Metres::parse(k, v)?,
-                "spot-blend" => pass.spot_blend = Fraction::parse(k, v)?,
+            pass = match k.as_str() {
+                "candela-per-power" | "spot-blend" => pass,
+                "min-range" => pass.with_min_range(Metres::parse(k, v)?),
                 _ => return Err(format!("unknown option {k}")),
-            }
+            };
         }
         Ok(pass)
     }

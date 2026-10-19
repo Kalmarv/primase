@@ -39,6 +39,7 @@ pub fn registry() -> PassRegistry {
     primase_gta::register(&mut r);
     primase_reskate::register(&mut r);
     primase_unity::register(&mut r);
+    primase_fromsoft::sekiro::passes::register(&mut r);
     r
 }
 

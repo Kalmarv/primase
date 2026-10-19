@@ -302,15 +302,16 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   level 0 on the prototype and levels 1 and 2 as `core.lods` forms for
   `select-lod`; positions, unit normals, stored tangents and UV0 in the world frame,
   a layered material's Byte4C members as raw `Color(n)` streams listed by
-  `fromsoft.layer_inputs`. Its options default to the faithful reading:
-  `pose=rigid|stored`, `uv-tiling=keep|apply` (recorded per material as
+  `fromsoft.layer_inputs`. `pose=rigid|stored` is required (which model is lowered);
+  its other options default to the source as stored: `uv-tiling=keep|apply` (recorded per material as
   `fromsoft.uv_tiling`), `winding=stored|normals`, `degenerates=keep|drop`,
   `leave-out=sky+light-volume+shadow`, `blocker-cards=draw|record`. Motion-blur
   face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
-- `lower-fromsoft-lights{candela-per-power=...}` makes `core.light` from the BTL
+- `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour bytes read as sRGB, intensity by the program's calibration (no
   default), range the stored radius (at least `min-range`), a spot's cone from the
-  stored angle with an inner cone at `1 - spot-blend` (0.15). The records stay.
+  stored angle with an inner cone at `1 - spot-blend` (no default: the cone falloff
+  is not established). The records stay.
 - `lower-fromsoft-collision{hit-filters=...}` lowers the map collision files that
   parts of the chosen hit filters name (required) into `core.collision` soups
   (`game`, `water`, `game_state<n>` with the file's condition), each triangle with
@@ -344,7 +345,7 @@ The collision and geometry the earlier reader produced by itself are this explic
 composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
 lower-fromsoft-object-collision{convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
 drop-fromsoft-far, fromsoft-apply-rigid-skinning,
-lower-fromsoft-geometry{uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
+lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
 (streams, indices, material identities), collision, lights, joined ledges and
 travel markers exactly.

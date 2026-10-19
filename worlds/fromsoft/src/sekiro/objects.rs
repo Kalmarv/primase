@@ -172,15 +172,15 @@ impl ConvexBodies {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftObjectCollision {
     /// What convex bodies become.
-    pub convex: ConvexBodies,
+    convex: ConvexBodies,
     /// HitMtrl classes whose triangles are not lowered.
-    pub leave_out: BTreeSet<HitClass>,
+    leave_out: BTreeSet<HitClass>,
     /// Stored motion types whose bodies are not lowered.
-    pub leave_out_motion: BTreeSet<u64>,
+    leave_out_motion: BTreeSet<u64>,
     /// The surface of convex bodies.
-    pub convex_surface: ConvexSurface,
+    convex_surface: ConvexSurface,
     /// The crop around the read region, if any.
-    pub reach: Option<Metres>,
+    reach: Option<Metres>,
 }
 
 impl LowerFromSoftObjectCollision {
@@ -195,6 +195,42 @@ impl LowerFromSoftObjectCollision {
         }
     }
 
+    /// The HitMtrl classes whose triangles are not lowered.
+    pub fn with_leave_out(mut self, leave_out: BTreeSet<HitClass>) -> Self {
+        self.leave_out = leave_out;
+        self
+    }
+    /// The stored motion types whose bodies are not lowered.
+    pub fn with_leave_out_motion(mut self, leave_out_motion: BTreeSet<u64>) -> Self {
+        self.leave_out_motion = leave_out_motion;
+        self
+    }
+    pub fn with_convex_surface(mut self, convex_surface: ConvexSurface) -> Self {
+        self.convex_surface = convex_surface;
+        self
+    }
+    /// The triangles whose centre lies more than `reach` outside the read region left out.
+    pub fn with_reach(mut self, reach: Metres) -> Self {
+        self.reach = Some(reach);
+        self
+    }
+    pub fn convex(&self) -> ConvexBodies {
+        self.convex
+    }
+    pub fn leave_out(&self) -> &BTreeSet<HitClass> {
+        &self.leave_out
+    }
+    pub fn leave_out_motion(&self) -> &BTreeSet<u64> {
+        &self.leave_out_motion
+    }
+    pub fn convex_surface(&self) -> ConvexSurface {
+        self.convex_surface
+    }
+    pub fn reach(&self) -> Option<Metres> {
+        self.reach
+    }
+
+    /// From its options, through [`LowerFromSoftObjectCollision::new`] and its setters.
     pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
         let convex = match o.get("convex").map(String::as_str) {
             Some("tessellate") => ConvexBodies::Tessellate,
@@ -209,25 +245,24 @@ impl LowerFromSoftObjectCollision {
         };
         let mut pass = Self::new(convex);
         for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("convex", _) => {}
-                ("leave-out", v) => pass.leave_out = HitClass::parse_set(k, v)?,
-                ("leave-out-motion", v) => {
-                    pass.leave_out_motion = v
-                        .split('+')
+            pass = match (k.as_str(), v.as_str()) {
+                ("convex", _) => pass,
+                ("leave-out", v) => pass.with_leave_out(HitClass::parse_set(k, v)?),
+                ("leave-out-motion", v) => pass.with_leave_out_motion(
+                    v.split('+')
                         .filter(|m| !m.is_empty())
                         .map(|m| {
                             m.parse::<u64>()
                                 .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
                         })
-                        .collect::<std::result::Result<_, _>>()?
-                }
-                ("convex-surface", "default") => pass.convex_surface = ConvexSurface::Default,
-                ("convex-surface", "render") => pass.convex_surface = ConvexSurface::Render,
+                        .collect::<std::result::Result<_, _>>()?,
+                ),
+                ("convex-surface", "default") => pass.with_convex_surface(ConvexSurface::Default),
+                ("convex-surface", "render") => pass.with_convex_surface(ConvexSurface::Render),
                 ("convex-surface", v) => return Err(format!("convex-surface={v} is not default or render")),
-                ("reach", v) => pass.reach = Some(Metres::parse(k, v)?),
+                ("reach", v) => pass.with_reach(Metres::parse(k, v)?),
                 _ => return Err(format!("unknown option {k}")),
-            }
+            };
         }
         Ok(pass)
     }

@@ -183,7 +183,7 @@ pub fn assemble(
 /// file), each spawn point a `core.marker` of kind `travel` at its position, named as stored, its stored rotation
 /// kept as `fromsoft.spawn_point`. Nothing is joined, rounded, renamed or turned: chaining ledges, choosing a
 /// spawn and naming markers for players are a program's.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct LowerFromSoftExtras;
 
 impl Pass for LowerFromSoftExtras {

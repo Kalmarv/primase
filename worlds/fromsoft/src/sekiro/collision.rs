@@ -278,11 +278,11 @@ pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftCollision {
     /// The hit filters whose parts' files are lowered.
-    pub hit_filters: HitFilters,
+    hit_filters: HitFilters,
     /// What becomes of the triangles of a HitMtrl class other than ground; a class not listed is ground.
-    pub classes: BTreeMap<HitClass, ClassChoice>,
+    classes: BTreeMap<HitClass, ClassChoice>,
     /// The crop around the read region, if any.
-    pub reach: Option<Metres>,
+    reach: Option<Metres>,
 }
 
 /// What `lower-fromsoft-collision` makes of a HitMtrl class's triangles instead of ground.
@@ -304,6 +304,30 @@ impl LowerFromSoftCollision {
         }
     }
 
+    /// The triangles of HitMtrl class `class` made what `choice` says instead of ground; an error for a class given a
+    /// choice already.
+    pub fn with_class(mut self, class: HitClass, choice: ClassChoice) -> std::result::Result<Self, String> {
+        if self.classes.insert(class, choice).is_some() {
+            return Err(format!("HitMtrl class {class} is both water and left out"));
+        }
+        Ok(self)
+    }
+    /// The triangles whose centre lies more than `reach` outside the read region left out.
+    pub fn with_reach(mut self, reach: Metres) -> Self {
+        self.reach = Some(reach);
+        self
+    }
+    pub fn hit_filters(&self) -> &HitFilters {
+        &self.hit_filters
+    }
+    pub fn classes(&self) -> &BTreeMap<HitClass, ClassChoice> {
+        &self.classes
+    }
+    pub fn reach(&self) -> Option<Metres> {
+        self.reach
+    }
+
+    /// From its options, through [`LowerFromSoftCollision::new`] and its setters.
     pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
         let filters = o
             .get("hit-filters")
@@ -315,15 +339,13 @@ impl LowerFromSoftCollision {
                 "water" => ClassChoice::Water,
                 "leave-out" => ClassChoice::LeaveOut,
                 "reach" => {
-                    pass.reach = Some(Metres::parse(k, v)?);
+                    pass = pass.with_reach(Metres::parse(k, v)?);
                     continue;
                 }
                 _ => return Err(format!("unknown option {k}")),
             };
             for class in HitClass::parse_set(k, v)? {
-                if pass.classes.insert(class, choice).is_some() {
-                    return Err(format!("HitMtrl class {class} is both water and left out"));
-                }
+                pass = pass.with_class(class, choice)?;
             }
         }
         Ok(pass)
