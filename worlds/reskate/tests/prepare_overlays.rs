@@ -12,7 +12,7 @@ use primase_core::{
     DrawLayer, DrawOrder, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform,
     World,
 };
-use primase_reskate::dialect::{MarkerKind, Other, SkateMarker, SkateOverlayStack};
+use primase_reskate::dialect::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
 use primase_reskate::prepare::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
 use primase_reskate::{BuildOptions, EncodingOptions, WriterChoices};
 
@@ -181,7 +181,12 @@ fn decals_are_stacked_before_the_writer() {
         .run(&mut w, &mut log)
         .unwrap();
     let rec = w.resource::<SkateOverlayStack>().unwrap().clone();
-    let mut lifts: Vec<f32> = rec.shifts.values().copied().collect();
+    let mut lifts: Vec<f32> = rec
+        .pieces
+        .values()
+        .map(|p| p.shift)
+        .filter(|&s| s > 0.0)
+        .collect();
     lifts.sort_by(f32::total_cmp);
     assert_eq!(lifts.len(), 2, "{rec:?}");
     assert!(
@@ -189,7 +194,34 @@ fn decals_are_stacked_before_the_writer() {
         "{lifts:?}"
     );
     assert_eq!(rec.under.len(), 1);
-    assert_eq!(rec.materials.len(), 3, "the floor's piece and the decals'");
+    assert_eq!(rec.pieces.len(), 3, "the floor's piece and the decals'");
+    // what each piece is, in the world: the floor's centre on the ground, each decal's at its lift
+    for (piece, s) in &rec.pieces {
+        let OverlayPiece::Placed { part: 0, .. } = piece else {
+            panic!("{piece:?}: a merged placement's first part");
+        };
+        assert_eq!((s.mesh.as_str(), s.tris), ("t_0_0", 2), "{s:?}");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        if s.overlay {
+            let centre = if s.material.contains("dirt") {
+                [11.5, -12.5]
+            } else {
+                [12.0, -12.0]
+            };
+            assert!(
+                near(s.centre[0], centre[0]) && near(s.centre[2], centre[1]) && near(s.centre[1], s.shift),
+                "{s:?}"
+            );
+        } else {
+            assert!(
+                near(s.centre[0], 12.0)
+                    && near(s.centre[1], 0.0)
+                    && near(s.centre[2], -12.0)
+                    && s.shift == 0.0,
+                "{s:?}"
+            );
+        }
+    }
     assert_eq!(log.counts["overlay pieces lifted"], 2);
     let (r, stacked) = write(&w, "stacked", &EncodingOptions::default()).unwrap();
     let written: Vec<f32> = r
@@ -294,7 +326,7 @@ fn the_stack_follows_its_pieces_entities() {
     assert!(refs.contains(&second));
     w.despawn(second);
     let rec = w.resource::<SkateOverlayStack>().unwrap();
-    assert_eq!((rec.materials.len(), rec.under.len()), (2, 0));
+    assert_eq!((rec.pieces.len(), rec.under.len()), (2, 0));
     write(&w, "despawned", &EncodingOptions::default()).unwrap();
 }
 

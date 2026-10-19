@@ -184,7 +184,10 @@ impl Pass for PrepareReskateOverlays {
         }
         let rec = overlay_stack(w, &self.encoding(), self.step).map_err(|e| e.to_string())?;
         log.count("overlay pieces stacked", rec.totals.pieces.max(0) as u64);
-        log.count("overlay pieces lifted", rec.shifts.len() as u64);
+        log.count(
+            "overlay pieces lifted",
+            rec.pieces.values().filter(|p| p.shift > 0.0).count() as u64,
+        );
         log.count(
             "overlay relations (one piece under another)",
             rec.under.len() as u64,

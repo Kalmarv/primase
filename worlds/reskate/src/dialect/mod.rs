@@ -607,19 +607,33 @@ pub struct OverlayGrouping {
     pub offset: [f64; 2],
 }
 
-/// The overlay stack `prepare-reskate-overlays` made for the writer's meshes: each decal- or water-class piece's lift
-/// along its faces' normals (metres; a piece not listed is not lifted), which piece lies under which (the meshes' draw
-/// order follows them), the material (by name) each piece of a mesh with overlays was drawn with (the writer refuses
-/// meshes it would draw otherwise), the step it stacked by, the grouping it stacked over and its totals. Not part of
-/// scene-interchange v1.
+/// The overlay stack `prepare-reskate-overlays` made for the writer's meshes: every piece of a mesh with overlays, by
+/// identity ([`StackedPiece`]: what it was drawn with, how it was ordered, how far it was lifted), which piece lies
+/// under which (the meshes' draw order follows them), the step it stacked by, the grouping it stacked over and its
+/// totals. The writer refuses a mesh whose pieces or materials differ from these. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SkateOverlayStack {
     pub step: f32,
     pub grouping: Option<OverlayGrouping>,
-    pub shifts: BTreeMap<OverlayPiece, f32>,
+    pub pieces: BTreeMap<OverlayPiece, StackedPiece>,
     pub under: BTreeSet<(OverlayPiece, OverlayPiece)>,
-    pub materials: BTreeMap<OverlayPiece, String>,
     pub totals: OverlayTotals,
+}
+
+/// One piece of a stacked mesh: the mesh (`t_<column>_<row>`, a render tile; `proto <name>`, an instanced prototype),
+/// the material it is drawn with (by name), whether it is an overlay (decal or water class), its stacking pass and
+/// order, how far it was lifted along its faces' normals (metres; 0: not), its triangles, and its centre after the
+/// lift (scene axes; the world frame for a tile's piece, the prototype's for an instanced one).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StackedPiece {
+    pub mesh: String,
+    pub material: String,
+    pub overlay: bool,
+    pub pass: i32,
+    pub order: i32,
+    pub shift: f32,
+    pub tris: u32,
+    pub centre: [f32; 3],
 }
 
 /// The overlay stack's totals over every mesh.
@@ -639,24 +653,34 @@ pub struct OverlayTotals {
 impl Resource for SkateOverlayStack {
     const NAME: &'static str = "skate.overlay_stack";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        let id = |p: &OverlayPiece| match *p {
+            OverlayPiece::Placed { placement, part } => {
+                serde_json::json!({ "placement": placement.index(), "part": part })
+            }
+            OverlayPiece::Proto { prototype, row, part } => {
+                serde_json::json!({ "prototype": prototype.index(), "row": row, "part": part })
+            }
+        };
         Ok(Some(serde_json::json!({
             "step": self.step,
             "grouping": self.grouping,
-            "pieces_lifted": self.shifts.len(),
-            "relations": self.under.len(),
-            "pieces_checked": self.materials.len(),
             "totals": self.totals,
+            "overlays": self
+                .pieces
+                .iter()
+                .filter(|(_, s)| s.overlay)
+                .map(|(p, s)| serde_json::json!({ "piece": id(p), "stacked": s }))
+                .collect::<Vec<_>>(),
+            "under": self.under.iter().map(|(a, b)| [id(a), id(b)]).collect::<Vec<_>>(),
         })))
     }
     fn references(&self, out: &mut Vec<Entity>) {
-        let mut all: BTreeSet<Entity> = self.materials.keys().map(OverlayPiece::entity).collect();
-        all.extend(self.shifts.keys().map(OverlayPiece::entity));
+        let mut all: BTreeSet<Entity> = self.pieces.keys().map(OverlayPiece::entity).collect();
         all.extend(self.under.iter().flat_map(|(a, b)| [a.entity(), b.entity()]));
         out.extend(all);
     }
     fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
-        self.shifts.retain(|p, _| keep(p.entity()));
-        self.materials.retain(|p, _| keep(p.entity()));
+        self.pieces.retain(|p, _| keep(p.entity()));
         self.under.retain(|(a, b)| keep(a.entity()) && keep(b.entity()));
     }
 }

@@ -29,12 +29,6 @@ word = "forza"
 reason = "forza_string, a hash with no user yet"
 removed_when = "it moves into the Forza reader when one exists, or is deleted"
 
-[[name]]
-crate = "worlds/reskate"
-word = "gta"
-reason = "the overlay pieces record carries GTA's own fields (centre, drawable, shader, bucket)"
-removed_when = "overlay preparation leaves the writer and GTA's fields go to the GTA program's report (plan step 8)"
-
 # ---- composition without data logic (examples, bins, cli) ----
 
 [[entry_point]]

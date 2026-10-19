@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::blend_order::{self, Geometry};
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
-use crate::dialect::{OverlayPiece, OverlayTotals, SkateOverlayStack};
+use crate::dialect::{OverlayPiece, OverlayTotals, SkateOverlayStack, StackedPiece};
 use crate::glb::{self, GlbPrim};
 use crate::grind;
 use crate::material::{MatLib, Material, VClass};
@@ -14,8 +14,8 @@ use crate::model::{CollisionMode, Hull, MapObject, Placement, ProtoInfo, SrcMesh
 use crate::overlay::{self, OverlayStats, Parts, Piece};
 use crate::pausemap::PauseMap;
 use crate::records::{
-    Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, PieceJson, PiecesJson,
-    SpawnJson, StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
+    Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, SpawnJson,
+    StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
     TravelPointJson,
 };
 use crate::scene::{GrindCurve, Marker, PlacedLight, SnapMode, SurfaceTable, WaterQuad};
@@ -44,7 +44,6 @@ pub struct WriterOptions {
     /// bounds of their own, which sort by view depth and swap chain ranks; cut here, every rank of a (cell, axis) is
     /// padded to the same box. 0: not cut.
     pub blend_grid: f32,
-    pub piece_log: bool,
     pub offset: [f64; 3],
     pub limit: f32,
     pub map_height: usize,
@@ -146,8 +145,10 @@ struct Acc {
     blend: Vec<f32>,
     idx: Vec<u32>,
     pieces: Vec<AccPiece>,
-    src: Vec<PieceSrc>,
 }
+
+/// The props' collision of each collision tile, with the map tile that placed them.
+type PropParts = BTreeMap<(i32, i32), Vec<(i32, i32, PropSoup)>>;
 
 /// One append to a merged part: its triangles and vertices, draw order and entity.
 #[derive(Clone, Copy, Debug)]
@@ -159,39 +160,6 @@ struct AccPiece {
     v1: usize,
     order: i32,
     entity: i32,
-}
-
-/// Where a piece came from, for pieces.json.
-#[derive(Clone, Debug)]
-struct PieceSrc {
-    drawable: String,
-    entity: Vec3,
-    shader: String,
-    bucket: u8,
-    model: i32,
-    geom: i32,
-}
-
-/// The props' collision of each collision tile, with the map tile that placed them.
-type PropParts = BTreeMap<(i32, i32), Vec<(i32, i32, PropSoup)>>;
-
-/// One overlay piece for pieces.json.
-#[derive(Clone, Debug)]
-struct PieceRec {
-    mesh: String,
-    material: String,
-    pass: i32,
-    order: i32,
-    shift_mm: f32,
-    tris: usize,
-    centre: Vec3,
-    drawable: String,
-    entity: Vec3,
-    shader: String,
-    bucket: u8,
-    model: i32,
-    geom: i32,
-    entity_no: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -626,7 +594,6 @@ pub struct MapWriter {
     prop_hulls: Vec<Hull>,
     /// Tiles' chain overlays waiting for finish, by (row, column).
     pending_chains: BTreeMap<(i32, i32), PendingChain>,
-    piece_log: Option<Vec<PieceRec>>,
     /// The overlay stack: none, made here for `prepare-reskate-overlays`, or the one it made, replayed.
     stack: Stack,
     /// Mesh files (meshes/<name>), written at the end.
@@ -703,7 +670,6 @@ impl MapWriter {
         };
         let tex = TexLib::new(tex_dir);
         Ok(MapWriter {
-            piece_log: o.piece_log.then(Vec::new),
             o,
             ctx: Ctx {
                 tex,
@@ -960,7 +926,7 @@ impl MapWriter {
     }
 
     /// Stack the mesh's overlay pieces as the stack mode says (not at all; stacked here and recorded; the recorded
-    /// stack replayed), logging them with --piece-log; returns which material lies under which, `(below, above)`.
+    /// stack replayed); returns which material lies under which, `(below, above)`.
     fn stack_overlays(
         &mut self,
         parts: &mut BTreeMap<usize, Acc>,
@@ -1020,11 +986,26 @@ impl MapWriter {
                     totals.add(&stacked.stats);
                     rec.totals = totals_of(&totals);
                     for (k, p) in pieces.iter().enumerate() {
-                        rec.materials
-                            .insert(ids[k], self.ctx.mats.by_id(src[k].0).name.clone());
-                        if p.shift > 0.0 {
-                            rec.shifts.insert(ids[k], p.shift);
+                        // its centre after the lift, the mesh's frame in scene axes
+                        let pos = &*view.pos[p.part];
+                        let mut c = Vec3::ZERO;
+                        for v in p.v0..p.v1 {
+                            c += Vec3::new(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
                         }
+                        c = c / (p.v1 - p.v0).max(1) as f32 + origin;
+                        rec.pieces.insert(
+                            ids[k],
+                            StackedPiece {
+                                mesh: mesh.to_owned(),
+                                material: self.ctx.mats.by_id(src[k].0).name.clone(),
+                                overlay: p.overlay,
+                                pass: p.pass,
+                                order: p.order,
+                                shift: p.shift,
+                                tris: (p.t1 - p.t0) as u32,
+                                centre: [c.x, c.z, -c.y],
+                            },
+                        );
                     }
                     rec.under
                         .extend(stacked.under.iter().map(|&(lo, hi)| (ids[lo], ids[hi])));
@@ -1032,14 +1013,18 @@ impl MapWriter {
                 }
                 Stack::Replay(rec) if stacking => {
                     for (k, p) in pieces.iter_mut().enumerate() {
-                        if rec.materials.get(&ids[k]) != Some(&self.ctx.mats.by_id(src[k].0).name) {
+                        let Some(stacked) = rec
+                            .pieces
+                            .get(&ids[k])
+                            .filter(|r| r.material == self.ctx.mats.by_id(src[k].0).name)
+                        else {
                             return Err(Error::Scene(format!(
                                 "{mesh}: the overlay stack (skate.overlay_stack) was made for other pieces or \
                                  materials than the writer draws: run prepare-reskate-overlays after the passes that \
                                  change geometry, materials or textures"
                             )));
-                        }
-                        p.shift = rec.shifts.get(&ids[k]).copied().unwrap_or(0.0);
+                        };
+                        p.shift = stacked.shift;
                     }
                     overlay::replay(&mut view, &pieces);
                     let at: HashMap<OverlayPiece, usize> =
@@ -1069,45 +1054,6 @@ impl MapWriter {
                 }
             }
         }
-        let Some(log) = &mut self.piece_log else {
-            return Ok(under);
-        };
-        for (k, p) in pieces.iter().enumerate() {
-            if !p.overlay {
-                continue;
-            }
-            let (mat, i) = src[k];
-            let a = &parts[&mat];
-            let mut c = Vec3::ZERO;
-            for v in p.v0..p.v1 {
-                c += Vec3::new(a.pos[v * 3], a.pos[v * 3 + 1], a.pos[v * 3 + 2]);
-            }
-            c = c / (p.v1 - p.v0).max(1) as f32 + origin;
-            let PieceSrc {
-                drawable,
-                entity,
-                shader,
-                bucket,
-                model,
-                geom,
-            } = a.src[i].clone();
-            log.push(PieceRec {
-                mesh: mesh.to_owned(),
-                material: self.ctx.mats.by_id(mat).name.clone(),
-                pass: p.pass,
-                order: p.order,
-                shift_mm: p.shift * 1000.0,
-                tris: p.t1 - p.t0,
-                centre: c,
-                drawable,
-                entity,
-                shader,
-                bucket,
-                model,
-                geom,
-                entity_no: p.entity,
-            });
-        }
         Ok(under)
     }
 
@@ -1120,7 +1066,6 @@ impl MapWriter {
         origin: Vec3,
         order: i32,
         only: Option<&[u32]>,
-        drawable: &str,
         entity: i32,
     ) {
         let (t0, v0) = (a.idx.len() / 3, a.pos.len() / 3);
@@ -1134,14 +1079,6 @@ impl MapWriter {
                 v1: a.pos.len() / 3,
                 order,
                 entity,
-            });
-            a.src.push(PieceSrc {
-                drawable: drawable.to_owned(),
-                entity: s.map_or(Vec3::ZERO, |x| x.pos),
-                shader: p.shader.clone(),
-                bucket: p.bucket,
-                model: p.model,
-                geom: p.geom,
             });
         }
     }
@@ -1250,7 +1187,6 @@ impl MapWriter {
                 Vec3::ZERO,
                 order as i32,
                 None,
-                &m.name,
                 0,
             );
         }
@@ -1532,7 +1468,6 @@ impl MapWriter {
                             origin,
                             piece_order,
                             only,
-                            &m.name,
                             entity_no,
                         );
                         piece_order += 1;
@@ -2184,7 +2119,7 @@ impl MapWriter {
         Ok(())
     }
 
-    /// Collision, water, grind curves, markers, lights, textures_index.json, pieces.json, map.json, trainer.json.
+    /// Collision, water, grind curves, markers, lights, textures_index.json, map.json, trainer.json.
     pub fn finish(&mut self, x: Extras) -> Result<()> {
         let o = self.o.clone();
         let (r, off) = (o.region, self.off);
@@ -2335,9 +2270,6 @@ impl MapWriter {
         self.write_index()?;
         for m in &mut self.ctx.mats.list {
             m.tris = self.mat_tris.get(&m.id).copied().unwrap_or(0) as u64;
-        }
-        if self.piece_log.is_some() {
-            self.write_pieces()?;
         }
 
         let used_mats: BTreeSet<String> = self.objects.iter().filter_map(|ob| ob.material.clone()).collect();
@@ -2598,43 +2530,6 @@ impl MapWriter {
         }
         self.r.mesh_bytes = self.mesh_files.values().map(|b| b.len() as u64).sum();
         self.r.collision = Some(col);
-        Ok(())
-    }
-
-    fn write_pieces(&mut self) -> Result<()> {
-        let Some(log) = &self.piece_log else { return Ok(()) };
-        let mut recs: Vec<&PieceRec> = log.iter().collect();
-        recs.sort_by(|a, b| {
-            a.mesh
-                .cmp(&b.mesh)
-                .then(a.pass.cmp(&b.pass))
-                .then(a.order.cmp(&b.order))
-        });
-        let r2 = |v: Vec3| [v.x, v.y, v.z];
-        let pieces = PiecesJson {
-            overlay_step_m: self.stack.step(),
-            pieces: recs
-                .into_iter()
-                .map(|p| PieceJson {
-                    mesh: &p.mesh,
-                    material: &p.material,
-                    pass: p.pass,
-                    order: p.order,
-                    shift_mm: p.shift_mm,
-                    tris: p.tris,
-                    gta: r2(p.centre),
-                    drawable: &p.drawable,
-                    entity: r2(p.entity),
-                    shader: &p.shader,
-                    bucket: p.bucket,
-                    model: p.model,
-                    geometry: p.geom,
-                    entity_no: p.entity_no,
-                })
-                .collect(),
-        };
-        let bytes = crate::json_bytes("pieces.json", &pieces, true)?;
-        self.files.insert("pieces.json".into(), bytes);
         Ok(())
     }
 }

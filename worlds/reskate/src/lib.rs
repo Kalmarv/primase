@@ -1,7 +1,7 @@
 //! ReSkate (skate.): the target's own crate. It owns the `skate.*` dialect ([`dialect`]), the preparation passes a
 //! program selects to raise core data into it ([`prepare`], `raise-skate`, and the target's lowerings), the frozen
 //! skate-scene interchange v1 ([`interchange`]: read, load, write), and the writer of ReSkate Studio normalized map
-//! folders (`map.json`, `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`, `pieces.json`,
+//! folders (`map.json`, `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`,
 //! `textures_index.json`), gated against the reference C# writer by what Studio reads: meshes, tables and texture
 //! payloads exactly, JSON as parsed values, PNGs by pixels.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]

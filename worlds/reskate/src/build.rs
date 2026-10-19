@@ -39,8 +39,6 @@ pub struct EncodingOptions {
     pub limit: f32,
     /// Added to every written coordinate (east, north).
     pub offset: [f64; 2],
-    /// Write the collision pieces' log.
-    pub piece_log: bool,
     /// The scene's warnings for the map's stats, taken before a pass left placements out ([`leave_out_optional`]):
     /// the reference reads them from the whole scene before its writer filters. `None`: from the world as given.
     pub scene_warnings: Option<Vec<String>>,
@@ -57,7 +55,6 @@ impl Default for EncodingOptions {
             max_render_edge: None,
             limit: 4780.0,
             offset: [0.0, 0.0],
-            piece_log: false,
             scene_warnings: None,
         }
     }
@@ -106,7 +103,6 @@ pub struct BuildOptions {
     pub overlay_step: f32,
     pub blend_objects: Option<usize>,
     pub blend_grid: f32,
-    pub piece_log: bool,
     pub limit: f32,
     pub map_height: usize,
     pub no_water: bool,
@@ -129,7 +125,6 @@ impl Default for BuildOptions {
             overlay_step: 0.004,
             blend_objects: c.blend_objects,
             blend_grid: c.blend_grid,
-            piece_log: e.piece_log,
             limit: e.limit,
             map_height: c.map_height,
             no_water: c.no_water,
@@ -156,7 +151,6 @@ impl BuildOptions {
                 max_render_edge: a.max_render_edge,
                 limit: a.limit,
                 offset: a.offset,
-                piece_log: a.piece_log,
                 scene_warnings: a.scene_warnings,
             },
             WriterChoices {
@@ -561,7 +555,6 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         min_instance_tris: a.min_instance_tris,
         blend_objects: c.blend_objects,
         blend_grid: c.blend_grid,
-        piece_log: a.piece_log,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
         map_height: c.map_height,
@@ -627,7 +620,6 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
 fn assembly(world: &World, a: &EncodingOptions, stack: Stack, encode: bool) -> Result<MapWriter> {
     let s = Scene::from_world(world, Path::new(""))?;
     let mut o = writer_options(&s, a, &WriterChoices::default())?;
-    o.piece_log = false;
     let placements = writer_placements(&s, o.tile);
     o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
     let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?.with_stack(stack);

@@ -241,10 +241,17 @@ impl MatLib {
         }
         let id40 = h.value() & 0xFF_FFFF_FFFF;
         let mut name = format!("{}_{}_{:010x}", kind_name(cls), safe, id40);
+        // unique within the map (map.json names materials, and prepare-reskate-overlays checks pieces by name): a
+        // name taken gets the material's id, then a count, until it is new
         if !self.names.insert(name.clone()) {
             self.collisions.push(name.clone());
-            name = format!("{name}_{id}");
-            self.names.insert(name.clone());
+            let base = name.clone();
+            name = format!("{base}_{id}");
+            let mut n = 1;
+            while !self.names.insert(name.clone()) {
+                name = format!("{base}_{id}_{n}");
+                n += 1;
+            }
         }
         self.list.push(Material {
             id,
@@ -270,5 +277,28 @@ impl MatLib {
         });
         self.map.insert(key, id);
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A material's name is new in its map even when its name and the id-suffixed one are both taken: the count goes
+    /// on until it is.
+    #[test]
+    fn material_names_are_unique_however_they_collide() {
+        let tex = TexLib::new(std::path::Path::new(""));
+        let spec = MaterialSpec::derived(VClass::Decal, false);
+        let mut first = MatLib::default();
+        let id = first.get(&tex, &spec, -1);
+        let name = first.by_id(id).name.clone();
+        // a map where both names it would take are another material's already
+        let mut lib = MatLib::default();
+        lib.names.insert(name.clone());
+        lib.names.insert(format!("{name}_0"));
+        let id = lib.get(&tex, &spec, -1);
+        assert_eq!(lib.by_id(id).name, format!("{name}_0_1"));
+        assert_eq!(lib.collisions, [name]);
     }
 }

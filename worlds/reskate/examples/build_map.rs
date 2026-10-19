@@ -6,7 +6,7 @@
 //! (`budget-reskate-textures`), the overlays stacked (`prepare-reskate-overlays`, 4 mm), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
-//! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--piece-log] [--name N] [--lod default|highest|N]
+//! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--name N] [--lod default|highest|N]
 //! [--max-priority N]`
 //!
 //! `--tex-cap` (256 when not given) caps every texture's larger side; `--tex-caps` is a JSON file whose `caps` object
@@ -51,7 +51,6 @@ fn main() -> Result<(), BoxError> {
             "--lights-max-per-cell" => c.lights_max_per_cell = val()?.parse()?,
             "--water-ocean" => c.water_ocean = true,
             "--no-water" => c.no_water = true,
-            "--piece-log" => o.piece_log = true,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
             "--max-priority" => max_priority = Some(val()?.parse()?),
             s if s.starts_with("--") => return Err(format!("unknown option {s}").into()),

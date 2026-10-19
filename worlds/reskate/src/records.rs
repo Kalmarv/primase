@@ -1,5 +1,5 @@
 //! The JSON files of a map folder as serde records: `map.json`, `textures_index.json`, `trainer.json`,
-//! `pieces.json`, `stats.json` and `ui/map_image.json`. Absent optional fields are left out.
+//! `stats.json` and `ui/map_image.json`. Absent optional fields are left out.
 
 use std::collections::BTreeMap;
 
@@ -230,31 +230,6 @@ pub struct TrainerJson<'a> {
 pub struct TrainerSpot {
     pub name: String,
     pub position: [f32; 3],
-}
-
-/// `pieces.json`: where each merged piece came from and how the overlay stack moved it.
-#[derive(Debug, Serialize)]
-pub struct PiecesJson<'a> {
-    pub overlay_step_m: f32,
-    pub pieces: Vec<PieceJson<'a>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PieceJson<'a> {
-    pub mesh: &'a str,
-    pub material: &'a str,
-    pub pass: i32,
-    pub order: i32,
-    pub shift_mm: f32,
-    pub tris: usize,
-    pub gta: [f32; 3],
-    pub drawable: &'a str,
-    pub entity: [f32; 3],
-    pub shader: &'a str,
-    pub bucket: u8,
-    pub model: i32,
-    pub geometry: i32,
-    pub entity_no: i32,
 }
 
 /// `ui/map_image.json`: the pause map picture's extent in Studio's frame.
