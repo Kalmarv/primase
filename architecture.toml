@@ -14,11 +14,6 @@
 # A migration status per module, counted like a break: the check fails on a module that breaks the layout and isn't
 # listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
 
-[[layout]]
-file = "worlds/reskate/src/build.rs"
-reason = "writer I/O in Other"
-removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"
-
 # ---- composition without data logic (examples, bins, cli) ----
 
 # ---- passes registered, lowerings run as passes ----

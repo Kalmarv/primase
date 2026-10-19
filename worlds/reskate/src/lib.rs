@@ -9,7 +9,6 @@
 
 pub mod assembly;
 pub mod blend_order;
-pub mod build;
 pub mod collision;
 mod collision_pack;
 pub mod components;
@@ -94,7 +93,7 @@ pub mod vertex_alpha {
 use std::path::PathBuf;
 
 pub use assembly::{AssembledMaterial, EncodingOptions, assembled_materials};
-pub use build::{BuildReport, MapSink, leave_out_optional, lod_choice, select_lod, target, write_map};
+pub use write::map::{BuildReport, MapSink, leave_out_optional, lod_choice, select_lod, target, write_map};
 /// A skate-scene folder as the convert loop's reader.
 pub use read::scene::SceneReader;
 
