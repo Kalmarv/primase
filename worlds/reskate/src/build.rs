@@ -5,8 +5,6 @@
     reason = "writer I/O: writes the map folder"
 )]
 
-mod floor;
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -45,9 +43,6 @@ pub struct BuildOptions {
     pub water_ocean: bool,
     pub lights_max_per_cell: usize,
     pub max_render_edge: Option<f32>,
-    pub min_height: Option<f32>,
-    pub stub_below: Option<f32>,
-    pub floor: Option<f32>,
     pub offset: [f64; 2],
     /// The scene's warnings as the reference build reports them, taken before a pass left placements out
     /// ([`leave_out_optional`]): the reference reads them from the whole scene before its writer filters. `None`:
@@ -73,9 +68,6 @@ impl Default for BuildOptions {
             water_ocean: false,
             lights_max_per_cell: 0,
             max_render_edge: None,
-            min_height: None,
-            stub_below: None,
-            floor: None,
             offset: [0.0, 0.0],
             scene_warnings: None,
         }
@@ -126,6 +118,7 @@ fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
                 no_instance: p.split,
                 index: pi,
                 split_whole: p.split && proto.prims.is_some(),
+                part_off: p.parts_off.clone(),
                 ..Placement::default()
             };
             // clipped as the placement says (clip-reskate-region marks them); the writer decides none
@@ -499,12 +492,10 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         ));
     }
     let cut = s.region;
-    let mut placements = writer_placements(&s, o.tile);
+    let placements = writer_placements(&s, o.tile);
     o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
-    let floor = floor::prepare(&s, &mut placements, a)?;
-    let drop_below = floor.drop_below;
-    let lift = floor.lift;
-    o.offset = [a.offset[0], a.offset[1], f64::from(lift)];
+    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
+    let drop_below = f32::NEG_INFINITY;
 
     let out_dir = a.out_root.join(&o.name);
     let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?;
@@ -577,7 +568,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
             std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
         }
     }
-    let stats = stats_json(&writer, &s, &o, placements.len(), &floor, failed)?;
+    let stats = stats_json(&writer, &s, &o, placements.len(), failed)?;
     let p = out_dir.join("stats.json");
     std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
     let r = &writer.r;
@@ -605,7 +596,6 @@ fn stats_json(
     s: &Scene,
     o: &WriterOptions,
     placements: usize,
-    floor: &floor::FloorLift,
     failed: i64,
 ) -> Result<Vec<u8>> {
     let r = &writer.r;
@@ -626,12 +616,12 @@ fn stats_json(
         scene: full.to_string_lossy().into_owned(),
         region: o.region,
         tile_size: o.tile,
-        lift_m: floor.lift,
+        lift_m: s.floor_plan.as_ref().map_or(0.0, |f| f.lift),
         totals: Totals {
             placements,
             placements_degenerate: r.degenerate,
-            placements_stubs_left_out: floor.placements_removed,
-            placed_parts_stubs_left_out: floor.parts_removed,
+            placements_stubs_left_out: s.floor_plan.as_ref().map_or(0, |f| f.placements_removed as i64),
+            placed_parts_stubs_left_out: s.floor_plan.as_ref().map_or(0, |f| f.parts_removed as i64),
             placements_clipped_away: r.far_dropped,
             prototypes_placed: r.archetypes,
             prototypes_failed: failed,

@@ -321,9 +321,8 @@ pub struct Scene {
     pub water: Vec<WaterQuad>,
     pub markers: Vec<Marker>,
     pub streaming: Option<[f64; 3]>,
-    pub min_height: f32,
-    pub stub_below: f32,
-    pub floor: f32,
+    /// The floor prepare-reskate-floor applied (for the stats).
+    pub floor_plan: Option<crate::dialect::SkateFloorPlan>,
     pub max_render_edge: f32,
     pub trainer_note: Option<String>,
     pub light_prefix: Option<String>,
@@ -420,6 +419,8 @@ pub struct ScenePlacement {
     pub clip: Option<bool>,
     pub no_collision: bool,
     pub split: bool,
+    /// The parts left out (`skate.parts_off`, prepare-reskate-floor's).
+    pub parts_off: Option<Vec<bool>>,
 }
 
 impl Scene {
@@ -538,6 +539,15 @@ impl Scene {
                 "the scene's texture budget ({max}) not applied by the writer: a budget is a pass \
                  (budget-reskate-textures)"
             ));
+        }
+        if sc.min_height.is_some() {
+            unsupported.push((
+                "skate.scene min_height (prepare-reskate-floor lifts the map)".to_owned(),
+                1,
+            ));
+            report_warnings.push(
+                "the scene's min_height not applied by the writer: the floor is a pass (prepare-reskate-floor)".into(),
+            );
         }
         for (i, (e, p)) in world.iter::<SkatePrototype>().enumerate() {
             proto_index.insert(e, i);
@@ -669,6 +679,7 @@ impl Scene {
                 clip: sp.clip,
                 no_collision: sp.no_collision,
                 split: sp.split_by_tile,
+                parts_off: world.get::<crate::dialect::SkatePartsOff>(e).map(|p| p.0.clone()),
             });
         }
         let soup_def = |file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
@@ -850,20 +861,7 @@ impl Scene {
                     s.far.unwrap_or(500.0),
                 ]
             }),
-            min_height: sc
-                .min_height
-                .as_ref()
-                .map_or(f32::NAN, |m| m.height.unwrap_or(100.01) as f32),
-            stub_below: sc
-                .min_height
-                .as_ref()
-                .and_then(|m| m.stub_below)
-                .map_or(250.0, |v| v as f32),
-            floor: sc
-                .min_height
-                .as_ref()
-                .and_then(|m| m.floor)
-                .map_or(f32::NAN, |v| v as f32),
+            floor_plan: world.resource::<crate::dialect::SkateFloorPlan>().cloned(),
             max_render_edge: sc.max_render_edge.unwrap_or(0.0) as f32,
             trainer_note: sc.trainer_note.clone(),
             light_prefix: sc.light_prefix.clone(),

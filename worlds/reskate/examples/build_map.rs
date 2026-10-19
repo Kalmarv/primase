@@ -1,8 +1,8 @@
 //! A skate-scene folder -> a ReSkate Studio normalized map folder: read, its meshes and textures loaded, the chosen
-//! level of detail and placements, a spawn when the scene has none, the scene's region clipped when it states one
-//! (`clip-reskate-region`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
-//! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
-//! (`budget-reskate-textures`), then the writer.
+//! level of detail and placements, the scene's region clipped and its floor lifted when it states them
+//! (`clip-reskate-region`, `prepare-reskate-floor`), a spawn when the scene has none, the textures capped
+//! (`cap-textures`, box-filtered as the map writer used to), tints multiplied in (`prepare-reskate-textures`), the
+//! scene's texture budget when it states one (`budget-reskate-textures`), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
 //! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--piece-log] [--name N] [--lod default|highest|N]
@@ -76,6 +76,21 @@ fn main() -> Result<(), BoxError> {
         passes.push(Box::new(primase_reskate::prepare::ClipReskateRegion::new(
             region,
         )?));
+    }
+    // a scene that states a floor is lifted by it (the writer lifts nothing of its own): its height (100.01 m when it
+    // gives none), the cutoff below the floor (250 m) and a pinned floor when it gives one, as the writer read them
+    if let Some(m) = w
+        .resource::<primase_reskate::dialect::SkateScene>()
+        .and_then(|s| s.min_height.clone())
+    {
+        let mut floor = primase_reskate::prepare::PrepareReskateFloor::new(
+            m.height.unwrap_or(100.01) as f32,
+            m.stub_below.unwrap_or(250.0) as f32,
+        )?;
+        if let Some(f) = m.floor {
+            floor = floor.with_pinned_floor(f as f32)?;
+        }
+        passes.push(Box::new(floor));
     }
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it

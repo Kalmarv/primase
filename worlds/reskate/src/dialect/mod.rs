@@ -519,7 +519,34 @@ impl Component for SkateMaterial {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SkateBaseFactor(pub [f32; 4]);
 
+/// Which of a placement's parts (its prototype's primitives, in order) are left out of the map: the parts
+/// `prepare-reskate-floor` found entirely below its cutoff. Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkatePartsOff(pub Vec<bool>);
+
+/// The floor `prepare-reskate-floor` chose and applied: the floor height it measured or was given, the lift it moved
+/// every coordinate up by, the cutoff below which it left geometry out, and what it left out. Not part of
+/// scene-interchange v1; the map writer reports it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateFloorPlan {
+    /// `None`: nothing to measure (no geometry), so nothing moved.
+    pub floor: Option<f32>,
+    pub lift: f32,
+    /// `None`: no floor, nothing left out.
+    pub drop_below: Option<f32>,
+    pub placements_removed: u64,
+    pub parts_removed: u64,
+}
+
+impl Resource for SkateFloorPlan {
+    const NAME: &'static str = "skate.floor_plan";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 shown!(
+    SkatePartsOff = "skate.parts_off",
     SkateBaseFactor = "skate.base_factor",
     SkateTexture = "skate.texture",
     SkatePrototype = "skate.prototype",
