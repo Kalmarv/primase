@@ -71,7 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let unit = |v| primase_gltf::prepare::UnitValue::new(v).expect("a unit value");
     let passes: Vec<Box<dyn Pass>> = vec![
         // the level as stored: what is off stays off, LOD 0 draws
-        Box::new(primase_core::state::ResolveState::default()),
+        Box::new(primase_core::state::ResolveState {
+            // the level of detail the source leaves to screen size: the finest
+            assign_class: [("lod".to_owned(), "lod0".to_owned())].into(),
+            ..Default::default()
+        }),
         Box::new(primase_core::SelectLod {
             choice: primase_core::LodChoice::Finest,
         }),

@@ -22,8 +22,9 @@
 //! shadows and layer and not static-batched, becomes one placement (LOD 0's) of a prototype with [`Lods`]: the coarser
 //! levels' meshes and materials are its forms (`detail` the level, no default: Unity picks by screen size), so a
 //! prototype is a mesh with the chain of its coarser forms. Any other LODGroup keeps every level as placements, each
-//! with a literal on the group's `unity.lod.<file>.<path id>` axis (its levels, default 0), so LOD 0 is what draws by
-//! default. A disabled LODGroup switches nothing off: its levels draw together, as in Unity.
+//! with a literal on the group's `unity.lod.<file>.<path id>` axis (class `lod`, its levels, no default: Unity picks by
+//! screen size), so a program states which level draws (`resolve-state{assign-class=lod:lod0}` for the finest). A
+//! disabled LODGroup switches nothing off: its levels draw together, as in Unity.
 //!
 //! Every renderer is placed as stored. One whose material builds its geometry in the vertex shader from component
 //! data ([`procedural`]) draws a placeholder mesh; it carries its GameObject's MonoBehaviours as bytes
@@ -377,7 +378,9 @@ impl Builder<'_> {
                     StateAxis {
                         key: format!("unity.lod.{}.{}{at}", group.file, group.path_id),
                         domain: Domain::Enum((0..levels).map(|i| format!("lod{i}")).collect()),
-                        default: Some(0),
+                        // Unity picks a level by screen size: the source states none (a program's choice,
+                        // resolve-state's assign-class lod)
+                        default: None,
                         scope: Scope::Global,
                         class: "lod".into(),
                         source: format!("LODGroup {}/{}{at}", group.file, group.path_id),

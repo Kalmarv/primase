@@ -443,7 +443,11 @@ fn as_stored(w: &mut primase_core::World) {
             w,
             &primase_core::pass::Pipeline {
                 passes: vec![
-                    Box::new(primase_core::state::ResolveState::default()),
+                    Box::new(primase_core::state::ResolveState {
+                        // the level of detail the source leaves to screen size: the finest
+                        assign_class: [("lod".to_owned(), "lod0".to_owned())].into(),
+                        ..Default::default()
+                    }),
                     Box::new(primase_core::SelectLod {
                         choice: primase_core::LodChoice::Finest,
                     }),

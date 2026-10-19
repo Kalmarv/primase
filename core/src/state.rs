@@ -288,7 +288,9 @@ impl Resource for StateAssignment {
 }
 
 /// `resolve-state{assign=key:value;key:value}`: one concrete world, as far as the values are known. Each axis takes
-/// its `assign` value, else the [`StateAssignment`] resource's, else its default (values by name or index). Keys
+/// its `assign` value, else the [`StateAssignment`] resource's, else its class's `assign-class` value
+/// (`assign-class=class:value;...`: a program's choice for every axis of a kind, a level of detail where the source
+/// picks by screen size), else its default (values by name or index). Keys
 /// without an axis, in `assign`, `keep` or the resource, are counted by key and ignored: a program states its choices
 /// once for every world it converts, and a region, level or save holds axes for some of them only. A value outside an
 /// axis's domain is an error. Placed entities whose condition does not hold are despawned, then each remaining
@@ -311,6 +313,8 @@ impl Resource for StateAssignment {
 pub struct ResolveState {
     /// key -> value text, as given.
     pub assign: BTreeMap<String, String>,
+    /// class -> value text, for every axis of that class nothing else gives a value.
+    pub assign_class: BTreeMap<String, String>,
     /// The keys of the axes left unresolved.
     pub keep: BTreeSet<String>,
 }
@@ -318,9 +322,23 @@ pub struct ResolveState {
 /// The pass factory (`PassRegistry::register("resolve-state", resolve_state)`).
 pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
     let mut assign = BTreeMap::new();
+    let mut assign_class = BTreeMap::new();
     let mut keep = BTreeSet::new();
     for (k, v) in o {
         match k.as_str() {
+            "assign-class" => {
+                for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                    let (class, value) = item
+                        .split_once(':')
+                        .ok_or_else(|| format!("assign-class item {item:?} is not class:value"))?;
+                    if assign_class
+                        .insert(class.trim().to_owned(), value.trim().to_owned())
+                        .is_some()
+                    {
+                        return Err(format!("assign-class: {class} twice"));
+                    }
+                }
+            }
             "keep" => {
                 for key in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
                     if !keep.insert(key.to_owned()) {
@@ -347,7 +365,11 @@ pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
     if let Some(k) = keep.iter().find(|k| assign.contains_key(*k)) {
         return Err(format!("{k} is both assigned and kept"));
     }
-    Ok(Box::new(ResolveState { assign, keep }))
+    Ok(Box::new(ResolveState {
+        assign,
+        assign_class,
+        keep,
+    }))
 }
 
 impl Pass for ResolveState {
@@ -359,6 +381,14 @@ impl Pass for ResolveState {
         if !self.assign.is_empty() {
             let items: Vec<String> = self.assign.iter().map(|(k, v)| format!("{k}:{v}")).collect();
             o.insert("assign".to_owned(), items.join(";"));
+        }
+        if !self.assign_class.is_empty() {
+            let items: Vec<String> = self
+                .assign_class
+                .iter()
+                .map(|(k, v)| format!("{k}:{v}"))
+                .collect();
+            o.insert("assign-class".to_owned(), items.join(";"));
         }
         if !self.keep.is_empty() {
             let keys: Vec<&str> = self.keep.iter().map(String::as_str).collect();
@@ -383,7 +413,7 @@ impl Pass for ResolveState {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        // the value of every axis: assign option > assignment resource > default
+        // the value of every axis: assign option > assignment resource > its class's assign-class > default
         let axes: Vec<(Entity, StateAxis)> = w.iter::<StateAxis>().map(|(e, a)| (e, a.clone())).collect();
         let by_key: BTreeMap<&str, (Entity, &StateAxis)> =
             axes.iter().map(|(e, a)| (a.key.as_str(), (*e, a))).collect();
@@ -394,6 +424,23 @@ impl Pass for ResolveState {
             .iter()
             .filter_map(|(e, a)| a.default.map(|d| (*e, d)))
             .collect();
+        // a program's choice for a kind of axis, over the source's default
+        for (class, text) in &self.assign_class {
+            let mut any = false;
+            for (e, a) in axes.iter().filter(|(_, a)| &a.class == class) {
+                let v = a
+                    .domain
+                    .parse(text)
+                    .ok_or_else(|| format!("assign-class {class}:{text} is not a value of axis {}", a.key))?;
+                values.insert(*e, v);
+                any = true;
+            }
+            if any {
+                log.count(&format!("axes of class {class} assigned {text}"), 1);
+            } else {
+                log.count(&format!("assigned class {class}, which no axis has: ignored"), 1);
+            }
+        }
         // a save holds every flag the game knows, a world has axes for a few: keys without an axis are counted
         let resource = w.remove_resource::<StateAssignment>().unwrap_or_default();
         for (k, &v) in &resource.0 {
