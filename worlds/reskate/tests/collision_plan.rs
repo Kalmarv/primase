@@ -112,7 +112,7 @@ fn a_minor_surface_is_coalesced_or_kept() {
     let mut w = world(&[(METAL, false)]);
     let log = plan(&mut w, CollisionSurfaces::Coalesce, CollisionWeld::Millimetre);
     let p = w.resource::<SkateCollisionPlan>().unwrap();
-    let leaves = p.leaves.as_ref().unwrap();
+    let leaves = &p.leaves;
     assert_eq!(leaves.len(), 1);
     let leaf = leaves.values().next().unwrap();
     assert_eq!(leaf.into, [(METAL as usize, CONCRETE as usize)].into());
@@ -187,7 +187,7 @@ fn a_plan_for_another_layout_is_refused() {
     let mut w = world(&[(METAL, false)]);
     plan(&mut w, CollisionSurfaces::Coalesce, CollisionWeld::Millimetre);
     let mut p = w.resource::<SkateCollisionPlan>().unwrap().clone();
-    let leaves = p.leaves.as_mut().unwrap();
+    let leaves = &mut p.leaves;
     let leaf = leaves.values().next().unwrap().clone();
     leaves.insert("c_9_9".into(), leaf);
     w.insert_resource(p);

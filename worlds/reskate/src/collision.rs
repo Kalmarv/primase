@@ -153,6 +153,46 @@ pub struct CollisionResult {
     pub ground: Vec<f32>,
 }
 
+impl CollisionResult {
+    /// Another layout's objects and counts added (collision laid out apart: a cell of a map in parts).
+    pub(crate) fn absorb(&mut self, o: CollisionResult) {
+        let CollisionResult {
+            objects,
+            triangles,
+            prop_triangles,
+            interior_triangles,
+            pieces,
+            split_cells,
+            dense_leaves,
+            up_tris,
+            down_tris,
+            cut_degenerate,
+            cut_beyond_limit,
+            props_beyond_limit,
+            water_triangles,
+            hulls,
+            placed,
+            ground,
+        } = o;
+        self.objects.extend(objects);
+        self.triangles += triangles;
+        self.prop_triangles += prop_triangles;
+        self.interior_triangles += interior_triangles;
+        self.pieces += pieces;
+        self.split_cells += split_cells;
+        self.dense_leaves += dense_leaves;
+        self.up_tris += up_tris;
+        self.down_tris += down_tris;
+        self.cut_degenerate += cut_degenerate;
+        self.cut_beyond_limit += cut_beyond_limit;
+        self.props_beyond_limit += props_beyond_limit;
+        self.water_triangles += water_triangles;
+        self.hulls += hulls;
+        self.placed.extend(placed);
+        self.ground.extend(ground);
+    }
+}
+
 /// A marker to put on the ground.
 #[derive(Clone, Debug)]
 pub struct Query {

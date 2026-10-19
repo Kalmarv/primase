@@ -11,11 +11,16 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::assembly::{
-    EncodingOptions, Records, SceneWarnings, SoupWorld, assemble, hulls_numbered, map_counts, map_region,
-    part_options, scene_warnings, writer_placements,
+    EncodingOptions, PartRead, Records, SceneWarnings, cell_layout, group_cell, hulls_numbered, lay_part,
+    read_part, scene_warnings,
 };
-use crate::components::{OverlayPiece, OverlayTotals, SkateBlendChains, SkateLayoutSummary, StackedPiece};
-use crate::map::{CellKey, Chains, Extras, MapWriter, Stack, WriterOptions, sum_totals};
+use crate::collision::{Collision, CollisionResult};
+use crate::collision_pack::{Files, Pack, check_packed};
+use crate::components::{
+    OverlayPiece, OverlayTotals, SkateBlendChains, SkateCellLayout, SkateCollisionPlan, SkateLayoutSummary,
+    StackedPiece,
+};
+use crate::map::{CellKey, Chains, Extras, MapWriter, Stack, WriterOptions, lay_cell, sum_totals};
 use crate::model::CollisionMode;
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{GrindCurve, Marker, PlacedLight, Scene, SceneNotes, WaterQuad};
@@ -28,11 +33,11 @@ pub struct BuildReport {
     pub out_dir: PathBuf,
     /// The parts the map came in (1: whole).
     pub parts: usize,
-    /// How much collision the sink held between parts, and what it laid out at the end.
-    pub held: HeldCells,
-    /// The collision plan the writer made leaf by leaf, by `prepare-reskate-collision`'s rule (a map in parts, whose
-    /// record holds the rule only); `None` otherwise.
-    pub collision_plan: Option<crate::components::SkateCollisionPlan>,
+    /// The collision cells laid out from their gathered shares (a map in parts), each whole, and their triangles as
+    /// filed: the triangles each part brought to those cells as it was written, which the sink dropped (the cells
+    /// laid them out already), are these, cell by cell.
+    pub cells: usize,
+    pub cell_triangles: usize,
     /// The blend budget the writer decided over the whole map by `plan-reskate-blend-budget`'s rule, with its basis (a
     /// map in parts, whose record holds the mode only); `None` otherwise.
     pub blend_budget: Option<crate::components::SkateBlendBudget>,
@@ -93,19 +98,11 @@ impl BuildReport {
             (
                 "reskate parts".into(),
                 format!(
-                    "parts={} held_peak_cells={} held_peak_bytes={} cells_laid_at_finish={} parts_untold={}",
-                    self.parts,
-                    self.held.peak_cells,
-                    self.held.peak_bytes,
-                    self.held.at_finish,
-                    self.held.parts_untold
+                    "parts={} cells_gathered={} cell_triangles={}",
+                    self.parts, self.cells, self.cell_triangles
                 ),
             ),
         ];
-        if let Some(p) = &self.collision_plan {
-            let leaves = p.leaves.as_ref().map_or(0, BTreeMap::len);
-            report.push(("reskate collision plan made".into(), format!("{leaves} leaves")));
-        }
         if let Some(b) = &self.blend_budget {
             report.push(("reskate blend budget made".into(), format!("{b:?}")));
         }
@@ -268,6 +265,10 @@ pub fn target() -> primase_core::pass::Target {
         // the map's summary is taken in through the budget planned from it (its basis is checked on writing)
         .legal(SkateMapSummary::NAME)
         .legal(SkateCollisionPlan::NAME)
+        // a collision cell of a map in parts: every part's shares of it, its layout and what it is written as
+        .legal(crate::components::SkateCellShare::NAME)
+        .legal(crate::components::SkateCellLayout::NAME)
+        .legal(crate::components::SkateCellCounts::NAME)
         .legal(SkateRegionClip::NAME)
         .legal(SkatePauseImage::NAME)
         .legal(SkatePausePicture::NAME)
@@ -294,14 +295,31 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
 /// carry the map's layout summary (`summarize-reskate-layout`), instancing counts (`summarize-reskate-instances`) and,
 /// without a stated region, content extent (`summarize-reskate-content`); a part without the layout summary is the
 /// whole map, and a second one is refused. A render tile is drawn by the one part holding all of its placements (else
-/// refused, with the tile and the placements of each part: partition aligned to the tile, `partition-grid{tile=T}`). A
-/// collision cell is laid out once every part the summary announced for it has come, from the triangles of all of
-/// them; a part adding to a cell it did not announce is refused. A part is told by the roots it holds; one holding
-/// none of its roots any more (a pass removed them all) is not, and the cells waiting for it are laid out at the end.
+/// refused, with the tile and the placements of each part: partition aligned to the tile, `partition-grid{tile=T}`).
+/// Its collision cells come before its parts, each gathered from every part's shares and planned
+/// (`share-reskate-collision`, the cell spool, `prepare-reskate-collision` on the cell): the sink lays each out as its
+/// plan says and writes it at once, holding only its objects. A part then brings no collision cell but those laid out
+/// (its own cells' triangles are dropped, a cell the gathering did not lay out refused); its hulls it writes whole.
 pub struct MapSink {
     dir: PathBuf,
     encoding: EncodingOptions,
     taken: Option<Taken>,
+    cells: GatheredCells,
+}
+
+/// The collision cells of a map in parts, laid out as they came (before its parts): the map's folder, the cells'
+/// layout, which cells with their triangles as filed and the triangles the parts brought to them (dropped), their
+/// objects and counts, and the bytes of each file written.
+#[derive(Default)]
+struct GatheredCells {
+    out_dir: Option<PathBuf>,
+    layout: Option<SkateCellLayout>,
+    keys: BTreeSet<CellKey>,
+    triangles: BTreeMap<CellKey, usize>,
+    brought: BTreeMap<CellKey, usize>,
+    col: CollisionResult,
+    water_col: CollisionResult,
+    mesh_sizes: BTreeMap<String, u64>,
 }
 
 impl std::fmt::Debug for MapSink {
@@ -347,30 +365,20 @@ struct Content {
     grind: Vec<GrindCurve>,
 }
 
-/// A map in parts: the layout summary, which part each root is in, the parts each cell still waits for.
+/// A map in parts: the layout summary, which part each root is in.
 struct Layout {
     summary: SkateLayoutSummary,
     tag_of: HashMap<u64, u64>,
-    cells_of: BTreeMap<u64, Vec<CellKey>>,
-    waiting: BTreeMap<CellKey, BTreeSet<u64>>,
 }
 
 impl Layout {
     fn new(summary: &SkateLayoutSummary) -> Layout {
-        let mut cells_of: BTreeMap<u64, Vec<CellKey>> = BTreeMap::new();
-        for (c, parts) in &summary.cells {
-            for &p in parts {
-                cells_of.entry(p).or_default().push(*c);
-            }
-        }
         Layout {
             tag_of: summary
                 .parts
                 .iter()
                 .flat_map(|(&t, roots)| roots.iter().map(move |&r| (r, t)))
                 .collect(),
-            cells_of,
-            waiting: summary.cells.clone(),
             summary: summary.clone(),
         }
     }
@@ -395,22 +403,10 @@ impl Layout {
     }
 }
 
-/// How much collision the sink held between parts, and what it laid out at the end.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HeldCells {
-    /// The most cells waiting for a part at once, and the most bytes of soups and props they held.
-    pub peak_cells: usize,
-    pub peak_bytes: usize,
-    /// Cells laid out at the end, still waiting for a part that holds none of its roots any more (a map in parts), and
-    /// those parts.
-    pub at_finish: usize,
-    pub parts_untold: usize,
-}
-
 /// What the sink keeps between parts: the writer (what it wrote, not its payloads), the first part's writer options
 /// (every part's must be the same, the scene's notes aside) and preparation records, the scene's facts, the map's
 /// markers, water, lights and grind curves, how many placements there were and how many prototypes failed, the names
-/// the target does not take; for a map in parts its layout; how much collision it held.
+/// the target does not take; for a map in parts its layout.
 struct Taken {
     out_dir: PathBuf,
     first: WriterOptions,
@@ -423,7 +419,6 @@ struct Taken {
     unsupported_names: BTreeMap<String, u64>,
     layout: Option<Layout>,
     parts: usize,
-    held: HeldCells,
     /// The bytes of each mesh file written (the map's mesh bytes; a file a later decision removed taken out).
     mesh_sizes: BTreeMap<String, u64>,
     /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
@@ -463,11 +458,16 @@ impl MapSink {
             dir: dir.to_owned(),
             encoding: encoding.clone(),
             taken: None,
+            cells: GatheredCells::default(),
         }
     }
 
-    /// Take the prepared part `world`: lay it out and write its payloads (see [`MapSink`]).
+    /// Take the prepared world `world`: a collision cell of a map in parts (one holding `skate.cell_layout`), laid out
+    /// and written now; else a part, laid out and its payloads written (see [`MapSink`]).
     pub fn part(&mut self, world: &World) -> Result<()> {
+        if world.resource::<SkateCellLayout>().is_some() {
+            return self.cell(world);
+        }
         let a = self.encoding.clone();
         let summary = world.resource::<SkateLayoutSummary>();
         if self.taken.as_ref().is_some_and(|t| t.layout.is_none()) {
@@ -478,26 +478,39 @@ impl MapSink {
             ));
         }
         let prepared = target().check_prepared(world);
-        let mut s = Scene::from_world(world, &self.dir)?;
+        // the part as the writer reads it: its options every part's the same (the region stated, else the map's
+        // content over every part), its instancing the map's over every part; the scene's notes are the map's, added at
+        // the end
+        let PartRead {
+            scene: mut s,
+            mut o,
+            cut,
+            placements,
+            records,
+            counts,
+            ..
+        } = read_part(world, &self.dir, &a, true)?;
         let warnings = match &a.scene_warnings {
             Some(w) => Ok(w.clone()),
             None => Err(SceneWarnings::of(&s, world)?),
         };
-        // the writer's options, every part's the same: the region stated, else the content's (the map's, over every
-        // part); the scene's notes are the map's, added at the end
-        let mut o = part_options(world, &s, &a, true)?;
-        let cut = s.region;
-        let placements = writer_placements(&s, o.tile);
-        let in_parts = summary.is_some();
-        o.region = map_region(world, &s, &placements, in_parts)?;
         o.warnings = s.stated_warnings.clone();
-        let records = Records::of(world, &s, &a)?;
-        // the map's instancing: in parts, its counts over every part, by prototype key
-        let counts = map_counts(world, &s, in_parts)?;
         let out_dir = a.out_root.join(&o.name);
+        if let Some(l) = &self.cells.layout
+            && *l != cell_layout(&s, &o)
+        {
+            return Err(Error::Scene(
+                "the map's collision cells were laid out for another map name, surface table, limit or offset than \
+                 its parts' (skate.cell_layout): share the collision with the writer's settings"
+                    .into(),
+            ));
+        }
         if self.taken.is_none() {
-            fresh_folder(&out_dir.join("meshes"))?;
-            fresh_folder(&out_dir.join("textures"))?;
+            // the gathered cells' folder is the map's, made with the first cell
+            if self.cells.out_dir.is_none() {
+                fresh_folder(&out_dir.join("meshes"))?;
+                fresh_folder(&out_dir.join("textures"))?;
+            }
             let writer = records.clone().writer(o.clone(), s.surfaces.clone())?;
             self.taken = Some(Taken {
                 out_dir: out_dir.clone(),
@@ -526,7 +539,6 @@ impl MapSink {
                 stack_meshes: BTreeMap::new(),
                 proto_pieces: BTreeMap::new(),
                 chains: None,
-                held: HeldCells::default(),
             });
         }
         let t = self.taken.as_mut().expect("taken");
@@ -608,40 +620,30 @@ impl MapSink {
         }
         // in parts: which part this is, and every tile it draws held whole by it
         let tiles: BTreeSet<(i32, i32)> = placements.iter().map(|p| (p.tx, p.ty)).collect();
-        let tag = match &t.layout {
-            None => None,
-            Some(l) => {
-                let tag = l.part_of(world)?;
-                for tile in &tiles {
-                    let by = l.summary.tiles.get(tile);
-                    if tag.is_none()
-                        || by.is_none_or(|by| by.len() != 1 || !by.contains_key(&tag.expect("told")))
-                    {
-                        return Err(Error::Scene(format!(
-                            "render tile t_{}_{} is drawn by a part that does not hold all of its placements (by part, \
-                             their planning ids: {:?}): partition the map aligned to the {} m tile \
-                             (partition-grid{{tile={}}}, its cell a whole multiple)",
-                            tile.0,
-                            tile.1,
-                            by.cloned().unwrap_or_default(),
-                            o.tile,
-                            o.tile
-                        )));
-                    }
+        if let Some(l) = &t.layout {
+            let tag = l.part_of(world)?;
+            for tile in &tiles {
+                let by = l.summary.tiles.get(tile);
+                if tag.is_none() || by.is_none_or(|by| by.len() != 1 || !by.contains_key(&tag.expect("told")))
+                {
+                    return Err(Error::Scene(format!(
+                        "render tile t_{}_{} is drawn by a part that does not hold all of its placements (by part, \
+                         their planning ids: {:?}): partition the map aligned to the {} m tile \
+                         (partition-grid{{tile={}}}, its cell a whole multiple)",
+                        tile.0,
+                        tile.1,
+                        by.cloned().unwrap_or_default(),
+                        o.tile,
+                        o.tile
+                    )));
                 }
-                tag
             }
-        };
-        // the part's collision: its world soups (each hull soup numbered among the map's) and its tiles' props
-        let drop_below = f32::NEG_INFINITY;
-        let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
-        let water_world = s
-            .soups
-            .iter()
-            .any(|x| x.mode == CollisionMode::Water)
-            .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
+        }
+        // the part laid out: its world soups and tiles' props held, its tiles and prototypes assembled; its hull soups
+        // each numbered among the map's
+        t.failed += lay_part(&mut s, cut, &placements, &mut t.writer)?;
         let ranks: Option<&BTreeSet<(bool, u64)>> = t.layout.as_ref().map(|l| &l.summary.hulls);
-        let world_hulls = hulls_numbered(&mut s, cut, drop_below, &|sd, n| match ranks {
+        let world_hulls = hulls_numbered(&mut s, cut, f32::NEG_INFINITY, &|sd, n| match ranks {
             None => Ok(n),
             Some(r) => {
                 let key = (sd.raw, u64::from(sd.entity.index()));
@@ -655,59 +657,24 @@ impl MapSink {
                 }
             }
         })?;
-        let mut contributed: BTreeSet<CellKey> = tri_world.cell_keys().map(|(x, y)| (false, x, y)).collect();
-        if let Some(w) = &water_world {
-            contributed.extend(w.cell_keys().map(|(x, y)| (true, x, y)));
-        }
-        let before: BTreeSet<CellKey> = t.writer.prop_cells_of(&tiles);
-        t.writer.add_soups(tri_world, water_world);
-        t.failed += assemble(&s, &placements, &mut t.writer)?;
-        contributed.extend(t.writer.prop_cells_of(&tiles).difference(&before).copied());
         t.writer.lay_hulls(&world_hulls)?;
         let prop_hulls = t.writer.take_prop_hulls();
         t.writer.lay_hulls(&prop_hulls)?;
-        // the cells it completes, laid out now: every cell, for a map written whole
-        match &mut t.layout {
-            None => {
-                let waiting = t.writer.waiting_cells();
-                t.writer.lay_cells(&waiting, None)?;
-            }
-            Some(l) => {
-                for c in &contributed {
-                    if !l
-                        .summary
-                        .cells
-                        .get(c)
-                        .is_some_and(|p| tag.is_some_and(|t| p.contains(&t)))
-                    {
-                        return Err(Error::Scene(format!(
-                            "a part adds collision to the cell {c:?}, which the layout summary does not announce for \
-                             it: content a pass added after the summary was made"
-                        )));
-                    }
+        // its collision cells: a map written whole lays them out at the end; a map in parts laid each out whole from
+        // every part's shares (the gathered cells, recorded as they came), so the triangles a part brings to them are
+        // dropped and counted, checked against the cells at the end; a cell the gathering did not lay out is refused
+        if self.cells.layout.is_some() || t.layout.is_some() {
+            for (c, content) in t.writer.take_cells() {
+                if !self.cells.keys.contains(&c) {
+                    return Err(Error::Scene(format!(
+                        "a part of the map has collision in the cell {c:?}, which no gathered cell laid out: a map in \
+                         parts shares its collision per cell (share-reskate-collision in the gather pipeline, after \
+                         every pass that changes it)"
+                    )));
                 }
-                let mut ready = BTreeSet::new();
-                if let Some(tag) = tag {
-                    for c in l.cells_of.get(&tag).into_iter().flatten() {
-                        if let Some(w) = l.waiting.get_mut(c) {
-                            w.remove(&tag);
-                            if w.is_empty() {
-                                l.waiting.remove(c);
-                                ready.insert(*c);
-                            }
-                        }
-                    }
-                }
-                let ready: BTreeSet<CellKey> =
-                    t.writer.waiting_cells().intersection(&ready).copied().collect();
-                t.writer.lay_cells(&ready, None)?;
-                if tag.is_none() {
-                    t.held.parts_untold += 1;
-                }
+                *self.cells.brought.entry(c).or_default() += content.triangles();
             }
         }
-        t.held.peak_cells = t.held.peak_cells.max(t.writer.waiting_cells().len());
-        t.held.peak_bytes = t.held.peak_bytes.max(t.writer.waiting_bytes());
         // the part's payloads, written now and not kept
         let meshes = std::mem::take(&mut t.writer.mesh_files);
         t.mesh_sizes
@@ -756,6 +723,62 @@ impl MapSink {
         Ok(())
     }
 
+    /// Take a collision cell of a map in parts (a group of its gathered cells: every part's shares of the cell and
+    /// their plan): laid out alone as the plan says (exactly without one) and its pieces written now. The cells come
+    /// before the parts.
+    fn cell(&mut self, world: &World) -> Result<()> {
+        if self.taken.is_some() {
+            return Err(Error::Scene(
+                "a collision cell after a part of the map: the gathered cells come before the parts".into(),
+            ));
+        }
+        let (key, content, surf, layout) = group_cell(world)?;
+        let c = &mut self.cells;
+        match &c.layout {
+            Some(l) if *l != layout => {
+                return Err(Error::Scene(
+                    "the collision cells of one map disagree on their layout (skate.cell_layout): every part shares \
+                     its collision alike"
+                        .into(),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                let out_dir = self.encoding.out_root.join(&layout.name);
+                fresh_folder(&out_dir.join("meshes"))?;
+                fresh_folder(&out_dir.join("textures"))?;
+                c.out_dir = Some(out_dir);
+                c.layout = Some(layout.clone());
+            }
+        }
+        if !c.keys.insert(key) {
+            return Err(Error::Scene(format!("the collision cell {key:?} is given twice")));
+        }
+        c.triangles.insert(key, content.triangles());
+        let plan = world.resource::<SkateCollisionPlan>();
+        let off = primase_meshops::vector::Vec3::new(layout.offset[0], layout.offset[1], layout.offset[2]);
+        let mut files = Files::new();
+        {
+            let mut pack = Pack::new(&surf, off, plan, &mut files)?;
+            let mut collision = Collision::new(&surf, off.x, off.y, off.z, layout.limit);
+            let res = if key.0 { &mut c.water_col } else { &mut c.col };
+            lay_cell(&mut collision, key, content, res, &mut |leaf, r| {
+                pack.leaf(leaf, r)
+            })?;
+            check_packed(plan, pack.seen())?;
+        }
+        c.mesh_sizes
+            .extend(files.iter().map(|(f, b)| (f.clone(), b.len() as u64)));
+        write_files(
+            &c.out_dir
+                .as_ref()
+                .expect("made with the first cell")
+                .join("meshes"),
+            files,
+        )?;
+        Ok(())
+    }
+
     /// The map laid out to the end (the cells still waiting, the water, the grind prisms, the lights and markers in
     /// the map's order) and its index files written; what the map writer did.
     pub fn finish(self) -> Result<BuildReport> {
@@ -768,7 +791,6 @@ impl MapSink {
             failed,
             unsupported_names,
             parts,
-            mut held,
             mut mesh_sizes,
             records,
             stack_meshes,
@@ -780,7 +802,6 @@ impl MapSink {
                 "the map sink was given no part: a map needs its whole".into(),
             ));
         };
-        held.at_finish = writer.waiting_cells().len();
         // the markers in the scene's order, those without a name of their own named as the scene names them
         let Content {
             mut markers,
@@ -806,6 +827,31 @@ impl MapSink {
             writer.set_overlay_totals(&sum_totals(stack_meshes.values()));
         }
         writer.set_budget_chains(chains);
+        // the gathered cells laid out already: their objects and counts among the map's
+        let GatheredCells {
+            keys: cells,
+            triangles: cell_triangles,
+            brought,
+            col,
+            water_col,
+            mesh_sizes: cell_sizes,
+            ..
+        } = self.cells;
+        // what the parts brought to the gathered cells is what the cells laid out: their collision unchanged since it
+        // was shared
+        if !cells.is_empty()
+            && let Some((c, n)) = cell_triangles
+                .iter()
+                .find(|(c, n)| brought.get(*c).copied().unwrap_or(0) != **n)
+        {
+            return Err(Error::Scene(format!(
+                "the collision cell {c:?} was laid out from {n} shared triangles, but the parts as written bring {} to \
+                 it: a pass changed a part's collision after it was shared (run it in the gather pipeline too)",
+                brought.get(c).copied().unwrap_or(0)
+            )));
+        }
+        writer.add_laid_cells(col, water_col);
+        mesh_sizes.extend(cell_sizes);
         writer.o.warnings = s.stated_warnings.iter().chain(&notes).cloned().collect();
         writer.finish(Extras {
             hulls: Vec::new(),
@@ -868,28 +914,11 @@ impl MapSink {
         let p = out_dir.join("stats.json");
         std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
         let r = &writer.r;
-        // a plan the writer made: what it rewrote and dropped, reported as the pass reports a whole map's
-        let plan_made = writer.plan_made();
-        let mut plan_rewritten: BTreeMap<String, u64> = BTreeMap::new();
-        let mut plan_collapsed = 0u64;
-        if let Some(p) = &plan_made {
-            for l in p.leaves.iter().flat_map(BTreeMap::values) {
-                plan_collapsed += l.collapsed as u64;
-                for (&from, &to) in &l.into {
-                    *plan_rewritten
-                        .entry(format!(
-                            "collision triangles of surface {} written as their leaf's {}",
-                            p.table[from], p.table[to]
-                        ))
-                        .or_default() += l.counts[&from] as u64;
-                }
-            }
-        }
         Ok(BuildReport {
             out_dir,
             parts,
-            held,
-            collision_plan: plan_made,
+            cells: cells.len(),
+            cell_triangles: cell_triangles.values().sum(),
             blend_budget: writer.budget_made().cloned(),
             tiles: r.tiles.len(),
             merged_entities: r.merged_entities,
@@ -931,7 +960,6 @@ impl MapSink {
                             r.trainer_left_out as i64,
                         ),
                         ("grind curves with no usable points", r.grind_unusable as i64),
-                        ("collision triangles the 1 mm weld collapses", plan_collapsed as i64),
                     ]
                     .into_iter()
                     .filter(|(_, n)| *n > 0)
@@ -962,7 +990,6 @@ impl MapSink {
                     .filter(|(_, n)| *n > 0)
                     .map(|(what, n)| (what.to_owned(), n as u64)),
                 )
-                .chain(plan_rewritten)
                 .chain(match writer.chains() {
                     Chains::Off { left } if *left > 0 => Some((
                         "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \

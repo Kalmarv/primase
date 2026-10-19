@@ -30,7 +30,10 @@ pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{
     BudgetReskateTextures, SummarizeReskateTextures, budget_reskate_textures, summarize_reskate_textures,
 };
-pub use collision::{PrepareReskateCollision, prepare_reskate_collision};
+pub use collision::{
+    PrepareReskateCellCollision, PrepareReskateCollision, ShareReskateCollision,
+    prepare_reskate_cell_collision, prepare_reskate_collision, share_reskate_collision,
+};
 pub use floor::{
     DecideReskateFloor, PrepareReskateFloor, SummarizeReskateFloor, decide_reskate_floor,
     prepare_reskate_floor, summarize_reskate_floor,

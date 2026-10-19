@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::assembly::{SoupWorld, soup_cell};
+use crate::assembly::{SoupSeg, SoupWorld, soup_cell};
 use crate::blend_order::{self, Geometry};
 use crate::collision::{Collision, CollisionResult, LeafVisit, PropSoup};
 use crate::components::{
@@ -636,8 +636,6 @@ pub struct MapWriter {
     col: CollisionResult,
     water_col: CollisionResult,
     leaves_packed: usize,
-    /// The leaves it planned itself (a plan without leaves: a map in parts), by name.
-    leaves_made: BTreeMap<String, crate::components::PlannedLeaf>,
     /// Mesh files a later decision dropped (a blend chain's form not taken) after they may have been written.
     pub discarded: Vec<String>,
     /// Mesh files (meshes/<name>), written at the end.
@@ -782,7 +780,6 @@ impl MapWriter {
             col: CollisionResult::default(),
             water_col: CollisionResult::default(),
             leaves_packed: 0,
-            leaves_made: BTreeMap::new(),
             discarded: Vec::new(),
             pending_chains: BTreeMap::new(),
             stack: Stack::Off { unstacked: 0 },
@@ -890,21 +887,37 @@ impl MapWriter {
         out
     }
 
-    /// The bytes the waiting cells hold (their soups and props).
-    pub(crate) fn waiting_bytes(&self) -> usize {
-        let props = |p: &PropParts| -> usize {
-            p.values()
-                .flatten()
-                .map(|(_, _, s)| 4 * s.pos.len() + s.surf.len() + s.ground.as_ref().map_or(0, Vec::len))
-                .sum()
+    /// Cell `key`'s soups and props, taken out.
+    fn take_cell(&mut self, (water, tx, ty): CellKey) -> CellContent {
+        let (soups, parts) = if water {
+            (&mut self.water_soups, &mut self.water_parts)
+        } else {
+            (&mut self.soups, &mut self.prop_parts)
         };
-        self.soups.bytes() + self.water_soups.bytes() + props(&self.prop_parts) + props(&self.water_parts)
+        CellContent {
+            segs: soups.take_cell((tx, ty)),
+            props: parts.remove(&(tx, ty)).unwrap_or_default(),
+        }
+    }
+
+    /// Every waiting cell's soups and props, taken out: what a part of a map in parts shares of each cell
+    /// (`share-reskate-collision`), or (dropped) what the map's gathered cells already laid out.
+    pub(crate) fn take_cells(&mut self) -> BTreeMap<CellKey, CellContent> {
+        self.waiting_cells()
+            .into_iter()
+            .map(|k| (k, self.take_cell(k)))
+            .collect()
+    }
+
+    /// The collision of cells laid out apart (the gathered cells of a map in parts, each checked against its own
+    /// plan), added to what it lays out: their objects and counts.
+    pub(crate) fn add_laid_cells(&mut self, col: CollisionResult, water_col: CollisionResult) {
+        self.col.absorb(col);
+        self.water_col.absorb(water_col);
     }
 
     /// The cells `keys` laid out now, from the soups and props they hold (taken out): each leaf packed as the plan
-    /// says into the mesh files and the collision's objects, or given to `visit` (nothing written). A cell is laid out
-    /// alone ([`Collision::cell`]): its world triangles in the scene's soup order, its props by tile, whatever part
-    /// they came from.
+    /// says into the mesh files and the collision's objects, or given to `visit` (nothing written).
     pub(crate) fn lay_cells(
         &mut self,
         keys: &BTreeSet<CellKey>,
@@ -916,7 +929,7 @@ impl MapWriter {
         let plan = self.collision_plan.take();
         let (mut col, mut water_col) = (std::mem::take(&mut self.col), std::mem::take(&mut self.water_col));
         let mut files = crate::collision_pack::Files::new();
-        let laid = (|| -> Result<(usize, BTreeMap<String, crate::components::PlannedLeaf>)> {
+        let laid = (|| -> Result<usize> {
             let mut pack = crate::collision_pack::Pack::new(&surf, off, plan.as_ref(), &mut files)?;
             let mut pack_leaf =
                 |leaf: crate::collision::Leaf<'_>, res: &mut CollisionResult| pack.leaf(leaf, res);
@@ -924,46 +937,18 @@ impl MapWriter {
                 Some(v) => v,
                 None => &mut pack_leaf,
             };
-            for &(water, tx, ty) in keys {
-                let (segs, props, res, prefix) = if water {
-                    (
-                        self.water_soups.take_cell((tx, ty)),
-                        self.water_parts.remove(&(tx, ty)),
-                        &mut water_col,
-                        "w",
-                    )
-                } else {
-                    (
-                        self.soups.take_cell((tx, ty)),
-                        self.prop_parts.remove(&(tx, ty)),
-                        &mut col,
-                        "c",
-                    )
-                };
-                let props = props.map(join);
-                collision.cell(
-                    soup_cell(&segs),
-                    props.as_ref(),
-                    (tx, ty),
-                    prefix,
-                    water,
-                    res,
-                    visit,
-                )?;
+            for &key in keys {
+                let content = self.take_cell(key);
+                let res = if key.0 { &mut water_col } else { &mut col };
+                lay_cell(&mut collision, key, content, res, visit)?;
             }
             drop(pack_leaf);
-            Ok((pack.seen(), pack.take_made()))
+            Ok(pack.seen())
         })();
         self.collision_plan = plan;
         self.col = col;
         self.water_col = water_col;
-        let (packed, made) = laid?;
-        self.leaves_packed += packed;
-        for (name, leaf) in made {
-            if self.leaves_made.insert(name.clone(), leaf).is_some() {
-                return Err(Error::Scene(format!("two collision leaves are named {name}")));
-            }
-        }
+        self.leaves_packed += laid?;
         self.mesh_files.extend(files);
         Ok(())
     }
@@ -991,16 +976,6 @@ impl MapWriter {
         self.counts = counts;
     }
 
-    /// The collision plan it made leaf by leaf (a map written in parts, the record without leaves), the record's rule
-    /// with every leaf it laid out; `None`: the record had the leaves, or there is none.
-    pub(crate) fn plan_made(&self) -> Option<crate::components::SkateCollisionPlan> {
-        let p = self.collision_plan.as_ref()?;
-        p.leaves.is_none().then(|| crate::components::SkateCollisionPlan {
-            leaves: Some(self.leaves_made.clone()),
-            ..p.clone()
-        })
-    }
-
     /// The textures the materials drawn so far use.
     pub(crate) fn used_textures(&self) -> BTreeSet<i32> {
         self.mat_used
@@ -1014,18 +989,6 @@ impl MapWriter {
     }
 
     /// The collision cells a part's props fall in: those of the render tiles `tiles`.
-    pub(crate) fn prop_cells_of(&self, tiles: &BTreeSet<(i32, i32)>) -> BTreeSet<CellKey> {
-        let mut out = BTreeSet::new();
-        for (water, parts) in [(false, &self.prop_parts), (true, &self.water_parts)] {
-            for (&(cx, cy), bag) in parts {
-                if bag.iter().any(|(tx, ty, _)| tiles.contains(&(*tx, *ty))) {
-                    out.insert((water, cx, cy));
-                }
-            }
-        }
-        out
-    }
-
     /// The blend chains as `chains` says.
     pub(crate) fn with_chains(mut self, chains: Chains) -> MapWriter {
         self.chains = chains;
@@ -2097,7 +2060,45 @@ fn split_long(a: &mut Acc, max: f32) {
     }
 }
 
-/// Joins the props of each collision tile in map-tile order (row, then column).
+/// One collision cell's content as the writer lays it out: its world soups' triangles and the props its render tiles
+/// file in it, by tile.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CellContent {
+    pub segs: Vec<SoupSeg>,
+    pub props: Vec<(i32, i32, PropSoup)>,
+}
+
+impl CellContent {
+    /// Its triangles: the soups' and the props', as filed (before the cell's own cleaning).
+    pub(crate) fn triangles(&self) -> usize {
+        self.segs.iter().map(|g| g.s.len()).sum::<usize>()
+            + self.props.iter().map(|(_, _, p)| p.surf.len()).sum::<usize>()
+    }
+}
+
+/// The cell `key` laid out alone ([`Collision::cell`]) from `content`, each leaf given to `visit`: its world triangles
+/// in the scene's soup order, its props by tile, whatever part they came from. The whole map lays out each of its cells
+/// so ([`MapWriter::lay_cells`]); a map in parts lays out each gathered cell so.
+pub(crate) fn lay_cell(
+    collision: &mut Collision<'_>,
+    (water, tx, ty): CellKey,
+    content: CellContent,
+    res: &mut CollisionResult,
+    visit: &mut LeafVisit<'_>,
+) -> Result<()> {
+    let props = (!content.props.is_empty()).then(|| join(content.props));
+    collision.cell(
+        soup_cell(&content.segs),
+        props.as_ref(),
+        (tx, ty),
+        if water { "w" } else { "c" },
+        water,
+        res,
+        visit,
+    )?;
+    Ok(())
+}
+
 /// A cell's props from every render tile that placed some in it, as one soup: by tile (row, then column), whatever
 /// part drew the tile.
 fn join(mut bag: Vec<(i32, i32, PropSoup)>) -> PropSoup {

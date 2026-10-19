@@ -16,13 +16,15 @@
 //! writing; a map with blend chains and no budget is refused).
 use std::path::{Path, PathBuf};
 
+use primase_reskate::spool::CellSpool;
 use primase_reskate::{EncodingOptions, MapSink};
 
 use crate::convert::Result;
 
-/// `[--name N] [--min-instances N] [--parts]`
+/// `[--name N] [--min-instances N] [--parts [--spool <folder>]]`
 pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
     let mut parts = false;
+    let mut spool: Option<PathBuf> = None;
     let mut name = out
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -42,6 +44,7 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
                     .map_err(|_| "reskate: --min-instances is a number")?
             }
             "--parts" => parts = true,
+            "--spool" => spool = Some(PathBuf::from(value()?)),
             "--blend-objects" => {
                 return Err(
                     "reskate: the chain-object budget is plan-reskate-blend-budget's: --passes \"..., \
@@ -66,14 +69,27 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
     {
         return Err(format!("reskate: the map name {name:?} is not [A-Za-z0-9_-]+ (--name)").into());
     }
-    encoding.name = Some(name);
+    if spool.is_some() && !parts {
+        return Err("reskate: --spool is for a map in parts (--parts)".into());
+    }
     // one map: the whole selection in one part, or the partition plan's parts (the map sink lays them out as the
-    // whole: their layout, instancing and content summaries merged over every part, --summarize)
-    let source: Box<dyn primase_core::convert::PartSource> = if parts {
-        Box::new(primase_core::convert::PlannedParts::default())
+    // whole: their layout, instancing and content summaries merged over every part, --summarize; their collision
+    // cells gathered in the cell spool, --gather and --group)
+    let (source, spool): (Box<dyn primase_core::convert::PartSource>, _) = if parts {
+        let dir = spool.unwrap_or_else(|| out.join(format!("{name}.cells")));
+        let spool: Box<dyn primase_core::convert::Spool> = Box::new(CellSpool::new(&dir)?);
+        (
+            Box::new(primase_core::convert::PlannedParts::default()),
+            Some(spool),
+        )
     } else {
-        Box::new(primase_core::convert::WholeWorld::default())
+        (Box::new(primase_core::convert::WholeWorld::default()), None)
     };
+    encoding.name = Some(name);
     // the world carries every input in memory: no scene folder to read from
-    Ok((source, Box::new(MapSink::new(&PathBuf::new(), &encoding))))
+    Ok(crate::convert::Destination {
+        parts: source,
+        writer: Box::new(MapSink::new(&PathBuf::new(), &encoding)),
+        spool,
+    })
 }

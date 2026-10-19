@@ -34,7 +34,10 @@ pub mod layered;
 pub mod loaded;
 pub mod pause_map;
 
-pub use collision::{CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkateRock};
+pub use collision::{
+    CellCount, CellKey, CellProps, CellSoup, CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCellCounts,
+    SkateCellLayout, SkateCellShare, SkateCollisionPlan, SkateRock,
+};
 pub use layered::{BlendOpacity, VertexBlend};
 pub use loaded::LoadedFile;
 pub use pause_map::{SkatePauseImage, SkatePausePicture};
@@ -1009,9 +1012,7 @@ impl primase_core::summary::Summary for SkateWaterSurfaces {
 }
 
 /// `skate.layout_summary`: what each part of a map written in parts lays out (`summarize-reskate-layout`), for the map
-/// sink: which part each render tile's placements are in, which parts' collision may fall in each 256 m collision
-/// cell (the sink lays a cell out once every part announcing it has arrived), and the map's hull soups (a hull is named
-/// by its rank). A part is named by its tag, its smallest root's planning id; the sink tells which part it is given by
+/// sink: which part each render tile's placements are in, and the map's hull soups (a hull is named by its rank). A part is named by its tag, its smallest root's planning id; the sink tells which part it is given by
 /// the roots it holds (a pass may remove some of them, not the part's name). Not part of scene-interchange v1.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SkateLayoutSummary {
@@ -1021,8 +1022,6 @@ pub struct SkateLayoutSummary {
     pub parts: BTreeMap<u64, BTreeSet<u64>>,
     /// Each render tile `(column, row)`: its placements, by the part holding them.
     pub tiles: BTreeMap<(i32, i32), BTreeMap<u64, BTreeSet<u64>>>,
-    /// Each collision cell `(water, column, row)`: the parts whose collision may fall in it.
-    pub cells: BTreeMap<(bool, i32, i32), BTreeSet<u64>>,
     /// The map's hull soups, by (placed by an entity of its own, planning id): the scene's order.
     pub hulls: BTreeSet<(bool, u64)>,
 }
@@ -1034,7 +1033,6 @@ impl Resource for SkateLayoutSummary {
             "tile": self.tile,
             "parts": self.parts.len(),
             "tiles": self.tiles.len(),
-            "cells": self.cells.len(),
             "hulls": self.hulls.len(),
         })))
     }
@@ -1042,7 +1040,7 @@ impl Resource for SkateLayoutSummary {
 
 impl primase_core::summary::Summary for SkateLayoutSummary {
     fn merge(&mut self, other: Self) -> Result<(), String> {
-        if self.parts.is_empty() && self.tiles.is_empty() && self.cells.is_empty() && self.hulls.is_empty() {
+        if self.parts.is_empty() && self.tiles.is_empty() && self.hulls.is_empty() {
             self.tile = other.tile;
         } else if other.tile != self.tile {
             return Err(format!(
@@ -1057,9 +1055,6 @@ impl primase_core::summary::Summary for SkateLayoutSummary {
                 mine.entry(part).or_default().extend(ids);
             }
         }
-        for (c, parts) in other.cells {
-            self.cells.entry(c).or_default().extend(parts);
-        }
         self.hulls.extend(other.hulls);
         Ok(())
     }
@@ -1070,8 +1065,7 @@ impl primase_core::summary::Summary for SkateLayoutSummary {
             .values()
             .map(|by| 8 + by.values().map(|ids| 16 + 8 * ids.len()).sum::<usize>())
             .sum();
-        let cells: usize = self.cells.values().map(|p| 12 + 8 * p.len()).sum();
-        parts + tiles + cells + 9 * self.hulls.len()
+        parts + tiles + 9 * self.hulls.len()
     }
 }
 

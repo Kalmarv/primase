@@ -29,6 +29,7 @@ pub mod postcompile;
 pub mod read;
 pub mod records;
 pub mod scene;
+pub mod spool;
 pub mod texture;
 pub mod write;
 
@@ -70,6 +71,7 @@ pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateInstanceCounts>();
     reg.summary::<components::SkateWaterSurfaces>();
     reg.summary::<components::SkateLayoutSummary>();
+    reg.summary::<components::SkateCellCounts>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -147,6 +149,14 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "prepare-reskate-collision",
         passes::prepare_reskate_collision,
+        &[("surfaces", "coalesce"), ("weld", "mm")],
+    );
+    // a part's collision per cell, for a map in parts (the gather traversal), for the encoding given
+    reg.register("share-reskate-collision", passes::share_reskate_collision);
+    // a collision cell of a map in parts planned (the group pipeline): the choices are the program's, no default
+    reg.register_requiring(
+        "prepare-reskate-cell-collision",
+        passes::prepare_reskate_cell_collision,
         &[("surfaces", "coalesce"), ("weld", "mm")],
     );
     // the map's summary, for the encoding given (the writer's defaults unless stated)

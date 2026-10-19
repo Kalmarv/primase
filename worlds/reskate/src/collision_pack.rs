@@ -34,21 +34,21 @@ fn replan(why: String) -> Error {
     ))
 }
 
-/// Done with the layout, `packed` leaves packed (by every packer of the map): an error when the plan has leaves the
-/// layout did not give.
+/// Done with the layout, `packed` leaves packed (by every packer of the world the plan was made for): an error when the
+/// plan has leaves the layout did not give.
 pub(crate) fn check_packed(plan: Option<&SkateCollisionPlan>, packed: usize) -> Result<()> {
-    match plan.and_then(|p| p.leaves.as_ref()) {
-        Some(leaves) if leaves.len() != packed => Err(replan(format!(
+    match plan {
+        Some(p) if p.leaves.len() != packed => Err(replan(format!(
             "the plan has {} leaves, the layout {packed}",
-            leaves.len()
+            p.leaves.len()
         ))),
         _ => Ok(()),
     }
 }
 
 /// How the leaf `leaf` is written under `surfaces` and `weld`, over the surface table `surf`: its triangles per
-/// surface, the surfaces written as another, the triangles its weld collapses. The one rule: `prepare-reskate-collision`
-/// records it for every leaf of a whole map, and the writer applies it leaf by leaf to a map written in parts.
+/// surface, the surfaces written as another, the triangles its weld collapses. `prepare-reskate-collision`'s rule, for
+/// every leaf of the world it plans (the whole map, or one collision cell of a map in parts).
 pub(crate) fn plan_leaf(
     surf: &SurfaceTable,
     leaf: &Leaf<'_>,
@@ -80,8 +80,6 @@ pub(crate) struct Pack<'a> {
     files: &'a mut Files,
     /// The leaves packed, to tell a plan with leaves the layout no longer has.
     seen: usize,
-    /// The leaves it planned itself (a plan without leaves: [`plan_leaf`]), by name.
-    made: BTreeMap<String, PlannedLeaf>,
 }
 
 impl<'a> Pack<'a> {
@@ -108,7 +106,6 @@ impl<'a> Pack<'a> {
             plan,
             files,
             seen: 0,
-            made: BTreeMap::new(),
         })
     }
 
@@ -120,22 +117,10 @@ impl<'a> Pack<'a> {
         let (weld, collapsed) = match self.plan {
             None => (CollisionWeld::Exact, None),
             Some(p) => {
-                let made;
-                let planned = match &p.leaves {
-                    Some(leaves) => leaves
-                        .get(leaf.name)
-                        .ok_or_else(|| replan(format!("its leaf {} is not in the plan", leaf.name)))?,
-                    None => {
-                        made = plan_leaf(self.surf, &leaf, p.surfaces, p.weld)?;
-                        if self.made.insert(leaf.name.to_owned(), made.clone()).is_some() {
-                            return Err(Error::Scene(format!(
-                                "two collision leaves are named {}",
-                                leaf.name
-                            )));
-                        }
-                        &made
-                    }
-                };
+                let planned = p
+                    .leaves
+                    .get(leaf.name)
+                    .ok_or_else(|| replan(format!("its leaf {} is not in the plan", leaf.name)))?;
                 let mine: BTreeMap<usize, usize> = leaf
                     .counts(ns)
                     .into_iter()
@@ -241,11 +226,6 @@ impl<'a> Pack<'a> {
     /// The leaves it packed.
     pub(crate) fn seen(&self) -> usize {
         self.seen
-    }
-
-    /// The leaves it planned itself, taken out.
-    pub(crate) fn take_made(&mut self) -> BTreeMap<String, PlannedLeaf> {
-        std::mem::take(&mut self.made)
     }
 
     /// One convex hull of surface `surface`, written whole.

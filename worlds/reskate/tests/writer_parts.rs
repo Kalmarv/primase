@@ -1,10 +1,10 @@
-//! The map sink over parts (`convert_parts_summarized` with a partition plan's parts): a map written in parts is the
+//! The map sink over parts (`convert_parts_gathered` with a partition plan's parts): a map written in parts is the
 //! map written whole, byte for byte, whatever order the parts come in. Its render tiles are drawn by the part holding
-//! their placements (the partition aligned to the tile), its collision cells laid out once every part announced for
-//! them has come (a ground soup in a part of its own reaches every cell), its prototypes, textures and materials
-//! written once, its markers, lights and water in the map's order. A part a pass leaves with none of its roots is not
-//! told, and the cells waiting for it are laid out at the end, with the same result. A partition not aligned to the
-//! tile, and a part adding collision where it announced none, are refused.
+//! their placements (the partition aligned to the tile); its collision cells are gathered from every part's shares
+//! (`share-reskate-collision`, the cell spool: a ground soup in a part of its own reaches every cell), each planned on
+//! its own and laid out before the parts; its prototypes, textures and materials written once, its markers, lights and
+//! water in the map's order. What the spool holds in memory does not grow with the map. A partition not aligned to the
+//! tile, and a part bringing collision the gathering did not lay out, are refused.
 
 #![allow(clippy::unwrap_used)]
 
@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use primase_core::convert::{
-    Finished, PartitionPlan, PlannedParts, Reader, Report, Result, Summarized, Writer,
-    convert_parts_summarized,
+    ConvertReport, Finished, Gathered, NoticeKind, PartitionPlan, PlannedParts, Reader, Report, Result,
+    Summarized, Writer, convert_parts_gathered,
 };
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Target};
 use primase_core::pbr::{PbrMaterial, TextureRef};
@@ -33,10 +33,11 @@ use primase_reskate::components::{
 use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateWater};
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
-    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision, PrepareReskateOverlays,
-    RaiseOptions, SummarizeReskateContent, SummarizeReskateInstances, SummarizeReskateLayout,
-    SummarizeReskateMap,
+    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCellCollision, PrepareReskateCollision,
+    PrepareReskateOverlays, RaiseOptions, ShareReskateCollision, SummarizeReskateContent,
+    SummarizeReskateInstances, SummarizeReskateLayout, SummarizeReskateMap,
 };
+use primase_reskate::spool::{CellSpool, SpoolReport};
 use primase_reskate::{BuildReport, EncodingOptions, MapSink};
 
 fn tmp(name: &str) -> PathBuf {
@@ -372,7 +373,8 @@ impl Pass for DropFarRock {
     }
 }
 
-/// Adds a collision soup nothing announced: a pass's content after the layout summary was made.
+/// Adds a collision soup: content a pass adds after the part's collision was shared (the gather traversal ran
+/// without it).
 #[derive(Debug)]
 struct AddSoup;
 impl Pass for AddSoup {
@@ -476,36 +478,78 @@ impl Writer for Sink {
     }
 }
 
+/// A conversion in parts' passes: `passes` in each part as it is written; `gather` in each part before its collision
+/// is shared (the passes that change it; `share-reskate-collision` follows them); `group` on each collision cell;
+/// `finalize` once, on every summary.
+#[derive(Default)]
+struct Stages {
+    passes: Vec<Box<dyn Pass>>,
+    gather: Vec<Box<dyn Pass>>,
+    group: Vec<Box<dyn Pass>>,
+    finalize: Vec<Box<dyn Pass>>,
+}
+
+impl Stages {
+    /// `passes` in each part, and in the gather traversal too.
+    fn both(passes: impl Fn() -> Vec<Box<dyn Pass>>) -> Stages {
+        Stages {
+            passes: passes(),
+            gather: passes(),
+            ..Stages::default()
+        }
+    }
+
+    /// The collision cells planned (`prepare-reskate-cell-collision` on each), as [`plan`] plans the whole map.
+    fn planned(mut self) -> Stages {
+        self.group.push(Box::new(PrepareReskateCellCollision::new(
+            CollisionSurfaces::Coalesce,
+            CollisionWeld::Millimetre,
+        )));
+        self
+    }
+}
+
+/// What a conversion in parts did: the sink's report, the conversion's, the spool's, and how many parts there were.
+struct InParts {
+    built: BuildReport,
+    converted: ConvertReport,
+    spool: SpoolReport,
+    parts: usize,
+}
+
 /// The map written in the parts of `grid`, their groups in the order `order` gives (`None`: the plan's), with `passes`
-/// in each part.
+/// in each part (and in the gather traversal).
 fn in_parts(
     out: &Path,
     grid: &PartitionGrid,
     order: Option<&[usize]>,
-    passes: Vec<Box<dyn Pass>>,
-) -> Result<(BuildReport, usize)> {
-    in_parts_with(&encoding(out), grid, order, passes)
+    passes: impl Fn() -> Vec<Box<dyn Pass>>,
+) -> Result<InParts> {
+    in_parts_staged(&encoding(out), grid, order, Stages::both(passes), 200.0)
 }
 
-/// The map written as `e` says in the parts of `grid`, as [`in_parts`].
-fn in_parts_with(
+/// The map `map` written as `e` says in the parts of `grid`, their groups in the order `order` gives (`None`: the
+/// plan's), through `stages`, the layout summarized for `layout_tile` metre tiles; the cell spool in `e`'s output
+/// root.
+fn in_parts_staged(
     e: &EncodingOptions,
     grid: &PartitionGrid,
     order: Option<&[usize]>,
-    passes: Vec<Box<dyn Pass>>,
-) -> Result<(BuildReport, usize)> {
-    in_parts_tiled(e, grid, order, passes, 200.0)
-}
-
-/// [`in_parts_with`], the layout summarized for `layout_tile` metre tiles.
-fn in_parts_tiled(
-    e: &EncodingOptions,
-    grid: &PartitionGrid,
-    order: Option<&[usize]>,
-    passes: Vec<Box<dyn Pass>>,
+    stages: Stages,
     layout_tile: f32,
-) -> Result<(BuildReport, usize)> {
-    let mut w = map();
+) -> Result<InParts> {
+    in_parts_of(map(), e, grid, order, stages, layout_tile)
+}
+
+/// [`in_parts_staged`] of the map `w`.
+fn in_parts_of(
+    mut w: World,
+    e: &EncodingOptions,
+    grid: &PartitionGrid,
+    order: Option<&[usize]>,
+    stages: Stages,
+    layout_tile: f32,
+) -> Result<InParts> {
     grid.run(&mut w, &mut PassLog::default()).unwrap();
     let mut plan = w.resource::<PartitionPlan>().unwrap().clone();
     if let Some(order) = order {
@@ -521,7 +565,12 @@ fn in_parts_tiled(
         Box::new(SummarizeReskateInstances),
         Box::new(SummarizeReskateContent),
     ];
-    convert_parts_summarized(
+    let mut gather = stages.gather;
+    gather.push(Box::new(
+        ShareReskateCollision::new(&EncodingOptions::default()).unwrap(),
+    ));
+    let mut spool = CellSpool::new(&e.out_root.join("spool"))?;
+    let converted = convert_parts_gathered(
         &mut Planned(w),
         &mut PlannedParts::default(),
         Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
@@ -532,10 +581,25 @@ fn in_parts_tiled(
             summarize: &Pipeline { passes: summarize },
             decide: &Pipeline { passes: Vec::new() },
         },
-        &Pipeline { passes },
+        Gathered {
+            spool: &mut spool,
+            gather: &Pipeline { passes: gather },
+            group: &Pipeline { passes: stages.group },
+            finalize: &Pipeline {
+                passes: stages.finalize,
+            },
+        },
+        &Pipeline {
+            passes: stages.passes,
+        },
     )?;
-    let r = report.take().unwrap();
-    Ok((r, parts))
+    let built = report.take().unwrap();
+    Ok(InParts {
+        built,
+        converted,
+        spool: spool.report(),
+        parts,
+    })
 }
 
 /// Every file of a folder, by its path within it.
@@ -585,41 +649,51 @@ fn a_map_written_in_parts_is_the_map_written_whole_in_any_order() {
     assert!(r.instances >= 5 && r.tiles >= 4 && r.collision_tris > 0, "{r:?}");
     let reference = reference.join("parts");
     let mut orders: Vec<Option<Vec<usize>>> = vec![None];
-    let (_, n) = in_parts(&tmp("count"), &aligned(), None, Vec::new()).unwrap();
+    let n = in_parts(&tmp("count"), &aligned(), None, Vec::new).unwrap().parts;
     assert!(n >= 5, "{n} parts");
     orders.push(Some((0..n).rev().collect()));
     orders.push(Some((0..n).map(|i| (i * 3 + 1) % n).collect()));
     for (k, order) in orders.iter().enumerate() {
         let out = tmp(&format!("parts{k}"));
-        let (r, parts) = in_parts(&out, &aligned(), order.as_deref(), Vec::new()).unwrap();
-        assert_eq!(r.parts, parts, "{order:?}");
-        // collision waited for the ground's part, then was laid out as it came; none was left for the end
-        assert!(r.held.peak_cells > 0, "{:?}", r.held);
-        assert_eq!((r.held.at_finish, r.held.parts_untold), (0, 0), "{order:?}");
+        let r = in_parts(&out, &aligned(), order.as_deref(), Vec::new).unwrap();
+        assert_eq!(r.built.parts, r.parts, "{order:?}");
+        // every cell the ground and the props reach gathered from every part, each laid out once, the spool emptied
+        assert!(r.built.cells >= 6, "{order:?}: {} cells", r.built.cells);
+        assert_eq!(r.spool.cells, r.built.cells, "{order:?}");
+        assert!(
+            r.spool.shares > r.spool.cells,
+            "a cell shared by several parts: {:?}",
+            r.spool
+        );
+        // the triangles the parts brought to the gathered cells as written, dropped: what they shared
+        assert!(r.spool.triangles > 0);
+        assert_eq!(r.built.cell_triangles, r.spool.triangles, "{order:?}");
+        assert!(
+            !out.join("spool").exists(),
+            "{order:?}: the spool's folder is removed"
+        );
         same_maps(&reference, &out.join("parts"), &format!("{order:?}"));
     }
 }
 
 #[test]
-fn a_part_left_without_its_roots_waits_to_the_end_and_changes_nothing() {
+fn a_part_left_without_its_roots_changes_nothing() {
     let reference = tmp("whole-dropped");
     whole(&reference, vec![Box::new(DropFarRock)]);
     let out = tmp("parts-dropped");
-    let (r, _) = in_parts(&out, &aligned(), None, vec![Box::new(DropFarRock)]).unwrap();
-    // the far rock's part is not told: the cell it announced waits for it to the end
-    assert_eq!(r.held.parts_untold, 1, "{:?}", r.held);
-    assert!(r.held.at_finish >= 1, "{:?}", r.held);
+    let drop = || -> Vec<Box<dyn Pass>> { vec![Box::new(DropFarRock)] };
+    in_parts(&out, &aligned(), None, drop).unwrap();
     same_maps(&reference.join("parts"), &out.join("parts"), "dropped");
 }
 
 #[test]
-fn a_misaligned_partition_and_unannounced_collision_are_refused() {
+fn a_misaligned_partition_and_collision_not_gathered_are_refused() {
     // 300 m cells, not aligned to the 200 m tile: a tile's placements in two parts
     let e = in_parts(
         &tmp("misaligned"),
         &PartitionGrid::new(300.0).unwrap().with_halo(50.0).unwrap(),
         None,
-        Vec::new(),
+        Vec::new,
     )
     .err()
     .unwrap()
@@ -630,51 +704,207 @@ fn a_misaligned_partition_and_unannounced_collision_are_refused() {
             && e.contains("tile=200"),
         "{e}"
     );
-    // a soup a part's pass added, in a cell the layout summary announced for no part
-    let e = in_parts(&tmp("unannounced"), &aligned(), None, vec![Box::new(AddSoup)])
+    // a soup a part's pass adds after its collision was shared, in a cell no gathered cell laid out
+    let stages = Stages {
+        passes: vec![Box::new(AddSoup)],
+        ..Stages::default()
+    };
+    let e = in_parts_staged(&encoding(&tmp("ungathered")), &aligned(), None, stages, 200.0)
         .err()
         .unwrap()
         .to_string();
-    assert!(e.contains("does not announce"), "{e}");
+    assert!(e.contains("no gathered cell laid out"), "{e}");
+    // a part's collision removed after it was shared: the cell was laid out with triangles the part no longer brings
+    let stages = Stages {
+        passes: vec![Box::new(DropFarRock)],
+        ..Stages::default()
+    };
+    let e = in_parts_staged(&encoding(&tmp("changed")), &aligned(), None, stages, 200.0)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        e.contains("a pass changed a part's collision after it was shared"),
+        "{e}"
+    );
 }
 
-/// The collision plan over parts: each part records the rule only, the writer plans each leaf as it lays the cell out by
-/// the pass's own rule, and the plan it reports is the one the pass records for the whole map (leaf by leaf), the map
-/// byte for byte the same; the rocks' few metal triangles are written as their leaf's wood or concrete.
+/// The collision plan over parts: each collision cell, gathered from every part's shares, is planned on its own by the
+/// pass's rule, the plan of every cell together the one the pass records for the whole map (leaf by leaf), the map
+/// byte for byte the same; the rocks' few metal triangles are written as their leaf's wood or concrete, reported by
+/// the cells' passes among the conversion's notices; a part of a map in several plans none.
 #[test]
 fn the_collision_plan_over_parts_is_the_whole_maps_leaf_by_leaf() {
     let reference = tmp("whole-planned");
-    let (r, recorded) = whole_planned(&reference, vec![Box::new(plan())]);
+    let (_, recorded) = whole_planned(&reference, vec![Box::new(plan())]);
     let recorded = recorded.unwrap();
     assert!(
-        r.collision_plan.is_none(),
-        "a whole map's plan is the pass's record"
-    );
-    let leaves = recorded.leaves.as_ref().unwrap();
-    assert!(
-        leaves.values().any(|l| !l.into.is_empty()),
-        "the plan rewrites a minor surface somewhere: {leaves:?}"
+        recorded.leaves.values().any(|l| !l.into.is_empty()),
+        "the plan rewrites a minor surface somewhere: {:?}",
+        recorded.leaves
     );
     let mut order: Option<Vec<usize>> = None;
     for _ in 0..2 {
         let out = tmp("parts-planned");
-        let (r, n) = in_parts(&out, &aligned(), order.as_deref(), vec![Box::new(plan())]).unwrap();
-        assert!(n >= 2);
-        assert_eq!(r.collision_plan.as_ref(), Some(&recorded), "{order:?}");
-        assert!(
-            r.approximated
+        let r = in_parts_staged(
+            &encoding(&out),
+            &aligned(),
+            order.as_deref(),
+            Stages::default().planned(),
+            200.0,
+        )
+        .unwrap();
+        assert!(r.parts >= 2);
+        // the cells' passes report what they rewrote, as the whole map's pass does: the same triangles
+        let rewritten = |what: &str| -> u64 {
+            r.converted
+                .notices()
                 .iter()
-                .any(|(what, _)| what.starts_with("collision triangles of surface metal")),
+                .filter(|n| n.kind == NoticeKind::Approximation && n.reason.contains(what))
+                .map(|n| n.count)
+                .sum()
+        };
+        let whole_rewritten: usize = recorded
+            .leaves
+            .values()
+            .flat_map(|l| l.into.keys().map(|s| l.counts[s]))
+            .sum();
+        assert!(
+            rewritten("collision triangles of surface metal") > 0,
             "{:?}",
-            r.approximated
+            r.converted.notices()
+        );
+        assert_eq!(
+            rewritten("collision triangles of surface") as usize,
+            whole_rewritten
         );
         same_maps(
             &reference.join("parts"),
             &out.join("parts"),
             &format!("planned {order:?}"),
         );
-        order = Some((0..n).rev().collect());
+        order = Some((0..r.parts).rev().collect());
     }
+    // a part of a map in several plans no collision of its own
+    let e = in_parts(
+        &tmp("part-planned"),
+        &aligned(),
+        None,
+        || -> Vec<Box<dyn Pass>> { vec![Box::new(plan())] },
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(e.contains("a part of a map in several plans no collision"), "{e}");
+}
+
+/// Rocks in pairs, a pair's two in one 256 m collision cell (east 150 and 210 m, north 1000 m apart pair from pair) but
+/// in two parts (`partition-grid{cell=200,tile=200}`: the 200 m columns 0 and 1), and a spawn.
+fn pairs(n: usize) -> World {
+    let mut w = World::new();
+    let mut surfaces = Surfaces::default();
+    let metal = surfaces.index("metal").unwrap();
+    w.insert_resource(surfaces);
+    let material = w.spawn();
+    w.insert(material, Name("stone".into()));
+    w.insert(material, PbrMaterial::default());
+    let rock = prototype(&mut w, "rock", 4, 3.0, 1.0, material, metal, material);
+    for k in 0..n {
+        let north = 1000.0 * k as f32 + 50.0;
+        place(&mut w, rock, 150.0, north);
+        place(&mut w, rock, 210.0, north);
+    }
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
+    let e = w.spawn();
+    w.insert(
+        e,
+        SkateMarker {
+            kind: MarkerKind::Spawn,
+            position: Some(([100.0, -100.0], Some(1.0))),
+            yaw: None,
+            m: None,
+            blueprint: None,
+            snap: None,
+            lift: None,
+            shelter: None,
+            trainer: None,
+            other: Other::new(),
+        },
+    );
+    w
+}
+
+/// The order that gives every pair's first part before any pair's second: the parts of column 0 (east 0..200 m), then
+/// those of column 1, by the east of their roots.
+fn firsts_then_seconds(w: &World, grid: &PartitionGrid) -> Vec<usize> {
+    let mut w = w.clone();
+    grid.run(&mut w, &mut PassLog::default()).unwrap();
+    let plan = w.resource::<PartitionPlan>().unwrap();
+    let east = |i: usize| {
+        plan.groups[i]
+            .roots
+            .iter()
+            .filter_map(|&e| w.get::<Transform>(e).map(|t| t.cols[3][0]))
+            .fold(f32::INFINITY, f32::min)
+    };
+    let mut order: Vec<usize> = (0..plan.groups.len()).collect();
+    order.sort_by(|&a, &b| east(a).total_cmp(&east(b)).then(a.cmp(&b)));
+    order
+}
+
+/// The cell spool's memory does not grow with the map: rocks in pairs sharing a collision cell across two parts, given
+/// every pair's first part before any second, the most share payload the spool holds at once is the same for 2, 8 and
+/// 32 pairs (one cell's, or one part's), while what it writes grows with them; each map is the map written whole, the
+/// cells planned the same.
+#[test]
+fn the_spools_memory_does_not_grow_with_the_map() {
+    let grid = PartitionGrid::new(200.0)
+        .unwrap()
+        .with_tile(200.0)
+        .unwrap()
+        .with_halo(20.0)
+        .unwrap();
+    let mut peaks = Vec::new();
+    let mut written = Vec::new();
+    for n in [2usize, 8, 32] {
+        let reference = tmp(&format!("whole-pairs-{n}"));
+        let mut w = pairs(n);
+        plan().run(&mut w, &mut PassLog::default()).unwrap();
+        primase_reskate::write_map(&w, Path::new(""), &encoding(&reference)).unwrap();
+        let w = pairs(n);
+        let order = firsts_then_seconds(&w, &grid);
+        let out = tmp(&format!("parts-pairs-{n}"));
+        let r = in_parts_of(
+            w,
+            &encoding(&out),
+            &grid,
+            Some(&order),
+            Stages::default().planned(),
+            200.0,
+        )
+        .unwrap();
+        // a part per rock, and the spawn's
+        assert_eq!(r.parts, 2 * n + 1, "{n} pairs");
+        assert_eq!(r.built.cells, n, "a cell per pair");
+        assert_eq!(r.spool.shares, 2 * n, "two shares per cell");
+        same_maps(
+            &reference.join("parts"),
+            &out.join("parts"),
+            &format!("{n} pairs"),
+        );
+        peaks.push(r.spool.peak_payload_bytes);
+        written.push(r.spool.bytes_written);
+    }
+    assert!(peaks[0] > 0, "{peaks:?}");
+    assert!(
+        peaks.iter().all(|&p| p == peaks[0]),
+        "the peak grows with the map: {peaks:?}"
+    );
+    assert!(written[0] < written[1] && written[1] < written[2], "{written:?}");
 }
 
 /// The routes' preparation, for a map encoded with `cull_ids`: the overlays stacked, the blend chains split, the
@@ -756,15 +986,18 @@ fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
             r.blend
         );
         let out = tmp(&format!("parts-pool-{cull_ids}"));
-        let (p, n) = in_parts_with(
-            &encoding_with(&out, cull_ids),
-            &aligned(),
-            None,
-            prepared(cull_ids),
-        )
-        .unwrap();
-        assert!(n >= 3);
-        let made = p.blend_budget.unwrap();
+        // in parts: the collision planned cell by cell, the rest of the preparation in each part
+        let stages = Stages {
+            passes: prepared(cull_ids)
+                .into_iter()
+                .filter(|p| p.name() != "prepare-reskate-collision")
+                .collect(),
+            ..Stages::default()
+        }
+        .planned();
+        let r = in_parts_staged(&encoding_with(&out, cull_ids), &aligned(), None, stages, 200.0).unwrap();
+        assert!(r.parts >= 3);
+        let made = r.built.blend_budget.unwrap();
         assert_eq!(made.mode, BlendBudgetMode::Pool);
         assert_eq!(made.decision, recorded.decision, "{cull_ids}");
         same_maps(
@@ -815,10 +1048,19 @@ fn a_prototype_stacked_differently_by_two_parts_is_refused() {
         ),
         Box::new(TamperDeck),
     ];
-    let e = in_parts(&tmp("tampered"), &aligned(), None, passes)
-        .err()
-        .unwrap()
-        .to_string();
+    let e = in_parts_staged(
+        &encoding(&tmp("tampered")),
+        &aligned(),
+        None,
+        Stages {
+            passes,
+            ..Stages::default()
+        },
+        200.0,
+    )
+    .err()
+    .unwrap()
+    .to_string();
     assert!(
         e.contains("proto deck is stacked differently by two parts"),
         "{e}"
@@ -828,11 +1070,11 @@ fn a_prototype_stacked_differently_by_two_parts_is_refused() {
 /// A layout summarized for other tiles than the writer's is refused, naming both.
 #[test]
 fn a_layout_for_other_tiles_is_refused() {
-    let e = in_parts_tiled(
+    let e = in_parts_staged(
         &encoding(&tmp("other-tiles")),
         &aligned(),
         None,
-        Vec::new(),
+        Stages::default(),
         100.0,
     )
     .err()

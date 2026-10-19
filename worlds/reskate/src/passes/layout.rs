@@ -1,14 +1,9 @@
 //! `summarize-reskate-layout{tile=T}`: what this part of a map written in parts lays out (`skate.layout_summary`), for
 //! the map sink. Merged over the parts, it tells the sink which part holds each render tile's placements (a tile drawn
-//! by a part that does not hold all of them is refused: partition aligned to the tile, `partition-grid{tile=T}`),
-//! which parts' collision may fall in each 256 m collision cell (a cell is laid out once every part announcing it has
-//! been written, its triangles from all of them), and the map's hull soups (named by rank).
-//!
-//! It files as the writer does, by the same functions: a placement in the tile it states or stands in
-//! ([`primase_core::Tile::of`]), its collision in the cell of its pivot ([`crate::collision::prop_cell`]); a world
-//! soup's triangles by their centres ([`crate::collision::triangle_cell`]). What it announces is what the part may
-//! contribute before its passes run; a pass that removes content leaves an announced cell without it, which is
-//! harmless, and content a pass adds where nothing was announced is refused by the sink.
+//! by a part that does not hold all of them is refused: partition aligned to the tile, `partition-grid{tile=T}`) and
+//! the map's hull soups (named by rank). It files a placement as the writer does, in the tile it states or stands in
+//! ([`primase_core::Tile::of`]). The map's 256 m collision cells are not the layout's: each part shares its collision
+//! per cell (`share-reskate-collision`) and each cell is laid out whole from every part's shares.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -18,10 +13,9 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Resource, World};
 
 use crate::assembly::writer_placements;
-use crate::collision::{prop_cell, triangle_cell};
 use crate::components::SkateLayoutSummary;
 use crate::model::CollisionMode;
-use crate::scene::{Scene, w_at};
+use crate::scene::Scene;
 
 /// See the module documentation. Made by [`SummarizeReskateLayout::new`]; from options by the same call.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,37 +96,13 @@ impl Pass for SummarizeReskateLayout {
                 .entry(tag)
                 .or_default()
                 .insert(u64::from(e.index()));
-            let proto = &s.protos[sp.proto as usize];
-            if p.no_collision || proto.collision.is_none() {
-                continue;
-            }
-            let (cx, cy) = prop_cell(p.pos);
-            match proto.col_mode {
-                CollisionMode::Hull => {}
-                CollisionMode::Water => {
-                    sum.cells.entry((true, cx, cy)).or_default().insert(tag);
-                }
-                CollisionMode::TriangleMesh => {
-                    sum.cells.entry((false, cx, cy)).or_default().insert(tag);
-                }
-            }
         }
-        for sd in s.soups.iter().filter(|sd| owned.contains(sd.entity)) {
-            if sd.mode == CollisionMode::Hull {
-                sum.hulls.insert((sd.raw, u64::from(sd.entity.index())));
-                continue;
-            }
-            let water = sd.mode == CollisionMode::Water;
-            let mut cells = BTreeSet::new();
-            for t in 0..sd.surf.len() {
-                let a = w_at(&sd.pos, sd.idx[t * 3] as usize * 3);
-                let b = w_at(&sd.pos, sd.idx[t * 3 + 1] as usize * 3);
-                let c = w_at(&sd.pos, sd.idx[t * 3 + 2] as usize * 3);
-                cells.insert(triangle_cell(a, b, c));
-            }
-            for (cx, cy) in cells {
-                sum.cells.entry((water, cx, cy)).or_default().insert(tag);
-            }
+        for sd in s
+            .soups
+            .iter()
+            .filter(|sd| owned.contains(sd.entity) && sd.mode == CollisionMode::Hull)
+        {
+            sum.hulls.insert((sd.raw, u64::from(sd.entity.index())));
         }
         w.insert_resource(sum);
         Ok(())

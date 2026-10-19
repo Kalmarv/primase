@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 
 use primase_core::World;
 
-use crate::collision::{CollisionWorld, TileData};
+use crate::collision::{Collision, CollisionResult, CollisionWorld, PropSoup, TileData};
 use crate::components::{
-    CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkatePausePicture,
+    CellCount, CellKey, CellProps, CellSoup, CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCellCounts,
+    SkateCellLayout, SkateCellShare, SkateCollisionPlan, SkatePausePicture,
 };
-use crate::map::{Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
+use crate::map::{CellContent, Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions, lay_cell};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
 
@@ -186,15 +187,6 @@ impl SoupWorld {
         for (k, segs) in o.cells {
             self.cells.entry(k).or_default().extend(segs);
         }
-    }
-
-    /// Every cell's soups, for the bytes a sink holds.
-    pub(crate) fn bytes(&self) -> usize {
-        self.cells
-            .values()
-            .flatten()
-            .map(|g| 4 * g.v.len() + g.s.len() + g.rock.len() + 24)
-            .sum()
     }
 }
 
@@ -708,31 +700,89 @@ impl Laid {
 /// encoding (marker snaps, overlay stack, blend chains), the tiles and prototypes assembled. What [`crate::write_map`]
 /// emits and `summarize-reskate-map` counts.
 pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<Laid> {
-    let mut s = Scene::from_world(world, dir)?;
-    let mut o = part_options(world, &s, a, encode)?;
-    let cut = s.region;
-    let placements = writer_placements(&s, o.tile);
-    o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
-    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
-    let drop_below = f32::NEG_INFINITY;
-    let mut writer = Records::of(world, &s, a)?.writer(o.clone(), s.surfaces.clone())?;
+    let PartRead {
+        scene: mut s,
+        o,
+        cut,
+        placements,
+        records,
+        counts,
+        ..
+    } = read_part(world, dir, a, encode)?;
+    let mut writer = records.writer(o, s.surfaces.clone())?;
     if !encode {
         writer = writer.without_encoding();
     }
-    let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
-    let water_world = s
-        .soups
-        .iter()
-        .any(|x| x.mode == CollisionMode::Water)
-        .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
-    writer.add_soups(tri_world, water_world);
-    let hulls = hulls(&mut s, cut, drop_below);
-    assemble(&s, &placements, &mut writer)?;
+    writer.set_counts(counts);
+    lay_part(&mut s, cut, &placements, &mut writer)?;
+    let hulls = hulls(&mut s, cut, f32::NEG_INFINITY);
     Ok(Laid {
         scene: s,
         writer,
         hulls,
     })
+}
+
+/// A prepared world (a part of a map, or the whole) as the map writer reads it for the encoding `a` (`dir`: where its
+/// scene came from; `encode`: its textures encoded, else only identified): what [`read_part`] gives.
+pub(crate) struct PartRead {
+    pub scene: Scene,
+    /// The writer's options: the region stated, else the content's (a part of a map in parts: the map's, merged over
+    /// every part, `skate.content_bounds`).
+    pub o: WriterOptions,
+    /// The region the scene states, which its soups are cut by.
+    pub cut: Option<[f64; 4]>,
+    /// Its placements in the writer's tiles.
+    pub placements: Vec<Placement>,
+    /// The preparation records the writer replays.
+    pub records: Records,
+    /// The map's instancing by prototype key (a part of a map in parts: over every part); `None`: these placements'.
+    pub counts: Option<HashMap<u32, i64>>,
+}
+
+/// `world` as the map writer reads it for the encoding `a`: the one reading of a prepared part that the map sink, the
+/// dry layouts the passes count and plan from ([`lay`]), and the collision a part shares ([`cell_shares`]) all make.
+pub(crate) fn read_part(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<PartRead> {
+    let scene = Scene::from_world(world, dir)?;
+    let mut o = part_options(world, &scene, a, encode)?;
+    let cut = scene.region;
+    let placements = writer_placements(&scene, o.tile);
+    let in_parts = world
+        .resource::<crate::components::SkateLayoutSummary>()
+        .is_some();
+    o.region = map_region(world, &scene, &placements, in_parts)?;
+    let records = Records::of(world, &scene, a)?;
+    let counts = map_counts(world, &scene, in_parts)?;
+    Ok(PartRead {
+        scene,
+        o,
+        cut,
+        placements,
+        records,
+        counts,
+    })
+}
+
+/// A part's world soups (triangle mesh and water, cut by `cut`) and its placements (`placements`, of its scene `s`) laid
+/// into `writer`: their cells' soups and props held in it, its tiles and prototypes assembled. The hulls are the
+/// caller's. What the map sink lays a part out with, and what a part shares of its collision. The prototypes that
+/// failed to build, counted.
+pub(crate) fn lay_part(
+    s: &mut Scene,
+    cut: Option<[f64; 4]>,
+    placements: &[Placement],
+    writer: &mut MapWriter,
+) -> Result<i64> {
+    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
+    let drop_below = f32::NEG_INFINITY;
+    let tri_world = SoupWorld::new(s, CollisionMode::TriangleMesh, cut, drop_below);
+    let water_world = s
+        .soups
+        .iter()
+        .any(|x| x.mode == CollisionMode::Water)
+        .then(|| SoupWorld::new(s, CollisionMode::Water, cut, drop_below));
+    writer.add_soups(tri_world, water_world);
+    assemble(s, placements, writer)
 }
 
 /// The writer's region for a prepared world (its scene `s`, its `placements`): the region the scene states; else the
@@ -947,9 +997,185 @@ pub(crate) fn collision_plan(
             surfaces,
             weld,
             table: surf.list.iter().map(|(n, _)| n.clone()).collect(),
-            leaves: Some(leaves),
+            leaves,
         },
         rewritten,
+    ))
+}
+
+/// What the prepared part `world` lays out in each collision cell, as the map sink would lay the part out for the
+/// encoding `a` (the region, instancing and records as it takes them; a part of a map in parts takes the map's from its
+/// summaries), nothing encoded: the cell layout and a share per cell it adds collision to
+/// (`share-reskate-collision`'s). The hulls are not shared: each part writes its own whole.
+pub(crate) fn cell_shares(
+    world: &World,
+    a: &EncodingOptions,
+) -> Result<(SkateCellLayout, BTreeMap<CellKey, SkateCellShare>)> {
+    let PartRead {
+        scene: mut s,
+        o,
+        cut,
+        placements,
+        records,
+        counts,
+        ..
+    } = read_part(world, Path::new(""), a, false)?;
+    let layout = cell_layout(&s, &o);
+    let mut writer = records.writer(o, s.surfaces.clone())?.without_encoding();
+    writer.set_counts(counts);
+    lay_part(&mut s, cut, &placements, &mut writer)?;
+    let shares = writer
+        .take_cells()
+        .into_iter()
+        .map(|(cell, c)| {
+            let share = SkateCellShare {
+                cell,
+                soups: c
+                    .segs
+                    .into_iter()
+                    .map(|g| CellSoup {
+                        order: (g.order.0, g.order.1.index()),
+                        ground: g.ground,
+                        v: g.v,
+                        s: g.s,
+                        rock: g.rock,
+                    })
+                    .collect(),
+                props: c
+                    .props
+                    .into_iter()
+                    .map(|(tx, ty, p)| CellProps {
+                        tile: (tx, ty),
+                        pos: p.pos,
+                        surf: p.surf,
+                        ground: p.ground,
+                    })
+                    .collect(),
+            };
+            (cell, share)
+        })
+        .collect();
+    Ok((layout, shares))
+}
+
+/// The cell layout of a part read as `s` with the writer's options `o`: what its cells are laid out with.
+pub(crate) fn cell_layout(s: &Scene, o: &WriterOptions) -> SkateCellLayout {
+    SkateCellLayout {
+        name: o.name.clone(),
+        surfaces: s.surfaces.list.clone(),
+        limit: o.limit,
+        offset: [o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32],
+    }
+}
+
+/// One collision cell's content from its shares, every part's (the order they come in does not matter: the cell lays
+/// its soups out in the scene's order and its props by tile).
+pub(crate) fn cell_content(shares: &[&SkateCellShare]) -> CellContent {
+    let mut c = CellContent::default();
+    for share in shares {
+        c.segs.extend(share.soups.iter().map(|g| SoupSeg {
+            order: (g.order.0, primase_core::Entity::from_index(g.order.1)),
+            ground: g.ground,
+            v: g.v.clone(),
+            s: g.s.clone(),
+            rock: g.rock.clone(),
+        }));
+        c.props.extend(share.props.iter().map(|p| {
+            (
+                p.tile.0,
+                p.tile.1,
+                PropSoup {
+                    pos: p.pos.clone(),
+                    surf: p.surf.clone(),
+                    ground: p.ground.clone(),
+                },
+            )
+        }));
+    }
+    c
+}
+
+/// The collision cell a group world holds (its shares, its `skate.cell_layout`): its key, its content and the layout's
+/// surface table; an error for a world without one cell's shares.
+pub(crate) fn group_cell(
+    world: &World,
+) -> Result<(CellKey, CellContent, crate::scene::SurfaceTable, SkateCellLayout)> {
+    let layout = world
+        .resource::<SkateCellLayout>()
+        .cloned()
+        .ok_or_else(|| Error::Scene("a collision cell without its layout (skate.cell_layout)".into()))?;
+    let shares: Vec<&SkateCellShare> = world.iter::<SkateCellShare>().map(|(_, s)| s).collect();
+    let key = shares
+        .first()
+        .map(|s| s.cell)
+        .ok_or_else(|| Error::Scene("a collision cell with no share (skate.cell_share)".into()))?;
+    if let Some(other) = shares.iter().find(|s| s.cell != key) {
+        return Err(Error::Scene(format!(
+            "a collision cell holds shares of two cells, {key:?} and {:?}",
+            other.cell
+        )));
+    }
+    let surf = crate::scene::SurfaceTable {
+        list: layout.surfaces.clone(),
+    };
+    Ok((key, cell_content(&shares), surf, layout))
+}
+
+/// The collision plan of the collision cell a group world holds (`prepare-reskate-collision`'s, on a cell of a map in
+/// parts): the cell laid out alone as the writer lays it out, each leaf's minor surfaces rewritten as `surfaces` says
+/// and its pieces welded as `weld` says; with the triangles rewritten, and what the cell is written as (its pieces and
+/// their cull IDs, counted by the writer's own packing of it as planned).
+pub(crate) fn cell_plan(
+    world: &World,
+    surfaces: CollisionSurfaces,
+    weld: CollisionWeld,
+) -> Result<(SkateCollisionPlan, Rewritten, SkateCellCounts)> {
+    let (key, content, surf, layout) = group_cell(world)?;
+    let off = primase_meshops::vector::Vec3::new(layout.offset[0], layout.offset[1], layout.offset[2]);
+    let mut leaves: BTreeMap<String, PlannedLeaf> = BTreeMap::new();
+    let mut rewritten = Rewritten::new();
+    let mut collision = Collision::new(&surf, off.x, off.y, off.z, layout.limit);
+    let mut res = CollisionResult::default();
+    lay_cell(&mut collision, key, content.clone(), &mut res, &mut |leaf, _| {
+        let planned = crate::collision_pack::plan_leaf(&surf, &leaf, surfaces, weld)?;
+        for (&s, &to) in &planned.into {
+            *rewritten
+                .entry((surf.list[s].0.clone(), surf.list[to].0.clone()))
+                .or_default() += planned.counts[&s];
+        }
+        if leaves.insert(leaf.name.to_owned(), planned).is_some() {
+            return Err(Error::Scene(format!(
+                "two collision leaves are named {}",
+                leaf.name
+            )));
+        }
+        Ok(())
+    })?;
+    let plan = SkateCollisionPlan {
+        surfaces,
+        weld,
+        table: surf.list.iter().map(|(n, _)| n.clone()).collect(),
+        leaves,
+    };
+    // what the writer writes of it, as planned: its pieces and the cull IDs they take
+    let mut files = crate::collision_pack::Files::new();
+    let mut pack = crate::collision_pack::Pack::new(&surf, off, Some(&plan), &mut files)?;
+    let mut res = CollisionResult::default();
+    let mut collision = Collision::new(&surf, off.x, off.y, off.z, layout.limit);
+    lay_cell(&mut collision, key, content, &mut res, &mut |leaf, r| {
+        pack.leaf(leaf, r)
+    })?;
+    crate::collision_pack::check_packed(Some(&plan), pack.seen())?;
+    let count = CellCount {
+        pieces: res.objects.len(),
+        cull_ids: res.objects.iter().map(|ob| ob.cells as usize).sum(),
+    };
+    Ok((
+        plan,
+        rewritten,
+        SkateCellCounts {
+            cells: BTreeMap::from([(key, count)]),
+        },
     ))
 }
 
