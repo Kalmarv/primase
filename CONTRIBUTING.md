@@ -324,12 +324,9 @@ than the code it checks.
 | `PRIMASE_SCENE_FILTER` | filter | live | optional: only scene folders whose path contains this text | - |
 | `PRIMASE_RESKATE_PATCH` | input | live | a Patch folder written by ReSkate Studio's compile (its `layout.toc`, `Win32` TOCs and CAS archives); `worlds/reskate/tests/postcompile_fb.rs` | third-party: ReSkate Studio's compile output |
 | `PRIMASE_SKATE_DATA` | input | live | the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only | the user's own install |
-| `PRIMASE_RESKATE_VBLEND_SPEC` | input | retired | the vertex-blend gate's spec for `PRIMASE_RESKATE_PATCH`: keys to retarget and every rewritten section's expected bytes (JSON; schema in `worlds/reskate/tests/postcompile_vblend.rs`) | its spec, checker and reference were our own outputs; retired by the blend owner, `postcompile_vbrecord.rs` carries the remaining obligation |
-| `PRIMASE_RESKATE_VBLEND_CHECK` | input | retired | optional: an independent checker of the vertex-blend output, run as `python -I CHECK ORIG OUT SPEC DATA [REF]`, last line `PASS` (protocol in `worlds/reskate/tests/postcompile_vblend.rs`) | our own checker; retired with `PRIMASE_RESKATE_VBLEND_SPEC` |
-| `PRIMASE_RESKATE_VBLEND_REF` | input | retired | optional: the same Patch blended by a reference patcher whose output was checked in game, for the checker's comparison | our own patcher's output; retired with `PRIMASE_RESKATE_VBLEND_SPEC` |
 | `PRIMASE_RESKATE_BLEND_MAP` | input | live | a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs` | our own writer's output: the stage's input, not a reference |
 | `PRIMASE_RESKATE_BLEND_PATCH` | input | live | ReSkate Studio's Patch of that map, compiled by a build that carries the vertex-blend weight (validated: 20261012) | third-party: ReSkate Studio 20261012's compile of that map |
-| `PRIMASE_RESKATE_BLEND_SPEC` | input | live | optional: a frozen resolution of that record against that Patch (a regression baseline of our own stage), in the vertex-blend spec format plus `"materials": {name: key}`; with `PRIMASE_RESKATE_VBLEND_CHECK` the checker runs on the stage's output | regression baseline: an earlier run of our own stage, frozen; not an independent oracle |
+| `PRIMASE_RESKATE_BLEND_SPEC` | input | live | optional: a frozen resolution of that record against that Patch (a regression baseline of our own stage), `{"materials": {name: key}}` | regression baseline: an earlier run of our own stage, frozen; not an independent oracle |
 | `PRIMASE_UNITY_V21_DATA` | input | live | a Unity player data folder with SerializedFile version 21 containers | the user's own install |
 | `PRIMASE_UNITY_V21_CENSUS` | input | live | an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
 | `PRIMASE_UNITY_DATA` | input | live | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) | the user's own install |
@@ -400,6 +397,11 @@ hidden by skips; build one when a whole-route (step 20) or in-game difference po
   shaders on WARP), blocker cards, extras (lights, hang edges and markers as stored), MSB part kinds other than map
   pieces and objects, map offsets, and world-state membership (the event-script rules that turn flags into placement
   conditions; the facts they read, MSB entity IDs and the scripts' decode, are checked against the state oracle).
+- ReSkate: the vertex-blend output (the postcompile stage retargeting Studio's blend keys). `postcompile_vbrecord.rs`
+  checks the record stage's I/O on a real compile (declarations, indices, texture coordinates, tangents, positions,
+  donor rows, determinism) with our own readers; no independent decode checks the result. The decal retarget is
+  checked in game at step 20 (Legion's blended materials); the two-texture-set retarget has no producer in any route
+  and is unit-tested only.
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 

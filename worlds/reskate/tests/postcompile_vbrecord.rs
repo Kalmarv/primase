@@ -15,9 +15,8 @@
 //!   texture-set rows are the stock decal's; the root's program records are the game's (Studio's private
 //!   `vertex_blend` program gone) and every row indexes them;
 //! - applied twice, the outputs are byte-identical (determinism);
-//! - `PRIMASE_RESKATE_BLEND_SPEC` (optional): the same resolution and values from an independent implementation
-//!   (oracle: a Python decode of the Patch and the map's GLBs), as the S2 gate's spec: its keys must equal ours, and
-//!   with `PRIMASE_RESKATE_VBLEND_CHECK` the independent checker must pass on our output.
+//! - `PRIMASE_RESKATE_BLEND_SPEC` (optional): a frozen resolution from an earlier run of this stage (a regression
+//!   baseline, not an independent oracle): its keys must equal ours.
 
 #![allow(clippy::unwrap_used)]
 
@@ -25,7 +24,6 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
 use primase_compress::oodle::{Oodle, Version};
@@ -203,7 +201,7 @@ fn vbrecord_gate() -> R {
             a.display()
         );
     }
-    // ---- independent resolution and checker
+    // ---- the frozen resolution (a regression baseline)
     if let Some(spec_path) = real_data("PRIMASE_RESKATE_BLEND_SPEC") {
         let spec: Value = serde_json::from_slice(&std::fs::read(&spec_path)?)?;
         let theirs: BTreeMap<String, u64> = spec["materials"]
@@ -212,24 +210,8 @@ fn vbrecord_gate() -> R {
             .iter()
             .map(|(m, k)| (m.clone(), u64::from_str_radix(k.as_str().unwrap(), 16).unwrap()))
             .collect();
-        assert_eq!(theirs, resolution.keys, "independent resolution");
-        println!("independent resolution agrees: {} materials", theirs.len());
-        if let Some(check) = real_data("PRIMASE_RESKATE_VBLEND_CHECK") {
-            let o = Command::new("python")
-                .arg("-I")
-                .arg(&check)
-                .arg(&patch)
-                .arg(&out)
-                .arg(&spec_path)
-                .arg(&data)
-                .output()?;
-            let text = String::from_utf8_lossy(&o.stdout);
-            println!("{text}{}", String::from_utf8_lossy(&o.stderr));
-            assert!(
-                o.status.success() && text.lines().last() == Some("PASS"),
-                "independent checker did not pass"
-            );
-        }
+        assert_eq!(theirs, resolution.keys, "frozen resolution");
+        println!("frozen resolution agrees: {} materials", theirs.len());
     }
     Ok(())
 }
