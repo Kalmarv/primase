@@ -72,14 +72,7 @@ fn fixture() -> Fixture {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "snap".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("snap").unwrap()).unwrap();
     let spawn = marker(&mut w, MarkerKind::Spawn, ([20.0, -20.0], None), None);
     let on_ground = marker(
         &mut w,
@@ -116,7 +109,9 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
     } = fixture();
     let before_pinned = snapped(&w, pinned).clone();
     let mut log = PassLog::default();
-    SnapReskateMarkers::new().run(&mut w, &mut log).unwrap();
+    SnapReskateMarkers::for_default_encoding()
+        .run(&mut w, &mut log)
+        .unwrap();
     let s = snapped(&w, spawn);
     let ([_, _], h) = s.position.unwrap();
     assert_eq!((h, s.snap.as_ref(), s.lift), (Some(3.0), None, Some(0.3)));
@@ -135,7 +130,7 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
     );
     assert_eq!(
         w.resource::<SkateMarkerSnaps>().unwrap(),
-        SnapReskateMarkers::new().basis()
+        SnapReskateMarkers::for_default_encoding().basis()
     );
     // the writer: the spawn 0.3 m over the ground, the ground travel point 0.05 m (its default lift) over it
     let out_root = tmp("snapped");
@@ -166,7 +161,7 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
     );
     assert_eq!((y(&travel[0]), y(&travel[1])), (3.0 + 0.05, 7.0 + 0.05));
     // a second run is refused: the markers are snapped
-    let e = SnapReskateMarkers::new()
+    let e = SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap_err();
     assert!(e.contains("already snapped"), "{e}");
@@ -190,7 +185,7 @@ fn the_writer_reports_unsnapped_markers_and_refuses_other_settings() {
     .unwrap_err()
     .to_string();
     assert!(e.contains("no height"), "{e}");
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .with_limit(1000.0)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
@@ -234,7 +229,7 @@ fn the_snap_options_round_trip_and_are_checked() {
     }
     assert_eq!(
         SnapReskateMarkers::from_options(&o(&[])).unwrap(),
-        SnapReskateMarkers::new()
+        SnapReskateMarkers::for_default_encoding()
     );
     for bad in [
         o(&[("limit", "20")]),

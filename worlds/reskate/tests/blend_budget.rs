@@ -14,7 +14,7 @@ use primase_core::{
     Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::layered::LowerLayeredReskate;
+use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::prepare::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers,
 };
@@ -127,19 +127,12 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "budget".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    LowerLayeredReskate::default()
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("budget").unwrap()).unwrap();
+    LowerLayeredReskate::new(OverlayLimit::All)
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     // the markers snapped before the writer, which snaps nothing
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     // the chains split before the writer, which splits nothing: Studio's 200 m cells

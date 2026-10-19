@@ -77,30 +77,132 @@ use crate::{Error, Result};
 mod materials;
 pub use materials::{SKATE_F0, fold_reflectance};
 
-/// What [`raise_skate`] needs from the caller.
-#[derive(Clone, Debug)]
+/// What [`raise_skate`] needs from the caller: the scene's name ([`RaiseOptions::new`]), and optionally the world's
+/// surface names onto skate surfaces, the skate surface of an unclassified one and the lights' calibration.
+#[derive(Clone, Debug, PartialEq)]
 pub struct RaiseOptions {
-    /// The scene's name, `[A-Za-z0-9_-]+`; required (the default, empty, is refused).
-    pub name: String,
-    /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`).
-    pub surfaces: BTreeMap<String, String>,
-    /// The skate surface for a surface with no class and no entry in `surfaces` (counted per name); `None`: such a
-    /// surface's collision triangles are left out and reported.
-    pub unclassified: Option<String>,
-    /// Every light's intensity (physical candela) times this before [`studio_watts`]: skate's calibration,
-    /// [`SKATE_LIGHT_SCALE`] by default; finite and above 0. Reported as an approximation with its value, the default
-    /// included.
-    pub light_scale: f64,
+    name: String,
+    surfaces: BTreeMap<String, String>,
+    unclassified: Option<String>,
+    light_scale: f64,
 }
 
-impl Default for RaiseOptions {
-    fn default() -> Self {
-        RaiseOptions {
-            name: String::new(),
+impl RaiseOptions {
+    /// For a scene named `name` (`[A-Za-z0-9_-]+`): no surface mapped, an unclassified surface's triangles left out
+    /// (reported), lights at skate's calibration ([`SKATE_LIGHT_SCALE`]).
+    pub fn new(name: &str) -> std::result::Result<RaiseOptions, String> {
+        if !valid_name(name) {
+            return Err(format!("the scene name {name:?} is not [A-Za-z0-9_-]+"));
+        }
+        Ok(RaiseOptions {
+            name: name.to_owned(),
             surfaces: BTreeMap::new(),
             unclassified: None,
             light_scale: SKATE_LIGHT_SCALE,
+        })
+    }
+
+    /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`), both named.
+    pub fn with_surfaces(
+        mut self,
+        surfaces: BTreeMap<String, String>,
+    ) -> std::result::Result<RaiseOptions, String> {
+        if let Some((from, to)) = surfaces
+            .iter()
+            .find(|(from, to)| from.is_empty() || to.is_empty())
+        {
+            return Err(format!("surface {from:?} -> {to:?}: both are names"));
         }
+        self.surfaces = surfaces;
+        Ok(self)
+    }
+
+    /// The skate surface for a surface with no class and no entry in the surfaces (counted per name).
+    pub fn with_unclassified(mut self, surface: &str) -> std::result::Result<RaiseOptions, String> {
+        if surface.is_empty() {
+            return Err("unclassified: a skate surface name".into());
+        }
+        self.unclassified = Some(surface.to_owned());
+        Ok(self)
+    }
+
+    /// Every light's intensity (physical candela) times this before [`studio_watts`]: finite and above 0. Reported as
+    /// an approximation with its value.
+    pub fn with_light_scale(mut self, scale: f64) -> std::result::Result<RaiseOptions, String> {
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(format!("light_scale={scale} is not a finite number above 0"));
+        }
+        self.light_scale = scale;
+        Ok(self)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn surfaces(&self) -> &BTreeMap<String, String> {
+        &self.surfaces
+    }
+    pub fn unclassified(&self) -> Option<&str> {
+        self.unclassified.as_deref()
+    }
+    pub fn light_scale(&self) -> f64 {
+        self.light_scale
+    }
+
+    /// From `raise-skate`'s options (`name` required; `map=NAME:skate;...`, `unclassified`, `light_scale`), through
+    /// [`RaiseOptions::new`] and the setters.
+    pub fn from_options(o: &primase_core::pass::Options) -> std::result::Result<RaiseOptions, String> {
+        let name = o
+            .get("name")
+            .ok_or("name=N is required: the scene's name, [A-Za-z0-9_-]+")?;
+        let mut options = RaiseOptions::new(name)?;
+        for (k, v) in o {
+            match k.as_str() {
+                "name" => {}
+                "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
+                    return Err(format!(
+                        "{k}: the spawn is placed before the writer plans, at selection: \
+                         place-spawn{{at=centre | east=E,north=N[,yaw=DEGREES]}} (raise-skate raises it)"
+                    ));
+                }
+                "unclassified" => options = options.with_unclassified(v)?,
+                "light_scale" => {
+                    let scale = v
+                        .parse::<f64>()
+                        .map_err(|_| format!("light_scale={v} is not a number"))?;
+                    options = options.with_light_scale(scale)?;
+                }
+                // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
+                "map" => {
+                    let mut surfaces = BTreeMap::new();
+                    for pair in v.split(';').filter(|p| !p.is_empty()) {
+                        let (from, to) = pair
+                            .split_once(':')
+                            .ok_or_else(|| format!("map={v}: each entry is NAME:skate_surface"))?;
+                        surfaces.insert(from.to_owned(), to.to_owned());
+                    }
+                    options = options.with_surfaces(surfaces)?;
+                }
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(options)
+    }
+
+    /// Every setting as `raise-skate`'s options ([`RaiseOptions::from_options`] reads them back).
+    pub fn options(&self) -> primase_core::pass::Options {
+        let mut o = primase_core::pass::Options::from([
+            ("name".to_owned(), self.name.clone()),
+            ("light_scale".to_owned(), self.light_scale.to_string()),
+        ]);
+        if let Some(u) = &self.unclassified {
+            o.insert("unclassified".into(), u.clone());
+        }
+        if !self.surfaces.is_empty() {
+            let map: Vec<String> = self.surfaces.iter().map(|(a, b)| format!("{a}:{b}")).collect();
+            o.insert("map".into(), map.join(";"));
+        }
+        o
     }
 }
 
@@ -194,18 +296,6 @@ fn valid_name(name: &str) -> bool {
 /// successful conversion does not imply that every PBR feature is represented by the target.
 pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog> {
     let bad = |m: String| Error::Scene(format!("raise-skate: {m}"));
-    if !valid_name(&options.name) {
-        return Err(bad(format!(
-            "the scene name {:?} is not [A-Za-z0-9_-]+",
-            options.name
-        )));
-    }
-    if !(options.light_scale.is_finite() && options.light_scale > 0.0) {
-        return Err(bad(format!(
-            "light_scale {} is not a finite number above 0",
-            options.light_scale
-        )));
-    }
     if world.resource::<SkateScene>().is_some() {
         return Err(bad("the world is already a skate scene".into()));
     }
@@ -805,48 +895,24 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
 /// class, [`class_to_skate`]).
 #[derive(Debug)]
 pub struct RaiseSkate {
-    pub options: RaiseOptions,
+    options: RaiseOptions,
+}
+
+impl RaiseSkate {
+    pub fn new(options: RaiseOptions) -> RaiseSkate {
+        RaiseSkate { options }
+    }
+
+    pub fn raise_options(&self) -> &RaiseOptions {
+        &self.options
+    }
 }
 
 /// `raise-skate` from its options (a [`primase_core::pass::PassFactory`]).
 pub fn raise_skate_pass(
     o: &primase_core::pass::Options,
 ) -> std::result::Result<Box<dyn primase_core::pass::Pass>, String> {
-    let mut options = RaiseOptions::default();
-    for (k, v) in o {
-        match k.as_str() {
-            "name" if valid_name(v) => options.name.clone_from(v),
-            "name" => return Err(format!("name={v} is not [A-Za-z0-9_-]+")),
-            "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
-                return Err(format!(
-                    "{k}: the spawn is placed before the writer plans, at selection: \
-                     place-spawn{{at=centre | east=E,north=N[,yaw=DEGREES]}} (raise-skate raises it)"
-                ));
-            }
-            "unclassified" => options.unclassified = Some(v.clone()),
-            "light_scale" => {
-                options.light_scale = v
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|n| n.is_finite() && *n > 0.0)
-                    .ok_or_else(|| format!("light_scale={v} is not a finite number above 0"))?;
-            }
-            // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
-            "map" => {
-                for pair in v.split(';').filter(|p| !p.is_empty()) {
-                    let (from, to) = pair
-                        .split_once(':')
-                        .ok_or_else(|| format!("map={v}: each entry is NAME:skate_surface"))?;
-                    options.surfaces.insert(from.to_owned(), to.to_owned());
-                }
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    if options.name.is_empty() {
-        return Err("name=N is required: the scene's name, [A-Za-z0-9_-]+".into());
-    }
-    Ok(Box::new(RaiseSkate { options }))
+    Ok(Box::new(RaiseSkate::new(RaiseOptions::from_options(o)?)))
 }
 
 impl primase_core::pass::Pass for RaiseSkate {
@@ -854,23 +920,7 @@ impl primase_core::pass::Pass for RaiseSkate {
         "raise-skate"
     }
     fn options(&self) -> primase_core::pass::Options {
-        let mut o = primase_core::pass::Options::from([("name".to_owned(), self.options.name.clone())]);
-        if let Some(u) = &self.options.unclassified {
-            o.insert("unclassified".into(), u.clone());
-        }
-        if self.options.light_scale != SKATE_LIGHT_SCALE {
-            o.insert("light_scale".into(), self.options.light_scale.to_string());
-        }
-        if !self.options.surfaces.is_empty() {
-            let map: Vec<String> = self
-                .options
-                .surfaces
-                .iter()
-                .map(|(a, b)| format!("{a}:{b}"))
-                .collect();
-            o.insert("map".into(), map.join(";"));
-        }
-        o
+        self.options.options()
     }
     fn provides(&self) -> &[&'static str] {
         &[

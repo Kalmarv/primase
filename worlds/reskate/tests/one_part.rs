@@ -68,14 +68,7 @@ fn world() -> (World, [Entity; 2]) {
         e
     };
     let placed = [place(&mut w, 10.0), place(&mut w, 300.0)];
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "parts".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("parts").unwrap()).unwrap();
     (w, placed)
 }
 
@@ -111,7 +104,7 @@ fn passes() -> Vec<Box<dyn Pass>> {
         Box::new(PrepareReskateFloor::new(100.0, 250.0).unwrap()),
         Box::new(ClipReskateRegion::new([0.0, 0.0, 512.0, 256.0]).unwrap()),
         Box::new(PlaceReskateSpawn::centre()),
-        Box::new(SnapReskateMarkers::new()),
+        Box::new(SnapReskateMarkers::for_default_encoding()),
         Box::new(SelectReskateLights::new(8, 200.0).unwrap()),
         Box::new(PrepareReskateWater::new(WaterExtent::All, OceanMaterials::All).unwrap()),
         Box::new(

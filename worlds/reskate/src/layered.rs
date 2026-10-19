@@ -148,11 +148,10 @@ pub struct OverlayCounts {
 }
 
 /// How many overlays a triangle may get.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayLimit {
     /// Every layer, in slot order: the exact lerp chain where the game draws the overlays in that order (it does not
     /// always: see the module doc).
-    #[default]
     All,
     /// At most one: the strongest other layer over the base, renormalised; order-free, but neighbouring triangles
     /// that keep different layers meet in hard edges.
@@ -379,26 +378,40 @@ type PlannedPart = (
 /// (black for a null slot and for the darkening overlay) marked [`VertexBlend`], its opacities in
 /// [`BlendOpacity`]. The layered materials themselves are removed. The ReSkate writer emits the overlays with
 /// Studio's `vertex_blend`, and the post-compile stage moves them onto the stock decal row.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerLayeredReskate {
-    /// How many overlays a triangle may get (default [`OverlayLimit::All`]).
-    pub overlays: OverlayLimit,
+    overlays: OverlayLimit,
+}
+
+impl LowerLayeredReskate {
+    /// With at most `overlays` overlays a triangle.
+    pub fn new(overlays: OverlayLimit) -> LowerLayeredReskate {
+        LowerLayeredReskate { overlays }
+    }
+
+    pub fn overlays(&self) -> OverlayLimit {
+        self.overlays
+    }
+
+    /// From its options: `overlays`, required: `all` or `one`.
+    pub fn from_options(o: &primase_core::pass::Options) -> Result<LowerLayeredReskate, String> {
+        if let Some(k) = o.keys().find(|k| k.as_str() != "overlays") {
+            return Err(format!("unknown option {k}"));
+        }
+        match o.get("overlays").map(String::as_str) {
+            Some("all") => Ok(LowerLayeredReskate::new(OverlayLimit::All)),
+            Some("one") => Ok(LowerLayeredReskate::new(OverlayLimit::One)),
+            Some(v) => Err(format!("overlays={v} is not all or one")),
+            None => Err("overlays is required: all (every layer, in slot order) or one".into()),
+        }
+    }
 }
 
 /// `lower-layered-reskate{overlays=all|one}` from its options (a [`primase_core::pass::PassFactory`]).
 pub fn lower_layered_reskate(
     o: &primase_core::pass::Options,
 ) -> Result<Box<dyn primase_core::pass::Pass>, String> {
-    let mut pass = LowerLayeredReskate::default();
-    for (k, v) in o {
-        match (k.as_str(), v.as_str()) {
-            ("overlays", "all") => pass.overlays = OverlayLimit::All,
-            ("overlays", "one") => pass.overlays = OverlayLimit::One,
-            ("overlays", v) => return Err(format!("overlays={v} is not all or one")),
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    Ok(Box::new(pass))
+    Ok(Box::new(LowerLayeredReskate::from_options(o)?))
 }
 
 impl primase_core::pass::Pass for LowerLayeredReskate {
@@ -406,12 +419,11 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         "lower-layered-reskate"
     }
     fn options(&self) -> primase_core::pass::Options {
-        match self.overlays {
-            OverlayLimit::All => primase_core::pass::Options::new(),
-            OverlayLimit::One => {
-                primase_core::pass::Options::from([("overlays".to_owned(), "one".to_owned())])
-            }
-        }
+        let v = match self.overlays {
+            OverlayLimit::All => "all",
+            OverlayLimit::One => "one",
+        };
+        primase_core::pass::Options::from([("overlays".to_owned(), v.to_owned())])
     }
     // the blends are optional: a map without them has nothing to lower
     fn requires(&self) -> &[&'static str] {
@@ -952,21 +964,16 @@ mod tests {
     #[test]
     fn options_name_the_overlay_limit_and_round_trip() {
         use primase_core::pass::Options;
-        assert_eq!(LowerLayeredReskate::default().options(), Options::new());
+        // the limit is required and always named
+        assert!(lower_layered_reskate(&Options::new()).is_err());
         for limit in [OverlayLimit::All, OverlayLimit::One] {
-            let o = LowerLayeredReskate { overlays: limit }.options();
+            let o = LowerLayeredReskate::new(limit).options();
             assert_eq!(lower_layered_reskate(&o).unwrap().options(), o);
         }
         let one = Options::from([("overlays".to_owned(), "one".to_owned())]);
-        assert_eq!(
-            LowerLayeredReskate {
-                overlays: OverlayLimit::One
-            }
-            .options(),
-            one
-        );
+        assert_eq!(LowerLayeredReskate::new(OverlayLimit::One).options(), one);
         let all = Options::from([("overlays".to_owned(), "all".to_owned())]);
-        assert_eq!(lower_layered_reskate(&all).unwrap().options(), Options::new());
+        assert_eq!(LowerLayeredReskate::new(OverlayLimit::All).options(), all);
         let bad = Options::from([("overlays".to_owned(), "two".to_owned())]);
         assert!(
             lower_layered_reskate(&bad)
@@ -1053,7 +1060,7 @@ mod tests {
     fn refused_unchanged(mut world: World, want: &str) {
         let before = format!("{world:?}");
         let mut log = PassLog::default();
-        let err = LowerLayeredReskate::default()
+        let err = LowerLayeredReskate::new(OverlayLimit::All)
             .run(&mut world, &mut log)
             .unwrap_err();
         assert!(err.contains(want), "{err}");
@@ -1080,7 +1087,7 @@ mod tests {
     fn a_dialects_per_primitive_data_follows_the_overlays() {
         let (mut world, _, mesh) = layered_world(true, Some(1));
         world.insert(mesh, Sources(vec!["terrain"]));
-        LowerLayeredReskate::default()
+        LowerLayeredReskate::new(OverlayLimit::All)
             .run(&mut world, &mut PassLog::default())
             .unwrap();
         // the base and its overlay both come from the source primitive
@@ -1116,7 +1123,9 @@ mod tests {
         let (mut world, m, mesh) = layered_world(false, Some(1));
         let before = world.get::<Mesh>(mesh).cloned();
         let mut log = PassLog::default();
-        LowerLayeredReskate::default().run(&mut world, &mut log).unwrap();
+        LowerLayeredReskate::new(OverlayLimit::All)
+            .run(&mut world, &mut log)
+            .unwrap();
         assert!(!world.has::<LayeredMaterial>(m));
         assert_eq!(world.get::<Mesh>(mesh).cloned(), before);
         assert_eq!(
@@ -1129,7 +1138,9 @@ mod tests {
     fn lowering_draws_the_base_then_the_overlay_and_a_second_run_is_a_noop() {
         let (mut world, m, mesh) = layered_world(true, Some(1));
         let mut log = PassLog::default();
-        LowerLayeredReskate::default().run(&mut world, &mut log).unwrap();
+        LowerLayeredReskate::new(OverlayLimit::All)
+            .run(&mut world, &mut log)
+            .unwrap();
         assert_eq!(log.counts["overlay primitives"], 1);
         assert!(!world.has::<LayeredMaterial>(m) && !world.has::<SkateMaterial>(m));
         let prims = &world.get::<Mesh>(mesh).unwrap().primitives();
@@ -1149,7 +1160,7 @@ mod tests {
         assert_eq!(op[1].as_deref(), Some(&[0.0, 0.0, 0.5][..]));
         let before = format!("{world:?}");
         let mut again = PassLog::default();
-        LowerLayeredReskate::default()
+        LowerLayeredReskate::new(OverlayLimit::All)
             .run(&mut world, &mut again)
             .unwrap();
         assert!(again.counts.is_empty());

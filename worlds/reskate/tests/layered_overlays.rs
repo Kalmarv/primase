@@ -248,11 +248,9 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         choose_lod(&mut one);
         primase_gltf::load_mesh_files(&mut one, &scene).unwrap();
         let mut one_log = PassLog::default();
-        LowerLayeredReskate {
-            overlays: OverlayLimit::One,
-        }
-        .run(&mut one, &mut one_log)
-        .unwrap();
+        LowerLayeredReskate::new(OverlayLimit::One)
+            .run(&mut one, &mut one_log)
+            .unwrap();
         println!(
             "{} with one overlay per triangle: {:?}",
             scene.display(),
@@ -265,7 +263,9 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         // the default draws every layer
         primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
         let mut log = PassLog::default();
-        LowerLayeredReskate::default().run(&mut w, &mut log).unwrap();
+        LowerLayeredReskate::new(OverlayLimit::All)
+            .run(&mut w, &mut log)
+            .unwrap();
         assert_eq!(w.iter::<LayeredMaterial>().count(), 0);
         println!("{}: {:?}", scene.display(), log.counts);
         assert_eq!(

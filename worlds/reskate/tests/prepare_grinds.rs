@@ -59,14 +59,7 @@ fn world() -> (World, [Entity; 3]) {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "grinds".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("grinds").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,
@@ -95,7 +88,7 @@ fn world() -> (World, [Entity; 3]) {
 fn curves_get_studios_prisms() {
     let (mut w, [straight, corner, point]) = world();
     let mut log = PassLog::default();
-    PrepareReskateGrinds::new().run(&mut w, &mut log).unwrap();
+    PrepareReskateGrinds::studio().run(&mut w, &mut log).unwrap();
     let s = w.get::<SkateGrindPrism>(straight).unwrap();
     assert_eq!(
         (s.positions.len(), s.triangles.len(), s.pieces, s.length),
@@ -120,14 +113,14 @@ fn curves_get_studios_prisms() {
     assert_eq!(log.counts["grind curves with no usable points: empty prisms"], 1);
     assert_eq!(log.counts["grind prism runs"], 3);
     // a second run is refused: the prisms are made
-    let e = PrepareReskateGrinds::new()
+    let e = PrepareReskateGrinds::studio()
         .run(&mut w, &mut PassLog::default())
         .unwrap_err();
     assert!(e.contains("already has its prism"), "{e}");
     // a surface Studio has no smooth-grind surface for is refused
     let (mut w, _) = world();
     curve(&mut w, vec![[0.0, 1.0, 0.0], [1.0, 1.0, 0.0]], 5);
-    let e = PrepareReskateGrinds::new()
+    let e = PrepareReskateGrinds::studio()
         .run(&mut w, &mut PassLog::default())
         .unwrap_err();
     assert!(e.contains("surface 5"), "{e}");
@@ -165,7 +158,7 @@ fn grind_objects(map: &serde_json::Value) -> Vec<String> {
 #[test]
 fn the_writer_writes_prisms_and_builds_none() {
     let (mut w, _) = world();
-    PrepareReskateGrinds::new()
+    PrepareReskateGrinds::studio()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let (r, map) = write(&w, "prepared");
@@ -206,7 +199,7 @@ fn a_world_without_curves_gets_nothing() {
         .run(
             &mut w,
             &primase_core::pass::Pipeline {
-                passes: vec![Box::new(PrepareReskateGrinds::new())],
+                passes: vec![Box::new(PrepareReskateGrinds::studio())],
             },
             &mut report,
         )
@@ -242,7 +235,7 @@ fn the_grind_options_round_trip_and_are_checked() {
             pass.options()
         );
     }
-    assert_eq!(PrepareReskateGrinds::new().rules(), PrismRules::STUDIO);
+    assert_eq!(PrepareReskateGrinds::studio().rules(), PrismRules::STUDIO);
     for bad in [
         o(&[("sides", "2")]),
         o(&[("sides", "8.5")]),

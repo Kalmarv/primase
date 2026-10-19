@@ -186,14 +186,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "benches".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("benches").unwrap()).unwrap();
     let assets = tmp("assets");
     primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
@@ -202,7 +195,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let out_root = tmp("out");

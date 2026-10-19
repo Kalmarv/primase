@@ -93,11 +93,7 @@ fn scene(name: &str) -> PathBuf {
     at(710.0, true, false);
     primase_reskate::prepare::raise_skate(
         &mut w,
-        &primase_reskate::prepare::RaiseOptions {
-            name: "lights".into(),
-            surfaces: BTreeMap::new(),
-            ..Default::default()
-        },
+        &primase_reskate::prepare::RaiseOptions::new("lights").unwrap(),
     )
     .unwrap();
     primase_reskate::interchange::prepare_assets(&mut w, &tmp(&format!("{name}_assets"))).unwrap();

@@ -33,14 +33,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "bare".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("bare").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,
@@ -61,7 +54,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
     primase_reskate::register(&mut registry);
     let pipeline = registry
         .parse(
-            "lower-layered-reskate, prepare-reskate-textures, budget-reskate-textures{max=64}, \
+            "lower-layered-reskate{overlays=all}, prepare-reskate-textures, budget-reskate-textures{max=64}, \
              prepare-reskate-grinds, select-reskate-lights{per_cell=8,cell=200}, \
              prepare-reskate-water{extent=content,margin=400}, \
              prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}, plan-reskate-blend-budget{objects=pool}",

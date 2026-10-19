@@ -454,14 +454,7 @@ mod tests {
             |p| p,
         );
         w.insert(ground, c);
-        crate::prepare::raise_skate(
-            &mut w,
-            &crate::prepare::RaiseOptions {
-                name: "content".into(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        crate::prepare::raise_skate(&mut w, &crate::prepare::RaiseOptions::new("content").unwrap()).unwrap();
         assert!(w.resource::<SkateScene>().unwrap().region.is_none());
         let strip = water(
             &mut w,

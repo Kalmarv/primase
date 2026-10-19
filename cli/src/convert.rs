@@ -20,7 +20,7 @@ readers:
 writers:
   web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--plain]
-  reskate  [--name N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate,
+  reskate  [--name N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate{overlays=all},
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
            prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200},
            plan-reskate-blend-budget{objects=pool}\", and a pause map if wanted:
@@ -191,7 +191,7 @@ mod tests {
                      lower-gta-water, normalize-normals"
                 );
                 let reskate = format!(
-                    "{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate, \
+                    "{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate{{overlays=all}}, \
                      cap-textures{{max=256,normals=box}}, prepare-reskate-textures, budget-reskate-textures{{max=64}}, snap-reskate-markers, \
                      prepare-reskate-pause-map{{from=geometry,height=2160,extent=content}}, \
                      prepare-reskate-overlays{{step=0.004}}, prepare-reskate-blend-order{{grid=200}}, \

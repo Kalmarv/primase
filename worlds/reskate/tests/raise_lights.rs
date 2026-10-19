@@ -2,8 +2,6 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::collections::BTreeMap;
-
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Light, LightKind, Transform, World};
 use primase_reskate::{
@@ -71,16 +69,7 @@ fn raise_then_lower_restores_core_lights() {
         w.insert(e, *t);
         entities.push(e);
     }
-    raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "lights".into(),
-            surfaces: BTreeMap::new(),
-            unclassified: None,
-            light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
-        },
-    )
-    .unwrap();
+    raise_skate(&mut w, &RaiseOptions::new("lights").unwrap()).unwrap();
     for (e, (light, t)) in entities.iter().zip(&lights) {
         let (lowered, transform) = lower_light(w.get::<SkateLight>(*e).unwrap()).unwrap();
         assert!(
@@ -211,11 +200,7 @@ fn raise_skate_calibrates_light_energy() {
         let e = light(&mut w);
         let log = raise_skate(
             &mut w,
-            &RaiseOptions {
-                name: "lit".into(),
-                light_scale: scale,
-                ..RaiseOptions::default()
-            },
+            &RaiseOptions::new("lit").unwrap().with_light_scale(scale).unwrap(),
         )
         .unwrap();
         let energy = w.get::<SkateLight>(e).unwrap().energy;
@@ -234,19 +219,12 @@ fn raise_skate_calibrates_light_energy() {
             "{reason}"
         );
     }
+    // refused when the options are made, before anything runs
     for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        let mut w = World::new();
-        light(&mut w);
-        let e = raise_skate(
-            &mut w,
-            &RaiseOptions {
-                name: "bad".into(),
-                light_scale: bad,
-                ..RaiseOptions::default()
-            },
-        )
-        .unwrap_err()
-        .to_string();
+        let e = RaiseOptions::new("bad")
+            .unwrap()
+            .with_light_scale(bad)
+            .unwrap_err();
         assert!(e.contains("light_scale"), "{e}");
     }
 }

@@ -101,7 +101,7 @@ fn main() -> Result<(), BoxError> {
         passes.push(Box::new(floor));
     }
     // the grind curves' prisms, as Studio builds them, from the curves where the floor put them
-    passes.push(Box::new(primase_reskate::prepare::PrepareReskateGrinds::new()));
+    passes.push(Box::new(primase_reskate::prepare::PrepareReskateGrinds::studio()));
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it
     passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));

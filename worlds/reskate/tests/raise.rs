@@ -153,12 +153,10 @@ fn world() -> World {
 }
 
 fn options() -> RaiseOptions {
-    RaiseOptions {
-        name: "raised".into(),
-        surfaces: BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]),
-        unclassified: None,
-        light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
-    }
+    RaiseOptions::new("raised")
+        .unwrap()
+        .with_surfaces(BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]))
+        .unwrap()
 }
 
 #[test]
@@ -301,11 +299,10 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
         w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
         let r = prepare::raise_skate(
             &mut w,
-            &RaiseOptions {
-                name: "x".into(),
-                surfaces: map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect(),
-                ..RaiseOptions::default()
-            },
+            &RaiseOptions::new("x")
+                .unwrap()
+                .with_surfaces(map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect())
+                .unwrap(),
         );
         r.map(|_| w.resource::<Surfaces>().unwrap().0[0].name.clone())
             .map_err(|e| e.to_string())
@@ -340,14 +337,7 @@ fn water_collision() {
         }
         w.insert(proto, c);
         // no surface map: the water class decides
-        let log = prepare::raise_skate(
-            &mut w,
-            &RaiseOptions {
-                name: "raised".into(),
-                ..RaiseOptions::default()
-            },
-        )
-        .unwrap();
+        let log = prepare::raise_skate(&mut w, &RaiseOptions::new("raised").unwrap()).unwrap();
         let p = w.get::<SkatePrototype>(proto).unwrap();
         let mode = p.collision.as_ref().unwrap().mode;
         let material = mesh.primitives()[0].material.unwrap();
@@ -445,33 +435,25 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
 
 #[test]
 fn what_skate_cannot_take_is_refused() {
-    // a surface map naming a surface skate does not have, and a scene without a name
-    for (name, map) in [("x", "lava"), ("", "asphalt")] {
-        let mut w = world();
-        let err = prepare::raise_skate(
-            &mut w,
-            &RaiseOptions {
-                name: name.into(),
-                surfaces: BTreeMap::from([("Snow".to_owned(), map.to_owned())]),
-                unclassified: None,
-                light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains(if name.is_empty() {
-                "scene name"
-            } else {
-                "Snow -> lava"
-            }),
-            "{err}"
-        );
-        assert!(
-            w.resource::<dialect::SkateScene>().is_none(),
-            "refused input leaves the world unchanged"
-        );
-    }
+    // a scene without a name: refused before anything runs
+    let err = RaiseOptions::new("").unwrap_err();
+    assert!(err.contains("scene name"), "{err}");
+    // a surface map naming a surface skate does not have
+    let mut w = world();
+    let err = prepare::raise_skate(
+        &mut w,
+        &RaiseOptions::new("x")
+            .unwrap()
+            .with_surfaces(BTreeMap::from([("Snow".to_owned(), "lava".to_owned())]))
+            .unwrap(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("Snow -> lava"), "{err}");
+    assert!(
+        w.resource::<dialect::SkateScene>().is_none(),
+        "refused input leaves the world unchanged"
+    );
     // a texture transform still to bake
     let mut w = world();
     let (m, _) = w.iter::<PbrMaterial>().next().unwrap();
@@ -884,14 +866,7 @@ fn markers_are_raised_from_core_markers() {
     t.cols[3] = [4.0, 1.5, -3.0];
     w.insert(travel, t);
     let waypoint = marker(&mut w, "waypoint", Some([0.0, 0.0]), None);
-    let log = prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "m".into(),
-            ..RaiseOptions::default()
-        },
-    )
-    .unwrap();
+    let log = prepare::raise_skate(&mut w, &RaiseOptions::new("m").unwrap()).unwrap();
     let s = w.get::<dialect::SkateMarker>(spawn).unwrap();
     assert_eq!(
         (s.kind, s.position, s.yaw, s.snap.clone()),
@@ -932,11 +907,10 @@ fn unclassified_surfaces_and_prototype_collision() {
     );
     let log = prepare::raise_skate(
         &mut w,
-        &RaiseOptions {
-            name: "x".into(),
-            unclassified: Some("concrete".into()),
-            ..RaiseOptions::default()
-        },
+        &RaiseOptions::new("x")
+            .unwrap()
+            .with_unclassified("concrete")
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(log.counts["unclassified surfaces made concrete: Snow"], 1);
@@ -948,11 +922,7 @@ fn unclassified_surfaces_and_prototype_collision() {
     // an unclassified surface that is no skate surface is refused
     let e = prepare::raise_skate(
         &mut world(),
-        &RaiseOptions {
-            name: "x".into(),
-            unclassified: Some("lava".into()),
-            ..RaiseOptions::default()
-        },
+        &RaiseOptions::new("x").unwrap().with_unclassified("lava").unwrap(),
     )
     .unwrap_err()
     .to_string();
@@ -982,10 +952,7 @@ fn unmapped_surfaces_are_left_out_and_reported() {
         .find(|&(e, _)| e != proto)
         .map(|(e, _)| e)
         .unwrap();
-    let unmapped = RaiseOptions {
-        surfaces: BTreeMap::new(),
-        ..options()
-    };
+    let unmapped = options().with_surfaces(BTreeMap::new()).unwrap();
     let log = prepare::raise_skate(&mut w, &unmapped).unwrap();
     let reason = "collision triangles on a surface with no skate surface, left out: Snow";
     assert_eq!(log.omitted.get(reason), Some(&2));
@@ -1004,10 +971,9 @@ fn unmapped_surfaces_are_left_out_and_reported() {
     let mut w = world();
     let log = prepare::raise_skate(
         &mut w,
-        &RaiseOptions {
-            surfaces: BTreeMap::from([("Snow".to_owned(), "earth".to_owned())]),
-            ..options()
-        },
+        &options()
+            .with_surfaces(BTreeMap::from([("Snow".to_owned(), "earth".to_owned())]))
+            .unwrap(),
     )
     .unwrap();
     assert!(log.omitted.is_empty());

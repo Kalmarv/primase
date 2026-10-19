@@ -156,17 +156,9 @@ fn files(root: &Path) -> BTreeMap<String, Vec<u8>> {
 fn a_loaded_scene_writes_what_its_world_writes() {
     let mut w = world();
     spawn_at(&mut w, [0.0, 0.0]);
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "mesh_input".into(),
-            surfaces: BTreeMap::new(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("mesh_input").unwrap()).unwrap();
     // the markers snapped before the writer, which snaps nothing
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let assets = tmp("assets");
@@ -248,14 +240,7 @@ fn a_spawn_over_no_ground_is_refused() {
                 yaw: None,
             },
         );
-        primase_reskate::prepare::raise_skate(
-            &mut w,
-            &RaiseOptions {
-                name: "spawned".into(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("spawned").unwrap()).unwrap();
         let assets = tmp(&format!("{tag}-assets"));
         primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
         let scene = tmp(&format!("{tag}-scene"));
@@ -264,7 +249,7 @@ fn a_spawn_over_no_ground_is_refused() {
         primase_reskate::interchange::read(&scene, &mut w).unwrap();
         primase_reskate::interchange::load(&scene, &mut w).unwrap();
         // the markers snapped before the writer, which snaps nothing
-        SnapReskateMarkers::new()
+        SnapReskateMarkers::for_default_encoding()
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         let out_root = tmp(&format!("{tag}-out"));
@@ -316,14 +301,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let mut t = Transform::IDENTITY;
     t.cols[3] = [10.0, 0.0, 10.0];
     w.insert(at, t);
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "collides".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("collides").unwrap()).unwrap();
     let assets = tmp("collides-assets");
     primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("collides-scene");
@@ -332,7 +310,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let out_root = tmp("collides-out");
@@ -392,15 +370,8 @@ fn the_write_needs_no_scene_file_after_the_load() {
     for m in materials {
         w.get_mut::<PbrMaterial>(m).unwrap().base_color_texture = Some(TextureRef::new(shared));
     }
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "once".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    SnapReskateMarkers::new()
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("once").unwrap()).unwrap();
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     primase_reskate::interchange::prepare_assets(&mut w, &tmp("once-assets")).unwrap();

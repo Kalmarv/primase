@@ -38,7 +38,7 @@ pub struct SnapReskateMarkers {
 
 impl SnapReskateMarkers {
     /// With the writer's default encoding ([`EncodingOptions::default`]).
-    pub fn new() -> SnapReskateMarkers {
+    pub fn for_default_encoding() -> SnapReskateMarkers {
         let o = EncodingOptions::default();
         SnapReskateMarkers {
             basis: SkateMarkerSnaps {
@@ -53,7 +53,7 @@ impl SnapReskateMarkers {
 
     /// For the encoding the map will be written with (its limit, offset and instancing), through the setters' checks.
     pub fn for_encoding(e: &EncodingOptions) -> Result<SnapReskateMarkers, String> {
-        SnapReskateMarkers::new()
+        SnapReskateMarkers::for_default_encoding()
             .with_limit(e.limit)?
             .with_offset(e.offset.map(|v| v as f32))?
             .with_instancing(e.min_instances, e.min_instance_tris, e.max_render_edge)
@@ -120,7 +120,7 @@ impl SnapReskateMarkers {
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let mut pass = SnapReskateMarkers::new();
+        let mut pass = SnapReskateMarkers::for_default_encoding();
         if let Some(l) = number("limit")? {
             pass = pass.with_limit(l as f32)?;
         }
@@ -141,13 +141,6 @@ impl SnapReskateMarkers {
             count("min_instance_tris", b.min_instance_tris)?,
             edge,
         )
-    }
-}
-
-impl Default for SnapReskateMarkers {
-    /// The writer's defaults: what a map written with `EncodingOptions::default()` takes.
-    fn default() -> Self {
-        SnapReskateMarkers::new()
     }
 }
 

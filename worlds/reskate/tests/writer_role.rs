@@ -125,14 +125,7 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "role".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("role").unwrap()).unwrap();
     w.resource_mut::<SkateScene>().unwrap().region = Some([0.0, 0.0, 100.0, 100.0]);
     let water = w.spawn();
     w.insert(
@@ -143,7 +136,7 @@ fn world() -> World {
             other: Other::new(),
         },
     );
-    SnapReskateMarkers::new()
+    SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     w

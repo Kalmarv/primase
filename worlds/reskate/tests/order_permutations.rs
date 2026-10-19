@@ -261,14 +261,7 @@ fn world(order: Order) -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(
-        &mut w,
-        &RaiseOptions {
-            name: "orders".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("orders").unwrap()).unwrap();
     // two rails 1 m up, along east (scene x), in the first and second cells
     let rails = [
         vec![[100.0, 1.0, -50.0], [104.0, 1.0, -50.0]],
@@ -292,7 +285,7 @@ fn world(order: Order) -> World {
 }
 
 /// The ReSkate recipe a program runs on the raised world, in the pass manager.
-const RECIPE: &str = "lower-layered-reskate, prepare-reskate-textures, prepare-reskate-grinds, snap-reskate-markers, \
+const RECIPE: &str = "lower-layered-reskate{overlays=all}, prepare-reskate-textures, prepare-reskate-grinds, snap-reskate-markers, \
                       prepare-reskate-water{extent=content,margin=400}, \
                       prepare-reskate-pause-map{from=geometry,height=256,extent=content}, \
                       select-reskate-lights{per_cell=2,cell=200}, prepare-reskate-overlays{step=0.004}, \

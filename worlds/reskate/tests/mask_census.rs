@@ -105,13 +105,7 @@ fn source_mask_channels_match_independent_pixels() -> Result<(), Box<dyn std::er
                 variant: 0,
             },
         );
-        let log = raise_skate(
-            &mut world,
-            &RaiseOptions {
-                name: "mask-census".into(),
-                ..Default::default()
-            },
-        )?;
+        let log = raise_skate(&mut world, &RaiseOptions::new("mask-census").unwrap())?;
         let mask = world
             .get::<SkateMaterial>(material)
             .ok_or("target material missing")?

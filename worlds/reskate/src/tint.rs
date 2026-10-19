@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use crate::dialect::SkateMaterial;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World};
 
 /// Colours a primitive splits into at most; past it, one mean tint. 32 keeps palette gradients of 9 to 23 colours
@@ -76,15 +76,54 @@ type Split = Vec<(Option<Vec<u32>>, Colour)>;
 type Rebuilt = (Entity, Vec<Primitive>, Vec<usize>, Vec<Option<Colour>>);
 
 /// `lower-tint-reskate` (see the module documentation).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerTintReskate {
-    /// At most this many tinted material copies (`copies=N`); `None`: one per (material, colour).
-    pub copies: Option<usize>,
+    copies: Option<usize>,
+}
+
+impl LowerTintReskate {
+    /// One tinted material copy per (material, colour).
+    pub fn uncapped() -> LowerTintReskate {
+        LowerTintReskate { copies: None }
+    }
+
+    /// At most `copies` tinted material copies (1 or more).
+    pub fn with_copies(mut self, copies: usize) -> Result<LowerTintReskate, String> {
+        if copies == 0 {
+            return Err("copies: 1 or more tinted material copies".into());
+        }
+        self.copies = Some(copies);
+        Ok(self)
+    }
+
+    pub fn copies(&self) -> Option<usize> {
+        self.copies
+    }
+
+    /// From its options: `copies=N`, optional.
+    pub fn from_options(o: &Options) -> Result<LowerTintReskate, String> {
+        let mut pass = LowerTintReskate::uncapped();
+        for (k, v) in o {
+            match k.as_str() {
+                "copies" => {
+                    pass = pass.with_copies(v.parse().map_err(|_| format!("copies={v} is not a count"))?)?;
+                }
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(pass)
+    }
 }
 
 impl Pass for LowerTintReskate {
     fn name(&self) -> &'static str {
         "lower-tint-reskate"
+    }
+    fn options(&self) -> Options {
+        match self.copies {
+            Some(n) => Options::from([("copies".to_owned(), n.to_string())]),
+            None => Options::new(),
+        }
     }
     // no `requires`: a part without tints has nothing to lower
     fn provides(&self) -> &[&'static str] {
@@ -394,7 +433,7 @@ mod tests {
         );
         w.insert(mesh, Sources(vec!["two", "one", "white", "none"]));
         let mut log = PassLog::default();
-        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        LowerTintReskate::uncapped().run(&mut w, &mut log).unwrap();
         let prims = &w.get::<Mesh>(mesh).unwrap().primitives();
         assert_eq!(prims.len(), 5);
         // the split: triangle 0 starts at red vertex 0, triangle 1 at blue vertex 3 (sorted by colour: blue first)
@@ -438,7 +477,9 @@ mod tests {
         let mesh = w.spawn();
         w.insert(mesh, Mesh::new(vec![quad(m, Some(two))]));
         let mut log = PassLog::default();
-        LowerTintReskate { copies: Some(1) }
+        LowerTintReskate::uncapped()
+            .with_copies(1)
+            .unwrap()
             .run(&mut w, &mut log)
             .unwrap();
         let prims = &w.get::<Mesh>(mesh).unwrap().primitives();
@@ -473,7 +514,7 @@ mod tests {
             }]),
         );
         let mut log = PassLog::default();
-        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        LowerTintReskate::uncapped().run(&mut w, &mut log).unwrap();
         assert_eq!(w.get::<Mesh>(mesh).unwrap().primitives().len(), 1);
         assert_eq!(
             log.approximations["triangles drawn with a mean tint"],
@@ -500,7 +541,7 @@ mod tests {
             primase_core::MaterialVariants(vec![BTreeMap::from([(1, variant)])]),
         );
         let mut log = PassLog::default();
-        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        LowerTintReskate::uncapped().run(&mut w, &mut log).unwrap();
         let p = &w.get::<Mesh>(mesh).unwrap().primitives()[0];
         let tint = w.get::<SkateMaterial>(p.material.unwrap()).unwrap().tint.unwrap();
         assert_eq!(tint, [137, 255, 255]);
@@ -529,7 +570,7 @@ mod tests {
             primase_core::MaterialVariants(vec![BTreeMap::from([(1, takes)])]),
         );
         let mut log = PassLog::default();
-        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        LowerTintReskate::uncapped().run(&mut w, &mut log).unwrap();
         assert_eq!(
             w.get::<Mesh>(alone).unwrap().primitives()[0].material,
             Some(ignores)
@@ -563,7 +604,7 @@ mod tests {
         let mesh = w.spawn();
         w.insert(mesh, Mesh::new(vec![strip]));
         let mut log = PassLog::default();
-        LowerTintReskate::default().run(&mut w, &mut log).unwrap();
+        LowerTintReskate::uncapped().run(&mut w, &mut log).unwrap();
         assert_eq!(
             log.counts["tinted primitives not a triangle list, tint not applied"],
             1
@@ -583,7 +624,7 @@ mod tests {
             q.material = Some(m2);
             let mesh = w.spawn();
             w.insert(mesh, Mesh::new(vec![q.clone()]));
-            let e = LowerTintReskate::default()
+            let e = LowerTintReskate::uncapped()
                 .run(&mut w, &mut PassLog::default())
                 .unwrap_err();
             assert!(e.contains("past the") || e.contains("not an RGB"), "{e}");

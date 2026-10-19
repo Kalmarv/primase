@@ -102,18 +102,14 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(prepare::PrepareReskateTextures)),
     });
-    reg.register("lower-layered-reskate", layered::lower_layered_reskate);
+    // how many overlays a triangle may get is the program's: no default
+    reg.register_requiring(
+        "lower-layered-reskate",
+        layered::lower_layered_reskate,
+        &[("overlays", "all")],
+    );
     reg.register("lower-tint-reskate", |o| {
-        let mut pass = tint::LowerTintReskate::default();
-        for (k, v) in o {
-            match k.as_str() {
-                "copies" => {
-                    pass.copies = Some(v.parse().map_err(|_| format!("copies={v} is not a count"))?);
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(Box::new(pass))
+        Ok(Box::new(tint::LowerTintReskate::from_options(o)?))
     });
     reg.register("lower-vertex-alpha-reskate", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),

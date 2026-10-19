@@ -24,7 +24,7 @@ pub struct PrepareReskateGrinds {
 
 impl PrepareReskateGrinds {
     /// With Studio's rules ([`PrismRules::STUDIO`]).
-    pub fn new() -> PrepareReskateGrinds {
+    pub fn studio() -> PrepareReskateGrinds {
         PrepareReskateGrinds {
             rules: PrismRules::STUDIO,
         }
@@ -72,14 +72,7 @@ impl PrepareReskateGrinds {
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        PrepareReskateGrinds::new().with_rules(r)
-    }
-}
-
-impl Default for PrepareReskateGrinds {
-    /// Studio's rules.
-    fn default() -> Self {
-        PrepareReskateGrinds::new()
+        PrepareReskateGrinds::studio().with_rules(r)
     }
 }
 

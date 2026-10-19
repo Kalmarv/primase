@@ -12,8 +12,8 @@
 from = "worlds/reskate"
 to = "formats/gltf"
 section = "dependencies"
-reason = "the interchange loads and writes prototype GLBs, and the post-compile step re-reads the map's"
-removed_when = "the post-compile step takes the map's meshes in memory, and GLB encoding is a toolkit mechanism"
+reason = "the interchange reads and writes prototype GLBs, and the post-compile step reads the map's"
+removed_when = "the GLB codec moves into the toolkit (separate change after step 15)"
 
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
