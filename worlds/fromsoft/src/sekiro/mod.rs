@@ -8,6 +8,7 @@
 mod bake_assembly;
 pub mod blockers;
 pub mod collision;
+pub mod convert;
 pub mod extras;
 pub mod layers;
 pub mod lights;
@@ -312,6 +313,14 @@ fn select_placements(
 /// programs of its layered materials (`fromsoft.shader_programs`). Each map collision file the MSB's collision parts
 /// name is a `fromsoft.map_collision` entity; lights are `fromsoft.light` records where they stand; hang edges and
 /// spawn points are `fromsoft.area_extras`; what the read covered is `fromsoft.read_scope`.
+/// A model's posed box in the world frame (the file frame's z reversed), `[min, max]` metres: the extent the read's
+/// region rule uses and [`convert::AreaReader`] gives as a prototype's box. `None` for a model whose face sets use no
+/// vertex.
+pub fn world_bounds(model: &Model) -> std::result::Result<Option<[[f32; 3]; 2]>, String> {
+    Ok(crate::rigid::posed_bounds(model)?
+        .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]))
+}
+
 pub fn read_area(
     install: impl AsRef<Path>,
     area: &str,
@@ -417,9 +426,7 @@ pub fn read_area(
                 })
             })
             .collect();
-        let bounds = crate::rigid::posed_bounds(&model)
-            .map_err(|e| invalid("Sekiro model", 0, format!("{key}: {e}")))?
-            .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]);
+        let bounds = world_bounds(&model).map_err(|e| invalid("Sekiro model", 0, format!("{key}: {e}")))?;
         prototypes.insert(
             key,
             Prototype {
