@@ -662,3 +662,79 @@ fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
     let e = water().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-content"), "{e}");
 }
+
+/// Every spawn written, by its ground position (as bits); the parts that wrote one.
+fn spawns(w: &World) -> Vec<[u32; 2]> {
+    w.iter::<primase_reskate::components::SkateMarker>()
+        .filter(|(_, m)| m.kind == primase_reskate::components::MarkerKind::Spawn)
+        .map(|(_, m)| m.position.unwrap().0.map(f32::to_bits))
+        .collect()
+}
+
+#[test]
+fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
+    use primase_reskate::passes::{PlaceReskateSpawn, SummarizeReskateSpawn};
+    let mut whole = map();
+    PlaceReskateSpawn::centre()
+        .run(&mut whole, &mut PassLog::default())
+        .unwrap();
+    let expected = spawns(&whole);
+    assert_eq!(expected.len(), 1);
+    struct Got(Rc<RefCell<Vec<Vec<[u32; 2]>>>>);
+    impl Writer for Got {
+        fn target(&self) -> Target {
+            primase_reskate::target()
+        }
+        fn write(&mut self, part: &World) -> Result<()> {
+            self.0.borrow_mut().push(spawns(part));
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<Finished> {
+            Ok(Finished::default())
+        }
+    }
+    let mut registry = SummaryRegistry::new();
+    primase_reskate::register_summaries(&mut registry);
+    for order in [vec![0, 1, 2], vec![2, 0, 1], vec![1, 2, 0]] {
+        let got = Rc::new(RefCell::new(Vec::new()));
+        convert_parts_summarized(
+            &mut Prepared(map()),
+            &mut Groups {
+                parts: 3,
+                order: order.clone(),
+                groups: Vec::new(),
+                next: 0,
+            },
+            Box::new(Got(got.clone())),
+            &PassManager::new(PassRegistry::new()),
+            &Pipeline { passes: Vec::new() },
+            &Summarized {
+                registry: &registry,
+                summarize: &Pipeline {
+                    passes: vec![Box::new(SummarizeReskateSpawn)],
+                },
+                decide: &Pipeline { passes: Vec::new() },
+            },
+            &Pipeline {
+                passes: vec![Box::new(PlaceReskateSpawn::centre())],
+            },
+        )
+        .unwrap();
+        let by_part = got.take();
+        // one part placed it, the same one whatever the order, where the whole map does
+        assert_eq!(by_part.iter().filter(|s| !s.is_empty()).count(), 1, "{order:?}");
+        assert_eq!(by_part.concat(), expected, "{order:?}");
+    }
+    // a part without the summary is refused
+    let mut w = map();
+    let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
+    w.insert_resource(primase_core::convert::PartScope {
+        roots,
+        context: BTreeSet::new(),
+        whole: false,
+    });
+    let e = PlaceReskateSpawn::centre()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap_err();
+    assert!(e.contains("summarize-reskate-spawn"), "{e}");
+}

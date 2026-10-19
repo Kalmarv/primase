@@ -50,7 +50,9 @@ pub use raise::{
 };
 pub use region::{ClipReskateRegion, clip_reskate_region};
 pub use snap::{SnapReskateMarkers, snap_reskate_markers};
-pub use spawn::{PlaceReskateSpawn, ReskateSpawnAt, place_reskate_spawn};
+pub use spawn::{
+    PlaceReskateSpawn, ReskateSpawnAt, SummarizeReskateSpawn, place_reskate_spawn, summarize_reskate_spawn,
+};
 pub use summarize::{SummarizeReskateMap, summarize_reskate_map};
 pub use textures::{PrepareReskateTextures, tint_pixels};
 pub use uv_repeats::{PrepareReskateUvRepeats, RepeatBlended, RepeatDecals, prepare_reskate_uv_repeats};
@@ -72,8 +74,8 @@ pub(crate) fn owned(w: &World) -> impl Fn(Entity) -> bool + '_ {
 /// A pass that works on the whole map refuses a part that is not the whole of what is written, as its part source
 /// states it (`core.part_scope`'s `whole`), unless the decision was made over every part: what it would compute from a
 /// part (a floor percentile, the collision a snap reaches, a spawn per part, a budget) is not the map's. The floor, the
-/// light cap, the texture budget and water's content extent take their decisions from summaries merged over every part
-/// ([`primase_core::convert::convert_parts_summarized`]); the spawn, the marker snaps, the pause map, overlays, blend
+/// light cap, the texture budget, water's content extent and the spawn take their decisions from summaries merged over
+/// every part ([`primase_core::convert::convert_parts_summarized`]); the marker snaps, the pause map, overlays, blend
 /// chains and their budget, the collision plan and the map's summary refuse parts until the writer lays out parts
 /// (B2c part 2, step 9 incomplete); the region clip and water's other extents are local. A world outside the part protocol (no
 /// `core.part_scope`: a program composing passes and the writer directly) is the whole map.

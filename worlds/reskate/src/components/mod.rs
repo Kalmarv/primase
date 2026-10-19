@@ -835,6 +835,38 @@ impl primase_core::summary::Summary for SkateContentBounds {
     }
 }
 
+/// `skate.spawn_summary`: what one part holds of the map's spawn (`summarize-reskate-spawn`): the spawns it owns, the
+/// ground box of its own placements' positions (the spawn's centre without a region: `lo` past `hi` when it has
+/// none), and the smallest planning id among its roots (the part holding the map's smallest places the spawn). Merged
+/// over the parts (summed, the box of both, the smaller id), order-free. Not part of scene-interchange v1.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SkateSpawnSummary {
+    pub spawns: usize,
+    pub lo: [f32; 2],
+    pub hi: [f32; 2],
+    pub first: Option<u32>,
+}
+
+impl Resource for SkateSpawnSummary {
+    const NAME: &'static str = "skate.spawn_summary";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
+impl primase_core::summary::Summary for SkateSpawnSummary {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        self.spawns += other.spawns;
+        self.lo = [self.lo[0].min(other.lo[0]), self.lo[1].min(other.lo[1])];
+        self.hi = [self.hi[0].max(other.hi[0]), self.hi[1].max(other.hi[1])];
+        self.first = match (self.first, other.first) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Ok(())
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]
