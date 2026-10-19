@@ -101,7 +101,7 @@ impl GtaSource {
     /// Every entity of both maps within `reach` metres of `region` (`[x0, y0, x1, y1]`), with its prototype and its
     /// map-state and hour conditions ([`crate::read::region::read_region`]), each prototype's light records
     /// ([`crate::read::assets::attach_lights`]), the static map bounds meeting the region
-    /// ([`crate::read::collision::attach_map_bounds`]) and every water file ([`crate::water::attach_water`]: each quad of
+    /// ([`crate::read::collision::attach_map_bounds`]) and every water file ([`crate::read::water::attach_water`]: each quad of
     /// the whole map placed with its file's `gta.water` condition, the rest of each file a `gta.water`); no geometry
     /// or textures yet.
     pub fn read(&self, region: [f32; 4], reach: f32) -> Result<(World, ReadReport)> {
@@ -118,7 +118,7 @@ impl GtaSource {
         )?;
         let lights = attach_lights(&mut w, self.assets(), &self.keys)?;
         let bounds = attach_map_bounds(&mut w, self.assets(), &self.keys, bounds_region)?;
-        let water = crate::water::attach_water(&mut w, &self.assets().install, &self.keys)?;
+        let water = crate::read::water::attach_water(&mut w, &self.assets().install, &self.keys)?;
         Ok((
             w,
             ReadReport {
@@ -154,7 +154,9 @@ impl GtaSource {
 pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
     let Some(a) = world.get::<GtaArchetype>(prototype) else {
         // a water surface: its outline's box
-        return world.get::<crate::water::GtaWaterSurface>(prototype)?.bounds();
+        return world
+            .get::<crate::components::water::GtaWaterSurface>(prototype)?
+            .bounds();
     };
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)

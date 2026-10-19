@@ -12,10 +12,9 @@ pub mod passes;
 pub mod rage;
 pub mod read;
 pub mod tint;
-pub mod water;
 
 // paths consumers use from before the crate was arranged by role
-pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, winding};
+pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, water, winding};
 pub use read::convert;
 /// `pipeline::{Map, LeaveOutInteriors}`, as consumers name them: now [`read::source::Map`] and
 /// [`passes::interiors::LeaveOutInteriors`].
@@ -120,9 +119,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         none(o, passes::surfaces::LowerGtaSurfaces)
     });
     reg.register("gta-select-water", |o| {
-        Ok(Box::new(water::SelectGtaWater::from_options(o)?))
+        Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?))
     });
-    reg.register("lower-gta-water", |o| none(o, water::LowerGtaWater));
+    reg.register("lower-gta-water", |o| none(o, passes::water::LowerGtaWater));
     reg.register("lower-gta-lights", |o| {
         Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?))
     });

@@ -15,11 +15,6 @@
 # listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
 
 [[layout]]
-file = "worlds/gta/src/water.rs"
-reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
 file = "worlds/reskate/src/build.rs"
 reason = "writer I/O in Other"
 removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"

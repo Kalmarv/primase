@@ -11,6 +11,7 @@
 
 pub mod collision;
 pub mod state;
+pub mod water;
 
 use primase_core::frame::SourceFrame;
 use primase_core::{Component, Entity, JsonError, Lods, Mesh, World};
