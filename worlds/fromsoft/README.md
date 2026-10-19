@@ -141,15 +141,11 @@ trigonometry, rounds basis components to f32, and applies the core frame's Z
 reflection for handedness. MapOffset places map-local resources separately;
 it must not be added to part placements a second time.
 
-`PRIMASE_FROMSOFT_MSB_ORACLE` supplies `maps.jsonl` from an independent reader.
-Each record has `path`, decoded-file `sha256`, an ordered `models` name array,
-`parts` and `offsets`. Parts contain `name`, `kind`, nullable model name,
-`position`, `rotation` in degrees, `scale` and `transform`. Offsets contain
-`name`, `position`, `degrees` and `transform`. Transforms are 12 f32 values,
-four columns of three components, in the right-handed output frame.
-Stored values and model references must match exactly. Derived bases allow
-absolute error 1e-6 after division by max(1, largest absolute local scale);
-translations remain exact. Gates count exact and tolerance matches separately.
+The MSB reading is checked against an independent one: SoulsFormats' parts of the same area,
+`PRIMASE_FROMSOFT_RIGID_ORACLE`'s `parts.jsonl` (every map piece and object part with its `name`, `kind`, model,
+`position`, `rotation` in degrees and `scale`). Each part's stored values must match bit for bit (`msb_census.rs`); the
+matrices derived from them are checked against the same dump by `sekiro_scene.rs`. Other part kinds and map offsets
+have no independent reference yet: an open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area).
 
 Parts also carry their entity ID and eight entity group IDs as stored (sentinels -1 and 0 included); event scripts
 address a part by any positive one of them (`Part::entity_ids`). `PRIMASE_FROMSOFT_STATE_ORACLE` is a folder from an
@@ -410,13 +406,10 @@ bitangent and green by the normalized tangent, rebuilds positive Z, and
 normalizes the result. Sampled blue goes separately to o1.x, not to normal Z.
 It uses the evidenced source basis and shared Z reconstruction.
 
-`PRIMASE_FROMSOFT_NORMAL_FRAMES` supplies `frames.jsonl` with independently sampled
-unit source normal `n`, tangent `t`, handedness `w`, and a model `key`. Two off-axis
-normal probes per frame compare the transformed consumer formula with our glTF
-basis at absolute component tolerance 1e-6. `PRIMASE_FROMSOFT_NORMAL_CURL` supplies
-a JSON array of independently measured `name` and `verdict` values; the gate
-reports all classifications and names every OpenGL verdict as a measurement,
-not a conversion exception. These gates require no installed archive reads.
+`PRIMASE_FROMSOFT_NORMAL_CURL` supplies a JSON array of independently measured `name` and `verdict` values; the
+gate reports all classifications and names every OpenGL verdict as a measurement, not a conversion exception. The
+sampled source frames this section used to be checked against came from our earlier exporter's dump and are gone; the
+basis is checked by the hand-worked probes above.
 
 ## Collision reader (in progress)
 
@@ -477,14 +470,8 @@ these black interior blockers; a program that omits them records them instead.
 Their level-0 geometry, material, original FLVER mesh index and placed transforms
 are kept in the `fromsoft.blocker_cards` resource. They never become collision geometry.
 
-`PRIMASE_FROMSOFT_BLOCKER_ORACLE` points to a directory with `cases.json`, an array
-of objects containing `name`, `area`, `region` (null or source rectangle),
-`placements` (source labels), `prototypes` (identity strings), `mesh_identities`
-(array of `[prototype, original_flver_mesh_index]`), `meshes` and `triangles`.
-The gate reads each case's area and region, lowers it with the explicit legacy
-composition above, compares the recorded cards and verifies no matching material
-is drawn. Exported part indices must be mapped back to original FLVER mesh indices
-when layer splitting changes them.
+Blocker cards have no independent reference: the earlier cases came from our earlier exporter, and testing
+against our own old code is not a check. An open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area); the unit tests cover the rule.
 
 ### Bounded layered-material pilot
 
@@ -533,13 +520,9 @@ The bounded common-period policy searches up to sixteen UV units and records
 when it falls back to the main texture's repeat. These policies are not runtime
 shader behavior or format requirements.
 
-`PRIMASE_FROMSOFT_LAYER_AREA` holds `counts.json`, keyed by `slice` and `castle`,
-with `region` (the manifest rectangle unchanged, or null), `variants`,
-`nonunit_variants` and `records` (each has `material` and eight quantized `weights`).
-`<scope>-materials.json` is an array of `{key,mtd,bindings,period}`; each binding
-contains `{kind,path,scale}`. Keys identify the independent producer's material
-variants. The gate joins source bindings and checks quantized group identities
-and UV periods before any image bake. This gate is separate from pixel parity.
+The layer bake's area grouping, UV periods and images have no independent reference: the earlier inventory and
+its control came from our earlier exporter's layer bake. An open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area; the reference
+would be the game's layer shaders run on WARP, `PRIMASE_FROMSOFT_LAYER_PILOT`).
 
 The opt-in `layer_area_pixels` tests additionally require
 `<scope>-d3d-control/<record-index>-{albedo,normal}.rgba`, with indices in the
@@ -550,14 +533,6 @@ layer, capped at 512. The gate reports unit and non-unit UV periods separately,
 per-channel maximum and worst-image p99, and worker/wall time. No area output
 is accepted merely because the fixtures exist: group identities, sizes and
 periods must match before each image comparison.
-
-An experimental reference control can be selected explicitly with
-`PRIMASE_FROMSOFT_LAYER_AREA_CONTROL`. It contains `control.json` documenting
-the producer revision and modifications, plus `<scope>/<record-index>-{albedo,normal}.rgba`.
-The gate prints that provenance and retains the same one-level bound. A control
-that preserves qualified texture bindings isolates the independent producer's
-numeric-slot overwrite; it is not a replacement oracle or runtime binding proof.
-Acceptance against a corrected producer still requires a separate comparison.
 
 
 ### Material passes: layer bake and PBR lowering

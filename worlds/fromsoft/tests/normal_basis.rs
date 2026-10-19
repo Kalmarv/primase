@@ -45,29 +45,6 @@ fn handedness_and_axis_swap_follow_shader_basis() {
     assert!(consumer_basis("unknown").is_err());
 }
 #[test]
-fn sampled_consumer_frames() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_NORMAL_FRAMES") else {
-        return Ok(());
-    };
-    let mut count = 0;
-    let mut maximum = 0f64;
-    for line in std::fs::read_to_string(root.join("frames.jsonl"))?.lines() {
-        let v: serde_json::Value = serde_json::from_str(line)?;
-        let n: [f64; 3] = serde_json::from_value(v["n"].clone())?;
-        let t: [f64; 3] = serde_json::from_value(v["t"].clone())?;
-        let w = v["w"].as_f64().ok_or("w")?;
-        for (x, y) in [(0.6, 0.2), (-0.3, 0.7)] {
-            let e = probe(n, t, w, x, y);
-            assert!(e <= 1e-6, "{} error {e}", v["key"]);
-            maximum = maximum.max(e);
-            count += 1;
-        }
-    }
-    assert!(count > 0);
-    println!("consumer stored-frame probes {count}, maximum component error {maximum}, bound 1e-6");
-    Ok(())
-}
-#[test]
 fn curl_verdicts_are_named_measurements() -> Result<()> {
     let Some(path) = real_data("PRIMASE_FROMSOFT_NORMAL_CURL") else {
         return Ok(());
@@ -190,39 +167,6 @@ fn projection_outside_the_disk_is_the_same_in_either_frame() {
             "{pipeline}"
         );
     }
-}
-
-#[test]
-fn uv_frame_classes_remain_measurements() -> Result<()> {
-    let Some(path) = real_data("PRIMASE_FROMSOFT_UV_FRAME_CENSUS") else {
-        return Ok(());
-    };
-    let input = std::fs::read_to_string(path)?;
-    let mut textures = 0;
-    let mut total = 0f64;
-    let mut area = std::collections::BTreeMap::<String, f64>::new();
-    for line in input.lines().skip(1).filter(|s| !s.is_empty()) {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(fields.len(), 5);
-        let weight: f64 = fields[1].parse()?;
-        assert!(weight.is_finite() && weight >= 0.);
-        total += weight;
-        textures += 1;
-        for class in fields[4].split(", ") {
-            let (name, fraction) = class.rsplit_once(' ').ok_or("class fraction")?;
-            let fraction: f64 = fraction.parse()?;
-            assert!((0. ..=1.).contains(&fraction));
-            *area.entry(name.to_owned()).or_default() += weight * fraction;
-        }
-    }
-    assert!(textures > 0 && total > 0.);
-    println!(
-        "UV-frame census {textures} textures, area {total} m2; rounded source fractions, not per-texture conversion rules"
-    );
-    for (class, weight) in area {
-        println!("UV-frame {class}: {} percent area", weight / total * 100.);
-    }
-    Ok(())
 }
 
 #[test]

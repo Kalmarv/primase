@@ -408,14 +408,6 @@ pub const VARIABLES: &[Variable] = &[
         source: "the existing fixtures were decoded by our earlier C# exporter, not independently; replacement: a thin dump through Havoc (SoulsAssetPipeline d11caf9)",
     },
     Variable {
-        name: "PRIMASE_FROMSOFT_EXTRAS_ORACLE",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"independent stored EDGE/BTL records and loose fixtures; worlds/fromsoft/tests/extras_census.rs"#,
-        status: Status::Live,
-        source: "SoulsFormats' EDGE/BTL readings; archive access went through our earlier C# exporter",
-    },
-    Variable {
         name: "PRIMASE_FROMSOFT_NAMES",
         kind: Kind::Input,
         gate: true,
@@ -438,14 +430,6 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md"#,
         status: Status::Blocked,
         source: "the C# oracle's decoder source is gone; replacement: a third-party DDS decoder",
-    },
-    Variable {
-        name: "PRIMASE_FROMSOFT_MSB_ORACLE",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"independent map models, parts and transforms; schema in worlds/fromsoft/README.md"#,
-        status: Status::Live,
-        source: "SoulsFormats' MSBS reading of the install's maps",
     },
     Variable {
         name: "PRIMASE_FROMSOFT_SHADOW_ORACLE",
@@ -472,14 +456,6 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"an earlier C# exporter's scene, since deleted; retired with the earlier exporter's other scenes"#,
     },
     Variable {
-        name: "PRIMASE_FROMSOFT_BLOCKER_ORACLE",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"blocker-card reference cases.json; schema in worlds/fromsoft/README.md"#,
-        status: Status::Live,
-        source: "cases.json; its producer is not recorded yet",
-    },
-    Variable {
         name: "PRIMASE_FROMSOFT_MATERIAL_ORACLE",
         kind: Kind::Input,
         gate: true,
@@ -504,22 +480,6 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them"#,
     },
     Variable {
-        name: "PRIMASE_FROMSOFT_LAYER_AREA",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"area layer grouping identities, UV periods and quantized weights, and per record albedo/normal images of the layered shaders run on D3D inputs; schema in worlds/fromsoft/README.md; `worlds/fromsoft/tests/layer_area.rs`, `layer_area_pixels.rs`"#,
-        status: Status::Live,
-        source: r#"mixed: grouping identities, periods and weights from our earlier C# exporter (a regression baseline); images from the game's own shaders executed on D3D-decoded inputs (independent execution)"#,
-    },
-    Variable {
-        name: "PRIMASE_FROMSOFT_LAYER_AREA_CONTROL",
-        kind: Kind::Input,
-        gate: false,
-        about: r#"optional experimental reference-control images and provenance (`control.json`), not a replacement oracle; schema in worlds/fromsoft/README.md; `worlds/fromsoft/tests/layer_area_pixels.rs`"#,
-        status: Status::Live,
-        source: r#"a modified run of the earlier exporter's layer bake that keeps qualified bindings, documented in its control.json"#,
-    },
-    Variable {
         name: "PRIMASE_FROMSOFT_LAYER_PILOT",
         kind: Kind::Input,
         gate: true,
@@ -540,8 +500,8 @@ pub const VARIABLES: &[Variable] = &[
         kind: Kind::Input,
         gate: true,
         about: r#"reference archive outputs; schema in worlds/fromsoft/README.md"#,
-        status: Status::Blocked,
-        source: "replacement: SoulsFormats/UXM census mode of the dump harness",
+        status: Status::Live,
+        source: "independent: SoulsFormats 9c0da6b with UXM's Sekiro dictionary, the dump harness's census mode (kept with the private oracle tools)",
     },
     Variable {
         name: "PRIMASE_HAVOK_CORPUS",
@@ -566,14 +526,6 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"the ReSkate CLI executable, used as an independent EBX reader and reference writer (`ebx-values`, `ebx-rewrite-diff`); worlds/frostbite/tests/ebx.rs"#,
         status: Status::Live,
         source: "third-party: ReSkate Studio's CLI (20261012)",
-    },
-    Variable {
-        name: "PRIMASE_FROMSOFT_UV_FRAME_CENSUS",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"independent TSV with normal_texture, area_m2, main_class, main_share and comma-separated class/fraction values; reports rounded area fractions without choosing conversion exceptions"#,
-        status: Status::Live,
-        source: "a TSV whose producer is not recorded yet",
     },
     Variable {
         name: "PRIMASE_CODEC_CORPUS",
@@ -662,14 +614,6 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"a folder holding `frames.jsonl`: SoulsFormats' reading of a few Sekiro models as stored (per mesh its LOD0 face set, per vertex position, normal, tangents and UV0); `worlds/fromsoft/tests/handedness.rs`"#,
         status: Status::Live,
         source: "independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (frames mode)",
-    },
-    Variable {
-        name: "PRIMASE_FROMSOFT_NORMAL_FRAMES",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"a folder holding `frames.jsonl`: independently stored tangent frames (`n`, `t`, `w` per sample key) of Sekiro normal-mapped surfaces; `worlds/fromsoft/tests/normal_basis.rs`"#,
-        status: Status::Live,
-        source: "a JSONL whose producer is not recorded yet",
     },
     Variable {
         name: "PRIMASE_FROMSOFT_NORMAL_CURL",
