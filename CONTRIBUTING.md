@@ -188,7 +188,8 @@ tests are what show that. It checks:
 It works by name: a function value, a trait object or a macro that reaches I/O is not seen. A module not yet arranged
 carries a migration status in `architecture.toml` (`[[layout]]`, one per module, counted like a break): a new
 violating module fails, and a listed one that follows the layout must be deleted, so the list only shrinks. Crates move
-one at a time: ReSkate first, before step 20; the others when a lane substantially touches them.
+one at a time: ReSkate first, before step 20; then GTA, Unity, Frostbite and FromSoft, each before the final
+review.
 
 ### Where code goes
 
