@@ -135,11 +135,13 @@ impl Owned {
 /// A pass that works on the whole map refuses a part that is not the whole of what is written, as its part source
 /// states it (`core.part_scope`'s `whole`), unless the decision was made over every part: what it would compute from a
 /// part (a floor percentile, the collision a snap reaches, a spawn per part, a budget) is not the map's. The floor, the
-/// light cap, the texture budget, water's content extent, the spawn and the marker snaps' instancing and water take their
-/// decisions from summaries merged over every part ([`primase_core::convert::convert_parts_summarized`]); the pause map, overlays, blend
-/// chains and their budget, the collision plan and the map's summary refuse parts until the writer lays out parts
-/// (B2c part 2, step 9 incomplete); the region clip and water's other extents are local. A world outside the part protocol (no
-/// `core.part_scope`: a program composing passes and the writer directly) is the whole map.
+/// light cap, the texture budget, water's content extent, the spawn, the pause map's content extent and the marker
+/// snaps' instancing and water take their decisions from summaries merged over every part
+/// ([`primase_core::convert::convert_parts_summarized`]), and refuse a part without them through this. The overlays and
+/// blend chains are each part's own; the collision plan, the map's summary and the blend budget are left to the writer,
+/// which decides them over the whole map by the passes' own rules (the map sink); the region clip and water's other
+/// extents are local. A world outside the part protocol (no `core.part_scope`: a program composing passes and the writer
+/// directly) is the whole map.
 pub fn require_whole_map(w: &World, pass: &str) -> Result<(), String> {
     match w.resource::<PartScope>() {
         Some(s) if !s.whole => Err(format!(
