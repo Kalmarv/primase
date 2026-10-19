@@ -192,6 +192,32 @@ mod tests {
         }
     }
 
+    /// Every registered pass describes its settings in its options: made as registered, written as pipeline text,
+    /// parsed back, it is the same pass with the same options (so a typed pass and its text agree).
+    #[test]
+    fn every_registered_pass_round_trips_through_its_text() {
+        let registry = super::registry();
+        let names: Vec<&str> = registry.names().collect();
+        assert!(!names.is_empty());
+        for name in names {
+            let made = registry
+                .make_registered(name)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let text = primase_core::pass::pass_text(made.as_ref());
+            let parsed = registry
+                .parse(&text)
+                .unwrap_or_else(|e| panic!("{name}: its own text {text} does not parse: {e}"));
+            assert_eq!(parsed.passes.len(), 1, "{text}");
+            let back = &parsed.passes[0];
+            assert_eq!(back.name(), made.name(), "{text}");
+            assert_eq!(
+                back.options(),
+                made.options(),
+                "{name}: {text} parses to other options"
+            );
+        }
+    }
+
     /// Every library pass a conversion may name or plan is registered (bake-nonrigid lowers non-rigid transforms for
     /// writers that take rigid ones).
     #[test]

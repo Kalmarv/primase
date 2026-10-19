@@ -232,6 +232,20 @@ impl PassRegistry {
         self.requiring.contains(name)
     }
 
+    /// Every registered pass's name, in order.
+    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.factories.keys().copied()
+    }
+
+    /// The pass `name` made with the options it was registered with (none, or a required-option pass's example).
+    pub fn make_registered(&self, name: &str) -> Result<Box<dyn Pass>, Error> {
+        let (_, example) = self
+            .factories
+            .get(name)
+            .ok_or_else(|| Error::UnknownPass(name.to_owned()))?;
+        self.make(name, example)
+    }
+
     pub fn make(&self, name: &str, options: &Options) -> Result<Box<dyn Pass>, Error> {
         let (f, _) = self
             .factories
