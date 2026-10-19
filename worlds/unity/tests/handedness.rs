@@ -104,8 +104,8 @@ fn mirror_is_undone_in_the_geometry() {
         let submeshes = m["submeshes"].as_array().unwrap();
         let ours = UnityMeshData::read(&player, &r).unwrap();
         let prims = ours.primitives(0..submeshes.len()).unwrap();
-        assert_eq!(prims.len(), submeshes.len(), "{name}: primitives");
-        for ((sub_index, p), tris) in prims.iter().zip(submeshes) {
+        assert_eq!(prims.0.len(), submeshes.len(), "{name}: primitives");
+        for ((sub_index, p), tris) in prims.0.iter().zip(submeshes) {
             let tris: Vec<[usize; 3]> = tris
                 .as_array()
                 .unwrap()

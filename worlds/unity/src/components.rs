@@ -1,7 +1,7 @@
 //! The `unity.*` dialect: what a Unity scene says about an entity that the core components do not.
 
 use primase_core::{Component, Entity, JsonError, World};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use crate::material::{PassKind, ShaderPass, SubShader};
 use crate::player::{ObjRef, RenderPipeline};
@@ -101,14 +101,54 @@ impl Component for UnityTexture {
     }
 }
 
+/// A number a material stores, in the dialect's JSON view: a JSON number, or `"inf"`, `"-inf"` or `"nan"` for the
+/// non-finite values a shader property may store as a sentinel (JSON has none; the dialect keeps what was stored).
+struct Stored(f32);
+
+impl Serialize for Stored {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            x if x.is_finite() => s.serialize_f32(x),
+            x if x.is_nan() => s.serialize_str("nan"),
+            x if x > 0.0 => s.serialize_str("inf"),
+            _ => s.serialize_str("-inf"),
+        }
+    }
+}
+
+fn stored_pair<S: Serializer>(v: &[f32; 2], s: S) -> Result<S::Ok, S::Error> {
+    [Stored(v[0]), Stored(v[1])].serialize(s)
+}
+
+fn stored_floats<S: Serializer>(v: &[(String, f32)], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(v.iter().map(|(k, x)| (k, Stored(*x))))
+}
+
+fn stored_colors<S: Serializer>(v: &[(String, [f32; 4])], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(v.iter().map(|(k, c)| (k, c.map(Stored))))
+}
+
 /// A texture property of a material: its texture entity (`None`: none set, or not in the player) and tiling (`_ST`,
-/// Unity's bottom-left origin).
+/// Unity's bottom-left origin), as stored (non-finite numbers included).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityTexEnv {
     pub name: String,
     pub texture: Option<Entity>,
+    #[serde(serialize_with = "stored_pair")]
     pub scale: [f32; 2],
+    #[serde(serialize_with = "stored_pair")]
     pub offset: [f32; 2],
+}
+
+impl UnityTexEnv {
+    /// The tiling, when both its scale and its offset are finite: a non-finite one is no tiling a lowering can use.
+    pub fn finite_tiling(&self) -> Option<([f32; 2], [f32; 2])> {
+        self.scale
+            .iter()
+            .chain(&self.offset)
+            .all(|x| x.is_finite())
+            .then_some((self.scale, self.offset))
+    }
 }
 
 /// The pass of a subshader that draws the surface under `pipeline`: the first with its own state (not a `UsePass` or
@@ -169,16 +209,19 @@ pub fn queue_tag(v: &str) -> Option<i32> {
 }
 
 /// A material as Unity stores it: its shader's name and render state (its subshaders, as
-/// [`crate::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored), keywords,
-/// tags and render queue.
+/// [`crate::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored; a non-finite
+/// number a shader property stores as a sentinel kept as stored, [`UnityMaterial::float`] and [`UnityMaterial::color`]
+/// giving it to no lowering), keywords, tags and render queue.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityMaterial {
     pub material: UnityObject,
     pub shader: Option<String>,
     pub shader_state: Vec<crate::material::SubShader>,
     pub textures: Vec<UnityTexEnv>,
+    #[serde(serialize_with = "stored_floats")]
     pub floats: Vec<(String, f32)>,
     pub ints: Vec<(String, i64)>,
+    #[serde(serialize_with = "stored_colors")]
     pub colors: Vec<(String, [f32; 4])>,
     pub keywords: Vec<String>,
     pub tags: Vec<(String, String)>,
@@ -249,12 +292,33 @@ impl UnityMaterial {
             .unwrap_or(v.value)
     }
 
+    /// A float property's value, unless it is not finite (a sentinel no lowering can use: read as unset, and
+    /// [`UnityMaterial::non_finite`] counts it).
     pub fn float(&self, name: &str) -> Option<f32> {
-        self.floats.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
+        self.floats
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| *v)
+            .filter(|v| v.is_finite())
     }
 
+    /// A colour property's value, unless a channel of it is not finite (as [`UnityMaterial::float`]).
     pub fn color(&self, name: &str) -> Option<[f32; 4]> {
-        self.colors.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
+        self.colors
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| *v)
+            .filter(|v| v.iter().all(|x| x.is_finite()))
+    }
+
+    /// The float and colour properties holding a non-finite number, as stored.
+    pub fn non_finite(&self) -> usize {
+        self.floats.iter().filter(|(_, v)| !v.is_finite()).count()
+            + self
+                .colors
+                .iter()
+                .filter(|(_, c)| c.iter().any(|x| !x.is_finite()))
+                .count()
     }
 
     /// A texture property with a texture set.
@@ -675,6 +739,31 @@ mod tests {
         ] {
             assert_eq!(queue_tag(tag), q, "{tag}");
         }
+    }
+
+    /// A non-finite number a material stores is kept: its JSON view writes it as a token, and the accessors give it to
+    /// no lowering (unset), counted by `non_finite`.
+    #[test]
+    fn non_finite_material_numbers_are_kept_as_stored() {
+        let mut m = material(2000, Vec::new());
+        m.floats = vec![("_Glossiness".into(), 0.5), ("_Fade".into(), f32::INFINITY)];
+        m.colors = vec![("_CameraFadeParams".into(), [0.0, f32::INFINITY, 0.0, 1.0])];
+        m.textures = vec![UnityTexEnv {
+            name: "_MainTex".into(),
+            texture: None,
+            scale: [f32::NAN, 1.0],
+            offset: [0.0, 0.0],
+        }];
+        let json = m.to_json().expect("a faithful view").expect("a value");
+        assert_eq!(json["floats"][1][1], "inf");
+        assert_eq!(json["floats"][0][1], 0.5);
+        assert_eq!(json["colors"][0][1][1], "inf");
+        assert_eq!(json["textures"][0]["scale"][0], "nan");
+        assert_eq!(m.float("_Fade"), None);
+        assert_eq!(m.float("_Glossiness"), Some(0.5));
+        assert_eq!(m.color("_CameraFadeParams"), None);
+        assert_eq!(m.non_finite(), 2);
+        assert_eq!(m.textures[0].finite_tiling(), None);
     }
 
     fn material(render_queue: i64, subshaders: Vec<SubShader>) -> UnityMaterial {

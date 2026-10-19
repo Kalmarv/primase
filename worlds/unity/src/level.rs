@@ -154,9 +154,10 @@ pub struct LevelReport {
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
     /// properties.
     pub not_reproduced: BTreeMap<String, u64>,
-    /// Source data read with an approximation or not read because core has no slot for it, by what, over the meshes
-    /// read ([`crate::mesh::UvNotices`]).
-    pub notices: BTreeMap<&'static str, u64>,
+    /// What was read differently from how it is stored, or not read, because core holds it otherwise or has no slot
+    /// for it, by what: quads and line strips converted, components core has no slot for, non-finite vertex values
+    /// ([`crate::mesh::MeshNotices`]).
+    pub notices: BTreeMap<String, u64>,
     pub skipped: Skipped,
 }
 
@@ -404,18 +405,10 @@ impl Builder<'_> {
         }
     }
 
-    /// Count what a mesh's texture coordinates could not put into core ([`LevelReport::notices`]).
-    fn note_uvs(&mut self, uv: crate::mesh::UvNotices) {
-        for (what, n) in [
-            (
-                "texture coordinates of 3 or 4 components: those beyond u and v not read (vertices)",
-                uv.components_not_read,
-            ),
-            ("non-finite texture coordinates read as 0", uv.non_finite),
-        ] {
-            if n > 0 {
-                *self.report.notices.entry(what).or_default() += n;
-            }
+    /// Count what reading a mesh could not put into core as stored ([`LevelReport::notices`]).
+    fn note_mesh(&mut self, notices: crate::mesh::MeshNotices) {
+        for (what, n) in notices {
+            *self.report.notices.entry(what.to_owned()).or_default() += n;
         }
     }
 
@@ -980,9 +973,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 Vec::new()
             };
             if !meshes.contains_key(&r.mesh) {
-                let data = UnityMeshData::read(player, &r.mesh)?;
-                b.note_uvs(data.uv_notices());
-                meshes.insert(r.mesh.clone(), data);
+                meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
             }
             let data = &meshes[&r.mesh];
             let (first, count) = match r.submeshes {
@@ -991,11 +982,10 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             };
             let key = (r.mesh.clone(), r.submeshes, role.forms.clone());
             if !prototypes.contains_key(&key) {
-                let (drawn, primitives): (Vec<u32>, Vec<_>) = data
-                    .primitives(first as usize..first as usize + count)?
-                    .into_iter()
-                    .map(|(k, p)| (k as u32, p))
-                    .unzip();
+                let (read, notices) = data.primitives(first as usize..first as usize + count)?;
+                b.note_mesh(notices);
+                let (drawn, primitives): (Vec<u32>, Vec<_>) =
+                    read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
                 let e = w.spawn();
                 // a mesh with no submesh that has indices draws nothing: no core mesh
                 if !primitives.is_empty() {
@@ -1115,16 +1105,13 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             let mut forms = Vec::with_capacity(key.2.len());
             for (level, (mesh, mats)) in key.2.iter().enumerate() {
                 if !meshes.contains_key(mesh) {
-                    let data = UnityMeshData::read(player, mesh)?;
-                    b.note_uvs(data.uv_notices());
-                    meshes.insert(mesh.clone(), data);
+                    meshes.insert(mesh.clone(), UnityMeshData::read(player, mesh)?);
                 }
                 let data = &meshes[mesh];
-                let (drawn, mut primitives): (Vec<u32>, Vec<_>) = data
-                    .primitives(0..data.submeshes.len())?
-                    .into_iter()
-                    .map(|(k, p)| (k as u32, p))
-                    .unzip();
+                let (read, notices) = data.primitives(0..data.submeshes.len())?;
+                b.note_mesh(notices);
+                let (drawn, mut primitives): (Vec<u32>, Vec<_>) =
+                    read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
                 // material i draws submesh i
                 for (prim, &k) in primitives.iter_mut().zip(&drawn) {
                     prim.material = match mats.get(k as usize).cloned().flatten() {

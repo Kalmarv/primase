@@ -412,6 +412,14 @@ impl Lowering {
     }
 
     fn lower(&mut self, w: &mut World, m: &UnityMaterial) -> Result<PbrMaterial> {
+        // a property storing a non-finite sentinel reads as unset (its default), counted
+        let non_finite = m.non_finite() as u64;
+        if non_finite > 0 {
+            self.log.approximate(
+                "material properties storing a non-finite number, read as unset",
+                non_finite,
+            );
+        }
         let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
         let fam = family(m.shader.as_deref());
         let mut p = PbrMaterial {
@@ -430,8 +438,9 @@ impl Lowering {
             .textures
             .iter()
             .find(|env| env.name == tex)
-            .filter(|env| env.scale != [1.0; 2] || env.offset != [0.0; 2])
-            .map(|env| UvTransform::from_bottom_left(env.scale, env.offset));
+            .and_then(UnityTexEnv::finite_tiling)
+            .filter(|(scale, offset)| *scale != [1.0; 2] || *offset != [0.0; 2])
+            .map(|(scale, offset)| UvTransform::from_bottom_left(scale, offset));
         if let Some(env) = m.texture(tex) {
             p.base_color_texture = self.color(w, env, tiling)?;
         }

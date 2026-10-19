@@ -9,7 +9,7 @@
 //! `start + item * (range / (2^bits - 1))` in f32; normals and tangents keep x and y, z is rebuilt from the unit
 //! length with a stored sign; its indices are packed integers (`m_Triangles`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use primase_core::{Primitive, Semantic, Stream, Topology};
@@ -394,55 +394,121 @@ impl UnityMeshData {
     }
 }
 
-/// Unity's MeshTopology as a core topology (quads and line strips are not lowered).
-fn topology(t: i64) -> Result<Topology> {
+/// Unity's MeshTopology as core's, with how a submesh's indices become core's: triangles (0), lines (3) and points (5)
+/// as stored, quads (2) as two triangles each (a, b, c and a, c, d), a line strip (4) as its segments; both exact.
+fn topology(t: i64) -> Result<(Topology, Option<&'static str>)> {
     Ok(match t {
-        0 => Topology::Triangles,
-        3 => Topology::Lines,
-        5 => Topology::Points,
+        0 => (Topology::Triangles, None),
+        2 => (
+            Topology::Triangles,
+            Some("quad submeshes read as triangles, two per quad"),
+        ),
+        3 => (Topology::Lines, None),
+        4 => (
+            Topology::Lines,
+            Some("line-strip submeshes read as lines, one per segment"),
+        ),
+        5 => (Topology::Points, None),
         t => return Err(Error::Unsupported(format!("mesh topology {t}"))),
     })
 }
 
-/// A texture coordinate as core holds it: finite (a non-finite one reads as 0).
-fn finite(v: f32) -> f32 {
-    if v.is_finite() { v } else { 0.0 }
+/// A submesh's indices as `topology` gives them to core ([`topology`]).
+fn core_indices(topology: i64, indices: Vec<u32>) -> Vec<u32> {
+    match topology {
+        2 => indices
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]])
+            .collect(),
+        4 => indices.windows(2).flat_map(|s| [s[0], s[1]]).collect(),
+        _ => indices,
+    }
 }
 
-/// What reading a mesh's texture coordinates could not put into core, over its whole vertex buffer: the components
-/// beyond u and v of channels that store 3 or 4 (core texture coordinates have two), and the non-finite u or v values
-/// read as 0 (core streams are finite).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct UvNotices {
-    /// Vertices of each UV channel with components beyond 2, those components not read: one per vertex per channel.
-    pub components_not_read: u64,
-    /// u or v values that were not finite, read as 0.
-    pub non_finite: u64,
+/// What reading a submesh could not put into core as stored, by what: counts for [`crate::level::LevelReport::notices`].
+pub type MeshNotices = std::collections::BTreeMap<&'static str, u64>;
+
+fn note(notices: &mut MeshNotices, what: &'static str, n: u64) {
+    if n > 0 {
+        *notices.entry(what).or_default() += n;
+    }
+}
+
+/// A submesh's primitive made finite, as core requires, by what each stream is, judged on the vertices its indices
+/// use (`used`): a non-finite position leaves the primitive out (core cannot place it; `false`), a non-finite normal or
+/// tangent takes its stream out (a zero direction is not one; passes can derive it again), a non-finite texture
+/// coordinate or colour reads as 0. Each counted in `notices`. The other vertices' non-finite values read as 0 too,
+/// uncounted: compaction leaves them out.
+fn make_finite(p: &mut Primitive, used: &BTreeSet<u32>, notices: &mut MeshNotices) -> bool {
+    fn values(s: &Stream, i: usize) -> &[f32] {
+        match s {
+            Stream::F32x2(v) => &v[i],
+            Stream::F32x3(v) => &v[i],
+            Stream::F32x4(v) => &v[i],
+            _ => &[],
+        }
+    }
+    let bad = |s: &Stream| -> u64 {
+        used.iter()
+            .map(|&i| values(s, i as usize).iter().filter(|x| !x.is_finite()).count() as u64)
+            .sum()
+    };
+    if p.streams.get(&Semantic::Position).is_some_and(|s| bad(s) > 0) {
+        note(notices, "primitives with non-finite positions left out", 1);
+        return false;
+    }
+    for (semantic, what) in [
+        (
+            Semantic::Normal,
+            "primitives' normal streams with non-finite values left out",
+        ),
+        (
+            Semantic::Tangent,
+            "primitives' tangent streams with non-finite values left out",
+        ),
+    ] {
+        if p.streams.get(&semantic).is_some_and(|s| bad(s) > 0) {
+            p.streams.remove(&semantic);
+            note(notices, what, 1);
+        }
+    }
+    for (semantic, stream) in p.streams.iter_mut() {
+        let what = match semantic {
+            Semantic::TexCoord(_) => Some("non-finite texture coordinates read as 0"),
+            Semantic::Color(_) => Some("non-finite vertex colour values read as 0"),
+            _ => None,
+        };
+        if let Some(what) = what {
+            note(notices, what, bad(stream));
+        }
+        let zero = |x: &mut f32| {
+            if !x.is_finite() {
+                *x = 0.0;
+            }
+        };
+        match stream {
+            Stream::F32x2(v) => v.iter_mut().flatten().for_each(zero),
+            Stream::F32x3(v) => v.iter_mut().flatten().for_each(zero),
+            Stream::F32x4(v) => v.iter_mut().flatten().for_each(zero),
+            _ => {}
+        }
+    }
+    true
 }
 
 impl UnityMeshData {
-    /// See [`UvNotices`]: counted once per mesh, as [`UnityMeshData::primitives`] reads every vertex of a channel.
-    pub fn uv_notices(&self) -> UvNotices {
-        let mut notices = UvNotices::default();
-        for c in self.channels.iter().skip(4).take(8).flatten() {
-            if c.dim > 2 {
-                notices.components_not_read += self.vertex_count as u64;
-            }
-            notices.non_finite += (0..self.vertex_count)
-                .flat_map(|i| c.vertex(i).iter().take(2))
-                .filter(|v| !v.is_finite())
-                .count() as u64;
-        }
-        notices
-    }
-
     /// The submeshes `range` as world primitives, each with its submesh index, compacted to the vertices it uses,
     /// without materials; a submesh without indices draws nothing and is left out. Unity's frame is converted ([`UNITY`]): positions and directions mirrored, triangle winding reversed
     /// so front faces stay front, and a tangent's w negated, since a mirror flips the bitangent cross(n, t) * w (both
     /// conventions point the bitangent along the normal map's +Y). Texture coordinates move to the world's top-left
-    /// origin, v becoming 1 - v; a channel of 3 or 4 components gives its u and v (see [`UnityMeshData::uv_notices`]).
-    /// Normals keep three components (stored as half4, the fourth is padding).
-    pub fn primitives(&self, range: Range<usize>) -> Result<Vec<(usize, Primitive)>> {
+    /// origin, v becoming 1 - v; a channel of 3 or 4 components gives its u and v. Normals keep three components
+    /// (stored as half4, the fourth is padding). Quads become triangles and line strips lines ([`topology`]); each
+    /// primitive is made finite as core requires ([`make_finite`]). What could not be read as stored is counted in the
+    /// returned notices, over the primitives returned (and those left out).
+    pub fn primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
+        let mut notices = MeshNotices::new();
         let n = self.vertex_count;
         let mut streams = BTreeMap::new();
         for (ch, c) in self.channels.iter().enumerate() {
@@ -482,15 +548,14 @@ impl UnityMeshData {
                             .collect(),
                     ),
                 ),
-                // u and v; components beyond them are not read and a non-finite one reads as 0 (both counted,
-                // [`UnityMeshData::uv_notices`])
+                // u and v; components beyond them are not read (counted below, per primitive)
                 (4..12, 2..=4) => (
                     Semantic::TexCoord(ch as u8 - 4),
                     Stream::F32x2(
                         (0..n)
                             .map(|i| {
                                 let v = c.vertex(i);
-                                [finite(v[0]), 1.0 - finite(v[1])]
+                                [v[0], 1.0 - v[1]]
                             })
                             .collect(),
                     ),
@@ -524,12 +589,16 @@ impl UnityMeshData {
                 continue;
             }
             let what = || format!("{} submesh {k}", self.name);
-            full.topology = topology(s.topology)?;
+            let (core_topology, conversion) = topology(s.topology)?;
+            full.topology = core_topology;
+            if let Some(what) = conversion {
+                note(&mut notices, what, 1);
+            }
             if s.first_byte % self.index_size != 0 {
                 return Err(invalid(format!("{}: first byte {}", what(), s.first_byte)));
             }
             let first = (s.first_byte / self.index_size) as usize;
-            let mut indices = self
+            let indices = self
                 .indices
                 .get(first..first + s.index_count as usize)
                 .ok_or_else(|| invalid(format!("{}: indices past the buffer", what())))?
@@ -537,16 +606,37 @@ impl UnityMeshData {
                 .map(|&i| i.checked_add(s.base_vertex))
                 .collect::<Option<Vec<u32>>>()
                 .ok_or_else(|| invalid(format!("{}: base vertex overflows", what())))?;
+            let mut indices = core_indices(s.topology, indices);
             if full.topology == Topology::Triangles && UNITY.flips_winding() {
                 for t in indices.as_chunks_mut::<3>().0 {
                     t.swap(1, 2);
                 }
             }
-            full.indices = Some(indices);
-            let compacted = compact_primitive(&full).map_err(|e| invalid(format!("{}: {}", what(), e.0)))?;
-            out.push((k, compacted.primitive));
+            let used: BTreeSet<u32> = indices.iter().copied().collect();
+            let mut part = Primitive {
+                indices: Some(indices),
+                ..full.clone()
+            };
+            if !make_finite(&mut part, &used, &mut notices) {
+                continue;
+            }
+            let compacted = compact_primitive(&part)
+                .map_err(|e| invalid(format!("{}: {}", what(), e.0)))?
+                .primitive;
+            let vertices = used.len() as u64;
+            let wide_uvs = self.channels[4..12]
+                .iter()
+                .flatten()
+                .filter(|c| c.dim > 2)
+                .count() as u64;
+            note(
+                &mut notices,
+                "texture coordinates of 3 or 4 components: those beyond u and v not read (vertices)",
+                vertices * wide_uvs,
+            );
+            out.push((k, compacted));
         }
-        Ok(out)
+        Ok((out, notices))
     }
 }
 
@@ -596,7 +686,8 @@ mod tests {
                 },
             ],
         };
-        let prims = m.primitives(0..2).unwrap();
+        let (prims, notices) = m.primitives(0..2).unwrap();
+        assert!(notices.is_empty(), "{notices:?}");
         assert_eq!(prims.len(), 1, "the empty submesh is left out");
         let (k, p) = &prims[0];
         assert_eq!(*k, 1);
@@ -623,11 +714,27 @@ mod tests {
             Stream::F32x2(vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.75]])
         );
         assert!(m.primitives(1..3).is_err(), "submeshes past the mesh");
-        assert_eq!(m.uv_notices(), UvNotices::default());
     }
 
-    /// A UV channel of four components gives u and v; its other two are not read, counted per vertex; a non-finite
-    /// u or v reads as 0, counted.
+    fn mesh(channels: [Option<Channel>; 12], indices: Vec<u32>, topology: i64) -> UnityMeshData {
+        UnityMeshData {
+            name: "t".into(),
+            vertex_count: channels[0].as_ref().map_or(0, |c| c.values.len() / c.dim),
+            channels,
+            compressed: false,
+            index_size: 2,
+            submeshes: vec![SubMesh {
+                first_byte: 0,
+                index_count: indices.len() as u32,
+                topology,
+                base_vertex: 0,
+            }],
+            indices,
+        }
+    }
+
+    /// A UV channel of four components gives u and v, its other two not read (counted per vertex); a non-finite u or
+    /// v reads as 0 (counted); a second, two-component channel is untouched.
     #[test]
     fn texture_coordinates_of_four_components_and_non_finite_values() {
         let mut channels: [Option<Channel>; 12] = Default::default();
@@ -650,36 +757,102 @@ mod tests {
             ],
         );
         channels[5] = channel(2, &[0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
-        let m = UnityMeshData {
-            name: "t".into(),
-            vertex_count: 3,
-            channels,
-            compressed: false,
-            indices: vec![0, 1, 2],
-            index_size: 2,
-            submeshes: vec![SubMesh {
-                first_byte: 0,
-                index_count: 3,
-                topology: 0,
-                base_vertex: 0,
-            }],
-        };
-        let prims = m.primitives(0..1).unwrap();
+        let (prims, notices) = mesh(channels, vec![0, 1, 2], 0).primitives(0..1).unwrap();
         let p = &prims[0].1;
-        // the winding reversed: Unity's 0, 1, 2 drawn 0, 2, 1
         let Stream::F32x2(uv) = &p.streams[&Semantic::TexCoord(0)] else {
             panic!("two components")
         };
         let mut uv = uv.clone();
         uv.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(uv, vec![[0.0, 0.0], [0.25, 0.5], [1.0, 1.0]]);
+        // v becomes 1 - v: the infinite v's 1 - v is -inf, read as 0
+        assert_eq!(uv, vec![[0.0, 0.0], [0.25, 0.5], [1.0, 0.0]]);
         assert!(p.streams.contains_key(&Semantic::TexCoord(1)));
         assert_eq!(
-            m.uv_notices(),
-            UvNotices {
-                components_not_read: 3,
-                non_finite: 2
-            }
+            notices,
+            MeshNotices::from([
+                ("non-finite texture coordinates read as 0", 2),
+                (
+                    "texture coordinates of 3 or 4 components: those beyond u and v not read (vertices)",
+                    3
+                ),
+            ])
+        );
+    }
+
+    /// A quad submesh is two triangles per quad and a line strip one line per segment, both counted.
+    #[test]
+    fn quads_and_line_strips_become_triangles_and_lines() {
+        let mut channels: [Option<Channel>; 12] = Default::default();
+        channels[0] = channel(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+        let (prims, notices) = mesh(channels.clone(), vec![0, 1, 2, 3], 2)
+            .primitives(0..1)
+            .unwrap();
+        let p = &prims[0].1;
+        assert_eq!(p.topology, Topology::Triangles);
+        assert_eq!(p.indices.as_ref().map(Vec::len), Some(6));
+        assert_eq!(
+            notices,
+            MeshNotices::from([("quad submeshes read as triangles, two per quad", 1)])
+        );
+        let (prims, notices) = mesh(channels, vec![0, 1, 2, 3], 4).primitives(0..1).unwrap();
+        let p = &prims[0].1;
+        assert_eq!(p.topology, Topology::Lines);
+        assert_eq!(p.indices.as_ref().map(Vec::len), Some(6));
+        assert_eq!(
+            notices,
+            MeshNotices::from([("line-strip submeshes read as lines, one per segment", 1)])
+        );
+    }
+
+    /// A non-finite tangent takes the primitive's tangent stream out; a non-finite position leaves the primitive out;
+    /// a non-finite colour reads as 0; each counted.
+    #[test]
+    fn non_finite_vertex_values_by_what_they_are() {
+        let tri = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut channels: [Option<Channel>; 12] = Default::default();
+        channels[0] = channel(3, &tri);
+        channels[1] = channel(3, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        channels[2] = channel(
+            4,
+            &[1.0, 0.0, 0.0, 1.0, f32::NAN, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        );
+        channels[3] = channel(
+            4,
+            &[
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                f32::INFINITY,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+            ],
+        );
+        let (prims, notices) = mesh(channels, vec![0, 1, 2], 0).primitives(0..1).unwrap();
+        let p = &prims[0].1;
+        assert!(!p.streams.contains_key(&Semantic::Tangent));
+        assert!(p.streams.contains_key(&Semantic::Normal));
+        assert_eq!(
+            notices,
+            MeshNotices::from([
+                ("non-finite vertex colour values read as 0", 1),
+                ("primitives' tangent streams with non-finite values left out", 1),
+            ])
+        );
+        let mut channels: [Option<Channel>; 12] = Default::default();
+        let mut bad = tri;
+        bad[4] = f32::NAN;
+        channels[0] = channel(3, &bad);
+        let (prims, notices) = mesh(channels, vec![0, 1, 2], 0).primitives(0..1).unwrap();
+        assert!(prims.is_empty());
+        assert_eq!(
+            notices,
+            MeshNotices::from([("primitives with non-finite positions left out", 1)])
         );
     }
 }
