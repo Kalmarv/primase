@@ -1,0 +1,170 @@
+//! `bake-fromsoft-layers`: the layered materials of the placed prototypes baked per weight level.
+use super::settings::{PixelCap, Seconds};
+use crate::materials::{self, Material};
+use crate::sekiro::source::{LayerInputs, PrototypeSource};
+use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::{Component, Entity, Instance, Lods, Mesh, World};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// `bake-fromsoft-layers{max-size=N,sample-time=S}`: bake the static layered materials of the placed lowered
+/// prototypes (a `fromsoft.material` with a layered definition, drawn by primitives carrying `fromsoft.layer_inputs`)
+/// into core PBR from the source programs and texture files the reader kept. Each material group's triangles are
+/// reduced to their mean inputs, clustered into at most three constant levels, and each level's shader evaluated
+/// into albedo, normal, gloss (ORM) and HDR emission images at the group's reference size capped at `max-size`, sampled
+/// from base mips with bilinear wrapping in a static frame (unit pre-exposure, fixed camera, the global time at
+/// `sample-time` seconds, which scrolls some layers); parts are split by level through `World::rebuild_primitives`.
+/// Both options are required: the cap is the program's quality choice (also the size of a group without a colour
+/// image), the time its choice of the animated layers' frame.
+///
+/// The layer inputs of the primitives it baked are consumed (their `Color(n)` streams and entries); unplaced
+/// prototypes' stay. A level-of-detail form or a placed mesh without a source prototype that carries layer inputs is
+/// refused before anything changes: choose a level of detail first (`select-lod`). The source resources are kept,
+/// also when it fails.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BakeFromSoftLayers {
+    /// The baked images' largest edge.
+    max_size: PixelCap,
+    /// The seconds of global time the programs that read it are sampled at.
+    sample_time: Seconds,
+}
+
+impl BakeFromSoftLayers {
+    pub fn new(max_size: PixelCap, sample_time: Seconds) -> Self {
+        BakeFromSoftLayers {
+            max_size,
+            sample_time,
+        }
+    }
+    pub fn max_size(&self) -> PixelCap {
+        self.max_size
+    }
+    pub fn sample_time(&self) -> Seconds {
+        self.sample_time
+    }
+
+    /// From its options (both required), through [`BakeFromSoftLayers::new`].
+    pub fn from_options(o: &Options) -> Result<Self, String> {
+        let mut max_size = None;
+        let mut sample_time = None;
+        for (k, v) in o {
+            match k.as_str() {
+                "max-size" => max_size = Some(PixelCap::parse(k, v)?),
+                "sample-time" => sample_time = Some(Seconds::parse(k, v)?),
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(BakeFromSoftLayers::new(
+            max_size.ok_or("max-size is required: the baked images' largest edge is the program's choice")?,
+            sample_time
+                .ok_or("sample-time is required: the frame of the animated layers is the program's choice")?,
+        ))
+    }
+}
+
+impl Pass for BakeFromSoftLayers {
+    fn name(&self) -> &'static str {
+        "bake-fromsoft-layers"
+    }
+    fn options(&self) -> Options {
+        Options::from([
+            ("max-size".to_owned(), self.max_size.to_string()),
+            ("sample-time".to_owned(), self.sample_time.to_string()),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Material::NAME, LayerInputs::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[
+            "pbr.material",
+            "core.texture",
+            "core.name",
+            Material::NAME,
+            materials::LayeredMaterial::NAME,
+        ]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[LayerInputs::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Mesh::NAME]
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn approximates(&self) -> &'static str {
+        "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame at the sample time"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
+        // the meshes it bakes: placed source prototypes'; inputs elsewhere are refused (a form) or left (unplaced)
+        let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        let forms: BTreeSet<Entity> = world
+            .iter::<Lods>()
+            .flat_map(|(_, l)| l.forms.iter().map(|f| f.form))
+            .collect();
+        let mut unplaced = 0;
+        for (e, _) in world.iter::<LayerInputs>() {
+            if placed.contains(&e) && world.has::<PrototypeSource>(e) {
+                continue;
+            }
+            if forms.contains(&e) || placed.contains(&e) {
+                return Err(format!(
+                    "{e:?} carries layer inputs this bake does not bake (a level-of-detail form, or a placed mesh \
+                     without fromsoft.prototype): choose a level of detail first (select-lod)"
+                ));
+            }
+            unplaced += 1;
+        }
+        if unplaced > 0 {
+            log.count("unplaced meshes whose layer inputs stay", unplaced);
+        }
+        // lent read-only while the world changes, then put back as they were: borrowed, not written
+        let none = BTreeMap::new();
+        let result = world.resource_scope::<ShaderPrograms, _>(|world, shaders| {
+            world.resource_scope::<TexturePayloads, _>(|world, payloads| {
+                let bake = super::layers::AreaBake::with_sources(
+                    world,
+                    shaders.map_or(&none, |s| &s.0),
+                    payloads.map_or(&none, |p| &p.0),
+                )?;
+                let prototypes: BTreeMap<String, Entity> = world
+                    .iter::<PrototypeSource>()
+                    .map(|(e, s)| (s.id.clone(), e))
+                    .collect();
+                super::bake_assembly::assemble(
+                    &bake,
+                    &prototypes,
+                    self.max_size.get(),
+                    self.sample_time.get(),
+                    world,
+                )
+            })
+        });
+        let (report, baked) = result.map_err(|e| e.to_string())?;
+        // counted after the split: a part baked at k levels gives k primitives' streams
+        log.count(
+            "layer input streams consumed",
+            LayerInputs::consume(world, |e, i, _| baked.contains(&(e, i))),
+        );
+        for (k, v) in [
+            ("source materials baked", report.source_materials),
+            ("bake groups", report.materials),
+            ("bake levels", report.variants),
+            ("bake levels with non-unit UV periods", report.nonunit_uv_variants),
+            ("bake groups with gloss", report.gloss_materials),
+            ("bake groups without gloss", report.missing_gloss_materials),
+            ("bake groups with emission", report.emissive_materials),
+            ("bake groups without emission", report.missing_emissive_materials),
+        ] {
+            log.count(k, v as u64);
+        }
+        for (k, v) in report.policies.counts {
+            log.count(&k, v);
+        }
+        for (k, v) in report.policies.approximations {
+            log.approximate(&k, v);
+        }
+        Ok(())
+    }
+}
