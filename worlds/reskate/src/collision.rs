@@ -867,17 +867,46 @@ fn open(td: &TileData, n_static: usize, q: &Query) -> Option<(f32, f32, f32)> {
     (!pz.is_nan()).then_some((q.x, q.y, pz))
 }
 
-/// Where a spawn or bus stop asked for at (qx, qy) goes: onto ground joined to the streets.
-fn place(
-    td: &TileData,
-    n_static: usize,
-    water: &[WaterQuad],
-    street_kind: &[u8; 256],
-    qx: f32,
-    qy: f32,
-) -> Option<(f32, f32, f32)> {
+/// Which of two triangles covering a grid point at the same height the point takes: a static (ground) one first,
+/// then the lower surface index, then the one not natural rock, then the smaller triangle by its corners in
+/// coordinate order. Order-free: the triangles' order (which came from render-mesh hashes) never decides.
+fn tie_wins(td: &TileData, n_static: usize, t: usize, held: usize) -> bool {
+    let rank = |t: usize| {
+        let mut corners =
+            [p3(&td.v, td.t[t]), p3(&td.v, td.t[t + 1]), p3(&td.v, td.t[t + 2])].map(|p| [p.x, p.y, p.z]);
+        corners.sort_by(|a, b| {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| x.total_cmp(y))
+                .find(|o| o.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        (
+            t >= n_static * 3,
+            td.s[t / 3],
+            t < n_static * 3 && td.rock.get(t / 3).copied().unwrap_or(false),
+            corners,
+        )
+    };
+    let (a, b) = (rank(t), rank(held));
+    let coords = |x: &[[f32; 3]; 3], y: &[[f32; 3]; 3]| {
+        x.iter()
+            .flatten()
+            .zip(y.iter().flatten())
+            .map(|(p, q)| p.total_cmp(q))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    (a.0, a.1, a.2)
+        .cmp(&(b.0, b.1, b.2))
+        .then_with(|| coords(&a.3, &b.3))
+        .is_lt()
+}
+
+/// The street search's grid around (qx, qy): per 4 m point the highest steep-enough triangle's height and index (on
+/// an exact tie, [`tie_wins`] decides) and the lowest static floor's height.
+fn grid(td: &TileData, n_static: usize, qx: f32, qy: f32) -> (Vec<f32>, Vec<f32>, Vec<i64>) {
     const STEP: f32 = PLACE_STEP;
-    const MAX_SLOPE: f32 = 0.3;
     const R: i32 = PLACE_CELLS;
     const W: i32 = 2 * R + 1;
     let wn = (W * W) as usize;
@@ -917,7 +946,10 @@ fn place(
                 }
                 let z = a.z * w0 + b.z * w1 + c.z * w2;
                 let k = ((j + R) * W + i + R) as usize;
-                if top[k].is_nan() || z > top[k] {
+                if top[k].is_nan()
+                    || z > top[k]
+                    || (z == top[k] && tie_wins(td, n_static, t, tri[k] as usize))
+                {
                     top[k] = z;
                     tri[k] = t as i64;
                 }
@@ -927,6 +959,24 @@ fn place(
             }
         }
     }
+    (top, low, tri)
+}
+
+/// Where a spawn or bus stop asked for at (qx, qy) goes: onto ground joined to the streets.
+fn place(
+    td: &TileData,
+    n_static: usize,
+    water: &[WaterQuad],
+    street_kind: &[u8; 256],
+    qx: f32,
+    qy: f32,
+) -> Option<(f32, f32, f32)> {
+    const STEP: f32 = PLACE_STEP;
+    const MAX_SLOPE: f32 = 0.3;
+    const R: i32 = PLACE_CELLS;
+    const W: i32 = 2 * R + 1;
+    let wn = (W * W) as usize;
+    let (mut top, low, tri) = grid(td, n_static, qx, qy);
     let mut kind = vec![0u8; wn];
     let mut solid = vec![false; wn];
     let mut rock = vec![false; wn];
@@ -1065,4 +1115,47 @@ fn place(
         qy + ((b as i32 / W) - R) as f32 * STEP,
         top[b],
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two flat triangles covering the same 4 m grid point at the same height, surfaces 5 and 2: the old rule kept
+    /// whichever came first (an order from render-mesh hashes); the point now takes surface 2's triangle in either
+    /// order, and a static one over one that is not, whatever their order.
+    #[test]
+    fn an_exact_height_tie_is_settled_without_the_order() {
+        let tile = |surfaces: [u8; 2], n_static: usize| {
+            let v = vec![
+                -10.0, -10.0, 0.0, 10.0, -10.0, 0.0, 0.0, 10.0, 0.0, // a
+                -12.0, -12.0, 0.0, 12.0, -12.0, 0.0, 0.0, 12.0, 0.0, // b
+            ];
+            TileData {
+                v,
+                t: vec![0, 1, 2, 3, 4, 5],
+                s: surfaces.to_vec(),
+                rock: vec![false; n_static],
+                ground: Some(n_static),
+                mask: None,
+            }
+        };
+        let centre = (PLACE_CELLS * (2 * PLACE_CELLS + 1) + PLACE_CELLS) as usize;
+        // surface 5 first, surface 2 second: the old order would keep the first (t = 0)
+        let (_, _, tri) = grid(&tile([5, 2], 2), 2, 0.0, 0.0);
+        assert_eq!(tri[centre], 3);
+        let (_, _, tri) = grid(&tile([2, 5], 2), 2, 0.0, 0.0);
+        assert_eq!(tri[centre], 0);
+        // the same surface: the static triangle (only the first is ground) wins over the later one, and in the
+        // other order too
+        let (_, _, tri) = grid(&tile([2, 2], 1), 1, 0.0, 0.0);
+        assert_eq!(tri[centre], 0);
+        let mut swapped = tile([2, 2], 1);
+        swapped.t = vec![3, 4, 5, 0, 1, 2];
+        let (_, _, tri) = grid(&swapped, 1, 0.0, 0.0);
+        assert_eq!(tri[centre], 0, "the static triangle (now b) wins");
+        // the same surface and both static: the smaller by corner coordinates (b, whose corners start at -12)
+        let (_, _, tri) = grid(&tile([2, 2], 2), 2, 0.0, 0.0);
+        assert_eq!(tri[centre], 3);
+    }
 }
