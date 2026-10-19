@@ -16,6 +16,8 @@ pub const USAGE: &str = "usage: primase convert --from <reader> [reader options]
 <out> [writer options]
 --conservation off|report|enforce: count what each pass leaves out against what it declares (off unless given;
 report: differences as diagnostic notices; enforce: a difference fails the pass).
+--effect-checks on|off: check each pass's effects entity by entity against its declarations (on in debug builds,
+off in release builds unless given).
 --summarize \"<pipeline>\" [--decide \"<pipeline>\"]: go over the parts twice; first each part's summaries are made by
 the summarize passes and merged over every part, the decide passes make the map's decisions from them once, then each
 part goes through --passes with them (a ReSkate map in parts: --summarize \"summarize-reskate-layout{tile=200},
@@ -170,6 +172,12 @@ pub fn run(args: &[String]) -> Result<()> {
         Some("enforce") => primase_core::pass::Conservation::Enforce,
         Some(v) => return Err(format!("--conservation {v}: off, report or enforce").into()),
     };
+    let effect_checks = match take("--effect-checks")?.as_deref() {
+        None => cfg!(debug_assertions),
+        Some("on") => true,
+        Some("off") => false,
+        Some(v) => return Err(format!("--effect-checks {v}: on or off").into()),
+    };
     let writer_name = &args[to + 1];
     let out = Path::new(args.get(to + 2).ok_or(USAGE)?);
     let mut reader = find(READERS, reader_name, "reader")?(&reader_args)?;
@@ -229,7 +237,9 @@ pub fn run(args: &[String]) -> Result<()> {
         println!("group: {p}");
         println!("finalize: {f}");
     }
-    let manager = PassManager::new(registry).with_conservation(conservation);
+    let manager = PassManager::new(registry)
+        .with_conservation(conservation)
+        .with_effect_checks(effect_checks);
     let summaries = summaries();
     let converted = match (&summarize, gathered) {
         (Some(summarize), Some((mut spool, gather, group, finalize))) => convert_parts_gathered(

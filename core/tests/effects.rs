@@ -131,7 +131,8 @@ fn world() -> World {
 }
 
 fn run(act: Act, declared: bool) -> Result<RunReport, String> {
-    let m = PassManager::new(PassRegistry::new());
+    // the checks under test, whatever the build
+    let m = PassManager::new(PassRegistry::new()).with_effect_checks(true);
     let mut w = world();
     let mut report = RunReport::default();
     m.run(
