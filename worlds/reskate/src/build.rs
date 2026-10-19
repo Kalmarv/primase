@@ -478,6 +478,15 @@ impl MapSink {
                 "the parts of one map carry different layout summaries".into(),
             ));
         }
+        // the layout's basis: it filed the placements in the writer's tiles
+        if let Some(s) = summary
+            && s.tile != o.tile
+        {
+            return Err(Error::Scene(format!(
+                "the layout summary was made for {} m tiles, the writer's are {} m: summarize-reskate-layout{{tile={}}}",
+                s.tile, o.tile, o.tile
+            )));
+        }
         t.parts += 1;
         t.writer.set_counts(counts);
         // the part's own overlay stack and blend chains, replayed on its meshes and tiles; a prototype stacked by

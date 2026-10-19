@@ -494,6 +494,17 @@ fn in_parts_with(
     order: Option<&[usize]>,
     passes: Vec<Box<dyn Pass>>,
 ) -> Result<(BuildReport, usize)> {
+    in_parts_tiled(e, grid, order, passes, 200.0)
+}
+
+/// [`in_parts_with`], the layout summarized for `layout_tile` metre tiles.
+fn in_parts_tiled(
+    e: &EncodingOptions,
+    grid: &PartitionGrid,
+    order: Option<&[usize]>,
+    passes: Vec<Box<dyn Pass>>,
+    layout_tile: f32,
+) -> Result<(BuildReport, usize)> {
     let mut w = map();
     grid.run(&mut w, &mut PassLog::default()).unwrap();
     let mut plan = w.resource::<PartitionPlan>().unwrap().clone();
@@ -506,7 +517,7 @@ fn in_parts_with(
     primase_reskate::register_summaries(&mut registry);
     let report = Rc::new(RefCell::new(None));
     let summarize: Vec<Box<dyn Pass>> = vec![
-        Box::new(SummarizeReskateLayout::new(200.0).unwrap()),
+        Box::new(SummarizeReskateLayout::new(layout_tile).unwrap()),
         Box::new(SummarizeReskateInstances),
         Box::new(SummarizeReskateContent),
     ];
@@ -812,4 +823,20 @@ fn a_prototype_stacked_differently_by_two_parts_is_refused() {
         e.contains("proto deck is stacked differently by two parts"),
         "{e}"
     );
+}
+
+/// A layout summarized for other tiles than the writer's is refused, naming both.
+#[test]
+fn a_layout_for_other_tiles_is_refused() {
+    let e = in_parts_tiled(
+        &encoding(&tmp("other-tiles")),
+        &aligned(),
+        None,
+        Vec::new(),
+        100.0,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(e.contains("made for 100 m tiles, the writer's are 200 m"), "{e}");
 }
