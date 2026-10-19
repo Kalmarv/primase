@@ -9,16 +9,21 @@
 //! `gta-select-collision{detail}`: the map bounds of the details asked for kept (`plain`, `hi`, `ma`, `;` between;
 //! `plain` unless given), the others despawned, counted per detail.
 //!
-//! `lower-gta-collision{x0,y0,x1,y1}`: every [`GtaBounds`] entity becomes an entity with an identity `core.transform`
-//! and a `core.collision` triangle soup in the core frame: geometry triangles as stored; boxes, spheres, capsules and
-//! cylinders tessellated (approximated, counted); composite children placed by their transforms; children flagged
-//! foliage (type flag bit 19) or river (bit 27) left out, as the earlier exporter did (counted). Each triangle's
-//! surface is its material's name in the install's material table (`materials.dat`), in the world's `Surfaces`.
-//! Given a region, only triangles whose centre lies in it are kept. The raw bound is removed once lowered, and an
-//! entity left with no triangle in the region goes (counted).
+//! `lower-gta-collision{x0,y0,x1,y1,foliage,river}`: every [`GtaBounds`] entity becomes an entity with an identity
+//! `core.transform` and a `core.collision` triangle soup in the core frame: geometry triangles as stored, box polygons
+//! and box bounds as their twelve triangles (exact, counted); approximated, each counted by what it became: spheres
+//! (bounds and polygons) as 32-triangle spheres (an octahedron subdivided once), capsule polygons as 8-sided tubes with
+//! such sphere ends, cylinder polygons as closed 8-sided tubes, and capsule, disc and cylinder bounds as their bounding
+//! boxes; composite children placed by their transforms. Composite children flagged foliage (type flag bit 19: bushes
+//! a body passes through) or river (bit 27: water volumes) are left out or kept as the required `foliage` and `river`
+//! options say (`leave-out` or `keep`), counted either way. Each triangle's surface is its material's name in the
+//! install's material table (`materials.dat`), in the world's `Surfaces`. Given a region, only triangles whose centre
+//! lies in it are kept. The raw bound is removed once lowered, and an entity left with no triangle in the region goes
+//! (counted).
 //!
-//! `lower-gta-embedded-collision`: every prototype's [`GtaEmbeddedBounds`] becomes its `core.collision`, in its own
-//! space (its placements place it), lowered as above (no region: its placements were selected). A placement whose
+//! `lower-gta-embedded-collision{foliage,river}`: every prototype's [`GtaEmbeddedBounds`] becomes its
+//! `core.collision`, in its own space (its placements place it), lowered as above (no region: its placements were
+//! selected). A placement whose
 //! entity flags have bit 2 set (`4`: embedded collision disabled) draws without it: its prototype is copied once
 //! without collision for the placements that disable it (counted). A placed prop (a bench, a rail, a pole) collides
 //! by these bounds; the map's ybn bounds hold the static map's.
@@ -255,11 +260,61 @@ impl Pass for SelectCollision {
     }
 }
 
+/// Which flagged composite children the collision lowerings keep: their `foliage` and `river` options, each `keep`
+/// or `leave-out`, required (whether collision is dropped is the caller's choice).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlaggedVolumes {
+    /// Children flagged foliage (type flag bit 19).
+    pub foliage: bool,
+    /// Children flagged river (type flag bit 27).
+    pub river: bool,
+}
+
+impl FlaggedVolumes {
+    /// Both kept.
+    pub const KEEP: FlaggedVolumes = FlaggedVolumes {
+        foliage: true,
+        river: true,
+    };
+    /// Both left out.
+    pub const LEAVE_OUT: FlaggedVolumes = FlaggedVolumes {
+        foliage: false,
+        river: false,
+    };
+
+    /// The `foliage` and `river` options of `o`.
+    pub fn from_options(o: &Options) -> std::result::Result<FlaggedVolumes, String> {
+        let kept = |k: &str| match o.get(k).map(String::as_str) {
+            Some("keep") => Ok(true),
+            Some("leave-out") => Ok(false),
+            Some(v) => Err(format!("{k}={v}: keep or leave-out")),
+            None => Err(format!(
+                "{k} is required (keep or leave-out): whether collision flagged {k} is dropped is the caller's choice"
+            )),
+        };
+        Ok(FlaggedVolumes {
+            foliage: kept("foliage")?,
+            river: kept("river")?,
+        })
+    }
+
+    fn insert_options(self, o: &mut Options) {
+        for (k, keep) in [("foliage", self.foliage), ("river", self.river)] {
+            o.insert(k.to_owned(), if keep { "keep" } else { "leave-out" }.to_owned());
+        }
+    }
+}
+
+/// What both collision lowerings approximate.
+const APPROXIMATES: &str = "spheres as 32-triangle spheres, capsule and cylinder polygons as 8-sided tubes, capsule, \
+                            disc and cylinder bounds as their bounding boxes";
+
 /// `lower-gta-collision` (see the module documentation).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaCollision {
     /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every triangle.
     pub region: Option<[f32; 4]>,
+    pub volumes: FlaggedVolumes,
 }
 
 impl LowerGtaCollision {
@@ -270,7 +325,7 @@ impl LowerGtaCollision {
                 .transpose()
         };
         for k in o.keys() {
-            if !["x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+            if !["x0", "y0", "x1", "y1", "foliage", "river"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
@@ -279,7 +334,10 @@ impl LowerGtaCollision {
             [None, None, None, None] => None,
             _ => return Err("x0, y0, x1 and y1 go together".into()),
         };
-        Ok(LowerGtaCollision { region })
+        Ok(LowerGtaCollision {
+            region,
+            volumes: FlaggedVolumes::from_options(o)?,
+        })
     }
 }
 
@@ -517,7 +575,7 @@ impl Soup {
     /// A bound placed by `t` (GTA frame), into this soup. A leaf is built in its own space (its spheres, capsules and
     /// cylinders tessellated there) and its vertices placed by `t`, so a scaled or sheared transform shapes them as it
     /// does the triangles beside them.
-    fn bound(&mut self, b: &Bound, t: &[[f32; 3]; 4], log: &mut PassLog) {
+    fn bound(&mut self, b: &Bound, t: &[[f32; 3]; 4], volumes: FlaggedVolumes, log: &mut PassLog) {
         match &b.contents {
             Contents::Geometry(g) => {
                 let mut local = Soup::default();
@@ -526,17 +584,23 @@ impl Soup {
             }
             Contents::Composite(children) => {
                 for c in children {
-                    // the earlier exporter's choice: no foliage or river volumes
+                    // the caller's choice: foliage and river volumes kept or left out; a child is left out when
+                    // a flag it has is (counted by the first), else counted kept by each flag it has
                     let flags = c.flags[0];
-                    if flags & (1 << 19) != 0 {
-                        log.count("composite children flagged foliage, left out", 1);
+                    let flagged: Vec<(&str, bool)> =
+                        [(19, "foliage", volumes.foliage), (27, "river", volumes.river)]
+                            .into_iter()
+                            .filter(|(bit, _, _)| flags & (1 << bit) != 0)
+                            .map(|(_, what, keep)| (what, keep))
+                            .collect();
+                    if let Some((what, _)) = flagged.iter().find(|(_, keep)| !keep) {
+                        log.count(&format!("composite children flagged {what}, left out"), 1);
                         continue;
                     }
-                    if flags & (1 << 27) != 0 {
-                        log.count("composite children flagged river, left out", 1);
-                        continue;
+                    for (what, _) in &flagged {
+                        log.count(&format!("composite children flagged {what}, kept"), 1);
                     }
-                    self.bound(&c.bound, &compose(t, &c.transform), log);
+                    self.bound(&c.bound, &compose(t, &c.transform), volumes, log);
                 }
             }
             Contents::Primitive => {
@@ -545,11 +609,15 @@ impl Soup {
                 let mut local = Soup::default();
                 match h.kind {
                     0 => {
-                        log.approximate("sphere bounds tessellated (32 triangles)", 1);
+                        log.approximate("sphere bounds as 32-triangle spheres", 1);
                         local.add_sphere(h.sphere_centre, h.sphere_radius, m);
                     }
+                    3 => {
+                        log.count("box bounds as their box", 1);
+                        local.add_aabb(h.box_min, h.box_max, &IDENTITY, m);
+                    }
                     _ => {
-                        log.approximate("box, capsule, disc and cylinder bounds as their boxes", 1);
+                        log.approximate("capsule, disc and cylinder bounds as their bounding boxes", 1);
                         local.add_aabb(h.box_min, h.box_max, &IDENTITY, m);
                     }
                 }
@@ -576,19 +644,22 @@ impl Soup {
                     self.materials.push(m);
                 }
                 Polygon::Box { corners } => {
-                    log.approximate("box polygons as boxes from their corners", 1);
+                    log.count("box polygons as their box from its corners", 1);
                     self.add_box(corners.map(|k| v[k as usize]), m);
                 }
                 Polygon::Sphere { centre, radius } => {
-                    log.approximate("sphere polygons tessellated (32 triangles)", 1);
+                    log.approximate("sphere polygons as 32-triangle spheres", 1);
                     self.add_sphere(v[usize::from(*centre)], *radius, m);
                 }
                 Polygon::Capsule { ends, radius } => {
-                    log.approximate("capsule polygons tessellated (8-sided)", 1);
+                    log.approximate(
+                        "capsule polygons as 8-sided tubes with 32-triangle sphere ends",
+                        1,
+                    );
                     self.add_tube(v[usize::from(ends[0])], v[usize::from(ends[1])], *radius, true, m);
                 }
                 Polygon::Cylinder { ends, radius } => {
-                    log.approximate("cylinder polygons tessellated (8-sided)", 1);
+                    log.approximate("cylinder polygons as closed 8-sided tubes", 1);
                     self.add_tube(
                         v[usize::from(ends[0])],
                         v[usize::from(ends[1])],
@@ -651,6 +722,7 @@ impl Pass for LowerGtaCollision {
                 o.insert(k.to_string(), v.to_string());
             }
         }
+        self.volumes.insert_options(&mut o);
         o
     }
     fn provides(&self) -> &[&'static str] {
@@ -664,7 +736,7 @@ impl Pass for LowerGtaCollision {
         true
     }
     fn approximates(&self) -> &'static str {
-        "boxes, spheres, capsules and cylinders tessellated; foliage and river volumes left out"
+        APPROXIMATES
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let names = w
@@ -680,7 +752,7 @@ impl Pass for LowerGtaCollision {
         for e in holders {
             let mut soup = Soup::default();
             let raw = w.remove::<GtaBounds>(e).expect("bounds");
-            soup.bound(&raw.bound, &IDENTITY, log);
+            soup.bound(&raw.bound, &IDENTITY, self.volumes, log);
             let c = soup.collision(&names, &mut surfaces, inside, log)?;
             if c.triangles.is_empty() {
                 log.count("bounds with no triangle in the region, left out", 1);
@@ -698,12 +770,30 @@ impl Pass for LowerGtaCollision {
 }
 
 /// `lower-gta-embedded-collision` (see the module documentation).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LowerGtaEmbeddedCollision;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LowerGtaEmbeddedCollision {
+    pub volumes: FlaggedVolumes,
+}
+
+impl LowerGtaEmbeddedCollision {
+    pub fn from_options(o: &Options) -> std::result::Result<LowerGtaEmbeddedCollision, String> {
+        if let Some(k) = o.keys().find(|k| !["foliage", "river"].contains(&k.as_str())) {
+            return Err(format!("unknown option {k}"));
+        }
+        Ok(LowerGtaEmbeddedCollision {
+            volumes: FlaggedVolumes::from_options(o)?,
+        })
+    }
+}
 
 impl Pass for LowerGtaEmbeddedCollision {
     fn name(&self) -> &'static str {
         "lower-gta-embedded-collision"
+    }
+    fn options(&self) -> Options {
+        let mut o = Options::new();
+        self.volumes.insert_options(&mut o);
+        o
     }
     // no `requires`: it runs on every loaded part and leaves one without embedded bounds as it is
     fn provides(&self) -> &[&'static str] {
@@ -713,7 +803,7 @@ impl Pass for LowerGtaEmbeddedCollision {
         &["core.instance"]
     }
     fn approximates(&self) -> &'static str {
-        "boxes, spheres, capsules and cylinders tessellated; foliage and river volumes left out"
+        APPROXIMATES
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let holders: Vec<Entity> = w.iter::<GtaEmbeddedBounds>().map(|(e, _)| e).collect();
@@ -730,6 +820,7 @@ impl Pass for LowerGtaEmbeddedCollision {
             soup.bound(
                 &w.get::<GtaEmbeddedBounds>(e).expect("bounds").bound,
                 &IDENTITY,
+                self.volumes,
                 log,
             );
             let c = soup.collision(&names, &mut surfaces, |_| true, log)?;
@@ -824,7 +915,7 @@ mod tests {
         for x in [1.0, -1.0] {
             let t = [[x, 0., 0.], [0., 1., 0.], [0., 0., 1.], [5., 0., 0.]];
             let mut soup = Soup::default();
-            soup.bound(&sphere, &t, &mut PassLog::default());
+            soup.bound(&sphere, &t, FlaggedVolumes::KEEP, &mut PassLog::default());
             assert_eq!(soup.triangles.len(), 32);
             for tri in &soup.triangles {
                 let [a, b, c] = tri.map(|i| soup.positions[i as usize]);
@@ -870,6 +961,7 @@ mod tests {
         let mut log = PassLog::default();
         LowerGtaCollision {
             region: Some([-10.0, -10.0, 10.0, 10.0]),
+            volumes: FlaggedVolumes::LEAVE_OUT,
         }
         .run(&mut w, &mut log)
         .unwrap();
@@ -881,6 +973,105 @@ mod tests {
             Some(&1)
         );
         assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+    }
+
+    /// A composite of a box, a sphere, a capsule bound, a child flagged foliage and one flagged river (each a box):
+    /// the box is exact and counted, the sphere and the capsule approximated by what they became; the flagged
+    /// children are kept or left out as the options say, counted either way. Both options are required.
+    #[test]
+    fn flagged_volumes_are_the_callers_choice_and_reports_name_what_was_approximated() {
+        use crate::bounds::Child;
+        let child = |kind: u8, flags: u32| {
+            let mut b = box_bound();
+            b.header.kind = kind;
+            Child {
+                bound: Box::new(b),
+                transform: IDENTITY,
+                flags: [flags, 0],
+                flags_2: [0, 0],
+            }
+        };
+        let mut root = box_bound();
+        root.header.kind = 10;
+        root.contents = Contents::Composite(vec![
+            child(3, 0),
+            child(0, 0),
+            child(1, 0),
+            child(3, 1 << 19),
+            child(3, 1 << 27),
+            child(3, 1 << 19 | 1 << 27),
+        ]);
+        // kept: the flagged boxes kept (the one flagged both only when both are kept)
+        for (options, volumes, kept) in [
+            ("foliage=leave-out,river=leave-out", FlaggedVolumes::LEAVE_OUT, 0),
+            ("foliage=keep,river=keep", FlaggedVolumes::KEEP, 3),
+            (
+                "foliage=keep,river=leave-out",
+                FlaggedVolumes {
+                    foliage: true,
+                    river: false,
+                },
+                1,
+            ),
+        ] {
+            let o: Options = options
+                .split(',')
+                .map(|kv| {
+                    let (k, v) = kv.split_once('=').unwrap();
+                    (k.to_owned(), v.to_owned())
+                })
+                .collect();
+            assert_eq!(FlaggedVolumes::from_options(&o), Ok(volumes));
+            assert_eq!(
+                LowerGtaEmbeddedCollision::from_options(&o).map(|p| p.options()),
+                Ok(o.clone())
+            );
+            let mut soup = Soup::default();
+            let mut log = PassLog::default();
+            soup.bound(&root, &IDENTITY, volumes, &mut log);
+            // box 12, sphere 32, capsule as its box 12, each kept flagged box 12
+            assert_eq!(soup.triangles.len(), 12 + 32 + 12 + 12 * kept, "{options}");
+            assert_eq!(
+                log.counts.get("box bounds as their box"),
+                Some(&(1 + kept as u64))
+            );
+            assert_eq!(
+                log.approximations.get("sphere bounds as 32-triangle spheres"),
+                Some(&1)
+            );
+            assert_eq!(
+                log.approximations
+                    .get("capsule, disc and cylinder bounds as their bounding boxes"),
+                Some(&1)
+            );
+            assert_eq!(log.approximations.len(), 2, "{:?}", log.approximations);
+            // the child flagged both: left out by foliage first, or counted kept by both
+            let (foliage, river) = match (volumes.foliage, volumes.river) {
+                (false, _) => (("left out", 2), ("left out", 1)),
+                (true, false) => (("kept", 1), ("left out", 2)),
+                (true, true) => (("kept", 2), ("kept", 2)),
+            };
+            for (what, (done, n)) in [("foliage", foliage), ("river", river)] {
+                assert_eq!(
+                    log.counts
+                        .get(&format!("composite children flagged {what}, {done}")),
+                    Some(&n),
+                    "{options} {what}"
+                );
+            }
+        }
+        for missing in ["foliage=keep", "river=keep", ""] {
+            let o: Options = missing
+                .split_once('=')
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .into_iter()
+                .collect();
+            assert!(LowerGtaCollision::from_options(&o).is_err(), "{missing:?}");
+            assert!(
+                LowerGtaEmbeddedCollision::from_options(&o).is_err(),
+                "{missing:?}"
+            );
+        }
     }
 
     /// A box bound from GTA's (0, 0, 0) to (1, 2, 3), of material 1.
@@ -920,7 +1111,11 @@ mod tests {
         let on = placement(&mut w, proto, 0);
         let off = placement(&mut w, proto, EMBEDDED_COLLISION_DISABLED | 1);
         let mut log = PassLog::default();
-        LowerGtaEmbeddedCollision.run(&mut w, &mut log).unwrap();
+        LowerGtaEmbeddedCollision {
+            volumes: FlaggedVolumes::LEAVE_OUT,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
 
         let c = w.get::<Collision>(proto).expect("collision");
         assert_eq!(c.triangles.len(), 12);
@@ -968,7 +1163,7 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         crate::register(&mut reg);
         let pipeline = reg
-            .parse("lower-gta-embedded-collision, lower-gta-surfaces")
+            .parse("lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, lower-gta-surfaces")
             .unwrap();
 
         let mut w = World::new();
@@ -1046,7 +1241,7 @@ mod tests {
                 flags_2: [0, 0],
             }]);
             let mut soup = Soup::default();
-            soup.bound(&root, &IDENTITY, &mut PassLog::default());
+            soup.bound(&root, &IDENTITY, FlaggedVolumes::KEEP, &mut PassLog::default());
             for (axis, [lo, hi]) in want.iter().enumerate() {
                 let got = [
                     soup.positions

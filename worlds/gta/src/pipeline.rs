@@ -236,16 +236,17 @@ mod tests {
         crate::register(&mut r);
         let m = PassManager::new(r);
         let rect = "x0=0,y0=0,x1=1,y1=1";
+        let leave = "foliage=leave-out,river=leave-out";
         let select = |assign: &str, lights: &str| {
             format!(
                 "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
                 gta-leave-out-interiors, lower-gta-lights{{{lights}{rect}}}, gta-select-collision{{detail=plain}}, \
-                lower-gta-collision{{{rect}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+                lower-gta-collision{{{rect},{leave}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
             )
         };
         let part = |form: &str, night: &str| {
             format!(
-                "select-lod{{form={form}}}, lower-gta-embedded-collision, lower-gta-surfaces, \
+                "select-lod{{form={form}}}, lower-gta-embedded-collision{{{leave}}}, lower-gta-surfaces, \
                 gta-pose-fragments, lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, \
                 gta-vertex-colours, lower-gta-water, normalize-normals"
             )

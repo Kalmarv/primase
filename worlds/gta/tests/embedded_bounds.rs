@@ -18,7 +18,7 @@ use primase_core::{Collision, Instance, Surfaces, World};
 use primase_gta::Keys;
 use primase_gta::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::assets::attach_assets;
-use primase_gta::collision::{GtaMaterials, LowerGtaEmbeddedCollision, material_names};
+use primase_gta::collision::{FlaggedVolumes, GtaMaterials, LowerGtaEmbeddedCollision, material_names};
 use primase_gta::components::GtaArchetype;
 use primase_gta::map::{ArchetypeDef, ArchetypeKind};
 use primase_testdata::real_data;
@@ -131,9 +131,12 @@ fn props_collide_by_codewalkers_reading_of_their_bounds() {
         );
         let report = attach_assets(&mut w, &set, &keys).unwrap();
         assert_eq!(report.embedded_bounds, 1, "{stem}: its bound");
-        LowerGtaEmbeddedCollision
-            .run(&mut w, &mut PassLog::default())
-            .unwrap();
+        // flagged foliage and river leaves left out, as the leaf loop below skips them
+        LowerGtaEmbeddedCollision {
+            volumes: FlaggedVolumes::LEAVE_OUT,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
         let c = w.get::<Collision>(proto).expect("collision");
         let surfaces = &w.resource::<Surfaces>().unwrap().0;
 

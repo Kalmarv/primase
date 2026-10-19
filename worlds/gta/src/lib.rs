@@ -74,7 +74,8 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1}`, `lower-gta-embedded-collision`,
+/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
+/// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
 /// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}` and `lower-gta-water`.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
@@ -95,18 +96,24 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("gta-select-region", |o| {
         Ok(Box::new(select::SelectRegion::from_options(o)?))
     });
-    reg.register("lower-gta-collision", |o| {
-        Ok(Box::new(collision::LowerGtaCollision::from_options(o)?))
-    });
+    // whether flagged collision is dropped is the caller's choice: no default
+    let volumes = [("foliage", "leave-out"), ("river", "leave-out")];
+    reg.register_requiring(
+        "lower-gta-collision",
+        |o| Ok(Box::new(collision::LowerGtaCollision::from_options(o)?)),
+        &volumes,
+    );
     reg.register("gta-select-stand-ins", |o| {
         Ok(Box::new(select::SelectStandIns::from_options(o)?))
     });
     reg.register("gta-select-collision", |o| {
         Ok(Box::new(collision::SelectCollision::from_options(o)?))
     });
-    reg.register("lower-gta-embedded-collision", |o| {
-        none(o, collision::LowerGtaEmbeddedCollision)
-    });
+    reg.register_requiring(
+        "lower-gta-embedded-collision",
+        |o| Ok(Box::new(collision::LowerGtaEmbeddedCollision::from_options(o)?)),
+        &volumes,
+    );
     reg.register("lower-gta-surfaces", |o| none(o, surfaces::LowerGtaSurfaces));
     reg.register("gta-select-water", |o| {
         Ok(Box::new(water::SelectGtaWater::from_options(o)?))
@@ -122,9 +129,10 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
 
 #[cfg(test)]
 mod tests {
-    /// GTA registers exactly these passes, and each is made with no options under its own name.
+    /// GTA registers exactly these passes, and each is made under its own name: with no options, but for the
+    /// collision lowerings, which require their `foliage` and `river` choices.
     #[test]
-    fn the_gta_passes_register_by_name_and_need_no_options() {
+    fn the_gta_passes_register_by_name() {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
         let names = [
@@ -146,10 +154,23 @@ mod tests {
             "lower-gta-water",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let volumes: primase_core::pass::Options = [("foliage", "keep"), ("river", "leave-out")]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
         for name in names {
-            let pass = reg
-                .make(name, &primase_core::pass::Options::new())
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let requiring = name.starts_with("lower-gta-") && name.ends_with("collision");
+            assert_eq!(reg.requires_options(name), requiring, "{name}");
+            let options = if requiring {
+                assert!(
+                    reg.make(name, &primase_core::pass::Options::new()).is_err(),
+                    "{name}"
+                );
+                volumes.clone()
+            } else {
+                primase_core::pass::Options::new()
+            };
+            let pass = reg.make(name, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(pass.name(), name);
         }
     }
@@ -161,7 +182,7 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
         let p = reg
-            .parse("gta-select-region, gta-select-stand-ins, gta-select-collision, gta-leave-out-interiors, gta-select-water, lower-gta-collision")
+            .parse("gta-select-region, gta-select-stand-ins, gta-select-collision, gta-leave-out-interiors, gta-select-water, lower-gta-collision{foliage=leave-out,river=leave-out}")
             .unwrap();
         for pass in &p.passes {
             assert!(pass.despawns_entities(), "{}", pass.name());

@@ -157,6 +157,7 @@ mod tests {
     fn gta_pipelines_pass_the_declaration_checks() {
         let registry = super::registry();
         let rect = "x0=0,y0=0,x1=100,y1=100";
+        let leave = "foliage=leave-out,river=leave-out";
         let mut pipelines = Vec::new();
         for (assign, lights, night) in [
             ("assign=gta.map:online;gta.hour:12", "", "false"),
@@ -166,11 +167,12 @@ mod tests {
             for interiors in ["", " gta-leave-out-interiors,"] {
                 let select = format!(
                     "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5}},{interiors} \
-                     lower-gta-lights{{{lights}{rect}}}, gta-select-collision, lower-gta-collision{{{rect}}}, \
+                     lower-gta-lights{{{lights}{rect}}}, gta-select-collision, lower-gta-collision{{{rect},{leave}}}, \
                      lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
                 );
                 let passes = format!(
-                    "select-lod{{form=finest}}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, \
+                    "select-lod{{form=finest}}, lower-gta-embedded-collision{{{leave}}}, lower-gta-surfaces, \
+                     gta-pose-fragments, \
                      lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, \
                      lower-gta-water, normalize-normals"
                 );

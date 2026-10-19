@@ -25,13 +25,15 @@ fn select([x0, y0, x1, y1]: [f32; 4]) -> String {
     format!(
         "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
          gta-leave-out-interiors, lower-gta-lights{{{rect}}}, gta-select-collision{{detail=plain}}, \
-         lower-gta-collision{{{rect}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+         lower-gta-collision{{{rect},foliage=leave-out,river=leave-out}}, lower-gta-surfaces, \
+         gta-select-water{{{rect},clip=kept}}"
     )
 }
 
 /// Every GTA pass over a loaded world: the finest level of detail, embedded collision with its surfaces, fragments
 /// posed, shaders lowered for day, winding, tints, terrain layers, vertex colours, water meshes, normal maps.
-const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, \
+const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, \
+                    lower-gta-surfaces, gta-pose-fragments, \
                     lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, \
                     normalize-normals";
 

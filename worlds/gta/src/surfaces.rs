@@ -237,10 +237,11 @@ mod tests {
                 &mut RunReport::default(),
             )
         };
-        let err = run("lower-gta-surfaces, lower-gta-embedded-collision").unwrap_err();
+        let err = run("lower-gta-surfaces, lower-gta-embedded-collision{foliage=leave-out,river=leave-out}")
+            .unwrap_err();
         assert!(matches!(err, Error::SettledThenChanged { .. }), "{err}");
         // the default order (embedded collision first) is not refused for that
-        let r = run("lower-gta-embedded-collision, lower-gta-surfaces");
+        let r = run("lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, lower-gta-surfaces");
         assert!(!matches!(r, Err(Error::SettledThenChanged { .. })), "{r:?}");
     }
 
