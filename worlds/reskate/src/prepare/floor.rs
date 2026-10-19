@@ -206,6 +206,7 @@ impl Pass for PrepareReskateFloor {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        super::require_one_part(w, self.name())?;
         if w.resource::<SkateFloorPlan>().is_some() {
             return Err(
                 "prepare-reskate-floor: the world's floor is already prepared (skate.floor_plan)".into(),

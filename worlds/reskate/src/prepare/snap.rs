@@ -173,6 +173,7 @@ impl Pass for SnapReskateMarkers {
         &["skate.marker"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        super::require_one_part(w, self.name())?;
         if w.resource::<SkateMarkerSnaps>().is_some() {
             return Err("snap-reskate-markers: the markers are already snapped (skate.marker_snaps)".into());
         }
