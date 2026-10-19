@@ -17,6 +17,250 @@ removed_when = "the GLB codec moves into the toolkit (separate change after step
 
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
+# ---- worlds crate layout: modules not yet arranged by role (read/, passes/, write/, components/, stages) ----
+# A migration status per module, counted like a break: the check fails on a module that breaks the layout and isn't
+# listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
+
+[[layout]]
+file = "worlds/fromsoft/src/archive.rs"
+reason = "reader I/O in Other"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/fromsoft/src/dcx.rs"
+reason = "Other names the I/O module primase_compress::oodle"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/fromsoft/src/sekiro/collision.rs"
+reason = "Other names the I/O module primase_fromsoft::Archive"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/fromsoft/src/sekiro/extras.rs"
+reason = "Other names the I/O module primase_fromsoft::Archive"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/fromsoft/src/sekiro/mod.rs"
+reason = "Other names the I/O module primase_fromsoft::Archive"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/fromsoft/src/sekiro/textures.rs"
+reason = "Other names the I/O module primase_fromsoft::Archive; Other names the I/O module primase_fromsoft::archive"
+removed_when = "worlds/fromsoft is arranged by role, game-first under sekiro/, at the Elden Ring work or when a lane substantially touches it"
+
+[[layout]]
+file = "worlds/frostbite/src/ebx/mod.rs"
+reason = "Other names the I/O module primase_frostbite::ebx::read; Other names the I/O module primase_frostbite::ebx::write"
+removed_when = "worlds/frostbite is arranged by role when a lane substantially touches it (read/ for folder access; EBX codecs renamed off read/write)"
+
+[[layout]]
+file = "worlds/frostbite/src/folder.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_compress::oodle"
+removed_when = "worlds/frostbite is arranged by role when a lane substantially touches it (read/ for folder access; EBX codecs renamed off read/write)"
+
+[[layout]]
+file = "worlds/gta/src/archive_set.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::rpf"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/assets.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region; Other names the I/O module primase_gta::rpf"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/collision.rs"
+reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/gtxd.rs"
+reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/keys.rs"
+reason = "reader I/O in Other"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/lights.rs"
+reason = "Other names the I/O module primase_gta::region"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/ng.rs"
+reason = "Other names the I/O module primase_gta::keys"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/pipeline.rs"
+reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::assets; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region; Other names the I/O module primase_gta::Install"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/pose.rs"
+reason = "Other names the I/O module primase_gta::region"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/region.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::assets"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/rpf.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_gta::keys"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/select.rs"
+reason = "Other names the I/O module primase_gta::region"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/gta/src/water.rs"
+reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region"
+removed_when = "worlds/gta is arranged by role when a lane substantially touches it (read/ for archives, resources and regions; passes/; components/)"
+
+[[layout]]
+file = "worlds/reskate/src/build.rs"
+reason = "writer I/O in Other"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/interchange/mod.rs"
+reason = "reader I/O in Other; Other names the I/O module primase_reskate::interchange::read; Other names the I/O module primase_reskate::interchange::write; Other names the I/O module primase_gltf::LoadReport; Other names the I/O module primase_image::TextureLoadReport; Other names the I/O module primase_gltf::load_mesh_files; Other names the I/O module primase_image::load_textures; Other names the I/O module primase_reskate::texture"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/layered.rs"
+reason = "Other names the I/O module primase_reskate::postcompile::vblend"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/map.rs"
+reason = "Other names the I/O module primase_reskate::texture; Other names the I/O module primase_reskate::postcompile::map_folder"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/material.rs"
+reason = "Other names the I/O module primase_reskate::texture"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/blend_order.rs"
+reason = "Other names the I/O module primase_reskate::build"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/budget.rs"
+reason = "Other names the I/O module primase_reskate::texture"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/overlays.rs"
+reason = "Other names the I/O module primase_reskate::build"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/raise.rs"
+reason = "a #[path] attribute (a module's place is its file's path)"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/snap.rs"
+reason = "Other names the I/O module primase_reskate::build"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/textures.rs"
+reason = "Other names the I/O module primase_reskate::texture"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/prepare/water.rs"
+reason = "Other names the I/O module primase_reskate::build"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/scene.rs"
+reason = "Other names the I/O module primase_reskate::texture"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/reskate/src/texture.rs"
+reason = "writer I/O in Other"
+removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+
+[[layout]]
+file = "worlds/unity/src/components.rs"
+reason = "Components names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/drawn.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/level.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/lower.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/lower_lights.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/material.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/mesh.rs"
+reason = "Other names the I/O module primase_unity::player; Other names the I/O module primase_unity::resource"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/player.rs"
+reason = "reader I/O in Other"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/program.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/resource.rs"
+reason = "reader I/O in Other"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/scene.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/terrain.rs"
+reason = "Other names the I/O module primase_unity::player"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
+[[layout]]
+file = "worlds/unity/src/texture.rs"
+reason = "Other names the I/O module primase_unity::player; Other names the I/O module primase_unity::resource"
+removed_when = "worlds/unity is arranged by role when a lane substantially touches it (read/ for player, container and resource decoding; passes/; components/)"
+
 # ---- composition without data logic (examples, bins, cli) ----
 
 [[entry_point]]

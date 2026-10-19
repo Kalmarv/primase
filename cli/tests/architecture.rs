@@ -13,6 +13,12 @@
 //!   environment and process access, listed in `clippy.toml`), and every module that opts back in names a role its
 //!   crate has: reader and writer I/O in `formats` and `worlds`, toolkit I/O in the toolkit, test I/O only in test
 //!   code.
+//! - `worlds_layout`: a worlds crate is arranged by role: reader I/O only under `read/`, writer I/O only under
+//!   `write/`, a later stage's I/O under its own folder (`[package.metadata.primase] stages`); allowances cover no
+//!   module beneath them; passes, components and other modules name no I/O path (any module that opts in to I/O, a
+//!   `read`/`write`/stage module, or a re-export of one). A guardrail by name, not a proof. A module not yet arranged
+//!   carries a migration status in `architecture.toml` (`[[layout]]`, per module, counted like a break). The rules
+//!   are checked on `layout_rules`' and `layout_paths`' fixtures.
 //! - `game_names`: no game, engine or destination names in core, toolkit and formats code (the test-input registry
 //!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`).
 //! - `entry_points`: examples, bins and the cli compose library entry points; no world data or format handling of
@@ -61,6 +67,9 @@ struct Member {
     names: Vec<String>,
     /// The engine crate (package name) a game or destination crate may depend on.
     engine: Option<String>,
+    /// The later stages a worlds crate holds, each in its own folder (`postcompile`): a stage reads and writes its
+    /// own artifacts.
+    stages: Vec<String>,
 }
 
 impl Member {
@@ -92,11 +101,13 @@ fn members() -> Vec<Member> {
                     .and_then(|v| v.as_str())
                     .map(str::to_owned)
             };
-            let names = meta
-                .and_then(|m| m.get("names"))
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
-                .unwrap_or_default();
+            let list = |k: &str| -> Vec<String> {
+                meta.and_then(|m| m.get(k))
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default()
+            };
+            let (names, stages) = (list("names"), list("stages"));
             let (kind, engine) = (text("kind"), text("engine"));
             if path.starts_with("worlds/") {
                 assert!(
@@ -114,6 +125,7 @@ fn members() -> Vec<Member> {
                 kind,
                 names,
                 engine,
+                stages,
             }
         })
         .collect()
@@ -530,6 +542,573 @@ fn io_follows_roles() {
         .map(|e| format!("{}: {}", e["file"], e["role"]))
         .collect();
     assert_reconciled("I/O breaks", found, excused);
+}
+
+// ---- worlds crate layout ----
+
+/// Where a file of a worlds crate sits, from its path under `src/`: the first folder (or module file) that names a
+/// role or one of the crate's stages. Game-first subtrees use the same names (`sekiro/read/msb.rs` is in `read`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Place {
+    Read,
+    Write,
+    Passes,
+    Components,
+    Stage(String),
+    /// Elsewhere: the crate root, named format modules and pure codecs.
+    Other,
+}
+
+fn place(src_path: &str, stages: &[String]) -> Place {
+    for part in src_path.split('/') {
+        let part = part.strip_suffix(".rs").unwrap_or(part);
+        match part {
+            "read" => return Place::Read,
+            "write" => return Place::Write,
+            "passes" => return Place::Passes,
+            "components" => return Place::Components,
+            s if stages.iter().any(|st| st == s) => return Place::Stage(s.to_owned()),
+            _ => {}
+        }
+    }
+    Place::Other
+}
+
+/// A file's module path in its crate (`["a", "b"]` for `src/a/b.rs` or `src/a/b/mod.rs`; empty for `lib.rs`).
+fn module_of(src_path: &str) -> Vec<String> {
+    let p = src_path.trim_end_matches(".rs");
+    let p = p.strip_suffix("/mod").unwrap_or(p);
+    if p == "lib" {
+        return Vec::new();
+    }
+    p.split('/').map(str::to_owned).collect()
+}
+
+/// The path starting at `t[i]` (`a::b::c`) and the index after it.
+fn path_at(t: &[Tok], i: usize) -> (Vec<String>, usize) {
+    let mut segs = Vec::new();
+    if let Some(Tok::Ident(first)) = t.get(i) {
+        segs.push(first.clone());
+    }
+    let mut j = i + 1;
+    while let (Some(a), Some(b), Some(Tok::Ident(seg))) = (t.get(j), t.get(j + 1), t.get(j + 2)) {
+        if !(punct(a, ':') && punct(b, ':')) {
+            break;
+        }
+        segs.push(seg.clone());
+        j += 3;
+    }
+    (segs, j)
+}
+
+/// The paths of a `use` tree (`crate::{read::x, y as z, w::*}`), each with the name it brings in (`*` for a glob).
+fn use_tree(t: &[Tok], prefix: &[String], out: &mut Vec<(Vec<String>, String)>) {
+    let mut segs = prefix.to_vec();
+    let mut i = 0;
+    while i < t.len() {
+        match &t[i] {
+            Tok::Ident(s) if s == "as" => {
+                if let Some(Tok::Ident(name)) = t.get(i + 1) {
+                    out.push((segs, name.clone()));
+                }
+                return;
+            }
+            Tok::Ident(s) => {
+                segs.push(s.clone());
+                i += 1;
+            }
+            Tok::Punct('{') => {
+                let end = block_end(t, i).min(t.len());
+                let inner = &t[i + 1..end];
+                let (mut depth, mut start) = (0i32, 0);
+                for (k, tok) in inner.iter().enumerate() {
+                    match tok {
+                        Tok::Punct('{') => depth += 1,
+                        Tok::Punct('}') => depth -= 1,
+                        Tok::Punct(',') if depth == 0 => {
+                            use_tree(&inner[start..k], &segs, out);
+                            start = k + 1;
+                        }
+                        _ => {}
+                    }
+                }
+                use_tree(&inner[start..], &segs, out);
+                return;
+            }
+            Tok::Punct('*') => {
+                out.push((segs, "*".to_owned()));
+                return;
+            }
+            _ => i += 1,
+        }
+    }
+    if segs.len() > prefix.len() {
+        if segs.last().is_some_and(|s| s == "self") {
+            segs.pop();
+        }
+        let name = segs.last().cloned().unwrap_or_default();
+        out.push((segs, name));
+    }
+}
+
+/// A `use` item: whether it is a re-export (`pub`, `pub(crate)`, ...), and its paths with the names they bring in.
+struct Use {
+    public: bool,
+    items: Vec<(Vec<String>, String)>,
+}
+
+/// The `use` items and the other paths (two segments or more) a token stream names.
+fn named(t: &[Tok]) -> (Vec<Use>, Vec<Vec<String>>) {
+    let (mut uses, mut paths) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < t.len() {
+        if punct(&t[i], '#') {
+            // an attribute names lints and paths of its own, not dependencies: skip `#[...]` and `#![...]`
+            let open = if t.get(i + 1).is_some_and(|x| punct(x, '!')) {
+                i + 2
+            } else {
+                i + 1
+            };
+            if t.get(open).is_some_and(|x| punct(x, '[')) {
+                let mut depth = 0i32;
+                let mut k = open;
+                while k < t.len() {
+                    if punct(&t[k], '[') {
+                        depth += 1;
+                    } else if punct(&t[k], ']') {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    k += 1;
+                }
+                i = k + 1;
+                continue;
+            }
+            i += 1;
+        } else if ident(&t[i], "use") {
+            let public = i > 0
+                && (ident(&t[i - 1], "pub") || (punct(&t[i - 1], ')') && i >= 4 && ident(&t[i - 4], "pub")));
+            let end = (i..t.len()).find(|&k| punct(&t[k], ';')).unwrap_or(t.len());
+            let mut items = Vec::new();
+            use_tree(&t[i + 1..end], &[], &mut items);
+            uses.push(Use { public, items });
+            i = end;
+        } else if matches!(t[i], Tok::Ident(_)) {
+            let (segs, j) = path_at(t, i);
+            if segs.len() > 1 {
+                paths.push(segs);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    (uses, paths)
+}
+
+/// A path as `crate_ident::...`: `crate`, `self` and `super` resolved against the file's module; a first segment
+/// naming another crate (`primase_*`, `std`, `core`, `alloc`) kept; anything else relative to the file's module.
+fn absolute(segs: &[String], krate: &str, module: &[String]) -> String {
+    let here = || -> Vec<String> {
+        std::iter::once(krate.to_owned())
+            .chain(module.iter().cloned())
+            .collect()
+    };
+    let (mut base, mut rest) = match segs.first().map(String::as_str) {
+        Some("crate") => (vec![krate.to_owned()], &segs[1..]),
+        Some("self") => (here(), &segs[1..]),
+        Some(s) if s.starts_with("primase_") || matches!(s, "std" | "core" | "alloc") => (Vec::new(), segs),
+        _ => (here(), segs),
+    };
+    while rest.first().is_some_and(|s| s == "super") {
+        base.pop();
+        rest = &rest[1..];
+    }
+    base.extend(rest.iter().cloned());
+    base.join("::")
+}
+
+/// Whether `path` is `prefix` or lies under it.
+fn within(path: &str, prefix: &str) -> bool {
+    path == prefix || path.strip_prefix(prefix).is_some_and(|r| r.starts_with("::"))
+}
+
+/// The workspace's modules and which do I/O, as `crate_ident::path`: a path is I/O when the deepest module it lies in
+/// is (a pure child of an I/O module is not), or when it is under a re-export of an I/O path.
+struct IoIndex {
+    /// Every library module (each crate root too), with whether it does I/O.
+    modules: BTreeMap<String, bool>,
+    /// Re-exports of I/O paths, by the path they are re-exported as.
+    aliases: BTreeSet<String>,
+}
+
+impl IoIndex {
+    /// The deepest known module `path` lies in.
+    fn module(&self, path: &str) -> Option<&String> {
+        self.modules
+            .keys()
+            .filter(|m| within(path, m))
+            .max_by_key(|m| m.len())
+    }
+    /// The I/O module or re-export `path` reaches, if any.
+    fn io(&self, path: &str) -> Option<String> {
+        if let Some(a) = self.aliases.iter().find(|a| within(path, a)) {
+            return Some(a.clone());
+        }
+        let m = self.module(path)?;
+        self.modules[m].then(|| m.clone())
+    }
+}
+
+/// One source file of a worlds crate, as the layout rules see it.
+struct LayoutFile<'a> {
+    file: &'a str,
+    src_path: &'a str,
+    text: &'a str,
+    tokens: &'a [Tok],
+    krate: &'a str,
+}
+
+/// The layout rules for one file of a worlds crate (CONTRIBUTING "Worlds crates: one role vocabulary"):
+/// - reader I/O only under `read/` or a stage folder, writer I/O only under `write/` or a stage folder;
+/// - an I/O allowance covers no module beneath it: none on a `mod` declaration, and no inner one in a file that
+///   declares modules;
+/// - no `#[path]` attribute and no inline role module (`mod read { ... }`), so a file's place is its path;
+/// - passes, components and the other modules (format modules, codecs; the crate root aside, which re-exports for
+///   consumers) name no I/O path but their own module's: every module that opts in to I/O, every `read`/`write`/stage
+///   module of a worlds crate, and every re-export of one of them (`IoIndex`).
+///
+/// Coverage is by name: a function value, a trait object or a macro that reaches I/O is not seen.
+fn layout_violations(f: &LayoutFile, stages: &[String], io: &IoIndex) -> Vec<String> {
+    let (file, src_path) = (f.file, f.src_path);
+    let at = place(src_path, stages);
+    let module = module_of(src_path);
+    let mut out = Vec::new();
+    for (role, inner, on_mod) in io_attrs(f.text) {
+        let allowed = match role.as_str() {
+            "reader I/O" => matches!(at, Place::Read | Place::Stage(_)),
+            "writer I/O" => matches!(at, Place::Write | Place::Stage(_)),
+            _ => true,
+        };
+        if !allowed {
+            out.push(format!(
+                "{file}: {role} in {at:?} (reader I/O belongs under read/, writer I/O under write/)"
+            ));
+        }
+        if on_mod {
+            out.push(format!(
+                "{file}: an I/O allowance on a mod declaration covers the whole module"
+            ));
+        }
+        if inner && declares_modules(f.tokens) {
+            out.push(format!(
+                "{file}: an inner I/O allowance covers the modules this file declares"
+            ));
+        }
+    }
+    if f.text.contains("#[path") {
+        out.push(format!(
+            "{file}: a #[path] attribute (a module's place is its file's path)"
+        ));
+    }
+    let role_name =
+        |n: &str| matches!(n, "read" | "write" | "passes" | "components") || stages.iter().any(|s| s == n);
+    for w in f.tokens.windows(3) {
+        if ident(&w[0], "mod") && matches!(&w[1], Tok::Ident(n) if role_name(n)) && punct(&w[2], '{') {
+            out.push(format!("{file}: an inline role module (give it its own file)"));
+        }
+    }
+    if matches!(at, Place::Passes | Place::Components | Place::Other) && src_path != "lib.rs" {
+        let (uses, paths) = named(f.tokens);
+        let all = uses
+            .iter()
+            .flat_map(|u| u.items.iter().map(|(p, _)| p.clone()))
+            .chain(paths);
+        let here = absolute(&[], f.krate, &module);
+        let mut seen = BTreeSet::new();
+        for p in all {
+            let abs = absolute(&p, f.krate, &module);
+            if io.module(&abs) == Some(&here) {
+                continue; // its own module
+            }
+            if let Some(m) = io.io(&abs)
+                && seen.insert(m.clone())
+            {
+                out.push(format!("{file}: {at:?} names the I/O module {m}"));
+            }
+        }
+    }
+    out
+}
+
+/// The `allow(clippy::disallowed_*)` attributes of a source text: (role, inner attribute, applied to a `mod` item).
+fn io_attrs(text: &str) -> Vec<(String, bool, bool)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(p) = text[from..].find("allow(") {
+        let start = from + p;
+        let end = text[start..].find(")]").map_or(text.len(), |e| start + e + 2);
+        let attr = &text[start..end];
+        if attr.contains("clippy::disallowed_") {
+            let role = attr
+                .split_once("reason = \"")
+                .and_then(|(_, r)| r.split_once(':'))
+                .map_or_else(|| "(no reason)".to_owned(), |(role, _)| role.to_owned());
+            let inner = text[..start].trim_end().ends_with("#![");
+            let after = text[end..].trim_start();
+            let after = after
+                .strip_prefix("pub(crate)")
+                .or_else(|| after.strip_prefix("pub(super)"))
+                .or_else(|| after.strip_prefix("pub"))
+                .unwrap_or(after)
+                .trim_start();
+            out.push((role, inner, !inner && after.starts_with("mod ")));
+        }
+        from = end;
+    }
+    out
+}
+
+/// Whether a (test-free) token stream declares a module.
+fn declares_modules(t: &[Tok]) -> bool {
+    t.windows(3).any(|w| {
+        ident(&w[0], "mod") && matches!(w[1], Tok::Ident(_)) && (punct(&w[2], ';') || punct(&w[2], '{'))
+    })
+}
+
+/// The workspace's I/O index: every library module, I/O when it opts in to reader, writer or toolkit I/O or is a
+/// `read`/`write`/stage module of a worlds crate, and every re-export of an I/O path (followed until nothing new
+/// appears).
+fn io_paths(members: &[Member]) -> IoIndex {
+    let mut modules = BTreeMap::new();
+    let mut files = Vec::new();
+    for m in members.iter().filter(|m| m.library()) {
+        let krate = m.name.replace('-', "_");
+        let src = format!("{}/src/", m.path);
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            let src_path = file[src.len()..].to_owned();
+            let module = module_of(&src_path);
+            let here: Vec<String> = std::iter::once(krate.clone())
+                .chain(module.iter().cloned())
+                .collect();
+            let opted = io_attrs(&read(&root().join(&file)))
+                .iter()
+                .any(|(r, ..)| matches!(r.as_str(), "reader I/O" | "writer I/O" | "toolkit I/O"));
+            let role = m.layer() == "worlds"
+                && matches!(
+                    place(&src_path, &m.stages),
+                    Place::Read | Place::Write | Place::Stage(_)
+                );
+            modules.insert(here.join("::"), (opted || role) && !module.is_empty());
+            files.push((krate.clone(), module, here, code(&file)));
+        }
+    }
+    let mut io = IoIndex {
+        modules,
+        aliases: BTreeSet::new(),
+    };
+    loop {
+        let before = io.aliases.len();
+        for (krate, module, here, tokens) in &files {
+            let (uses, _) = named(tokens);
+            for u in uses.iter().filter(|u| u.public) {
+                for (path, name) in &u.items {
+                    if name != "*" && io.io(&absolute(path, krate, module)).is_some() {
+                        io.aliases.insert(format!("{}::{name}", here.join("::")));
+                    }
+                }
+            }
+        }
+        if io.aliases.len() == before {
+            return io;
+        }
+    }
+}
+
+#[test]
+fn worlds_layout() {
+    let members = members();
+    let io = io_paths(&members);
+    let excused: BTreeSet<String> = entries("layout").iter().map(|e| e["file"].clone()).collect();
+    let mut found = BTreeMap::new();
+    for m in members.iter().filter(|m| m.layer() == "worlds") {
+        let krate = m.name.replace('-', "_");
+        let src = format!("{}/src/", m.path);
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            let text = read(&root().join(&file));
+            let tokens = code(&file);
+            let f = LayoutFile {
+                file: &file,
+                src_path: &file[src.len()..],
+                text: &text,
+                tokens: &tokens,
+                krate: &krate,
+            };
+            let v = layout_violations(&f, &m.stages, &io);
+            if !v.is_empty() {
+                found.insert(file.clone(), v);
+            }
+        }
+    }
+    let mut msg = String::new();
+    for (file, v) in &found {
+        if !excused.contains(file) {
+            for line in v {
+                msg += &format!("\n  violation: {line}");
+            }
+        }
+    }
+    for file in &excused {
+        if !found.contains_key(file) {
+            msg +=
+                &format!("\n  stale migration entry (the module follows the layout now; delete it): {file}");
+        }
+    }
+    assert!(msg.is_empty(), "worlds crate layout:{msg}");
+}
+
+#[test]
+fn layout_rules() {
+    let stages = vec!["postcompile".to_owned()];
+    let modules = [
+        ("primase_image", false),
+        ("primase_image::texture", true),
+        ("primase_x", false),
+        ("primase_x::read", true),
+        ("primase_x::write", true),
+        ("primase_x::postcompile", true),
+        ("primase_x::components", false),
+        ("primase_x::interchange", true),
+        ("primase_x::interchange::tables", false),
+        ("primase_x::passes::floor", false),
+        ("primase_x::archive", true),
+    ];
+    let io = IoIndex {
+        modules: modules.iter().map(|(m, io)| ((*m).to_owned(), *io)).collect(),
+        aliases: ["primase_x::read_scene".to_owned()].into(),
+    };
+    let check = |path: &str, src: &str| {
+        let tokens = code_of(src);
+        let f = LayoutFile {
+            file: path,
+            src_path: path,
+            text: src,
+            tokens: &tokens,
+            krate: "primase_x",
+        };
+        layout_violations(&f, &stages, &io)
+    };
+    let reader = "#[allow(clippy::disallowed_methods, reason = \"reader I/O: x\")]\nfn r() {}";
+    let writer = "#[allow(clippy::disallowed_methods, reason = \"writer I/O: x\")]\nfn w() {}";
+    // I/O where its role is
+    assert!(check("read/scene.rs", reader).is_empty());
+    assert!(check("sekiro/read/msb.rs", reader).is_empty());
+    assert!(check("postcompile/map_folder.rs", reader).is_empty());
+    assert!(check("write/map.rs", writer).is_empty());
+    assert!(check("postcompile/vblend.rs", writer).is_empty());
+    // a writer reads nothing; reading and writing elsewhere is refused
+    assert_eq!(check("write/map.rs", reader).len(), 1);
+    assert_eq!(check("passes/floor.rs", writer).len(), 1);
+    assert_eq!(check("components.rs", reader).len(), 1);
+    assert_eq!(check("interchange/schema.rs", writer).len(), 1);
+    // narrow allowances, and a module's place is its file
+    let on_mod = "#[allow(clippy::disallowed_methods, reason = \"reader I/O: x\")]\npub mod scene;";
+    assert_eq!(check("read/mod.rs", on_mod).len(), 1);
+    let inner = "#![allow(clippy::disallowed_methods, reason = \"reader I/O: x\")]\nmod scene;\nfn r() {}";
+    assert_eq!(check("read/mod.rs", inner).len(), 1);
+    assert_eq!(check("read/mod.rs", "#[path = \"x.rs\"] mod scene;").len(), 1);
+    assert_eq!(check("lib.rs", "mod read { pub fn f() {} }").len(), 1);
+    // passes, components and shared modules name no I/O path, however it is written
+    assert!(check("passes/floor.rs", "use crate::components::Floor; fn f() {}").is_empty());
+    assert_eq!(
+        check("passes/floor.rs", "use crate::read::scene; fn f() {}").len(),
+        1
+    );
+    assert_eq!(
+        check("passes/floor.rs", "use crate::{components::Floor, read::scene};").len(),
+        1
+    );
+    assert_eq!(
+        check(
+            "passes/a/floor.rs",
+            "fn f() { super::super::super::write::map(); }"
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        check("passes/floor.rs", "fn f() { crate::postcompile::run(); }").len(),
+        1
+    );
+    assert_eq!(
+        check("passes/floor.rs", "fn f() { primase_image::texture::load(); }").len(),
+        1
+    );
+    assert_eq!(check("passes/floor.rs", "use crate::read_scene as rs;").len(), 1);
+    assert_eq!(check("components.rs", "use crate::read::Thing;").len(), 1);
+    assert_eq!(
+        check("collision_query.rs", "fn f() { crate::write::encode(); }").len(),
+        1
+    );
+    assert!(check("passes/floor.rs", "fn f() { primase_image::resize(); }").is_empty());
+    // a pure child of an I/O module is not I/O; a module naming itself is not a dependency
+    assert!(check("passes/floor.rs", "use crate::interchange::tables::Row;").is_empty());
+    assert_eq!(
+        check("passes/floor.rs", "use crate::interchange::Thing;").len(),
+        1
+    );
+    assert!(check("archive.rs", "fn f() { crate::archive::open(); }").is_empty());
+    // an attribute's paths are not dependencies
+    assert!(
+        check(
+            "interchange/schema.rs",
+            "#[allow(clippy::too_many_lines)]
+fn f() {}"
+        )
+        .is_empty()
+    );
+    // I/O modules may name each other; the crate root re-exports for consumers
+    assert!(check("write/map.rs", "use crate::read::scene;").is_empty());
+    assert!(check("lib.rs", "pub use read::scene::read_scene;").is_empty());
+}
+
+#[test]
+fn layout_paths() {
+    let mut out = Vec::new();
+    use_tree(
+        &code_of("crate::{read::{a, b as c}, passes::*, write::self}"),
+        &[],
+        &mut out,
+    );
+    let got: Vec<(String, String)> = out.into_iter().map(|(p, n)| (p.join("::"), n)).collect();
+    let want: Vec<(String, String)> = [
+        ("crate::read::a", "a"),
+        ("crate::read::b", "c"),
+        ("crate::passes", "*"),
+        ("crate::write", "write"),
+    ]
+    .iter()
+    .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+    .collect();
+    assert_eq!(got, want);
+    let segs = |s: &str| s.split("::").map(str::to_owned).collect::<Vec<_>>();
+    let module = segs("passes::a::floor");
+    assert_eq!(
+        absolute(&segs("super::write::x"), "k", &module),
+        "k::passes::a::write::x"
+    );
+    assert_eq!(
+        absolute(&segs("super::super::super::write"), "k", &module),
+        "k::write"
+    );
+    assert_eq!(absolute(&segs("crate::read::x"), "k", &module), "k::read::x");
+    assert_eq!(
+        absolute(&segs("primase_image::texture"), "k", &module),
+        "primase_image::texture"
+    );
+    assert_eq!(absolute(&segs("read::x"), "k", &[]), "k::read::x");
 }
 
 // ---- parse modules ----
@@ -1072,6 +1651,54 @@ const KNOWN_BREAKS: &[&str] = &[
     "entry_point: file=formats/web/examples/ktx2_compare.rs what=reads a format itself",
     "entry_point: file=formats/web/examples/synthetic_tiles.rs what=queries or edits world components",
     "io: file=formats/gltf/src/write.rs role=exception",
+    "layout: file=worlds/fromsoft/src/archive.rs",
+    "layout: file=worlds/fromsoft/src/dcx.rs",
+    "layout: file=worlds/fromsoft/src/sekiro/collision.rs",
+    "layout: file=worlds/fromsoft/src/sekiro/extras.rs",
+    "layout: file=worlds/fromsoft/src/sekiro/mod.rs",
+    "layout: file=worlds/fromsoft/src/sekiro/textures.rs",
+    "layout: file=worlds/frostbite/src/ebx/mod.rs",
+    "layout: file=worlds/frostbite/src/folder.rs",
+    "layout: file=worlds/gta/src/archive_set.rs",
+    "layout: file=worlds/gta/src/assets.rs",
+    "layout: file=worlds/gta/src/collision.rs",
+    "layout: file=worlds/gta/src/gtxd.rs",
+    "layout: file=worlds/gta/src/keys.rs",
+    "layout: file=worlds/gta/src/lights.rs",
+    "layout: file=worlds/gta/src/ng.rs",
+    "layout: file=worlds/gta/src/pipeline.rs",
+    "layout: file=worlds/gta/src/pose.rs",
+    "layout: file=worlds/gta/src/region.rs",
+    "layout: file=worlds/gta/src/rpf.rs",
+    "layout: file=worlds/gta/src/select.rs",
+    "layout: file=worlds/gta/src/water.rs",
+    "layout: file=worlds/reskate/src/build.rs",
+    "layout: file=worlds/reskate/src/interchange/mod.rs",
+    "layout: file=worlds/reskate/src/layered.rs",
+    "layout: file=worlds/reskate/src/map.rs",
+    "layout: file=worlds/reskate/src/material.rs",
+    "layout: file=worlds/reskate/src/prepare/blend_order.rs",
+    "layout: file=worlds/reskate/src/prepare/budget.rs",
+    "layout: file=worlds/reskate/src/prepare/overlays.rs",
+    "layout: file=worlds/reskate/src/prepare/raise.rs",
+    "layout: file=worlds/reskate/src/prepare/snap.rs",
+    "layout: file=worlds/reskate/src/prepare/textures.rs",
+    "layout: file=worlds/reskate/src/prepare/water.rs",
+    "layout: file=worlds/reskate/src/scene.rs",
+    "layout: file=worlds/reskate/src/texture.rs",
+    "layout: file=worlds/unity/src/components.rs",
+    "layout: file=worlds/unity/src/drawn.rs",
+    "layout: file=worlds/unity/src/level.rs",
+    "layout: file=worlds/unity/src/lower.rs",
+    "layout: file=worlds/unity/src/lower_lights.rs",
+    "layout: file=worlds/unity/src/material.rs",
+    "layout: file=worlds/unity/src/mesh.rs",
+    "layout: file=worlds/unity/src/player.rs",
+    "layout: file=worlds/unity/src/program.rs",
+    "layout: file=worlds/unity/src/resource.rs",
+    "layout: file=worlds/unity/src/scene.rs",
+    "layout: file=worlds/unity/src/terrain.rs",
+    "layout: file=worlds/unity/src/texture.rs",
 ];
 
 /// A break's identity: its table and every field but `reason` and `removed_when`, sorted.

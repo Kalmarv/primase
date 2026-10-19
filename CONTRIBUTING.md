@@ -145,6 +145,51 @@ Vendor formats used across engines (Havok, DXBC, DXIL) are toolkit mechanisms.
 Namespaced components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's or destination's
 crate (`skate.*`: `worlds/reskate`, with the skate-scene interchange it carries). `pbr.*` lives in core.
 
+### Worlds crates: one role vocabulary
+
+Every worlds crate is arranged by the same roles, so no world drifts to a layout of its own; a crate has only the
+roles it has (no empty folders):
+
+```
+src/read/          the reader: decoding the source, the convert::Reader adapter and its load step
+src/passes/        the passes: selections, lowerings, preparation (no I/O; they take the world and their settings)
+src/write/         the writer and its encoding: it writes the prepared data it is given and reopens no source
+src/components/    the World data the crate owns (its namespaced components and resources)
+src/<stage>/       a later stage with its own artifacts, in its own folder (reskate's postcompile/), declared in the
+                   manifest: [package.metadata.primase] stages = ["postcompile"]
+src/<format>/      a named format module for records, tables and byte codecs that more than one role uses (reskate's
+                   interchange/ schema, with read/interchange and write/interchange as its I/O entry points)
+```
+
+- **Several games in one crate** use game-first subtrees with the same names: shared engine work at the crate's roles,
+  each game's under `<game>/read`, `<game>/passes`, `<game>/components` (fromsoft: `sekiro/`, later `elden/`). One
+  game isn't split between both conventions, and a game folder isn't added merely because several games use an engine.
+- **Format records aren't components**: an encoded record and a World component are different representations. No
+  catch-all `shared/`, no duplicate structs for symmetry, no splitting a tiny pure codec into three files.
+- **A mixed module is split by responsibility**, not moved whole (query helpers apart from encoding, reading apart from
+  lowering).
+- **Public entry points stay**: a crate's useful public paths are kept through explicit re-exports when it moves, so
+  consumers don't churn; internals aren't made public to reach siblings.
+
+Loaded prepared data is authoritative: a writer never prefers a source file over what it was given, and keeping the
+original encoded bytes for an unchanged pass-through is the reader's job, with an explicit unchanged relationship.
+
+`architecture.rs` (`worlds_layout`) is a guardrail, not a proof that readers read and writers write; the behavioural
+tests are what show that. It checks:
+
+- reader I/O only under `read/`, writer I/O only under `write/`, a stage's under its own folder;
+- an I/O allowance covers no module beneath it (none on a `mod` declaration, no inner one in a file that declares
+  modules), and a module's place is its file (no `#[path]`, no inline role modules);
+- passes, components and the other modules (format modules, pure codecs, helpers) name no I/O path but their own: no
+  module that opts in to I/O or is a `read`/`write`/stage module, and no re-export of one, however the path is written
+  (`use` trees, `crate`/`super`/`self`, aliases). A helper that reached I/O would be refused itself, so a pass can't
+  reach I/O through it. The crate root may re-export for consumers.
+
+It works by name: a function value, a trait object or a macro that reaches I/O is not seen. A module not yet arranged
+carries a migration status in `architecture.toml` (`[[layout]]`, one per module, counted like a break): a new
+violating module fails, and a listed one that follows the layout must be deleted, so the list only shrinks. Crates move
+one at a time: ReSkate first, before step 20; the others when a lane substantially touches them.
+
 ### Where code goes
 
 1. **A game's meaning** (what its data is, its shader classes, which of its records are ledges or spawns) goes to its
