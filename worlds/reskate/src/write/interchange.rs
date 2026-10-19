@@ -668,8 +668,8 @@ impl Writer<'_> {
                     let materials: Vec<Option<Entity>> =
                         mesh.primitives().iter().map(|p| p.material).collect();
                     let mut local = mesh;
-                    for prim in local.primitives_mut() {
-                        prim.material = None;
+                    for mut prim in local.primitives_mut() {
+                        *prim.material_mut() = None;
                     }
                     let mut glb = World::default();
                     let proto = glb.spawn();

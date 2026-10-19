@@ -1172,8 +1172,8 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         let Some(mesh) = w.get_mut::<Mesh>(p.entity) else {
             continue;
         };
-        for (prim, &k) in mesh.primitives_mut().iter_mut().zip(&p.drawn) {
-            prim.material = material(&p.variants[0], k);
+        for (mut prim, &k) in mesh.primitives_mut().zip(&p.drawn) {
+            *prim.material_mut() = material(&p.variants[0], k);
         }
         if overrides.iter().any(|o| !o.is_empty()) {
             w.insert(p.entity, MaterialVariants(overrides));

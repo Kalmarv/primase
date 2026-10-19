@@ -125,8 +125,8 @@ pub fn load_mesh_files(world: &mut World, base_dir: &Path) -> Result<LoadReport>
             });
         }
         let mut mesh: Mesh = read.to_mesh();
-        for (p, m) in mesh.primitives_mut().iter_mut().zip(&file.materials) {
-            p.material = *m;
+        for (mut p, m) in mesh.primitives_mut().zip(&file.materials) {
+            *p.material_mut() = *m;
         }
         report.primitives += mesh.primitives().len() as u64;
         report.meshes += 1;

@@ -422,12 +422,80 @@ impl Primitive {
     }
 }
 
+/// One primitive of a [`Mesh`], edited in place: it reads as a [`Primitive`] and changes field by field (its streams,
+/// indices, topology and material), but never as a whole, so a primitive can't be replaced by another or swapped
+/// with one, and the list keeps its count and order. Per-primitive components describe the primitive in its place;
+/// a pass that rebuilds the list uses [`crate::World::rebuild_primitives`] or [`crate::World::edit_mesh`], which
+/// carry them along.
+///
+/// No slice to swap, sort or reverse:
+/// ```compile_fail
+/// let mut mesh = primase_core::Mesh::default();
+/// mesh.primitives_mut().swap(0, 1);
+/// ```
+/// and no primitive replaced by another:
+/// ```compile_fail
+/// let mut mesh = primase_core::Mesh::default();
+/// let other = mesh.primitives()[0].clone();
+/// *mesh.primitive_mut(0).unwrap() = other;
+/// ```
+#[derive(Debug)]
+pub struct PrimitiveMut<'a>(&'a mut Primitive);
+
+impl std::ops::Deref for PrimitiveMut<'_> {
+    type Target = Primitive;
+    fn deref(&self) -> &Primitive {
+        self.0
+    }
+}
+
+impl PrimitiveMut<'_> {
+    pub fn topology_mut(&mut self) -> &mut Topology {
+        &mut self.0.topology
+    }
+    pub fn streams_mut(&mut self) -> &mut BTreeMap<Semantic, Stream> {
+        &mut self.0.streams
+    }
+    pub fn indices_mut(&mut self) -> &mut Option<Vec<u32>> {
+        &mut self.0.indices
+    }
+    pub fn material_mut(&mut self) -> &mut Option<Entity> {
+        &mut self.0.material
+    }
+    /// Every field at once, for an edit that changes several (indices against the streams, say).
+    pub fn fields(&mut self) -> PrimitiveFields<'_> {
+        let Primitive {
+            topology,
+            streams,
+            indices,
+            material,
+        } = self.0;
+        PrimitiveFields {
+            topology,
+            streams,
+            indices,
+            material,
+        }
+    }
+}
+
+/// A primitive's fields, each editable ([`PrimitiveMut::fields`]).
+#[derive(Debug)]
+pub struct PrimitiveFields<'a> {
+    pub topology: &'a mut Topology,
+    pub streams: &'a mut BTreeMap<Semantic, Stream>,
+    pub indices: &'a mut Option<Vec<u32>>,
+    pub material: &'a mut Option<Entity>,
+}
+
 /// A prototype's geometry in its own local space.
 ///
-/// Its primitive list changes only through [`crate::World::rebuild_primitives`], which keeps every per-primitive
-/// component (material variants, dialect provenance) in step: a mesh is built whole ([`Mesh::new`]), read
-/// ([`Mesh::primitives`]) and edited primitive by primitive in place ([`Mesh::primitives_mut`], a slice: neither the
-/// count nor the order can change).
+/// Its primitive list changes only through [`crate::World::rebuild_primitives`] and [`crate::World::edit_mesh`], which
+/// keep every per-primitive component (material variants, dialect provenance) in step: a mesh is built whole
+/// ([`Mesh::new`]), read ([`Mesh::primitives`]) and edited one primitive at a time, field by field
+/// ([`Mesh::primitives_mut`], [`Mesh::primitive_mut`]: a [`PrimitiveMut`] edits a primitive's streams, indices,
+/// topology and material, and cannot replace, reorder, add or remove primitives, so per-primitive components stay with
+/// the primitive they describe).
 ///
 /// Each mesh built with [`Mesh::new`] has an identity of its own, which a clone and an edit in place keep, so the
 /// conservation diagnostics ([`crate::ledger`]) tell a mesh edited in place from one replaced by another. Equality and
@@ -456,9 +524,13 @@ impl Mesh {
     pub fn primitives(&self) -> &[Primitive] {
         &self.primitives
     }
-    /// The primitives, each editable in place.
-    pub fn primitives_mut(&mut self) -> &mut [Primitive] {
-        &mut self.primitives
+    /// The primitives, each editable field by field in place (see [`PrimitiveMut`]).
+    pub fn primitives_mut(&mut self) -> impl ExactSizeIterator<Item = PrimitiveMut<'_>> {
+        self.primitives.iter_mut().map(PrimitiveMut)
+    }
+    /// Primitive `i`, editable field by field in place; `None` past the last.
+    pub fn primitive_mut(&mut self, i: usize) -> Option<PrimitiveMut<'_>> {
+        self.primitives.get_mut(i).map(PrimitiveMut)
     }
     pub fn into_primitives(self) -> Vec<Primitive> {
         self.primitives

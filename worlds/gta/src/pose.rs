@@ -178,7 +178,7 @@ impl Pass for PoseFragments {
                     mesh.primitives().len()
                 ));
             }
-            for (p, bone) in mesh.primitives_mut().iter_mut().zip(bones) {
+            for (mut p, bone) in mesh.primitives_mut().zip(bones) {
                 let Some(bone) = bone else { continue };
                 let Some(&pose) = poses.get(usize::from(bone)) else {
                     log.count("primitives on a bone without a pose, left as stored", 1);
@@ -194,7 +194,7 @@ impl Pass for PoseFragments {
                             // a mirror turns every triangle over: reverse them so their fronts stay where they were
                             let n = p.vertex_count() as u32;
                             for tri in p
-                                .indices
+                                .indices_mut()
                                 .get_or_insert_with(|| (0..n).collect())
                                 .as_chunks_mut::<3>()
                                 .0
@@ -209,22 +209,22 @@ impl Pass for PoseFragments {
                         1,
                     ),
                 }
-                if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Position) {
+                if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Position) {
                     for x in v.iter_mut() {
                         *x = GTA.point(t.point(GTA.point_to_source(*x)));
                     }
                 }
                 if t.turn == Turn::Singular {
-                    p.streams.remove(&Semantic::Normal);
-                    p.streams.remove(&Semantic::Tangent);
+                    p.streams_mut().remove(&Semantic::Normal);
+                    p.streams_mut().remove(&Semantic::Tangent);
                     continue;
                 }
-                if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Normal) {
+                if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Normal) {
                     for x in v.iter_mut() {
                         *x = GTA.direction(t.normal(GTA.direction_to_source(*x)).expect("invertible"));
                     }
                 }
-                if let Some(Stream::F32x4(v)) = p.streams.get_mut(&Semantic::Tangent) {
+                if let Some(Stream::F32x4(v)) = p.streams_mut().get_mut(&Semantic::Tangent) {
                     for x in v.iter_mut() {
                         let s = GTA.direction_to_source([x[0], x[1], x[2]]);
                         let u = t.tangent([s[0], s[1], s[2], x[3]]).expect("invertible");

@@ -238,7 +238,7 @@ impl Pass for GtaTerrainLayers {
         }
         // every terrain primitive's weights in COLOR_1
         for_each_mesh(w, |mesh| {
-            for p in mesh.primitives_mut() {
+            for mut p in mesh.primitives_mut() {
                 let Some((mode, lookup)) = p.material.and_then(|m| weights.get(&m)) else {
                     continue;
                 };
@@ -283,7 +283,7 @@ impl Pass for GtaTerrainLayers {
                         )
                     })
                     .collect();
-                p.streams.insert(Semantic::Color(1), Stream::U8x4(out));
+                p.streams_mut().insert(Semantic::Color(1), Stream::U8x4(out));
                 log.count("terrain primitives weighed by COLOR_1", 1);
             }
             Ok(None)

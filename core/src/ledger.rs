@@ -284,6 +284,13 @@ mod tests {
     use std::collections::BTreeMap as Map;
 
     /// A triangle list of `n` triangles.
+    /// Primitive `i` of `m` given `p`'s contents, field by field (a pass editing it in place).
+    fn set(m: &mut Mesh, i: usize, p: Primitive) {
+        let mut q = m.primitive_mut(i).unwrap();
+        let f = q.fields();
+        (*f.topology, *f.streams, *f.indices, *f.material) = (p.topology, p.streams, p.indices, p.material);
+    }
+
     fn prim(n: u32) -> Primitive {
         Primitive {
             topology: Topology::Triangles,
@@ -476,7 +483,7 @@ mod tests {
     fn triangles_are_counted_inside_kept_primitives() {
         // decimate primitive 2 from 3 triangles to 1 in place
         let decimate = |w: &mut World| {
-            w.get_mut::<Mesh>(Entity::from_index(0)).unwrap().primitives_mut()[2] = prim(1);
+            set(w.get_mut::<Mesh>(Entity::from_index(0)).unwrap(), 2, prim(1));
         };
         assert_eq!(left_out(decimate, vec![]), (Measure::Triangles, 2, 0));
         run(decimate, vec![(Measure::Triangles, 2)]).unwrap();
@@ -532,7 +539,7 @@ mod tests {
         run(split_and_drop, vec![(Measure::Primitives, 1)]).unwrap();
         let in_place = |w: &mut World| {
             w.edit_mesh(Entity::from_index(0), |m| {
-                m.primitives_mut()[0] = prim(0);
+                set(m, 0, prim(0));
                 Ok(None)
             })
             .unwrap();
@@ -573,7 +580,7 @@ mod tests {
         let clone_back = |w: &mut World| {
             let e = Entity::from_index(0);
             let mut m = w.get::<Mesh>(e).unwrap().clone();
-            m.primitives_mut()[1] = prim(1);
+            set(&mut m, 1, prim(1));
             w.insert(e, m);
         };
         assert_eq!(left_out(clone_back, vec![]), (Measure::Triangles, 1, 0));
@@ -632,7 +639,7 @@ mod tests {
         // the stand-in edited in place (primitive 2 from 3 triangles to 1), and rebuilt without primitive 2
         let stand_in_edited = |w: &mut World| {
             let copy = stand_in(w);
-            w.get_mut::<Mesh>(copy).unwrap().primitives_mut()[2] = prim(1);
+            set(w.get_mut::<Mesh>(copy).unwrap(), 2, prim(1));
         };
         assert_eq!(left_out(stand_in_edited, vec![]), (Measure::Triangles, 2, 0));
         run(stand_in_edited, vec![(Measure::Triangles, 2)]).unwrap();
@@ -645,7 +652,7 @@ mod tests {
         // moved, then edited in place or split so that a primitive is hidden by a piece
         let moved_edited = |w: &mut World| {
             let to = moved(w);
-            w.get_mut::<Mesh>(to).unwrap().primitives_mut()[2] = prim(1);
+            set(w.get_mut::<Mesh>(to).unwrap(), 2, prim(1));
         };
         assert_eq!(left_out(moved_edited, vec![]), (Measure::Triangles, 2, 0));
         let moved_split = |w: &mut World| {
@@ -657,7 +664,7 @@ mod tests {
         // a copy beside the mesh, which stays whole: the copy's losses are not the source's
         let copy_edited = |w: &mut World| {
             let copy = w.duplicate(Entity::from_index(0)).unwrap();
-            w.get_mut::<Mesh>(copy).unwrap().primitives_mut()[2] = prim(1);
+            set(w.get_mut::<Mesh>(copy).unwrap(), 2, prim(1));
         };
         run(copy_edited, vec![]).unwrap();
         let copy_rebuilt = |w: &mut World| {
@@ -671,7 +678,7 @@ mod tests {
             let m = w.get::<Mesh>(Entity::from_index(0)).unwrap().clone();
             let to = w.spawn();
             w.insert(to, m);
-            w.get_mut::<Mesh>(to).unwrap().primitives_mut()[0] = prim(0);
+            set(w.get_mut::<Mesh>(to).unwrap(), 0, prim(0));
         };
         run(clone_elsewhere, vec![]).unwrap();
         // and the source losing a primitive is its loss, a whole copy beside it or not

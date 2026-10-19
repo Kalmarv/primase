@@ -163,9 +163,11 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
     let mut subset = world.subset(&world.closure([mesh]));
     let unrelated = world.spawn();
     let mut other = world.get::<Mesh>(mesh).unwrap().clone();
-    other.primitives_mut()[0].material = None;
-    other.primitives_mut()[0]
-        .streams
+    *other.primitive_mut(0).expect("a listed primitive").material_mut() = None;
+    other
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3]));
     world.insert(unrelated, other);
     primase_reskate::passes::LowerLayeredPbr

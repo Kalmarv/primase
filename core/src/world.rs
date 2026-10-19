@@ -660,10 +660,32 @@ impl World {
     /// Keep `e`'s per-primitive components in step with its rebuilt mesh: every typed component that follows
     /// primitives ([`Component::remap_primitives`]) remapped by `from` (new primitive `i` from old `from[i]`). A pass
     /// that splits, reorders or drops a mesh's primitives calls it once, so it need not know the dialects' components.
-    /// All or nothing: an error (an index a component does not have) names the component and changes nothing.
-    /// Opaque components are left as they are: per-primitive data must be typed to follow (the verifier catches the
-    /// rest).
+    /// All or nothing: an error (an index a component does not have, or a component refusing the mapping) names the
+    /// component and changes nothing.
+    ///
+    /// An opaque component (bytes a reader carried without a type) can't follow: whether it describes primitives
+    /// can't be known, so a mapping that changes the list (anything but `0..n` in order) is refused while `e` has
+    /// one, before anything changes, naming them. The program removes them (a selection, reported) or gives them a
+    /// typed form first.
     pub fn remap_primitives(&mut self, e: Entity, from: &[usize]) -> Result<(), String> {
+        let identity = from.iter().enumerate().all(|(i, &f)| i == f)
+            && self
+                .get::<crate::Mesh>(e)
+                .is_none_or(|m| m.primitives().len() == from.len());
+        if !identity {
+            let mut opaque: Vec<&String> = self
+                .opaque
+                .iter()
+                .filter(|(_, values)| values.contains_key(&e))
+                .map(|(name, _)| name)
+                .collect();
+            if !opaque.is_empty() {
+                opaque.sort();
+                return Err(format!(
+                    "{e:?}: opaque components can't follow a change to its primitives: {opaque:?} (remove them, or                      give them a typed form, before the pass)"
+                ));
+            }
+        }
         let mut done = Vec::new();
         // by name, so the error reported is always the same one
         let mut columns: Vec<_> = self.columns.iter().collect();
@@ -737,44 +759,40 @@ impl World {
     /// primitives in order (edited in place at most: the mesh stays the same mesh, whatever `f` built to hold them),
     /// else, for each primitive now, the one it comes from, as
     /// [`World::rebuild_primitives`] (per-primitive components follow, and the conservation diagnostics count the
-    /// rebuild exactly). The mesh is taken out while `f` runs (no copy) and put back, also when `f` fails. False when
-    /// `e` has no mesh.
+    /// rebuild exactly). False when `e` has no mesh.
+    ///
+    /// All or nothing: when `f` fails, its mapping is malformed, or a per-primitive component can't follow it, the
+    /// mesh and its components are as they were (the mesh is kept while `f` runs, to put back), and the error says
+    /// why.
     pub fn edit_mesh(
         &mut self,
         e: Entity,
         f: impl FnOnce(&mut crate::Mesh) -> Result<Option<Vec<usize>>, String>,
     ) -> Result<bool, String> {
-        let Some(mut mesh) = self.remove::<crate::Mesh>(e) else {
+        // the edit works on a copy: `e` keeps the original until the edit is accepted
+        let Some(mut mesh) = self.get::<crate::Mesh>(e).cloned() else {
             return Ok(false);
         };
         let (old, source) = (mesh.primitives().len(), mesh.id());
-        let edited = f(&mut mesh);
-        let from = match edited {
-            Ok(from) => from,
-            Err(m) => {
-                self.insert(e, mesh);
-                return Err(m);
-            }
-        };
+        let from = f(&mut mesh)?;
         let Some(from) = from else {
             let n = mesh.primitives().len();
+            if n != old {
+                return Err(format!("{e:?}: {n} primitives from {old} without their sources"));
+            }
             // its primitives kept in order: the same mesh, even when `f` built a new one to hold them
             mesh.keep_id(source);
             self.insert(e, mesh);
-            return if n == old {
-                Ok(true)
-            } else {
-                Err(format!("{e:?}: {n} primitives from {old} without their sources"))
-            };
+            return Ok(true);
         };
         if mesh.primitives().len() != from.len() || from.iter().any(|&i| i >= old) {
             let n = mesh.primitives().len();
-            self.insert(e, mesh);
             return Err(format!(
                 "{e:?}: {n} primitives with {} sources of {old}",
                 from.len()
             ));
         }
+        // all or nothing: a component that can't follow leaves the components and the original mesh as they were
         self.remap_primitives(e, &from)?;
         let made = crate::Mesh::new(mesh.into_primitives());
         self.record_rebuild(e, source, old, from, made.id());

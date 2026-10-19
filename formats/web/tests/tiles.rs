@@ -91,18 +91,21 @@ fn triangle_centres_keep_whole_faces() {
     let mut w = World::new();
     let e = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0].streams.insert(
-        Semantic::Position,
-        Stream::F32x3(vec![
-            [198., 0., 0.],
-            [199., 0., 0.],
-            [198., 0., 1.],
-            [199., 0., 0.],
-            [203., 0., 0.],
-            [201., 0., 1.],
-        ]),
-    );
-    m.primitives_mut()[0].indices = Some(vec![0, 1, 2, 3, 4, 5]);
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
+        .insert(
+            Semantic::Position,
+            Stream::F32x3(vec![
+                [198., 0., 0.],
+                [199., 0., 0.],
+                [198., 0., 1.],
+                [199., 0., 0.],
+                [203., 0., 0.],
+                [201., 0., 1.],
+            ]),
+        );
+    *m.primitive_mut(0).expect("a listed primitive").indices_mut() = Some(vec![0, 1, 2, 3, 4, 5]);
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
     let mut o = plain();
@@ -124,7 +127,7 @@ fn bad_meshes_and_options_are_errors() {
     let mut w = World::new();
     let e = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0].indices = Some(vec![0, 1, 9]);
+    *m.primitive_mut(0).expect("a listed primitive").indices_mut() = Some(vec![0, 1, 9]);
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
     assert!(write(&w, &plain()).is_err());
@@ -290,20 +293,28 @@ fn quantized_streams_decode_exactly_and_validate() {
     let mut w = World::new();
     let p = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0]
-        .streams
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::Normal, Stream::F32x3(vec![[0., 1., 0.]; 3]));
-    m.primitives_mut()[0]
-        .streams
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 3]));
-    m.primitives_mut()[0].streams.insert(
-        Semantic::TexCoord(0),
-        Stream::F32x2(vec![[0., 0.5], [1., 0.], [0., 1.]]),
-    );
-    m.primitives_mut()[0].streams.insert(
-        Semantic::TexCoord(1),
-        Stream::F32x2(vec![[0., 0.], [2., 0.], [0., 2.]]),
-    );
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
+        .insert(
+            Semantic::TexCoord(0),
+            Stream::F32x2(vec![[0., 0.5], [1., 0.], [0., 1.]]),
+        );
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
+        .insert(
+            Semantic::TexCoord(1),
+            Stream::F32x2(vec![[0., 0.], [2., 0.], [0., 2.]]),
+        );
     w.insert(p, m);
     for x in [0., 10.] {
         let e = w.spawn();
@@ -420,9 +431,10 @@ fn one_mesh(positions: Vec<[f32; 3]>) -> (serde_json::Value, Vec<u8>) {
     let mut w = World::new();
     let e = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0].indices = Some(vec![0, 1, 2, 0, 2, 3]);
-    m.primitives_mut()[0]
-        .streams
+    *m.primitive_mut(0).expect("a listed primitive").indices_mut() = Some(vec![0, 1, 2, 0, 2, 3]);
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::Position, Stream::F32x3(positions));
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
@@ -766,11 +778,14 @@ fn texture_transforms_survive_instancing_and_compression() {
     );
     let p = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0].material = Some(mat);
-    m.primitives_mut()[0].streams.insert(
-        Semantic::TexCoord(0),
-        Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
-    );
+    *m.primitive_mut(0).expect("a listed primitive").material_mut() = Some(mat);
+    m.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
+        .insert(
+            Semantic::TexCoord(0),
+            Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+        );
     w.insert(p, m);
     for x in [0., 1., 2.] {
         let e = w.spawn();
@@ -1103,7 +1118,7 @@ fn emissive_strength_survives_compression_and_instancing() {
     );
     let proto = w.spawn();
     let mut m = mesh();
-    m.primitives_mut()[0].material = Some(mat);
+    *m.primitive_mut(0).expect("a listed primitive").material_mut() = Some(mat);
     w.insert(proto, m);
     for x in [0.0f32, 2.0] {
         let e = w.spawn();
@@ -1220,9 +1235,10 @@ fn vertex_colours_survive_compression_and_instancing() {
         );
         let proto = w.spawn();
         let mut m = mesh();
-        m.primitives_mut()[0].material = Some(mat);
-        m.primitives_mut()[0]
-            .streams
+        *m.primitive_mut(0).expect("a listed primitive").material_mut() = Some(mat);
+        m.primitive_mut(0)
+            .expect("a listed primitive")
+            .streams_mut()
             .insert(Semantic::Color(0), Stream::U8x4(colours.clone()));
         w.insert(proto, m);
         for x in [0.0f32, 2.0] {
@@ -1310,16 +1326,22 @@ fn layered_materials_survive_tiling_and_compression() {
         );
         let proto = w.spawn();
         let mut m = mesh();
-        m.primitives_mut()[0].material = Some(host);
-        m.primitives_mut()[0].streams.insert(
-            Semantic::Color(1),
-            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
-        );
+        *m.primitive_mut(0).expect("a listed primitive").material_mut() = Some(host);
+        m.primitive_mut(0)
+            .expect("a listed primitive")
+            .streams_mut()
+            .insert(
+                Semantic::Color(1),
+                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
+            );
         // the layers are sampled with set 0
-        m.primitives_mut()[0].streams.insert(
-            Semantic::TexCoord(0),
-            Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
-        );
+        m.primitive_mut(0)
+            .expect("a listed primitive")
+            .streams_mut()
+            .insert(
+                Semantic::TexCoord(0),
+                Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+            );
         w.insert(proto, m);
         let place = w.spawn();
         w.insert(

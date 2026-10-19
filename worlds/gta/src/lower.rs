@@ -359,7 +359,7 @@ pub fn night_prototypes(w: &mut World, log: &mut PassLog) -> Result<BTreeSet<Ent
             let Some(mut mesh) = w.remove::<Mesh>(m) else {
                 continue;
             };
-            for q in mesh.primitives_mut() {
+            for mut q in mesh.primitives_mut() {
                 let Some(mat) = q.material.filter(|x| night.contains(x)) else {
                     continue;
                 };
@@ -368,7 +368,7 @@ pub fn night_prototypes(w: &mut World, log: &mut PassLog) -> Result<BTreeSet<Ent
                     w.copy_components(mat, nm);
                     nm
                 });
-                q.material = Some(nm);
+                *q.material_mut() = Some(nm);
             }
             w.insert(m, mesh);
         }
@@ -1172,14 +1172,14 @@ impl Pass for GtaVertexColours {
             .resource::<crate::tint::GtaTinted>()
             .map_or(BTreeSet::new(), |t| t.0.clone());
         for_each_mesh(w, |mesh| {
-            for p in mesh.primitives_mut() {
+            for mut p in mesh.primitives_mut() {
                 let Some(m) = p.material else { continue };
                 let Some(c) = classes.get(&m) else { continue };
                 if c.class == Class::Terrain && !layered.contains(&m) && !lowered.contains(&m) {
                     log.count("terrain primitives left (gta-terrain-layers has not run)", 1);
                     continue;
                 }
-                match p.streams.remove(&Semantic::Color(0)) {
+                match p.streams_mut().remove(&Semantic::Color(0)) {
                     Some(Stream::U8x4(v)) => {
                         if v.iter().any(|c| c[0] != 255 || c[1] != 255) {
                             log.approximate("primitives with per-vertex ambient occlusion not carried", 1);
@@ -1189,7 +1189,7 @@ impl Pass for GtaVertexColours {
                             && v.iter().any(|c| c[3] < 255);
                         if fades {
                             let white = v.iter().map(|c| [255, 255, 255, c[3]]).collect();
-                            p.streams.insert(Semantic::Color(0), Stream::U8x4(white));
+                            p.streams_mut().insert(Semantic::Color(0), Stream::U8x4(white));
                             log.count("COLOR_0 kept as vertex alpha", 1);
                         } else {
                             log.count("COLOR_0 dropped", 1);
@@ -1205,13 +1205,13 @@ impl Pass for GtaVertexColours {
                                 c[3] = 65535;
                             }
                         }
-                        p.streams.insert(Semantic::Color(0), Stream::U16x4(v));
+                        p.streams_mut().insert(Semantic::Color(0), Stream::U16x4(v));
                         log.count("COLOR_0 kept as the tint", 1);
                     }
                     Some(_) => return Err("COLOR_0 not a u8 x 4 stream".into()),
                     None => {}
                 }
-                if !layered.contains(&m) && p.streams.remove(&Semantic::Color(1)).is_some() {
+                if !layered.contains(&m) && p.streams_mut().remove(&Semantic::Color(1)).is_some() {
                     log.count("COLOR_1 dropped", 1);
                 }
             }

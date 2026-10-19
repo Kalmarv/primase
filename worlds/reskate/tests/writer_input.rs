@@ -164,8 +164,12 @@ fn a_foreign_name_leaves_the_map_unchanged_and_is_reported() {
 fn geometry_that_is_not_finite_is_refused_naming_it() {
     let (mut w, _) = world();
     let proto = w.iter::<Mesh>().map(|(e, _)| e).next().unwrap();
-    if let Some(Stream::F32x3(p)) = w.get_mut::<Mesh>(proto).unwrap().primitives_mut()[0]
-        .streams
+    if let Some(Stream::F32x3(p)) = w
+        .get_mut::<Mesh>(proto)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .get_mut(&Semantic::Position)
     {
         p[1][0] = f32::NAN;

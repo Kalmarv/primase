@@ -323,8 +323,9 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
             continue;
         }
         let mesh = world.get_mut::<Mesh>(e).expect("listed mesh");
-        mesh.primitives_mut()[index]
-            .streams
+        mesh.primitive_mut(index)
+            .expect("a listed primitive")
+            .streams_mut()
             .insert(Semantic::Tangent, Stream::F32x4(derived));
         log.count("primitives given the derived tangent frame", 1);
     }

@@ -204,12 +204,12 @@ impl Pass for FillMissingTexcoords {
                 .map(|p| p.material.map(|m| sampled_texcoords(w, m)).unwrap_or_default())
                 .collect();
             let mesh = w.get_mut::<Mesh>(e).expect("listed");
-            for (p, sets) in mesh.primitives_mut().iter_mut().zip(wanted) {
+            for (mut p, sets) in mesh.primitives_mut().zip(wanted) {
                 let count = p.vertex_count();
                 let mut filled = false;
                 for set in sets {
                     if let std::collections::btree_map::Entry::Vacant(v) =
-                        p.streams.entry(Semantic::TexCoord(set))
+                        p.streams_mut().entry(Semantic::TexCoord(set))
                     {
                         v.insert(Stream::F32x2(vec![[0.; 2]; count]));
                         filled = true;

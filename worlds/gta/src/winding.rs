@@ -58,13 +58,13 @@ impl Pass for GtaWinding {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         for_each_mesh(w, |mesh| {
-            for p in mesh.primitives_mut() {
-                match faces_away(p) {
+            for mut p in mesh.primitives_mut() {
+                match faces_away(&p) {
                     None => log.count("primitives without normals, kept as stored", 1),
                     Some(false) => {}
                     Some(true) => {
                         let n = p.vertex_count() as u32;
-                        let idx = p.indices.get_or_insert_with(|| (0..n).collect());
+                        let idx = p.indices_mut().get_or_insert_with(|| (0..n).collect());
                         for t in idx.as_chunks_mut::<3>().0 {
                             t.swap(1, 2);
                         }

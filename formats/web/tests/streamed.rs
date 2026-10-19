@@ -60,8 +60,12 @@ fn spanning_marks_wide_and_misplaced_placements() {
     // a 2 m prop, a 300 m wide one, and a 2 m one whose geometry lies 50 m from its pivot
     let (mut w, placed) = world(&[(10., 2.), (10., 300.), (500., 2.)]);
     let far = w.get::<Instance>(placed[2]).unwrap().prototype;
-    if let Some(Stream::F32x3(v)) = w.get_mut::<Mesh>(far).unwrap().primitives_mut()[0]
-        .streams
+    if let Some(Stream::F32x3(v)) = w
+        .get_mut::<Mesh>(far)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .get_mut(&Semantic::Position)
     {
         v.iter_mut().for_each(|p| p[0] += 50.);

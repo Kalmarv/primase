@@ -547,13 +547,20 @@ fn output_is_deterministic() {
 fn bad_worlds_are_errors() {
     let b = build(&scratch("bad"));
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0].indices = Some(vec![0, 1, 9]);
+    *w.get_mut::<Mesh>(b.proto_rich)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .indices_mut() = Some(vec![0, 1, 9]);
     let err = write(&w, &options(&b)).unwrap_err().to_string();
     assert!(err.contains("index 9 of 4 vertices"), "{err}");
 
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0]
-        .streams
+    w.get_mut::<Mesh>(b.proto_rich)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::Normal, Stream::F32x3(vec![[0.0; 3]; 3]));
     assert!(
         write(&w, &options(&b))
@@ -563,8 +570,11 @@ fn bad_worlds_are_errors() {
     );
 
     let mut w = b.world.clone();
-    w.get_mut::<Mesh>(b.proto_rich).unwrap().primitives_mut()[0]
-        .streams
+    w.get_mut::<Mesh>(b.proto_rich)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
         .insert(Semantic::Position, Stream::F32x3(vec![[f32::NAN; 3]; 4]));
     assert!(
         write(&w, &options(&b))

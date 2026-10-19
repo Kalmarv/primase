@@ -539,9 +539,8 @@ mod tests {
         fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
             let meshes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
             for e in meshes {
-                if let Some(Stream::F32x3(v)) = w
-                    .get_mut::<Mesh>(e)
-                    .and_then(|m| m.primitives_mut()[0].streams.get_mut(&Semantic::Position))
+                if let Some(mut p) = w.get_mut::<Mesh>(e).and_then(|m| m.primitive_mut(0))
+                    && let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Position)
                 {
                     v[0][0] += 1.;
                     log.count("moved", 1);

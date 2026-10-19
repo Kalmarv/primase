@@ -107,7 +107,7 @@ fn tint_mesh(
     palettes: &BTreeMap<Entity, (Palette, TintColumn)>,
     log: &mut PassLog,
 ) {
-    for p in mesh.primitives_mut() {
+    for mut p in mesh.primitives_mut() {
         let Some((palette, column)) = p.material.and_then(|m| palettes.get(&m)) else {
             continue;
         };
@@ -140,7 +140,7 @@ fn tint_mesh(
                 [linear16(r), linear16(g), linear16(b), a]
             })
             .collect();
-        p.streams.insert(Semantic::Color(0), Stream::U16x4(colours));
+        p.streams_mut().insert(Semantic::Color(0), Stream::U16x4(colours));
         log.count("tinted primitives", 1);
     }
 }

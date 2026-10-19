@@ -352,17 +352,17 @@ impl LayerInputs {
             let Some(mesh) = world.get_mut::<primase_core::Mesh>(e) else {
                 continue;
             };
-            for (index, primitive) in mesh.primitives_mut().iter_mut().enumerate() {
+            for (index, mut primitive) in mesh.primitives_mut().enumerate() {
                 let Some(members) = inputs.primitives.get_mut(index) else {
                     continue;
                 };
-                if members.is_empty() || !consumed(e, index, primitive) {
+                if members.is_empty() || !consumed(e, index, &primitive) {
                     continue;
                 }
                 for n in std::mem::take(members) {
                     removed += u64::from(
                         primitive
-                            .streams
+                            .streams_mut()
                             .remove(&primase_core::Semantic::Color(n))
                             .is_some(),
                     );

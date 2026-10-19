@@ -117,7 +117,10 @@ fn invalid_later_mesh_does_not_publish_earlier_plans() {
     let (mut world, entity) = fixture();
     let second = world.spawn();
     let mut bad = world.get::<Mesh>(entity).unwrap().clone();
-    bad.primitives_mut()[0].streams.remove(&Semantic::Color(1));
+    bad.primitive_mut(0)
+        .expect("a listed primitive")
+        .streams_mut()
+        .remove(&Semantic::Color(1));
     world.insert(second, bad);
     let before = format!("{world:?}");
     assert!(plan_layered_pbr(&world, SelectionPolicy::CoreWeights).is_err());
@@ -175,7 +178,12 @@ fn empty_split_still_prunes_the_replaced_host() {
     let host = world.get::<Mesh>(entity).unwrap().primitives()[0]
         .material
         .unwrap();
-    world.get_mut::<Mesh>(entity).unwrap().primitives_mut()[0].indices = Some(vec![]);
+    *world
+        .get_mut::<Mesh>(entity)
+        .unwrap()
+        .primitive_mut(0)
+        .expect("a listed primitive")
+        .indices_mut() = Some(vec![]);
     primase_meshops::lower_layered_pbr(
         &mut world,
         SelectionPolicy::CoreWeights,

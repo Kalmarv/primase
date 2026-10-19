@@ -124,7 +124,10 @@ impl Pass for BakeLayerChannels {
             };
             for (mesh, i, s) in streams {
                 if let Some(m) = w.get_mut::<Mesh>(mesh) {
-                    m.primitives_mut()[i].streams.insert(Semantic::Color(n), s);
+                    m.primitive_mut(i)
+                        .expect("a listed primitive")
+                        .streams_mut()
+                        .insert(Semantic::Color(n), s);
                     log.approximate("primitives with layer weights baked at their vertices", 1);
                 }
             }

@@ -161,8 +161,11 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
             }
             for &((e, i), _) in prims {
                 let mesh = world.get_mut::<Mesh>(e).expect("loaded");
-                if let Some(Stream::F32x2(uv)) =
-                    mesh.primitives_mut()[i].streams.get_mut(&Semantic::TexCoord(n))
+                if let Some(Stream::F32x2(uv)) = mesh
+                    .primitive_mut(i)
+                    .expect("a listed primitive")
+                    .streams_mut()
+                    .get_mut(&Semantic::TexCoord(n))
                 {
                     for x in uv.iter_mut() {
                         *x = t.apply(*x);

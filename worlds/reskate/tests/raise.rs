@@ -804,7 +804,7 @@ fn a_drawn_blend_becomes_a_layered_material() {
         },
     );
     let mut mesh = w.get::<Mesh>(proto).unwrap().clone();
-    mesh.primitives_mut()[1].material = Some(blend);
+    *mesh.primitive_mut(1).expect("a listed primitive").material_mut() = Some(blend);
     w.insert(proto, mesh);
     // a layer with no pbr.material is refused, the world unchanged
     let orphan = w.spawn();
