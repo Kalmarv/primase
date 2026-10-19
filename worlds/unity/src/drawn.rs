@@ -1,5 +1,9 @@
 //! What a renderer other than Unity's can draw of a scene's mesh renderers (pass `unity-drawn`). A placement is left
 //! out, counted by reason, when:
+//! - its renderer's layer is one no camera drawing to the screen draws (no target texture; its culling mask without
+//!   the layer's bit), as Unity culls it: what only a camera rendering into a texture sees (a minimap's markers) is
+//!   not in the player's view. A camera still under a [`Condition`](primase_core::state::Condition) (run before
+//!   `resolve-state`) counts as drawing. A world with no screen camera keeps every layer, counted;
 //! - its prototype draws nothing (a mesh with no submesh that has indices: the prototype has no mesh);
 //! - one of its materials is on a shader that builds its geometry in the vertex shader from component data
 //!   ([`procedural`]): its mesh is a placeholder, and the GameObject's MonoBehaviours (`unity.behaviours`) hold the
@@ -17,7 +21,7 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, MeshFile, World};
 
-use crate::components::{UnityMaterial, UnityMesh, UnityRenderSettings};
+use crate::components::{UnityCamera, UnityMaterial, UnityMesh, UnityRenderSettings, UnityRenderer};
 use crate::level::procedural;
 use crate::lower::modelled;
 use crate::player::RenderPipeline;
@@ -58,8 +62,26 @@ pub fn unity_drawn(w: &mut World) -> PassLog {
     let pipeline = w
         .resource::<UnityRenderSettings>()
         .and_then(|s| s.pipeline.clone());
+    // the layers the screen cameras draw; `None` without one, when no layer is judged
+    let screen = w
+        .iter::<UnityCamera>()
+        .filter(|(_, c)| c.target_texture.is_none())
+        .map(|(_, c)| c.culling_mask)
+        .reduce(|a, b| a | b);
+    if screen.is_none() {
+        log.count("renderers' layers not judged: no camera draws to the screen", 1);
+    }
     for (e, i) in w.iter::<Instance>() {
         let p = i.prototype;
+        if let (Some(mask), Some(r)) = (screen, w.get::<UnityRenderer>(e))
+            && 1u32.checked_shl(r.layer).is_some_and(|bit| mask & bit == 0)
+        {
+            gone.insert(
+                e,
+                format!("renderers left out: layer {} no screen camera draws", r.layer),
+            );
+            continue;
+        }
         if !w.has::<Mesh>(p) && !w.has::<MeshFile>(p) {
             gone.insert(
                 e,
@@ -128,11 +150,121 @@ impl Pass for UnityDrawn {
         true
     }
     fn approximates(&self) -> &'static str {
-        "procedural geometry and additive surfaces of shaders not modelled are left out"
+        "procedural geometry, additive surfaces of shaders not modelled and layers no screen camera draws are left out"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = unity_drawn(w);
         log.absorb(r);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::UnityObject;
+    use primase_core::MeshFile;
+
+    fn obj(path_id: i64) -> UnityObject {
+        UnityObject {
+            file: "level2".into(),
+            path_id,
+        }
+    }
+
+    /// A placement of a mesh with no materials (none left out for its shaders) by a renderer on `layer`.
+    fn placement(w: &mut World, prototype: Entity, layer: u32) -> Entity {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        w.insert(
+            e,
+            UnityRenderer {
+                renderer: obj(i64::from(layer)),
+                layer,
+                materials: Vec::new(),
+                submeshes: None,
+                cast_shadows: 1,
+                receive_shadows: None,
+            },
+        );
+        e
+    }
+
+    fn camera(w: &mut World, culling_mask: u32, target_texture: Option<UnityObject>) {
+        let e = w.spawn();
+        w.insert(
+            e,
+            UnityCamera {
+                camera: obj(1),
+                culling_mask,
+                target_texture,
+            },
+        );
+    }
+
+    /// SkateBIRD level2's cameras: the screen camera's mask leaves layer 28 out, the minimap camera (into a texture)
+    /// draws it. Its markers on layer 28 are left out, counted by layer; the rest stay.
+    #[test]
+    fn layers_no_screen_camera_draws_are_left_out() {
+        let mut w = World::default();
+        let p = w.spawn();
+        w.insert(
+            p,
+            MeshFile {
+                path: "m.glb".into(),
+                mesh: 0,
+                materials: Vec::new(),
+            },
+        );
+        let ground = placement(&mut w, p, 0);
+        let marker = placement(&mut w, p, 28);
+        let odd = placement(&mut w, p, 40);
+        camera(&mut w, 0xe003_ff17, None);
+        camera(&mut w, 0xf003_ff17, Some(obj(1283)));
+        let log = unity_drawn(&mut w);
+        assert!(w.has::<Instance>(ground));
+        assert!(!w.has::<Instance>(marker));
+        // a layer beyond Unity's 32 is no bit of a mask: not judged
+        assert!(w.has::<Instance>(odd));
+        let reasons: Vec<&str> = log.drops.keys().map(|(_, why)| why.as_str()).collect();
+        assert_eq!(reasons, ["renderers left out: layer 28 no screen camera draws"]);
+
+        // two screen cameras draw the union of their masks
+        camera(&mut w, 1 << 28, None);
+        let marker = placement(&mut w, p, 28);
+        unity_drawn(&mut w);
+        assert!(w.has::<Instance>(marker));
+    }
+
+    /// Without a camera drawing to the screen (only one into a texture, or none), no layer is judged, counted.
+    #[test]
+    fn without_a_screen_camera_every_layer_stays() {
+        let mut w = World::default();
+        let p = w.spawn();
+        w.insert(
+            p,
+            MeshFile {
+                path: "m.glb".into(),
+                mesh: 0,
+                materials: Vec::new(),
+            },
+        );
+        let marker = placement(&mut w, p, 28);
+        camera(&mut w, 0, Some(obj(1283)));
+        let log = unity_drawn(&mut w);
+        assert!(w.has::<Instance>(marker));
+        assert_eq!(
+            log.counts
+                .get("renderers' layers not judged: no camera draws to the screen")
+                .copied(),
+            Some(1)
+        );
+        assert!(log.drops.is_empty());
     }
 }

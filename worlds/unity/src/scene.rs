@@ -790,6 +790,39 @@ impl Scene {
         Ok(out)
     }
 
+    /// The cameras, whatever their state, in the order of the scene's object table.
+    pub fn cameras(&self, player: &Player) -> Result<Vec<CameraComponent>> {
+        let file = self.file.as_str();
+        let f = player.file(file)?;
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
+        let mut out = Vec::new();
+        for o in f.objects.iter().filter(|o| class(o.path_id) == "Camera") {
+            let c = player.decode(&r(o.path_id))?;
+            let Some(tp) = self.transform_of(path_id(&c, "m_GameObject")?) else {
+                continue;
+            };
+            out.push(CameraComponent {
+                camera: r(o.path_id),
+                path: self.path(tp),
+                world: self.world_of(tp)?,
+                culling_mask: c
+                    .at(&["m_CullingMask", "m_Bits"])
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1) as u32,
+                target_texture: match c.get("m_TargetTexture") {
+                    Some(p) => player.resolve(file, p)?,
+                    None => None,
+                },
+                off: self.off_flags(tp, Some((o.path_id, flag(&c, "m_Enabled")?))),
+            });
+        }
+        Ok(out)
+    }
+
     /// The terrains, whatever their state, in the order of the scene's object table.
     pub fn terrains(&self, player: &Player) -> Result<Vec<TerrainComponent>> {
         let file = self.file.as_str();
@@ -912,6 +945,19 @@ pub struct LightComponent {
     pub culling_mask: u32,
     pub cookie: Option<ObjRef>,
     /// What keeps it from shining; shines when empty.
+    pub off: Vec<OffFlag>,
+}
+
+/// A camera as stored: its culling mask (`m_CullingMask`, the layers it draws; all when absent) and the texture it
+/// renders into (`m_TargetTexture`; `None`: it draws to the screen).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CameraComponent {
+    pub camera: ObjRef,
+    pub path: String,
+    pub world: Matrix,
+    pub culling_mask: u32,
+    pub target_texture: Option<ObjRef>,
+    /// What keeps it from drawing; draws when empty.
     pub off: Vec<OffFlag>,
 }
 

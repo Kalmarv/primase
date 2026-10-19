@@ -586,6 +586,23 @@ impl Component for UnityLight {
     }
 }
 
+/// A camera as stored, on an entity placed by its Transform: the layers it draws (`culling_mask`, bit n for layer n)
+/// and the texture it renders into (`None`: the screen). `unity-drawn` leaves out renderers on layers no screen camera
+/// draws ([`crate::drawn`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityCamera {
+    pub camera: UnityObject,
+    pub culling_mask: u32,
+    pub target_texture: Option<UnityObject>,
+}
+
+impl Component for UnityCamera {
+    const NAME: &'static str = "unity.camera";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 /// A scene's ambient lighting as RenderSettings stores it: `mode` (`m_AmbientMode`: 0 skybox, 1 trilight, a gradient
 /// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored, and
 /// `intensity` (`m_AmbientIntensity`).

@@ -10,8 +10,10 @@
 //! its variants ([`MaterialVariants`], [`Instance::variant`]). Submeshes beyond a renderer's materials are not drawn
 //! and materials beyond its submeshes draw the last one again (an extra pass): neither is reproduced, both counted.
 //!
+//! Each camera is an entity placed by its Transform with what it draws (`unity.camera`: culling mask, target texture).
+//!
 //! State is data. Each GameObject stored inactive and each component stored disabled on the way to a renderer,
-//! collider, light or terrain is a Bool [`StateAxis`] (default off; class `active`, key `unity.active.<file>.<path
+//! collider, light, camera or terrain is a Bool [`StateAxis`] (default off; class `active`, key `unity.active.<file>.<path
 //! id>`, or `enabled`, `unity.enabled.<file>.<path id>`), and the entity's [`Condition`] is one clause: each of them
 //! on. Flags stored on are constants, not axes. `resolve-state` with the defaults keeps what Unity draws as stored.
 //!
@@ -39,10 +41,10 @@ use primase_core::{
 
 use crate::Result;
 use crate::components::{
-    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCollider, UnityColliderShape, UnityLight,
-    UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
-    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
-    UnityTreeInstance,
+    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape,
+    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings,
+    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
+    UnityTree, UnityTreeInstance,
 };
 use crate::material::{ShaderData, UnityMaterialData};
 use crate::mesh::UnityMeshData;
@@ -131,6 +133,8 @@ pub struct LevelReport {
     pub textures: usize,
     pub terrains: usize,
     pub lights: usize,
+    /// Cameras read, whatever their state (`unity.camera`).
+    pub cameras: usize,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -1260,6 +1264,23 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         b.condition(w, e, literals, "lights");
     }
     b.report.lights = lights.len();
+    let cameras = scene.cameras(player)?;
+    for c in &cameras {
+        let e = w.spawn();
+        w.insert(e, Name(c.path.clone()));
+        w.insert(e, UNITY.transform(&transform_of(&c.world)));
+        w.insert(
+            e,
+            UnityCamera {
+                camera: UnityObject::from(&c.camera),
+                culling_mask: c.culling_mask,
+                target_texture: c.target_texture.as_ref().map(UnityObject::from),
+            },
+        );
+        let literals = b.literals(w, &scene, &c.off, &c.path);
+        b.condition(w, e, literals, "cameras");
+    }
+    b.report.cameras = cameras.len();
     b.report.sun_named = sun.is_some();
     w.insert_resource(UnityRenderSettings {
         sun: sun_entity,
