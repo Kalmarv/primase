@@ -83,8 +83,9 @@ One program, four stages:
   approximates is a notice in the report; a value it cannot encode is an error. Compiling the folder into a playable
   level is ReSkate Studio's step.
 
-`convert_parts` drives them: it reads, runs the selection, plans the parts (one here, since a ReSkate map is laid out
-whole), loads each, runs its preparation, checks it against what the writer writes, and writes it. Every choice is a
+`convert_parts` drives them: it reads, runs the selection, plans the parts, loads each, runs its preparation, checks
+it against what the writer writes, and writes it. This region is one part; a larger map is converted in parts and
+written as the whole map would be. Every choice is a
 typed value, an enum or a checked number, so a choice that is not valid fails while the pipeline is built, before
 anything is read.
 
@@ -126,7 +127,7 @@ fn main() -> Result<()> {
     println!("select: {select}\npasses: {passes}");
     let writer = Box::new(MapSink::new(Path::new(""), &encoding));
 
-    // A ReSkate map is laid out whole: the selected area is one part.
+    // The region is converted as one part; a larger map goes in parts (`PlannedParts`, `convert_parts_summarized`).
     let manager = PassManager::new(PassRegistry::new());
     let report = convert_parts(
         &mut reader,

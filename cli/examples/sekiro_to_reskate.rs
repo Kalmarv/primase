@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     println!("select: {select}\npasses: {passes}");
     let writer = Box::new(MapSink::new(Path::new(""), &encoding));
 
-    // A ReSkate map is laid out whole: the selected area is one part.
+    // The region is converted as one part; a larger map goes in parts (`PlannedParts`, `convert_parts_summarized`).
     let manager = PassManager::new(PassRegistry::new());
     let report = convert_parts(
         &mut reader,
