@@ -546,8 +546,15 @@ impl Pass for LowerGtaPbr {
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
+    /// Besides the materials: the textures it derives (emission and specular), each a new entity with its name.
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material", "core.draw_order", "core.state_override"]
+        &[
+            "pbr.material",
+            "core.draw_order",
+            "core.state_override",
+            "core.texture",
+            "core.name",
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "gta.sources", "core.texture", "core.lods"]
