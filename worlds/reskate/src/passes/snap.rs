@@ -23,7 +23,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_meshops::vector::Vec3;
 
-use crate::build::{EncodingOptions, SoupWorld, bounds, hulls, writer_placements};
+use crate::assembly::{EncodingOptions, SoupWorld, bounds, hulls, writer_placements};
 use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
 use crate::components::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
@@ -194,7 +194,7 @@ impl Pass for SnapReskateMarkers {
             .collect();
         let b = &self.basis;
         if queries.iter().any(|q| q.snap.mode != SnapMode::None) {
-            let apron_width = crate::build::apron_of(w, &s).map_err(|e| e.to_string())?;
+            let apron_width = crate::assembly::apron_of(w, &s).map_err(|e| e.to_string())?;
             let (placed, ground) = self.snap(&mut s, &queries, apron_width)?;
             let entities: Vec<primase_core::Entity> = w.iter::<SkateMarker>().map(|(e, _)| e).collect();
             for (i, e) in entities.into_iter().enumerate() {

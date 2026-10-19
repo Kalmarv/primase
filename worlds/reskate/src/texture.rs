@@ -3,7 +3,7 @@
 //! else as `.png`), every file named after its content. Nothing here reads a file: a reader hands in the bytes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
@@ -519,7 +519,6 @@ pub struct OutTexture {
 /// `prepare-reskate-textures`).
 #[derive(Debug)]
 pub struct TexLib {
-    out_dir: PathBuf,
     /// Encode the files (`false`: ids only, by the same content keys: what a pass needs of the writer's materials).
     encode: bool,
     by_key: HashMap<(u64, bool), usize>,
@@ -622,9 +621,9 @@ impl TexLib {
         self
     }
 
-    pub fn new(out_dir: &Path) -> TexLib {
+    /// A library that encodes its files (each texture once per content), ready to give them to the writer.
+    pub fn encoding() -> TexLib {
         TexLib {
-            out_dir: out_dir.to_owned(),
             encode: true,
             by_key: HashMap::new(),
             by_content: HashMap::new(),
@@ -948,27 +947,20 @@ impl TexLib {
         n
     }
 
-    /// Writes the files that are not removed.
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "writer I/O: writes the map's texture files"
-    )]
-    pub fn save(&self) -> Result<()> {
+    /// The files to write, those not removed: each one's name (under `textures/`) and bytes. A library that
+    /// encodes nothing has none to give (an error).
+    pub fn files(&self) -> Result<Vec<(&str, &[u8])>> {
         if !self.encode {
             return Err(Error::Texture(
-                "a texture library that encodes nothing has nothing to save".into(),
+                "a texture library that encodes nothing has no files to write".into(),
             ));
         }
-        std::fs::create_dir_all(&self.out_dir).map_err(|source| Error::Io {
-            path: self.out_dir.clone(),
-            source,
-        })?;
-        for t in self.out.iter().filter(|t| !t.removed) {
-            let p = self.out_dir.join(&t.file);
-            std::fs::write(&p, &t.data).map_err(|source| Error::Io { path: p, source })?;
-        }
-        Ok(())
+        Ok(self
+            .out
+            .iter()
+            .filter(|t| !t.removed)
+            .map(|t| (t.file.as_str(), t.data.as_slice()))
+            .collect())
     }
 
     /// Texture files by name, for reports.

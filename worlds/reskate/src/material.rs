@@ -288,7 +288,7 @@ mod tests {
     /// on until it is.
     #[test]
     fn material_names_are_unique_however_they_collide() {
-        let tex = TexLib::new(std::path::Path::new(""));
+        let tex = TexLib::encoding();
         let spec = MaterialSpec::derived(VClass::Decal, false);
         let mut first = MatLib::default();
         let id = first.get(&tex, &spec, -1);

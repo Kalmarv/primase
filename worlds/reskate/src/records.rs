@@ -6,6 +6,10 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+/// The vertex-blend record's file name in a map folder (`vertex_blend.json`, written only when the map has vertex-blend
+/// materials): what the post-compile stage reads ([`crate::postcompile::map_folder`]).
+pub const VERTEX_BLEND_RECORD: &str = "vertex_blend.json";
+
 /// `map.json`.
 #[derive(Debug, Serialize)]
 pub struct MapJson<'a> {

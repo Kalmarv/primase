@@ -14,7 +14,7 @@
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
-use crate::build::{EncodingOptions, overlay_stack};
+use crate::assembly::{EncodingOptions, overlay_stack};
 use crate::components::SkateOverlayStack;
 
 /// See the module documentation.

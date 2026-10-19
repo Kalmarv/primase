@@ -25,7 +25,7 @@ use std::path::Path;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, World};
 
-use crate::build::{bounds, writer_placements};
+use crate::assembly::{bounds, writer_placements};
 use crate::components::{MaterialClass, SkateMaterial, SkateScene, SkateWater};
 use crate::scene::{Scene, WaterQuad};
 

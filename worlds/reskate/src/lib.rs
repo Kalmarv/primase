@@ -6,6 +6,7 @@
 //! payloads exactly, JSON as parsed values, PNGs by pixels.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod assembly;
 pub mod blend_order;
 pub mod build;
 pub mod collision;
@@ -70,10 +71,8 @@ pub mod vertex_alpha {
 
 use std::path::PathBuf;
 
-pub use build::{
-    AssembledMaterial, BuildReport, EncodingOptions, assembled_materials, leave_out_optional, lod_choice,
-    select_lod, target, write_map,
-};
+pub use assembly::{AssembledMaterial, EncodingOptions, assembled_materials};
+pub use build::{BuildReport, leave_out_optional, lod_choice, select_lod, target, write_map};
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.

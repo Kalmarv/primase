@@ -42,7 +42,7 @@ pub struct WriterOptions {
     pub offset: [f64; 3],
     /// The apron `clip-reskate-region` recorded around the region (0 when nothing is clipped).
     pub apron: f32,
-    /// The cull IDs the map may take ([`crate::build::EncodingOptions::cull_ids`]).
+    /// The cull IDs the map may take ([`crate::assembly::EncodingOptions::cull_ids`]).
     pub cull_ids: usize,
     pub limit: f32,
     pub light_prefix: String,
@@ -696,7 +696,7 @@ struct Proto {
 }
 
 impl MapWriter {
-    pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
+    pub fn new(o: WriterOptions, surfaces: SurfaceTable) -> Result<MapWriter> {
         let off = Vec3::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
         let pm = match &o.pause {
             Some(SkatePausePicture::Image {
@@ -718,7 +718,7 @@ impl MapWriter {
             )),
             None => None,
         };
-        let tex = TexLib::new(tex_dir);
+        let tex = TexLib::encoding();
         Ok(MapWriter {
             o,
             ctx: Ctx {
@@ -755,7 +755,7 @@ impl MapWriter {
 
     /// Texture ids only, no file encoded: the writer's assembly for a pass, nothing to save.
     pub(crate) fn without_encoding(mut self) -> MapWriter {
-        let tex = std::mem::replace(&mut self.ctx.tex, TexLib::new(std::path::Path::new("")));
+        let tex = std::mem::replace(&mut self.ctx.tex, TexLib::encoding());
         self.ctx.tex = tex.without_encoding();
         self
     }
@@ -2502,7 +2502,7 @@ impl MapWriter {
                 }
             }
             let doc = serde_json::json!({ "format": 1, "materials": record });
-            let record = crate::postcompile::map_folder::RECORD;
+            let record = crate::records::VERTEX_BLEND_RECORD;
             let bytes = crate::json_bytes(record, &doc, true)?;
             self.files.insert(record.into(), bytes);
         }

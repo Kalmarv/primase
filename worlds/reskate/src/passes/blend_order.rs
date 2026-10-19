@@ -16,7 +16,7 @@
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
-use crate::build::{EncodingOptions, blend_chains};
+use crate::assembly::{EncodingOptions, blend_chains};
 use crate::components::SkateBlendChains;
 
 /// See the module documentation.

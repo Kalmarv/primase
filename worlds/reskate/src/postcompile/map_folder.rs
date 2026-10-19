@@ -20,7 +20,7 @@ use crate::postcompile::{Error, Result, bad};
 const W: &str = "vertex-blend record";
 
 /// The record's file name in the map folder.
-pub const RECORD: &str = "vertex_blend.json";
+pub const RECORD: &str = crate::records::VERTEX_BLEND_RECORD;
 
 /// `vertex_blend.json`: material name -> the (GLB relative to the map folder, primitive) pairs drawing it.
 #[derive(Clone, Debug, PartialEq, Eq)]
