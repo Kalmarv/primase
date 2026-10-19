@@ -873,7 +873,6 @@ dependencies = [
  "primase-dds",
  "primase-dxbc",
  "primase-gltf",
- "primase-hash",
  "primase-havok",
  "primase-image",
  "primase-meshops",

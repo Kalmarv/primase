@@ -14,6 +14,17 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
+/// An archive path's hash, as the BHD5 tables key files: FromSoft's base37, wrapping u32, over the UTF-16 units of the
+/// lowercase path, backslashes replaced by slashes and a leading slash added. Game dictionary paths are ASCII.
+pub fn path_hash(path: &str) -> u32 {
+    let path = path.to_lowercase().replace('\\', "/");
+    let mut h = if path.starts_with('/') { 0u32 } else { 47 };
+    for c in path.encode_utf16() {
+        h = h.wrapping_mul(37).wrapping_add(u32::from(c));
+    }
+    h
+}
+
 /// Caller-provided UTF-8 dictionary, one path per line; blank/comment lines ignored.
 /// Hash collisions retain every distinct normalized candidate, never overwrite.
 #[derive(Debug, Default, Clone)]
@@ -38,7 +49,7 @@ impl NameDictionary {
             if !s.starts_with('/') {
                 s.insert(0, '/');
             }
-            let list = names.entry(primase_hash::fromsoft_path(&s)).or_default();
+            let list = names.entry(path_hash(&s)).or_default();
             if !list.contains(&s) {
                 list.push(s);
                 list.sort();
@@ -117,7 +128,7 @@ impl Archive {
         decoder.decode_if_dcx(&bytes)
     }
     pub fn read(&self, path: &str, decoder: &Decoder<'_>) -> Result<Vec<u8>> {
-        self.read_hash(primase_hash::fromsoft_path(path), decoder)
+        self.read_hash(path_hash(path), decoder)
     }
 }
 /// Public key parameters for one Sekiro shard (1 through 5).

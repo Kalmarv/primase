@@ -12,16 +12,6 @@ pub fn crc32(bytes: &[u8]) -> u32 {
     }
     !h
 }
-/// FromSoft base37, wrapping u32, over UTF-16 units of lowercase path, backslashes
-/// replaced by slashes and a leading slash added. Game dictionary paths are ASCII.
-pub fn fromsoft_path(path: &str) -> u32 {
-    let path = path.to_lowercase().replace('\\', "/");
-    let mut h = if path.starts_with('/') { 0u32 } else { 47 };
-    for c in path.encode_utf16() {
-        h = h.wrapping_mul(37).wrapping_add(u32::from(c));
-    }
-    h
-}
 /// Jenkins one-at-a-time over bytes, with ASCII uppercase folded to lowercase,
 /// wrapping u32 at every step (CodeWalker JenkHash ASCII path convention).
 pub fn joaat(bytes: &[u8]) -> u32 {
@@ -54,10 +44,6 @@ pub fn fnv1a32_utf16le(s: &str) -> u32 {
     s.encode_utf16()
         .flat_map(u16::to_le_bytes)
         .fold(0x811c9dc5u32, |h, c| (h ^ u32::from(c)).wrapping_mul(0x01000193))
-}
-/// ForzaTech string-table hash: seed 0xFFFFFFFF, rotl(h xor byte, 7) per UTF-8 byte.
-pub fn forza_string(s: &str) -> u32 {
-    s.bytes().fold(!0u32, |h, c| (h ^ u32::from(c)).rotate_left(7))
 }
 /// Standard FNV-1 64 over bytes, offset basis 0xcbf29ce484222325, prime 0x100000001b3.
 pub fn fnv1_64(bytes: &[u8]) -> u64 {
@@ -123,10 +109,6 @@ mod tests {
         assert_eq!(crc32(b"NormalTiling"), 0x730f2086);
         assert_eq!(crc32(b"123456789"), 0xcbf43926);
         assert_eq!(crc32(b""), 0);
-        assert_eq!(fromsoft_path("map\\MapStudio\\m11_01_00_00.msb"), 0xfbbb5962);
-        assert_eq!(fromsoft_path("/map/mapstudio/m11_01_00_00.msb"), 0xfbbb5962);
-        assert_eq!(forza_string("NormalTiling"), 0xd7f0e387);
-        assert_eq!(forza_string("A😀é"), 0x6f4eaf8e);
         assert_eq!(
             content_finish(content_word(
                 content_string(0x9e3779b97f4a7c15, "A😀é"),

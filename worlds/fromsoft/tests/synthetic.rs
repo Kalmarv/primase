@@ -204,7 +204,10 @@ fn every_truncation_is_an_error() {
 fn dictionary_normalizes_and_deduplicates() {
     let d = NameDictionary::parse("# comment\nA\\B\n/a/b\n").expect("synthetic fixture");
     assert_eq!(d.names.len(), 1);
-    assert_eq!(d.names[&primase_hash::fromsoft_path("/a/b")], vec!["/a/b"]);
+    assert_eq!(
+        d.names[&primase_fromsoft::archive::path_hash("/a/b")],
+        vec!["/a/b"]
+    );
     assert!(NameDictionary::parse("é").is_err());
 }
 #[test]
@@ -249,7 +252,7 @@ fn binder_hash_table_and_nested_dcx() {
     u32le(&mut b, 104, 1);
     b[108..112].copy_from_slice(&[16, 8, 8, 0]);
     u32le(&mut b, 112, 1);
-    u32le(&mut b, 120, primase_hash::fromsoft_path("a"));
+    u32le(&mut b, 120, primase_fromsoft::archive::path_hash("a"));
     assert_eq!(Binder::read(&b, &decoder()).expect("hash table").files.len(), 1);
     for p in [56, 96, 104, 108, 112, 116, 124] {
         let mut bad = b.clone();
@@ -399,4 +402,12 @@ fn tpf_import_uses_shared_dds_metadata() {
     assert_eq!(record.image().expect("image"), image);
     record.kind = TextureKind::Cube;
     assert!(record.image().is_err());
+}
+
+/// The archive path hash: a known Sekiro path, with backslashes and capitals and as the dictionary writes it.
+#[test]
+fn path_hash_reference_values() {
+    use primase_fromsoft::archive::path_hash;
+    assert_eq!(path_hash(r"map\MapStudio\m11_01_00_00.msb"), 0xfbbb5962);
+    assert_eq!(path_hash("/map/mapstudio/m11_01_00_00.msb"), 0xfbbb5962);
 }

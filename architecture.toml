@@ -17,18 +17,6 @@ removed_when = "the post-compile step takes the map's meshes in memory, and GLB 
 
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
-[[name]]
-crate = "toolkit/hash"
-word = "fromsoft"
-reason = "fromsoft_path, one game's path hash framing"
-removed_when = "it moves into worlds/fromsoft, its only user"
-
-[[name]]
-crate = "toolkit/hash"
-word = "forza"
-reason = "forza_string, a hash with no user yet"
-removed_when = "it moves into the Forza reader when one exists, or is deleted"
-
 # ---- composition without data logic (examples, bins, cli) ----
 
 [[entry_point]]
