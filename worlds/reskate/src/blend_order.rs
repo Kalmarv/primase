@@ -339,6 +339,26 @@ pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32) -> Chai
     p
 }
 
+/// The object budget over tiles in their key order (row, then column), each needing `objects[i]` chain objects: a
+/// tile takes the chain form if the objects taken so far, its own and (with `hold`) one for every tile after it fit
+/// the `budget`; else it is written plain and the next is tried. One rule for `plan-reskate-blend-budget` (a fixed
+/// count) and the writer (what the cull-ID pool has left).
+pub fn take_chains(objects: &[usize], budget: usize, hold: bool) -> Vec<bool> {
+    let (mut taken, mut left) = (0usize, objects.len());
+    objects
+        .iter()
+        .map(|&n| {
+            left -= 1;
+            let held = if hold { left } else { 0 };
+            let fits = taken + n + held <= budget;
+            if fits {
+                taken += n;
+            }
+            fits
+        })
+        .collect()
+}
+
 impl ChainPlan {
     /// Every rank of a (cell, axis) padded to its box, into the rank's part drawn first (first use): the chain form's
     /// objects then all have the box as their bounds.

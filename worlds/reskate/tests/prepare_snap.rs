@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{MarkerKind, Other, SkateMarker, SkateMarkerSnaps, Snap, SnapMode};
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers, snap_reskate_markers};
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -147,7 +147,6 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
             name: Some("snap".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     assert!(
@@ -187,7 +186,6 @@ fn the_writer_reports_unsnapped_markers_and_refuses_other_settings() {
             name: Some("snap".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();
@@ -205,7 +203,6 @@ fn the_writer_reports_unsnapped_markers_and_refuses_other_settings() {
             name: Some("snap".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();

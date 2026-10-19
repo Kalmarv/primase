@@ -13,9 +13,11 @@ use primase_core::{
     Collision, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
     Surfaces, Topology, Transform, WeightMapping, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::layered::LowerLayeredReskate;
-use primase_reskate::prepare::{PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers};
-use primase_reskate::{EncodingOptions, WriterChoices};
+use primase_reskate::prepare::{
+    PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers,
+};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -148,18 +150,29 @@ fn world() -> World {
     w
 }
 
+/// The chain-object budget `blend_objects` (`None`: the cull-ID pool) planned on `w`, as a program plans it.
+fn plan_budget(w: &mut World, blend_objects: Option<usize>) {
+    match blend_objects {
+        Some(n) => PlanReskateBlendBudget::objects(n),
+        None => PlanReskateBlendBudget::pool(),
+    }
+    .run(w, &mut PassLog::default())
+    .unwrap();
+}
+
 /// The map's object names, its stats' blend_order record and its mesh files, written with `blend_objects`.
 fn build(blend_objects: Option<usize>, tag: &str) -> (Vec<String>, serde_json::Value, Vec<String>) {
     let out_root = tmp(tag);
+    let mut w = world();
+    plan_budget(&mut w, blend_objects);
     primase_reskate::write_map(
-        &world(),
+        &w,
         &PathBuf::new(),
         &EncodingOptions {
             out_root: out_root.clone(),
             name: Some("budget".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices { blend_objects },
     )
     .unwrap();
     let read = |f: &str| -> serde_json::Value {

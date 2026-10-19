@@ -39,6 +39,10 @@ pub struct EncodingOptions {
     pub limit: f32,
     /// Added to every written coordinate (east, north).
     pub offset: [f64; 2],
+    /// The cull IDs the map may take (an ID per object per 200 m Studio cell it meets, and per light): the level's
+    /// share of ReSkate 2.1.0-pre's pool ([`crate::map::CULL_ID_POOL`] x [`crate::map::CULL_ID_SHARE`]). In pool mode
+    /// the blend chains take what the map's other objects leave of it.
+    pub cull_ids: usize,
     /// The scene's warnings for the map's stats, taken before a pass left placements out ([`leave_out_optional`]):
     /// the reference reads them from the whole scene before its writer filters. `None`: from the world as given.
     pub scene_warnings: Option<Vec<String>>,
@@ -55,24 +59,16 @@ impl Default for EncodingOptions {
             max_render_edge: None,
             limit: 4780.0,
             offset: [0.0, 0.0],
+            cull_ids: (crate::map::CULL_ID_POOL as f64 * crate::map::CULL_ID_SHARE) as usize,
             scene_warnings: None,
         }
     }
 }
 
-/// The content choices the writer still makes, each until a preparation pass takes it over: the blend-chain
-/// object budget (PRIMASE-PLAN step 9's global preparation). Delete a field when its pass lands.
-#[derive(Clone, Debug, Default)]
-pub struct WriterChoices {
-    /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
-    /// and takes a cull ID). `None`: the level's share of ReSkate 2.1.0-pre's cull-ID pool less what the rest of the
-    /// map takes ([`crate::map::CULL_ID_POOL`]).
-    pub blend_objects: Option<usize>,
-}
-
-/// The options of `scene-skate build`, flat: [`EncodingOptions`], [`WriterChoices`], the overlay step
-/// (`prepare-reskate-overlays`'s; 0: no stack) and the blend-chain grid (`prepare-reskate-blend-order`'s) in one, for [`build`], the deprecated composition helper. Removed with
-/// it (PRIMASE-PLAN step 10).
+/// The options of `scene-skate build`, flat: [`EncodingOptions`] and the choices the preparation passes now make (the
+/// overlay step, `prepare-reskate-overlays`'s, 0: no stack; the blend-chain grid, `prepare-reskate-blend-order`'s; the
+/// chain-object budget, `plan-reskate-blend-budget`'s, `None`: the cull-ID pool) in one, for [`build`], the deprecated
+/// composition helper. Removed with it (PRIMASE-PLAN step 10).
 #[derive(Clone, Debug)]
 pub struct BuildOptions {
     pub out_root: PathBuf,
@@ -91,7 +87,7 @@ pub struct BuildOptions {
 
 impl Default for BuildOptions {
     fn default() -> Self {
-        let (e, c) = (EncodingOptions::default(), WriterChoices::default());
+        let e = EncodingOptions::default();
         BuildOptions {
             out_root: e.out_root,
             name: e.name,
@@ -99,7 +95,7 @@ impl Default for BuildOptions {
             min_instances: e.min_instances,
             min_instance_tris: e.min_instance_tris,
             overlay_step: 0.004,
-            blend_objects: c.blend_objects,
+            blend_objects: None,
             blend_grid: 200.0,
             limit: e.limit,
             max_render_edge: e.max_render_edge,
@@ -110,25 +106,21 @@ impl Default for BuildOptions {
 }
 
 impl BuildOptions {
-    /// The writer's encoding and the choices it still makes.
-    pub fn split(&self) -> (EncodingOptions, WriterChoices) {
+    /// The writer's encoding.
+    pub fn encoding(&self) -> EncodingOptions {
         let a = self.clone();
-        (
-            EncodingOptions {
-                out_root: a.out_root,
-                name: a.name,
-                tile: a.tile,
-                min_instances: a.min_instances,
-                min_instance_tris: a.min_instance_tris,
-                max_render_edge: a.max_render_edge,
-                limit: a.limit,
-                offset: a.offset,
-                scene_warnings: a.scene_warnings,
-            },
-            WriterChoices {
-                blend_objects: a.blend_objects,
-            },
-        )
+        EncodingOptions {
+            out_root: a.out_root,
+            name: a.name,
+            tile: a.tile,
+            min_instances: a.min_instances,
+            min_instance_tris: a.min_instance_tris,
+            max_render_edge: a.max_render_edge,
+            limit: a.limit,
+            offset: a.offset,
+            cull_ids: EncodingOptions::default().cull_ids,
+            scene_warnings: a.scene_warnings,
+        }
     }
 }
 
@@ -513,7 +505,7 @@ fn run_passes(
 
 /// The writer's options for the scene `s`: its encoding `a` and the choices `c` it still makes; the region and the
 /// pause picture are the caller's to set. Refuses placements split by tile.
-fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<WriterOptions> {
+fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
     if s.placements.iter().any(|p| p.split) {
         return Err(Error::Unsupported("placements split by tile (flag 32)".into()));
     }
@@ -529,8 +521,8 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         band_rows: 8,
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
-        blend_objects: c.blend_objects,
         offset: [a.offset[0], a.offset[1], 0.0],
+        cull_ids: a.cull_ids,
         limit: a.limit,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
@@ -571,7 +563,7 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::Overla
 /// The deprecated composition helper: [`write_map`] with the flat [`BuildOptions`]. Removed when its last callers
 /// switch (PRIMASE-PLAN step 10).
 pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport> {
-    let (e, c) = a.split();
+    let e = a.encoding();
     // the overlay stack the writer used to make, made here as prepare-reskate-overlays makes it
     let stack = match world.resource::<crate::dialect::SkateOverlayStack>() {
         None if a.overlay_step > 0.0 => Some(overlay_stack(world, &e, a.overlay_step)?),
@@ -582,13 +574,27 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         None => Some(blend_chains(world, &e, a.blend_grid)?),
         Some(_) => None,
     };
-    write_map_with(world, dir, &e, &c, stack, chains)
+    // and their budget, as plan-reskate-blend-budget plans it
+    let budget = match world.resource::<crate::dialect::SkateBlendBudget>() {
+        None => {
+            let mode = a.blend_objects.map_or(
+                crate::dialect::BlendBudgetMode::Pool,
+                crate::dialect::BlendBudgetMode::Objects,
+            );
+            let record = chains
+                .as_ref()
+                .or(world.resource::<crate::dialect::SkateBlendChains>());
+            Some(crate::prepare::blend_budget::plan(record, mode))
+        }
+        Some(_) => None,
+    };
+    write_map_with(world, dir, &e, stack, chains, budget)
 }
 
 /// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
-/// as `a` says, with the content choices `c` the writer still makes.
-pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoices) -> Result<BuildReport> {
-    write_map_with(world, dir, a, c, None, None)
+/// as `a` says.
+pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
+    write_map_with(world, dir, a, None, None, None)
 }
 
 /// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
@@ -601,7 +607,7 @@ fn assembly(
     encode: bool,
 ) -> Result<MapWriter> {
     let s = Scene::from_world(world, Path::new(""))?;
-    let mut o = writer_options(&s, a, &WriterChoices::default())?;
+    let mut o = writer_options(&s, a)?;
     let placements = writer_placements(&s, o.tile);
     o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
     let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?
@@ -703,16 +709,16 @@ fn write_map_with(
     world: &World,
     dir: &Path,
     a: &EncodingOptions,
-    c: &WriterChoices,
     given: Option<crate::dialect::SkateOverlayStack>,
     given_chains: Option<crate::dialect::SkateBlendChains>,
+    given_budget: Option<crate::dialect::SkateBlendBudget>,
 ) -> Result<BuildReport> {
     let mut s = Scene::from_world(world, dir)?;
     let scene_warnings = match &a.scene_warnings {
         Some(w) => w.clone(),
         None => scene_warnings(&s, world)?,
     };
-    let mut o = writer_options(&s, a, c)?;
+    let mut o = writer_options(&s, a)?;
     o.pause = world.resource::<SkatePausePicture>().cloned();
     // markers snapped before the writer were snapped against this writer's collision: the same settings
     if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
@@ -780,9 +786,11 @@ fn write_map_with(
         }
         None => Chains::Off { left: 0 },
     };
+    let budget = given_budget.or_else(|| world.resource::<crate::dialect::SkateBlendBudget>().cloned());
     let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?
         .with_stack(stack)
-        .with_chains(chains);
+        .with_chains(chains)
+        .with_budget(budget);
     let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
     let water_world = s
         .soups
@@ -886,6 +894,14 @@ fn write_map_with(
                 .filter(|(_, n)| *n > 0)
                 .map(|(what, n)| (what.to_owned(), n as u64)),
             )
+            .chain(writer.r.chain_fallbacks.iter().map(|line| (line.clone(), 1)))
+            .chain((writer.r.chains_unbudgeted > 0).then(|| {
+                (
+                    "tiles' blend chains written plain: no blend budget planned (plan-reskate-blend-budget)"
+                        .to_owned(),
+                    writer.r.chains_unbudgeted as u64,
+                )
+            }))
             .chain(match writer.chains() {
                 Chains::Off { left } if *left > 0 => Some((
                     "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \

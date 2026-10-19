@@ -31,7 +31,7 @@ pub mod vertex_alpha;
 use std::path::PathBuf;
 
 pub use build::{
-    AssembledMaterial, BuildOptions, BuildReport, EncodingOptions, WriterChoices, assembled_materials, build,
+    AssembledMaterial, BuildOptions, BuildReport, EncodingOptions, assembled_materials, build,
     leave_out_optional, lod_choice, select_lod, write_map,
 };
 
@@ -67,6 +67,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "select-reskate-lights",
         prepare::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
+    );
+    // the budget is the program's: no default
+    reg.register_requiring(
+        "plan-reskate-blend-budget",
+        prepare::plan_reskate_blend_budget,
+        &[("objects", "pool")],
     );
     // the grid is the program's: no default
     reg.register_requiring(

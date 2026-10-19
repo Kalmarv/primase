@@ -14,8 +14,8 @@ use primase_core::{
     Collision, ColorSpace, Instance, Light, LightKind, Mesh, MeshFile, Name, Primitive, Semantic, Stream,
     Surfaces, TexFormat, TexRole, Texture, TextureFile, Topology, Transform, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -183,7 +183,6 @@ fn a_loaded_scene_writes_what_its_world_writes() {
             out_root: tmp("unloaded"),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();
@@ -207,7 +206,6 @@ fn a_loaded_scene_writes_what_its_world_writes() {
                 out_root: out_root.clone(),
                 ..EncodingOptions::default()
             },
-            &WriterChoices::default(),
         )
         .unwrap();
         let mut f = files(&out_root);
@@ -277,7 +275,6 @@ fn a_spawn_over_no_ground_is_refused() {
                 out_root: out_root.clone(),
                 ..EncodingOptions::default()
             },
-            &WriterChoices::default(),
         )
         .map(|_| out_root)
         .map_err(|e| e.to_string())
@@ -346,7 +343,6 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
             out_root: out_root.clone(),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     let stats: serde_json::Value =
@@ -431,7 +427,6 @@ fn the_write_needs_no_scene_file_after_the_load() {
                 out_root: out_root.clone(),
                 ..EncodingOptions::default()
             },
-            &WriterChoices::default(),
         )
         .unwrap();
         let mut f = files(&out_root);

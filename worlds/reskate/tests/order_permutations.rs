@@ -11,15 +11,15 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::pass::{Pass, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Collision, Entity, Instance, Layer, LayerWeights, LayeredMaterial, Light, LightKind, Mesh, Name,
     Primitive, Semantic, Stream, Surfaces, Topology, Transform, WeightMapping, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::SkateGrindCurve;
-use primase_reskate::prepare::RaiseOptions;
-use primase_reskate::{EncodingOptions, WriterChoices};
+use primase_reskate::prepare::{PlanReskateBlendBudget, RaiseOptions};
 
 /// The orders a list of `n` things is made in: as listed, reversed, and rotated by one.
 #[derive(Clone, Copy, Debug)]
@@ -326,6 +326,13 @@ fn map(order: Order, blend_objects: Option<usize>) -> BTreeMap<String, Vec<u8>> 
     PassManager::new(registry)
         .run(&mut w, &pipeline, &mut RunReport::default())
         .unwrap();
+    // the budget, planned last
+    match blend_objects {
+        Some(n) => PlanReskateBlendBudget::objects(n),
+        None => PlanReskateBlendBudget::pool(),
+    }
+    .run(&mut w, &mut primase_core::pass::PassLog::default())
+    .unwrap();
     let out_root: PathBuf =
         std::env::temp_dir().join(format!("primase-reskate-orders-{}", std::process::id()));
     if out_root.exists() {
@@ -339,7 +346,6 @@ fn map(order: Order, blend_objects: Option<usize>) -> BTreeMap<String, Vec<u8>> 
             name: Some("orders".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices { blend_objects },
     )
     .unwrap();
     let f = files(&out_root.join("orders"));

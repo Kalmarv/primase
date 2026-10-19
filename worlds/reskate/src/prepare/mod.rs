@@ -1,6 +1,7 @@
 //! Preparation for the ReSkate target: passes a program selects to turn core data into the `skate.*` dialect
 //! ([`crate::dialect`]) its writers take.
 
+pub mod blend_budget;
 pub mod blend_order;
 pub mod budget;
 pub mod floor;
@@ -15,6 +16,7 @@ pub mod spawn;
 pub mod textures;
 pub mod water;
 
+pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
 pub use floor::{PrepareReskateFloor, prepare_reskate_floor};

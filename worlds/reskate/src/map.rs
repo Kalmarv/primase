@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::blend_order::{self, Geometry};
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
 use crate::dialect::{
-    ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendChains, SkateOverlayStack, StackedPiece,
+    BlendBudgetMode, ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendBudget, SkateBlendChains,
+    SkateOverlayStack, StackedPiece,
 };
 use crate::glb::{self, GlbPrim};
 use crate::grind;
@@ -38,11 +39,9 @@ pub struct WriterOptions {
     pub band_rows: i32,
     pub min_instances: i64,
     pub min_instance_tris: i64,
-    /// The most objects the writer adds to draw blend-chain overlays in chain order (one per tile, dominant axis and
-    /// chain rank: [`crate::blend_order`]); past it a tile's chain overlays stay in its mesh, in an unstable order.
-    /// 0: none added. `None`: the level's share of the cull-ID pool less the rest of the map ([`CULL_ID_POOL`]).
-    pub blend_objects: Option<usize>,
     pub offset: [f64; 3],
+    /// The cull IDs the map may take ([`crate::build::EncodingOptions::cull_ids`]).
+    pub cull_ids: usize,
     pub limit: f32,
     pub light_prefix: String,
     pub streaming_distances: [f64; 3],
@@ -87,6 +86,10 @@ pub struct WriteResult {
     pub overlay: OverlayStats,
     /// The blend-chain overlays as objects of their own ([`crate::blend_order`]).
     pub blend: blend_order::Stats,
+    /// The tiles whose chain form the cull-ID pool had no room for, written plain (pool mode), one line each.
+    pub chain_fallbacks: Vec<String>,
+    /// The tiles with chain forms written plain because no blend budget was planned.
+    pub chains_unbudgeted: usize,
     pub prop_col_tris: BTreeMap<String, i64>,
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
@@ -599,6 +602,8 @@ pub struct MapWriter {
     stack: Stack,
     /// The blend chains: none, chosen here for `prepare-reskate-blend-order`, or the ones it chose, built again.
     chains: Chains,
+    /// The chain-object budget `plan-reskate-blend-budget` planned (`None`: none planned, every tile plain).
+    budget: Option<SkateBlendBudget>,
     /// Mesh files (meshes/<name>), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
@@ -727,6 +732,7 @@ impl MapWriter {
             pending_chains: BTreeMap::new(),
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
+            budget: None,
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
@@ -757,6 +763,12 @@ impl MapWriter {
         std::mem::replace(&mut self.stack, Stack::Off { unstacked: 0 })
     }
 
+    /// The chain-object budget `plan-reskate-blend-budget` planned.
+    pub(crate) fn with_budget(mut self, budget: Option<SkateBlendBudget>) -> MapWriter {
+        self.budget = budget;
+        self
+    }
+
     /// The blend chains as `chains` says.
     pub(crate) fn with_chains(mut self, chains: Chains) -> MapWriter {
         self.chains = chains;
@@ -780,6 +792,7 @@ impl MapWriter {
         &mut self,
         parts: &mut BTreeMap<usize, Acc>,
         at: Vec3,
+        (tx, ty): (i32, i32),
         tile: &str,
     ) -> Result<Option<PendingChain>> {
         let mut ranks: Vec<(usize, u8)> = Vec::new();
@@ -822,6 +835,8 @@ impl MapWriter {
         // what this tile's chain form is, as the pass records it and the writer checks it
         let mats = &self.ctx.mats;
         let found = ChainTile {
+            column: tx,
+            row: ty,
             pieces: ranks
                 .iter()
                 .flat_map(|(k, _)| parts[k].pieces.iter().map(|p| p.id))
@@ -932,29 +947,52 @@ impl MapWriter {
         }))
     }
 
-    /// Decides every tile's pending chain overlays in key order (row, then column): its objects of their own while
-    /// they fit the budget, else its plain object (drawn in an unstable order); the form not taken is deleted. The
-    /// budget is `--blend-objects` when given, else the level's share of the cull-ID pool ([`CULL_ID_POOL`] x
-    /// [`CULL_ID_SHARE`]) less `other`, the cull IDs the rest of the map takes; with the pool's budget one ID is held
-    /// back for every tile not yet decided, so the plain fallbacks always fit.
+    /// Writes every tile's pending chain overlays in key order (row, then column) in the form the budget gives it
+    /// ([`blend_order::take_chains`]): the tiles `plan-reskate-blend-budget` chose for a fixed count; in pool mode the
+    /// ranked tiles while the map's cull IDs ([`WriterOptions::cull_ids`], by default the level's share of
+    /// [`CULL_ID_POOL`]) less `other`, the
+    /// cull IDs the rest of the map takes, has room (one ID held back for every tile not yet decided, so the plain
+    /// fallbacks always fit), each tile past it reported. Without a planned budget every tile is plain. The form not
+    /// taken is deleted.
     fn emit_chains(&mut self, other: usize) -> Result<()> {
         let pending = std::mem::take(&mut self.pending_chains);
-        let from_pool = self.o.blend_objects.is_none();
-        let budget = match self.o.blend_objects {
-            Some(cap) => cap,
-            None => ((CULL_ID_POOL as f64 * CULL_ID_SHARE) as usize).saturating_sub(other),
+        let names: Vec<String> = pending.keys().map(|&(ty, tx)| format!("t_{tx}_{ty}")).collect();
+        let pool = self.o.cull_ids.saturating_sub(other);
+        let (take, cap, from_pool) = match &self.budget {
+            None => {
+                self.r.chains_unbudgeted = names.len();
+                (vec![false; names.len()], 0, false)
+            }
+            Some(b) => {
+                if b.ranked != names {
+                    return Err(Error::Scene(
+                        "the blend budget (skate.blend_budget) ranks other tiles than the writer's blend chains: run \
+                         plan-reskate-blend-budget after prepare-reskate-blend-order"
+                            .into(),
+                    ));
+                }
+                match b.mode {
+                    BlendBudgetMode::Objects(n) => {
+                        let chosen = b.chosen.as_ref().ok_or_else(|| {
+                            Error::Scene("the blend budget for a fixed count names no chosen tiles".into())
+                        })?;
+                        (names.iter().map(|t| chosen.contains(t)).collect(), n, false)
+                    }
+                    BlendBudgetMode::Pool => {
+                        let objects: Vec<usize> = pending.values().map(|p| p.groups).collect();
+                        (blend_order::take_chains(&objects, pool, true), pool, true)
+                    }
+                }
+            }
         };
         let st = &mut self.r.blend;
-        st.cap = budget;
+        st.cap = cap;
         st.cap_from_pool = from_pool;
         st.other_cull_ids = other;
         st.grid_m = self.chains.grid();
-        let mut left = pending.len();
-        for (_, p) in pending {
-            left -= 1;
-            let held = if from_pool { left } else { 0 };
+        for ((p, chain), name) in pending.into_values().zip(take).zip(names) {
             let st = &mut self.r.blend;
-            if st.objects + p.groups + held <= budget {
+            if chain {
                 st.objects += p.groups;
                 st.tiles_split += 1;
                 st.overlay_triangles_split += p.tris;
@@ -969,6 +1007,12 @@ impl MapWriter {
                 self.objects.extend(p.plain);
                 for f in &p.files {
                     self.discard_file(f);
+                }
+                if from_pool {
+                    self.r.chain_fallbacks.push(format!(
+                        "blend chains: tile {name} written plain, cull-ID pool full ({other} other cull IDs of {})",
+                        self.o.cull_ids
+                    ));
                 }
             }
         }
@@ -1653,7 +1697,7 @@ impl MapWriter {
                         }
                     }
                     let tile = format!("t_{tx}_{ty}");
-                    let chain = self.chain_candidates(&mut parts, at, &tile)?;
+                    let chain = self.chain_candidates(&mut parts, at, (tx, ty), &tile)?;
                     if chain.is_none() {
                         // left in the tile: counted with its parts below
                         chained.clear();

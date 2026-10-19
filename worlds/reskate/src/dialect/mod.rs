@@ -653,6 +653,9 @@ pub struct SkateBlendChains {
 /// per object (cell, axis, rank) what it holds.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ChainTile {
+    /// The tile's column and row (the writer's tiles in key order: row, then column).
+    pub column: i32,
+    pub row: i32,
     pub pieces: BTreeSet<OverlayPiece>,
     pub clipped: u32,
     pub steps: Option<BTreeMap<u8, f32>>,
@@ -681,6 +684,8 @@ impl Resource for SkateBlendChains {
                 .map(|(name, t)| {
                     serde_json::json!({
                         "tile": name,
+                        "column": t.column,
+                        "row": t.row,
                         "pieces": t.pieces.len(),
                         "clipped": t.clipped,
                         "steps": t.steps,
@@ -709,6 +714,39 @@ impl Resource for SkateBlendChains {
         for t in self.tiles.values_mut() {
             t.pieces.retain(|p| keep(p.entity()));
         }
+    }
+}
+
+/// How many chain objects a map takes: a fixed count, or what the cull-ID pool has left after the map's other objects
+/// (known when the map is written).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlendBudgetMode {
+    Objects(usize),
+    Pool,
+}
+
+/// The blend-chain budget `plan-reskate-blend-budget` planned: its mode, the tiles with a chain form in the order they
+/// are given one (row, then column), and for a fixed count the tiles that take it. In pool mode the writer gives the
+/// chain form to the ranked tiles in that order while the pool's room holds and writes the rest plain, each reported.
+/// Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkateBlendBudget {
+    pub mode: BlendBudgetMode,
+    pub ranked: Vec<String>,
+    pub chosen: Option<BTreeSet<String>>,
+}
+
+impl Resource for SkateBlendBudget {
+    const NAME: &'static str = "skate.blend_budget";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "mode": match self.mode {
+                BlendBudgetMode::Objects(n) => serde_json::json!({ "objects": n }),
+                BlendBudgetMode::Pool => serde_json::json!("pool"),
+            },
+            "ranked": self.ranked,
+            "chosen": self.chosen,
+        })))
     }
 }
 

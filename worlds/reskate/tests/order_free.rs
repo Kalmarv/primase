@@ -13,10 +13,10 @@ use primase_core::{
     Collision, Instance, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology, Transform, World,
 };
 use primase_meshops::vector::Vec3;
+use primase_reskate::EncodingOptions;
 use primase_reskate::prepare::lights::keep_lights;
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
 use primase_reskate::scene::PlacedLight;
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -213,7 +213,6 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
             out_root: out_root.clone(),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     assert_eq!(report.instances, 9);

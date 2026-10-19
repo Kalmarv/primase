@@ -4,7 +4,8 @@
 //! when the scene has none, the markers snapped (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
 //! (`budget-reskate-textures`), the overlays stacked (`prepare-reskate-overlays`, 4 mm), the blend chains split
-//! (`prepare-reskate-blend-order`, 200 m), then the writer.
+//! (`prepare-reskate-blend-order`, 200 m) and their budget (`plan-reskate-blend-budget`, the cull-ID pool), then the
+//! writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
 //! [--tex-caps FILE] [--water-ocean] [--no-water] [--map-height N] [--lights-max-per-cell N] [--name N] [--lod default|highest|N]
@@ -17,13 +18,13 @@ use std::path::PathBuf;
 
 use primase_core::World;
 use primase_core::pass::{Pass, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_reskate::{EncodingOptions, WriterChoices};
+use primase_reskate::EncodingOptions;
 
 type BoxError = Box<dyn std::error::Error>;
 
 fn main() -> Result<(), BoxError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut o, c) = (EncodingOptions::default(), WriterChoices::default());
+    let mut o = EncodingOptions::default();
     let mut scene: Option<PathBuf> = None;
     let mut lod = primase_core::LodChoice::Default;
     let mut max_priority: Option<u8> = None;
@@ -179,6 +180,8 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::prepare::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
     ));
+    // and as many chain objects as the cull-ID pool has room for, as the writer chose them
+    passes.push(Box::new(primase_reskate::prepare::PlanReskateBlendBudget::pool()));
     let mut prepared = RunReport::default();
     PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes }, &mut prepared)?;
     for step in lods.steps.iter().chain(&dropped.steps).chain(&prepared.steps) {
@@ -186,7 +189,7 @@ fn main() -> Result<(), BoxError> {
             println!("{}: {:?}", step.pass, step.log.counts);
         }
     }
-    let r = primase_reskate::write_map(&w, &scene, &o, &c)?;
+    let r = primase_reskate::write_map(&w, &scene, &o)?;
     println!(
         "map '{}': {} tiles, {} merged placements / {:.2} M tris, {} instances of {} prototypes, {} object records, {} materials, {} textures, collision {:.2} M tris, in {:.1}s",
         r.out_dir.display(),

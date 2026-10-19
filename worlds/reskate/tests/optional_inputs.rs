@@ -8,9 +8,9 @@ use std::path::Path;
 
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Collision, Surfaces, World};
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{MarkerKind, Other, SkateMarker};
 use primase_reskate::prepare::RaiseOptions;
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 #[test]
 fn a_map_without_the_optional_features_is_prepared_and_written() {
@@ -64,7 +64,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
             "lower-layered-reskate, prepare-reskate-textures, budget-reskate-textures{max=64}, \
              prepare-reskate-grinds, select-reskate-lights{per_cell=8,cell=200}, \
              prepare-reskate-water{extent=content,margin=400}, \
-             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}",
+             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}, plan-reskate-blend-budget{objects=pool}",
         )
         .unwrap();
     let mut report = RunReport::default();
@@ -84,6 +84,10 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
     );
     assert_eq!(count("prepare-reskate-blend-order", "chain objects"), Some(0));
     assert_eq!(
+        count("plan-reskate-blend-budget", "tiles ranked for the chain form"),
+        Some(0)
+    );
+    assert_eq!(
         count("prepare-reskate-overlays", "overlay pieces lifted"),
         Some(0)
     );
@@ -96,7 +100,6 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
             name: Some("bare".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     assert_eq!((r.tiles, r.textures), (0, 0));

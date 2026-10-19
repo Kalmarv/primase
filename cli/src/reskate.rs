@@ -9,25 +9,25 @@
 //! prism), `snap-reskate-markers` (the writer snaps no marker), the pause map if wanted
 //! (`prepare-reskate-pause-map{from=geometry,height=2160,extent=content}`, what the old writer always drew; without it
 //! the map has none) and, last, `prepare-reskate-overlays{step=0.004}` (the writer stacks no decal of its own) and
-//! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own).
+//! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own), then
+//! `plan-reskate-blend-budget{objects=pool}` (how many chain objects; without it every tile's chains are plain).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
 use primase_core::convert::{Report, Writer};
 use primase_core::pass::Target;
-use primase_reskate::{EncodingOptions, WriterChoices};
+use primase_reskate::EncodingOptions;
 
 use crate::convert::Result;
 
 struct Reskate {
     encoding: EncodingOptions,
-    choices: WriterChoices,
     report: Report,
     /// What the map writer did not write, not yet taken by the conversion.
     notices: Vec<primase_core::convert::Notice>,
 }
 
-/// `[--name N] [--blend-objects N] [--min-instances N]`
+/// `[--name N] [--min-instances N]`
 pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
     let mut name = out
         .file_name()
@@ -37,7 +37,6 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         out_root: out.to_path_buf(),
         ..EncodingOptions::default()
     };
-    let mut choices = WriterChoices::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("reskate: {a} needs a value"));
@@ -49,11 +48,11 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
                     .map_err(|_| "reskate: --min-instances is a number")?
             }
             "--blend-objects" => {
-                choices.blend_objects = Some(
-                    value()?
-                        .parse()
-                        .map_err(|_| "reskate: --blend-objects is a number")?,
-                )
+                return Err(
+                    "reskate: the chain-object budget is plan-reskate-blend-budget's: --passes \"..., \
+                     plan-reskate-blend-budget{objects=N}\""
+                        .into(),
+                );
             }
             "--blend-grid" => {
                 return Err(
@@ -78,7 +77,6 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         Box::new(primase_core::convert::WholeWorld::default()),
         Box::new(Reskate {
             encoding,
-            choices,
             report: Report::new(),
             notices: Vec::new(),
         }),
@@ -93,7 +91,7 @@ impl Writer for Reskate {
     }
     fn write(&mut self, part: &World) -> Result<()> {
         // the world carries every input in memory: no scene folder to read from
-        let report = primase_reskate::write_map(part, &PathBuf::new(), &self.encoding, &self.choices)?;
+        let report = primase_reskate::write_map(part, &PathBuf::new(), &self.encoding)?;
         self.report.push((
             "reskate".into(),
             format!(

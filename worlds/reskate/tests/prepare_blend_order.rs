@@ -12,12 +12,13 @@ use primase_core::{
     Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream, Topology,
     Transform, WeightMapping, World,
 };
-use primase_reskate::dialect::{MarkerKind, Other, SkateBlendChains, SkateMarker};
+use primase_reskate::dialect::{MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateMarker};
 use primase_reskate::layered::LowerLayeredReskate;
 use primase_reskate::prepare::{
-    PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions, prepare_reskate_blend_order,
+    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions,
+    plan_reskate_blend_budget, prepare_reskate_blend_order,
 };
-use primase_reskate::{BuildOptions, EncodingOptions, WriterChoices};
+use primase_reskate::{BuildOptions, EncodingOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -153,7 +154,6 @@ fn write(w: &World, tag: &str, e: &EncodingOptions) -> Result<(primase_reskate::
             name: Some("chains".into()),
             ..e.clone()
         },
-        &WriterChoices::default(),
     )
     .map_err(|e| e.to_string())?;
     Ok((r, files(&out_root.join("chains"))))
@@ -198,6 +198,10 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
     PrepareReskateBlendOrder::new(200.0)
         .unwrap()
         .run(&mut w, &mut log)
+        .unwrap();
+    // the budget the deprecated helper plans by default: the cull-ID pool's room
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
         .unwrap();
     let rec = w.resource::<SkateBlendChains>().unwrap().clone();
     assert_eq!(rec.tiles.len(), 1, "{rec:?}");
@@ -350,5 +354,125 @@ fn the_blend_order_options_round_trip_and_are_checked() {
         o(&[("grid", "200"), ("step", "0.004")]),
     ] {
         assert!(prepare_reskate_blend_order(&bad).is_err(), "{bad:?}");
+    }
+}
+
+/// The border chain prepared up to its budget: the overlays stacked, the chains split.
+fn chained() -> World {
+    let mut w = across_the_border();
+    PrepareReskateOverlays::new(0.004)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    PrepareReskateBlendOrder::new(200.0)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    w
+}
+
+/// A fixed count is decided by the pass: too few objects for the tile's chain objects leave it plain (an approximation
+/// the pass reports), enough give it the chain form; the writer follows the plan and decides nothing.
+#[test]
+fn a_fixed_budget_is_decided_by_the_pass() {
+    let objects = chained()
+        .resource::<SkateBlendChains>()
+        .unwrap()
+        .tiles
+        .values()
+        .next()
+        .unwrap()
+        .groups
+        .len();
+    for (n, split) in [(objects - 1, 0), (objects, 1)] {
+        let mut w = chained();
+        let mut log = PassLog::default();
+        PlanReskateBlendBudget::objects(n).run(&mut w, &mut log).unwrap();
+        let plan = w.resource::<SkateBlendBudget>().unwrap();
+        assert_eq!(
+            (plan.ranked.len(), plan.chosen.as_ref().unwrap().len()),
+            (1, split)
+        );
+        assert_eq!(
+            log.approximations.values().sum::<u64>(),
+            1 - split as u64,
+            "{:?}",
+            log.approximations
+        );
+        let (r, _) = write(&w, &format!("objects-{n}"), &EncodingOptions::default()).unwrap();
+        assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (split, 1 - split));
+        assert!(
+            r.unsupported.iter().all(|(what, _)| !what.contains("blend")),
+            "{:?}",
+            r.unsupported
+        );
+    }
+}
+
+/// In pool mode the writer gives the chain form while the map's cull IDs have room; with none left it writes the tile
+/// plain and reports it, with the other objects' count and the pool.
+#[test]
+fn a_full_pool_writes_the_tile_plain_and_says_so() {
+    let mut w = chained();
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let (r, _) = write(&w, "pool-room", &EncodingOptions::default()).unwrap();
+    assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (1, 0));
+    let full = EncodingOptions {
+        cull_ids: 0,
+        ..EncodingOptions::default()
+    };
+    let (r, _) = write(&w, "pool-full", &full).unwrap();
+    assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
+    let notice = r
+        .unsupported
+        .iter()
+        .find(|(what, _)| what.starts_with("blend chains: tile t_0_0 written plain, cull-ID pool full"))
+        .unwrap_or_else(|| panic!("{:?}", r.unsupported));
+    assert!(notice.0.ends_with("other cull IDs of 0)"), "{}", notice.0);
+}
+
+/// The writer refuses a plan for other tiles; without a plan it writes every tile's chains plain, reported once.
+#[test]
+fn a_plan_for_other_tiles_is_refused_and_none_is_reported() {
+    let mut w = chained();
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    w.resource_mut::<SkateBlendBudget>()
+        .unwrap()
+        .ranked
+        .push("t_9_9".into());
+    let e = write(&w, "other-plan", &EncodingOptions::default()).unwrap_err();
+    assert!(e.contains("ranks other tiles"), "{e}");
+    let (r, _) = write(&chained(), "unplanned", &EncodingOptions::default()).unwrap();
+    assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
+    assert!(
+        r.unsupported
+            .iter()
+            .any(|(what, n)| what.contains("no blend budget planned") && *n == 1),
+        "{:?}",
+        r.unsupported
+    );
+}
+
+/// The budget is required, a count or the pool; it prints back and reads back the same.
+#[test]
+fn the_budget_options_round_trip_and_are_checked() {
+    let o = |pairs: &[(&str, &str)]| -> Options {
+        pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
+    };
+    for given in [o(&[("objects", "pool")]), o(&[("objects", "12")])] {
+        let pass = plan_reskate_blend_budget(&given).unwrap();
+        assert_eq!(pass.options(), given);
+    }
+    for bad in [
+        o(&[]),
+        o(&[("objects", "-1")]),
+        o(&[("objects", "all")]),
+        o(&[("objects", "1"), ("grid", "200")]),
+    ] {
+        assert!(plan_reskate_blend_budget(&bad).is_err(), "{bad:?}");
     }
 }

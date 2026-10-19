@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{LayeredMaterial, Mesh, World};
+use primase_reskate::EncodingOptions;
 use primase_reskate::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
-use primase_reskate::prepare::{PrepareReskateBlendOrder, PrepareReskateOverlays};
-use primase_reskate::{EncodingOptions, WriterChoices};
+use primase_reskate::prepare::{PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays};
 
 /// The grid the blend chains are cut on: Studio's WorldPartition cell.
 const GRID: f32 = 200.0;
@@ -232,7 +232,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             ..EncodingOptions::default()
         };
         choose_lod(&mut w);
-        let refused = primase_reskate::write_map(&w, &scene, &o, &WriterChoices::default())
+        let refused = primase_reskate::write_map(&w, &scene, &o)
             .err()
             .map(|e| e.to_string())
             .unwrap_or_default();
@@ -287,7 +287,10 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             .unwrap()
             .run(&mut w, &mut PassLog::default())
             .unwrap();
-        let report = primase_reskate::write_map(&w, &scene, &o, &WriterChoices::default()).unwrap();
+        PlanReskateBlendBudget::pool()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        let report = primase_reskate::write_map(&w, &scene, &o).unwrap();
         let out = report.out_dir;
         let map: Value = serde_json::from_slice(&std::fs::read(out.join("map.json")).unwrap()).unwrap();
         let blended: BTreeSet<String> = map["materials"]

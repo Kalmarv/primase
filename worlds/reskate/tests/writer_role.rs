@@ -15,9 +15,9 @@ use primase_core::{
     Collision, Entity, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces,
     Topology, Transform, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{Other, SkateScene, SkateWater};
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 /// A 10 x 10 quad grid (200 triangles, over the instancing threshold of 150) drawn with `material`.
 fn grid(material: Entity) -> Mesh {
@@ -164,7 +164,6 @@ fn the_writer_writes_what_it_is_given() {
             name: Some("role".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     let dir = out_root.join("role");

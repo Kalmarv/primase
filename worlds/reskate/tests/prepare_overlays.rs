@@ -14,7 +14,7 @@ use primase_core::{
 };
 use primase_reskate::dialect::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
 use primase_reskate::prepare::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
-use primase_reskate::{BuildOptions, EncodingOptions, WriterChoices};
+use primase_reskate::{BuildOptions, EncodingOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -138,7 +138,6 @@ fn write(w: &World, tag: &str, e: &EncodingOptions) -> Result<(primase_reskate::
             name: Some("overlays".into()),
             ..e.clone()
         },
-        &WriterChoices::default(),
     )
     .map_err(|e| e.to_string())?;
     Ok((r, files(&out_root.join("overlays"))))

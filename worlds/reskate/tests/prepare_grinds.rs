@@ -7,10 +7,10 @@ use std::path::PathBuf;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{MarkerKind, Other, SkateGrindCurve, SkateGrindPrism, SkateMarker};
 use primase_reskate::grind::PrismRules;
 use primase_reskate::prepare::{PrepareReskateGrinds, RaiseOptions, prepare_reskate_grinds};
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -143,7 +143,6 @@ fn write(w: &World, tag: &str) -> (primase_reskate::BuildReport, serde_json::Val
             name: Some("grinds".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     let map = serde_json::from_slice(&std::fs::read(out_root.join("grinds/map.json")).unwrap()).unwrap();

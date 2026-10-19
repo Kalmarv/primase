@@ -12,9 +12,9 @@ use primase_core::{
     ColorSpace, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
     Topology, Transform, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{FileRef, MaterialClass, Other, SkateBaseFactor, SkateMaterial, SkateTexture};
 use primase_reskate::prepare::{BudgetReskateTextures, PrepareReskateTextures};
-use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -340,7 +340,6 @@ fn the_writer_writes_textures_as_prepared() {
             out_root: out_root.clone(),
             ..EncodingOptions::default()
         },
-        &WriterChoices::default(),
     )
     .unwrap();
     assert!(
