@@ -208,6 +208,10 @@ pub struct PartScope {
     pub whole: bool,
     /// The part's [`Part::area`]: the ground area its context covers, if its source states one.
     pub area: Option<[f64; 4]>,
+    /// The first entity index the part's passes make ([`World::next_index`] as loaded): an entity below it was loaded
+    /// (its id is the planning world's, the same in every part); one at or above it was made in this part. Set by the
+    /// conversion; `None` in a scope composed by hand (every entity taken as loaded).
+    pub first_made: Option<u32>,
 }
 
 impl Resource for PartScope {
@@ -847,11 +851,13 @@ fn run(
                 // what was loaded is checked before any summary pass reads it, as the second traversal does
                 manager.verify(&part, &format!("summary {ordinal}: load"))?;
                 *during = format!("summary {ordinal}: passes");
+                let first_made = Some(part.next_index());
                 part.insert_resource(PartScope {
                     roots,
                     context,
                     whole,
                     area,
+                    first_made,
                 });
                 let mut r = RunReport::default();
                 let ran = manager.run(&mut part, s.summarize, &mut r);
@@ -910,11 +916,13 @@ fn run(
         if let Some((registry, decided)) = &decided {
             registry.hand_on(decided, &mut part);
         }
+        let first_made = Some(part.next_index());
         part.insert_resource(PartScope {
             roots: roots.clone(),
             context: context.clone(),
             whole,
             area,
+            first_made,
         });
         manager.run(&mut part, passes, &mut part_report.explicit)?;
         part.remove_resource::<PartScope>();

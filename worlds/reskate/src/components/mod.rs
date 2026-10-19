@@ -567,38 +567,67 @@ impl Resource for SkateFloorPlan {
 /// Not part of scene-interchange v1.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct SkateFloorSummary {
-    pub lows: Vec<f32>,
-    pub soup_lows: Vec<f32>,
+    /// Per owned placement (by owned key), the lowest point of each of its parts.
+    pub lows: BTreeMap<u64, Vec<f32>>,
+    /// Per owned world soup (by owned key), the lowest point of each of its triangles.
+    pub soup_lows: BTreeMap<u64, Vec<f32>>,
 }
 
-/// `a` and `b`, each sorted, as one sorted list.
-fn merge_sorted(a: &mut Vec<f32>, b: Vec<f32>) {
-    a.extend(b);
-    a.sort_by(f32::total_cmp);
+impl SkateFloorSummary {
+    /// What the floor is measured on: every placement low (else every soup low), sorted.
+    pub fn measured(&self) -> Vec<f32> {
+        let from = if self.lows.is_empty() {
+            &self.soup_lows
+        } else {
+            &self.lows
+        };
+        let mut v: Vec<f32> = from.values().flatten().copied().collect();
+        v.sort_by(f32::total_cmp);
+        v
+    }
+}
+
+/// `b` merged into `a` by key: an entity two parts both own is one entry; the same key measured differently is an
+/// error.
+fn merge_keyed<V: PartialEq>(a: &mut BTreeMap<u64, V>, b: BTreeMap<u64, V>) -> Result<(), String> {
+    for (k, v) in b {
+        match a.get(&k) {
+            Some(x) if *x != v => return Err(format!("entity {k} summarized differently by two parts")),
+            Some(_) => {}
+            None => {
+                a.insert(k, v);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Resource for SkateFloorSummary {
     const NAME: &'static str = "skate.floor_summary";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(serde_json::json!({
-            "lows": self.lows.len(),
-            "soup_lows": self.soup_lows.len(),
+            "placements": self.lows.len(),
+            "soups": self.soup_lows.len(),
         })))
     }
 }
 
 impl primase_core::summary::Summary for SkateFloorSummary {
     fn merge(&mut self, other: Self) -> Result<(), String> {
-        merge_sorted(&mut self.lows, other.lows);
+        merge_keyed(&mut self.lows, other.lows)?;
         if self.lows.is_empty() {
-            merge_sorted(&mut self.soup_lows, other.soup_lows);
+            merge_keyed(&mut self.soup_lows, other.soup_lows)?;
         } else {
             self.soup_lows.clear();
         }
         Ok(())
     }
     fn retained_bytes(&self) -> usize {
-        4 * (self.lows.len() + self.soup_lows.len())
+        self.lows
+            .values()
+            .chain(self.soup_lows.values())
+            .map(|v| 8 + 4 * v.len())
+            .sum()
     }
 }
 
@@ -627,7 +656,8 @@ impl Resource for SkateFloorDecision {
 /// group, its priority, and the fields [`crate::scene::light_order`] orders by. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RankedLight {
-    pub id: u32,
+    /// Its owned key ([`crate::passes`]'s ownership: its planning id when loaded).
+    pub id: u64,
     pub default_group: bool,
     pub priority: f32,
     pub fields: [f32; 18],
@@ -698,17 +728,18 @@ impl SkateLightsSummary {
         s
     }
 
-    /// Each cell sorted best first and cut to `per_cell`.
+    /// Each cell sorted best first, a light two parts both own once, and cut to `per_cell`.
     fn cap(&mut self) {
         for g in self.cells.values_mut() {
             g.sort_by(|a, b| a.rank(b));
+            g.dedup_by(|a, b| a.id == b.id);
             g.truncate(self.per_cell);
         }
         self.cells.retain(|_, g| !g.is_empty());
     }
 
-    /// The ids of the lights kept.
-    pub fn kept(&self) -> BTreeSet<u32> {
+    /// The keys of the lights kept.
+    pub fn kept(&self) -> BTreeSet<u64> {
         self.cells.values().flatten().map(|l| l.id).collect()
     }
 }
@@ -748,15 +779,27 @@ impl primase_core::summary::Summary for SkateLightsSummary {
     }
 }
 
-/// `skate.texture_weights`: the weight of each texture the placements a part owns draw, by texture key
-/// (`summarize-reskate-textures`, with the budget it is for): exact sums, so merged over the parts (summed per key) they
-/// are the whole map's weights whatever order the parts arrive in. `budget-reskate-textures` keeps the heaviest. Not
-/// part of scene-interchange v1.
+/// `skate.texture_weights`: what each placement a part owns adds to each texture's weight, by (texture key, owned
+/// placement key) (`summarize-reskate-textures`, with the budget it is for): exact sums. Merged over the parts (by key,
+/// a placement two parts both own once) and summed per texture ([`SkateTextureWeights::totals`]), they are the whole
+/// map's weights whatever order the parts arrive in. `budget-reskate-textures` keeps the heaviest. Not part of
+/// scene-interchange v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateTextureWeights {
     pub max: usize,
     pub aux_weight: f64,
-    pub weights: BTreeMap<String, crate::exact_sum::ExactSum>,
+    pub contributions: BTreeMap<(String, u64), crate::exact_sum::ExactSum>,
+}
+
+impl SkateTextureWeights {
+    /// Each texture's weight: its placements' contributions summed exactly.
+    pub fn totals(&self) -> BTreeMap<String, crate::exact_sum::ExactSum> {
+        let mut out: BTreeMap<String, crate::exact_sum::ExactSum> = BTreeMap::new();
+        for ((t, _), s) in &self.contributions {
+            out.entry(t.clone()).or_default().merge(s);
+        }
+        out
+    }
 }
 
 impl Resource for SkateTextureWeights {
@@ -765,7 +808,7 @@ impl Resource for SkateTextureWeights {
         Ok(Some(serde_json::json!({
             "max": self.max,
             "aux_weight": self.aux_weight,
-            "textures": self.weights.len(),
+            "textures": self.totals().len(),
         })))
     }
 }
@@ -778,13 +821,27 @@ impl primase_core::summary::Summary for SkateTextureWeights {
                 self.max, self.aux_weight, other.max, other.aux_weight
             ));
         }
-        for (k, s) in other.weights {
-            self.weights.entry(k).or_default().merge(&s);
+        for (k, s) in other.contributions {
+            match self.contributions.get(&k) {
+                Some(x) if *x != s => {
+                    return Err(format!(
+                        "placement {} weighs texture '{}' differently in two parts",
+                        k.1, k.0
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    self.contributions.insert(k, s);
+                }
+            }
         }
         Ok(())
     }
     fn retained_bytes(&self) -> usize {
-        self.weights.iter().map(|(k, s)| k.len() + s.bytes()).sum()
+        self.contributions
+            .iter()
+            .map(|((t, _), s)| t.len() + 8 + s.bytes())
+            .sum()
     }
 }
 
@@ -855,9 +912,10 @@ impl primase_core::summary::Summary for SkateContentBounds {
 /// ground box of its own placements' positions (the spawn's centre without a region: `lo` past `hi` when it has
 /// none), and the smallest planning id among its roots (the part holding the map's smallest places the spawn). Merged
 /// over the parts (summed, the box of both, the smaller id), order-free. Not part of scene-interchange v1.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SkateSpawnSummary {
-    pub spawns: usize,
+    /// The owned keys of its spawns (a spawn two parts both own once).
+    pub spawns: BTreeSet<u64>,
     pub lo: [f32; 2],
     pub hi: [f32; 2],
     pub first: Option<u32>,
@@ -872,7 +930,7 @@ impl Resource for SkateSpawnSummary {
 
 impl primase_core::summary::Summary for SkateSpawnSummary {
     fn merge(&mut self, other: Self) -> Result<(), String> {
-        self.spawns += other.spawns;
+        self.spawns.extend(other.spawns);
         self.lo = [self.lo[0].min(other.lo[0]), self.lo[1].min(other.lo[1])];
         self.hi = [self.hi[0].max(other.hi[0]), self.hi[1].max(other.hi[1])];
         self.first = match (self.first, other.first) {

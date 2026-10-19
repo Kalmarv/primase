@@ -646,7 +646,8 @@ impl Pass for SummarizeReskateContent {
     }
     fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
         let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
-        let b = crate::assembly::content_bounds(&s, &writer_placements(&s, 200.0), &super::owned(w));
+        let owned = super::Owned::of(w);
+        let b = crate::assembly::content_bounds(&s, &writer_placements(&s, 200.0), &|e| owned.contains(e));
         w.insert_resource(b);
         Ok(())
     }

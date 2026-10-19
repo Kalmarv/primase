@@ -841,8 +841,9 @@ impl World {
     }
 
     /// The index the next spawned entity gets: an entity with an index at or above it was made after this call
-    /// (ids are handed out in order and never reused).
-    pub(crate) fn next_index(&self) -> u32 {
+    /// (ids are handed out in order and never reused; a part loaded with [`World::subset`] keeps its planning world's,
+    /// so what a pass makes in it is told from what was loaded).
+    pub fn next_index(&self) -> u32 {
         self.next
     }
 

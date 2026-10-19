@@ -157,6 +157,7 @@ fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<
                     context: scope.context.clone(),
                     whole: scope.whole,
                     area: scope.area,
+                    first_made: None,
                 });
             }
             (pass.name(), pass.run(&mut w, &mut PassLog::default()))
@@ -182,14 +183,17 @@ fn a_part_not_stated_whole_is_refused_and_the_whole_map_is_taken() {
         }
     };
     // the planned parts: the west cell has the east placement as context (its box reaches the halo); the east
-    // cell's halo does not reach the west placement; neither is the whole
+    // cell's halo does not reach the west placement, but it reaches the ground soup the west cell owns (east 0..512),
+    // which it loads as context; neither is the whole
     let (mut w, placed) = world();
+    let ground: Vec<Entity> = w.iter::<Collision>().map(|(e, _)| e).collect();
+    assert_eq!(ground.len(), 1);
     let p = plan(&w, placed);
     w.insert_resource(p);
     let planned = parts(&mut PlannedParts::default(), &w);
     assert_eq!(planned.len(), 2);
     assert_eq!(planned[0].context, BTreeSet::from([placed[1]]));
-    assert!(planned[1].context.is_empty());
+    assert_eq!(planned[1].context, BTreeSet::from([ground[0]]));
     assert!(!planned[0].whole && !planned[1].whole);
     refused(&planned[0], false);
     refused(&planned[1], true);

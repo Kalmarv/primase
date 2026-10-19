@@ -24,11 +24,12 @@
 //! then applies that decision to each part, with the same settings (a decision for others is refused). A part that is
 //! not the whole and has no decision is refused. The whole map measured at once gives the same floor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Mesh, Transform, World};
 
+use super::Owned;
 use crate::components::{
     CollisionMode, SkateCollision, SkateFloorDecision, SkateFloorPlan, SkateFloorSummary, SkateGrindCurve,
     SkateLight, SkateMarker, SkatePartsOff, SkatePrototype, SkateRock, SkateScene, SkateWater,
@@ -151,34 +152,44 @@ fn select_floor(lows: &[f32], pinned: Option<f32>) -> Option<f32> {
     Some(lows[lows.len() / 100])
 }
 
-/// What the floor is measured on of the entities `owned` accepts: the lowest point of each part of the placements the
-/// map draws and, when there are none, of each world collision triangle; each sorted.
-fn measure(w: &World, owned: &dyn Fn(Entity) -> bool) -> SkateFloorSummary {
-    let mut lows: Vec<f32> = w
+/// What the floor is measured on of what `owned` owns: per placement the map draws, the lowest point of each of its
+/// parts; and, when there are none, per world collision soup, of each of its triangles.
+fn measure(w: &World, owned: &Owned) -> SkateFloorSummary {
+    let mut lows: BTreeMap<u64, Vec<f32>> = BTreeMap::new();
+    for (e, i) in w
         .iter::<Instance>()
-        .filter(|(e, i)| owned(*e) && w.has::<SkatePrototype>(i.prototype))
-        .flat_map(|(e, i)| {
-            let t = w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
-            w.get::<Mesh>(i.prototype).map_or_else(Vec::new, |m| spans(m, &t))
-        })
-        .map(|b| b[0])
-        .filter(|v| v.is_finite())
-        .collect();
-    let mut soup_lows = Vec::new();
-    if lows.is_empty() {
-        for (e, t) in world_soups(w).into_iter().filter(|(e, _)| owned(*e)) {
-            let c = w.get::<Collision>(e).expect("listed");
-            for tri in &c.triangles {
-                soup_lows.push(
-                    tri.iter()
-                        .map(|&i| t.apply(c.positions[i as usize])[1])
-                        .fold(f32::INFINITY, f32::min),
-                );
-            }
+        .filter(|(_, i)| w.has::<SkatePrototype>(i.prototype))
+    {
+        let Some(k) = owned.key(e) else { continue };
+        let t = w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+        let v: Vec<f32> = w
+            .get::<Mesh>(i.prototype)
+            .map_or_else(Vec::new, |m| spans(m, &t))
+            .into_iter()
+            .map(|b| b[0])
+            .filter(|v| v.is_finite())
+            .collect();
+        if !v.is_empty() {
+            lows.insert(k, v);
         }
     }
-    lows.sort_by(f32::total_cmp);
-    soup_lows.sort_by(f32::total_cmp);
+    let mut soup_lows = BTreeMap::new();
+    if lows.is_empty() {
+        for (e, t) in world_soups(w) {
+            let Some(k) = owned.key(e) else { continue };
+            let c = w.get::<Collision>(e).expect("listed");
+            let v: Vec<f32> = c
+                .triangles
+                .iter()
+                .map(|tri| {
+                    tri.iter()
+                        .map(|&i| t.apply(c.positions[i as usize])[1])
+                        .fold(f32::INFINITY, f32::min)
+                })
+                .collect();
+            soup_lows.insert(k, v);
+        }
+    }
     SkateFloorSummary { lows, soup_lows }
 }
 
@@ -267,7 +278,7 @@ impl Pass for PrepareReskateFloor {
                          decide-reskate-floor)"
                     )
                 })?;
-                self.decide(&measure(w, &|_| true))
+                self.decide(&measure(w, &Owned::all()))
             }
         };
         self.apply(w, log, &decision);
@@ -279,12 +290,7 @@ impl PrepareReskateFloor {
     /// The floor of the map whose measurements are `summary`: pinned, else measured; the lift up to `min_height` and the
     /// cutoff `stub_below` under it.
     fn decide(&self, summary: &SkateFloorSummary) -> SkateFloorDecision {
-        let lows = if summary.lows.is_empty() {
-            &summary.soup_lows
-        } else {
-            &summary.lows
-        };
-        let floor = select_floor(lows, self.floor);
+        let floor = select_floor(&summary.measured(), self.floor);
         SkateFloorDecision {
             min_height: self.min_height,
             stub_below: self.stub_below,
@@ -488,12 +494,9 @@ impl Pass for SummarizeReskateFloor {
         &["skate.floor_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let summary = measure(w, &super::owned(w));
-        log.count("placed parts measured", summary.lows.len() as u64);
-        log.count(
-            "world collision triangles measured",
-            summary.soup_lows.len() as u64,
-        );
+        let summary = measure(w, &Owned::of(w));
+        log.count("placements measured", summary.lows.len() as u64);
+        log.count("world collision soups measured", summary.soup_lows.len() as u64);
         w.insert_resource(summary);
         Ok(())
     }

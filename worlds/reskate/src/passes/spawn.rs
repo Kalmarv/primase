@@ -21,14 +21,15 @@ use crate::components::{MarkerKind, SkateMarker, SkateScene, SkateSpawnSummary, 
 
 /// What `w` holds of the map's spawn, of the entities it owns (see [`SkateSpawnSummary`]).
 fn summarize(w: &World) -> SkateSpawnSummary {
-    let owned = super::owned(w);
+    let owned = super::Owned::of(w);
     let spawns = w
         .iter::<SkateMarker>()
-        .filter(|(e, m)| m.kind == MarkerKind::Spawn && owned(*e))
-        .count();
+        .filter(|(_, m)| m.kind == MarkerKind::Spawn)
+        .filter_map(|(e, _)| owned.key(e))
+        .collect();
     let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     // a placement at scene (x, y, z) is on the ground at (east, north) = (x, -z)
-    for (e, _) in w.iter::<Instance>().filter(|(e, _)| owned(*e)) {
+    for (e, _) in w.iter::<Instance>().filter(|(e, _)| owned.contains(*e)) {
         if let Some(t) = w.get::<Transform>(e) {
             let g = [t.cols[3][0], -t.cols[3][2]];
             lo = [lo[0].min(g[0]), lo[1].min(g[1])];
@@ -138,7 +139,7 @@ impl Pass for PlaceReskateSpawn {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // what the whole map holds of its spawn (merged over every part); else, on the whole map, measured here
         let summary = match w.resource::<SkateSpawnSummary>() {
-            Some(s) => *s,
+            Some(s) => s.clone(),
             None => {
                 super::require_whole_map(w, self.name()).map_err(|e| {
                     format!(
@@ -149,7 +150,7 @@ impl Pass for PlaceReskateSpawn {
                 summarize(w)
             }
         };
-        if summary.spawns > 0 {
+        if !summary.spawns.is_empty() {
             log.count("scenes with a spawn of their own: none placed", 1);
             return Ok(());
         }

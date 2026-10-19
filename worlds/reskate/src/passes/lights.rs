@@ -13,6 +13,7 @@
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, World};
 
+use super::Owned;
 use crate::components::{RankedLight, SkateLight, SkateLightsSummary};
 use crate::scene::{PlacedLight, light_fields, light_order, placed_light};
 
@@ -67,7 +68,7 @@ pub fn select_reskate_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
 }
 
 /// Light `l` as the cap ranks it, `id` naming it.
-fn ranked(l: &PlacedLight, id: u32) -> RankedLight {
+fn ranked(l: &PlacedLight, id: u64) -> RankedLight {
     RankedLight {
         id,
         default_group: l.group.is_empty(),
@@ -87,7 +88,7 @@ pub fn keep_lights(lights: &[PlacedLight], per_cell: usize, cell: f32) -> Vec<us
     let ranked: Vec<RankedLight> = lights
         .iter()
         .enumerate()
-        .map(|(i, l)| ranked(l, i as u32))
+        .map(|(i, l)| ranked(l, i as u64))
         .collect();
     let mut out: Vec<usize> = SkateLightsSummary::of(per_cell, cell, ranked)
         .kept()
@@ -98,12 +99,11 @@ pub fn keep_lights(lights: &[PlacedLight], per_cell: usize, cell: f32) -> Vec<us
     out
 }
 
-/// What a cap of `per_cell` per `cell` metres keeps of the world's lights `owned` accepts, each named by its id.
-fn summarize(w: &World, per_cell: usize, cell: f32, owned: &dyn Fn(Entity) -> bool) -> SkateLightsSummary {
+/// What a cap of `per_cell` per `cell` metres keeps of the lights `owned` owns, each named by its owned key.
+fn summarize(w: &World, per_cell: usize, cell: f32, owned: &Owned) -> SkateLightsSummary {
     let lights: Vec<RankedLight> = w
         .iter::<SkateLight>()
-        .filter(|(e, _)| owned(*e))
-        .map(|(e, l)| ranked(&placed_light(w, e, l), e.index()))
+        .filter_map(|(e, l)| owned.key(e).map(|k| ranked(&placed_light(w, e, l), k)))
         .collect();
     SkateLightsSummary::of(per_cell, cell, lights)
 }
@@ -144,20 +144,19 @@ impl Pass for SelectReskateLights {
                          cap)"
                     )
                 })?;
-                summarize(w, self.per_cell, self.cell, &|_| true)
+                summarize(w, self.per_cell, self.cell, &Owned::all())
             }
         };
         let kept = summary.kept();
-        let lights: Vec<Entity> = {
-            let owned = super::owned(w);
+        let lights: Vec<(Entity, u64)> = {
+            let owned = Owned::of(w);
             w.iter::<SkateLight>()
-                .map(|(e, _)| e)
-                .filter(|&e| owned(e))
+                .filter_map(|(e, _)| owned.key(e).map(|k| (e, k)))
                 .collect()
         };
         let mut left_out = 0;
-        for &e in &lights {
-            if !kept.contains(&e.index()) {
+        for &(e, k) in &lights {
+            if !kept.contains(&k) {
                 w.despawn(e);
                 left_out += 1;
             }
@@ -207,7 +206,7 @@ impl Pass for SummarizeReskateLights {
         &["skate.lights_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let s = summarize(w, self.0.per_cell, self.0.cell, &super::owned(w));
+        let s = summarize(w, self.0.per_cell, self.0.cell, &Owned::of(w));
         log.count("lights a part's cap keeps", s.kept().len() as u64);
         w.insert_resource(s);
         Ok(())

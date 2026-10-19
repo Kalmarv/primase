@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, Texture, Topology, Transform, World};
 
+use super::Owned;
 use crate::components::{SkateBaseFactor, SkateMaterial, SkateTexture, SkateTextureWeights};
 use crate::exact_sum::ExactSum;
 use crate::texture::{TexSource, mean_color};
@@ -142,11 +143,11 @@ fn texture_key(w: &World, t: Entity) -> String {
         .map_or_else(|| format!("#{}", t.index()), |s| s.key.clone())
 }
 
-/// Each placed primitive of the placements `placed` accepts, with the material it is drawn with (its own or the
-/// placement's variant; one with a `skate.material`) and its placed area.
-fn drawn(w: &World, placed: &dyn Fn(Entity) -> bool) -> Vec<(Entity, f64)> {
+/// Each placed primitive, with its placement, the material it is drawn with (its own or the placement's variant; one
+/// with a `skate.material`) and its placed area.
+fn drawn(w: &World) -> Vec<(Entity, Entity, f64)> {
     let mut out = Vec::new();
-    for (e, i) in w.iter::<Instance>().filter(|(e, _)| placed(*e)) {
+    for (e, i) in w.iter::<Instance>() {
         let Some(mesh) = w.get::<Mesh>(i.prototype) else {
             continue;
         };
@@ -158,22 +159,23 @@ fn drawn(w: &World, placed: &dyn Fn(Entity) -> bool) -> Vec<(Entity, f64)> {
                 .and_then(|row| row.get(&i.variant).copied())
                 .or(p.material);
             if let Some(m) = m.filter(|&m| w.has::<SkateMaterial>(m)) {
-                out.push((m, placed_area(p, &t)));
+                out.push((e, m, placed_area(p, &t)));
             }
         }
     }
     out
 }
 
-/// The weight of each texture the placements `owned` accepts draw, by texture key: every placed primitive's area for
-/// its material's base texture, `aux_weight` of it for its normal map and mask, summed exactly.
-fn weights(w: &World, aux_weight: f64, owned: &dyn Fn(Entity) -> bool) -> BTreeMap<String, ExactSum> {
-    let mut out: BTreeMap<String, ExactSum> = BTreeMap::new();
-    for (m, a) in drawn(w, owned) {
+/// What each placement `owned` owns adds to each texture's weight, by (texture key, owned placement key): every placed
+/// primitive's area for its material's base texture, `aux_weight` of it for its normal map and mask, summed exactly.
+fn contributions(w: &World, aux_weight: f64, owned: &Owned) -> BTreeMap<(String, u64), ExactSum> {
+    let mut out: BTreeMap<(String, u64), ExactSum> = BTreeMap::new();
+    for (e, m, a) in drawn(w) {
+        let Some(k) = owned.key(e) else { continue };
         let mat = w.get::<SkateMaterial>(m).expect("drawn");
-        for (t, k) in [(mat.base, 1.0), (mat.normal, aux_weight), (mat.mask, aux_weight)] {
+        for (t, f) in [(mat.base, 1.0), (mat.normal, aux_weight), (mat.mask, aux_weight)] {
             if let Some(t) = t {
-                out.entry(texture_key(w, t)).or_default().add(a * k);
+                out.entry((texture_key(w, t), k)).or_default().add(a * f);
             }
         }
     }
@@ -242,7 +244,7 @@ impl Pass for BudgetReskateTextures {
                         s.max, s.aux_weight, self.aux_weight
                     ));
                 }
-                s.weights.clone()
+                s.totals()
             }
             None => {
                 super::require_whole_map(w, self.name()).map_err(|e| {
@@ -251,7 +253,12 @@ impl Pass for BudgetReskateTextures {
                          the same budget)"
                     )
                 })?;
-                weights(w, self.aux_weight, &|_| true)
+                SkateTextureWeights {
+                    max,
+                    aux_weight: self.aux_weight,
+                    contributions: contributions(w, self.aux_weight, &Owned::all()),
+                }
+                .totals()
             }
         };
         log.count("textures drawn", weights.len() as u64);
@@ -262,7 +269,7 @@ impl Pass for BudgetReskateTextures {
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
         let keep_keys: BTreeSet<&String> = ranked.iter().take(max - 1).map(|r| r.1).collect();
         // the materials this world draws, and its textures the budget keeps
-        let materials: BTreeSet<Entity> = drawn(w, &|_| true).into_iter().map(|(m, _)| m).collect();
+        let materials: BTreeSet<Entity> = drawn(w).into_iter().map(|(_, m, _)| m).collect();
         let keep: BTreeSet<Entity> = materials
             .iter()
             .flat_map(|&m| {
@@ -351,13 +358,13 @@ impl Pass for SummarizeReskateTextures {
         &["skate.texture_weights"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let weights = weights(w, self.0.aux_weight, &super::owned(w));
-        log.count("textures this part draws", weights.len() as u64);
-        w.insert_resource(SkateTextureWeights {
+        let s = SkateTextureWeights {
             max: self.0.max,
             aux_weight: self.0.aux_weight,
-            weights,
-        });
+            contributions: contributions(w, self.0.aux_weight, &Owned::of(w)),
+        };
+        log.count("textures this part draws", s.totals().len() as u64);
+        w.insert_resource(s);
         Ok(())
     }
 }
