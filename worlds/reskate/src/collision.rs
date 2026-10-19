@@ -185,6 +185,9 @@ fn hull_tiles(hulls: &[(Vec<f32>, Vec<u32>, bool)]) -> Vec<TileData> {
         .collect()
 }
 
+/// Each query's placed position (writer frame) and ground height, NaN where its snap found nothing.
+pub(crate) type Snapped = (Vec<(f32, f32)>, Vec<f32>);
+
 /// The marker snaps of the map writer, without writing anything: each query's placed position and ground height
 /// (both as the query's when its snap finds nothing). The collision is what the writer files: `world` the world
 /// soups' triangles per 256 m cell, `props` the placed props' per cell, `hulls` the hull soups, `water` the water
@@ -200,7 +203,7 @@ pub(crate) fn snap_queries(
     hulls: &[(Vec<f32>, Vec<u32>, bool)],
     water: &[WaterQuad],
     queries: &[Query],
-) -> (Vec<(f32, f32)>, Vec<f32>) {
+) -> Snapped {
     let mut c = Collision::new(surf, offset[0], offset[1], 0.0, limit);
     let mut res = CollisionResult::default();
     let mut wanted: BTreeSet<(i32, i32)> = BTreeSet::new();

@@ -15,7 +15,7 @@ use primase_core::{
 };
 use primase_reskate::BuildOptions;
 use primase_reskate::layered::LowerLayeredReskate;
-use primase_reskate::prepare::RaiseOptions;
+use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -134,6 +134,10 @@ fn world() -> World {
     )
     .unwrap();
     LowerLayeredReskate::default()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    // the markers snapped before the writer, which snaps nothing
+    SnapReskateMarkers::new()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     w

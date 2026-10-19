@@ -7,13 +7,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Collision, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology,
     Transform, World,
 };
 use primase_reskate::BuildOptions;
-use primase_reskate::prepare::RaiseOptions;
+use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -163,6 +164,10 @@ fn a_loaded_scene_writes_what_its_world_writes() {
         },
     )
     .unwrap();
+    // the markers snapped before the writer, which snaps nothing
+    SnapReskateMarkers::new()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     let assets = tmp("assets");
     primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
@@ -257,6 +262,10 @@ fn a_spawn_over_no_ground_is_refused() {
         let mut w = World::new();
         primase_reskate::interchange::read(&scene, &mut w).unwrap();
         primase_reskate::interchange::load(&scene, &mut w).unwrap();
+        // the markers snapped before the writer, which snaps nothing
+        SnapReskateMarkers::new()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
         let out_root = tmp(&format!("{tag}-out"));
         primase_reskate::build(
             &w,
@@ -321,6 +330,10 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let mut w = World::new();
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::interchange::load(&scene, &mut w).unwrap();
+    // the markers snapped before the writer, which snaps nothing
+    SnapReskateMarkers::new()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     let out_root = tmp("collides-out");
     primase_reskate::build(
         &w,

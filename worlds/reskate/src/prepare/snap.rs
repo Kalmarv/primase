@@ -21,7 +21,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_meshops::vector::Vec3;
 
 use crate::build::{BuildOptions, SoupWorld, bounds, hulls, writer_placements};
-use crate::collision::{PropSoup, Query, add_prop, snap_queries};
+use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
 use crate::dialect::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
 use crate::model::CollisionMode;
@@ -232,7 +232,7 @@ impl Pass for SnapReskateMarkers {
 
 impl SnapReskateMarkers {
     /// Each query's placed position and ground (NaN: nothing found), as the writer's collision answers it.
-    fn snap(&self, s: &mut Scene, queries: &[Query]) -> Result<(Vec<(f32, f32)>, Vec<f32>), String> {
+    fn snap(&self, s: &mut Scene, queries: &[Query]) -> Result<Snapped, String> {
         let b = &self.basis;
         // the placements as the writer takes them, its region and the region's apron
         let placements = writer_placements(s, 200.0);

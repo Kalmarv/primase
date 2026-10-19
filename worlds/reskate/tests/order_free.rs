@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Collision, Instance, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology, Transform, World,
@@ -14,7 +15,7 @@ use primase_core::{
 use primase_meshops::vector::Vec3;
 use primase_reskate::BuildOptions;
 use primase_reskate::map::keep_lights;
-use primase_reskate::prepare::RaiseOptions;
+use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
 use primase_reskate::scene::PlacedLight;
 
 fn tmp(name: &str) -> PathBuf {
@@ -200,6 +201,10 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     let mut w = World::new();
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::interchange::load(&scene, &mut w).unwrap();
+    // the markers snapped before the writer, which snaps nothing
+    SnapReskateMarkers::new()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     let out_root = tmp("out");
     let report = primase_reskate::build(
         &w,
