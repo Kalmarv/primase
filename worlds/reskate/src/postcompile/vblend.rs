@@ -23,7 +23,8 @@
 //! stock table: 2016 rows, no exception).
 //!
 //! The stock data (declaration bytes, parameter block, rows) is read from the installed game at run time
-//! ([`Donor::find`]); nothing derived from it is part of this crate.
+//! ([`Donor::find`]); nothing derived from it is part of this crate. The Patch and the game are read through the
+//! Frostbite folder reader ([`Folder`]); this module only writes the output folder.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -140,7 +141,7 @@ impl Donor {
     /// bundle in TOC `level_toc`, its rows in TOC `root_toc` (both relative to the data folder).
     pub fn find(game: &Source, level_toc: &str, root_toc: &str, key: u64) -> Result<Donor> {
         let (mut program_row, mut texture_set) = (None, None);
-        let t = toc::read(&read_file(&game.folder.toc_path(root_toc))?)?;
+        let t = game.folder.toc(root_toc)?;
         for (_, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = game.manifest(&files, &inline)? else {
@@ -160,7 +161,7 @@ impl Donor {
         let missing = |what: &str| Error::Missing(format!("stock key {key:016x}: no {what}"));
         let program_row = program_row.ok_or_else(|| missing("program row"))?;
         let texture_set = texture_set.ok_or_else(|| missing("texture-set row"))?;
-        let t = toc::read(&read_file(&game.folder.toc_path(level_toc))?)?;
+        let t = game.folder.toc(level_toc)?;
         for (_, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = game.manifest(&files, &inline)? else {
@@ -238,7 +239,7 @@ pub struct StockPrograms {
 impl StockPrograms {
     /// Reads the program records of the program lookup in TOC `root_toc` (relative to the data folder).
     pub fn find(game: &Source, root_toc: &str) -> Result<StockPrograms> {
-        let t = toc::read(&read_file(&game.folder.toc_path(root_toc))?)?;
+        let t = game.folder.toc(root_toc)?;
         for (_, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = game.manifest(&files, &inline)? else {
@@ -330,18 +331,6 @@ pub struct Report {
     pub rows: BTreeMap<u64, (Vec<u32>, Vec<u32>)>,
     /// The program records replaced by the game's: (Studio's program count, the game's).
     pub programs: Option<(u32, u32)>,
-}
-
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "exception: reads the compiled Patch and the installed game's stock rows"
-)]
-fn read_file(p: &Path) -> Result<Vec<u8>> {
-    fs::read(p).map_err(|source| Error::Io {
-        path: p.to_path_buf(),
-        source,
-    })
 }
 
 #[allow(
@@ -515,7 +504,7 @@ pub(crate) type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
 pub(crate) fn patch_bundles(src: &Source) -> Result<PatchBundles> {
     let mut tocs = Vec::new();
     for rel in &src.folder.tocs {
-        let t = toc::read(&read_file(&src.folder.toc_path(rel))?)?;
+        let t = src.folder.toc(rel)?;
         let mut bundles = Vec::with_capacity(t.bundles.len());
         for (_, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;

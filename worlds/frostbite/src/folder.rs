@@ -16,8 +16,9 @@ use primase_compress::cas::Cas;
 use primase_compress::oodle::Oodle;
 
 use crate::bundle::{self, FileRef, Manifest};
+use crate::db;
+use crate::toc::{self, Loc, Toc};
 use crate::{Error, Result};
-use crate::{db, toc::Loc};
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
     move |source| Error::Io {
@@ -117,6 +118,12 @@ impl Folder {
 
     pub fn toc_path(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
+    }
+
+    /// The TOC at `rel` (relative to the folder, as in [`Folder::tocs`]), read and parsed.
+    pub fn toc(&self, rel: &str) -> Result<Toc> {
+        let path = self.toc_path(rel);
+        toc::read(&fs::read(&path).map_err(io(&path))?)
     }
 
     pub fn archive(&self, loc: Loc) -> Option<&Path> {

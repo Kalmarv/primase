@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::folder::Source;
-use primase_reskate::postcompile::fb::{MESHSET, lookup, toc};
+use primase_reskate::postcompile::fb::{MESHSET, lookup};
 use primase_reskate::postcompile::meshset;
 
 pub type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -21,7 +21,7 @@ pub type Meshes = BTreeMap<(String, String), (Vec<u8>, BTreeMap<[u8; 16], Vec<u8
 pub fn meshes(src: &Source) -> R<Meshes> {
     let mut out = BTreeMap::new();
     for rel in &src.folder.tocs {
-        let t = toc::read(&std::fs::read(src.folder.toc_path(rel))?)?;
+        let t = src.folder.toc(rel)?;
         for (name, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = src.manifest(&files, &inline)? else {
@@ -67,7 +67,7 @@ pub type Rows = (BTreeMap<u64, Vec<u32>>, BTreeMap<u64, u64>);
 pub fn rows(src: &Source) -> R<Rows> {
     let (mut p, mut t) = (BTreeMap::new(), BTreeMap::new());
     for rel in &src.folder.tocs {
-        let toc = toc::read(&std::fs::read(src.folder.toc_path(rel))?)?;
+        let toc = src.folder.toc(rel)?;
         for (_, region) in &toc.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = src.manifest(&files, &inline)? else {

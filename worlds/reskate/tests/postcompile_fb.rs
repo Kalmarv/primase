@@ -205,7 +205,7 @@ fn meshset_census() -> R {
     let mut failures: BTreeMap<String, usize> = BTreeMap::new();
     let mut seen = std::collections::BTreeSet::new();
     for rel in &base.tocs {
-        let t = toc::read(&std::fs::read(base.toc_path(rel))?)?;
+        let t = base.toc(rel)?;
         for (name, region) in &t.bundles {
             let (files, inline) = bundle::read_region(region)?;
             let Some((m, first, _)) = src.manifest(&files, &inline)? else {
