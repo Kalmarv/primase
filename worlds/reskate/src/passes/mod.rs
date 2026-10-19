@@ -71,12 +71,12 @@ use std::collections::BTreeSet;
 use primase_core::convert::PartScope;
 use primase_core::{Entity, World};
 
-/// What a world owns, as core conversion defines a part's output: the closure of its roots (what they reach, a
-/// dependency shared with another part included) and what its passes made that its context's closure does not hold;
-/// every entity of a world outside the part protocol or of a whole part. What it only loaded as context is another
-/// part's. Each owned entity has a key: its planning id when it was loaded (the same in every part, so a dependency two
-/// parts both reach is one key, merged once), or, made in this part, its index tagged by the part's smallest root (made
-/// ids of different parts may coincide).
+/// What a world owns: a part's output as core conversion writes it ([`PartScope::output`]): the closure of its roots
+/// (what they reach, a dependency shared with another part included) and of what its passes declared as its output
+/// (placed; content placed from an entity it only loaded as context is that part's, and content made and not placed is
+/// not output). Every entity of a world outside the part protocol. Each owned entity has a key: its planning id when it
+/// was loaded (the same in every part, so a dependency two parts both reach is one key, merged once), or, made in this
+/// part, its index tagged by the part's smallest root (made ids of different parts may coincide).
 #[derive(Debug)]
 pub(crate) struct Owned {
     /// `None`: every entity, keyed by its index.
@@ -98,20 +98,13 @@ impl Owned {
 
     /// What `w` owns (see [`Owned`]).
     pub(crate) fn of(w: &World) -> Owned {
-        let Some(s) = w.resource::<PartScope>().filter(|s| !s.whole) else {
+        let Some(s) = w.resource::<PartScope>() else {
             return Owned::all();
         };
-        let mut owned = w.closure(s.roots.iter().copied());
-        let first_made = s.first_made.unwrap_or(u32::MAX);
-        let reached = w.closure(s.roots.iter().chain(&s.context).copied());
-        owned.extend(
-            w.entities()
-                .filter(|e| e.index() >= first_made && !reached.contains(e)),
-        );
         Owned {
             part: Some(OwnedPart {
-                owned,
-                first_made,
+                owned: s.output(w).keep,
+                first_made: s.first_made.unwrap_or(u32::MAX),
                 tag: s.roots.first().map_or(0, |e| u64::from(e.index()) + 1),
             }),
         }

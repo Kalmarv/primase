@@ -158,6 +158,7 @@ fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<
                     whole: scope.whole,
                     area: scope.area,
                     first_made: None,
+                    placed: Default::default(),
                 });
             }
             (pass.name(), pass.run(&mut w, &mut PassLog::default()))

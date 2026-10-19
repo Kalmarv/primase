@@ -212,6 +212,63 @@ pub struct PartScope {
     /// (its id is the planning world's, the same in every part); one at or above it was made in this part. Set by the
     /// conversion; `None` in a scope composed by hand (every entity taken as loaded).
     pub first_made: Option<u32>,
+    /// What the part's passes declared as its output so far ([`crate::pass::PassLog::place`]): `true`, the part's own
+    /// (placed with no source, or from an entity in the roots' closure when it was placed); `false`, placed from an
+    /// entity it only loaded as context ([`crate::pass::PassLog::place_from`]: that part's). Classified when declared,
+    /// so a source a later pass removes does not change it. The pass manager adds each pass's declarations after it
+    /// runs ([`PartScope::declare`]); empty in a scope composed by hand.
+    pub placed: BTreeMap<Entity, bool>,
+}
+
+/// A part's output as conversion writes it ([`PartScope::output`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PartOutput {
+    /// What is written: the closure of the roots and of `placed`.
+    pub keep: BTreeSet<Entity>,
+    /// What its passes placed for it: content of its own nothing need reference (a marker), and content made from an
+    /// entity it owns.
+    pub placed: BTreeSet<Entity>,
+    /// What its passes placed from an entity it only loaded as context: the owner's, not written here.
+    pub from_context: BTreeSet<Entity>,
+}
+
+impl PartScope {
+    /// The part's output in `w`: the closure of its roots and of what its passes placed, but for what they placed
+    /// from an entity outside the roots' closure (its context's: that part's). Context is not output unless the output
+    /// reaches it; what the passes made and did not place is not output unless it reaches it. The one rule: the
+    /// conversion writes it, and a pass that needs what a part owns (a summary of its content) asks it.
+    pub fn output(&self, w: &World) -> PartOutput {
+        let mut out = PartOutput::default();
+        for (&e, &own) in self.placed.iter().filter(|(e, _)| w.is_alive(**e)) {
+            if own {
+                out.placed.insert(e);
+            } else {
+                out.from_context.insert(e);
+            }
+        }
+        out.keep = w.closure(self.roots.iter().chain(&out.placed).copied());
+        out
+    }
+
+    /// A pass's declarations (`placed`, with their sources `placed_from`) added to `w`'s part scope, each classified
+    /// now, while its source is in the world: the part's own unless placed from an entity outside the roots' closure.
+    /// Nothing without a scope (a world outside conversion).
+    pub fn declare(w: &mut World, placed: &BTreeSet<Entity>, placed_from: &BTreeMap<Entity, Entity>) {
+        let Some(scope) = w.resource::<PartScope>() else {
+            return;
+        };
+        if placed.is_empty() {
+            return;
+        }
+        let owned = w.closure(scope.roots.iter().copied());
+        let classified: Vec<(Entity, bool)> = placed
+            .iter()
+            .map(|e| (*e, placed_from.get(e).is_none_or(|s| owned.contains(s))))
+            .collect();
+        if let Some(scope) = w.resource_mut::<PartScope>() {
+            scope.placed.extend(classified);
+        }
+    }
 }
 
 impl Resource for PartScope {
@@ -493,7 +550,8 @@ pub struct ConvertReport {
     pub summarized: Vec<RunReport>,
     pub decided: RunReport,
     /// The bytes of every part's summaries kept until the merge (the most the first traversal holds of them), and of
-    /// the merged summaries handed to every part, as the summaries state them ([`crate::summary::Summary::retained_bytes`]).
+    /// the merged summaries handed to every part, as the summaries state them ([`crate::summary::Summary::retained_bytes`]):
+    /// logical-data accounting, not a measured or bounded memory peak.
     pub summary_bytes: usize,
     pub merged_summary_bytes: usize,
     pub parts: usize,
@@ -858,6 +916,7 @@ fn run(
                     whole,
                     area,
                     first_made,
+                    placed: BTreeMap::new(),
                 });
                 let mut r = RunReport::default();
                 let ran = manager.run_part(&mut part, s.summarize, &mut r);
@@ -924,31 +983,22 @@ fn run(
             whole,
             area,
             first_made,
+            placed: BTreeMap::new(),
         });
         manager.run_part(&mut part, passes, &mut part_report.explicit)?;
-        part.remove_resource::<PartScope>();
-        // the part's output is the closure of its roots and of what the passes placed for it: content of its own
-        // nothing need reference (as a marker; PassLog::place), and content made from an entity the part owns
-        // (PassLog::place_from; made from its context, it is the owner's). Its context is not output, unless the
-        // output reaches it. What the passes left unreferenced of what was loaded (materials of dropped geometry, of a
-        // discarded level of detail) is not part of it, nor is what they made that nothing kept reaches: dropped, and
-        // named in the counts by its components, as are the placed entities
-        let owned = part.closure(roots.iter().copied());
-        let mut from_context = BTreeSet::new();
-        let mut placed = BTreeSet::new();
-        for s in &part_report.explicit.steps {
-            for &e in s.log.placed.iter().filter(|&&e| part.is_alive(e)) {
-                match s.log.placed_from.get(&e) {
-                    Some(source) if !owned.contains(source) => {
-                        from_context.insert(e);
-                    }
-                    _ => {
-                        placed.insert(e);
-                    }
-                }
-            }
-        }
-        let keep = part.closure(roots.iter().copied().chain(placed.iter().copied()));
+        // the part's output (PartScope::output, what the passes declared): the closure of its roots and of what the
+        // passes placed for it, content made from its context left to the owner. What the passes left unreferenced of
+        // what was loaded (materials of dropped geometry, of a discarded level of detail) is not part of it, nor is what
+        // they made that nothing kept reaches: dropped, and named in the counts by its components, as are the placed
+        // entities
+        let scope = part
+            .remove_resource::<PartScope>()
+            .expect("the part's scope, put in above");
+        let PartOutput {
+            keep,
+            placed,
+            from_context,
+        } = scope.output(&part);
         let names: Vec<String> = part.component_names().into_iter().map(str::to_owned).collect();
         let kinds = |e: Entity| {
             names

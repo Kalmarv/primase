@@ -412,6 +412,7 @@ fn a_part_takes_only_the_decision_made_for_its_settings() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = floor().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-floor"), "{e}");
@@ -441,6 +442,7 @@ fn the_light_cap_over_parts_is_the_whole_maps_in_any_order() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = cap().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-lights"), "{e}");
@@ -665,6 +667,7 @@ fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = water().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-content"), "{e}");
@@ -741,6 +744,7 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = PlaceReskateSpawn::centre()
         .run(&mut w, &mut PassLog::default())
@@ -836,6 +840,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = pause().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-content"), "{e}");

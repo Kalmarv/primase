@@ -1134,6 +1134,8 @@ impl PassManager {
             let mut log = PassLog::default();
             match self.run_pass(w, p.as_ref(), &text, &mut log) {
                 Ok(done) => {
+                    // a part's declared output so far, for the passes after (PartScope::output)
+                    crate::convert::PartScope::declare(w, &done.log.placed, &done.log.placed_from);
                     hook(instrument.after_pass(&step, w, &done))?;
                     report.steps.push(done);
                 }

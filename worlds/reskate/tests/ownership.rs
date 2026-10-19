@@ -321,3 +321,81 @@ fn a_placement_reached_through_a_root_is_measured_and_weighed() {
     );
     assert_eq!(got, expected);
 }
+
+/// Makes lights in each part: from every seed light it holds (energy under 5), a spark nine times as bright, placed
+/// from its seed (PassLog::place_from); and an undeclared temporary of energy 100, never placed.
+#[derive(Debug)]
+struct Spark;
+impl Pass for Spark {
+    fn name(&self) -> &'static str {
+        "spark"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.light"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let seeds: Vec<(Entity, SkateLight)> = w
+            .iter::<SkateLight>()
+            .filter(|(_, l)| l.energy < 5.0)
+            .map(|(e, l)| (e, l.clone()))
+            .collect();
+        for (seed, l) in seeds {
+            let spark = w.spawn();
+            w.insert(
+                spark,
+                SkateLight {
+                    energy: l.energy * 9.0,
+                    position: [l.position[0] + 1.0, l.position[1], l.position[2]],
+                    ..l.clone()
+                },
+            );
+            log.place_from(spark, seed);
+            let temporary = w.spawn();
+            w.insert(temporary, SkateLight { energy: 100.0, ..l });
+        }
+        Ok(())
+    }
+}
+
+/// Lights made by a pass are owned as conversion writes them: a spark placed from an owned seed is the part's, one
+/// placed from a seed it only loaded as context is the seed owner's (not counted twice), an undeclared temporary is
+/// nobody's. With the pass in both traversals and the light cap (2 per cell) decided over the parts, the parts keep and
+/// write what the whole map (WholeWorld: one part, the whole) keeps and writes: the two sparks, 18 and 9. Counting the
+/// temporaries (energy 100) would keep them and write nothing; counting the context copies would fill the cap with two
+/// 18s.
+#[test]
+fn made_lights_are_owned_as_conversion_writes_them() {
+    let mut w = World::new();
+    w.insert_resource(SkateScene {
+        name: "own".into(),
+        ..Default::default()
+    });
+    let s1 = light(&mut w, 10.0, 1.0);
+    let s2 = light(&mut w, 30.0, 2.0);
+    let cap = || SelectReskateLights::new(2, 200.0).unwrap();
+    let energies = |w: &World| -> Wrote {
+        w.iter::<SkateLight>()
+            .map(|(_, l)| (Entity::from_index(l.energy as u32), format!("{}", l.energy)))
+            .collect()
+    };
+    let run = |parts: Vec<Part>| {
+        convert(
+            w.clone(),
+            parts,
+            vec![Box::new(Spark), Box::new(SummarizeReskateLights::new(cap()))],
+            Vec::new(),
+            vec![Box::new(Spark), Box::new(cap())],
+            energies,
+        )
+    };
+    let whole = run(vec![Part {
+        roots: BTreeSet::from([s1, s2]),
+        context: BTreeSet::new(),
+        whole: true,
+        area: None,
+    }]);
+    assert_eq!(whole.values().cloned().collect::<Vec<_>>(), ["9", "18"]);
+    // each part holds the other's seed as context
+    let parts = run(vec![part(&[s1], &[s2]), part(&[s2], &[s1])]);
+    assert_eq!(parts, whole);
+}

@@ -1360,3 +1360,40 @@ fn a_part_with_none_of_a_passs_required_names_skips_it_recorded() {
         "{e}"
     );
 }
+
+/// A part's declared output (`PartScope::declare`, `PartScope::output`): each placement classified when declared, while
+/// its source is in the world: placed with no source or from an entity the roots reach is the part's, placed from its
+/// context is the owner's; a source a later step removes does not change that, and what was made and not placed is not
+/// output.
+#[test]
+fn a_parts_output_is_its_roots_and_what_it_declared() {
+    let mut w = World::new();
+    let root = w.spawn();
+    w.insert(root, Name("root".into()));
+    let halo = w.spawn();
+    w.insert(halo, Name("halo".into()));
+    let (from_root, from_halo, alone, temporary) = (w.spawn(), w.spawn(), w.spawn(), w.spawn());
+    for e in [from_root, from_halo, alone, temporary] {
+        w.insert(e, Name("made".into()));
+    }
+    w.insert_resource(PartScope {
+        roots: BTreeSet::from([root]),
+        context: BTreeSet::from([halo]),
+        whole: false,
+        area: None,
+        first_made: Some(from_root.index()),
+        placed: BTreeMap::new(),
+    });
+    PartScope::declare(
+        &mut w,
+        &BTreeSet::from([from_root, from_halo, alone]),
+        &BTreeMap::from([(from_root, root), (from_halo, halo)]),
+    );
+    // the root a later step removes: what was placed from it stays the part's
+    w.despawn(root);
+    let out = w.resource::<PartScope>().unwrap().output(&w);
+    assert_eq!(out.placed, BTreeSet::from([from_root, alone]));
+    assert_eq!(out.from_context, BTreeSet::from([from_halo]));
+    assert!(!out.keep.contains(&temporary) && !out.keep.contains(&halo));
+    assert!(out.keep.contains(&from_root) && out.keep.contains(&alone));
+}

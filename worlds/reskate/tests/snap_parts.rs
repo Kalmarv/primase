@@ -365,6 +365,7 @@ fn a_part_whose_area_does_not_hold_a_markers_search_is_refused() {
         whole: false,
         area: None,
         first_made: None,
+        placed: Default::default(),
     });
     let e = SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
@@ -387,6 +388,7 @@ fn a_part_whose_area_does_not_hold_a_markers_search_is_refused() {
             whole: false,
             area: Some([-1e4, -1e4, 1e4, 1e4]),
             first_made: None,
+            placed: Default::default(),
         });
         let e = SnapReskateMarkers::for_default_encoding()
             .run(&mut w, &mut PassLog::default())

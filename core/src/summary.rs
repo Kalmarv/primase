@@ -11,8 +11,8 @@
 //! A summary's merge is a property of the data, not of the pass that made it, and it must not depend on the order the
 //! parts arrive in or how they are grouped: the merge is commutative and associative, a contract its crate states and
 //! tests (shuffled orders, groupings, overlapping inputs). The conversion keeps every part's summaries until it merges
-//! them (metadata, each summary stating the bytes it holds, [`Summary::retained_bytes`]; the conversion reports their
-//! total, [`crate::convert::ConvertReport::summary_bytes`]), merges them in arrival order and in the
+//! them (metadata, each summary stating the bytes of the data it holds, [`Summary::retained_bytes`]: logical-data
+//! accounting, not a memory bound; the conversion reports their total, [`crate::convert::ConvertReport::summary_bytes`]), merges them in arrival order and in the
 //! reverse order, and refuses a summary whose two merges differ: a forward/reverse consistency check on every
 //! conversion, which catches many order dependencies but proves none absent (a merge that keeps only its first two
 //! arrivals can agree on A, B, A forward and backward and still differ on A, A, B). The crate that defines a summary
@@ -29,7 +29,9 @@ pub trait Summary: Resource + PartialEq {
     /// Fold `other`, another part's, into this one; an error for summaries that cannot be merged (made for other
     /// settings).
     fn merge(&mut self, other: Self) -> Result<(), String>;
-    /// The bytes it holds (its heap and inline data, near enough to bound what a conversion keeps of it).
+    /// The bytes of the data it holds, counted logically (its entries and payloads): accounting of what a conversion
+    /// keeps of it, not a memory bound (tree nodes, capacities and the merge's temporary copies are not counted). A
+    /// conversion's observed peak memory is measured separately.
     fn retained_bytes(&self) -> usize;
 }
 
