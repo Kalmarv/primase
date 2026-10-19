@@ -264,7 +264,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
     let gltf = GltfJson {
         asset: Asset {
             version: "2.0",
-            generator: "gta-skate",
+            generator: "primase",
         },
         scene: 0,
         scenes: [SceneJson { nodes: [0] }],
