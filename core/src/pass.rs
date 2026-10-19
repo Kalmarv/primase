@@ -992,7 +992,7 @@ pub struct PassManager {
     pub registry: PassRegistry,
     validators: Vec<Box<dyn Validator>>,
     conservation: Conservation,
-    effect_checks: bool,
+    pass_checks: bool,
 }
 
 impl fmt::Debug for PassManager {
@@ -1013,22 +1013,24 @@ impl PassManager {
             registry,
             validators: Vec::new(),
             conservation: Conservation::Off,
-            effect_checks: cfg!(debug_assertions),
+            pass_checks: cfg!(debug_assertions),
         }
     }
 
-    /// Check each pass's effects entity by entity against its declarations (what it adds to or takes from an entity,
-    /// what it despawns, the resources it writes: [`Pass::provides`], [`Pass::removes`], [`Pass::modifies`]). It costs
-    /// a snapshot of who holds each name per pass, so it is on in debug builds (the test suites) and off in release
-    /// builds unless asked for, like the conservation diagnostics. What a pass's names do across the whole world is
-    /// checked either way.
-    pub fn with_effect_checks(mut self, on: bool) -> Self {
-        self.effect_checks = on;
+    /// Check every pass as it runs: its effects entity by entity against its declarations (what it adds to or takes
+    /// from an entity, what it despawns, the resources it writes: [`Pass::provides`], [`Pass::removes`],
+    /// [`Pass::modifies`]), and the components' validators on what it leaves. Each costs a scan of the world per pass,
+    /// so they are on in debug builds (the test suites) and off in release builds unless asked for, like the
+    /// conservation diagnostics. What a pass's names do across the whole world is checked either way, and a conversion
+    /// validates at its boundaries (what was read and loaded, the merged summaries, a part or group before writing)
+    /// either way.
+    pub fn with_pass_checks(mut self, on: bool) -> Self {
+        self.pass_checks = on;
         self
     }
 
-    pub fn effect_checks(&self) -> bool {
-        self.effect_checks
+    pub fn pass_checks(&self) -> bool {
+        self.pass_checks
     }
 
     /// Run the conservation diagnostics around every pass ([`crate::ledger`]): off by default.
@@ -1211,7 +1213,7 @@ impl PassManager {
         };
         // who held each name, per entity: what the pass adds to or takes from an entity is checked against its
         // declarations, not only the names that appear or disappear across the whole world
-        let held_before: BTreeMap<&str, BTreeSet<Entity>> = if self.effect_checks {
+        let held_before: BTreeMap<&str, BTreeSet<Entity>> = if self.pass_checks {
             before
                 .iter()
                 .map(|n| (n.as_str(), w.entities_named(n).into_iter().collect()))
@@ -1219,7 +1221,7 @@ impl PassManager {
         } else {
             BTreeMap::new()
         };
-        if self.effect_checks {
+        if self.pass_checks {
             w.start_effects();
         }
         let first_made = w.next_index();
@@ -1324,10 +1326,10 @@ impl PassManager {
         }
         added.sort();
         removed.sort();
-        if self.effect_checks {
+        if self.pass_checks {
             self.check_entity_effects(w, p, text, log, &held_before, &effects)?;
+            self.verify(w, text)?;
         }
-        self.verify(w, text)?;
         Ok(StepReport {
             pass: text.to_owned(),
             approximates: p.approximates(),

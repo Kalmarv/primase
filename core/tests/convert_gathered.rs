@@ -217,6 +217,7 @@ impl Pass for Share {
             );
             log.place(bit);
         }
+        log.approximate("shared", 1);
         Ok(())
     }
 }
@@ -418,6 +419,16 @@ fn groups_are_written_first_and_every_part_gets_the_finalizing_decision_in_any_o
         let groups_named = vec!["group 0".to_owned(), "group 1".to_owned(), "group 2".to_owned()];
         assert_eq!(of("cells summed"), Some((3, groups_named)));
         assert_eq!(of("finalized"), Some((1, Vec::new())));
+        // the gather traversal's notices, named by traversal, one example per part
+        let gathered = notices
+            .iter()
+            .find(|n| n.kind == NoticeKind::Approximation && n.reason == "shared")
+            .unwrap();
+        assert_eq!(
+            (gathered.stage.as_str(), gathered.count, gathered.examples.len()),
+            ("toy-share (gather traversal)", 4, 4)
+        );
+        assert_eq!(report.approximations()["toy-share (gather traversal): shared"], 4);
         match &first {
             None => first = Some(got),
             Some(f) => assert_eq!(&got, f, "the same writer input in every order"),

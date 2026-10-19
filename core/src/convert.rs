@@ -628,7 +628,25 @@ impl ConvertReport {
                 }
             }
         }
+        for (traversal, runs) in self.preparing_traversals() {
+            for step in runs.iter().flat_map(|r| &r.steps) {
+                for (k, v) in &step.log.approximations {
+                    *out.entry(format!("{} ({traversal}): {k}", step.pass))
+                        .or_default() += v;
+                }
+            }
+        }
         out
+    }
+
+    /// The traversals that prepare what a later stage uses and write nothing: the summary traversal's and the gather
+    /// traversal's runs, part by part. Their notices are named by traversal, so a pass the write traversal runs again
+    /// is not summed with them.
+    fn preparing_traversals(&self) -> [(&'static str, &Vec<RunReport>); 2] {
+        [
+            ("summary traversal", &self.summarized),
+            ("gather traversal", &self.gather_runs),
+        ]
     }
 
     /// Every notice: the reader's and the writer's, then the passes' approximations, omissions and drops (what they
@@ -675,6 +693,26 @@ impl ConvertReport {
                 }
                 for g in &step.conservation {
                     add(&step.pass, NoticeKind::Diagnostic, &g.to_string(), 1, at.clone());
+                }
+            }
+        }
+        for (traversal, runs) in self.preparing_traversals() {
+            for (i, run) in runs.iter().enumerate() {
+                for step in &run.steps {
+                    let stage = format!("{} ({traversal})", step.pass);
+                    let at = || Some(format!("part {i}"));
+                    for (k, v) in &step.log.approximations {
+                        add(&stage, NoticeKind::Approximation, k, *v, at());
+                    }
+                    for (k, v) in &step.log.omitted {
+                        add(&stage, NoticeKind::Unsupported, k, *v, at());
+                    }
+                    for ((m, why), v) in &step.log.drops {
+                        add(&stage, NoticeKind::Selection, &format!("{m}: {why}"), *v, at());
+                    }
+                    for g in &step.conservation {
+                        add(&stage, NoticeKind::Diagnostic, &g.to_string(), 1, at());
+                    }
                 }
             }
         }
