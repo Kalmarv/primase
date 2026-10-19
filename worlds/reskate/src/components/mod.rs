@@ -1024,6 +1024,10 @@ pub struct SkateLayoutSummary {
     pub tiles: BTreeMap<(i32, i32), BTreeMap<u64, BTreeSet<u64>>>,
     /// The map's hull soups, by (placed by an entity of its own, planning id): the scene's order.
     pub hulls: BTreeSet<(bool, u64)>,
+    /// The first id a part makes ([`primase_core::convert::PartScope`]'s `first_made`, the same in every part): an
+    /// entity below it was loaded, one id in every part (content two parts both reach, written once); one at or above
+    /// it a part made, its own.
+    pub first_made: u32,
 }
 
 impl Resource for SkateLayoutSummary {
@@ -1042,10 +1046,16 @@ impl primase_core::summary::Summary for SkateLayoutSummary {
     fn merge(&mut self, other: Self) -> Result<(), String> {
         if self.parts.is_empty() && self.tiles.is_empty() && self.hulls.is_empty() {
             self.tile = other.tile;
+            self.first_made = other.first_made;
         } else if other.tile != self.tile {
             return Err(format!(
                 "parts laid out for tiles of {} and {} metres",
                 self.tile, other.tile
+            ));
+        } else if other.first_made != self.first_made {
+            return Err(format!(
+                "parts that make their entities from ids {} and {}: not one map's",
+                self.first_made, other.first_made
             ));
         }
         merge_keyed(&mut self.parts, other.parts)?;

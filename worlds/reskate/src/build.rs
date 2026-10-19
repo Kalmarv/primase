@@ -317,6 +317,8 @@ struct GatheredCells {
     keys: BTreeSet<CellKey>,
     triangles: BTreeMap<CellKey, usize>,
     brought: BTreeMap<CellKey, usize>,
+    /// The loaded soups brought to each cell (by planning id): a soup two parts both reach counted once.
+    brought_soups: BTreeSet<(CellKey, u32)>,
     col: CollisionResult,
     water_col: CollisionResult,
     mesh_sizes: BTreeMap<String, u64>,
@@ -363,6 +365,34 @@ struct Content {
     water: Vec<(primase_core::Entity, WaterQuad)>,
     lights: Vec<PlacedLight>,
     grind: Vec<GrindCurve>,
+}
+
+/// Whether the sink has not written `e` (of kind `kind`) yet, marking it written: content loaded (below `first_made`,
+/// the layout summary's: one id in every part) is written once, however many parts reach it; content a part made, and
+/// everything of a map written whole (`first_made` none), is its own.
+fn fresh(
+    written: &mut BTreeSet<(Kind, u32)>,
+    first_made: Option<u32>,
+    kind: Kind,
+    e: primase_core::Entity,
+) -> bool {
+    match first_made {
+        Some(f) if e.index() < f => written.insert((kind, e.index())),
+        _ => true,
+    }
+}
+
+/// What standalone content of a map in parts the sink writes once ([`Taken::written`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    Light,
+    Marker,
+    Water,
+    Grind,
+    /// A soup's facts (stats.json).
+    Soup,
+    /// A hull soup laid out.
+    Hull,
 }
 
 /// A map in parts: the layout summary, which part each root is in.
@@ -419,6 +449,9 @@ struct Taken {
     unsupported_names: BTreeMap<String, u64>,
     layout: Option<Layout>,
     parts: usize,
+    /// The loaded content written so far, by kind and planning id: a light, marker, water surface, grind curve or soup
+    /// two parts both reach is written once.
+    written: BTreeSet<(Kind, u32)>,
     /// The bytes of each mesh file written (the map's mesh bytes; a file a later decision removed taken out).
     mesh_sizes: BTreeMap<String, u64>,
     /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
@@ -547,6 +580,7 @@ impl MapSink {
                 stack_meshes: BTreeMap::new(),
                 proto_pieces: BTreeMap::new(),
                 chains: None,
+                written: BTreeSet::new(),
             });
         }
         let t = self.taken.as_mut().expect("taken");
@@ -651,6 +685,9 @@ impl MapSink {
         // each numbered among the map's
         t.failed += lay_part(&mut s, cut, &placements, &mut t.writer)?;
         let ranks: Option<&BTreeSet<(bool, u64)>> = t.layout.as_ref().map(|l| &l.summary.hulls);
+        // loaded content two parts both reach (a dependency of both) is written by the first; what a part made is its
+        // own (a whole map writes everything)
+        let first_made = t.layout.as_ref().map(|l| l.summary.first_made);
         let world_hulls = hulls_numbered(&mut s, cut, f32::NEG_INFINITY, &|sd, n| match ranks {
             None => Ok(n),
             Some(r) => {
@@ -665,7 +702,12 @@ impl MapSink {
                 }
             }
         })?;
+        let world_hulls: Vec<_> = world_hulls
+            .into_iter()
+            .filter(|h| fresh(&mut t.written, first_made, Kind::Hull, h.entity))
+            .collect();
         t.writer.lay_hulls(&world_hulls)?;
+        // a placement is in one part (its tile's), so its prototype's hulls are
         let prop_hulls = t.writer.take_prop_hulls();
         t.writer.lay_hulls(&prop_hulls)?;
         // its collision cells: a map written whole lays them out at the end; a map in parts laid each out whole from
@@ -680,7 +722,20 @@ impl MapSink {
                          every pass that changes it)"
                     )));
                 }
-                *self.cells.brought.entry(c).or_default() += content.triangles();
+                // a soup two parts both reach brought to the cell once
+                let brought = content.props.iter().map(|(_, _, p)| p.surf.len()).sum::<usize>()
+                    + content
+                        .segs
+                        .iter()
+                        .filter(|g| match first_made {
+                            Some(f) if g.order.1.index() < f => {
+                                self.cells.brought_soups.insert((c, g.order.1.index()))
+                            }
+                            _ => true,
+                        })
+                        .map(|g| g.s.len())
+                        .sum::<usize>();
+                *self.cells.brought.entry(c).or_default() += brought;
             }
         }
         // the part's payloads, written now and not kept
@@ -704,30 +759,46 @@ impl MapSink {
         if let (Err(mine), Err(found)) = (&mut t.scene.warnings, warnings) {
             mine.merge(found);
         }
-        t.scene.soups.extend(s.soups.iter().map(|sd| SoupFacts {
-            order: (sd.raw, sd.entity),
-            file: sd.file.clone(),
-            mode: sd.mode,
-            read: sd.surf.len(),
-            cut: sd.cut,
-            kept: sd.kept,
-        }));
+        let w = &mut t.written;
+        t.scene.soups.extend(
+            s.soups
+                .iter()
+                .filter(|sd| fresh(w, first_made, Kind::Soup, sd.entity))
+                .map(|sd| SoupFacts {
+                    order: (sd.raw, sd.entity),
+                    file: sd.file.clone(),
+                    mode: sd.mode,
+                    read: sd.surf.len(),
+                    cut: sd.cut,
+                    kept: sd.kept,
+                }),
+        );
         let c = &mut t.content;
         c.markers.extend(
             world
                 .iter::<crate::components::SkateMarker>()
                 .map(|(e, _)| (e, world.has::<primase_core::Name>(e)))
                 .zip(std::mem::take(&mut s.markers))
+                .filter(|((e, _), _)| fresh(w, first_made, Kind::Marker, *e))
                 .map(|((e, named), m)| (e, named, m)),
         );
         c.water.extend(
             world
                 .iter::<crate::components::SkateWater>()
                 .map(|(e, _)| e)
-                .zip(std::mem::take(&mut s.water)),
+                .zip(std::mem::take(&mut s.water))
+                .filter(|(e, _)| fresh(w, first_made, Kind::Water, *e)),
         );
-        c.lights.extend(std::mem::take(&mut s.lights));
-        c.grind.extend(std::mem::take(&mut s.curves));
+        c.lights.extend(
+            std::mem::take(&mut s.lights)
+                .into_iter()
+                .filter(|l| fresh(w, first_made, Kind::Light, l.entity)),
+        );
+        c.grind.extend(
+            std::mem::take(&mut s.curves)
+                .into_iter()
+                .filter(|g| fresh(w, first_made, Kind::Grind, g.entity)),
+        );
         Ok(())
     }
 
@@ -828,6 +899,13 @@ impl MapSink {
             }
         }
         water.sort_by_key(|(e, _)| *e);
+        // the markers still asking for a snap and the curves without a prism, counted over the map's content as
+        // written (one two parts both reach once), not summed over the parts
+        s.notes.unsnapped = markers
+            .iter()
+            .filter(|(_, _, m)| m.snap.mode != crate::scene::SnapMode::None)
+            .count();
+        s.notes.unprepared_curves = grind.iter().filter(|g| g.prism.is_none()).count();
         let (notes, omitted, approximated) = s.notes.render();
         // the overlay totals over every stacked mesh, a prototype once; the whole map's chains for a budget left to the
         // writer

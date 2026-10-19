@@ -21,9 +21,9 @@ use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Tar
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::summary::SummaryRegistry;
 use primase_core::{
-    Collision, ColorSpace, DrawLayer, DrawOrder, Entity, Instance, Layer, LayerWeights, LayeredMaterial,
-    Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole, Texture,
-    Topology, Transform, WeightMapping, World,
+    Collision, ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, Layer, LayerWeights,
+    LayeredMaterial, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole,
+    Texture, Topology, Transform, WeightMapping, World,
 };
 use primase_meshops::PartitionGrid;
 use primase_reskate::components::{
@@ -455,7 +455,7 @@ impl Reader for Planned {
         Ok((world.subset(&world.closure(roots.iter().copied())), Vec::new()))
     }
     fn emits(&self) -> &'static [&'static str] {
-        &["core", "skate", "reskate", "pbr"]
+        &["core", "skate", "reskate", "pbr", "test"]
     }
     fn prototype_box(&self, _world: &World, _prototype: Entity) -> Option<[[f64; 3]; 2]> {
         Some([[0.0, 0.0, -40.0], [40.0, 2.0, 0.0]])
@@ -1081,4 +1081,147 @@ fn a_layout_for_other_tiles_is_refused() {
     .unwrap()
     .to_string();
     assert!(e.contains("made for 100 m tiles, the writer's are 200 m"), "{e}");
+}
+
+/// Refers to the entities it holds: what holds them brings them into its part (as a reader's closure does).
+#[derive(Clone, Debug, PartialEq)]
+struct Holds(Vec<Entity>);
+impl Component for Holds {
+    const NAME: &'static str = "test.holds";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(&self.0);
+    }
+}
+
+/// [`map`] with content two parts both reach: a light, a travel marker, a water surface and a world soup (a 20 m
+/// square at east 300), each held by two holders standing in different parts (east 150 and east 610), so each part's
+/// closure brings them in.
+fn shared_map() -> World {
+    let mut w = map();
+    let l = w.spawn();
+    w.insert(
+        l,
+        primase_reskate::components::SkateLight {
+            spot: false,
+            position: [300.0, 6.0, -120.0],
+            direction: [0.0, -1.0, 0.0],
+            tangent: [0.0; 3],
+            color: [1.0; 3],
+            energy: 40.0,
+            range: 15.0,
+            radius: 0.1,
+            spot_size: 0.0,
+            spot_blend: 0.0,
+            time_of_day: 127,
+            cast_shadow: false,
+            priority: None,
+            group: String::new(),
+            unknown_flags: 0,
+        },
+    );
+    let m = w.spawn();
+    w.insert(
+        m,
+        SkateMarker {
+            kind: MarkerKind::Travel,
+            position: Some(([300.0, -120.0], Some(1.0))),
+            yaw: None,
+            m: None,
+            blueprint: None,
+            // a snap left to the writer: counted once among the map's approximations
+            snap: Some(primase_reskate::components::Snap::Mode(
+                primase_reskate::components::SnapMode::Ground,
+            )),
+            lift: None,
+            shelter: None,
+            trainer: None,
+            other: Other::new(),
+        },
+    );
+    let water = w.spawn();
+    w.insert(
+        water,
+        SkateWater {
+            corners: vec![[290.0, 110.0], [310.0, 110.0], [310.0, 130.0], [290.0, 130.0]],
+            height: Some(0.25),
+            other: Default::default(),
+        },
+    );
+    let soup = w.spawn();
+    let concrete = w
+        .resource::<Surfaces>()
+        .unwrap()
+        .clone()
+        .index("concrete")
+        .unwrap();
+    let mut c = Collision::default();
+    c.extend(
+        &[
+            [290.0, 0.5, -110.0],
+            [310.0, 0.5, -110.0],
+            [290.0, 0.5, -130.0],
+            [310.0, 0.5, -130.0],
+        ],
+        &[[0, 1, 2], [2, 1, 3]],
+        concrete,
+        |p| p,
+    );
+    w.insert(soup, c);
+    for east in [150.0, 610.0] {
+        let h = w.spawn();
+        w.insert(h, Holds(vec![l, m, water, soup]));
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [east, 0.0, -120.0];
+        w.insert(h, t);
+    }
+    w
+}
+
+/// Content two parts both reach (a light, a marker, a water surface, a world soup) is written once: the map in parts
+/// is the map written whole, byte for byte, the soup's cell gathered once and its triangles brought once, the marker's
+/// unresolved snap counted once.
+#[test]
+fn content_two_parts_reach_is_written_once() {
+    let reference = tmp("whole-shared");
+    let mut w = shared_map();
+    plan().run(&mut w, &mut PassLog::default()).unwrap();
+    primase_reskate::write_map(&w, Path::new(""), &encoding(&reference)).unwrap();
+    for order in [None, Some(true)] {
+        let out = tmp("parts-shared");
+        let w = shared_map();
+        let order: Option<Vec<usize>> = order.map(|_| {
+            let mut p = w.clone();
+            aligned().run(&mut p, &mut PassLog::default()).unwrap();
+            (0..p.resource::<PartitionPlan>().unwrap().groups.len())
+                .rev()
+                .collect()
+        });
+        let r = in_parts_of(
+            w,
+            &encoding(&out),
+            &aligned(),
+            order.as_deref(),
+            Stages::default().planned(),
+            200.0,
+        )
+        .unwrap();
+        assert_eq!(
+            r.built.cell_triangles,
+            r.spool.triangles - 2,
+            "the shared soup's two triangles, shared twice"
+        );
+        assert!(
+            r.built
+                .approximated
+                .iter()
+                .any(|(what, n)| what.starts_with("markers whose snap is unresolved") && *n == 1),
+            "{:?}",
+            r.built.approximated
+        );
+        same_maps(
+            &reference.join("parts"),
+            &out.join("parts"),
+            &format!("shared {order:?}"),
+        );
+    }
 }

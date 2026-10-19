@@ -104,10 +104,12 @@ pub type CellKey = (bool, i32, i32);
 
 /// One world soup's triangles filed in a cell: loose (9 writer-frame coordinates each), their surfaces and, a ground
 /// soup's, which are natural rock; `order` is the soup's place in the scene's order (raw soups after raised ones, each
-/// by its entity's planning id), which the cell's triangles are laid out in.
+/// by its entity's planning id), which the cell's triangles are laid out in; `key` is the soup's own (its planning id
+/// when loaded, so a soup two parts both write is one; tagged by its part when made in it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CellSoup {
     pub order: (bool, u32),
+    pub key: u64,
     pub ground: bool,
     pub v: Vec<f32>,
     pub s: Vec<u8>,

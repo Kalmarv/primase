@@ -81,6 +81,10 @@ impl Pass for SummarizeReskateLayout {
         };
         let mut sum = SkateLayoutSummary {
             tile: self.tile,
+            first_made: w
+                .resource::<PartScope>()
+                .and_then(|s| s.first_made)
+                .unwrap_or(u32::MAX),
             ..SkateLayoutSummary::default()
         };
         sum.parts.insert(tag, roots);

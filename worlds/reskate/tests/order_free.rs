@@ -30,6 +30,7 @@ fn tmp(name: &str) -> PathBuf {
 
 fn light(x: f32, y: f32, priority: f32, energy: f32) -> PlacedLight {
     PlacedLight {
+        entity: primase_core::Entity::from_index(0),
         spot: false,
         pos: Vec3::new(x, y, 3.0),
         dir: Vec3::new(0.0, 0.0, -1.0),

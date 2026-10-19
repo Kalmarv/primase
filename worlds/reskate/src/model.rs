@@ -135,6 +135,8 @@ impl TileOut {
 /// A convex hull written whole as one collision object (world positions in the writer's frame).
 #[derive(Clone, Debug)]
 pub struct Hull {
+    /// What it is of the world: the hull soup's entity, or the placement's whose prototype's collision it is.
+    pub entity: primase_core::Entity,
     pub name: String,
     pub pos: Vec<f32>,
     pub idx: Vec<u32>,

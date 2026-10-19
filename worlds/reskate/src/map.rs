@@ -1530,6 +1530,7 @@ impl MapWriter {
             let name = format!("h_{tx}_{ty}_{hull_no}_{}", m.name);
             *hull_no += 1;
             self.prop_hulls.push(Hull {
+                entity: s.entity.expect("a scene placement has its entity"),
                 name,
                 pos: placed_points(cp, s),
                 idx: ci.clone(),
@@ -2933,6 +2934,7 @@ mod tests {
 
     fn light(dir: Vec3, tan: Vec3) -> PlacedLight {
         PlacedLight {
+            entity: primase_core::Entity::from_index(0),
             spot: true,
             pos: Vec3::ZERO,
             dir,

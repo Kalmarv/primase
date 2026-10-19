@@ -329,6 +329,7 @@ pub(crate) fn hulls_numbered(
             continue;
         }
         res.push(Hull {
+            entity: sd.entity,
             name: format!("hull_{number:04}"),
             pos,
             idx: sd.idx.clone(),
@@ -1030,6 +1031,7 @@ pub(crate) fn collision_plan(
 pub(crate) fn cell_shares(
     world: &World,
     a: &EncodingOptions,
+    key: &dyn Fn(primase_core::Entity) -> u64,
 ) -> Result<(SkateCellLayout, BTreeMap<CellKey, SkateCellShare>)> {
     let PartRead {
         scene: mut s,
@@ -1059,6 +1061,7 @@ pub(crate) fn cell_shares(
                     .into_iter()
                     .map(|g| CellSoup {
                         order: (g.order.0, g.order.1.index()),
+                        key: key(g.order.1),
                         ground: g.ground,
                         v: g.v,
                         s: g.s,
@@ -1093,17 +1096,33 @@ pub(crate) fn cell_layout(s: &Scene, o: &WriterOptions) -> SkateCellLayout {
 }
 
 /// One collision cell's content from its shares, every part's (the order they come in does not matter: the cell lays
-/// its soups out in the scene's order and its props by tile).
-pub(crate) fn cell_content(shares: &[&SkateCellShare]) -> CellContent {
+/// its soups out in the scene's order and its props by tile). A soup two parts both write (one key) is laid out once;
+/// shared differently, it is refused.
+pub(crate) fn cell_content(shares: &[&SkateCellShare]) -> Result<CellContent> {
     let mut c = CellContent::default();
+    let mut seen: BTreeMap<u64, &crate::components::CellSoup> = BTreeMap::new();
     for share in shares {
-        c.segs.extend(share.soups.iter().map(|g| SoupSeg {
-            order: (g.order.0, primase_core::Entity::from_index(g.order.1)),
-            ground: g.ground,
-            v: g.v.clone(),
-            s: g.s.clone(),
-            rock: g.rock.clone(),
-        }));
+        for g in &share.soups {
+            match seen.get(&g.key) {
+                Some(first) if *first != g => {
+                    return Err(Error::Scene(format!(
+                        "the collision soup {} is shared differently by two parts in the cell {:?}",
+                        g.order.1, share.cell
+                    )));
+                }
+                Some(_) => continue,
+                None => {
+                    seen.insert(g.key, g);
+                }
+            }
+            c.segs.push(SoupSeg {
+                order: (g.order.0, primase_core::Entity::from_index(g.order.1)),
+                ground: g.ground,
+                v: g.v.clone(),
+                s: g.s.clone(),
+                rock: g.rock.clone(),
+            });
+        }
         c.props.extend(share.props.iter().map(|p| {
             (
                 p.tile.0,
@@ -1116,7 +1135,7 @@ pub(crate) fn cell_content(shares: &[&SkateCellShare]) -> CellContent {
             )
         }));
     }
-    c
+    Ok(c)
 }
 
 /// The collision cell a group world holds (its shares, its `skate.cell_layout`): its key, its content and the layout's
@@ -1142,7 +1161,7 @@ pub(crate) fn group_cell(
     let surf = crate::scene::SurfaceTable {
         list: layout.surfaces.clone(),
     };
-    Ok((key, cell_content(&shares), surf, layout))
+    Ok((key, cell_content(&shares)?, surf, layout))
 }
 
 /// The collision plan of the collision cell a group world holds (`prepare-reskate-collision`'s, on a cell of a map in

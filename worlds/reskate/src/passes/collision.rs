@@ -222,13 +222,16 @@ impl Pass for ShareReskateCollision {
                 "share-reskate-collision: the collision is already shared (skate.cell_layout)".into(),
             );
         }
-        // what the part writes: its output, as conversion keeps it (its roots and what the passes placed for it)
+        // what the part writes: its output, as conversion keeps it (its roots and what the passes placed for it), each
+        // soup keyed as the part owns it (a soup two parts both reach is one)
+        let owned = super::Owned::of(w);
+        let key = |e: primase_core::Entity| owned.key(e).unwrap_or(u64::from(e.index()));
         let shares = match w.resource::<PartScope>() {
             Some(scope) => {
                 let keep = scope.output(w).keep;
-                cell_shares(&w.subset(&keep), &self.encoding)
+                cell_shares(&w.subset(&keep), &self.encoding, &key)
             }
-            None => cell_shares(w, &self.encoding),
+            None => cell_shares(w, &self.encoding, &key),
         };
         let (layout, shares) = shares.map_err(|e| e.to_string())?;
         log.count("collision cells shared", shares.len() as u64);

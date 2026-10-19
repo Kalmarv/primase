@@ -1,5 +1,5 @@
 //! The cell spool's record of a share (`skate.cell_share`), little-endian: the cell (water `u8`, column `i32`, row
-//! `i32`); its soups (`u32` count; each: raw `u8`, planning id `u32`, ground `u8`, triangles `u32` n, then 9n `f32`
+//! `i32`); its soups (`u32` count; each: raw `u8`, planning id `u32`, key `u64`, ground `u8`, triangles `u32` n, 9n `f32`
 //! coordinates, n surface bytes, rock count `u32` and as many rock bytes); its props (`u32` count; each: tile column and
 //! row `i32`, triangles `u32` n, 9n `f32` coordinates, n surface bytes, ground `u8` flag and, when set, n ground bytes).
 //! A record is length-prefixed (`u32`), so a cell's file is its records one after another.
@@ -18,6 +18,7 @@ pub fn encode(share: &SkateCellShare, out: &mut Vec<u8>) {
     for g in &share.soups {
         out.push(u8::from(g.order.0));
         out.extend_from_slice(&g.order.1.to_le_bytes());
+        out.extend_from_slice(&g.key.to_le_bytes());
         out.push(u8::from(g.ground));
         out.extend_from_slice(&(g.s.len() as u32).to_le_bytes());
         for v in &g.v {
@@ -84,6 +85,9 @@ impl Rd<'_> {
     fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
     }
+    fn u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+    }
     fn i32(&mut self) -> Result<i32, String> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
     }
@@ -141,6 +145,7 @@ fn record(b: &[u8]) -> Result<SkateCellShare, String> {
     let mut soups = Vec::with_capacity(n);
     for _ in 0..n {
         let order = (r.flag()?, r.u32()?);
+        let key = r.u64()?;
         let ground = r.flag()?;
         let t = r.count(37)?;
         let v = r.f32s(t * 9)?;
@@ -149,6 +154,7 @@ fn record(b: &[u8]) -> Result<SkateCellShare, String> {
         let rock = r.flags(nr)?;
         soups.push(CellSoup {
             order,
+            key,
             ground,
             v,
             s,
@@ -188,6 +194,7 @@ mod tests {
             cell: (true, -3, 7),
             soups: vec![CellSoup {
                 order: (true, 41),
+                key: 7 << 32 | 41,
                 ground: true,
                 v: (0..18).map(|i| i as f32 * -0.5).collect(),
                 s: vec![3, 0x85],

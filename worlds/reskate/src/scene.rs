@@ -208,6 +208,8 @@ impl SnapSpec {
 /// A light in the writer's frame.
 #[derive(Clone, Debug)]
 pub struct PlacedLight {
+    /// The light's entity.
+    pub entity: Entity,
     pub spot: bool,
     pub pos: Vec3,
     pub dir: Vec3,
@@ -230,6 +232,7 @@ pub struct PlacedLight {
 /// Light `e` (its [`SkateLight`] `l`) in the writer's frame; its priority its own, else energy times range.
 pub fn placed_light(world: &World, e: Entity, l: &SkateLight) -> PlacedLight {
     PlacedLight {
+        entity: e,
         spot: l.spot,
         pos: w(l.position[0], l.position[1], l.position[2]),
         dir: w(l.direction[0], l.direction[1], l.direction[2]),
@@ -311,6 +314,8 @@ pub fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
 /// A grind curve in the writer's frame.
 #[derive(Clone, Debug)]
 pub struct GrindCurve {
+    /// The curve's entity.
+    pub entity: Entity,
     /// Its smooth-grind surface ([`crate::grind::SURFACES`]).
     pub surface: usize,
     /// Its prism (`skate.grind_prism`, writer frame); `None`: not prepared.
@@ -958,6 +963,7 @@ impl Scene {
         let curves: Vec<GrindCurve> = world
             .iter::<SkateGrindCurve>()
             .map(|(e, c)| GrindCurve {
+                entity: e,
                 surface: c.surface as usize,
                 prism: world
                     .get::<crate::components::SkateGrindPrism>(e)
