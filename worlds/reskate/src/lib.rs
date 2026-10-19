@@ -32,7 +32,7 @@ use std::path::PathBuf;
 
 pub use build::{
     AssembledMaterial, BuildReport, EncodingOptions, assembled_materials, leave_out_optional, lod_choice,
-    select_lod, write_map,
+    select_lod, target, write_map,
 };
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the

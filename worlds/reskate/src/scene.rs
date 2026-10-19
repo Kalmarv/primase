@@ -501,8 +501,21 @@ pub struct ScenePlacement {
 }
 
 impl Scene {
-    /// The scene a skate-scene reader attached to `w`, read from `dir`.
+    /// The scene a skate-scene reader attached to `w`, read from `dir`. Refused: a world its own components or
+    /// resources refuse (non-finite geometry, a transform that is not finite, ...), naming the first failure.
     pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
+        if let Some((name, entity, message)) = world.verify_components().into_iter().next() {
+            return Err(Error::Scene(format!(
+                "{name} of {entity:?}: {message} (the writer takes a world its components accept: the reader or pass \
+                 that made this one is at fault)"
+            )));
+        }
+        if let Some((name, message)) = world.verify_resources().into_iter().next() {
+            return Err(Error::Scene(format!(
+                "resource {name}: {message} (the writer takes a world its resources accept: the reader or pass that \
+                 made this one is at fault)"
+            )));
+        }
         if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
             return Err(Error::Scene(format!(
                 "prototype {entity:?} has levels of detail: choose one form first (select-lod)"

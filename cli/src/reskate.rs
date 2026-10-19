@@ -84,10 +84,10 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
 }
 
 impl Writer for Reskate {
-    /// The map builder writes the skate dialect and core and leaves other names alone; a blend (`core.layered`) it
-    /// doesn't write: `lower-layered-reskate` lowers blends to decal overlays first.
+    /// The map builder's names (`primase_reskate::target`): the skate dialect and the core names it reads; any other
+    /// name is reported as not written.
     fn target(&self) -> Target {
-        Target::new("reskate").illegal("core.layered").carry_unknown()
+        primase_reskate::target()
     }
     fn write(&mut self, part: &World) -> Result<()> {
         // the world carries every input in memory: no scene folder to read from

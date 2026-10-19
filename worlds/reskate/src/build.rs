@@ -524,6 +524,76 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::Overla
     }
 }
 
+/// What [`write_map`] writes, as a conversion's target: the skate dialect (the `skate.` and `reskate.` names), the
+/// core names the writer reads (names, placements, meshes and textures loaded, collision, material variants,
+/// priorities, the surface table) and those `raise-skate` raises into the dialect, written in their raised form
+/// (`pbr.material`, `core.material_usage` and `core.draw_order` as `skate.material`, `core.light` as `skate.light`,
+/// `core.marker` as `skate.marker`). A `core.mesh_file` or `core.texture_file` only beside its loaded mesh or texture;
+/// a blend (`core.layered`) is lowered first (`lower-layered-reskate`), one form per prototype chosen first
+/// (`select-lod`). Every other name is reported as not written: the map has no place for it.
+pub fn target() -> primase_core::pass::Target {
+    use crate::dialect::{
+        SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateFloorPlan, SkateForm,
+        SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMarker, SkateMarkerSnaps, SkateMaterial,
+        SkateOverlayStack, SkateParts, SkatePartsOff, SkatePlacement, SkatePrototype, SkateRegionClip,
+        SkateRock, SkateScene, SkateSoup, SkateTexture, SkateWater,
+    };
+    use crate::layered::{BlendOpacity, VertexBlend};
+    use crate::prepare::pause_map::{SkatePauseImage, SkatePausePicture};
+    use primase_core::pbr::PbrMaterial;
+    use primase_core::{
+        Collision, Component, DrawOrder, Instance, LayeredMaterial, Light, Lods, Marker, MaterialUsage,
+        MaterialVariants, Mesh, MeshFile, Name, Priority, Resource, Surfaces, Texture, TextureFile,
+        Transform,
+    };
+    primase_core::pass::Target::new("reskate")
+        .legal(Name::NAME)
+        .legal(Transform::NAME)
+        .legal(Instance::NAME)
+        .legal(Mesh::NAME)
+        .legal(Texture::NAME)
+        .legal(Collision::NAME)
+        .legal(MaterialVariants::NAME)
+        .legal(Priority::NAME)
+        .legal(Surfaces::NAME)
+        .legal(PbrMaterial::NAME)
+        .legal(MaterialUsage::NAME)
+        .legal(DrawOrder::NAME)
+        .legal(Light::NAME)
+        .legal(Marker::NAME)
+        .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
+        .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
+        .illegal(LayeredMaterial::NAME)
+        .illegal(Lods::NAME)
+        .legal(SkateScene::NAME)
+        .legal(SkateTexture::NAME)
+        .legal(SkateMaterial::NAME)
+        .legal(SkatePrototype::NAME)
+        .legal(SkateParts::NAME)
+        .legal(SkatePartsOff::NAME)
+        .legal(SkateForm::NAME)
+        .legal(SkatePlacement::NAME)
+        .legal(SkateCollision::NAME)
+        .legal(SkateSoup::NAME)
+        .legal(SkateRock::NAME)
+        .legal(SkateLight::NAME)
+        .legal(SkateGrindCurve::NAME)
+        .legal(SkateGrindPrism::NAME)
+        .legal(SkateWater::NAME)
+        .legal(SkateMarker::NAME)
+        .legal(SkateBaseFactor::NAME)
+        .legal(SkateFloorPlan::NAME)
+        .legal(SkateMarkerSnaps::NAME)
+        .legal(SkateOverlayStack::NAME)
+        .legal(SkateBlendChains::NAME)
+        .legal(SkateBlendBudget::NAME)
+        .legal(SkateRegionClip::NAME)
+        .legal(SkatePauseImage::NAME)
+        .legal(SkatePausePicture::NAME)
+        .legal(VertexBlend::NAME)
+        .legal(BlendOpacity::NAME)
+}
+
 /// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
 /// written), with the overlay stack `stack` and textures encoded or only identified (`encode`).
 fn assembly(

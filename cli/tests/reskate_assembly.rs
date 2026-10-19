@@ -39,7 +39,7 @@ struct Both {
 
 impl Writer for Both {
     fn target(&self) -> Target {
-        Target::new("reskate").illegal("core.layered").carry_unknown()
+        primase_reskate::target()
     }
     fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
         let e = EncodingOptions::default();
