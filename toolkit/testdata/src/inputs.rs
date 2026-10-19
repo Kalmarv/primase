@@ -416,14 +416,6 @@ pub const VARIABLES: &[Variable] = &[
         source: "third-party: UXM's Sekiro path dictionary",
     },
     Variable {
-        name: "PRIMASE_FROMSOFT_NORMAL_SCENE",
-        kind: Kind::Input,
-        gate: false,
-        about: r#"reference normal PNGs and scene.json for offline cached-DDS comparison; worlds/fromsoft/tests/normal_images.rs"#,
-        status: Status::Retired,
-        source: "an earlier exporter's PNGs; retired: hand-worked normal pixels carry the obligation",
-    },
-    Variable {
         name: "PRIMASE_FROMSOFT_DDS_ORACLE",
         kind: Kind::Input,
         gate: true,
@@ -502,6 +494,14 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"reference archive outputs; schema in worlds/fromsoft/README.md"#,
         status: Status::Live,
         source: "independent: SoulsFormats 9c0da6b with UXM's Sekiro dictionary, the dump harness's census mode (kept with the private oracle tools)",
+    },
+    Variable {
+        name: "PRIMASE_FROMSOFT_TPF_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"independent texture-package census (packages.jsonl, area-dds/, errors.tsv); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_census.rs, tpf_pixels.rs"#,
+        status: Status::Blocked,
+        source: "not built (a stated coverage gap): SoulsFormats' TPF reader in the dump harness's census mode; build it when a step 20 or in-game difference points at textures",
     },
     Variable {
         name: "PRIMASE_HAVOK_CORPUS",

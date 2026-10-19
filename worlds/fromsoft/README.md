@@ -34,22 +34,22 @@ are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
 - `PRIMASE_FROMSOFT_BHD_ORACLE`: directory of independent reference C# decoder
   output, generated from the same installation. Its files are:
   - `Data1.plain` through `Data5.plain`: complete RSA-unwrapped headers.
-  - `entries.tsv`: shard, eight-digit hex hash, container label, decoded length,
-    uppercase SHA-256, tab-separated.
+  - `entries.tsv`: shard, eight-digit hex hash, dictionary path (empty when the
+    dictionary has none), decoded length, uppercase SHA-256, tab-separated.
   - `binders.tsv`: shard, hash, zero-based member index, signed ID, member name,
-    decoded length, uppercase SHA-256.
-  - `errors.tsv`: shard, hash, parser name, decimal failure offset, normalized
-    error detail. Empty when the reference rejects nothing. Populate only from
-    verified reference failures; this is never a list of ignored entries.
+    decoded length, uppercase SHA-256: top-level BND4 members.
+  - `errors.tsv`: shard, hash, the reference's own message: the entries it
+    cannot decode. Empty when it rejects nothing; never a list of ignored entries.
   - `samples.tsv`: hash and archive path, tab-separated; corresponding exact
     decoded bytes in `samples/<hash>.bin`. Include varied entries and every
     indexed path for a selected map area.
 
 The census attempts every indexed entry. Accepted results must match reference
-lengths and digests; samples compare actual bytes. Rejections count as agreement
-only when both readers reject at the same parsing boundary with equivalent
-errors. Unexpected acceptance, a missing reference entry, or a different error
-fails the differential gate. Reports distinguish decoded entries from agreed
+lengths and digests; samples compare actual bytes. A rejection counts as
+agreement when both readers reject the same entry; their messages are an
+independent decoder's own words and are reported side by side, not compared.
+Unexpected acceptance, a rejection the reference does not share, or a missing
+reference entry fails the differential gate. Reports distinguish decoded entries from agreed
 rejections; agreement does not make a corrupt stock entry readable.
 
 ## Texture packages and split binders
@@ -68,13 +68,14 @@ mips and colour-space tags. Cube/volume payloads are retained by the container
 reader but explicitly rejected by this 2D import. Bindings assign semantic roles
 and normal conventions; package parsing does not infer them from a name.
 
-The TPF corpus gate extends the archive oracle directory with
-`tpf/packages.jsonl`: one object per discovered package, with `id` (shard/hex
+The TPF corpus gate reads its own oracle directory, `PRIMASE_FROMSOFT_TPF_ORACLE`,
+which is not built yet (a stated coverage gap; see CONTRIBUTING.md), with
+`packages.jsonl`: one object per discovered package, with `id` (shard/hex
 hash, followed by `/b<index>` or `/s<index>` for single/split binder children),
 `area`, package size/SHA256, platform/flags/encoding, and a `textures` array.
 Each texture records name/format/kind/mipmaps/flags, DDS size/SHA256 and, for area
 2D images, width/height and decoded RGBA SHA256. Area DDS inputs reside at
-`tpf/area-dds/<uppercase-sha256>.dds`; none belong in the repository.
+`area-dds/<uppercase-sha256>.dds`; none belong in the repository.
 
 The pixel gate additionally requires `PRIMASE_FROMSOFT_DDS_ORACLE`, an explicitly
 trusted .NET assembly launched with `dotnet`. For each DDS path on stdin it
@@ -104,11 +105,12 @@ Caller-supplied material decisions control mesh exclusion and main-layer UV
 scale. It retains vertices referenced by faces that later fail the area check.
 It does not bake layered materials or split parts into baked weight levels.
 
-The archive oracle directory adds `flver/models.jsonl`, identified with the same
-binder paths as the TPF census. Each record contains the input SHA256, version,
-layout declarations and meshes. Each mesh records its material, vertex count,
-vertex digest, layout indices and face sets (flags, strip/culling booleans,
-index digest and triangulated digest). Vertex digest input is little-endian:
+The archive oracle directory adds `flver/models.jsonl`, one record per FLVER2
+found in the archive and its binders, `id` the shard/hex hash followed by
+`/b<index>` or `/s<index>` for single/split binder members. Each record contains
+the input SHA256, version and meshes. Each mesh records its material, vertex
+count, vertex digest and face sets (flags, strip/culling booleans, index digest
+and triangulated digest). Vertex digest input is little-endian:
 position f32x3, normal f32x3, normal W i32, UV count u32 and f32x3 values,
 tangent count u32 and f32x4 values, colour count u32 and RGBA f32x4 values,
 repeated for every vertex. Indices are u32. Digests are uppercase SHA256.

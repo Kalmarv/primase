@@ -29,7 +29,7 @@ fn query(input: &mut impl Write, output: &mut impl Read, path: &std::path::Path)
 }
 #[test]
 fn area_pixels() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_BHD_ORACLE") else {
+    let Some(root) = real_data("PRIMASE_FROMSOFT_TPF_ORACLE") else {
         return Ok(());
     };
     let Some(csharp) = real_data("PRIMASE_FROMSOFT_DDS_ORACLE") else {
@@ -55,7 +55,7 @@ fn area_pixels() -> Result<()> {
     let mut pyout = BufReader::new(py.stdout.take().ok_or("stdout")?);
     let mut hashes = BTreeMap::new();
     let mut path_count = 0;
-    for line in std::fs::read_to_string(root.join("tpf/packages.jsonl"))?.lines() {
+    for line in std::fs::read_to_string(root.join("packages.jsonl"))?.lines() {
         let p: serde_json::Value = serde_json::from_str(line)?;
         if p["area"] != true {
             continue;
@@ -77,7 +77,7 @@ fn area_pixels() -> Result<()> {
     let mut by_format = BTreeMap::<String, GateReport>::new();
     let mut failures = Vec::new();
     for (hash, want) in &hashes {
-        let path = root.join("tpf/area-dds").join(format!("{hash}.dds"));
+        let path = root.join("area-dds").join(format!("{hash}.dds"));
         let result = (|| -> Result<()> {
             let dds = std::fs::read(&path)?;
             let t = primase_dds::read(&dds)?;

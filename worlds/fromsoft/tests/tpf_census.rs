@@ -93,7 +93,7 @@ fn all_texture_packages() -> Result<()> {
     let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
         return Ok(());
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_BHD_ORACLE") else {
+    let Some(oracle) = real_data("PRIMASE_FROMSOFT_TPF_ORACLE") else {
         return Ok(());
     };
     let Some(names) = real_data("PRIMASE_FROMSOFT_NAMES") else {
@@ -110,20 +110,18 @@ fn all_texture_packages() -> Result<()> {
     let archive = Archive::open(root)?;
     let names = NameDictionary::read(names)?;
     let mut expected = BTreeMap::new();
-    for line in std::fs::read_to_string(oracle.join("tpf/packages.jsonl"))?.lines() {
+    for line in std::fs::read_to_string(oracle.join("packages.jsonl"))?.lines() {
         let value: serde_json::Value = serde_json::from_str(line)?;
         expected.insert(value["id"].as_str().ok_or("id")?.to_owned(), value);
     }
+    // shard, hash, the reference's message: the entries it cannot decode (the archive census's schema)
     let mut rejected = BTreeMap::new();
     for line in std::fs::read_to_string(oracle.join("errors.tsv"))?.lines() {
-        let f: Vec<_> = line.split('\t').collect();
-        if f.len() != 5 {
-            return Err("error manifest row".into());
-        }
-        rejected.insert(
-            format!("{}/{}", f[0], f[1]),
-            (f[2].to_owned(), f[3].parse::<usize>()?, f[4].to_owned()),
-        );
+        let f: Vec<_> = line.splitn(3, '\t').collect();
+        let [shard, hash, message] = f[..] else {
+            return Err(format!("errors.tsv row: {line}").into());
+        };
+        rejected.insert(format!("{shard}/{hash}"), message.to_owned());
     }
     let mut counts = (0, 0);
     let mut failures = Vec::new();
@@ -157,12 +155,9 @@ fn all_texture_packages() -> Result<()> {
             Ok(())
         })();
         if let Err(e) = result {
-            if matches!((rejected.get(&id), e.downcast_ref::<primase_fromsoft::Error>()),
-                (Some((kind,offset,message)),Some(primase_fromsoft::Error::Invalid{format,offset:actual,detail}))
-                if kind==format&&offset==actual&&message==detail)
-            {
-                rejected.remove(&id);
-                println!("Known stock truncated entry {id}");
+            // both decoders reject it: agreement on the entry, the reasons reported side by side
+            if let Some(theirs) = rejected.remove(&id) {
+                println!("Agreed rejection {id}: ours {e}; reference {theirs}");
             } else {
                 failures.push(format!("{id}: {e}"));
             }

@@ -169,16 +169,14 @@ fn all_flver_models() -> Result<()> {
         let value: serde_json::Value = serde_json::from_str(line)?;
         expected.insert(value["id"].as_str().ok_or("id")?.to_owned(), value);
     }
+    // shard, hash, SoulsFormats' message: the entries the reference cannot decode
     let mut rejected = BTreeMap::new();
     for line in std::fs::read_to_string(oracle.join("errors.tsv"))?.lines() {
-        let f: Vec<_> = line.split('\t').collect();
-        if f.len() != 5 {
-            return Err("error manifest row".into());
-        }
-        rejected.insert(
-            format!("{}/{}", f[0], f[1]),
-            (f[2].to_owned(), f[3].parse::<usize>()?, f[4].to_owned()),
-        );
+        let f: Vec<_> = line.splitn(3, '\t').collect();
+        let [shard, hash, message] = f[..] else {
+            return Err(format!("errors.tsv row: {line}").into());
+        };
+        rejected.insert(format!("{shard}/{hash}"), message.to_owned());
     }
     let mut counts = Counts::default();
     let mut failures = Vec::new();
@@ -212,12 +210,9 @@ fn all_flver_models() -> Result<()> {
             Ok(())
         })();
         if let Err(e) = result {
-            if matches!((rejected.get(&id), e.downcast_ref::<primase_fromsoft::Error>()),
-                (Some((kind,offset,message)),Some(primase_fromsoft::Error::Invalid{format,offset:actual,detail}))
-                if kind==format&&offset==actual&&message==detail)
-            {
-                rejected.remove(&id);
-                println!("Known stock truncated entry {id}");
+            // both decoders reject it: agreement on the entry, the reasons reported side by side
+            if let Some(theirs) = rejected.remove(&id) {
+                println!("Agreed rejection {id}: ours {e}; reference {theirs}");
             } else {
                 failures.push(format!("{id}: {e}"));
             }

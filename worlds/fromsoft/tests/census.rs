@@ -102,11 +102,15 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
     }
     let error_text = std::fs::read_to_string(oracle.join("errors.tsv"))?;
     let mut rejected = BTreeMap::new();
+    // shard, hash, SoulsFormats' message: the entries the reference cannot decode
     for line in error_text.lines() {
-        let f: Vec<_> = line.split('\t').collect();
+        let f: Vec<_> = line.splitn(3, '\t').collect();
+        let [shard, hash, message] = f[..] else {
+            return Err(format!("errors.tsv row: {line}").into());
+        };
         rejected.insert(
-            (f[0].parse::<u8>()?, u32::from_str_radix(f[1], 16)?),
-            (f[2].to_owned(), f[3].parse::<usize>()?, f[4].to_owned()),
+            (shard.parse::<u8>()?, u32::from_str_radix(hash, 16)?),
+            message.to_owned(),
         );
     }
     let mut agreed_rejections = 0;
@@ -163,23 +167,14 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
         })();
         match result {
             Err(e) => {
-                let equivalent = match (
-                    rejected.get(&(entry.shard, hash)),
-                    e.downcast_ref::<primase_fromsoft::Error>(),
-                ) {
-                    (
-                        Some((kind, offset, message)),
-                        Some(primase_fromsoft::Error::Invalid {
-                            format,
-                            offset: actual,
-                            detail,
-                        }),
-                    ) => kind == format && offset == actual && message == detail,
-                    _ => false,
-                };
-                if equivalent {
+                // both decoders reject it: agreement on the entry; the reasons are an independent decoder's own
+                // words, reported side by side, not compared
+                if let Some(theirs) = rejected.get(&(entry.shard, hash)) {
                     agreed_rejections += 1;
-                    println!("AGREED REJECTION Data{} {hash:08x}: {e}", entry.shard);
+                    println!(
+                        "AGREED REJECTION Data{} {hash:08x}: ours {e}; reference {theirs}",
+                        entry.shard
+                    );
                 } else {
                     failures.push(format!("Data{} {hash:08x}: {e}", entry.shard));
                 }
