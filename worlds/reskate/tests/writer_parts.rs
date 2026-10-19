@@ -980,9 +980,18 @@ fn budget_notices(r: &ConvertReport) -> Vec<(NoticeKind, String, u64)> {
 
 /// The map converted whole as `e` says, after `passes`: the sink's report and the conversion's.
 fn converted_whole(e: &EncodingOptions, passes: Vec<Box<dyn Pass>>) -> (BuildReport, ConvertReport) {
+    converted_whole_of(map(), e, passes)
+}
+
+/// [`converted_whole`] of the map `w`.
+fn converted_whole_of(
+    w: World,
+    e: &EncodingOptions,
+    passes: Vec<Box<dyn Pass>>,
+) -> (BuildReport, ConvertReport) {
     let report = Rc::new(RefCell::new(None));
     let converted = primase_core::convert::convert(
-        &mut Planned(map()),
+        &mut Planned(w),
         Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
         &PassManager::new(PassRegistry::new()),
         &Pipeline { passes: Vec::new() },
@@ -1076,6 +1085,72 @@ fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
     }
     // the saturated map leaves every tile plain
     assert_eq!(chosen(&budget_for(saturated)), 0);
+}
+
+/// The pool budget of the map `w()` decided whole (`plan-reskate-blend-budget`) and in the parts of [`aligned`]
+/// (`finalize-reskate-blend-budget` on the gather traversal's summaries and the cells' counts), each written as
+/// `cull_ids` say: the two decisions, with their bases; the maps compared byte for byte.
+fn pool_budgets(w: &dyn Fn() -> World, cull_ids: usize, tag: &str) -> (SkateBlendBudget, SkateBlendBudget) {
+    let reference = tmp(&format!("whole-{tag}"));
+    let kept = KeepBudget::default();
+    let recorded = kept.0.clone();
+    let mut passes = prepared(cull_ids);
+    passes.push(Box::new(kept));
+    converted_whole_of(w(), &encoding_with(&reference, cull_ids), passes);
+    let out = tmp(&format!("parts-{tag}"));
+    let kept = KeepBudget::default();
+    let made = kept.0.clone();
+    let e = encoding_with(&out, cull_ids);
+    let mut passes = part_prepared(cull_ids);
+    passes.push(Box::new(kept));
+    let mut gather = part_prepared(cull_ids);
+    gather.push(Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()));
+    let stages = Stages {
+        passes,
+        gather,
+        finalize: vec![Box::new(FinalizeReskateBlendBudget::pool())],
+        ..Stages::default()
+    }
+    .planned();
+    in_parts_of(w(), &e, &aligned(), None, stages, 200.0).unwrap();
+    same_maps(&reference.join("parts"), &out.join("parts"), tag);
+    let recorded = recorded.lock().unwrap().clone().unwrap();
+    let made = made.lock().unwrap().clone().unwrap();
+    (recorded, made)
+}
+
+/// [`map`] with a second water surface, at the far west: two parts write a water surface each, the map one water
+/// object.
+fn two_waters() -> World {
+    let mut w = map();
+    let water = w.spawn();
+    w.insert(
+        water,
+        SkateWater {
+            corners: vec![[0.0, 300.0], [100.0, 300.0], [100.0, 400.0], [0.0, 400.0]],
+            height: Some(0.5),
+            other: Default::default(),
+        },
+    );
+    w
+}
+
+/// The map's other cull IDs over parts count what the writer writes once once: the water, one object however many
+/// parts bring a surface of it, and a light, a hull soup or a grind prism two parts both write (reached from both
+/// parts' roots), each by its key. The decision of a map in parts, with its basis, is the whole map's.
+#[test]
+fn shared_content_and_water_are_counted_once_over_parts() {
+    for (tag, w) in [
+        ("two-waters", &two_waters as &dyn Fn() -> World),
+        ("shared", &shared_map),
+    ] {
+        let roomy = pool_budgets(w, 1_000_000, &format!("{tag}-roomy"));
+        assert_eq!(roomy.1, roomy.0, "{tag}");
+        let basis = roomy.0.decision.as_ref().unwrap().pool.unwrap();
+        // and with little room, a pool a double count would change
+        let (whole, parts) = pool_budgets(w, basis.other_cull_ids + BLENDS.len(), &format!("{tag}-tight"));
+        assert_eq!(parts, whole, "{tag}");
+    }
 }
 
 /// Puts in a blend budget with its mode and no decision.

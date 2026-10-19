@@ -286,7 +286,7 @@ fn pool_finalize(w: World) -> Result<(SkateBlendBudget, PassLog), String> {
 fn finalize_world(whole: &SkateMapSummary, cells: usize) -> World {
     let mut w = World::new();
     w.insert_resource(SkateMapSummary {
-        other_cull_ids: whole.other_cull_ids - cells,
+        summed: whole.summed - cells,
         cells: CellsCounted::Apart,
         ..whole.clone()
     });
@@ -324,7 +324,7 @@ fn the_finalize_stage_decides_as_the_whole_map() {
         ["t_0_0", "t_1_0"],
         "the summary carries the chain tiles: {summary:?}"
     );
-    let other = summary.other_cull_ids;
+    let other = summary.other_cull_ids();
     assert!(other > 2, "{summary:?}");
     // the boundary: the fewest cull IDs with which both tiles take the chain form
     let chosen = |cull_ids: usize| {

@@ -1297,18 +1297,41 @@ pub struct ChainCandidate {
     pub objects: usize,
 }
 
+/// Standalone content two parts of a map may both write (each reached from both parts' roots), whose cull IDs a map
+/// summary counts once, by its key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum SharedContent {
+    Light,
+    GrindPrism,
+    HullSoup,
+}
+
 /// `skate.map_summary`: the small record the map's whole-map decisions are made from (`summarize-reskate-map`'s): the
-/// cull IDs its encoding may take, how many its content takes besides the blend chains (an ID per object per Studio
-/// 200 m cell it meets, and per light; the collision cells' objects as `cells` says), counted by the writer's own
-/// layout for the writer settings `grouping`, and the tiles with a chain form, by name. Not part of scene-interchange
-/// v1.
+/// cull IDs its encoding may take and what its content takes besides the blend chains (an ID per object per Studio
+/// 200 m cell it meets, and per light), counted by the writer's own layout for the writer settings `grouping`; and the
+/// tiles with a chain form, by name. Not part of scene-interchange v1.
+///
+/// The content's cull IDs, [`SkateMapSummary::other_cull_ids`], in three kinds, each merged over a map's parts as the
+/// writer writes it: what each part writes alone, summed (`summed`: its tiles, instances and placed props' hulls; the
+/// collision cells' objects as `cells` says); standalone content a part may share with another, by key (`shared`: its
+/// lights, grind prisms and hull soups, each keyed as [`crate::passes::Owned::key`] keys it, the same in every part
+/// that writes it); and the water, one object for the whole map (`water`: whether it has any).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateMapSummary {
     pub grouping: OverlayGrouping,
     pub cull_ids: usize,
-    pub other_cull_ids: usize,
+    pub summed: usize,
+    pub shared: BTreeMap<(SharedContent, u64), usize>,
+    pub water: bool,
     pub cells: CellsCounted,
     pub chains: BTreeMap<String, ChainCandidate>,
+}
+
+impl SkateMapSummary {
+    /// The cull IDs the map's content takes besides its blend chains (and, its cells apart, its collision cells).
+    pub fn other_cull_ids(&self) -> usize {
+        self.summed + self.shared.values().sum::<usize>() + usize::from(self.water)
+    }
 }
 
 impl Resource for SkateMapSummary {
@@ -1317,7 +1340,14 @@ impl Resource for SkateMapSummary {
         Ok(Some(serde_json::json!({
             "grouping": self.grouping,
             "cull_ids": self.cull_ids,
-            "other_cull_ids": self.other_cull_ids,
+            "other_cull_ids": self.other_cull_ids(),
+            "summed": self.summed,
+            "shared": self
+                .shared
+                .iter()
+                .map(|((kind, key), n)| serde_json::json!({ "kind": kind, "key": key, "cull_ids": n }))
+                .collect::<Vec<_>>(),
+            "water": self.water,
             "cells": self.cells,
             "chains": self.chains,
         })))
@@ -1325,8 +1355,9 @@ impl Resource for SkateMapSummary {
 }
 
 impl primase_core::summary::Summary for SkateMapSummary {
-    /// A map's cull IDs over its parts: each part's own objects' IDs summed and its chain tiles joined, for one
-    /// grouping and one pool, the collision cells apart in each. A whole map's summary (its cells counted) is not
+    /// A map's cull IDs over its parts, for one grouping and one pool, the collision cells apart in each: what each
+    /// part writes alone summed, its shared content joined by key (content two parts state with different counts
+    /// refused), whether any has water, its chain tiles joined. A whole map's summary (its cells counted) is not
     /// merged: it is already the map's; nor is a tile two parts state.
     fn merge(&mut self, other: Self) -> Result<(), String> {
         if (&self.grouping, self.cull_ids, self.cells) != (&other.grouping, other.cull_ids, other.cells) {
@@ -1350,7 +1381,18 @@ impl primase_core::summary::Summary for SkateMapSummary {
                 ));
             }
         }
-        self.other_cull_ids += other.other_cull_ids;
+        for (key, n) in other.shared {
+            if let Some(was) = self.shared.insert(key, n)
+                && was != n
+            {
+                return Err(format!(
+                    "{:?} {} is counted by two parts of the map as {was} and {n} cull IDs",
+                    key.0, key.1
+                ));
+            }
+        }
+        self.summed += other.summed;
+        self.water |= other.water;
         Ok(())
     }
     fn retained_bytes(&self) -> usize {
@@ -1360,6 +1402,7 @@ impl primase_core::summary::Summary for SkateMapSummary {
                 .keys()
                 .map(|k| k.len() + std::mem::size_of::<(String, ChainCandidate)>())
                 .sum::<usize>()
+            + self.shared.len() * std::mem::size_of::<((SharedContent, u64), usize)>()
     }
 }
 

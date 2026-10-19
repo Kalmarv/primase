@@ -9,8 +9,8 @@ use std::fmt::Debug;
 
 use primase_core::summary::Summary;
 use primase_reskate::components::{
-    CellsCounted, ChainCandidate, OverlayGrouping, RankedLight, SkateContentBounds, SkateFloorSummary,
-    SkateLightsSummary, SkateMapSummary, SkateSpawnSummary, SkateTextureWeights,
+    CellsCounted, ChainCandidate, OverlayGrouping, RankedLight, SharedContent, SkateContentBounds,
+    SkateFloorSummary, SkateLightsSummary, SkateMapSummary, SkateSpawnSummary, SkateTextureWeights,
 };
 use primase_reskate::exact_sum::ExactSum;
 
@@ -169,22 +169,37 @@ fn the_map_summary() {
     let s = |n: usize, tiles: &[(&str, i32, i32, usize)]| SkateMapSummary {
         grouping: g,
         cull_ids: 4096,
-        other_cull_ids: n,
+        summed: n,
+        shared: Default::default(),
+        water: false,
         cells: CellsCounted::Apart,
         chains: tiles
             .iter()
             .map(|&(name, row, column, objects)| (name.to_owned(), ChainCandidate { row, column, objects }))
             .collect(),
     };
+    // shared content by key (a light two parts write, a hull soup), and water in some parts
+    let with = |mut m: SkateMapSummary, shared: &[(SharedContent, u64, usize)], water: bool| {
+        m.shared = shared.iter().map(|&(kind, key, n)| ((kind, key), n)).collect();
+        m.water = water;
+        m
+    };
+    let light = (SharedContent::Light, 7, 1);
     merges_alike([
-        s(3, &[("t_0_0", 0, 0, 2)]),
-        s(0, &[]),
+        with(s(3, &[("t_0_0", 0, 0, 2)]), &[light], true),
+        with(s(0, &[]), &[light, (SharedContent::HullSoup, 9, 2)], false),
         s(10, &[("t_1_0", 0, 1, 1), ("t_0_1", 1, 0, 3)]),
-        s(3, &[("t_2_0", 0, 2, 1)]),
+        with(
+            s(3, &[("t_2_0", 0, 2, 1)]),
+            &[(SharedContent::GrindPrism, 7, 1)],
+            true,
+        ),
     ]);
-    let mut m = s(3, &[("t_0_0", 0, 0, 2)]);
-    m.merge(s(10, &[("t_1_0", 0, 1, 1)])).unwrap();
-    assert_eq!(m.other_cull_ids, 13);
+    let mut m = with(s(3, &[("t_0_0", 0, 0, 2)]), &[light], true);
+    m.merge(with(s(10, &[("t_1_0", 0, 1, 1)]), &[light], true))
+        .unwrap();
+    // the parts' own content summed, the light both write once, the map's one water object once
+    assert_eq!((m.summed, m.other_cull_ids()), (13, 15));
     assert_eq!(m.chains.len(), 2);
 
     // refused: other writer settings, another pool, cells counted otherwise, a tile two parts state, two whole maps
@@ -208,5 +223,10 @@ fn the_map_summary() {
         s(1, &[("t_0_0", 0, 0, 2)]),
         s(2, &[("t_0_0", 0, 0, 2)]),
         "t_0_0's blend chains are summarized by two parts",
+    );
+    refused(
+        with(s(1, &[]), &[(SharedContent::HullSoup, 9, 2)], false),
+        with(s(1, &[]), &[(SharedContent::HullSoup, 9, 3)], false),
+        "HullSoup 9 is counted by two parts of the map as 2 and 3 cull IDs",
     );
 }

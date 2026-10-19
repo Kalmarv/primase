@@ -2153,7 +2153,27 @@ struct LaidOut {
     col: CollisionResult,
     water: Option<MapObject>,
     kept_lights: Vec<PlacedLight>,
-    other: usize,
+    other: CullCount,
+}
+
+/// The cull IDs a map's content takes besides its blend chains, as the writer lays it out (an ID per entity Studio
+/// makes, each object once per 200 m cell it meets, and per light), by how a map's parts merge them
+/// ([`crate::components::SkateMapSummary`]).
+#[derive(Debug, Default)]
+pub(crate) struct CullCount {
+    /// What only the part laid out writes: its tiles, instances, placed props' hulls and collision cells.
+    pub summed: usize,
+    /// Standalone content another part may write too: its lights, grind prisms and hull soups, by their entity.
+    pub shared: BTreeMap<(crate::components::SharedContent, primase_core::Entity), usize>,
+    /// Whether it writes the water (one object for the whole map).
+    pub water: bool,
+}
+
+impl CullCount {
+    /// Every cull ID counted.
+    pub(crate) fn total(&self) -> usize {
+        self.summed + self.shared.values().sum::<usize>() + usize::from(self.water)
+    }
 }
 
 #[derive(Debug)]
@@ -2465,7 +2485,7 @@ impl MapWriter {
     /// The cull IDs the map takes besides its blend chains: an ID per entity Studio makes (each object once per 200 m
     /// cell it meets: tiles, instances, collision, grind prisms, water) and per light. The writer's own count, made as
     /// [`MapWriter::finish`] makes it, for `summarize-reskate-map`.
-    pub(crate) fn non_chain_cull_ids(&mut self, x: Extras) -> Result<usize> {
+    pub(crate) fn non_chain_cull_ids(&mut self, x: Extras) -> Result<CullCount> {
         Ok(self.lay_out(x)?.other)
     }
 
@@ -2489,7 +2509,7 @@ impl MapWriter {
             kept_lights,
             other,
         } = self.lay_out(x)?;
-        self.emit_chains(other)?;
+        self.emit_chains(other.total())?;
         // textures
         self.ctx.tex.finish();
         let used = self.used_textures();
@@ -2784,9 +2804,22 @@ impl MapWriter {
         // then the triangle mesh's and the water's counts as one
         let waiting = self.waiting_cells();
         self.lay_cells(&waiting, None)?;
-        let mut hulls = std::mem::take(&mut x.hulls);
-        hulls.extend(self.take_prop_hulls());
-        self.lay_hulls(&hulls)?;
+        // the hull soups one by one, each one's objects counted as its own (another part may write it too), then the
+        // placed props' hulls
+        let mut shared = BTreeMap::new();
+        for h in std::mem::take(&mut x.hulls) {
+            let before = self.col.objects.len();
+            self.lay_hulls(std::slice::from_ref(&h))?;
+            let cells: usize = self.col.objects[before..]
+                .iter()
+                .map(|ob| ob.cells as usize)
+                .sum();
+            if cells > 0 {
+                shared.insert((crate::components::SharedContent::HullSoup, h.entity), cells);
+            }
+        }
+        let prop_hulls = self.take_prop_hulls();
+        self.lay_hulls(&prop_hulls)?;
         crate::collision_pack::check_packed(self.collision_plan.as_ref(), self.leaves_packed)?;
         let mut col = std::mem::take(&mut self.col);
         let wc = std::mem::take(&mut self.water_col);
@@ -2801,12 +2834,12 @@ impl MapWriter {
 
         // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is
         // (its surface, then its geometry), not the order the curves came in; equal prisms write the same either way
-        let mut prisms: Vec<(usize, &crate::scene::GrindPrism)> = x
+        let mut prisms: Vec<(usize, &crate::scene::GrindPrism, primase_core::Entity)> = x
             .grind
             .iter()
-            .filter_map(|g| g.prism.as_ref().map(|p| (g.surface, p)))
+            .filter_map(|g| g.prism.as_ref().map(|p| (g.surface, p, g.entity)))
             .collect();
-        prisms.sort_by(|(sa, a), (sb, b)| {
+        prisms.sort_by(|(sa, a, _), (sb, b, _)| {
             let bits = |p: &crate::scene::GrindPrism| {
                 p.positions
                     .iter()
@@ -2817,7 +2850,7 @@ impl MapWriter {
                 .then_with(|| bits(a).cmp(&bits(b)))
                 .then_with(|| a.indices.cmp(&b.indices))
         });
-        for (i, (surface, p)) in prisms.into_iter().enumerate() {
+        for (i, (surface, p, entity)) in prisms.into_iter().enumerate() {
             let (gpos, gidx, pieces, length) = (&p.positions, p.indices.clone(), p.pieces, p.length);
             if gidx.is_empty() {
                 self.r
@@ -2863,6 +2896,10 @@ impl MapWriter {
             ob.collision_mode = "triangle_mesh";
             ob.collision_packed = grind::SURFACES[surface].1;
             ob.grind_source = Some(name);
+            shared.insert(
+                (crate::components::SharedContent::GrindPrism, entity),
+                ob.cells as usize,
+            );
             col.objects.push(ob);
             self.r.grind_curves += 1;
             self.r.grind_pieces += i64::from(pieces);
@@ -2880,14 +2917,32 @@ impl MapWriter {
         // every light the world holds (a cap is a pass: select-reskate-lights), in a total order
         let mut kept_lights = x.lights.clone();
         kept_lights.sort_by(crate::scene::light_order);
-        let other = self
+        shared.extend(
+            kept_lights
+                .iter()
+                .map(|l| ((crate::components::SharedContent::Light, l.entity), 1)),
+        );
+        let all = self
             .objects
             .iter()
             .chain(&col.objects)
-            .chain(&water)
             .map(|ob| ob.cells as usize)
-            .sum::<usize>()
-            + kept_lights.len();
+            .sum::<usize>();
+        let other = CullCount {
+            // the objects, less the hull soups' and grind prisms' (counted by entity)
+            summed: all
+                - shared
+                    .iter()
+                    .filter(|((kind, _), _)| *kind != crate::components::SharedContent::Light)
+                    .map(|(_, n)| n)
+                    .sum::<usize>(),
+            shared,
+            water: water.is_some(),
+        };
+        debug_assert_eq!(
+            other.total(),
+            all + water.as_ref().map_or(0, |ob| ob.cells as usize) + kept_lights.len()
+        );
         Ok(LaidOut {
             o,
             off,

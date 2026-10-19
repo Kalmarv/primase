@@ -510,7 +510,9 @@ fn the_map_summary_sums_over_parts() {
         w.insert_resource(SkateMapSummary {
             grouping,
             cull_ids,
-            other_cull_ids,
+            summed: other_cull_ids,
+            shared: BTreeMap::new(),
+            water: false,
             cells: CellsCounted::Apart,
             chains: BTreeMap::new(),
         });
@@ -519,7 +521,7 @@ fn the_map_summary_sums_over_parts() {
     let merged = registry
         .merge_order_free(&[part(10, 4096), part(0, 4096), part(32, 4096)])
         .unwrap();
-    assert_eq!(merged.resource::<SkateMapSummary>().unwrap().other_cull_ids, 42);
+    assert_eq!(merged.resource::<SkateMapSummary>().unwrap().other_cull_ids(), 42);
     let e = registry
         .merge_order_free(&[part(10, 4096), part(1, 2048)])
         .unwrap_err();

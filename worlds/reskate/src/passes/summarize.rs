@@ -80,12 +80,15 @@ impl Pass for SummarizeReskateMap {
         }
         // a part counts what it writes: its output, as conversion keeps it (its roots and what the passes placed for
         // it), not the context it loaded
+        // shared content keyed as every part keys it (the same entity in two parts is one key)
+        let owned = super::Owned::of(w);
+        let key = |e| owned.key(e);
         let summary = match w.resource::<PartScope>() {
             Some(scope) if !scope.whole => {
                 let keep = scope.output(w).keep;
-                map_summary(&w.subset(&keep), &self.encoding, CellsCounted::Apart)
+                map_summary(&w.subset(&keep), &self.encoding, CellsCounted::Apart, &key)
             }
-            _ => map_summary(w, &self.encoding, CellsCounted::Included),
+            _ => map_summary(w, &self.encoding, CellsCounted::Included, &key),
         }
         .map_err(|e| e.to_string())?;
         let cells = summary.cells;
@@ -94,7 +97,7 @@ impl Pass for SummarizeReskateMap {
                 CellsCounted::Included => "cull IDs the map takes besides its blend chains",
                 CellsCounted::Apart => "cull IDs the part takes besides its blend chains and collision cells",
             },
-            summary.other_cull_ids as u64,
+            summary.other_cull_ids() as u64,
         );
         log.count("tiles with a chain form", summary.chains.len() as u64);
         w.insert_resource(summary);

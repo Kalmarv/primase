@@ -967,11 +967,13 @@ impl Records {
 
 /// The summary of the prepared world `world` for the encoding `a` (`summarize-reskate-map`'s): the cull IDs the writer's
 /// own layout of it takes besides the blend chains, counted as [`MapWriter::finish`] counts them, with nothing encoded,
-/// its collision cells as `cells` says (apart: left unlaid, so uncounted); and its tiles with a chain form.
+/// its collision cells as `cells` says (apart: left unlaid, so uncounted), its shared content by `key` (each entity's
+/// key over the map's parts); and its tiles with a chain form.
 pub(crate) fn map_summary(
     world: &World,
     a: &EncodingOptions,
     cells: crate::components::CellsCounted,
+    key: &dyn Fn(primase_core::Entity) -> Option<u64>,
 ) -> Result<crate::components::SkateMapSummary> {
     // everything the map's objects take, nothing encoded
     let mut laid = lay(world, a, Layout::Count)?;
@@ -985,11 +987,24 @@ pub(crate) fn map_summary(
         // its collision cells are their groups': taken out unlaid
         writer.take_cells();
     }
-    let other_cull_ids = writer.non_chain_cull_ids(extras)?;
+    let count = writer.non_chain_cull_ids(extras)?;
+    let mut shared = BTreeMap::new();
+    for ((kind, e), n) in count.shared {
+        let k = key(e).ok_or_else(|| {
+            Error::Scene(format!(
+                "{kind:?} {e:?} is counted, but it is not the part's output"
+            ))
+        })?;
+        if shared.insert((kind, k), n).is_some() {
+            return Err(Error::Scene(format!("{kind:?} {k} is counted twice")));
+        }
+    }
     Ok(crate::components::SkateMapSummary {
         grouping,
         cull_ids: a.cull_ids,
-        other_cull_ids,
+        summed: count.summed,
+        shared,
+        water: count.water,
         cells,
         chains,
     })

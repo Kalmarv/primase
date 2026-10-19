@@ -441,12 +441,12 @@ fn the_pool_is_decided_before_writing_and_replayed() {
     let (r, _) = write(&w, "pool-room", &EncodingOptions::default()).unwrap();
     assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (1, 0));
     // the summary's count is the writer's own
-    assert_eq!(summary.other_cull_ids, r.blend.other_cull_ids);
-    assert!(summary.other_cull_ids > 0);
+    assert_eq!(summary.other_cull_ids(), r.blend.other_cull_ids);
+    assert!(summary.other_cull_ids() > 0);
     let groups = r.blend.objects;
     for (cull_ids, split) in [
-        (summary.other_cull_ids + groups, 1),
-        (summary.other_cull_ids + groups - 1, 0),
+        (summary.other_cull_ids() + groups, 1),
+        (summary.other_cull_ids() + groups - 1, 0),
     ] {
         let (w, _, log) = pool_planned(cull_ids);
         let plan = w.resource::<SkateBlendBudget>().unwrap();
@@ -500,7 +500,7 @@ fn the_pool_is_decided_before_writing_and_replayed() {
         w
     };
     let room = EncodingOptions {
-        cull_ids: summary.other_cull_ids + groups,
+        cull_ids: summary.other_cull_ids() + groups,
         ..EncodingOptions::default()
     };
     let mut w2 = lit();
@@ -512,7 +512,7 @@ fn the_pool_is_decided_before_writing_and_replayed() {
         .resource::<primase_reskate::components::SkateMapSummary>()
         .unwrap()
         .clone();
-    assert_eq!(lit_summary.other_cull_ids, summary.other_cull_ids + 1);
+    assert_eq!(lit_summary.other_cull_ids(), summary.other_cull_ids() + 1);
     PlanReskateBlendBudget::pool()
         .run(&mut w2, &mut PassLog::default())
         .unwrap();

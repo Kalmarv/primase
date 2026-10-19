@@ -128,7 +128,7 @@ pub(crate) fn plan(
             }
             Some(PoolBasis {
                 cull_ids: s.cull_ids,
-                other_cull_ids: s.other_cull_ids,
+                other_cull_ids: s.other_cull_ids(),
             })
         }
         _ => None,
@@ -154,7 +154,7 @@ pub(crate) fn plan_parts(
     }
     let pool = PoolBasis {
         cull_ids: summary.cull_ids,
-        other_cull_ids: summary.other_cull_ids + cells.cull_ids(),
+        other_cull_ids: summary.other_cull_ids() + cells.cull_ids(),
     };
     decide(&summary.chains, mode, Some(pool))
 }
