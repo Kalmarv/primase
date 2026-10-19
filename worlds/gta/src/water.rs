@@ -43,11 +43,11 @@ use primase_core::{
     Semantic, Source, Stream, Surfaces, Topology, Transform, World,
 };
 
+use crate::components::GTA;
 use crate::passes::rect::GroundRect;
+use crate::passes::select::RegionExtent;
 use crate::read::archive::archive_set::Install;
 use crate::read::archive::keys::Keys;
-use crate::region::GTA;
-use crate::select::RegionExtent;
 use crate::{Result, invalid};
 
 /// The world map's water data and the water tuning, as the install stores them.

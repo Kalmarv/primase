@@ -1,5 +1,5 @@
 //! `gta-select-region`: which placements a region export draws, by the rules the earlier skate exporter used, so a
-//! world read with a reach around the region ([`crate::region`]) comes down to what that export placed. Every rule is
+//! world read with a reach around the region ([`crate::read::region`]) comes down to what that export placed. Every rule is
 //! a choice of that export (not something the game does), counted in the pass log:
 //!
 //! - an entity is taken when its pivot lies in the region, or, for a real piece of the world (HD or ORPHANHD with no
@@ -27,9 +27,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, Instance, JsonError, Name, Resource, Transform, World};
 
+use crate::components::GTA;
 use crate::components::{GtaArchetype, GtaEntity};
 use crate::passes::rect::GroundRect;
-use crate::region::GTA;
 
 /// How far outside the region a box may reach and still be judged by its box, not its pivot (metres).
 const REACH: f32 = 600.0;

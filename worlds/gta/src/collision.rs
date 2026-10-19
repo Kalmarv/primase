@@ -32,12 +32,12 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Component, Entity, Instance, JsonError, Surfaces, Transform, World};
 
+use crate::components::GTA;
 use crate::components::GtaEntity;
 use crate::passes::rect::GroundRect;
 use crate::rage::bounds::{Bound, Contents, Polygon, read_ybn};
 use crate::read::archive::archive_set::ArchiveSet;
 use crate::read::archive::keys::Keys;
-use crate::region::GTA;
 use crate::{Result, invalid};
 
 /// One ybn's bound as stored (GTA's frame, metres, world space for map bounds), its file and its detail.

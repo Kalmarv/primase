@@ -20,28 +20,8 @@ reason = "Other names the I/O module primase_gta::archive_set; Other names the I
 removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
 
 [[layout]]
-file = "worlds/gta/src/lights.rs"
-reason = "Other names the I/O module primase_gta::region"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
 file = "worlds/gta/src/pipeline.rs"
 reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::assets; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region; Other names the I/O module primase_gta::Install"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/pose.rs"
-reason = "Other names the I/O module primase_gta::region"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/region.rs"
-reason = "reader I/O in Other; Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::assets"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/select.rs"
-reason = "Other names the I/O module primase_gta::region"
 removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
 
 [[layout]]

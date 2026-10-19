@@ -5,4 +5,5 @@ pub mod assets;
 pub mod gtxd;
 pub mod mount;
 pub(crate) mod rbf;
+pub mod region;
 pub(crate) mod xml;

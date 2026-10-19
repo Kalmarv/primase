@@ -1,7 +1,7 @@
 //! `lower-gta-lights{hour,state,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
 //! placed `core.light` entities, each with its record as `gta.light` (its hours among them), every light or, given
 //! `hour`, only those on then, or, with `state=true` (the hour kept as state), every light with its hours as a
-//! `core.condition` on the global `gta.hour` axis ([`crate::region::hour_axis`], made when the region has none; a light
+//! `core.condition` on the global `gta.hour` axis ([`crate::components::state::hour_axis`], made when the region has none; a light
 //! on every hour, or whose mask is 0 (always on, as GTA reads it), has none), and, given a region, those inside it (GTA ground
 //! coordinates; the light's own position decides, as the earlier exporter did). Runs on the read world after the selection (map state and hour
 //! resolved, region rules applied), so each light belongs to a placement that is drawn.
@@ -28,10 +28,10 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::{Clause, Condition, Literal};
 use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
 
+use crate::components::GTA;
 use crate::components::{GtaLight, GtaLights, GtaSkeleton};
+use crate::passes::pose::Pose;
 use crate::passes::rect::{GroundRect, Hour};
-use crate::pose::Pose;
-use crate::region::GTA;
 
 /// Which lights `lower-gta-lights` places, by their hours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,7 +246,7 @@ impl Pass for LowerGtaLights {
         }
         log.count("lights placed", made.len() as u64);
         // the hour as state: the axis (made when the region has none) and each light's hours on it
-        let axis = (self.hours == LightHours::State).then(|| crate::region::hour_axis(w));
+        let axis = (self.hours == LightHours::State).then(|| crate::components::state::hour_axis(w));
         for (t, l, g, n, s, hours) in made {
             let e: Entity = w.spawn();
             w.insert(e, t);

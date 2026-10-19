@@ -9,10 +9,16 @@
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
+pub mod state;
+
+use primase_core::frame::SourceFrame;
 use primase_core::{Component, Entity, JsonError, Lods, Mesh, World};
 use serde::Serialize;
 
 use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind};
+
+/// GTA V's frame: x east, y north, z up, metres.
+pub const GTA: SourceFrame = SourceFrame::ENU;
 
 /// A copy of prototype `proto` for some of its placements to use instead: every component copied, its `core.lods`
 /// forms copied with it (so a pass may change the copy's forms without touching the original's).

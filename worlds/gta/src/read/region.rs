@@ -10,9 +10,9 @@
 //! - Script-managed maps (`CMapData` flags bit 0: the game streams them only when a script requests them, an IPL):
 //!   each is a global bool axis `gta.ipl.<map name>` (class `ipl`), and the placements of that map, and of maps whose
 //!   LOD parent chain reaches it, carry a condition on it. The axis has no default: whether the game's start scripts
-//!   load it is in those scripts, not read ([`crate::ipl`]).
+//!   load it is in those scripts, not read ([`crate::components::state`]).
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
-//! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
+//! - Transforms: GTA's frame is east-north-up ([`crate::components::GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
 //! - Which entities a scene finally draws (LOD stand-ins, priority, size) is for passes; the reader keeps them all.
 //!   An interior instance's own entities are placed by its rotation and position; its entity sets (which scripts
@@ -25,19 +25,16 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 
-use primase_core::frame::SourceFrame;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
-use crate::components::{GtaArchetype, GtaEntity};
+use crate::components::state::hour_axis;
+use crate::components::{GTA, GtaArchetype, GtaEntity};
 use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
 use crate::rage::meta::Meta;
 use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::read::archive::keys::Keys;
 use crate::{Result, invalid};
-
-/// GTA V's frame: x east, y north, z up, metres.
-pub const GTA: SourceFrame = SourceFrame::ENU;
 
 /// Which map states to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,7 +397,7 @@ pub fn read_region(
     }
     let mut prototypes = BTreeMap::new();
     // the game's hours: always an axis (time archetypes and lights condition on it; the selection resolves or keeps it)
-    let hour_axis = self::hour_axis(&mut w);
+    let hour_axis = hour_axis(&mut w);
     let mut ipl_axes: BTreeMap<String, primase_core::Entity> = BTreeMap::new();
     for Placed {
         ymap,
@@ -527,29 +524,6 @@ pub fn read_region(
         return Err(invalid("region", 0, "no entity had an archetype"));
     }
     Ok((w, report))
-}
-
-/// The global `gta.hour` axis of `w` ({0..23}, value h is hour h, no default, class `time`): the one there, or a new
-/// one. The reader makes it for time archetypes; a pass that keeps the hour as state (lights by their hours) makes it
-/// when the region has none.
-pub fn hour_axis(w: &mut World) -> primase_core::Entity {
-    if let Some((e, _)) = w.iter::<StateAxis>().find(|(_, a)| a.key == "gta.hour") {
-        return e;
-    }
-    let e = w.spawn();
-    w.insert(
-        e,
-        StateAxis {
-            key: "gta.hour".into(),
-            domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
-            default: None,
-            scope: Scope::Global,
-            class: "time".into(),
-            source: "the game's hours: time archetypes' timeFlags (CTimeArchetypeDef), lights' time_flags"
-                .into(),
-        },
-    );
-    e
 }
 
 #[cfg(test)]

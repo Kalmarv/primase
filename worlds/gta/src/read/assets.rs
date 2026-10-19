@@ -37,6 +37,7 @@ use primase_core::{
 use primase_core::{LodForm, Lods, Origin, Provenance};
 
 use crate::collision::GtaEmbeddedBounds;
+use crate::components::GTA;
 use crate::components::{
     GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
 };
@@ -48,7 +49,6 @@ use crate::rage::texture::{Texture, TextureDictionary};
 use crate::read::archive::archive_set::ArchiveSet;
 use crate::read::archive::keys::Keys;
 use crate::read::gtxd::TextureParents;
-use crate::region::GTA;
 use crate::{Result, invalid};
 
 /// The resident detail dictionary searched last (`x64a.rpf\textures\mapdetail.ytd`, the global textures folder): detail
@@ -767,7 +767,7 @@ mod tests {
         };
         let (semantic, s) = stream(&g, e).unwrap();
         assert_eq!(semantic, Semantic::Tangent);
-        let d = crate::region::GTA.direction([1.0, 0.0, 0.0]);
+        let d = crate::components::GTA.direction([1.0, 0.0, 0.0]);
         assert_eq!(s, Stream::F32x4(vec![[d[0], d[1], d[2], -1.0]]));
     }
 }

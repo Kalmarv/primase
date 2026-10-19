@@ -10,20 +10,23 @@
 pub mod collision;
 pub mod components;
 pub mod convert;
-pub mod ipl;
-pub mod lights;
 pub mod passes;
 pub mod pipeline;
-pub mod pose;
 pub mod rage;
 pub mod read;
-pub mod region;
-pub mod select;
 pub mod tint;
 pub mod water;
 
 // paths consumers use from before the crate was arranged by role
-pub use passes::{lower, rect, surfaces, terrain, winding};
+pub use passes::{lights, lower, pose, rect, select, surfaces, terrain, winding};
+/// `region::hour_axis`, as consumers name it: now [`components::state::hour_axis`].
+pub mod region {
+    pub use crate::components::state::hour_axis;
+}
+/// `ipl::ipl_base`, as consumers name it: now [`components::state::ipl_base`].
+pub mod ipl {
+    pub use crate::components::state::ipl_base;
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -68,7 +71,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("classify-gta-texture-roles", |o| {
         none(o, passes::roles::ClassifyGtaTextureRoles)
     });
-    reg.register("gta-pose-fragments", |o| none(o, pose::PoseFragments));
+    reg.register("gta-pose-fragments", |o| none(o, passes::pose::PoseFragments));
     reg.register("lower-gta-pbr", |o| {
         Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?))
     });
@@ -81,7 +84,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the region is the caller's choice: no default
     reg.register_requiring(
         "gta-select-region",
-        |o| Ok(Box::new(select::SelectRegion::from_options(o)?)),
+        |o| Ok(Box::new(passes::select::SelectRegion::from_options(o)?)),
         &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")],
     );
     // whether flagged collision is dropped is the caller's choice: no default
@@ -94,7 +97,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the levels a far view draws are the caller's choice: no default
     reg.register_requiring(
         "gta-select-stand-ins",
-        |o| Ok(Box::new(select::SelectStandIns::from_options(o)?)),
+        |o| Ok(Box::new(passes::select::SelectStandIns::from_options(o)?)),
         &[("levels", "2;3;4")],
     );
     reg.register("gta-select-collision", |o| {
@@ -113,7 +116,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     });
     reg.register("lower-gta-water", |o| none(o, water::LowerGtaWater));
     reg.register("lower-gta-lights", |o| {
-        Ok(Box::new(lights::LowerGtaLights::from_options(o)?))
+        Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?))
     });
     reg.register("gta-leave-out-interiors", |o| {
         Ok(Box::new(pipeline::LeaveOutInteriors::from_options(o)?))

@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 
 use primase_core::{Entity, Lods, Mesh, Semantic, Stream, World};
 
+use crate::components::GTA;
 use crate::components::{GtaBones, GtaSkeleton};
-use crate::region::GTA;
 
 /// A model's transform in GTA's frame: rows `[x, y, z, translation]`.
 pub type Pose = [[f32; 4]; 3];
