@@ -64,7 +64,11 @@ fn raised() -> World {
     );
     w.insert(placed, Transform::IDENTITY);
     light(&mut w, 1.0);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("support").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("support", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

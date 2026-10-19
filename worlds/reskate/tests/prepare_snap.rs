@@ -72,7 +72,11 @@ fn fixture() -> Fixture {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("snap").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("snap", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let spawn = marker(&mut w, MarkerKind::Spawn, ([20.0, -20.0], None), None);
     let on_ground = marker(
         &mut w,

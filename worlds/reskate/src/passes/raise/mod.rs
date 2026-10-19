@@ -36,8 +36,9 @@
 //!   ocean); foliage is skate's leaves class in the foliage domain, except a material the source draws over the
 //!   surface beneath (`core.draw_order` decal), which stays a decal (counted);
 //! - point and spot `core.light`s: `skate.light`s, the energy in Studio watts by the named policy [`studio_watts`] of
-//!   the intensity times the caller's calibration (`light_scale`, [`SKATE_LIGHT_SCALE`] when not given): an
-//!   approximation reported with its value for every light, the default included (a fit, not a measurement);
+//!   the intensity times the caller's calibration (`light_scale`: `standard`, skate's fitted [`SKATE_LIGHT_SCALE`],
+//!   or a scale of its own; [`LightCalibration`]): an approximation reported with its value for every light, the
+//!   standard one included (a fit, not a measurement);
 //!   directional lights are left out (skate lights itself by its time of day), counted;
 //! - the world's `core.marker` points of a kind skate has (spawn, travel, trainer, vfx, trigger effect):
 //!   `skate.marker`s on the same entities; a ground marker (no height) snaps to the ground and keeps its yaw, one
@@ -76,28 +77,53 @@ use crate::{Error, Result};
 mod materials;
 pub use materials::{SKATE_F0, fold_reflectance};
 
-/// What [`raise_skate`] needs from the caller: the scene's name ([`RaiseOptions::new`]), and optionally the world's
-/// surface names onto skate surfaces, the skate surface of an unclassified one and the lights' calibration.
+/// How [`raise_skate`] calibrates lights: every light's intensity (physical candela) times a scale before
+/// [`studio_watts`], reported as an approximation with its value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightCalibration {
+    /// skate's fitted calibration, [`SKATE_LIGHT_SCALE`] (`light_scale=standard`).
+    Standard,
+    /// A scale of the caller's (`light_scale=S`): finite and above 0.
+    Scale(f64),
+}
+
+impl LightCalibration {
+    /// The scale the intensity is multiplied by.
+    pub fn scale(self) -> f64 {
+        match self {
+            LightCalibration::Standard => SKATE_LIGHT_SCALE,
+            LightCalibration::Scale(s) => s,
+        }
+    }
+}
+
+/// What [`raise_skate`] needs from the caller: the scene's name and the lights' calibration ([`RaiseOptions::new`]),
+/// and optionally the world's surface names onto skate surfaces and the skate surface of an unclassified one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RaiseOptions {
     name: String,
     surfaces: BTreeMap<String, String>,
     unclassified: Option<String>,
-    light_scale: f64,
+    lights: LightCalibration,
 }
 
 impl RaiseOptions {
-    /// For a scene named `name` (`[A-Za-z0-9_-]+`): no surface mapped, an unclassified surface's triangles left out
-    /// (reported), lights at skate's calibration ([`SKATE_LIGHT_SCALE`]).
-    pub fn new(name: &str) -> std::result::Result<RaiseOptions, String> {
+    /// For a scene named `name` (`[A-Za-z0-9_-]+`), lights calibrated by `lights` (a scale of the caller's finite and
+    /// above 0): no surface mapped, an unclassified surface's triangles left out (reported).
+    pub fn new(name: &str, lights: LightCalibration) -> std::result::Result<RaiseOptions, String> {
         if !valid_name(name) {
             return Err(format!("the scene name {name:?} is not [A-Za-z0-9_-]+"));
+        }
+        if let LightCalibration::Scale(scale) = lights
+            && !(scale.is_finite() && scale > 0.0)
+        {
+            return Err(format!("light_scale={scale} is not a finite number above 0"));
         }
         Ok(RaiseOptions {
             name: name.to_owned(),
             surfaces: BTreeMap::new(),
             unclassified: None,
-            light_scale: SKATE_LIGHT_SCALE,
+            lights,
         })
     }
 
@@ -125,16 +151,6 @@ impl RaiseOptions {
         Ok(self)
     }
 
-    /// Every light's intensity (physical candela) times this before [`studio_watts`]: finite and above 0. Reported as
-    /// an approximation with its value.
-    pub fn with_light_scale(mut self, scale: f64) -> std::result::Result<RaiseOptions, String> {
-        if !(scale.is_finite() && scale > 0.0) {
-            return Err(format!("light_scale={scale} is not a finite number above 0"));
-        }
-        self.light_scale = scale;
-        Ok(self)
-    }
-
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -144,20 +160,32 @@ impl RaiseOptions {
     pub fn unclassified(&self) -> Option<&str> {
         self.unclassified.as_deref()
     }
-    pub fn light_scale(&self) -> f64 {
-        self.light_scale
+    pub fn lights(&self) -> LightCalibration {
+        self.lights
     }
 
-    /// From `raise-skate`'s options (`name` required; `map=NAME:skate;...`, `unclassified`, `light_scale`), through
-    /// [`RaiseOptions::new`] and the setters.
+    /// From `raise-skate`'s options (`name` and `light_scale=standard|S` required; `map=NAME:skate;...`,
+    /// `unclassified`), through [`RaiseOptions::new`] and the setters.
     pub fn from_options(o: &primase_core::pass::Options) -> std::result::Result<RaiseOptions, String> {
         let name = o
             .get("name")
             .ok_or("name=N is required: the scene's name, [A-Za-z0-9_-]+")?;
-        let mut options = RaiseOptions::new(name)?;
+        let lights = match o.get("light_scale").map(String::as_str) {
+            Some("standard") => LightCalibration::Standard,
+            Some(v) => LightCalibration::Scale(
+                v.parse::<f64>()
+                    .map_err(|_| format!("light_scale={v} is not standard or a number"))?,
+            ),
+            None => {
+                return Err(
+                    "light_scale is required: standard (skate's fitted calibration) or a scale".into(),
+                );
+            }
+        };
+        let mut options = RaiseOptions::new(name, lights)?;
         for (k, v) in o {
             match k.as_str() {
-                "name" => {}
+                "name" | "light_scale" => {}
                 "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
                     return Err(format!(
                         "{k}: the spawn is placed before the writer plans, at selection: \
@@ -165,12 +193,6 @@ impl RaiseOptions {
                     ));
                 }
                 "unclassified" => options = options.with_unclassified(v)?,
-                "light_scale" => {
-                    let scale = v
-                        .parse::<f64>()
-                        .map_err(|_| format!("light_scale={v} is not a number"))?;
-                    options = options.with_light_scale(scale)?;
-                }
                 // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
                 "map" => {
                     let mut surfaces = BTreeMap::new();
@@ -192,7 +214,13 @@ impl RaiseOptions {
     pub fn options(&self) -> primase_core::pass::Options {
         let mut o = primase_core::pass::Options::from([
             ("name".to_owned(), self.name.clone()),
-            ("light_scale".to_owned(), self.light_scale.to_string()),
+            (
+                "light_scale".to_owned(),
+                match self.lights {
+                    LightCalibration::Standard => "standard".to_owned(),
+                    LightCalibration::Scale(s) => s.to_string(),
+                },
+            ),
         ]);
         if let Some(u) = &self.unclassified {
             o.insert("unclassified".into(), u.clone());
@@ -793,7 +821,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 },
                 tangent: [0.0; 3],
                 color: l.color,
-                energy: studio_watts((f64::from(l.intensity) * options.light_scale) as f32),
+                energy: studio_watts((f64::from(l.intensity) * options.lights.scale()) as f32),
                 range: l.range.unwrap_or(0.0),
                 radius: 0.0,
                 spot_size: size,
@@ -810,7 +838,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     // the calibration is a fit, not a measurement: every light raised is an approximation by its value
     let raised = log.counts.get("lights").copied().unwrap_or(0);
     if raised > 0 {
-        let fit = if options.light_scale == SKATE_LIGHT_SCALE {
+        let fit = if options.lights.scale() == SKATE_LIGHT_SCALE {
             "skate's fitted calibration"
         } else {
             "not skate's fitted calibration"
@@ -819,7 +847,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             &format!(
                 "light energy as Studio watts: 4 pi^2 x candela x light_scale {} ({fit}, fitted at 4 m assuming the \
                  engine's published punctual light model)",
-                options.light_scale
+                options.lights.scale()
             ),
             raised,
         );
@@ -889,8 +917,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     Ok(log)
 }
 
-/// `raise-skate{name=N[,map=NAME:surface;...][,unclassified=surface][,light_scale=S]}`:
-/// [`raise_skate`] as a pass; `name` is required; `map` is the caller's map of source surface names (it wins over the
+/// `raise-skate{name=N,light_scale=standard|S[,map=NAME:surface;...][,unclassified=surface]}`:
+/// [`raise_skate`] as a pass; `name` and `light_scale` are required; `map` is the caller's map of source surface names (it wins over the
 /// class, [`class_to_skate`]).
 #[derive(Debug)]
 pub struct RaiseSkate {

@@ -262,7 +262,11 @@ fn world(order: Order) -> World {
             yaw: None,
         },
     );
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("orders").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("orders", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     // two rails 1 m up, along east (scene x), in the first and second cells
     let rails = [
         vec![[100.0, 1.0, -50.0], [104.0, 1.0, -50.0]],

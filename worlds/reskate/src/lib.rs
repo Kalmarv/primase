@@ -79,9 +79,19 @@ pub use build::{BuildReport, leave_out_optional, lod_choice, select_lod, target,
 /// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the scene's name has no default
-    reg.register_requiring("raise-skate", passes::raise_skate_pass, &[("name", "n")]);
+    // the scene's name and the lights' calibration are the program's: no default
+    reg.register_requiring(
+        "raise-skate",
+        passes::raise_skate_pass,
+        &[("name", "n"), ("light_scale", "standard")],
+    );
     passes::lower::register(reg);
-    reg.register("place-reskate-spawn", passes::place_reskate_spawn);
+    // where the spawn goes is the program's: no default
+    reg.register_requiring(
+        "place-reskate-spawn",
+        passes::place_reskate_spawn,
+        &[("at", "centre")],
+    );
     reg.register("snap-reskate-markers", passes::snap_reskate_markers);
     reg.register("prepare-reskate-grinds", passes::prepare_reskate_grinds);
     // the step is the program's: no default

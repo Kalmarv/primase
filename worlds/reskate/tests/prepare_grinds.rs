@@ -59,7 +59,11 @@ fn world() -> (World, [Entity; 3]) {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("grinds").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("grinds", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

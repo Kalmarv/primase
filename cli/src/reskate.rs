@@ -1,6 +1,6 @@
 //! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`, [`primase_reskate::write_map`]) of the whole
 //! selection as one part, built from the world in memory. The part must have been through the passes the map needs
-//! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>}`
+//! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>,light_scale=standard}`
 //! (the skate dialect; a spawn comes from `place-spawn` at selection), `lower-layered-reskate` (blends as decal
 //! overlays; the target refuses an unlowered blend), then the texture choices: `cap-textures{max=N}` (the writer
 //! writes textures at the size they come; the old writer's own cap was `cap-textures{max=256,normals=box}`) and

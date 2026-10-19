@@ -101,7 +101,11 @@ fn fixture() -> Fixture {
     place(&mut w, floor, 10.0, -14.0);
     let decal = place(&mut w, a, 10.5, -13.5);
     let second = place(&mut w, b, 11.0, -13.0);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("overlays").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("overlays", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

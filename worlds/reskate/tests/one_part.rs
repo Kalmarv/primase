@@ -81,7 +81,11 @@ fn unraised() -> (World, [Entity; 2]) {
 /// [`unraised`], raised.
 fn world() -> (World, [Entity; 2]) {
     let (mut w, placed) = unraised();
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("parts").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     (w, placed)
 }
 
@@ -224,10 +228,10 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     let (mut w, _) = unraised();
     let mut registry = PassRegistry::new();
     primase_reskate::register(&mut registry);
-    let program = "raise-skate{name=parts}, lower-layered-reskate{overlays=all}, lower-tint-reskate, \
+    let program = "raise-skate{name=parts,light_scale=standard}, lower-layered-reskate{overlays=all}, lower-tint-reskate, \
                    lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250}, \
                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds, \
-                   place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
+                   place-reskate-spawn{at=centre}, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content}, \
                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004}, \
                    prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},                    summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
@@ -246,4 +250,26 @@ fn the_preparation_passes_run_under_the_pass_manager() {
         "{:?}",
         prepared.unsupported_resources
     );
+}
+
+/// Where the spawn goes is the program's: place-reskate-spawn without a place is refused; at=centre, or east and north,
+/// are taken and printed back.
+#[test]
+fn the_spawn_place_is_stated() {
+    let mut registry = PassRegistry::new();
+    primase_reskate::register(&mut registry);
+    let e = registry.parse("place-reskate-spawn").unwrap_err().to_string();
+    assert!(e.contains("the spawn's place is required"), "{e}");
+    for program in [
+        "place-reskate-spawn{at=centre}",
+        "place-reskate-spawn{east=10,north=-4}",
+    ] {
+        let p = registry.parse(program).unwrap();
+        let printed = primase_core::pass::pass_text(p.passes[0].as_ref());
+        assert_eq!(
+            registry.parse(&printed).unwrap().passes[0].options(),
+            p.passes[0].options(),
+            "{printed}"
+        );
+    }
 }

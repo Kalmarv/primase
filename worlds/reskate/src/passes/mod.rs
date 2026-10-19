@@ -38,7 +38,8 @@ pub use pause_map::{
     prepare_reskate_pause_map,
 };
 pub use raise::{
-    RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate, raise_skate_pass, studio_watts,
+    LightCalibration, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate,
+    raise_skate_pass, studio_watts,
 };
 pub use region::{ClipReskateRegion, clip_reskate_region};
 pub use snap::{SnapReskateMarkers, snap_reskate_markers};

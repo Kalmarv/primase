@@ -92,7 +92,11 @@ fn world(class: MaterialClass, blend: bool, over: bool) -> (World, Entity) {
         },
     );
     w.insert(placed, Transform::IDENTITY);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("repeats").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("repeats", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     w.get_mut::<SkateMaterial>(material).unwrap().class = class;
     let spawn = w.spawn();
     w.insert(

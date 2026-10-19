@@ -63,7 +63,8 @@ impl PlaceReskateSpawn {
             }
         }
         match (centre, east, north) {
-            (_, None, None) => Ok(PlaceReskateSpawn::centre()),
+            (false, None, None) => Err("the spawn's place is required: at=centre, or east and north".into()),
+            (true, None, None) => Ok(PlaceReskateSpawn::centre()),
             (false, Some(e), Some(n)) => PlaceReskateSpawn::at_ground(e, n),
             (true, _, _) => Err("at=centre or east, north: not both".into()),
             _ => Err("east and north go together".into()),

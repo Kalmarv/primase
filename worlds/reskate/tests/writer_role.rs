@@ -125,7 +125,11 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("role").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("role", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     w.resource_mut::<SkateScene>().unwrap().region = Some([0.0, 0.0, 100.0, 100.0]);
     let water = w.spawn();
     w.insert(

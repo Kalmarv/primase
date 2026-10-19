@@ -128,7 +128,11 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("budget").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("budget", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)
         .run(&mut w, &mut PassLog::default())
         .unwrap();

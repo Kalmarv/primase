@@ -67,7 +67,11 @@ fn world() -> (World, [Entity; 4]) {
         place(&mut w, proto, -60.0, 50.0),
         place(&mut w, proto, -200.0, 50.0),
     ];
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("apron").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("apron", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

@@ -93,7 +93,11 @@ fn scene(name: &str) -> PathBuf {
     at(710.0, true, false);
     primase_reskate::prepare::raise_skate(
         &mut w,
-        &primase_reskate::prepare::RaiseOptions::new("lights").unwrap(),
+        &primase_reskate::prepare::RaiseOptions::new(
+            "lights",
+            primase_reskate::passes::LightCalibration::Standard,
+        )
+        .unwrap(),
     )
     .unwrap();
     let dir = tmp(name);

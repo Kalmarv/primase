@@ -153,7 +153,7 @@ fn world() -> World {
 }
 
 fn options() -> RaiseOptions {
-    RaiseOptions::new("raised")
+    RaiseOptions::new("raised", primase_reskate::passes::LightCalibration::Standard)
         .unwrap()
         .with_surfaces(BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]))
         .unwrap()
@@ -297,7 +297,7 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
         w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
         let r = passes::raise_skate(
             &mut w,
-            &RaiseOptions::new("x")
+            &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
                 .unwrap()
                 .with_surfaces(map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect())
                 .unwrap(),
@@ -335,7 +335,11 @@ fn water_collision() {
         }
         w.insert(proto, c);
         // no surface map: the water class decides
-        let log = passes::raise_skate(&mut w, &RaiseOptions::new("raised").unwrap()).unwrap();
+        let log = passes::raise_skate(
+            &mut w,
+            &RaiseOptions::new("raised", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        )
+        .unwrap();
         let p = w.get::<SkatePrototype>(proto).unwrap();
         let mode = p.collision.as_ref().unwrap().mode;
         let material = mesh.primitives()[0].material.unwrap();
@@ -434,13 +438,13 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
 #[test]
 fn what_skate_cannot_take_is_refused() {
     // a scene without a name: refused before anything runs
-    let err = RaiseOptions::new("").unwrap_err();
+    let err = RaiseOptions::new("", primase_reskate::passes::LightCalibration::Standard).unwrap_err();
     assert!(err.contains("scene name"), "{err}");
     // a surface map naming a surface skate does not have
     let mut w = world();
     let err = passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("x")
+        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
             .unwrap()
             .with_surfaces(BTreeMap::from([("Snow".to_owned(), "lava".to_owned())]))
             .unwrap(),
@@ -862,7 +866,11 @@ fn markers_are_raised_from_core_markers() {
     t.cols[3] = [4.0, 1.5, -3.0];
     w.insert(travel, t);
     let waypoint = marker(&mut w, "waypoint", Some([0.0, 0.0]), None);
-    let log = passes::raise_skate(&mut w, &RaiseOptions::new("m").unwrap()).unwrap();
+    let log = passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("m", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     let s = w.get::<components::SkateMarker>(spawn).unwrap();
     assert_eq!(
         (s.kind, s.position, s.yaw, s.snap.clone()),
@@ -907,7 +915,7 @@ fn unclassified_surfaces_and_prototype_collision() {
     );
     let log = passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("x")
+        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
             .unwrap()
             .with_unclassified("concrete")
             .unwrap(),
@@ -922,7 +930,10 @@ fn unclassified_surfaces_and_prototype_collision() {
     // an unclassified surface that is no skate surface is refused
     let e = passes::raise_skate(
         &mut world(),
-        &RaiseOptions::new("x").unwrap().with_unclassified("lava").unwrap(),
+        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
+            .unwrap()
+            .with_unclassified("lava")
+            .unwrap(),
     )
     .unwrap_err()
     .to_string();
@@ -1049,6 +1060,7 @@ fn raise_skate_pass_options() {
     use primase_core::pass::Options;
     let o = Options::from([
         ("name".to_owned(), "m".to_owned()),
+        ("light_scale".to_owned(), "standard".to_owned()),
         ("map".to_owned(), "PUDDLE:default;SNOW:asphalt".to_owned()),
         ("unclassified".to_owned(), "default".to_owned()),
     ]);
@@ -1064,6 +1076,7 @@ fn raise_skate_pass_options() {
     assert!(e.contains("name=N is required"), "{e}");
     let spawn: Options = [
         ("name".to_owned(), "m".to_owned()),
+        ("light_scale".to_owned(), "standard".to_owned()),
         ("spawn".to_owned(), "centre".to_owned()),
     ]
     .into();
@@ -1078,7 +1091,12 @@ fn raise_skate_pass_options() {
         vec![("map", "PUDDLE")],
         vec![("colour", "red")],
     ] {
-        let o: Options = bad.iter().map(|&(k, v)| (k.to_owned(), v.to_owned())).collect();
+        // each beside a name and a calibration, so it is what is refused
+        let o: Options = [("name", "m"), ("light_scale", "standard")]
+            .iter()
+            .chain(&bad)
+            .map(|&(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
         assert!(passes::raise_skate_pass(&o).is_err(), "{bad:?}");
     }
 }

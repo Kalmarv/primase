@@ -107,7 +107,11 @@ fn world(corners: [[f32; 3]; 4], at: [f32; 3]) -> World {
     let mut t = Transform::IDENTITY;
     t.cols[3] = at;
     w.insert(placed, t);
-    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("chains").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new("chains", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+    )
+    .unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)
         .run(&mut w, &mut PassLog::default())
         .unwrap();
