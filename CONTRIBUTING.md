@@ -429,3 +429,10 @@ Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-co
 Toolchain: pinned in `rust-toolchain.toml` (latest stable). `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`. Commit messages say what changed
 and how it was verified: which affected checks ran, and which inputs were missing.
+
+## Open design questions
+
+- Whole-map decisions when a map is written in parts (the ReSkate blend budget, collision cells): they are made in a
+  spool and finalize stage before the write traversal (core's `convert_parts_gathered`: a gather traversal, groups,
+  finalize passes), so a writer never decides. The alternative, a writer applying them itself in parts mode, was
+  set aside for now. Revisit if the stage proves costly, or if other destinations need the same.
