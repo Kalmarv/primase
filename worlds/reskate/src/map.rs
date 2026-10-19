@@ -600,6 +600,8 @@ pub struct MapWriter {
     pub ctx: Ctx,
     pub surfaces: SurfaceTable,
     pub r: WriteResult,
+    /// What it makes (everything, encoded, unless a pass's layout asks for less).
+    layout: Layout,
     off: Vec3,
     pm: Option<PauseMap>,
     objects: Vec<MapObject>,
@@ -642,6 +644,33 @@ pub struct MapWriter {
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
     pub files: BTreeMap<String, Vec<u8>>,
+}
+
+/// What a writer's layout makes. `Write`: everything, its meshes encoded (the map written). The others encode no mesh
+/// and build only what their caller reads: `Count` everything but the encoding (the objects and the cull IDs they
+/// take: `summarize-reskate-map`), `Render` the tiles and prototypes only, no collision (the overlay stack, the blend
+/// chains, the materials), `Collision` the collision only, no render mesh (the collision plan, a part's shares).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    Write,
+    Count,
+    Render,
+    Collision,
+}
+
+impl Layout {
+    /// Whether it encodes the meshes it makes (GLB files).
+    pub(crate) fn encodes(self) -> bool {
+        self == Layout::Write
+    }
+    /// Whether it builds the render tiles and prototypes.
+    pub(crate) fn renders(self) -> bool {
+        self != Layout::Collision
+    }
+    /// Whether it lays out the collision (soups, the placed props' collision, hulls).
+    pub(crate) fn collides(self) -> bool {
+        self != Layout::Render
+    }
 }
 
 /// How the writer treats the overlay pieces of its meshes.
@@ -763,6 +792,7 @@ impl MapWriter {
             },
             surfaces,
             r: WriteResult::default(),
+            layout: Layout::Write,
             off,
             pm,
             objects: Vec::new(),
@@ -799,6 +829,17 @@ impl MapWriter {
         }
         self.stack = stack;
         self
+    }
+
+    /// A layout that makes only what `layout` says (see [`Layout`]).
+    pub(crate) fn with_layout(mut self, layout: Layout) -> MapWriter {
+        self.layout = layout;
+        self
+    }
+
+    /// What it makes.
+    pub(crate) fn layout(&self) -> Layout {
+        self.layout
     }
 
     /// Texture ids only, no file encoded: the writer's assembly for a pass, nothing to save.
@@ -929,8 +970,10 @@ impl MapWriter {
         let plan = self.collision_plan.take();
         let (mut col, mut water_col) = (std::mem::take(&mut self.col), std::mem::take(&mut self.water_col));
         let mut files = crate::collision_pack::Files::new();
+        let encodes = self.layout.encodes();
         let laid = (|| -> Result<usize> {
-            let mut pack = crate::collision_pack::Pack::new(&surf, off, plan.as_ref(), &mut files)?;
+            let mut pack =
+                crate::collision_pack::Pack::new(&surf, off, plan.as_ref(), &mut files)?.encoding(encodes);
             let mut pack_leaf =
                 |leaf: crate::collision::Leaf<'_>, res: &mut CollisionResult| pack.leaf(leaf, res);
             let visit: &mut LeafVisit<'_> = match visit {
@@ -957,7 +1000,8 @@ impl MapWriter {
     pub(crate) fn lay_hulls(&mut self, hulls: &[Hull]) -> Result<()> {
         let surf = self.surfaces.clone();
         let mut files = crate::collision_pack::Files::new();
-        let mut pack = crate::collision_pack::Pack::new(&surf, self.off, None, &mut files)?;
+        let mut pack = crate::collision_pack::Pack::new(&surf, self.off, None, &mut files)?
+            .encoding(self.layout.encodes());
         for h in hulls {
             pack.hull(&mut self.col, &h.name, &h.pos, &h.idx, h.surface)?;
         }
@@ -1274,7 +1318,9 @@ impl MapWriter {
     fn write_mesh(&mut self, stem: &str, pr: &[GlbPrim], at: Vec3) -> Result<Vec<MapObject>> {
         let rows = MapObject::translation(at.x, at.y, at.z);
         let file = format!("{stem}.glb");
-        self.mesh_files.insert(file.clone(), glb::write(stem, pr)?);
+        if self.layout.encodes() {
+            self.mesh_files.insert(file.clone(), glb::write(stem, pr)?);
+        }
         Ok(pr
             .iter()
             .enumerate()
@@ -1585,8 +1631,10 @@ impl MapWriter {
         let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
         let (pr, lifts) = prims(&parts, mats, &order);
         record_lifts(&mut self.r, format!("meshes/{stem}.glb"), lifts);
-        self.mesh_files
-            .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
+        if self.layout.encodes() {
+            self.mesh_files
+                .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
+        }
         let boxes: Vec<Option<(Vec3, Vec3)>> = pr
             .iter()
             .map(|p| {
@@ -1735,7 +1783,9 @@ impl MapWriter {
                         }
                         Fate::CollisionOnly { collision } => {
                             self.r.collision_only += 1;
-                            if let (Some(clip), Some(m)) = (collision, meshes.get(&s.proto)) {
+                            if let (true, Some(clip), Some(m)) =
+                                (self.layout.collides(), collision, meshes.get(&s.proto))
+                            {
                                 self.add_collision(
                                     m,
                                     s,
@@ -1767,7 +1817,7 @@ impl MapWriter {
                         }
                     };
                     let row = if m.has_variants { s.variant } else { 0 };
-                    if let Some(clip) = collision {
+                    if let (true, Some(clip)) = (self.layout.collides(), collision) {
                         self.add_collision(
                             m,
                             s,
@@ -1778,6 +1828,10 @@ impl MapWriter {
                             &mut soup_order,
                             clip,
                         );
+                    }
+                    // a collision layout builds no render mesh
+                    if !self.layout.renders() {
+                        continue;
                     }
                     let m = m.clone();
                     if inst {
@@ -1863,7 +1917,11 @@ impl MapWriter {
                         piece_order += 1;
                     }
                 }
-                let under = self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"))?;
+                let under = if self.layout.renders() {
+                    self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"))?
+                } else {
+                    Vec::new()
+                };
                 if !parts.is_empty() {
                     to.mesh = Some(format!("t_{tx}_{ty}.glb"));
                     if o.draws_pause() {
@@ -2230,20 +2288,22 @@ impl MapWriter {
         if idx.is_empty() {
             return Ok(None);
         }
-        self.mesh_files.insert(
-            "water.glb".into(),
-            glb::write(
-                "water",
-                &[GlbPrim {
-                    blend: None,
-                    material: Some(material.to_owned()),
-                    pos,
-                    nrm: Some(nrm),
-                    uv: Some(uv),
-                    idx,
-                }],
-            )?,
-        );
+        if self.layout.encodes() {
+            self.mesh_files.insert(
+                "water.glb".into(),
+                glb::write(
+                    "water",
+                    &[GlbPrim {
+                        blend: None,
+                        material: Some(material.to_owned()),
+                        pos,
+                        nrm: Some(nrm),
+                        uv: Some(uv),
+                        idx,
+                    }],
+                )?,
+            );
+        }
         let mut ob = MapObject::new(
             "water".into(),
             MapObject::translation(
@@ -2808,20 +2868,22 @@ impl MapWriter {
                 .flat_map(|q| [q.x + off.x, q.y + off.y, q.z + off.z])
                 .collect();
             let name = format!("grind_{i:05}");
-            self.mesh_files.insert(
-                format!("{name}.glb"),
-                glb::write(
-                    &name,
-                    &[GlbPrim {
-                        blend: None,
-                        material: None,
-                        pos: flat,
-                        nrm: None,
-                        uv: None,
-                        idx: gidx,
-                    }],
-                )?,
-            );
+            if self.layout.encodes() {
+                self.mesh_files.insert(
+                    format!("{name}.glb"),
+                    glb::write(
+                        &name,
+                        &[GlbPrim {
+                            blend: None,
+                            material: None,
+                            pos: flat,
+                            nrm: None,
+                            uv: None,
+                            idx: gidx,
+                        }],
+                    )?,
+                );
+            }
             let mut ob = MapObject::new(name.clone(), MapObject::translation(0.0, 0.0, 0.0));
             ob.collision_mesh = Some(format!("meshes/{name}.glb"));
             ob.render = false;

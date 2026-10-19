@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::assembly::{
-    EncodingOptions, PartRead, Records, SceneWarnings, cell_layout, group_cell, hulls_numbered, lay_part,
-    read_part, scene_warnings,
+    EncodingOptions, PartRead, Records, RecordsBasis, SceneWarnings, cell_layout, group_cell, hulls_numbered,
+    lay_part, read_part, scene_warnings,
 };
 use crate::collision::{Collision, CollisionResult};
 use crate::collision_pack::{Files, Pack, check_packed};
@@ -410,7 +410,7 @@ impl Layout {
 struct Taken {
     out_dir: PathBuf,
     first: WriterOptions,
-    records: Records,
+    records: RecordsBasis,
     writer: MapWriter,
     scene: SceneFacts,
     content: Content,
@@ -511,11 +511,19 @@ impl MapSink {
                 fresh_folder(&out_dir.join("meshes"))?;
                 fresh_folder(&out_dir.join("textures"))?;
             }
-            let writer = records.clone().writer(o.clone(), s.surfaces.clone())?;
+            // the writer replays each part's own stack and chains as the part comes (below): made without them, so
+            // no copy of the first part's is kept
+            let writer = Records {
+                stack: None,
+                chains: None,
+                budget: records.budget.clone(),
+                plan: records.plan.clone(),
+            }
+            .writer(o.clone(), s.surfaces.clone())?;
             self.taken = Some(Taken {
                 out_dir: out_dir.clone(),
                 first: o.clone(),
-                records: records.clone(),
+                records: records.basis(),
                 writer,
                 scene: SceneFacts {
                     dir: s.dir.clone(),
@@ -542,7 +550,7 @@ impl MapSink {
             });
         }
         let t = self.taken.as_mut().expect("taken");
-        if o != t.first || !records.alike(&t.records) || s.surfaces != *t.writer.surfaces() {
+        if o != t.first || records.basis() != t.records || s.surfaces != *t.writer.surfaces() {
             return Err(Error::Scene(
                 "the parts of one map disagree on the writer's settings, the preparation records or the surface \
                  table: every part of a map is prepared and written alike"

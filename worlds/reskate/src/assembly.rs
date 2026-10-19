@@ -13,7 +13,9 @@ use crate::components::{
     CellCount, CellKey, CellProps, CellSoup, CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCellCounts,
     SkateCellLayout, SkateCellShare, SkateCollisionPlan, SkatePausePicture,
 };
-use crate::map::{CellContent, Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions, lay_cell};
+use crate::map::{
+    CellContent, Chains, Ctx, Extras, Layout, MapWriter, MeshSource, Stack, WriterOptions, lay_cell,
+};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
 
@@ -452,8 +454,9 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::components::Ove
     }
 }
 
-/// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
-/// written), with the overlay stack `stack` and textures encoded or only identified (`encode`).
+/// The writer's assembly of the prepared world `world` for the encoding `a`: its tiles and prototypes only, no mesh
+/// encoded and no collision laid out ([`Layout::Render`]), with the overlay stack `stack` and textures encoded or only
+/// identified (`encode`).
 fn assembly(
     world: &World,
     a: &EncodingOptions,
@@ -461,18 +464,18 @@ fn assembly(
     chains: Chains,
     encode: bool,
 ) -> Result<MapWriter> {
-    let s = Scene::from_world(world, Path::new(""))?;
-    let mut o = writer_options(&s, a)?;
-    o.apron = apron_of(world, &s)?;
-    let placements = writer_placements(&s, o.tile);
-    let in_parts = world
-        .resource::<primase_core::convert::PartScope>()
-        .is_some_and(|p| !p.whole);
-    o.region = map_region(world, &s, &placements, in_parts)?;
+    let PartRead {
+        scene: s,
+        o,
+        placements,
+        counts,
+        ..
+    } = read_part(world, Path::new(""), a, false)?;
     let mut writer = MapWriter::new(o, s.surfaces.clone())?
         .with_stack(stack)
-        .with_chains(chains);
-    writer.set_counts(map_counts(world, &s, in_parts)?);
+        .with_chains(chains)
+        .with_layout(Layout::Render);
+    writer.set_counts(counts);
     if !encode {
         writer = writer.without_encoding();
     }
@@ -699,7 +702,7 @@ impl Laid {
 /// textures encoded or only identified (`encode`): the scene read, the preparation records checked against this
 /// encoding (marker snaps, overlay stack, blend chains), the tiles and prototypes assembled. What [`crate::write_map`]
 /// emits and `summarize-reskate-map` counts.
-pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<Laid> {
+pub(crate) fn lay(world: &World, a: &EncodingOptions, layout: Layout) -> Result<Laid> {
     let PartRead {
         scene: mut s,
         o,
@@ -707,15 +710,18 @@ pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) 
         placements,
         records,
         counts,
-        ..
-    } = read_part(world, dir, a, encode)?;
-    let mut writer = records.writer(o, s.surfaces.clone())?;
-    if !encode {
-        writer = writer.without_encoding();
-    }
+    } = read_part(world, Path::new(""), a, false)?;
+    let mut writer = records
+        .writer(o, s.surfaces.clone())?
+        .without_encoding()
+        .with_layout(layout);
     writer.set_counts(counts);
     lay_part(&mut s, cut, &placements, &mut writer)?;
-    let hulls = hulls(&mut s, cut, f32::NEG_INFINITY);
+    let hulls = if layout.collides() {
+        hulls(&mut s, cut, f32::NEG_INFINITY)
+    } else {
+        Vec::new()
+    };
     Ok(Laid {
         scene: s,
         writer,
@@ -773,15 +779,18 @@ pub(crate) fn lay_part(
     placements: &[Placement],
     writer: &mut MapWriter,
 ) -> Result<i64> {
-    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
-    let drop_below = f32::NEG_INFINITY;
-    let tri_world = SoupWorld::new(s, CollisionMode::TriangleMesh, cut, drop_below);
-    let water_world = s
-        .soups
-        .iter()
-        .any(|x| x.mode == CollisionMode::Water)
-        .then(|| SoupWorld::new(s, CollisionMode::Water, cut, drop_below));
-    writer.add_soups(tri_world, water_world);
+    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone; a
+    // render layout files no soup
+    if writer.layout().collides() {
+        let drop_below = f32::NEG_INFINITY;
+        let tri_world = SoupWorld::new(s, CollisionMode::TriangleMesh, cut, drop_below);
+        let water_world = s
+            .soups
+            .iter()
+            .any(|x| x.mode == CollisionMode::Water)
+            .then(|| SoupWorld::new(s, CollisionMode::Water, cut, drop_below));
+        writer.add_soups(tri_world, water_world);
+    }
     assemble(s, placements, writer)
 }
 
@@ -884,17 +893,26 @@ pub(crate) struct Records {
     pub plan: Option<crate::components::SkateCollisionPlan>,
 }
 
+/// What the parts of one map must share of their records ([`Records::basis`]): the collision plan and the blend budget
+/// (each part's whole), the overlay stack's and the blend chains' settings (each part's own meshes and tiles).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RecordsBasis {
+    pub plan: Option<crate::components::SkateCollisionPlan>,
+    pub budget: Option<crate::components::SkateBlendBudget>,
+    pub stack: Option<(f32, Option<crate::components::OverlayGrouping>)>,
+    pub chains: Option<(f32, Option<crate::components::OverlayGrouping>)>,
+}
+
 impl Records {
-    /// Whether the parts of one map were prepared alike: the same collision plan and blend budget (each part's whole:
-    /// a rule, the writer deciding over the whole map), an overlay stack and blend chains of the same settings or
-    /// neither (each part's own meshes and tiles).
-    pub(crate) fn alike(&self, o: &Records) -> bool {
-        self.plan == o.plan
-            && self.budget == o.budget
-            && self.stack.as_ref().map(|s| (s.step, s.grouping))
-                == o.stack.as_ref().map(|s| (s.step, s.grouping))
-            && self.chains.as_ref().map(|c| (c.grid, c.grouping))
-                == o.chains.as_ref().map(|c| (c.grid, c.grouping))
+    /// What every part of one map must share of its records: parts prepared alike have equal bases. A sink keeps this,
+    /// not the records (an overlay stack and blend chains are a part's own, and replayed as they come).
+    pub(crate) fn basis(&self) -> RecordsBasis {
+        RecordsBasis {
+            plan: self.plan.clone(),
+            budget: self.budget.clone(),
+            stack: self.stack.as_ref().map(|s| (s.step, s.grouping)),
+            chains: self.chains.as_ref().map(|c| (c.grid, c.grouping)),
+        }
     }
 
     /// The records of `world` (its scene `s`), for the encoding `a`.
@@ -949,7 +967,8 @@ impl Records {
 /// The summary of the prepared world `world` for the encoding `a` (`summarize-reskate-map`'s): the cull IDs the writer's
 /// own layout of it takes besides the blend chains, counted as [`MapWriter::finish`] counts them, with nothing encoded.
 pub(crate) fn map_summary(world: &World, a: &EncodingOptions) -> Result<crate::components::SkateMapSummary> {
-    let mut laid = lay(world, Path::new(""), a, false)?;
+    // everything the map's objects take, nothing encoded
+    let mut laid = lay(world, a, Layout::Count)?;
     let grouping = grouping(&laid.scene, a);
     let (writer, extras) = laid.extras();
     let other_cull_ids = writer.non_chain_cull_ids(extras)?;
@@ -972,7 +991,8 @@ pub(crate) fn collision_plan(
     surfaces: CollisionSurfaces,
     weld: CollisionWeld,
 ) -> Result<(SkateCollisionPlan, Rewritten)> {
-    let mut laid = lay(world, Path::new(""), a, false)?;
+    // the collision only: no render mesh, nothing encoded
+    let mut laid = lay(world, a, Layout::Collision)?;
     let writer = &mut laid.writer;
     let surf = writer.surfaces().clone();
     let mut leaves: BTreeMap<String, PlannedLeaf> = BTreeMap::new();
@@ -1021,7 +1041,11 @@ pub(crate) fn cell_shares(
         ..
     } = read_part(world, Path::new(""), a, false)?;
     let layout = cell_layout(&s, &o);
-    let mut writer = records.writer(o, s.surfaces.clone())?.without_encoding();
+    // the collision only: no render mesh, nothing encoded
+    let mut writer = records
+        .writer(o, s.surfaces.clone())?
+        .without_encoding()
+        .with_layout(Layout::Collision);
     writer.set_counts(counts);
     lay_part(&mut s, cut, &placements, &mut writer)?;
     let shares = writer
@@ -1159,7 +1183,7 @@ pub(crate) fn cell_plan(
     };
     // what the writer writes of it, as planned: its pieces and the cull IDs they take
     let mut files = crate::collision_pack::Files::new();
-    let mut pack = crate::collision_pack::Pack::new(&surf, off, Some(&plan), &mut files)?;
+    let mut pack = crate::collision_pack::Pack::new(&surf, off, Some(&plan), &mut files)?.encoding(false);
     let mut res = CollisionResult::default();
     let mut collision = Collision::new(&surf, off.x, off.y, off.z, layout.limit);
     lay_cell(&mut collision, key, content, &mut res, &mut |leaf, r| {
@@ -1182,6 +1206,108 @@ pub(crate) fn cell_plan(
 #[cfg(test)]
 mod tests {
     use super::SceneWarnings;
+
+    /// A raised map: a slab with its collision placed three times (instanced: `min_instances` 3), a 2 x 2 m ground
+    /// soup, a spawn.
+    fn slabs() -> primase_core::World {
+        use primase_core::{
+            Collision, Instance, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform,
+        };
+        let mut w = primase_core::World::new();
+        let mut surfaces = primase_core::Surfaces::default();
+        let concrete = surfaces.index("concrete").unwrap();
+        w.insert_resource(surfaces);
+        let material = w.spawn();
+        w.insert(material, Name("stone".into()));
+        w.insert(material, primase_core::pbr::PbrMaterial::default());
+        let pos = vec![
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [0.0, 0.0, -4.0],
+            [4.0, 0.0, -4.0],
+        ];
+        let tris = vec![[0u32, 1, 2], [2, 1, 3]];
+        let proto = w.spawn();
+        w.insert(proto, Name("slab".into()));
+        w.insert(
+            proto,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: std::collections::BTreeMap::from([(Semantic::Position, Stream::F32x3(pos.clone()))]),
+                indices: Some(tris.iter().flatten().copied().collect()),
+                material: Some(material),
+            }]),
+        );
+        let mut c = Collision::default();
+        c.extend(&pos, &tris, concrete, |p| p);
+        w.insert(proto, c.clone());
+        for x in [0.0, 10.0, 300.0] {
+            let p = w.spawn();
+            w.insert(
+                p,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            let mut t = Transform::IDENTITY;
+            t.cols[3] = [x, 0.0, 0.0];
+            w.insert(p, t);
+        }
+        let ground = w.spawn();
+        w.insert(ground, c);
+        crate::passes::raise_skate(
+            &mut w,
+            &crate::passes::RaiseOptions::new("slabs", crate::passes::LightCalibration::Standard).unwrap(),
+        )
+        .unwrap();
+        w
+    }
+
+    /// Each layout makes only what its caller reads: a dry one encodes no mesh; a collision layout builds no render
+    /// tile or prototype and files the same collision as the full layout; a render layout files no collision; a count
+    /// lays out what the full layout does, without a file.
+    #[test]
+    fn each_layout_makes_only_what_its_caller_reads() {
+        use crate::map::Layout;
+        let w = slabs();
+        let a = super::EncodingOptions {
+            min_instances: 3,
+            min_instance_tris: 1,
+            ..super::EncodingOptions::default()
+        };
+        let mut full = super::lay(&w, &a, Layout::Write).unwrap();
+        assert!(!full.writer.mesh_files.is_empty());
+        assert!(full.writer.r.instances == 3 && !full.writer.r.tiles.is_empty());
+        let cells = full.writer.waiting_cells();
+        assert!(!cells.is_empty());
+        let mut count = super::lay(&w, &a, Layout::Count).unwrap();
+        assert!(count.writer.mesh_files.is_empty());
+        assert_eq!(count.writer.r.tiles.len(), full.writer.r.tiles.len());
+        assert_eq!(count.writer.r.instances, full.writer.r.instances);
+        assert_eq!(count.writer.waiting_cells(), cells);
+        let mut collision = super::lay(&w, &a, Layout::Collision).unwrap();
+        assert!(collision.writer.mesh_files.is_empty());
+        assert!(collision.writer.r.tiles.is_empty() && collision.writer.r.instances == 0);
+        assert_eq!(collision.writer.waiting_cells(), cells);
+        let render = super::lay(&w, &a, Layout::Render).unwrap();
+        assert!(render.writer.mesh_files.is_empty());
+        assert_eq!(render.writer.r.tiles.len(), full.writer.r.tiles.len());
+        assert!(render.writer.waiting_cells().is_empty());
+        // the cells' content, as filed, is the same whichever layout filed it
+        let triangles = |l: &mut super::Laid| -> Vec<usize> {
+            l.writer
+                .take_cells()
+                .values()
+                .map(crate::map::CellContent::triangles)
+                .collect()
+        };
+        assert_eq!(triangles(&mut collision), triangles(&mut full));
+        assert_eq!(
+            triangles(&mut count),
+            triangles(&mut super::lay(&w, &a, Layout::Write).unwrap())
+        );
+    }
 
     fn set(items: &[&str]) -> std::collections::BTreeSet<String> {
         items.iter().map(|s| (*s).to_owned()).collect()

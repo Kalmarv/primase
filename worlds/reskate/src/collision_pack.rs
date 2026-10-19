@@ -80,6 +80,8 @@ pub(crate) struct Pack<'a> {
     files: &'a mut Files,
     /// The leaves packed, to tell a plan with leaves the layout no longer has.
     seen: usize,
+    /// Whether it encodes the pieces' GLB files; without, it makes their objects only (a pass's count).
+    encode: bool,
 }
 
 impl<'a> Pack<'a> {
@@ -106,7 +108,14 @@ impl<'a> Pack<'a> {
             plan,
             files,
             seen: 0,
+            encode: true,
         })
+    }
+
+    /// The packer encoding its pieces' files (`encode`), or making their objects only.
+    pub(crate) fn encoding(mut self, encode: bool) -> Pack<'a> {
+        self.encode = encode;
+        self
     }
 
     /// One leaf of the layout: its pieces written, each as GLB files of at most [`MAX_PIECE_VERTS`] vertices and a
@@ -191,20 +200,22 @@ impl<'a> Pack<'a> {
                 let file = format!("{stem_c}.glb");
                 let tris = (i.len() / 3) as i64;
                 let cells = cells_met(&p, Vec3::new(origin.x + self.off.x, origin.y + self.off.y, 0.0));
-                self.files.insert(
-                    file.clone(),
-                    glb::write(
-                        &stem_c,
-                        &[GlbPrim {
-                            blend: None,
-                            material: None,
-                            pos: p,
-                            nrm: None,
-                            uv: None,
-                            idx: i,
-                        }],
-                    )?,
-                );
+                if self.encode {
+                    self.files.insert(
+                        file.clone(),
+                        glb::write(
+                            &stem_c,
+                            &[GlbPrim {
+                                blend: None,
+                                material: None,
+                                pos: p,
+                                nrm: None,
+                                uv: None,
+                                idx: i,
+                            }],
+                        )?,
+                    );
+                }
                 let mut ob = MapObject::new(stem_c, at(self.off, origin));
                 ob.cells = cells;
                 ob.collision_mesh = Some(format!("meshes/{file}"));
@@ -258,20 +269,22 @@ impl<'a> Pack<'a> {
             Vec3::new(origin.x + self.off.x, origin.y + self.off.y, 0.0),
         );
         let file = format!("{name}.glb");
-        self.files.insert(
-            file.clone(),
-            glb::write(
-                name,
-                &[GlbPrim {
-                    blend: None,
-                    material: None,
-                    pos: local,
-                    nrm: None,
-                    uv: None,
-                    idx: idx.to_vec(),
-                }],
-            )?,
-        );
+        if self.encode {
+            self.files.insert(
+                file.clone(),
+                glb::write(
+                    name,
+                    &[GlbPrim {
+                        blend: None,
+                        material: None,
+                        pos: local,
+                        nrm: None,
+                        uv: None,
+                        idx: idx.to_vec(),
+                    }],
+                )?,
+            );
+        }
         let mut ob = MapObject::new(name.to_owned(), at(self.off, origin));
         ob.cells = cells;
         ob.collision_mesh = Some(format!("meshes/{file}"));
