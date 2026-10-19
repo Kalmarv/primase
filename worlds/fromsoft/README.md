@@ -579,7 +579,13 @@ The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sampl
 `lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.
 
 Generated texture names begin with `bake_`, including colour, normal, ORM and
-emission, so downstream web caps remain a separate policy. Core PBR bindings are
+emission, so downstream web caps remain a separate policy. Generated names follow
+the source, never entity order: a bake group's index is its place in the order of
+bake-input identities, its parts are in prototype source-id order (a repeated id
+is refused), and a source material's level variant is
+`bake_<group>_<level>_source_<digest>`, the digest the first 8 bytes of the
+SHA-256 of the material's identity record (the JSON the reader dedupes materials
+by); the lowering's packed ORM textures are `<normal>_orm_<digest>` the same way. Core PBR bindings are
 authoritative. Gloss becomes roughness only in the PBR helper; emission uses its
 normalised sRGB texture and explicit HDR strength. Source materials without a bake
 are lowered by the lowering pass. The bake's pass log counts unique source

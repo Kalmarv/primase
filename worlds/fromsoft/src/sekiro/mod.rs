@@ -483,9 +483,7 @@ pub fn read_area(
     for (key, proto) in prototypes {
         let mut slots = Vec::with_capacity(proto.materials.len());
         for m in proto.materials {
-            let identity = primase_core::json::to_value(&m)
-                .map_err(|e| invalid("Sekiro material", 0, e))?
-                .to_string();
+            let identity = m.identity()?;
             let e = if let Some(e) = material_entities.get(&identity) {
                 *e
             } else {

@@ -107,6 +107,28 @@ pub struct Material {
     pub bindings: BTreeMap<String, Binding>,
     pub layered: Option<LayeredMaterial>,
 }
+impl Material {
+    /// The material's identity record: the JSON of every field. The reader keeps one entity per record, so two
+    /// source materials are one when their records are equal.
+    pub fn identity(&self) -> crate::Result<String> {
+        primase_core::json::to_value(self)
+            .map(|v| v.to_string())
+            .map_err(|e| crate::invalid("Sekiro material", 0, e))
+    }
+    /// A short name for [`Material::identity`], for what is derived from the material ([`identity_digest`]).
+    pub fn identity_digest(&self) -> crate::Result<String> {
+        Ok(identity_digest(&self.identity()?))
+    }
+}
+/// A short name for an identity record ([`Material::identity`]): the first 8 bytes of its SHA-256, lowercase hex. It
+/// follows the source, never the order entities were spawned in.
+pub fn identity_digest(identity: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(identity.as_bytes())[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 impl Component for Material {
     const NAME: &'static str = "fromsoft.material";
     const VERSION: u32 = 3;

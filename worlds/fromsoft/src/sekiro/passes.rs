@@ -991,6 +991,44 @@ mod tests {
     }
 
     #[test]
+    fn the_bake_refuses_two_placed_prototypes_of_one_source_id() {
+        // the source id orders the bake's inputs; two prototypes sharing one would leave that order to their entities
+        let mut world = World::new();
+        let m = world.spawn();
+        world.insert(m, layered(None));
+        for _ in 0..2 {
+            let prototype = mesh_with_inputs(&mut world, m);
+            world.insert(
+                prototype,
+                PrototypeSource {
+                    id: "obj/o000001".into(),
+                    far: false,
+                },
+            );
+            let placement = world.spawn();
+            world.insert(
+                placement,
+                Instance {
+                    prototype,
+                    variant: 0,
+                },
+            );
+            world.insert(placement, Transform::IDENTITY);
+        }
+        let before = world.clone();
+        let bake = BakeFromSoftLayers::new(PixelCap::new(64).unwrap(), Seconds::new(0.).unwrap());
+        let err = bake.run(&mut world, &mut PassLog::default()).unwrap_err();
+        assert!(
+            err.contains("two placed prototypes with source id obj/o000001"),
+            "{err}"
+        );
+        assert_eq!(
+            world.iter::<LayerInputs>().count(),
+            before.iter::<LayerInputs>().count()
+        );
+    }
+
+    #[test]
     fn the_bake_refuses_level_of_detail_forms_before_changing_anything_and_leaves_unplaced_inputs() {
         let mut world = World::new();
         let m = world.spawn();

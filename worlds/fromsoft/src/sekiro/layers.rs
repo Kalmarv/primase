@@ -153,12 +153,21 @@ pub fn groups(world: &World) -> Result<Vec<MaterialGroups>> {
     for (_, i) in world.iter::<Instance>() {
         *uses.entry(i.prototype).or_default() += 1;
     }
+    // in source id order, which reaches the output (the clustering's feature order, so the centres and levels): an
+    // id names one prototype, so entity order never decides it
     let mut prototypes: Vec<_> = world
         .iter::<PrototypeSource>()
         .filter(|(e, _)| uses.contains_key(e) && world.has::<LayerInputs>(*e))
         .map(|(e, s)| (s.id.clone(), e))
         .collect();
-    prototypes.sort();
+    prototypes.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Some(w) = prototypes.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(invalid(
+            "layer groups",
+            0,
+            format!("two placed prototypes with source id {}", w[0].0),
+        ));
+    }
     let mut by_material = BTreeMap::<String, Vec<(String, primase_core::Entity, usize)>>::new();
     for (id, e) in &prototypes {
         let mesh = world

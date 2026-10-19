@@ -481,7 +481,8 @@ fn lower_materials(
                     },
                 )
                 .map_err(|e| invalid("Sekiro PBR ORM", 0, e))?;
-                let te = spawn(world, format!("{}_orm_{}", name, e.index()), t);
+                // named for the normal map and the material it was packed for: its identity, not its entity
+                let te = spawn(world, format!("{}_orm_{}", name, m.identity_digest()?), t);
                 let mut r = TextureRef::new(te);
                 r.transform = Some(nt);
                 p.metallic_roughness_texture = Some(r);

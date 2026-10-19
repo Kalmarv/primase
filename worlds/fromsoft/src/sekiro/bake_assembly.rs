@@ -192,30 +192,34 @@ pub(super) fn assemble(
             let original = primitive
                 .material
                 .ok_or_else(|| invalid("area bake", source.part, "missing source material"))?;
-            if world.get::<crate::materials::Material>(original).is_none() {
-                return Err(invalid("area bake", source.part, "missing source provenance"));
-            }
+            let identity = world
+                .get::<crate::materials::Material>(original)
+                .ok_or_else(|| invalid("area bake", source.part, "missing source provenance"))?
+                .identity()?;
             // the tiling the geometry pass multiplied into these coordinates, if it did
             let scale = world
                 .get::<super::passes::UvTiling>(original)
                 .map_or([1.; 2], |t| t.0);
             replaced_materials.insert(original);
             // Only instantiate levels used by this source part. Equal bake inputs
-            // share textures, never the full source material/GX identity.
+            // share textures, never the full source material/GX identity: a variant is one source material's (its
+            // identity record's) at one level, named for that record's digest, so its name follows the source and
+            // not the order entities were spawned in.
             let mut materials = vec![original; templates.len()];
             for &level in &source.assignments {
                 if level >= templates.len() {
                     return Err(invalid("area bake", source.part, "invalid level"));
                 }
-                let key = (original, group_index, level);
+                let key = (identity.clone(), group_index, level);
                 let material = if let Some(&e) = variants.get(&key) {
                     e
                 } else {
+                    let digest = crate::materials::identity_digest(&identity);
                     let e = source_variant(
                         world,
                         original,
                         &templates[level].0,
-                        format!("bake_{group_index:04}_{level}_source_{}", original.index()),
+                        format!("bake_{group_index:04}_{level}_source_{digest}"),
                     )?;
                     templates[level].1.record_material(&mut report.policies);
                     variants.insert(key, e);
