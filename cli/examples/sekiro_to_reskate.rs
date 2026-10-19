@@ -20,8 +20,8 @@ use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
 use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
 use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
 use primase_fromsoft::sekiro::passes::{
-    BakeFromSoftLayers, Cards, Degenerates, DropFromSoftFar, LowerFromSoftGeometry, LowerFromSoftMaterials,
-    Pose, Tiling, Winding,
+    BakeFromSoftLayers, Cards, Degenerates, DropFromSoftFar, DropFromSoftTextureTransforms,
+    LowerFromSoftGeometry, LowerFromSoftMaterials, Pose, Tiling, Winding,
 };
 use primase_fromsoft::sekiro::settings::{Factor, Fraction, HitClass, HitFilters, Metres, PixelCap, Seconds};
 use primase_image::{CapMode, CapTextures, NormalDownscale, NormalizeNormals};
@@ -139,6 +139,8 @@ fn prepare_reskate(e: &EncodingOptions) -> Result<Pipeline> {
     Ok(Pipeline {
         passes: vec![
             Box::new(NormalizeNormals),
+            // the skate dialect has no texture transform: each texture sampled at the albedo's tiling
+            Box::new(DropFromSoftTextureTransforms::new()),
             Box::new(RaiseSkate::new(RaiseOptions::new(
                 name,
                 LightCalibration::Standard,

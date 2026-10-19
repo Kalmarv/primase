@@ -75,9 +75,10 @@ One program, four stages:
 - **Select.** Passes run once on the world as read and lower Sekiro's data to core meanings: collision by hit class,
   static meshes posed, the finest level of detail, layered materials baked to plain textures, materials, lights and
   spawn points.
-- **Prepare.** Passes run on each part before it is written and prepare it for skate.: raised to the skate dialect,
-  clipped to the region, the floor placed, the spawn chosen, water, the pause map, textures capped and tinted, decal
-  overlays stacked, blend chains ordered and budgeted, the collision laid out.
+- **Prepare.** Passes run on each part before it is written and prepare it for skate.: textures sampled at the
+  albedo's tiling (the dialect has no texture transform), raised to the skate dialect, clipped to the region, the
+  floor placed, the spawn chosen, water, the pause map, textures capped and tinted, decal overlays stacked, blend
+  chains ordered and budgeted, the collision laid out.
 - **Write.** `MapSink` encodes the prepared part as a map folder for ReSkate Studio. What it leaves out or
   approximates is a notice in the report; a value it cannot encode is an error. Compiling the folder into a playable
   level is ReSkate Studio's step.
@@ -193,6 +194,8 @@ fn prepare_reskate(e: &EncodingOptions) -> Result<Pipeline> {
     Ok(Pipeline {
         passes: vec![
             Box::new(NormalizeNormals),
+            // the skate dialect has no texture transform: each texture sampled at the albedo's tiling
+            Box::new(DropFromSoftTextureTransforms::new()),
             Box::new(RaiseSkate::new(RaiseOptions::new(
                 name,
                 LightCalibration::Standard,
