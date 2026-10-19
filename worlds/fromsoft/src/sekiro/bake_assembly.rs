@@ -60,7 +60,8 @@ fn channel_material(
             "alpha" | "decal" | "water" => AlphaMode::Blend,
             _ => AlphaMode::Opaque,
         },
-        double_sided: source.two_sided,
+        // sidedness is each variant's: the face-set cull of the parts it draws
+        double_sided: false,
         ..Default::default()
     };
     if let Some(gloss) = &image.gloss {
@@ -94,6 +95,7 @@ fn source_variant(
     world: &mut World,
     original: Entity,
     template: &PbrMaterial,
+    cull: bool,
     name: String,
 ) -> Result<Entity> {
     let source = world
@@ -108,7 +110,7 @@ fn source_variant(
         "alpha" | "decal" | "water" => AlphaMode::Blend,
         _ => AlphaMode::Opaque,
     };
-    material.double_sided = source.two_sided;
+    material.double_sided = !cull;
     let entity = world.spawn();
     world.insert(entity, Name(name));
     if let Some(layered) = &source.layered {
@@ -196,6 +198,16 @@ pub(super) fn assemble(
                 .get::<crate::materials::Material>(original)
                 .ok_or_else(|| invalid("area bake", source.part, "missing source provenance"))?
                 .identity()?;
+            let cull = *world
+                .get::<super::source::FaceCull>(entity)
+                .and_then(|c| c.primitives.get(source.part))
+                .ok_or_else(|| {
+                    invalid(
+                        "area bake",
+                        source.part,
+                        "layered part without fromsoft.face_cull",
+                    )
+                })?;
             // the tiling the geometry pass multiplied into these coordinates, if it did
             let scale = world
                 .get::<super::passes::UvTiling>(original)
@@ -203,23 +215,25 @@ pub(super) fn assemble(
             replaced_materials.insert(original);
             // Only instantiate levels used by this source part. Equal bake inputs
             // share textures, never the full source material/GX identity: a variant is one source material's (its
-            // identity record's) at one level, named for that record's digest, so its name follows the source and
-            // not the order entities were spawned in.
+            // identity record's) at one level and one face-set cull, named for that record's digest (and `_two_sided`
+            // for parts that do not cull), so its name follows the source and not the order entities were spawned in.
             let mut materials = vec![original; templates.len()];
             for &level in &source.assignments {
                 if level >= templates.len() {
                     return Err(invalid("area bake", source.part, "invalid level"));
                 }
-                let key = (identity.clone(), group_index, level);
+                let key = (identity.clone(), group_index, level, cull);
                 let material = if let Some(&e) = variants.get(&key) {
                     e
                 } else {
                     let digest = crate::materials::identity_digest(&identity);
+                    let sided = if cull { "" } else { "_two_sided" };
                     let e = source_variant(
                         world,
                         original,
                         &templates[level].0,
-                        format!("bake_{group_index:04}_{level}_source_{digest}"),
+                        cull,
+                        format!("bake_{group_index:04}_{level}_source_{digest}{sided}"),
                     )?;
                     templates[level].1.record_material(&mut report.policies);
                     variants.insert(key, e);
@@ -577,8 +591,9 @@ mod tests {
             .iter::<Texture>()
             .map(|(e, t)| (e, t.levels.clone()))
             .collect();
-        let a = source_variant(&mut world, original_a, &template, "a".into()).unwrap();
-        let b = source_variant(&mut world, original_b, &template, "b".into()).unwrap();
+        // a's parts cull back faces, b's do not: the template's channels, each its own sidedness
+        let a = source_variant(&mut world, original_a, &template, true, "a".into()).unwrap();
+        let b = source_variant(&mut world, original_b, &template, false, "b".into()).unwrap();
         assert_ne!(a, b);
         let mesh = world.spawn();
         world.insert(
@@ -595,19 +610,22 @@ mod tests {
                     .collect(),
             ),
         );
-        for (primitive, expected) in world
+        for ((primitive, expected), two_sided) in world
             .get::<Mesh>(mesh)
             .unwrap()
             .primitives()
             .iter()
             .zip([source, other])
+            .zip([false, true])
         {
             let entity = primitive.material.unwrap();
             assert_eq!(
                 serde_json::to_value(world.get::<crate::materials::Material>(entity).unwrap()).unwrap(),
                 serde_json::to_value(expected).unwrap()
             );
-            assert_eq!(world.get::<PbrMaterial>(entity).unwrap(), &template);
+            let mut sided = template.clone();
+            sided.double_sided = two_sided;
+            assert_eq!(world.get::<PbrMaterial>(entity).unwrap(), &sided);
         }
         assert_eq!(
             pixels_before,
@@ -632,7 +650,6 @@ mod tests {
         );
         source.class = "cutout".into();
         source.cutoff = 0.4;
-        source.two_sided = true;
         for emission in [None, Some([0.; 3]), Some([4., 1., 0.])] {
             let mut world = World::default();
             let mut log = primase_core::pass::PassLog::default();
@@ -659,7 +676,8 @@ mod tests {
             assert_eq!(material.metallic, 0.);
             assert_eq!(material.roughness, 1.);
             assert_eq!(material.alpha_mode, AlphaMode::Mask { cutoff: 0.4 });
-            assert!(material.double_sided);
+            // the template states no sidedness: each variant takes its parts' face-set cull
+            assert!(!material.double_sided);
             assert_eq!(log.approximations[pbr::UNKNOWN_METALLIC_LOSS], 1);
             assert!(material.occlusion_texture.is_none());
             let base = world

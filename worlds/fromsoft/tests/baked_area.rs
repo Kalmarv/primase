@@ -3,7 +3,7 @@ use primase_core::pass::RunReport;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{DrawLayer, DrawOrder, Entity, MaterialUsage, Mesh, Name, Texture, World};
 use primase_fromsoft::materials::Material;
-use primase_fromsoft::sekiro::source::{MaterialSlots, PrototypeSource};
+use primase_fromsoft::sekiro::source::{FaceCull, MaterialSlots, PrototypeSource};
 use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
@@ -75,13 +75,32 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
         !pbr.approximations
             .contains_key("layered material lowered from its main-layer preview; layers not baked")
     );
-    for (_, mesh) in world.iter::<Mesh>() {
-        for primitive in mesh.primitives() {
+    // every drawn primitive's material is lowered, and as sided as its face set: two-sided exactly where the source
+    // face set does not cull back faces
+    let mut sided = [0u64; 2];
+    for (e, mesh) in world.iter::<Mesh>() {
+        let cull = world
+            .get::<FaceCull>(e)
+            .ok_or("a mesh without fromsoft.face_cull")?;
+        for (primitive, &cull) in mesh.primitives().iter().zip(&cull.primitives) {
             if let Some(material) = primitive.material {
-                assert!(world.has::<PbrMaterial>(material));
+                let pbr = world
+                    .get::<PbrMaterial>(material)
+                    .ok_or("a drawn material not lowered")?;
+                assert_eq!(pbr.double_sided, !cull);
+                sided[usize::from(pbr.double_sided)] += 1;
             }
         }
     }
+    println!(
+        "primitives drawing single-sided {}, two-sided {}; split {:?}, single {:?}, two {:?}",
+        sided[0],
+        sided[1],
+        pbr.counts.get("materials split by face-set cull"),
+        pbr.counts
+            .get("materials single-sided: their face sets cull back faces"),
+        pbr.counts.get("materials two-sided: their face sets do not cull")
+    );
     // what the source classes state about the surfaces, on the materials drawn: the reader's class, counted by the
     // lowering, and nothing else carries it
     let class = |c: &str| {
@@ -101,10 +120,20 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
         usage(MaterialUsage::Foliage),
         decals
     );
-    assert_eq!(
-        (usage(MaterialUsage::Water), usage(MaterialUsage::Foliage), decals),
-        (1, 79, 4)
-    );
+    let (water, foliage, decal_count) = (usage(MaterialUsage::Water), usage(MaterialUsage::Foliage), decals);
+    // the lowering counts what it lowered; a material it split by face-set cull has a copy that carries the same
+    let copies = |c: &str| {
+        world
+            .iter::<Material>()
+            .filter(|(e, m)| {
+                m.class == c
+                    && world.has::<PbrMaterial>(*e)
+                    && world
+                        .get::<Name>(*e)
+                        .is_some_and(|n| n.0.ends_with("_two_sided") && !n.0.starts_with("bake_"))
+            })
+            .count() as u64
+    };
     assert_eq!(usage(MaterialUsage::Water), class("water"));
     assert_eq!(usage(MaterialUsage::Foliage), class("leaves"));
     assert_eq!(decals, class("decal"));
@@ -114,15 +143,15 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_eq!(world.iter::<DrawOrder>().count() as u64, class("decal"));
     assert_eq!(
-        pbr.counts["materials of class water given their usage"],
+        pbr.counts["materials of class water given their usage"] + copies("water"),
         class("water")
     );
     assert_eq!(
-        pbr.counts["materials of class leaves given their usage"],
+        pbr.counts["materials of class leaves given their usage"] + copies("leaves"),
         class("leaves")
     );
     assert_eq!(
-        pbr.counts["materials of class decal given their draw order"],
+        pbr.counts["materials of class decal given their draw order"] + copies("decal"),
         class("decal")
     );
     for (entity, texture) in world.iter::<Texture>() {
@@ -153,6 +182,7 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(first.materials, second.materials);
     assert_eq!(first.parts, second.parts);
+    assert_eq!((water, foliage, decal_count), (1, 79, 4));
     Ok(())
 }
 

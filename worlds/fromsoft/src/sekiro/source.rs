@@ -316,6 +316,27 @@ impl Resource for AreaExtras {
     }
 }
 
+/// Per primitive of a mesh lowered from a FLVER, whether its source face set culls back faces: the face set's
+/// `CullBackfaces` byte (header byte 5), a source fact that varies by face set, not by material or class. The material
+/// lowering makes it the sidedness of the material the primitive draws with.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct FaceCull {
+    pub primitives: Vec<bool>,
+}
+impl Component for FaceCull {
+    const NAME: &'static str = "fromsoft.face_cull";
+    /// Which side is culled follows the triangles' winding, which a mirror's transform keeps.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.primitives, from).map(|primitives| FaceCull { primitives }))
+    }
+}
+
 /// Per primitive of a prototype, the FLVER Byte4C UV members it carries as raw vertex data: member `n` is the
 /// primitive's `Color(n)` stream, UNORM8 exactly as stored. The layered M[Multiple] shaders read these as layer
 /// weights, snow, tint and detail; their meaning belongs to the passes that evaluate those shaders.

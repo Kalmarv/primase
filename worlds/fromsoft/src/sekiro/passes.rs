@@ -6,9 +6,9 @@
 //! through the same calls.
 use super::blockers::{self, BlockerCards};
 use super::settings::{PixelCap, Seconds};
-use super::source::{LayerInputs, MaterialSlots, PrototypeSource};
+use super::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSource};
 use crate::flver::{FaceSetKind, Model, Part};
-use crate::materials::{self, Material};
+use crate::materials::{self, LayeredMaterial, Material};
 use crate::rigid::{ApplyRigidSkinning, RigidModel, SourceModel};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::world::Resource;
@@ -208,11 +208,39 @@ impl LowerFromSoftGeometry {
     }
 }
 
+/// One level of a prototype's lowered geometry: its primitives, each one's layer-input members and face-set cull.
+#[derive(Default)]
+struct Level {
+    primitives: Vec<Primitive>,
+    inputs: Vec<Vec<u8>>,
+    cull: Vec<bool>,
+}
+
+impl Level {
+    /// Its primitives on `e` as a mesh, with their face-set cull and any layer inputs.
+    fn insert(self, world: &mut World, e: Entity) {
+        world.insert(e, Mesh::new(self.primitives));
+        world.insert(
+            e,
+            FaceCull {
+                primitives: self.cull,
+            },
+        );
+        if self.inputs.iter().any(|i| !i.is_empty()) {
+            world.insert(
+                e,
+                LayerInputs {
+                    primitives: self.inputs,
+                },
+            );
+        }
+    }
+}
+
 /// One prototype's lowered geometry, before it goes into the world.
 #[derive(Default)]
 struct Lowered {
-    /// Per level: primitives and their layer-input member lists.
-    levels: BTreeMap<u8, (Vec<Primitive>, Vec<Vec<u8>>)>,
+    levels: BTreeMap<u8, Level>,
     cards: Vec<blockers::Card>,
 }
 
@@ -325,14 +353,15 @@ impl LowerFromSoftGeometry {
                 for (n, values) in layer {
                     streams.insert(Semantic::Color(n), Stream::U8x4(values));
                 }
-                let (primitives, inputs) = out.levels.entry(level).or_default();
-                primitives.push(Primitive {
+                let out = out.levels.entry(level).or_default();
+                out.primitives.push(Primitive {
                     topology: Topology::Triangles,
                     streams,
                     indices: Some(part.mesh.indices),
                     material: Some(entity),
                 });
-                inputs.push(members);
+                out.inputs.push(members);
+                out.cull.push(f.cull);
                 log.count(&format!("level {level} primitives"), 1);
             }
             mesh_levels.push(levels);
@@ -390,6 +419,7 @@ impl Pass for LowerFromSoftGeometry {
             Mesh::NAME,
             Lods::NAME,
             LayerInputs::NAME,
+            FaceCull::NAME,
             UvTiling::NAME,
             BlockerCards::NAME,
         ]
@@ -430,7 +460,7 @@ impl Pass for LowerFromSoftGeometry {
                 .flat_map(|l| {
                     l.levels
                         .values()
-                        .flat_map(|(p, _)| p.iter().filter_map(|p| p.material))
+                        .flat_map(|l| l.primitives.iter().filter_map(|p| p.material))
                 })
                 .collect();
             for e in used {
@@ -471,7 +501,7 @@ impl Pass for LowerFromSoftGeometry {
         for (prototype, mut out) in prototypes.into_iter().zip(lowered) {
             world.remove::<RigidModel>(prototype);
             let placed = placements.remove(&prototype).unwrap_or_default();
-            if out.levels.values().all(|(p, _)| p.is_empty()) {
+            if out.levels.values().all(|l| l.primitives.is_empty()) {
                 // the placements are core content, dropped by name; the prototype holds none yet (its source
                 // model was lowered to nothing), so it declares nothing and is counted
                 for p in placed {
@@ -486,20 +516,14 @@ impl Pass for LowerFromSoftGeometry {
                 log.count("prototypes left drawing nothing", 1);
                 continue;
             }
-            let (primitives, inputs) = out.levels.remove(&0).unwrap_or_default();
+            let finest = out.levels.remove(&0).unwrap_or_default();
             let mut forms = Vec::new();
-            for (level, (primitives, inputs)) in out.levels {
+            for (level, lowered) in out.levels {
                 let form = world.spawn();
-                world.insert(form, Mesh::new(primitives));
-                if inputs.iter().any(|i| !i.is_empty()) {
-                    world.insert(form, LayerInputs { primitives: inputs });
-                }
+                lowered.insert(world, form);
                 forms.push(LodForm { detail: level, form });
             }
-            world.insert(prototype, Mesh::new(primitives));
-            if inputs.iter().any(|i| !i.is_empty()) {
-                world.insert(prototype, LayerInputs { primitives: inputs });
-            }
+            finest.insert(world, prototype);
             if !forms.is_empty() {
                 log.count("prototypes with other levels of detail", 1);
                 world.insert(
@@ -727,7 +751,9 @@ impl Pass for BakeFromSoftLayers {
 /// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted),
 /// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings. What a
 /// lowered material's source class states about its surfaces is set with it ([`super::pbr::class_usage`]): water
-/// and leaves as their `core.material_usage`, decals as their `core.draw_order`.
+/// and leaves as their `core.material_usage`, decals as their `core.draw_order`. A material is two-sided exactly where
+/// the face sets drawing it do not cull back faces (`fromsoft.face_cull`), split when they differ
+/// ([`super::pbr::apply_face_cull`]).
 ///
 /// A layered material no pass baked needs the program's choice: `layers=preserve` leaves it as source data
 /// (unlowered, its layer inputs kept, counted); `layers=preview` lowers it from its main-layer preview, a counted
@@ -783,12 +809,16 @@ impl Pass for LowerFromSoftMaterials {
         &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
+        // a material drawn both culled and not is split: its copy has the source material's components
         &[
             "pbr.material",
             "core.texture",
             "core.name",
             MaterialUsage::NAME,
             DrawOrder::NAME,
+            Material::NAME,
+            LayeredMaterial::NAME,
+            UvTiling::NAME,
         ]
     }
     fn removes(&self) -> &[&'static str] {
@@ -819,7 +849,7 @@ impl Pass for LowerFromSoftMaterials {
             );
         }
         log.absorb(lowered);
-        Ok(())
+        super::pbr::apply_face_cull(world, log).map_err(|e| e.to_string())
     }
 }
 
@@ -1108,6 +1138,12 @@ mod tests {
         world.insert(e, Mesh::new(vec![primitive(previewed), primitive(skipped)]));
         world.insert(
             e,
+            FaceCull {
+                primitives: vec![true; 2],
+            },
+        );
+        world.insert(
+            e,
             LayerInputs {
                 primitives: vec![vec![1], vec![1]],
             },
@@ -1172,6 +1208,12 @@ mod tests {
         }
         let mesh = world.spawn();
         world.insert(mesh, Mesh::new(drawn.iter().map(|&m| primitive(m)).collect()));
+        world.insert(
+            mesh,
+            FaceCull {
+                primitives: vec![true; drawn.len()],
+            },
+        );
         let mut report = RunReport::default();
         PassManager::new(PassRegistry::new())
             .run(
@@ -1208,5 +1250,92 @@ mod tests {
         assert_eq!(log.counts["materials of class water given their usage"], 1);
         assert_eq!(log.counts["materials of class leaves given their usage"], 1);
         assert_eq!(log.counts["materials of class decal given their draw order"], 1);
+    }
+
+    #[test]
+    fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_they_differ() {
+        use primase_core::pass::{PassManager, Pipeline, RunReport};
+        use primase_core::pbr::PbrMaterial;
+        use primase_core::{Name, Semantic};
+        let mut world = World::new();
+        let material = |world: &mut World, name: &str| {
+            let m = world.spawn();
+            let mut source = layered(None);
+            source.layered = None;
+            world.insert(m, source);
+            world.insert(m, primase_core::Name(name.into()));
+            m
+        };
+        let culled = material(&mut world, "culled");
+        let open = material(&mut world, "open");
+        let both = material(&mut world, "both");
+        // two meshes: the first draws `both` culled and `open`, the second `culled` and `both` not culled
+        let first = world.spawn();
+        world.insert(first, Mesh::new(vec![primitive(both), primitive(open)]));
+        world.insert(
+            first,
+            FaceCull {
+                primitives: vec![true, false],
+            },
+        );
+        let second = world.spawn();
+        world.insert(second, Mesh::new(vec![primitive(culled), primitive(both)]));
+        world.insert(
+            second,
+            FaceCull {
+                primitives: vec![true, false],
+            },
+        );
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut world,
+                &Pipeline {
+                    passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+                },
+                &mut report,
+            )
+            .unwrap();
+        let sided = |e: Entity| world.get::<PbrMaterial>(e).unwrap().double_sided;
+        assert!(!sided(culled));
+        assert!(sided(open));
+        assert!(!sided(both));
+        // the primitive drawing `both` without culling draws its two-sided copy, which keeps its source
+        let copy = world.get::<Mesh>(second).unwrap().primitives()[1]
+            .material
+            .unwrap();
+        assert_ne!(copy, both);
+        assert!(sided(copy));
+        assert_eq!(world.get::<Name>(copy).unwrap().0, "both_two_sided");
+        assert_eq!(
+            serde_json::to_value(world.get::<Material>(copy).unwrap()).unwrap(),
+            serde_json::to_value(world.get::<Material>(both).unwrap()).unwrap()
+        );
+        assert_eq!(
+            world.get::<Mesh>(first).unwrap().primitives()[0].material,
+            Some(both)
+        );
+        assert!(
+            world.get::<Mesh>(second).unwrap().primitives()[1]
+                .streams
+                .contains_key(&Semantic::Position)
+        );
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["materials split by face-set cull"], 1);
+        assert_eq!(
+            log.counts["materials single-sided: their face sets cull back faces"],
+            1
+        );
+        assert_eq!(log.counts["materials two-sided: their face sets do not cull"], 1);
+
+        // a mesh drawing a lowered material without its face sets' cull is refused: sidedness is never a default
+        let mut world = World::new();
+        let m = material(&mut world, "unknown");
+        let mesh = world.spawn();
+        world.insert(mesh, Mesh::new(vec![primitive(m)]));
+        let err = LowerFromSoftMaterials::new(None)
+            .run(&mut world, &mut PassLog::default())
+            .unwrap_err();
+        assert!(err.contains("without fromsoft.face_cull"), "{err}");
     }
 }

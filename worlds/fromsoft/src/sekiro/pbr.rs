@@ -51,6 +51,63 @@ pub fn class_usage(class: &str) -> (Option<MaterialUsage>, Option<DrawOrder>) {
     }
 }
 
+/// Each lowered source material's sidedness from the face sets drawing it (`fromsoft.face_cull`): single-sided
+/// where every primitive drawing it culls back faces, two-sided where none does. A material drawn both ways is split:
+/// the primitives that do not cull draw a copy named `<name>_two_sided`, two-sided, counted. A mesh drawing a lowered
+/// material without `fromsoft.face_cull` is an error: sidedness is the source's, never a default.
+pub fn apply_face_cull(world: &mut World, log: &mut PassLog) -> Result<()> {
+    use super::source::FaceCull;
+    // per lowered material, the (mesh, primitive) drawing it, by whether it culls
+    let mut uses = BTreeMap::<Entity, [Vec<(Entity, usize)>; 2]>::new();
+    for (e, mesh) in world.iter::<primase_core::Mesh>() {
+        let cull = world.get::<FaceCull>(e);
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            let Some(m) = p
+                .material
+                .filter(|&m| world.has::<Material>(m) && world.has::<PbrMaterial>(m))
+            else {
+                continue;
+            };
+            let c = cull.and_then(|c| c.primitives.get(i)).ok_or_else(|| {
+                invalid(
+                    "Sekiro sidedness",
+                    i,
+                    format!("{e:?} draws a FromSoft material without fromsoft.face_cull"),
+                )
+            })?;
+            uses.entry(m).or_default()[usize::from(*c)].push((e, i));
+        }
+    }
+    let sided = |world: &mut World, m: Entity, two: bool| {
+        if let Some(p) = world.get_mut::<PbrMaterial>(m) {
+            p.double_sided = two;
+        }
+    };
+    for (m, [open, culled]) in uses {
+        if open.is_empty() {
+            sided(world, m, false);
+            log.count("materials single-sided: their face sets cull back faces", 1);
+        } else if culled.is_empty() {
+            sided(world, m, true);
+            log.count("materials two-sided: their face sets do not cull", 1);
+        } else {
+            sided(world, m, false);
+            let copy = world
+                .duplicate(m)
+                .ok_or_else(|| invalid("Sekiro sidedness", 0, "material not alive"))?;
+            sided(world, copy, true);
+            let name = world.get::<Name>(m).map_or_else(String::new, |n| n.0.clone());
+            world.insert(copy, Name(format!("{name}_two_sided")));
+            for (e, i) in open {
+                let mesh = world.get_mut::<primase_core::Mesh>(e).expect("listed mesh");
+                *mesh.primitive_mut(i).expect("listed primitive").material_mut() = Some(copy);
+            }
+            log.count("materials split by face-set cull", 1);
+        }
+    }
+    Ok(())
+}
+
 /// Pack a baked linear gloss plane as glTF ORM. R/B are neutral multipliers;
 /// this function does not claim to have measured AO or metallic content.
 pub(crate) fn orm_from_gloss(width: u32, height: u32, gloss: &[f32]) -> Result<Texture> {
@@ -420,7 +477,6 @@ fn lower_materials(
                 "alpha" | "decal" | "water" => AlphaMode::Blend,
                 _ => AlphaMode::Opaque,
             };
-            p.double_sided = m.two_sided;
         }
         if baked {
             log.approximate("layered PBR channels require shader bake outputs", 1);

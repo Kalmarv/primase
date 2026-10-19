@@ -574,6 +574,17 @@ programs of its layered materials (`fromsoft.shader_programs`);
   (`M[Translucency]`) as foliage, `decal` (`MeshDecal`) as `core.draw_order`'s
   decal layer (queue 2500, after the cutouts: a convention, as Sekiro's own pass
   sequence is not read). The other classes state only their alpha mode.
+  Sidedness is the source's, per face set: `lower-fromsoft-geometry` gives each
+  primitive its face set's `CullBackfaces` byte (`fromsoft.face_cull`), and the
+  lowering makes a material two-sided exactly where the face sets drawing it do
+  not cull, splitting a material drawn both ways (a `<name>_two_sided` copy,
+  counted); a drawing mesh without `fromsoft.face_cull` is an error. No class
+  makes a material two-sided. On the scene region the flag is set on 2,503 of 2,598
+  opaque, 51 of 261 cutout and 16 of 154 leaves LOD0 face sets, all 22 decal ones
+  and none of the 3 water ones, and 16 source materials have LOD0 face sets of
+  both kinds (the reader's decode; the BHD census checks it against SoulsFormats
+  on every model). The bake's
+  variants are per face-set cull too (`..._two_sided` for parts that do not cull).
 
 The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sample-time=0}` then
 `lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.

@@ -99,7 +99,6 @@ pub struct Material {
     pub metallic: Option<String>,
     pub emissive: Option<String>,
     pub cutoff: f32,
-    pub two_sided: bool,
     pub is_emissive: bool,
     pub uv_scale: [f32; 2],
     pub surface: String,
@@ -131,7 +130,8 @@ pub fn identity_digest(identity: &str) -> String {
 }
 impl Component for Material {
     const NAME: &'static str = "fromsoft.material";
-    const VERSION: u32 = 3;
+    /// 4: no `two_sided` (sidedness is the face sets' `fromsoft.face_cull`).
+    const VERSION: u32 = 4;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -210,7 +210,6 @@ pub fn resolve(
         metallic: None,
         emissive: None,
         cutoff: 0.5,
-        two_sided: false,
         is_emissive: false,
         uv_scale: [1.; 2],
         surface: "default".into(),
@@ -276,7 +275,6 @@ pub fn resolve(
         m.class = "decal".into();
     } else if sh.starts_with("M[Translucency]") {
         m.class = "leaves".into();
-        m.two_sided = true;
         if aref > 0 {
             m.cutoff = aref as f32 / 255.;
         }
@@ -284,7 +282,6 @@ pub fn resolve(
         m.class = "alpha".into();
     } else if aref > 0 {
         m.class = "cutout".into();
-        m.two_sided = true;
         m.cutoff = aref as f32 / 255.;
     }
     m.is_emissive = sh.contains("Emissive") && m.emissive.is_some();
