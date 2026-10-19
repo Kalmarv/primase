@@ -586,6 +586,14 @@ programs of its layered materials (`fromsoft.shader_programs`);
   on every model). The bake's
   variants are per face-set cull too (`..._two_sided` for parts that do not cull).
 
+- `drop-fromsoft-texture-transforms` (`DropFromSoftTextureTransforms::new()`, no
+  options) takes the transform off every texture binding of a lowered FromSoft
+  material (one with `fromsoft.material`), so each texture is sampled at the
+  coordinates the geometry pass scaled by the albedo's tiling, as the earlier
+  exporter sampled them; each non-identity transform left out is a counted
+  approximation, by slot. For a target without texture transforms (ReSkate's
+  dialect refuses them), after `lower-fromsoft-materials`.
+
 The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sample-time=0}` then
 `lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.
 

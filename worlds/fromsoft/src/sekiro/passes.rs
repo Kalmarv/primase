@@ -11,6 +11,7 @@ use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, LayeredMaterial, Material};
 use crate::rigid::{ApplyRigidSkinning, RigidModel, SourceModel};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::world::Resource;
 use primase_core::{
     Component, DrawOrder, Entity, Instance, LodForm, Lods, MaterialUsage, Mesh, Primitive, Semantic, Source,
@@ -853,6 +854,77 @@ impl Pass for LowerFromSoftMaterials {
     }
 }
 
+/// `drop-fromsoft-texture-transforms`: every texture binding of a lowered FromSoft material (a `pbr.material` on an
+/// entity with `fromsoft.material`) loses its transform, so each texture is sampled at the coordinates
+/// `lower-fromsoft-geometry{uv-tiling=apply}` scaled by the albedo binding's FLVER tiling, as the earlier exporter
+/// sampled them (only the main albedo's tiling scales the mesh UVs; a normal or detail map's own scale is not applied).
+/// Sekiro's normal and roughness maps carry their binding's scale relative to the albedo's
+/// (`lower-fromsoft-materials`), and a material that mixes them cannot have them baked into one coordinate set, so a
+/// target without texture transforms (ReSkate's dialect) needs them gone. Each non-identity transform left out is a
+/// counted approximation, by slot; other sources' materials are not this pass's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DropFromSoftTextureTransforms;
+
+impl DropFromSoftTextureTransforms {
+    /// The pass; it has no settings.
+    pub fn new() -> Self {
+        DropFromSoftTextureTransforms
+    }
+}
+
+impl Pass for DropFromSoftTextureTransforms {
+    fn name(&self) -> &'static str {
+        "drop-fromsoft-texture-transforms"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[PbrMaterial::NAME, Material::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[PbrMaterial::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "FromSoft textures sampled at the albedo's tiling, their own transform left out"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let materials: Vec<Entity> = world
+            .iter::<PbrMaterial>()
+            .filter(|(e, _)| world.has::<Material>(*e))
+            .map(|(e, _)| e)
+            .collect();
+        for e in materials {
+            let Some(m) = world.get_mut::<PbrMaterial>(e) else {
+                continue;
+            };
+            let specular = m.specular.as_mut();
+            let (specular, specular_colour) = match specular {
+                Some(s) => (&mut s.texture, &mut s.color_texture),
+                None => (&mut None, &mut None),
+            };
+            for (slot, r) in [
+                ("base colour", &mut m.base_color_texture),
+                ("metallic-roughness", &mut m.metallic_roughness_texture),
+                ("normal", &mut m.normal_texture),
+                ("occlusion", &mut m.occlusion_texture),
+                ("emissive", &mut m.emissive_texture),
+                ("specular", specular),
+                ("specular colour", specular_colour),
+            ] {
+                if let Some(t) = r.as_mut().and_then(|r| r.transform.take())
+                    && t != UvTransform::IDENTITY
+                {
+                    log.approximate(
+                        &format!(
+                            "{slot} textures sampled at the albedo's tiling, their own transform left out"
+                        ),
+                        1,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// `pass`, which takes no options: an option is refused.
 fn without_options(options: &Options, pass: impl Pass + 'static) -> Result<Box<dyn Pass>, String> {
     if let Some(k) = options.keys().next() {
@@ -877,6 +949,9 @@ pub fn register(registry: &mut PassRegistry) {
         |o| Ok(Box::new(BakeFromSoftLayers::from_options(o)?)),
         &[("max-size", "512"), ("sample-time", "0")],
     );
+    registry.register("drop-fromsoft-texture-transforms", |o| {
+        without_options(o, DropFromSoftTextureTransforms::new())
+    });
     registry.register("lower-fromsoft-materials", |o| {
         Ok(Box::new(LowerFromSoftMaterials::from_options(o)?))
     });
@@ -1337,5 +1412,58 @@ mod tests {
             .run(&mut world, &mut PassLog::default())
             .unwrap_err();
         assert!(err.contains("without fromsoft.face_cull"), "{err}");
+    }
+
+    #[test]
+    fn fromsoft_textures_lose_their_transforms_and_other_materials_keep_theirs() {
+        use primase_core::pass::{PassManager, Pipeline, RunReport};
+        use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
+        let mut world = World::new();
+        let t = world.spawn();
+        let scaled = |s: f32| {
+            let mut r = TextureRef::new(t);
+            r.transform = Some(UvTransform {
+                scale: [s, s],
+                ..UvTransform::IDENTITY
+            });
+            r
+        };
+        let material = PbrMaterial {
+            base_color_texture: Some(TextureRef::new(t)),
+            normal_texture: Some(scaled(4.)),
+            metallic_roughness_texture: Some(scaled(1.)),
+            ..PbrMaterial::default()
+        };
+        let fromsoft = world.spawn();
+        world.insert(fromsoft, material.clone());
+        world.insert(fromsoft, layered(None));
+        let other = world.spawn();
+        world.insert(other, material.clone());
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut world,
+                &Pipeline {
+                    passes: vec![Box::new(DropFromSoftTextureTransforms::new())],
+                },
+                &mut report,
+            )
+            .unwrap();
+        assert!(
+            world
+                .get::<PbrMaterial>(fromsoft)
+                .unwrap()
+                .textures()
+                .all(|r| r.transform.is_none())
+        );
+        // another source's material is not this pass's
+        assert_eq!(world.get::<PbrMaterial>(other), Some(&material));
+        let log = &report.steps[0].log;
+        // the identity transform is no approximation
+        assert_eq!(log.approximations.len(), 1, "{:?}", log.approximations);
+        assert_eq!(
+            log.approximations["normal textures sampled at the albedo's tiling, their own transform left out"],
+            1
+        );
     }
 }
