@@ -16,7 +16,8 @@ use primase_texcodec::{Decoder, TexDecoder};
 
 /// Register this crate's passes (not load-textures: loading is a reader's step).
 pub fn register(reg: &mut PassRegistry) {
-    reg.register("cap-textures", crate::cap_textures);
+    // the cap is the program's: no default
+    reg.register_requiring("cap-textures", crate::cap_textures, &[("max", "256")]);
     reg.register("bake-layer-channels", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(BakeLayerChannels)),

@@ -3,7 +3,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod cap;
-pub use cap::{CapTextures, Capped, cap_texture, cap_textures};
+pub use cap::{Beyond, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture, cap_textures};
 mod channels;
 mod frames;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};

@@ -1,7 +1,9 @@
 //! `cap-textures{max=N}`: textures no larger than the size a program asks for, taken from the stored mip levels.
 
+use std::collections::BTreeMap;
+
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{NormalX, NormalZ, TexFormat, TexRole, Texture, World};
+use primase_core::{Entity, Name, NormalX, NormalZ, TexFormat, TexRole, Texture, World};
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::{Image, Result, Samples, half, pick_level, resize_normals};
@@ -16,15 +18,47 @@ pub enum Capped {
     /// The stored level `level` and those below it kept, exactly; the larger ones dropped.
     Level { level: usize, width: u32, height: u32 },
     /// No stored level was small enough: the smallest one decoded to RGBA8 and box-filtered down to `width` x
-    /// `height`, in stored values (sRGB textures are filtered as stored; normal maps through [`resize_normals`]).
+    /// `height`, in stored values (sRGB textures are filtered as stored; normal maps through [`resize_normals`], or
+    /// by the same box as colour with [`NormalDownscale::Box`]).
     Downscaled { width: u32, height: u32 },
     /// No stored level was small enough, and the texture is a normal map whose X is not in red or whose Z is not
     /// stored, which averaging RGB vectors cannot filter: left at its smallest stored level.
     LeftLarge { level: usize, width: u32, height: u32 },
+    /// No stored level was small enough and the caller keeps stored levels only ([`Beyond::Keep`]): left at its
+    /// smallest stored level, exactly.
+    Smallest { level: usize, width: u32, height: u32 },
+}
+
+/// What [`cap_texture`] does with a texture none of whose stored levels is within the cap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Beyond {
+    /// Decode the smallest stored level and box-filter it down to the cap (an approximation, reported).
+    #[default]
+    Filter,
+    /// Keep the smallest stored level, larger than the cap (exact; reported).
+    Keep,
+}
+
+/// How a normal map is filtered down when it is ([`Beyond::Filter`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NormalDownscale {
+    /// Each vector decoded, averaged and renormalized ([`resize_normals`]); a normal map whose RGB is not X, Y, Z is
+    /// left at its smallest stored level.
+    #[default]
+    Renormalize,
+    /// The 2 x 2 box in stored values, as for colour (the vectors' mean, not renormalized; any convention).
+    Box,
+}
+
+/// How [`cap_texture`] reaches the cap; the defaults filter beyond the stored levels and renormalize normal maps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapMode {
+    pub beyond: Beyond,
+    pub normals: NormalDownscale,
 }
 
 /// Cap one texture to `max` pixels on its larger side (see [`CapTextures`]).
-pub fn cap_texture(t: &mut Texture, max: u32) -> Result<Capped> {
+pub fn cap_texture(t: &mut Texture, max: u32, mode: CapMode) -> Result<Capped> {
     if t.role == TexRole::Data {
         return Ok(Capped::Data);
     }
@@ -37,11 +71,17 @@ pub fn cap_texture(t: &mut Texture, max: u32) -> Result<Capped> {
         (t.width, t.height) = (width, height);
         return Ok(Capped::Level { level, width, height });
     }
+    if mode.beyond == Beyond::Keep {
+        t.levels.drain(..level);
+        (t.width, t.height) = (width, height);
+        return Ok(Capped::Smallest { level, width, height });
+    }
+    let renormalize = t.role == TexRole::Normal && mode.normals == NormalDownscale::Renormalize;
     // averaging the RGB vectors is right whatever the axes' order and signs, as long as RGB holds X, Y, Z
     let averageable = t
         .normal
         .is_none_or(|n| n.x == NormalX::Red && n.z == NormalZ::Stored);
-    if t.role == TexRole::Normal && !averageable {
+    if renormalize && !averageable {
         t.levels.drain(..level);
         (t.width, t.height) = (width, height);
         return Ok(Capped::LeftLarge { level, width, height });
@@ -57,7 +97,7 @@ pub fn cap_texture(t: &mut Texture, max: u32) -> Result<Capped> {
     while w.max(h) > max {
         (w, h) = ((w / 2).max(1), (h / 2).max(1));
     }
-    image = if t.role == TexRole::Normal {
+    image = if renormalize {
         resize_normals(&image, w, h)?.image
     } else {
         while image.width.max(image.height) > max {
@@ -77,40 +117,165 @@ pub fn cap_texture(t: &mut Texture, max: u32) -> Result<Capped> {
     })
 }
 
-/// `cap-textures{max=N}` (N > 0, required): every texture no larger than N pixels on its larger side, so passes that
-/// derive textures from it (PBR maps, normal maps) work at that size. The composing program chooses N; readers read
-/// every stored level.
-/// - A stored mip level no larger than N: that level and the smaller ones are kept, exactly; the larger ones dropped.
-/// - None: the smallest stored level is decoded to RGBA8 and box-filtered down (an approximation, named per texture).
-///   A normal map whose RGB does not hold X, Y, Z (X in alpha, Z rebuilt) is left at its smallest level instead
-///   (counted).
+/// A role [`CapTextures`] can cap apart from the others (data textures are never capped).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CapRole {
+    Color,
+    Normal,
+    Mask,
+}
+
+/// `cap-textures{max=N[,color=N][,normal=N][,mask=N][,names=NAME:N;...][,beyond=filter|keep][,normals=renormalize|box]}`
+/// (N > 0; `max` required): every texture no larger than its cap on its larger side, so passes that derive textures
+/// from it (PBR maps, normal maps) work at that size. The composing program chooses the caps; readers read every
+/// stored level. A texture's cap is its name's (`names`, its `core.name` in any case), else its role's (`color`,
+/// `normal`, `mask`), else `max`.
+/// - A stored mip level no larger than the cap: that level and the smaller ones are kept, exactly; the larger ones
+///   dropped.
+/// - None: by default (`beyond=filter`) the smallest stored level is decoded to RGBA8 and box-filtered down (an
+///   approximation, named per texture); normal maps are renormalized (`normals=renormalize`, and a normal map whose
+///   RGB does not hold X, Y, Z is left at its smallest level instead, counted) or box-filtered as colour is
+///   (`normals=box`). With `beyond=keep` the smallest stored level is kept as it is, counted.
 /// - Data textures (`TexRole::Data`: palettes, lookups, distance fields) are kept whole.
 ///
 /// Every texture is counted in one of these.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapTextures {
-    /// `None` only for the instance a registry makes with no options; running it is an error.
-    pub max: Option<u32>,
+    max: u32,
+    color: Option<u32>,
+    normal: Option<u32>,
+    mask: Option<u32>,
+    names: BTreeMap<String, u32>,
+    mode: CapMode,
+}
+
+/// A cap: a positive number of pixels.
+fn positive(what: &str, cap: u32) -> std::result::Result<u32, String> {
+    if cap == 0 {
+        return Err(format!("{what}: a cap is a positive number of pixels, not 0"));
+    }
+    Ok(cap)
+}
+
+/// A cap's option value: a positive number of pixels.
+fn pixels(k: &str, v: &str) -> std::result::Result<u32, String> {
+    let n = v
+        .parse::<u32>()
+        .map_err(|_| format!("{k}={v} is not a number of pixels"))?;
+    positive(&format!("{k}={v}"), n)
 }
 
 impl CapTextures {
+    /// Every texture no larger than `max` pixels on its larger side (positive), by the default mode.
+    pub fn new(max: u32) -> std::result::Result<CapTextures, String> {
+        Ok(CapTextures {
+            max: positive("max", max)?,
+            color: None,
+            normal: None,
+            mask: None,
+            names: BTreeMap::new(),
+            mode: CapMode::default(),
+        })
+    }
+
+    /// Textures of `role` no larger than `cap` (positive), over `max`.
+    pub fn with_role_cap(mut self, role: CapRole, cap: u32) -> std::result::Result<CapTextures, String> {
+        let cap = Some(positive("role cap", cap)?);
+        match role {
+            CapRole::Color => self.color = cap,
+            CapRole::Normal => self.normal = cap,
+            CapRole::Mask => self.mask = cap,
+        }
+        Ok(self)
+    }
+
+    /// The texture named `name` (its `core.name`, in any case) no larger than `cap` (positive), over its role's cap
+    /// and `max`.
+    pub fn with_name_cap(mut self, name: &str, cap: u32) -> std::result::Result<CapTextures, String> {
+        self.names.insert(name.to_lowercase(), positive(name, cap)?);
+        Ok(self)
+    }
+
+    /// How the caps are reached.
+    pub fn with_mode(mut self, mode: CapMode) -> CapTextures {
+        self.mode = mode;
+        self
+    }
+
+    pub fn max(&self) -> u32 {
+        self.max
+    }
+
+    pub fn role_cap(&self, role: CapRole) -> Option<u32> {
+        match role {
+            CapRole::Color => self.color,
+            CapRole::Normal => self.normal,
+            CapRole::Mask => self.mask,
+        }
+    }
+
+    /// The caps by name, lower case.
+    pub fn name_caps(&self) -> &BTreeMap<String, u32> {
+        &self.names
+    }
+
+    pub fn mode(&self) -> CapMode {
+        self.mode
+    }
+
+    /// From its options, through [`CapTextures::new`] and the same setters.
     pub fn from_options(o: &Options) -> std::result::Result<CapTextures, String> {
-        let mut max = None;
+        let max = o
+            .get("max")
+            .ok_or("cap-textures needs max=N, the largest side in pixels the program wants")?;
+        let mut pass = CapTextures::new(pixels("max", max)?)?;
+        let mut mode = CapMode::default();
         for (k, v) in o {
             match k.as_str() {
-                "max" => {
-                    max = Some(
-                        v.parse::<u32>()
-                            .ok()
-                            .filter(|&m| m > 0)
-                            .ok_or_else(|| format!("max={v} is not a positive number of pixels"))?,
-                    )
+                "max" => {}
+                "color" => pass = pass.with_role_cap(CapRole::Color, pixels(k, v)?)?,
+                "normal" => pass = pass.with_role_cap(CapRole::Normal, pixels(k, v)?)?,
+                "mask" => pass = pass.with_role_cap(CapRole::Mask, pixels(k, v)?)?,
+                "names" => {
+                    for pair in v.split(';').filter(|p| !p.is_empty()) {
+                        let (name, cap) = pair
+                            .rsplit_once(':')
+                            .ok_or_else(|| format!("names={v}: each entry is NAME:N"))?;
+                        pass = pass.with_name_cap(name, pixels("names", cap)?)?;
+                    }
+                }
+                "beyond" => {
+                    mode.beyond = match v.as_str() {
+                        "filter" => Beyond::Filter,
+                        "keep" => Beyond::Keep,
+                        _ => return Err(format!("beyond={v} is filter or keep")),
+                    }
+                }
+                "normals" => {
+                    mode.normals = match v.as_str() {
+                        "renormalize" => NormalDownscale::Renormalize,
+                        "box" => NormalDownscale::Box,
+                        _ => return Err(format!("normals={v} is renormalize or box")),
+                    }
                 }
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        // a registry makes every pass once with no options; a pipeline must name max (checked when it runs)
-        Ok(CapTextures { max })
+        Ok(pass.with_mode(mode))
+    }
+
+    /// The cap of texture `t` named `name` (lower case).
+    fn cap(&self, t: &Texture, name: Option<&str>) -> u32 {
+        if let Some(&n) = name.and_then(|n| self.names.get(n)) {
+            return n;
+        }
+        let role = match t.role {
+            TexRole::Color => self.color,
+            TexRole::Normal => self.normal,
+            TexRole::Mask => self.mask,
+            TexRole::Data | TexRole::Other => None,
+        };
+        role.unwrap_or(self.max)
     }
 }
 
@@ -124,10 +289,28 @@ impl Pass for CapTextures {
         "cap-textures"
     }
     fn options(&self) -> Options {
-        match self.max {
-            None => Options::new(),
-            Some(m) => Options::from([("max".to_owned(), m.to_string())]),
+        let mut o = Options::new();
+        for (k, v) in [
+            ("max", Some(self.max)),
+            ("color", self.color),
+            ("normal", self.normal),
+            ("mask", self.mask),
+        ] {
+            if let Some(v) = v {
+                o.insert(k.to_owned(), v.to_string());
+            }
         }
+        if !self.names.is_empty() {
+            let names: Vec<String> = self.names.iter().map(|(n, c)| format!("{n}:{c}")).collect();
+            o.insert("names".to_owned(), names.join(";"));
+        }
+        if self.mode.beyond == Beyond::Keep {
+            o.insert("beyond".to_owned(), "keep".to_owned());
+        }
+        if self.mode.normals == NormalDownscale::Box {
+            o.insert("normals".to_owned(), "box".to_owned());
+        }
+        o
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
@@ -136,24 +319,34 @@ impl Pass for CapTextures {
         "textures with no stored level within the cap: box-filtered from their smallest level, decoded to RGBA8"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let max = self
-            .max
-            .ok_or("cap-textures needs max=N, the largest side in pixels the program wants")?;
+        // the names the program caps by, looked up before the textures are borrowed
+        let names: BTreeMap<Entity, String> = if self.names.is_empty() {
+            BTreeMap::new()
+        } else {
+            w.iter::<Texture>()
+                .filter_map(|(e, _)| w.get::<Name>(e).map(|n| (e, n.0.to_lowercase())))
+                .collect()
+        };
         let Some(mut textures) = w.column_mut::<Texture>() else {
             return Ok(());
         };
         for (e, t) in textures.iter_mut() {
             let (from_w, from_h) = (t.width, t.height);
-            match cap_texture(t, max).map_err(|err| format!("{e:?}: {err}"))? {
+            let cap = self.cap(t, names.get(&e).map(String::as_str));
+            match cap_texture(t, cap, self.mode).map_err(|err| format!("{e:?}: {err}"))? {
                 Capped::Within => log.count("textures within the cap", 1),
                 Capped::Data => log.count("data textures kept whole", 1),
                 Capped::Level { level, .. } => log.count(&format!("textures: stored level {level} kept"), 1),
                 Capped::Downscaled { width, height } => log.approximate(
-                    &format!("{e:?}: {from_w}x{from_h}, no stored level within {max}, box-filtered to {width}x{height}"),
+                    &format!("{e:?}: {from_w}x{from_h}, no stored level within {cap}, box-filtered to {width}x{height}"),
                     1,
                 ),
                 Capped::LeftLarge { level, width, height } => log.count(
                     &format!("{e:?}: normal map with X not in red or Z not stored, left at stored level {level} ({width}x{height})"),
+                    1,
+                ),
+                Capped::Smallest { level, width, height } => log.count(
+                    &format!("{e:?}: no stored level within {cap}, left at its smallest, stored level {level} ({width}x{height})"),
                     1,
                 ),
             }
@@ -189,7 +382,7 @@ mod tests {
     #[test]
     fn a_stored_level_within_the_cap_is_kept_exactly() {
         let mut t = chain();
-        let got = cap_texture(&mut t, 2).unwrap();
+        let got = cap_texture(&mut t, 2, CapMode::default()).unwrap();
         assert_eq!(
             got,
             Capped::Level {
@@ -208,7 +401,7 @@ mod tests {
             TexRole::Mask,
         );
         assert_eq!(
-            cap_texture(&mut wide, 4).unwrap(),
+            cap_texture(&mut wide, 4, CapMode::default()).unwrap(),
             Capped::Level {
                 level: 1,
                 width: 4,
@@ -218,7 +411,10 @@ mod tests {
         assert_eq!(wide.levels, vec![vec![1; 32], vec![2; 8], vec![3; 4]]);
         // within the cap already: untouched
         let mut t = chain();
-        assert_eq!(cap_texture(&mut t, 8).unwrap(), Capped::Within);
+        assert_eq!(
+            cap_texture(&mut t, 8, CapMode::default()).unwrap(),
+            Capped::Within
+        );
         assert_eq!(t, chain());
     }
 
@@ -230,7 +426,7 @@ mod tests {
         let pixels: Vec<u8> = red.iter().flatten().flat_map(|&r| [r, 7, 9, 255]).collect();
         let mut t = rgba8(4, 4, vec![pixels], TexRole::Color);
         assert_eq!(
-            cap_texture(&mut t, 2).unwrap(),
+            cap_texture(&mut t, 2, CapMode::default()).unwrap(),
             Capped::Downscaled { width: 2, height: 2 }
         );
         let expected: Vec<u8> = [25, 0, 255, 3].iter().flat_map(|&r| [r, 7, 9, 255]).collect();
@@ -245,7 +441,7 @@ mod tests {
     fn data_textures_and_unfilterable_normal_maps_are_left_as_they_are() {
         let data = rgba8(8, 8, vec![vec![5; 256]], TexRole::Data);
         let mut t = data.clone();
-        assert_eq!(cap_texture(&mut t, 2).unwrap(), Capped::Data);
+        assert_eq!(cap_texture(&mut t, 2, CapMode::default()).unwrap(), Capped::Data);
         assert_eq!(t, data);
         // X in alpha (DXT5nm): averaging RGB would be wrong; its one level stays
         let mut normal = rgba8(4, 4, vec![vec![128; 64]], TexRole::Normal);
@@ -255,7 +451,7 @@ mod tests {
         });
         let before = normal.clone();
         assert_eq!(
-            cap_texture(&mut normal, 2).unwrap(),
+            cap_texture(&mut normal, 2, CapMode::default()).unwrap(),
             Capped::LeftLarge {
                 level: 0,
                 width: 4,
@@ -268,7 +464,7 @@ mod tests {
     #[test]
     fn the_pass_counts_every_texture_and_needs_max() {
         let mut r = PassRegistry::new();
-        r.register("cap-textures", cap_textures);
+        r.register_requiring("cap-textures", cap_textures, &[("max", "256")]);
         let m = PassManager::new(r);
         let mut w = World::new();
         let es: Vec<_> = (0..3).map(|_| w.spawn()).collect();
@@ -290,14 +486,112 @@ mod tests {
             ["e2: 4x4, no stored level within 2, box-filtered to 2x2"]
         );
         assert_eq!(report.steps[0].pass, "cap-textures{max=2}");
-        let err = m
-            .run(
-                &mut w,
-                &m.registry.parse("cap-textures").unwrap(),
-                &mut RunReport::default(),
-            )
-            .unwrap_err();
+        // max has no default: a pipeline without it does not parse, nor does a struct with none exist
+        let err = m.registry.parse("cap-textures").unwrap_err();
         assert!(err.to_string().contains("needs max=N"), "{err}");
+        assert!(CapTextures::new(0).is_err());
+        assert!(
+            CapTextures::new(4)
+                .unwrap()
+                .with_role_cap(CapRole::Normal, 0)
+                .is_err()
+        );
         assert!(m.registry.parse("cap-textures{max=0}").is_err());
+    }
+
+    /// `beyond=keep`: a texture with no stored level within the cap keeps its smallest, exactly; one with such a level
+    /// is capped as ever.
+    #[test]
+    fn keep_leaves_the_smallest_stored_level() {
+        let keep = CapMode {
+            beyond: Beyond::Keep,
+            ..CapMode::default()
+        };
+        // two stored levels, 8 and 4 px, capped to 2
+        let mut t = rgba8(8, 8, vec![vec![1; 256], vec![2; 64]], TexRole::Color);
+        assert_eq!(
+            cap_texture(&mut t, 2, keep).unwrap(),
+            Capped::Smallest {
+                level: 1,
+                width: 4,
+                height: 4
+            }
+        );
+        assert_eq!((t.width, t.height, t.levels.clone()), (4, 4, vec![vec![2; 64]]));
+        let mut t = chain();
+        assert_eq!(
+            cap_texture(&mut t, 2, keep).unwrap(),
+            Capped::Level {
+                level: 2,
+                width: 2,
+                height: 2
+            }
+        );
+    }
+
+    /// `normals=box`: a normal map is box-filtered in stored values as colour is, whatever its convention; by default
+    /// it is renormalized, so the two differ on vectors that do not average to unit length.
+    #[test]
+    fn normals_box_filters_like_colour() {
+        // a 2 x 1 normal map: +X and +Y, (255,128,128) and (128,255,128): the box mean is (192,192,128)
+        let pixels = vec![255, 128, 128, 255, 128, 255, 128, 255];
+        let mut normal = rgba8(2, 1, vec![pixels.clone()], TexRole::Normal);
+        normal.normal = Some(NormalConvention {
+            x: NormalX::Alpha,
+            ..NormalConvention::GLTF
+        });
+        let boxed = CapMode {
+            normals: NormalDownscale::Box,
+            ..CapMode::default()
+        };
+        let mut b = normal.clone();
+        assert_eq!(
+            cap_texture(&mut b, 1, boxed).unwrap(),
+            Capped::Downscaled { width: 1, height: 1 }
+        );
+        assert_eq!(b.levels, vec![vec![192, 192, 128, 255]]);
+        // the same map with X in alpha cannot be renormalized: left at its level by default
+        let mut r = normal.clone();
+        assert!(matches!(
+            cap_texture(&mut r, 1, CapMode::default()).unwrap(),
+            Capped::LeftLarge { .. }
+        ));
+        // in glTF's convention it is renormalized, not boxed
+        let mut g = normal;
+        g.normal = Some(NormalConvention::GLTF);
+        cap_texture(&mut g, 1, CapMode::default()).unwrap();
+        assert_ne!(g.levels, vec![vec![192, 192, 128, 255]]);
+    }
+
+    /// A texture's cap is its name's, else its role's, else `max`; the options print back as given.
+    #[test]
+    fn names_and_roles_choose_the_cap() {
+        let mut r = PassRegistry::new();
+        r.register_requiring("cap-textures", cap_textures, &[("max", "256")]);
+        let m = PassManager::new(r);
+        let pipeline = m
+            .registry
+            .parse("cap-textures{max=4,normal=2,names=Wall:1,beyond=keep,normals=box}")
+            .unwrap();
+        assert_eq!(
+            pipeline.to_string(),
+            "cap-textures{beyond=keep,max=4,names=wall:1,normal=2,normals=box}"
+        );
+        let mut w = World::new();
+        let (colour, normal, named) = (w.spawn(), w.spawn(), w.spawn());
+        w.insert(colour, chain());
+        w.insert(normal, rgba8(8, 8, chain().levels, TexRole::Normal));
+        w.insert(named, chain());
+        w.insert(named, Name("WALL".into()));
+        m.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
+        let side = |e| w.get::<Texture>(e).unwrap().width;
+        assert_eq!((side(colour), side(normal), side(named)), (4, 2, 1));
+        for bad in [
+            "cap-textures{max=4,names=wall}",
+            "cap-textures{max=4,beyond=crop}",
+            "cap-textures{max=4,normal=0}",
+        ] {
+            assert!(m.registry.parse(bad).is_err(), "{bad}");
+        }
     }
 }
