@@ -64,12 +64,6 @@ removed_when = "the synthetic world comes from a library fixture function"
 # ---- passes registered, lowerings run as passes ----
 
 [[pass]]
-file = "toolkit/image/src/texture.rs"
-what = "pass load-textures is not registered"
-reason = "a loader written as a pass; loading is a reader's load step"
-removed_when = "texture loading is a reader function, not a pass"
-
-[[pass]]
 file = "worlds/unity/src/drawn.rs"
 what = "pass unity-drawn is not registered"
 reason = "worlds/unity has no register() yet"
@@ -108,18 +102,6 @@ reason = "writes prototype GLBs and texture PNGs, then points the world at them,
 removed_when = "write serializes in-memory meshes and textures itself"
 
 # ---- file, environment and process access (clippy.toml), by module role ----
-
-[[io]]
-file = "formats/gltf/src/load.rs"
-role = "exception"
-reason = "load-mesh-files is a pass that reads GLB files"
-removed_when = "loading meshes is a reader's load step, not a pass"
-
-[[io]]
-file = "toolkit/image/src/texture.rs"
-role = "exception"
-reason = "load-textures is a pass that reads PNG and DDS files"
-removed_when = "loading textures is a reader's load step, not a pass"
 
 [[io]]
 file = "formats/gltf/src/write.rs"

@@ -14,7 +14,7 @@ use primase_core::{
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
-/// Register this crate's passes (not load-textures: loading is a reader's step).
+/// Register this crate's passes.
 pub fn register(reg: &mut PassRegistry) {
     // the cap is the program's: no default
     reg.register_requiring("cap-textures", crate::cap_textures, &[("max", "256")]);

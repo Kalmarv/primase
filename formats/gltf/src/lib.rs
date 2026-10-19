@@ -3,8 +3,8 @@
 //! - [`write()`] / [`write_file`]: a [`primase_core::World`] to one GLB (prototypes as shared meshes, placements as
 //!   nodes, `pbr.material`s, embedded PNGs, dialect components in extras); see [`write`](mod@write) for the rules.
 //! - [`Gltf`]: the strict GLB reader, meshes into [`primase_core::Mesh`].
-//! - [`load_mesh_files`]: the pass loading `core.mesh_file` prototypes into `core.mesh`; [`mesh_file_box`]: a mesh
-//!   file's box from its JSON alone.
+//! - [`load_mesh_files`]: a reader's load step, `core.mesh_file` prototypes into `core.mesh`; [`mesh_file_box`]: a
+//!   mesh file's box from its JSON alone.
 //!
 //! Frames: the world frame is glTF's (metres, right-handed, +Y up, -Z forward), so nothing is converted.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
@@ -20,11 +20,16 @@ use std::path::{Path, PathBuf};
 
 use primase_core::Entity;
 
-pub use load::{LoadMeshFiles, LoadReport, load_mesh_files, mesh_file_box, register};
+pub use load::{LoadReport, load_mesh_files, mesh_file_box};
 pub use read::{Gltf, ReadMesh, ReadPrimitive};
 pub use write::{
     GroupBy, Piece, Selected, Selection, WriteOptions, WriteReport, write, write_document, write_file,
 };
+
+/// Register this crate's passes.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    prepare::register(reg);
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

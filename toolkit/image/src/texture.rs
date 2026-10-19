@@ -1,5 +1,5 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Pass, PassLog};
 use primase_core::{
     ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
     Texture, TextureFile, World,
@@ -26,7 +26,7 @@ pub struct TextureLoadReport {
 #[allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "exception: a loader pass reads PNG and DDS files; loading belongs to a reader's load step"
+    reason = "toolkit I/O: a reader's load step reads the PNG and DDS files its world references"
 )]
 pub fn load_textures(world: &mut World, base_dir: &Path) -> Result<TextureLoadReport> {
     let jobs: Vec<_> = world
@@ -90,39 +90,6 @@ pub fn load_textures(world: &mut World, base_dir: &Path) -> Result<TextureLoadRe
         world.insert(e, t);
     }
     Ok(report)
-}
-/// Declared loader pass. Empty base_dir resolves relative paths from the caller's
-/// working directory; readers should prefer fully resolved TextureFile paths.
-#[derive(Debug, Clone, Default)]
-pub struct LoadTextures {
-    pub base_dir: PathBuf,
-}
-impl Pass for LoadTextures {
-    fn name(&self) -> &'static str {
-        "load-textures"
-    }
-    fn options(&self) -> Options {
-        if self.base_dir.as_os_str().is_empty() {
-            Options::new()
-        } else {
-            Options::from([("base_dir".into(), self.base_dir.to_string_lossy().into_owned())])
-        }
-    }
-    fn requires(&self) -> &[&'static str] {
-        &["core.texture_file"]
-    }
-    fn provides(&self) -> &[&'static str] {
-        &["core.texture"]
-    }
-    fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let r = load_textures(world, &self.base_dir).map_err(|e| e.to_string())?;
-        log.count("textures", r.textures);
-        log.count("files", r.files);
-        for (k, n) in r.ignored_ancillary {
-            log.approximate(&format!("PNG metadata {k} not represented"), n);
-        }
-        Ok(())
-    }
 }
 pub(crate) fn level_dimensions(t: &Texture, level: usize) -> Result<(u32, u32)> {
     if t.width == 0

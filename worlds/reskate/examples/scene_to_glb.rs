@@ -4,25 +4,25 @@
 //! `cargo run --release -p primase-reskate --example scene_to_glb -- <scene folder> <out.glb> [prototype|tile|none]
 //! [pipeline]`
 //!
-//! The default pipeline takes each prototype's finest level of detail, loads the prototypes' GLBs and the texture
-//! files, lowers `skate.material` to `pbr.material` (keeping the skate material, which goes to extras) and converts
-//! normal maps to glTF's convention:
-//! `select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals`. The world is verified after the reader and
-//! after every pass; the run report lists what each pass did and approximated.
+//! Each prototype's finest level of detail is selected (`select-lod{form=finest}`), then the reader's load step reads
+//! the prototypes' GLBs and the texture files of what is left (`interchange::load`). The default pipeline then lowers
+//! `skate.material` to `pbr.material` (keeping the skate material, which goes to extras) and converts normal maps to
+//! glTF's convention: `lower-skate-pbr, normalize-normals, ...`. The world is verified after the reader and after
+//! every pass; the run report lists what each pass did and approximated.
 
 use std::path::PathBuf;
 
 use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_gltf::{GroupBy, WriteOptions, write_file};
-use primase_image::{LoadTextures, NormalizeNormals};
+use primase_image::NormalizeNormals;
 use primase_reskate::dialect::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 
 /// The skate scene's own rules for what it does not state are this program's choices: zeros for a texture coordinate
 /// set a primitive lacks, and light grey, dielectric and rough for a material without PBR factors.
-const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, \
+const DEFAULT_PIPELINE: &str = "lower-skate-pbr, normalize-normals, \
     fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}, bake-nonrigid{mirrors=keep}";
 
 fn registry() -> PassRegistry {
@@ -32,16 +32,6 @@ fn registry() -> PassRegistry {
     reg.register("select-lod", primase_core::select_lod);
     primase_meshops::register(&mut reg);
     reg.register("drop-optional", primase_core::drop_optional);
-    reg.register("load-textures", |o| {
-        let mut p = LoadTextures::default();
-        for (k, v) in o {
-            match k.as_str() {
-                "base_dir" => p.base_dir = PathBuf::from(v),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(Box::new(p))
-    });
     reg.register("normalize-normals", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(NormalizeNormals)),
@@ -70,14 +60,19 @@ fn main() -> Result<(), BoxError> {
 
     let manager = PassManager::new(registry());
     manager.verify(&world, "the reader")?;
+    // the finest form of each prototype, then only what is left loaded
+    let select = manager.registry.parse("select-lod{form=finest}")?;
+    let mut report = RunReport {
+        target: "gltf".into(),
+        ..RunReport::default()
+    };
+    manager.run(&mut world, &select, &mut report)?;
+    primase_reskate::interchange::load(&folder, &mut world)?;
+    manager.verify(&world, "the reader's load step")?;
     let pipeline = manager
         .registry
         .parse(args.get(4).map_or(DEFAULT_PIPELINE, String::as_str))?;
-    let mut report = RunReport {
-        target: "gltf".into(),
-        pipeline: pipeline.to_string(),
-        ..RunReport::default()
-    };
+    report.pipeline = format!("select-lod{{form=finest}}, {pipeline}");
     manager.run(&mut world, &pipeline, &mut report)?;
 
     let options = WriteOptions {

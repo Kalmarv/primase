@@ -15,7 +15,7 @@ mod texture;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use std::io::Cursor;
 pub use texture::{
-    BakeNormalScale, LoadTextures, NormalizeNormals, TextureLoadReport, bake_normal_scale, load_textures,
+    BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, load_textures,
     normalize_normals, texture_level_png,
 };
 

@@ -33,7 +33,7 @@ promised: the contract is exact pixel roundtrip and deterministic output.
 Censuses deduplicate input files by SHA256 within each configured root, reporting
 path counts separately from checked distinct contents. All paths are read and hashed.
 
-`LoadTextures` / `load_textures` load PNG and DDS file components atomically,
+`load_textures`, a reader's load step, loads PNG and DDS file components atomically,
 retaining file provenance and stored mip levels. Absolute paths are used directly;
 relative paths resolve against the optional base directory. Existing textures take
 priority. PNG samples retain 8/16-bit precision and default to sRGB; semantic
