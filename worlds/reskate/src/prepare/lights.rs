@@ -101,6 +101,9 @@ impl Pass for SelectReskateLights {
     fn despawns_entities(&self) -> bool {
         true
     }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         super::require_one_part(w, self.name())?;
         let lights: Vec<(Entity, PlacedLight)> = w

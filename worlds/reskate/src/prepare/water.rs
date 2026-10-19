@@ -260,6 +260,9 @@ impl Pass for PrepareReskateWater {
     fn approximates(&self) -> &'static str {
         "a water outline the source gives not convex, drawn as a fan from its first corner"
     }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         super::require_one_part(w, self.name())?;
         if self.ocean == OceanMaterials::All

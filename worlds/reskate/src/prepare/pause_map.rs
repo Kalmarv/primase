@@ -187,6 +187,9 @@ impl Pass for PrepareReskatePauseMap {
     fn removes(&self) -> &[&'static str] {
         &[SkatePauseImage::NAME]
     }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         super::require_one_part(w, self.name())?;
         let picture = match self.source {

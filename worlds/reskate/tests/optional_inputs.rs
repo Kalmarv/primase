@@ -1,6 +1,6 @@
-//! A map's features are optional: a scene with no materials, no blends, no grind curves and no decals goes through the
-//! ReSkate preparation passes a program runs for them, as the pass manager runs them, and the writer: each pass finds
-//! nothing to do, and says so where it counts.
+//! A map's features are optional: a scene with no materials, no blends, no grind curves, no decals, no lights and no
+//! water goes through the ReSkate preparation passes a program runs for them, as the pass manager runs them, and the
+//! writer: each pass finds nothing to do, and says so where it counts.
 
 #![allow(clippy::unwrap_used)]
 
@@ -62,7 +62,9 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
     let pipeline = registry
         .parse(
             "lower-layered-reskate, prepare-reskate-textures, budget-reskate-textures{max=64}, \
-             prepare-reskate-grinds, prepare-reskate-overlays{step=0.004}",
+             prepare-reskate-grinds, select-reskate-lights{per_cell=8,cell=200}, \
+             prepare-reskate-water{extent=content,margin=400}, \
+             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}",
         )
         .unwrap();
     let mut report = RunReport::default();
