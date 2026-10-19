@@ -98,8 +98,15 @@ unwrap_used = "warn"
 disallowed_methods = "allow"
 disallowed_types = "allow"
 
+# Debug info: line tables for our crates (backtraces keep file and line), none for dependencies. Full debug info
+# made each agent's target directory ~90 GB, mostly Windows debug info in test binaries; turn it on locally when
+# stepping through code in a debugger (CARGO_PROFILE_DEV_DEBUG=true). The test profile inherits both.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.test]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
