@@ -16,7 +16,7 @@ pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_norma
 use std::io::Cursor;
 pub use texture::{
     BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, load_textures,
-    normalize_normals, texture_level_png,
+    normalize_normals, texture_level_png, texture_level_rgba8,
 };
 
 use thiserror::Error;

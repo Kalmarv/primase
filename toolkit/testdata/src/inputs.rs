@@ -531,7 +531,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_FROMSOFT_SCENE",
         kind: Kind::Input,
         gate: true,
-        about: r#"our earlier exporter's skate-scene folder of an area: scene.json (region, materials) and its collision tables (a regression baseline, not an independent reference); cli/tests/fromsoft_collision_scene.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs"#,
+        about: r#"our earlier exporter's skate-scene folder of an area: scene.json (region, materials), its collision tables (a regression baseline, not an independent reference) and textures; cli/tests/fromsoft_collision_scene.rs, web_texture_decode.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs"#,
         status: Status::Live,
         source: r#"regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead"#,
     },

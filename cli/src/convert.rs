@@ -40,6 +40,10 @@ pub fn registry() -> PassRegistry {
     primase_reskate::register(&mut r);
     primase_unity::register(&mut r);
     primase_fromsoft::sekiro::passes::register(&mut r);
+    // prepare-gltf-materials, fill-missing-texcoords (and load-mesh-files); prepare-web-textures
+    primase_gltf::register(&mut r);
+    #[cfg(feature = "ktx2")]
+    primase_web::prepare::register(&mut r);
     r
 }
 

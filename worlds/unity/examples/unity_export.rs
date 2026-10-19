@@ -122,10 +122,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     println!("glTF {}: {r:?}", glb.display());
     if web {
+        // this program's choices: 200 m cells, files of at most 96 MiB, with KTX2 textures of at most 512 (colour,
+        // normal) and 256 (mask) pixels, encodings of at most 360448 (colour) and 98304 (mask) bytes
         let options = primase_web::Options {
             ktx2,
-            ..Default::default()
+            tile_byte_budget: Some(96 << 20),
+            ..primase_web::Options::new(primase_web::TileSize::new(200.)?)
         };
+        if ktx2 {
+            use primase_web::prepare::{ByteBudget, PrepareWebTextures, RoleCaps, WebCap};
+            let mut pass = PrepareWebTextures::new(RoleCaps {
+                color: WebCap::new(512)?,
+                normal: WebCap::new(512)?,
+                mask: WebCap::new(256)?,
+            });
+            pass.color_bytes = Some(ByteBudget::new(360_448)?);
+            pass.mask_bytes = Some(ByteBudget::new(98_304)?);
+            let mut report = RunReport::default();
+            PassManager::new(PassRegistry::new()).run(
+                &mut w,
+                &Pipeline {
+                    passes: vec![Box::new(pass)],
+                },
+                &mut report,
+            )?;
+            for step in &report.steps {
+                show(&step.pass, &step.log);
+            }
+        }
         let set = primase_web::write(&w, &options)?;
         let folder = out.join("web");
         set.write_to(&folder)?;

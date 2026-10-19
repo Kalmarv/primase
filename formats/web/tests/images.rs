@@ -83,11 +83,11 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn images_are_shared_files_and_tiles_reference_them() {
     for options in [
-        Options::default(),
+        Options::new(primase_web::TileSize::new(200.).unwrap()),
         Options {
             compress: false,
             gpu_instancing: false,
-            ..Options::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         },
     ] {
         let set = write(&world(), &options).unwrap();
@@ -160,13 +160,13 @@ fn images_are_shared_files_and_tiles_reference_them() {
 
 #[test]
 fn subcells_share_their_cells_images() {
-    let whole = write(&world(), &Options::default()).unwrap();
+    let whole = write(&world(), &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let split = write(
         &world(),
         &Options {
             // every GLB is over this: each cell splits until one placement is left
             tile_byte_budget: Some(64),
-            ..Options::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         },
     )
     .unwrap();

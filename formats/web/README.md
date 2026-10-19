@@ -34,14 +34,17 @@ boxes (`primase_gltf::mesh_file_box` reads one from a GLB's JSON alone), the
 placements whose pivot does not locate their geometry, to be filed by triangle
 centre.
 
-`Options::tile_byte_budget` (96 MiB by default, `None` to disable) caps each file a
+`Options::tile_byte_budget` (`None` by default: the program states its budget;
+`scene_to_tiles` and the CLI use 96 MiB) caps each file a
 tile carries, its GLB and its collision sidecar: a cell with a larger one is split
 into quadtree subcells, by the cell rules, until each fits (FORMAT.md, "Byte
 budget and subcells"). Cells that fit keep the bytes and names they would have
 without a budget. A tile still over it, because one placement or viewer record
 makes it so or at the level limit, is written and listed in
-`TilePlan::over_budget` (`TileSet::over_budget`). `scene_to_tiles` takes
-`--budget-mib N` or `--no-budget`. The writer
+`TilePlan::over_budget` (`TileSet::over_budget`); each split cell is in
+`TilePlan::splits` and a selection notice of the writer. `scene_to_tiles` takes
+`--budget-mib N` or `--no-budget`. The tile size is the program's too:
+`Options::new(TileSize)` (`TileSize`: finite, above 0). The writer
 never loads or lowers: what it needs missing is an error. A tile holds its
 placements and what they refer to, and the world's lights whose position it contains. The world uses metres and +Y up. Ground tiles
 use floor(east/tile_size), floor(north/tile_size), with a default size of 200 metres.
@@ -173,18 +176,23 @@ gets separate texture bindings. The DFD primaries are BT709 for colour and
 unspecified for data, as required by
 [KHR_texture_basisu](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_texture_basisu).
 
-Colour uses UASTC quality 100 (RDO disabled), effort 2, with 512 pixels per
-axis and 360,448 encoded bytes; masks use 256 pixels and 98,304 bytes. Normals
-use lossless PNG at up to 512 pixels per axis, with no encoded-byte cap. Each
-axis is lowered to a power of two, at least four pixels. Small axes are
-replicated. Source/output dimensions, role, caps and actual bytes are recorded
-in image extras. These limits describe the web target, not the source format.
-
-The per-axis caps are `Options::texture_caps` (defaults above: colour 512,
-normal 512, mask 256; powers of two, at least 4). `Options::texture_caps_by_name`
-sets tighter caps for images whose glTF name starts with a given prefix (the
-first matching rule wins), for example to bound generated texture variants. The
-`scene_to_tiles` example exposes this as `--texture-cap <prefix>=<colour>,<normal>,<mask>`.
+Colour uses UASTC quality 100 (RDO disabled), effort 2; normal maps are
+lossless PNG. The writer encodes each image at the size it is given and never
+resizes it; an image whose sides are not multiples of 4 is written as PNG.
+Sizes are chosen before the writer by `prepare-web-textures` (`prepare` module),
+a pass a program runs: `{color=N,normal=N,mask=N}` caps per role (required;
+powers of two, at least 4), `names=PREFIX:C/N/M;...` tighter caps for textures
+whose name starts with a prefix (first match wins), and optional byte budgets
+`color-bytes=N`, `mask-bytes=N`. Each texture is snapped to a power of two within
+its cap (at least four pixels; small axes replicated); with a budget the pass
+encodes the image as the writer does, halves it until the encoding fits, and
+keeps the chosen encoding in `web.prepared_images`, which the writer writes as
+it is. A texture bound in several roles gets a copy per further role. Each snap
+and halving is a counted approximation. `scene_to_tiles` states its own choices:
+512/512/256 pixels, 360,448 (colour) and 98,304 (mask) bytes, and
+`--texture-cap <prefix>=<colour>,<normal>,<mask>` as name caps. Source/output
+dimensions, role, cap and actual bytes are recorded in image extras. These
+limits describe the web target, not the source format.
 
 Colour filtering averages in linear light. Normal filtering uses
 `primase_image::resize_normals`: normalize source vectors, average them, then
@@ -194,7 +202,7 @@ other writers. PNG carries one level; browser-generated mip filtering is not
 claimed to implement this vector filter. Resolution loss is measured separately
 from codec error, including its angular distribution.
 
-The encoder checks alpha against the capped source before accepting a colour
+The encoder checks alpha against the prepared source before accepting a colour
 image. Every cutout binding must change visibility for fewer than 0.1% of pixels
 at its material cutoff (including base-colour alpha factor). Blended alpha must
 have p99 absolute error at most 8 levels. Otherwise the capped image stays PNG.

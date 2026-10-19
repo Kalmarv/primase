@@ -110,7 +110,7 @@ fn a_world_that_loads_its_meshes_per_cell_writes_what_the_loaded_world_writes() 
     let options = Options {
         compress: false,
         split_by_tile: spans.marked.iter().copied().collect(),
-        ..Options::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
     let plain = Options {
         gpu_instancing: false,
@@ -162,7 +162,12 @@ fn nothing_to_draw_still_publishes_an_index() {
     for p in w.iter::<Mesh>().map(|(e, _)| e).collect::<Vec<_>>() {
         w.remove::<Mesh>(p);
     }
-    let plan = plan_with_geometry(&w, &Options::default(), &|_| false).unwrap();
+    let plan = plan_with_geometry(
+        &w,
+        &Options::new(primase_web::TileSize::new(200.).unwrap()),
+        &|_| false,
+    )
+    .unwrap();
     assert!(plan.cells().is_empty());
     let index = plan.finish().unwrap();
     assert_eq!(index.placements_without_mesh, 2);
@@ -255,7 +260,7 @@ fn collision_a_cell_loads_on_its_prototypes_is_written_with_the_cell() {
     };
     let options = Options {
         compress: false,
-        ..Options::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
     let mut plan = plan_with_geometry(&light, &options, &|_| true).unwrap();
     let mut sidecars = Vec::new();

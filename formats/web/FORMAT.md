@@ -94,9 +94,9 @@ are immutable: the same name always holds the same bytes.
 
 ## Byte budget and subcells
 
-The writer has a byte budget for each file a tile carries, its GLB and its
-collision sidecar alike (96 MiB by default; the producer may change or disable
-it). Image files are separate and not counted against a tile. A cell with a file
+The producer may give the writer a byte budget for each file a tile carries, its
+GLB and its collision sidecar alike (none by default; scene_to_tiles and the CLI
+use 96 MiB). Image files are separate and not counted against a tile. A cell with a file
 over the budget is split into a quadtree: halved along both ground axes into four
 subcells, and each subcell still over the budget again, down to level 8 at most.
 Content is divided by the same rules as cells: placements by pivot, placements

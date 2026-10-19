@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use primase_core::convert::{Part, PartSource, Report, Result, Writer};
+use primase_core::convert::{Finished, Part, PartSource, Report, Result, Writer};
 use primase_core::pass::Target;
 use primase_core::{Entity, Instance, World};
 
@@ -81,7 +81,7 @@ pub fn tiles(sets: Vec<(Options, PathBuf)>) -> (TileParts, TileWriter) {
 impl PartSource for TileParts {
     fn plan(&mut self, world: &World, boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
         let mut tiles = self.tiles.borrow_mut();
-        let spans = crate::spanning(world, tiles.sets[0].0.tile_size, |p| Ok(boxes(p)))?;
+        let spans = crate::spanning(world, tiles.sets[0].0.tile_size.get(), |p| Ok(boxes(p)))?;
         // the prototypes with geometry before it is loaded: those with a box
         let prototypes: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         let boxed: BTreeSet<Entity> = prototypes.into_iter().filter(|&p| boxes(p).is_some()).collect();
@@ -168,7 +168,7 @@ impl Writer for TileWriter {
         }
         Ok(())
     }
-    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
+    fn finish(self: Box<Self>) -> Result<Finished> {
         let TileWriter { tiles, bytes } = *self;
         let Tiles {
             sets,
@@ -182,7 +182,27 @@ impl Writer for TileWriter {
             report: Report::new(),
         });
         let mut indexes = Vec::new();
+        let mut notices = Vec::new();
         for (plan, (_, out)) in plans.into_iter().zip(&sets) {
+            // a file-size choice: the content is all written, in more tiles
+            if !plan.splits().is_empty() {
+                let mut n = primase_core::convert::Notice::new(
+                    "web",
+                    primase_core::convert::NoticeKind::Selection,
+                    format!(
+                        "cells split into subcells to fit the tile byte budget ({})",
+                        out.display()
+                    ),
+                    plan.splits().len() as u64,
+                );
+                for split in plan.splits() {
+                    n = n.example(match split.bytes {
+                        Some(b) => format!("{} ({b} bytes)", split.cell),
+                        None => split.cell.clone(),
+                    });
+                }
+                notices.push(n);
+            }
             #[cfg(feature = "ktx2")]
             if plan.encodings_dropped() > 0 {
                 report.push((
@@ -212,6 +232,6 @@ impl Writer for TileWriter {
                 index.tiles.iter().map(|t| t.lights).sum::<u64>(),
             ),
         ));
-        Ok(report.into())
+        Ok(Finished { report, notices })
     }
 }

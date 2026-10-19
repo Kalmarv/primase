@@ -118,6 +118,7 @@ impl Pass for PrepareGltfMaterials {
             .into_iter()
             .filter(|&e| !w.has::<PbrMaterial>(e) && !w.has::<LayeredMaterial>(e))
             .collect();
+        log.count("materials given the program's PBR factors", bare.len() as u64);
         for e in bare {
             w.insert(
                 e,
@@ -184,9 +185,7 @@ impl Pass for FillMissingTexcoords {
     fn name(&self) -> &'static str {
         "fill-missing-texcoords"
     }
-    fn requires(&self) -> &[&'static str] {
-        &[Mesh::NAME]
-    }
+    // a world (or part) without meshes has nothing to fill: no requirement
     fn modifies(&self) -> &[&'static str] {
         &[Mesh::NAME]
     }
@@ -195,6 +194,7 @@ impl Pass for FillMissingTexcoords {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let meshes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
+        log.count("meshes looked at", meshes.len() as u64);
         for e in meshes {
             let wanted: Vec<BTreeSet<u8>> = w
                 .get::<Mesh>(e)

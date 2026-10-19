@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 data: json!({"positions":[[1.,0.,-1.],[3.,0.,-1.],[1.,0.,-3.]],"triangles":[[0,1,2]],"surfaces":[7]}),
             },
         ],
-        ..Options::default()
+        ..Options::new(primase_web::TileSize::new(200.)?)
     };
     let set = primase_web::write(&world, &options)?;
     set.write_to(&output)?;

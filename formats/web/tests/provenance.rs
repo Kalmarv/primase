@@ -90,7 +90,7 @@ fn tiles_share_one_origin_table() {
     for compress in [false, true] {
         let options = Options {
             compress,
-            ..Options::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         };
         let set = write(&world(), &options).unwrap();
         assert_eq!(set.index.tiles.len(), 1);
@@ -153,7 +153,7 @@ fn tiles_without_provenance_have_no_table() {
     for e in held {
         w.remove::<Provenance>(e);
     }
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let text = String::from_utf8_lossy(
         primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file])
             .unwrap()

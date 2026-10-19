@@ -57,7 +57,7 @@ fn options(budget: Option<u64>) -> Options {
         compress: false,
         gpu_instancing: false,
         tile_byte_budget: budget,
-        ..Options::default()
+        ..Options::new(primase_web::TileSize::new(200.).expect("200 m is a tile size"))
     }
 }
 

@@ -108,9 +108,14 @@ pub(crate) fn level_dimensions(t: &Texture, level: usize) -> Result<(u32, u32)> 
 /// No transfer function, normal-map conversion, or mip filtering is implicit.
 /// Float/HDR values follow TexDecoder's documented clamped RGBA8 projection.
 pub fn texture_level_png(t: &Texture, level: usize) -> Result<Vec<u8>> {
+    write_png(&texture_level_rgba8(t, level)?)
+}
+
+/// Level `level` of `t` decoded to RGBA8, the pixels [`texture_level_png`] writes.
+pub fn texture_level_rgba8(t: &Texture, level: usize) -> Result<Image> {
     let (w, h) = level_dimensions(t, level)?;
     let rgba = Decoder::default().decode_rgba8(t.format, w, h, &t.levels[level])?;
-    write_png(&Image {
+    Ok(Image {
         width: w,
         height: h,
         samples: Samples::U8(rgba),

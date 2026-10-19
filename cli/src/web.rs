@@ -6,17 +6,27 @@ use primase_web::Options;
 
 use crate::convert::Result;
 
-/// `[--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]] [--budget-mib N |
-/// --no-budget] [--plain]`. KTX2 encodings are kept in the cache folder across runs, else in `PRIMASE_CACHE` when
-/// set; in memory, at most `--encoding-memory-mib` (512 by default) between tiles.
+/// `[--tile-m N] [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
+/// [--budget-mib N | --no-budget] [--plain]`. This command's choices unless told otherwise: 200 m cells, files of at
+/// most 96 MiB. KTX2 encodings are kept in the cache folder across runs, else in `PRIMASE_CACHE` when set; in memory,
+/// at most `--encoding-memory-mib` (512 by default) between tiles. The writer writes textures at the sizes it is
+/// given: `prepare-web-textures{...}` in `--passes` chooses them.
 pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
-    let (mut options, mut plain) = (Options::default(), false);
+    let (mut tile_m, mut plain) = (200., false);
+    let mut options = Options::new(primase_web::TileSize::new(tile_m)?);
+    options.tile_byte_budget = Some(96 << 20);
     #[cfg(feature = "ktx2")]
     let (mut cache_dir, mut cache_max_gib) = (None::<std::path::PathBuf>, None::<u64>);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("web: {a} needs a value"));
         match a.as_str() {
+            "--tile-m" => {
+                tile_m = value()?
+                    .parse()
+                    .map_err(|_| "web: --tile-m is a number of metres")?;
+                options.tile_size = primase_web::TileSize::new(tile_m)?;
+            }
             "--ktx2" => {
                 #[cfg(feature = "ktx2")]
                 {

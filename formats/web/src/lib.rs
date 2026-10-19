@@ -17,6 +17,8 @@ pub use images::{IMAGE_DIR, ImageFiles};
 pub use spanning::{LocalBox, PIVOT_MARGIN, Spans, spanning};
 #[cfg(feature = "ktx2")]
 pub mod ktx2;
+#[cfg(feature = "ktx2")]
+pub mod prepare;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -35,19 +37,14 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub struct Options {
-    pub tile_size: f64,
+    /// The cells' side: how big a tile is, the program's choice.
+    pub tile_size: TileSize,
     pub gpu_instancing: bool,
     /// Quantize vertex attributes and encode vertex streams with meshopt.
     pub compress: bool,
     /// Optional web texture lowering; PNG embedding remains the default.
     #[cfg(feature = "ktx2")]
     pub ktx2: bool,
-    /// KTX2 lowering: largest texture edge per role.
-    #[cfg(feature = "ktx2")]
-    pub texture_caps: ktx2::TextureCaps,
-    /// KTX2 lowering: caps for images whose glTF name starts with a prefix; first match wins.
-    #[cfg(feature = "ktx2")]
-    pub texture_caps_by_name: Vec<(String, ktx2::TextureCaps)>,
     /// KTX2 lowering: a disk cache of encoded images, kept across runs (`None`: encode every run).
     #[cfg(feature = "ktx2")]
     pub cache: Option<std::sync::Arc<primase_cache::Cache>>,
@@ -65,7 +62,8 @@ pub struct Options {
     pub split_by_tile: BTreeSet<Entity>,
     pub base_dir: PathBuf,
     /// The largest file a tile may carry, its GLB and its collision sidecar alike: a cell with a larger one is split
-    /// into quadtree [`Subcell`]s, recursively, until each file fits. `None` keeps every cell whole.
+    /// into quadtree [`Subcell`]s, recursively, until each file fits, each split reported. `None` (by default) keeps
+    /// every cell whole: the budget is the program's choice.
     pub tile_byte_budget: Option<u64>,
     /// A starting view, written to the index as `camera`; `None`: a consumer frames the scene itself.
     pub camera: Option<Camera>,
@@ -76,22 +74,36 @@ pub struct Camera {
     pub eye: [f64; 3],
     pub target: [f64; 3],
 }
-/// The default [`Options::tile_byte_budget`], 96 MiB.
-pub const DEFAULT_TILE_BYTE_BUDGET: u64 = 96 * 1024 * 1024;
+/// A cell's side in metres: finite and above 0.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct TileSize(f64);
+impl TileSize {
+    /// `metres`: an error unless finite and above 0.
+    pub fn new(metres: f64) -> Result<TileSize> {
+        if metres.is_finite() && metres > 0. {
+            Ok(TileSize(metres))
+        } else {
+            Err(Error::Invalid(format!(
+                "tile size {metres} is not finite and above 0 metres"
+            )))
+        }
+    }
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
 /// The deepest [`Subcell::level`] a cell is split to.
 pub const MAX_SUBCELL_LEVEL: u8 = 8;
-impl Default for Options {
-    fn default() -> Self {
+impl Options {
+    /// Tiles of `tile_size`, GPU-instanced and compressed, images as PNG, no viewer records, no byte budget, no
+    /// camera.
+    pub fn new(tile_size: TileSize) -> Options {
         Self {
-            tile_size: 200.,
+            tile_size,
             gpu_instancing: true,
             compress: true,
             #[cfg(feature = "ktx2")]
             ktx2: false,
-            #[cfg(feature = "ktx2")]
-            texture_caps: ktx2::TextureCaps::default(),
-            #[cfg(feature = "ktx2")]
-            texture_caps_by_name: Vec::new(),
             #[cfg(feature = "ktx2")]
             cache: None,
             #[cfg(feature = "ktx2")]
@@ -101,7 +113,7 @@ impl Default for Options {
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             base_dir: PathBuf::new(),
-            tile_byte_budget: Some(DEFAULT_TILE_BYTE_BUDGET),
+            tile_byte_budget: None,
             camera: None,
         }
     }
@@ -220,6 +232,17 @@ pub struct TileSet {
     pub images: BTreeMap<String, Vec<u8>>,
     /// Tiles left over the byte budget (see [`TilePlan::over_budget`]).
     pub over_budget: Vec<OverBudget>,
+    /// Cells and subcells split to fit the byte budget (see [`TilePlan::splits`]).
+    pub splits: Vec<Split>,
+}
+/// A cell or subcell split into its four children because a file of its tile was over [`Options::tile_byte_budget`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Split {
+    /// `<col>_<row>`, with `_<level>-<x>-<y>` for a subcell.
+    pub cell: String,
+    /// The larger file's length, when its tile was written to measure it (not when the parent's content was already
+    /// known to be too large).
+    pub bytes: Option<u64>,
 }
 /// A tile with a file over [`Options::tile_byte_budget`], and why its cell was not split further.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -436,6 +459,7 @@ pub struct TilePlan {
     tiles: Vec<TileInfo>,
     images: BTreeMap<String, u64>,
     over_budget: Vec<OverBudget>,
+    splits: Vec<Split>,
     skipped: u64,
     without_mesh: u64,
     #[cfg(feature = "ktx2")]
@@ -508,9 +532,6 @@ pub fn plan_with_geometry(
     options: &Options,
     geometry: &dyn Fn(Entity) -> bool,
 ) -> Result<TilePlan> {
-    if !options.tile_size.is_finite() || options.tile_size <= 0. {
-        return Err(Error::Invalid("tile size must be finite and positive".into()));
-    }
     if let Some(c) = options.camera
         && (!c.eye.iter().chain(&c.target).all(|v| v.is_finite()) || c.eye == c.target)
     {
@@ -584,16 +605,12 @@ pub fn plan_with_geometry(
         images: BTreeMap::new(),
         tiles: Vec::new(),
         over_budget: Vec::new(),
+        splits: Vec::new(),
         skipped: 0,
         without_mesh: 0,
         #[cfg(feature = "ktx2")]
-        textures: ktx2::TextureEncoder::new(
-            options.texture_caps,
-            options.texture_caps_by_name.clone(),
-            options.cache.clone(),
-            options.cache_verify,
-        )?
-        .with_memory(options.encoding_memory),
+        textures: ktx2::TextureEncoder::new(options.cache.clone(), options.cache_verify)
+            .with_memory(options.encoding_memory),
     };
     for p in placements.into_values() {
         match p.transform.classify() {
@@ -616,7 +633,7 @@ pub fn plan_with_geometry(
         if options.split_by_tile.contains(&p.entity) {
             plan.unsplit.push(p);
         } else {
-            let key = coordinate(p.transform.cols[3].map(f64::from), options.tile_size)?;
+            let key = coordinate(p.transform.cols[3].map(f64::from), options.tile_size.get())?;
             plan.cells.entry(key).or_default().placements.push(p);
         }
     }
@@ -643,7 +660,7 @@ pub fn plan_with_geometry(
                 "viewer item needs a finite anchor and nonempty kind".into(),
             ));
         }
-        let key = coordinate(item.anchor(), options.tile_size)?;
+        let key = coordinate(item.anchor(), options.tile_size.get())?;
         plan.cells.entry(key).or_default().items.push(i);
     }
     plan.next_item = plan.items.len();
@@ -652,7 +669,7 @@ pub fn plan_with_geometry(
             continue;
         }
         let transform = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
-        let key = coordinate(transform.cols[3].map(f64::from), options.tile_size)?;
+        let key = coordinate(transform.cols[3].map(f64::from), options.tile_size.get())?;
         plan.cells.entry(key).or_default().lights.push(plan.lights.len());
         plan.lights.push(PlannedLight {
             name: world
@@ -798,7 +815,7 @@ impl TilePlan {
                 let points = tri.map(|i| point(p.transform, pos[i as usize]));
                 let centre = std::array::from_fn(|k| (points[0][k] + points[1][k] + points[2][k]) / 3.);
                 pieces
-                    .entry(coordinate(centre, self.options.tile_size)?)
+                    .entry(coordinate(centre, self.options.tile_size.get())?)
                     .or_default()
                     .push(t as u32);
             }
@@ -915,6 +932,10 @@ impl TilePlan {
     pub fn over_budget(&self) -> &[OverBudget] {
         &self.over_budget
     }
+    /// Cells and subcells split to fit the byte budget so far, in the order they were split.
+    pub fn splits(&self) -> &[Split] {
+        &self.splits
+    }
     /// Write `content` of `cell`'s subcell `sub` (`None`: the whole cell), splitting it while a file is over the
     /// budget. `over`: the content is already known to be too large (its parent's content, all in this subcell).
     fn emit(
@@ -927,6 +948,7 @@ impl TilePlan {
         out: &mut Vec<WrittenTile>,
     ) -> Result<()> {
         let level = sub.map_or(0, |s| s.level);
+        let mut measured = None;
         if !over {
             let Some(tile) = self.tile(cell, sub, cw, &content)? else {
                 return Ok(());
@@ -939,6 +961,7 @@ impl TilePlan {
                 self.keep(tile, out);
                 return Ok(());
             }
+            measured = Some(largest);
             let units = content.items.len()
                 + content.lights.len()
                 + content
@@ -964,6 +987,13 @@ impl TilePlan {
                 return Ok(());
             }
         }
+        self.splits.push(Split {
+            cell: match sub {
+                None => format!("{}_{}", cell.0, cell.1),
+                Some(s) => format!("{}_{}_{}-{}-{}", cell.0, cell.1, s.level, s.x, s.y),
+            },
+            bytes: measured,
+        });
         let children = self.children(cell, sub, cw, content)?;
         if children.len() == 1 && level + 1 < MAX_SUBCELL_LEVEL {
             // all of it in one child: the same content, as large; split further without writing it
@@ -993,7 +1023,7 @@ impl TilePlan {
         content: Cell,
     ) -> Result<BTreeMap<Subcell, Cell>> {
         let (world, items) = (cw.world, cw.records);
-        let size = self.options.tile_size;
+        let size = self.options.tile_size.get();
         let mut out = BTreeMap::<Subcell, Cell>::new();
         for p in content.placements {
             let Some(parts) = &p.triangles else {
@@ -1163,7 +1193,8 @@ impl TilePlan {
                 let doc = provenance::apply(doc)?;
                 #[cfg(feature = "ktx2")]
                 let doc = if self.options.ktx2 {
-                    self.textures.apply(doc)?
+                    self.textures
+                        .apply(doc, w.resource::<prepare::PreparedImages>())?
                 } else {
                     doc
                 };
@@ -1418,7 +1449,7 @@ impl TilePlan {
             },
             empty_tile_policy: "omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload",
             version: 1,
-            tile_size: self.options.tile_size,
+            tile_size: self.options.tile_size.get(),
             tiles,
             images: self
                 .images
@@ -1458,7 +1489,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
             format_version: "2.0",
             empty_tile_policy: "",
             version: 1,
-            tile_size: options.tile_size,
+            tile_size: options.tile_size.get(),
             tiles: Vec::new(),
             images: Vec::new(),
             skipped_degenerate: 0,
@@ -1469,6 +1500,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         files: BTreeMap::new(),
         images: BTreeMap::new(),
         over_budget: Vec::new(),
+        splits: Vec::new(),
     };
     for cell in plan.cells() {
         let w = world.subset(&world.closure(plan.roots(cell)));
@@ -1481,6 +1513,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         }
     }
     set.over_budget = plan.over_budget().to_vec();
+    set.splits = plan.splits().to_vec();
     set.index = plan.finish()?;
     Ok(set)
 }

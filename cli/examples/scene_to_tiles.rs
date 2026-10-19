@@ -9,7 +9,7 @@ use primase_core::{Entity, Instance, MeshFile, World};
 use primase_web::{Options, PIVOT_MARGIN};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain] [--camera <eye x,y,z>:<target x,y,z>] [--cache <folder> [--cache-max-gib N] [--cache-verify]] (KTX2 encodings are kept in the cache folder, else in PRIMASE_CACHE when set, across runs)";
+const USAGE: &str = "usage: scene_to_tiles <scene folder> <output folder> [--ktx2 [--texture-cap <image name prefix>=<colour>,<normal>,<mask>]...] [--budget-mib N | --no-budget] [--max-priority N] [--no-plain] [--camera <eye x,y,z>:<target x,y,z>] [--cache <folder> [--cache-max-gib N] [--cache-verify]] (KTX2 encodings are kept in the cache folder, else in PRIMASE_CACHE when set, across runs). Its own choices: 200 m cells, files of at most 96 MiB, with --ktx2 textures of at most 512 (colour, normal) and 256 (mask) pixels, encodings of at most 360448 (colour) and 98304 (mask) bytes";
 
 /// `world`'s closure of `roots` with its meshes loaded, and (for rendering) its textures loaded and the materials
 /// lowered as the web writer requires.
@@ -125,19 +125,33 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     if lowered != scene_lights {
         return Err(format!("{lowered} lights lowered of the scene's {scene_lights}").into());
     }
+    // this program's choices: 200 m cells, files of at most 96 MiB unless told otherwise
     let mut options = Options {
         base_dir: folder.into(),
         camera,
-        ..Default::default()
+        tile_byte_budget: Some(96 << 20),
+        ..Options::new(primase_web::TileSize::new(200.)?)
     };
     if let Some(budget) = budget {
         options.tile_byte_budget = budget;
     }
+    #[cfg(feature = "ktx2")]
+    let mut web_textures = None;
     if ktx2 {
         #[cfg(feature = "ktx2")]
         {
             options.ktx2 = true;
-            options.texture_caps_by_name = caps
+            // this program's texture sizes: colour and normal maps at most 512 pixels, masks 256, encodings of at
+            // most 352 KiB (colour) and 96 KiB (masks), name rules first
+            use primase_web::prepare::{ByteBudget, PrepareWebTextures, RoleCaps, WebCap};
+            let mut pass = PrepareWebTextures::new(RoleCaps {
+                color: WebCap::new(512)?,
+                normal: WebCap::new(512)?,
+                mask: WebCap::new(256)?,
+            });
+            pass.color_bytes = Some(ByteBudget::new(360_448)?);
+            pass.mask_bytes = Some(ByteBudget::new(98_304)?);
+            pass.caps_by_name = caps
                 .iter()
                 .map(|rule| texture_cap(rule))
                 .collect::<Result<_, _>>()?;
@@ -153,6 +167,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
                 options.cache_verify = cache_verify;
                 println!("KTX2 cache: {} (cap {max} bytes)", dir.display());
             }
+            pass.cache = options.cache.clone();
+            // this program runs the pass once per cell; cells share textures: preparations kept between cells, at
+            // most 512 MiB of PNGs and encodings
+            pass.memo = Some(std::sync::Arc::new(std::sync::Mutex::new(
+                primase_web::prepare::Memo::new(512 << 20),
+            )));
+            web_textures = Some(pass);
         }
     }
     // viewer records: the writer takes the world's core.curve, core.marker and core.collision itself
@@ -177,7 +198,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             });
         }
     }
-    let spans = primase_web::spanning(&world, sets[0].0.tile_size, |p| {
+    let spans = primase_web::spanning(&world, sets[0].0.tile_size.get(), |p| {
         Ok(boxes.get(&p).copied().flatten())
     })?;
     let mut plans = Vec::new();
@@ -210,12 +231,30 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
             plan.split(&w, e)?;
         }
     }
+    // what prepare-web-textures did over every cell
+    #[cfg(feature = "ktx2")]
+    let mut web_log = PassLog::default();
     // each cell loaded once, written by every set, dropped
     let (mut proof, mut bytes) = (BTreeMap::new(), vec![0usize; plans.len()]);
     for cell in plans[0].0.cells() {
         let w = prepare(&world, &plans[0].0.roots(cell), folder, true)?;
+        // the KTX2 set's textures at their web sizes; the plain set's as the scene has them
+        #[cfg(feature = "ktx2")]
+        let web = match &web_textures {
+            Some(pass) => {
+                let mut web = w.clone();
+                let mut log = PassLog::default();
+                pass.run(&mut web, &mut log)?;
+                web_log.absorb(log);
+                Some(web)
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "ktx2"))]
+        let web: Option<World> = None;
         for (k, (plan, out)) in plans.iter_mut().enumerate() {
-            for tile in plan.write_cell(cell, &w)? {
+            let w = if k == 0 { web.as_ref().unwrap_or(&w) } else { &w };
+            for tile in plan.write_cell(cell, w)? {
                 tile.write_to(out)?;
                 bytes[k] += tile.bytes.len();
                 if k == 0 {
@@ -226,6 +265,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
                 }
             }
         }
+    }
+    #[cfg(feature = "ktx2")]
+    if web_textures.is_some() {
+        println!(
+            "prepare-web-textures: {:?}; approximations {:?}",
+            web_log.counts, web_log.approximations
+        );
     }
     let mut indexes = Vec::new();
     for (plan, out) in plans {
@@ -280,7 +326,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
 
 /// `<prefix>=<colour>,<normal>,<mask>`, e.g. `bake_=256,256,128`.
 #[cfg(feature = "ktx2")]
-fn texture_cap(rule: &str) -> Result<(String, primase_web::ktx2::TextureCaps), String> {
+fn texture_cap(rule: &str) -> Result<(String, primase_web::prepare::RoleCaps), String> {
+    use primase_web::prepare::{RoleCaps, WebCap};
     let bad = || format!("--texture-cap {rule}: expected <prefix>=<colour>,<normal>,<mask>");
     let (prefix, values) = rule.split_once('=').ok_or_else(bad)?;
     let values: Vec<u32> = values
@@ -291,8 +338,13 @@ fn texture_cap(rule: &str) -> Result<(String, primase_web::ktx2::TextureCaps), S
     let [colour, normal, mask] = values[..] else {
         return Err(bad());
     };
+    let cap = |n| WebCap::new(n).map_err(|e| format!("--texture-cap {rule}: {e}"));
     Ok((
         prefix.into(),
-        primase_web::ktx2::TextureCaps { colour, normal, mask },
+        RoleCaps {
+            color: cap(colour)?,
+            normal: cap(normal)?,
+            mask: cap(mask)?,
+        },
     ))
 }

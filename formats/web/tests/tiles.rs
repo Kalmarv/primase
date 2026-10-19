@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 fn plain() -> Options {
     Options {
         compress: false,
-        ..Options::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     }
 }
 #[test]
@@ -132,11 +132,8 @@ fn bad_meshes_and_options_are_errors() {
     w.insert(e, Transform::IDENTITY);
     assert!(write(&w, &plain()).is_err());
     w.insert(e, mesh());
-    let o = Options {
-        tile_size: 0.,
-        ..plain()
-    };
-    assert!(write(&w, &o).is_err());
+    // a tile size is finite and above 0, checked where it is made
+    assert!(primase_web::TileSize::new(0.).is_err() && primase_web::TileSize::new(f64::NAN).is_err());
     let mut t = Transform::IDENTITY;
     t.cols[0] = [0.; 3];
     w.insert(e, t);
@@ -329,8 +326,13 @@ fn quantized_streams_decode_exactly_and_validate() {
         t.cols[3][0] = x;
         w.insert(e, t);
     }
-    let set = write(&w, &Options::default()).unwrap();
-    assert_eq!(set.files, write(&w, &Options::default()).unwrap().files);
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
+    assert_eq!(
+        set.files,
+        write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap()))
+            .unwrap()
+            .files
+    );
     let bytes = set.files.values().next().unwrap();
     let chunks = primase_gltf::glb::parse(bytes).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
@@ -438,7 +440,7 @@ fn one_mesh(positions: Vec<[f32; 3]>) -> (serde_json::Value, Vec<u8>) {
         .insert(Semantic::Position, Stream::F32x3(positions));
     w.insert(e, m);
     w.insert(e, Transform::IDENTITY);
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let bytes = set.files.values().next().unwrap();
     let chunks = primase_gltf::glb::parse(bytes).unwrap();
     (
@@ -528,7 +530,7 @@ fn viewer_records_make_metadata_only_tiles_and_keep_payloads() {
     };
     let options = Options {
         viewer_items: vec![item.clone()],
-        ..Default::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
     let set = write(&World::new(), &options).unwrap();
     assert_eq!(set.index.tiles.len(), 1);
@@ -603,7 +605,7 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
             anchor: [1., 0., -1.],
             data: serde_json::json!(null),
         }],
-        ..Default::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
     assert_eq!(primase_web::plan(&w, &options).unwrap().ground_markers(), 1);
     let set = write(&w, &options).unwrap();
@@ -656,7 +658,7 @@ fn empty_prototypes_are_counted_but_unloaded_files_are_errors() {
         },
     );
     w.insert(e, Transform::IDENTITY);
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.placements_without_mesh, 1);
     assert!(set.files.is_empty());
     w.insert(
@@ -667,7 +669,7 @@ fn empty_prototypes_are_counted_but_unloaded_files_are_errors() {
             materials: Vec::new(),
         },
     );
-    assert!(write(&w, &Options::default()).is_err());
+    assert!(write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).is_err());
 }
 
 #[test]
@@ -682,7 +684,7 @@ fn collision_payload_is_external_and_referenced() {
                 anchor: [0.; 3],
                 data: payload.clone(),
             }],
-            ..Default::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         },
     )
     .unwrap();
@@ -730,7 +732,7 @@ fn compressed_plain_nodes_omit_absent_matrix() {
     let e = w.spawn();
     w.insert(e, mesh());
     w.insert(e, Transform::IDENTITY);
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let chunks = primase_gltf::glb::parse(set.files.values().next().unwrap()).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let node = &doc["nodes"][0];
@@ -800,7 +802,7 @@ fn texture_transforms_survive_instancing_and_compression() {
         t.cols[3][0] = x;
         w.insert(e, t);
     }
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 3);
     let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
@@ -1133,7 +1135,7 @@ fn emissive_strength_survives_compression_and_instancing() {
         t.cols[3][0] = x;
         w.insert(e, t);
     }
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 2);
     let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
@@ -1180,7 +1182,7 @@ fn shadows_split_instance_groups_and_stay_on_their_nodes() {
             w.insert(e, s);
         }
     }
-    let set = write(&w, &Options::default()).unwrap();
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 4);
     let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
@@ -1256,7 +1258,7 @@ fn vertex_colours_survive_compression_and_instancing() {
         }
         let options = Options {
             compress,
-            ..Options::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         };
         let set = write(&w, &options).unwrap();
         assert_eq!(set.index.tiles[0].instanced_placements, 2);
@@ -1354,7 +1356,7 @@ fn layered_materials_survive_tiling_and_compression() {
         w.insert(place, Transform::IDENTITY);
         let options = Options {
             compress,
-            ..Options::default()
+            ..Options::new(primase_web::TileSize::new(200.).unwrap())
         };
         let set = write(&w, &options).unwrap();
         assert_eq!(set.index.format_version, "2.0");
@@ -1496,7 +1498,7 @@ fn a_starting_camera_goes_to_the_index_as_2_2() {
             anchor: [0.; 3],
             data: serde_json::json!(null),
         }],
-        ..Default::default()
+        ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
     let index = write(&World::new(), &with(Some(camera))).unwrap().index;
     assert_eq!(index.format_version, "2.2");
