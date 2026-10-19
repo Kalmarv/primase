@@ -1166,6 +1166,18 @@ pub struct Tile {
     pub col: i32,
     pub row: i32,
 }
+impl Tile {
+    /// The tile of a `size`-metre grid from the origin holding the ground point `g` (`[east, north]`):
+    /// `(floor(east / size), floor(north / size))`, in f32. The one rule for every grid that has to agree on where
+    /// content stands: a writer's tiles, a partition aligned to them.
+    pub fn of(g: [f32; 2], size: f32) -> Tile {
+        Tile {
+            col: (g[0] / size).floor() as i32,
+            row: (g[1] / size).floor() as i32,
+        }
+    }
+}
+
 impl Component for Tile {
     const NAME: &'static str = "core.tile";
     /// No local-space geometry.

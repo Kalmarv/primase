@@ -7,7 +7,10 @@
 //! bounds, anything else with a transform by its position, in the ground frame (`east`, `north`:
 //! [`primase_core::frame::ground`]). Cells are half-open, `[origin + k * cell, origin + (k + 1) * cell)` on each axis,
 //! so a point on a border belongs to the cell above it. Content with no position (a world soup with no transform) is
-//! its own last part, `unplaced`. A part's context is the content of other cells standing within `halo` metres of its
+//! its own last part, `unplaced`. With `tile=T`, the cells are aligned to a writer's `T`-metre tiles: a cell and the
+//! origin whole multiples of `T` (refused otherwise), and content is filed by the tile it stands in, by the writers' own
+//! rule ([`primase_core::Tile::of`], or the `core.tile` it states), so a tile's content is never split between parts.
+//! A part's context is the content of other cells standing within `halo` metres of its
 //! cell, outside the region too (an operation may need to read a neighbour the region leaves out); the part's area
 //! (its cell and halo) lets [`primase_core::convert::PlannedParts`] add what reaches it by its authored box.
 
@@ -16,10 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::convert::{PartitionGroup, PartitionPlan};
 use primase_core::frame::ground;
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Curve, Entity, Marker, Resource, Transform, World};
+use primase_core::{Curve, Entity, Marker, Resource, Tile, Transform, World};
 
-/// `partition-grid{cell=C[,origin=E,N][,halo=H][,region=E0,N0,E1,N1]}`: see the module documentation. `cell` has no
-/// default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
+/// `partition-grid{cell=C[,origin=E,N][,halo=H][,region=E0,N0,E1,N1][,tile=T]}`: see the module documentation. `cell`
+/// has no default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
 /// left out and counted. Built by [`PartitionGrid::new`] and its setters, which check every value; the pipeline text
 /// goes through the same constructor ([`PartitionGrid::from_options`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +31,8 @@ pub struct PartitionGrid {
     origin: [f64; 2],
     halo: f64,
     region: Option<[f64; 4]>,
+    /// The writer's tile the cells align to (`None`: not aligned).
+    tile: Option<f64>,
 }
 
 fn finite(what: &str, x: f64) -> Result<f64, String> {
@@ -50,7 +55,18 @@ impl PartitionGrid {
             origin: [0.0; 2],
             halo: 0.0,
             region: None,
+            tile: None,
         })
+    }
+
+    /// Whether `x` is a whole multiple of the tile (when aligned).
+    fn aligned(&self, what: &str, x: f64) -> Result<(), String> {
+        match self.tile {
+            Some(t) if (x / t).fract() != 0.0 || (x / t) * t != x => Err(format!(
+                "{what} {x} is not a whole multiple of the tile {t}: an aligned grid's cells hold whole tiles"
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// The cells' origin `[east, north]`, metres.
@@ -59,6 +75,23 @@ impl PartitionGrid {
             finite("origin east", origin[0])?,
             finite("origin north", origin[1])?,
         ];
+        self.aligned("origin east", self.origin[0])?;
+        self.aligned("origin north", self.origin[1])?;
+        Ok(self)
+    }
+
+    /// Cells aligned to a writer's `tile`-metre tiles (finite, above 0, exact in f32 as the writers take it): the
+    /// cell and the origin must be whole multiples of it, and content is filed by its tile.
+    pub fn with_tile(mut self, tile: f64) -> Result<PartitionGrid, String> {
+        if finite("tile", tile)? <= 0.0 || f64::from(tile as f32) != tile {
+            return Err(format!(
+                "tile {tile} is not above 0 metres and exact as a 32-bit float"
+            ));
+        }
+        self.tile = Some(tile);
+        self.aligned("cell", self.cell)?;
+        self.aligned("origin east", self.origin[0])?;
+        self.aligned("origin north", self.origin[1])?;
         Ok(self)
     }
 
@@ -97,6 +130,9 @@ impl PartitionGrid {
     pub fn region(&self) -> Option<[f64; 4]> {
         self.region
     }
+    pub fn tile(&self) -> Option<f64> {
+        self.tile
+    }
 
     /// From the pipeline text's options, through [`PartitionGrid::new`] and the setters.
     pub fn from_options(o: &Options) -> Result<PartitionGrid, String> {
@@ -117,12 +153,15 @@ impl PartitionGrid {
         };
         if let Some(k) = o
             .keys()
-            .find(|k| !matches!(k.as_str(), "cell" | "origin" | "halo" | "region"))
+            .find(|k| !matches!(k.as_str(), "cell" | "origin" | "halo" | "region" | "tile"))
         {
             return Err(format!("unknown option {k}"));
         }
         let cell = o.get("cell").ok_or("cell=C (metres, above 0) is required")?;
         let mut grid = PartitionGrid::new(numbers("cell", cell, 1)?[0])?;
+        if let Some(v) = o.get("tile") {
+            grid = grid.with_tile(numbers("tile", v, 1)?[0])?;
+        }
         if let Some(v) = o.get("origin") {
             let xs = numbers("origin", v, 2)?;
             grid = grid.with_origin([xs[0], xs[1]])?;
@@ -137,8 +176,19 @@ impl PartitionGrid {
         Ok(grid)
     }
 
-    /// The cell `[east, north]` stands in.
-    fn cell_of(&self, p: [f64; 2]) -> (i64, i64) {
+    /// The cell content stands in: by its position `p` `[east, north]`; aligned to tiles, by its tile (the one it
+    /// states, `stated`, else the one `p` stands in), as a writer files it.
+    fn cell_of(&self, p: [f64; 2], stated: Option<Tile>) -> (i64, i64) {
+        if let Some(t) = self.tile {
+            // whole multiples (with_tile): the counts of tiles are exact
+            let tile = stated.unwrap_or_else(|| Tile::of([p[0] as f32, p[1] as f32], t as f32));
+            let per = (self.cell / t) as i64;
+            let (o0, o1) = ((self.origin[0] / t) as i64, (self.origin[1] / t) as i64);
+            return (
+                (i64::from(tile.col) - o0).div_euclid(per),
+                (i64::from(tile.row) - o1).div_euclid(per),
+            );
+        }
         (
             ((p[0] - self.origin[0]) / self.cell).floor() as i64,
             ((p[1] - self.origin[1]) / self.cell).floor() as i64,
@@ -197,6 +247,9 @@ impl Pass for PartitionGrid {
         if let Some(r) = self.region {
             o.insert("region".into(), format!("{},{},{},{}", r[0], r[1], r[2], r[3]));
         }
+        if let Some(t) = self.tile {
+            o.insert("tile".into(), t.to_string());
+        }
         o
     }
     fn provides(&self) -> &[&'static str] {
@@ -243,7 +296,10 @@ impl Pass for PartitionGrid {
                 log.count("content outside the region, left out", 1);
                 continue;
             }
-            cells.entry(self.cell_of(p)).or_default().insert(e);
+            cells
+                .entry(self.cell_of(p, w.get::<Tile>(e).copied()))
+                .or_default()
+                .insert(e);
         }
         let mut groups = Vec::new();
         let mut shared = 0;
@@ -588,5 +644,85 @@ mod tests {
         )]);
         let p = plan(&given).unwrap().to_string();
         assert!(p.contains("partition-grid{cell=250}"), "{p}");
+    }
+
+    /// Aligned to a writer's 200 m tiles: a cell or origin that is not a whole multiple of the tile is refused; content
+    /// is filed by the tile it stands in, by the writers' own rule, so a cell holds whole tiles (on both sides of every
+    /// border, in f32 as a writer computes it), and a placement stating its tile is filed by that tile.
+    #[test]
+    fn aligned_cells_hold_whole_tiles_by_the_writers_rule() {
+        for bad in [
+            &[("cell", "300"), ("tile", "200")][..],
+            &[("cell", "400"), ("tile", "200"), ("origin", "100,0")],
+            &[("cell", "400"), ("tile", "0.1")],
+            &[("cell", "400"), ("tile", "0")],
+        ] {
+            let o: Options = bad
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            assert!(PartitionGrid::from_options(&o).is_err(), "{bad:?}");
+        }
+        assert!(PartitionGrid::new(300.0).unwrap().with_tile(200.0).is_err());
+        assert!(
+            PartitionGrid::new(400.0)
+                .unwrap()
+                .with_tile(200.0)
+                .unwrap()
+                .with_origin([100.0, 0.0])
+                .is_err()
+        );
+        let g = grid(&[("cell", "400"), ("tile", "200"), ("origin", "-200,200")]);
+        assert_eq!(g.tile(), Some(200.0));
+        assert_eq!(PartitionGrid::from_options(&g.options()).unwrap(), g);
+        // every f32 position within a few steps of a tile border, both sides, both signs
+        let mut w = World::new();
+        let proto = w.spawn();
+        let mut placed = Vec::new();
+        for border in [-600.0f32, -200.0, 0.0, 200.0, 600.0, 1000.0, 25_600.0] {
+            let mut x = border;
+            for _ in 0..4 {
+                x = f32::from_bits(if x > 0.0 { x.to_bits() - 1 } else { x.to_bits() + 1 });
+            }
+            for _ in 0..8 {
+                placed.push((placement(&mut w, proto, x, x), x));
+                x = if x == 0.0 {
+                    f32::from_bits(1)
+                } else if x > 0.0 {
+                    f32::from_bits(x.to_bits() + 1)
+                } else {
+                    f32::from_bits(x.to_bits() - 1)
+                };
+            }
+        }
+        // a placement standing in one tile and stating another
+        let stated = placement(&mut w, proto, 10.0, 10.0);
+        w.insert(stated, Tile { col: 5, row: -3 });
+        g.run(&mut w, &mut PassLog::default()).unwrap();
+        let plan = w.resource::<PartitionPlan>().unwrap();
+        let cell_of = |e: Entity| {
+            plan.groups
+                .iter()
+                .find(|g| g.roots.contains(&e))
+                .map(|g| g.key.clone())
+                .unwrap()
+        };
+        // the cell of tile (c, r): tiles from the origin's (-1, 1), two to a cell
+        let cell_of_tile = |t: Tile| {
+            format!(
+                "cell {},{}",
+                (i64::from(t.col) + 1).div_euclid(2),
+                (i64::from(t.row) - 1).div_euclid(2)
+            )
+        };
+        for (e, x) in placed {
+            assert_eq!(
+                cell_of(e),
+                cell_of_tile(Tile::of([x, x], 200.0)),
+                "east = north = {x:e}"
+            );
+        }
+        assert_eq!(cell_of(stated), cell_of_tile(Tile { col: 5, row: -3 }));
+        assert_eq!(cell_of(stated), "cell 3,-2");
     }
 }

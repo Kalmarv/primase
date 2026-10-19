@@ -89,16 +89,12 @@ pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
             };
             // clipped as the placement says (clip-reskate-region marks them); the writer decides none
             pl.outside = p.clip.unwrap_or(false);
-            match p.tile {
-                Some(t) => {
-                    pl.tx = t[0];
-                    pl.ty = t[1];
-                }
-                None => {
-                    pl.tx = (pl.pos.x / tile).floor() as i32;
-                    pl.ty = (pl.pos.y / tile).floor() as i32;
-                }
-            }
+            // the tile it states, else the one its ground position stands in (the rule partition-grid{tile} aligns to)
+            let t = p.tile.unwrap_or_else(|| {
+                let t = primase_core::Tile::of([pl.pos.x, pl.pos.y], tile);
+                [t.col, t.row]
+            });
+            (pl.tx, pl.ty) = (t[0], t[1]);
             if let Some(r) = p.radius {
                 pl.radius = r;
             } else if let (Some(mn), Some(mx)) = (proto.min, proto.max) {
