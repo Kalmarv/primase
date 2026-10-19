@@ -456,7 +456,9 @@ impl std::fmt::Debug for TilePlan {
 /// with the mesh or texture loaded; a `core.curve` only as a polyline (`flatten-curves` first); `core.lods` and
 /// `core.collider` must be lowered first (`select-lod`, `tessellate-colliders`). Every other name is carried
 /// (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
-/// into geometry. A material entity without `pbr.material` is written as the glTF fallback material and counted.
+/// into geometry. As in glTF, a material entity without `pbr.material` is written as no material, and a primitive
+/// lacking a texture coordinate set its material samples is refused (`prepare-gltf-materials`,
+/// `fill-missing-texcoords` are a program's choices).
 pub fn target() -> primase_core::pass::Target {
     use primase_core::{
         Collision, Component, Curve, LayeredMaterial, Light, Lods, Marker, MeshFile, Shadows, Texture,

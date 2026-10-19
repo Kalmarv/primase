@@ -68,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.textures_not_decoded, report.not_reproduced
     );
     // the lowering, as a pipeline: each pass whose input the level has, verified after each
+    let unit = |v| primase_gltf::prepare::UnitValue::new(v).expect("a unit value");
     let passes: Vec<Box<dyn Pass>> = vec![
         // the level as stored: what is off stays off, LOD 0 draws
         Box::new(primase_core::state::ResolveState::default()),
@@ -80,6 +81,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(primase_unity::lower_collision::LowerUnityCollision),
         Box::new(primase_unity::lower_lights::LowerUnityLights),
         Box::new(primase_image::NormalizeNormals),
+        // what the scene does not state, this program's choices: zeros for a texture coordinate set a primitive lacks,
+        // light grey, dielectric and rough for a material without PBR factors
+        Box::new(primase_gltf::prepare::FillMissingTexcoords),
+        Box::new(primase_gltf::prepare::PrepareGltfMaterials {
+            base_color: [0.8, 0.8, 0.8, 1.].map(unit),
+            metallic: unit(0.),
+            roughness: unit(0.85),
+        }),
         // the writers here take collision as triangles
         Box::new(primase_meshops::TessellateColliders),
         // last before the writers: authored mirrors and shears into geometry, so every placement is rigid

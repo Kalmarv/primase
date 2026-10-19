@@ -13,9 +13,12 @@
 //!   nodes without a mesh become empties, children are parented). So groups are empty nodes, one per prototype or
 //!   per tile ([`GroupBy`]), with `"primase.collection": <name>` in their extras so a Blender-side script can turn
 //!   them into real collections. Blender's outliner already folds each group's placements under its empty.
-//! - **Materials** come from `pbr.material` ([`PbrMaterial`]); a material entity without one is written as
-//!   [`fallback_material`] (light grey, dielectric, rough) and counted. A primitive with no material has none in
-//!   glTF (the reader's default material) and is counted.
+//! - **Materials** come from `pbr.material` ([`PbrMaterial`]). A material entity without one (and not layered) is
+//!   not written: its primitives have no material in glTF (the reader's default material), counted; a program that
+//!   wants a look for them states it with `prepare-gltf-materials`. A primitive with no material has none in glTF,
+//!   counted.
+//! - **Texture coordinates**: glTF requires every set a material samples. A primitive that lacks one is refused, as
+//!   invalid input: `fill-missing-texcoords` gives it zeros, when a program chooses so.
 //! - **Vertex colour**: `COLOR_0` is written for a primitive whose material takes it (glTF multiplies it in). A
 //!   written primitive whose material is `core.vertex_color` `ignored` (the source's shader does not take it) is
 //!   written without it, counted; a prototype's `COLOR_0` accessor is not written at all when no material drawing
@@ -151,15 +154,15 @@ pub struct WriteReport {
     pub placements_without_mesh: u64,
     /// Prototypes nothing places (written at the origin only with `include_unplaced`).
     pub prototypes_unplaced: u64,
-    /// Material entities without `pbr.material`, written as [`fallback_material`].
-    pub materials_fallback: u64,
+    /// Material entities without `pbr.material` (nor layered): not written, their primitives drawn with none.
+    pub materials_without_pbr: u64,
+    /// Layer slots of layered materials whose material has no `pbr.material`: written as empty slots.
+    pub layers_without_pbr: u64,
     pub primitives_without_material: u64,
     /// `core.layered` materials written with `PRIMASE_layered_material`.
     pub layered_materials: u64,
     /// Primitives drawn with a layered material but lacking its weight attribute (they render as the host).
     pub primitives_layered_without_weights: u64,
-    /// Primitives given zero texture coordinates for a set their material samples but they lack.
-    pub primitives_texcoords_zero_filled: u64,
     /// Written primitives with a `COLOR_0` stream drawn without it: their material is `core.vertex_color` `ignored`.
     pub primitives_color0_ignored: u64,
     /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
@@ -201,31 +204,20 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(
             f,
-            "materials fallback {}, primitives without material {}, layered materials {} (primitives without \
-             weights {}), primitives with zero-filled texcoords {}, primitives drawn without their COLOR_0 (material              ignores it) {}, texture slots dropped {}",
-            self.materials_fallback,
+            "materials without pbr {} (layer slots {}), primitives without material {}, layered materials {} \
+             (primitives without weights {}), primitives drawn without their COLOR_0 (material ignores it) {}, \
+             texture slots dropped {}",
+            self.materials_without_pbr,
+            self.layers_without_pbr,
             self.primitives_without_material,
             self.layered_materials,
             self.primitives_layered_without_weights,
-            self.primitives_texcoords_zero_filled,
             self.primitives_color0_ignored,
             self.texture_slots_dropped
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
         write!(f, "extras unencoded {:?}", self.extras_unencoded)
-    }
-}
-
-/// The material written for a material entity without `pbr.material`: light grey (0.8 linear), metallic 0,
-/// roughness 0.85 (skate-scene's default), opaque, single-sided. Not glTF's default material, which is fully
-/// metallic and renders near-black in Blender without an environment.
-pub fn fallback_material() -> PbrMaterial {
-    PbrMaterial {
-        base_color: [0.8, 0.8, 0.8, 1.0],
-        metallic: 0.0,
-        roughness: 0.85,
-        ..PbrMaterial::default()
     }
 }
 
@@ -284,7 +276,6 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(glb::Doc
         proto_accessors: BTreeMap::new(),
         mesh_index: BTreeMap::new(),
         material_index: BTreeMap::new(),
-        zero_texcoords: BTreeMap::new(),
         texture_index: BTreeMap::new(),
         image_of_entity: BTreeMap::new(),
         image_by_hash: BTreeMap::new(),
@@ -375,9 +366,8 @@ struct Writer<'w> {
     proto_accessors: BTreeMap<Src, Vec<PrimAccessors>>,
     mesh_index: BTreeMap<(Src, Vec<Option<Entity>>), usize>,
     /// Material entity -> glTF index and the texture coordinate sets its written texture slots sample.
-    material_index: BTreeMap<Entity, (usize, BTreeSet<u8>)>,
-    /// Vertex count -> a zero-filled VEC2 accessor (texture coordinates a primitive lacks).
-    zero_texcoords: BTreeMap<usize, usize>,
+    /// Each material entity's glTF material and the sets it samples; `None` for one without `pbr.material`.
+    material_index: BTreeMap<Entity, Option<(usize, BTreeSet<u8>)>>,
     texture_index: BTreeMap<(Entity, [Wrap; 2]), usize>,
     image_of_entity: BTreeMap<Entity, Option<usize>>,
     image_by_hash: BTreeMap<[u8; 32], usize>,
@@ -810,24 +800,28 @@ impl Writer<'_> {
                 attrs.remove("COLOR_0");
                 self.report.primitives_color0_ignored += 1;
             }
-            let material_index = match material {
-                Some(m) => {
-                    let (index, sets) = self.material(*m)?;
-                    // glTF requires every texture coordinate set a material samples; skate-scene's rule for an
-                    // absent one is zeros, so that is what the primitive gets.
-                    let mut filled = false;
-                    for set in sets {
-                        let key = format!("TEXCOORD_{set}");
-                        if !attrs.contains_key(&key) {
-                            let zeros = self.zero_texcoords(prim.vertex_count());
-                            attrs.insert(key, json!(zeros));
-                            filled = true;
-                        }
+            let written = match material {
+                Some(m) => self.material(*m)?.map(|written| (*m, written)),
+                None => None,
+            };
+            let material_index = match written {
+                Some((m, (index, sets))) => {
+                    // glTF requires every texture coordinate set a material samples and states no default
+                    if let Some(set) = sets
+                        .iter()
+                        .find(|s| !attrs.contains_key(&format!("TEXCOORD_{s}")))
+                    {
+                        return Err(Error::World {
+                            entity: m,
+                            detail: format!(
+                                "a primitive drawn with it lacks TEXCOORD_{set}, which it samples; give the primitive \
+                                 the set, or run fill-missing-texcoords to give it zeros"
+                            ),
+                        });
                     }
-                    self.report.primitives_texcoords_zero_filled += u64::from(filled);
                     if self
                         .layered_weights
-                        .get(m)
+                        .get(&m)
                         .is_some_and(|attribute| !attrs.contains_key(attribute))
                     {
                         self.report.primitives_layered_without_weights += 1;
@@ -1068,30 +1062,20 @@ impl Writer<'_> {
         self.accessors.len() - 1
     }
 
-    fn zero_texcoords(&mut self, count: usize) -> usize {
-        if let Some(&a) = self.zero_texcoords.get(&count) {
-            return a;
-        }
-        let a = self.float_accessor(bytemuck::cast_slice(&vec![[0f32; 2]; count]), count, "VEC2", None);
-        self.zero_texcoords.insert(count, a);
-        a
-    }
-
-    /// The glTF material of an entity, and the texture coordinate sets it samples.
-    fn material(&mut self, e: Entity) -> Result<(usize, BTreeSet<u8>)> {
+    /// The glTF material of an entity, and the texture coordinate sets it samples; `None` for an entity with neither
+    /// `pbr.material` nor `core.layered` (counted once).
+    fn material(&mut self, e: Entity) -> Result<Option<(usize, BTreeSet<u8>)>> {
         if let Some(m) = self.material_index.get(&e) {
             return Ok(m.clone());
         }
         if let Some(layered) = self.world.get::<LayeredMaterial>(e) {
-            return self.layered_material(e, &layered.clone());
+            return self.layered_material(e, &layered.clone()).map(Some);
         }
         let mut sets = BTreeSet::new();
-        let pbr = match self.world.get::<PbrMaterial>(e) {
-            Some(m) => m.clone(),
-            None => {
-                self.report.materials_fallback += 1;
-                fallback_material()
-            }
+        let Some(pbr) = self.world.get::<PbrMaterial>(e).cloned() else {
+            self.report.materials_without_pbr += 1;
+            self.material_index.insert(e, None);
+            return Ok(None);
         };
         let mut m = Map::new();
         m.insert("name".into(), Value::String(self.name_of(e, "material")));
@@ -1190,8 +1174,8 @@ impl Writer<'_> {
         self.materials.push(Value::Object(m));
         self.report.materials += 1;
         let i = self.materials.len() - 1;
-        self.material_index.insert(e, (i, sets.clone()));
-        Ok((i, sets))
+        self.material_index.insert(e, Some((i, sets.clone())));
+        Ok(Some((i, sets)))
     }
 
     /// A light as `KHR_lights_punctual` writes it, named.
@@ -1277,7 +1261,12 @@ impl Writer<'_> {
                 layers.push(Value::Null);
                 continue;
             };
-            let (index, layer_sets) = self.material(layer.material)?;
+            let Some((index, layer_sets)) = self.material(layer.material)? else {
+                // a layer with no material the writer can express: an empty slot, as the format has
+                self.report.layers_without_pbr += 1;
+                layers.push(Value::Null);
+                continue;
+            };
             first.get_or_insert(index);
             sets.extend(layer_sets);
             sets.insert(layer.texcoord.unwrap_or(0));
@@ -1343,7 +1332,7 @@ impl Writer<'_> {
         self.report.materials += 1;
         self.report.layered_materials += 1;
         let i = self.materials.len() - 1;
-        self.material_index.insert(e, (i, sets.clone()));
+        self.material_index.insert(e, Some((i, sets.clone())));
         self.layered_weights.insert(e, attribute);
         Ok((i, sets))
     }

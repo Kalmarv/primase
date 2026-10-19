@@ -1315,6 +1315,11 @@ fn layered_materials_survive_tiling_and_compression() {
             Semantic::Color(1),
             Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0.5, 1., 1.]]),
         );
+        // the layers are sampled with set 0
+        m.primitives_mut()[0].streams.insert(
+            Semantic::TexCoord(0),
+            Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+        );
         w.insert(proto, m);
         let place = w.spawn();
         w.insert(

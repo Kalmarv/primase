@@ -170,6 +170,7 @@ impl primase_core::pass::Pass for LoadMeshFiles {
 
 /// Register this crate's passes.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    crate::prepare::register(reg);
     reg.register("load-mesh-files", |o| {
         let mut p = LoadMeshFiles::default();
         for (k, v) in o {

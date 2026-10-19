@@ -20,7 +20,10 @@ use primase_reskate::dialect::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 
-const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, bake-nonrigid{mirrors=keep}";
+/// The skate scene's own rules for what it does not state are this program's choices: zeros for a texture coordinate
+/// set a primitive lacks, and light grey, dielectric and rough for a material without PBR factors.
+const DEFAULT_PIPELINE: &str = "select-lod{form=finest}, load-mesh-files, load-textures, lower-skate-pbr, normalize-normals, \
+    fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}, bake-nonrigid{mirrors=keep}";
 
 fn registry() -> PassRegistry {
     let mut reg = PassRegistry::new();

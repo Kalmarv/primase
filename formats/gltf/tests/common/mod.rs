@@ -480,6 +480,29 @@ pub fn build(dir: &Path) -> Built {
         "{:?}",
         log.counts
     );
+    // and, as a glTF pipeline chooses them, the writer's needs the source does not state: a look for the material
+    // without PBR factors (the earlier writer's fallback), zeros for a texture coordinate set a primitive lacks
+    let mut log = primase_core::pass::PassLog::default();
+    use primase_core::pass::Pass;
+    let unit = |v| primase_gltf::prepare::UnitValue::new(v).unwrap();
+    primase_gltf::prepare::PrepareGltfMaterials {
+        base_color: [0.8, 0.8, 0.8, 1.0].map(unit),
+        metallic: unit(0.0),
+        roughness: unit(0.85),
+    }
+    .run(&mut w, &mut log)
+    .unwrap();
+    primase_gltf::prepare::FillMissingTexcoords
+        .run(&mut w, &mut log)
+        .unwrap();
+    assert_eq!(
+        log.approximations,
+        [
+            ("materials without PBR factors given the program's".to_owned(), 1),
+            ("primitives given zero texture coordinates".to_owned(), 1)
+        ]
+        .into()
+    );
     Built {
         world: w,
         dir: dir.to_owned(),

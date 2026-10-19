@@ -28,6 +28,16 @@ fn prepare(
         // strongest-layer lowering is the skate target's lossy path and leaves the replaced layered and layer materials
         // in the world, which the per-cell closure check rejects.
         primase_image::normalize_normals(&mut w)?;
+        // the skate scene's own rules for what it does not state: zeros for a texture coordinate set a primitive lacks,
+        // light grey, dielectric and rough for a material without PBR factors
+        let unit = |v| primase_gltf::prepare::UnitValue::new(v).expect("a unit value");
+        primase_gltf::prepare::FillMissingTexcoords.run(&mut w, &mut PassLog::default())?;
+        primase_gltf::prepare::PrepareGltfMaterials {
+            base_color: [0.8, 0.8, 0.8, 1.].map(unit),
+            metallic: unit(0.),
+            roughness: unit(0.85),
+        }
+        .run(&mut w, &mut PassLog::default())?;
     }
     Ok(w)
 }

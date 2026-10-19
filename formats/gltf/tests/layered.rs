@@ -71,10 +71,16 @@ fn world(weights: Option<Semantic>, mapping: WeightMapping, layers: usize) -> (W
             weights: LayerWeights::new(weights.unwrap_or(Semantic::Color(1)), mapping),
         },
     );
-    let mut streams = BTreeMap::from([(
-        Semantic::Position,
-        Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
-    )]);
+    // every set the layers are sampled with (layer 0 with set 1, the others with set 0)
+    let uv = || Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]);
+    let mut streams = BTreeMap::from([
+        (
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+        ),
+        (Semantic::TexCoord(0), uv()),
+        (Semantic::TexCoord(1), uv()),
+    ]);
     if weights != Some(Semantic::Color(9)) {
         streams.insert(
             Semantic::Color(1),

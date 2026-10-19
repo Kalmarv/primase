@@ -213,7 +213,6 @@ fn round_trip_geometry_and_transforms() {
         report.primitives_without_material, 5,
         "rich's third primitive in 4 meshes, the rail"
     );
-    assert_eq!(report.primitives_texcoords_zero_filled, 1);
     assert_eq!(report.triangles, 4 * 3 * 2 + 70_002 / 3 + 3 + 2);
     println!("{report}");
 }
@@ -438,7 +437,10 @@ fn round_trip_materials_textures_and_extras() {
     );
     assert_eq!(report.textures, 3);
     assert_eq!(report.materials, 4);
-    assert_eq!(report.materials_fallback, 1);
+    assert_eq!(
+        report.materials_without_pbr, 0,
+        "the fixture's pipeline gave every material PBR factors"
+    );
     assert_eq!(report.textures_skipped, BTreeMap::from([("dds".to_owned(), 1)]));
     assert_eq!(report.texture_slots_dropped, 1);
     assert_eq!(
@@ -778,4 +780,124 @@ fn extras_never_lose_a_value() {
     b.world.insert(b.regular, Sample(f32::NAN));
     let err = write(&b.world, &options(&b)).unwrap_err().to_string();
     assert!(err.contains("test.sample") && err.contains("NaN"), "{err}");
+}
+
+#[test]
+fn the_writer_invents_no_material_and_no_texture_coordinates() {
+    use primase_core::pbr::{PbrMaterial, TextureRef};
+    use primase_core::{Instance, Primitive, Transform};
+    let quad = |material: Entity, uv: bool| {
+        let mut streams = BTreeMap::from([(
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+        )]);
+        if uv {
+            streams.insert(Semantic::TexCoord(0), Stream::F32x2(vec![[0., 0.]; 3]));
+        }
+        Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: None,
+            material: Some(material),
+        }
+    };
+    let build = |uv: bool| {
+        let mut w = World::new();
+        let texture = w.spawn();
+        w.insert(
+            texture,
+            primase_core::Texture {
+                width: 1,
+                height: 1,
+                format: primase_core::TexFormat::Rgba8Unorm,
+                levels: vec![vec![255; 4]],
+                color_space: primase_core::ColorSpace::Srgb,
+                role: primase_core::TexRole::Color,
+                normal: None,
+            },
+        );
+        let textured = w.spawn();
+        w.insert(
+            textured,
+            PbrMaterial {
+                base_color_texture: Some(TextureRef::new(texture)),
+                ..PbrMaterial::default()
+            },
+        );
+        let bare = w.spawn();
+        let proto = w.spawn();
+        w.insert(proto, Mesh::new(vec![quad(textured, uv), quad(bare, true)]));
+        let placed = w.spawn();
+        w.insert(
+            placed,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(placed, Transform::IDENTITY);
+        (w, bare)
+    };
+    let options = WriteOptions::default();
+    // a material without PBR factors: no material in glTF, counted; no light grey invented
+    let (w, _) = build(true);
+    let (bytes, report) = write(&w, &options).unwrap();
+    assert_eq!(
+        (report.materials_without_pbr, report.materials),
+        (1, 1),
+        "{report}"
+    );
+    let gltf = Gltf::from_glb(&bytes).unwrap();
+    let doc = gltf.json();
+    let prims = arr(&arr(doc, "meshes")[0], "primitives");
+    assert!(prims[0].get("material").is_some() && prims[1].get("material").is_none());
+    // a textured primitive without its texture coordinates: refused, with the pass that fills them named
+    let (mut w, bare) = build(false);
+    let err = write(&w, &options).unwrap_err().to_string();
+    assert!(
+        err.contains("TEXCOORD_0") && err.contains("fill-missing-texcoords"),
+        "{err}"
+    );
+    // the program's choices fill both
+    let mut registry = primase_core::pass::PassRegistry::new();
+    primase_gltf::register(&mut registry);
+    let manager = primase_core::pass::PassManager::new(registry);
+    let mut run = primase_core::pass::RunReport::default();
+    manager
+        .run(
+            &mut w,
+            &manager
+                .registry
+                .parse("fill-missing-texcoords, prepare-gltf-materials{base-color=0.5/0.25/1/1,metallic=0,roughness=0.5}")
+                .unwrap(),
+            &mut run,
+        )
+        .unwrap();
+    assert_eq!(
+        w.get::<PbrMaterial>(bare).unwrap().base_color,
+        [0.5, 0.25, 1., 1.]
+    );
+    let (_, report) = write(&w, &options).unwrap();
+    assert_eq!(
+        (report.materials_without_pbr, report.materials),
+        (0, 2),
+        "{report}"
+    );
+    assert_eq!(
+        run.steps[0].log.approximations["primitives given zero texture coordinates"],
+        1
+    );
+    // the look is the program's: no default
+    assert!(
+        manager
+            .registry
+            .parse("prepare-gltf-materials{metallic=0,roughness=0.5}")
+            .is_err()
+    );
+    assert!(
+        manager
+            .registry
+            .parse("prepare-gltf-materials{base-color=2/0/0/1,metallic=0,roughness=0.5}")
+            .is_err()
+    );
 }
