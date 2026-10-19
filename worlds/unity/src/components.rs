@@ -3,7 +3,7 @@
 use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
-use crate::material::{PassKind, ShaderPass, SubShader};
+use crate::shader::{PassKind, ShaderPass, SubShader};
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -206,7 +206,7 @@ pub fn queue_tag(v: &str) -> Option<i32> {
 pub struct UnityMaterial {
     pub material: UnityObject,
     pub shader: Option<String>,
-    pub shader_state: Vec<crate::material::SubShader>,
+    pub shader_state: Vec<crate::shader::SubShader>,
     pub textures: Vec<UnityTexEnv>,
     #[serde(serialize_with = "stored_floats")]
     pub floats: Vec<(String, f32)>,
@@ -237,12 +237,12 @@ impl UnityMaterial {
         })
     }
 
-    /// A pass's blend factors (source, destination) as `BlendMode` values ([`crate::material::blend_mode`]), each the
+    /// A pass's blend factors (source, destination) as `BlendMode` values ([`crate::shader::blend_mode`]), each the
     /// bound property's value where it has one ([`Self::state_value`]); `None` when one is not a `BlendMode`.
     pub fn blend_factors(&self, pass: &ShaderPass) -> Option<(u8, u8)> {
-        let mode = |v: &crate::material::ShaderValue| {
+        let mode = |v: &crate::shader::ShaderValue| {
             let x = self.state_value(v);
-            (x.fract() == 0.0 && (0.0..=f32::from(crate::material::blend_mode::LAST)).contains(&x))
+            (x.fract() == 0.0 && (0.0..=f32::from(crate::shader::blend_mode::LAST)).contains(&x))
                 .then_some(x as u8)
         };
         Some((mode(&pass.src_blend)?, mode(&pass.dst_blend)?))
@@ -275,7 +275,7 @@ impl UnityMaterial {
 
     /// A shader render-state value: the bound material property's float where it names one the material has, else
     /// the shader's own value.
-    pub fn state_value(&self, v: &crate::material::ShaderValue) -> f32 {
+    pub fn state_value(&self, v: &crate::shader::ShaderValue) -> f32 {
         v.property
             .as_deref()
             .and_then(|p| self.float(p))
@@ -743,7 +743,7 @@ impl Component for UnityCollider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::material::fixture;
+    use crate::shader::fixture;
 
     #[test]
     fn queue_tags_read_as_shaderlab_writes_them() {
@@ -855,7 +855,7 @@ mod tests {
     /// forward pass, not its shadow caster; none under another pipeline.
     #[test]
     fn the_draw_pass_is_the_pipelines_surface_pass() {
-        use crate::material::PassKind;
+        use crate::shader::PassKind;
         let b = RenderPipeline::BuiltIn;
         let u = RenderPipeline::Universal;
         let picked = |passes: Vec<ShaderPass>, p: &RenderPipeline| {

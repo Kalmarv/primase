@@ -75,7 +75,8 @@ fn materials_match_the_oracle() {
 /// material's shader exactly.
 #[test]
 fn shader_state_matches_the_oracle() {
-    use primase_unity::material::{ShaderData, ShaderValue};
+    use primase_unity::material::ShaderData;
+    use primase_unity::shader::ShaderValue;
     let (Some(data), Some(tpk), Some(oracle)) = (
         real_data("PRIMASE_UNITY_DATA"),
         real_data("PRIMASE_UNITY_TPK"),

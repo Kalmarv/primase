@@ -1,6 +1,7 @@
 //! The reader: a player's data folder, its SerializedFiles decoded by their classes' type trees, the streamed
 //! resources beside them, and the objects read from them.
 
+pub mod material;
 pub mod mesh;
 pub mod player;
 pub mod program;

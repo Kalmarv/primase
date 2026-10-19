@@ -28,7 +28,7 @@ use crate::passes::lower::modelled;
 
 /// Whether a material is on a shader the lowering does not model whose draw pass under `pipeline` blends additively.
 fn additive_unmodelled(m: &UnityMaterial, pipeline: &RenderPipeline) -> bool {
-    use crate::material::blend_mode::{ONE, SRC_ALPHA};
+    use crate::shader::blend_mode::{ONE, SRC_ALPHA};
     !modelled(m.shader.as_deref())
         && m.draw_pass(pipeline)
             .and_then(|p| m.blend_factors(p))

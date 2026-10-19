@@ -1,11 +1,11 @@
 //! Unity players' data files read into the world.
 //!
 //! The reader (`read/`, its modules re-exported here):
-//! - [`serialized`]: the SerializedFile container (`globalgamemanagers`, `*.assets`, `levelN`): header, types,
-//!   the object table, script references, external files. Strict, and version-gated: only container versions
-//!   verified against real data are read.
-//! - [`tpk`]: a type tree package (the TPK format), the class layouts per Unity version that a player
-//!   build strips from its files. The caller supplies the package; none is bundled.
+//! - [`serialized`]: the SerializedFile container (`globalgamemanagers`, `*.assets`, `levelN`): header, types, the
+//!   object table, script references, external files. Strict, and version-gated: only container versions verified
+//!   against real data are read.
+//! - [`tpk`]: a type tree package (the TPK format), the class layouts per Unity version that a player build strips
+//!   from its files. The caller supplies the package; none is bundled.
 //! - [`typetree`]: decoding an object's bytes by its class's type tree into a [`Value`] tree.
 //! - [`resource`]: streamed resources (`.resS`), the bulk data that objects point at.
 //! - [`player`]: a player's data folder: its files, pointers resolved across them.
@@ -16,6 +16,9 @@
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
 //! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
 //! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
+//!
+//! [`shader`]: a Shader's render state as stored, which the reader decodes, `unity.material` carries and the passes
+//! choose by.
 //!
 //! The passes ([`passes`], each module re-exported here):
 //! - [`drawn`]: what a renderer other than Unity's can draw of the scene's renderers (pass `unity-drawn`).
@@ -28,9 +31,9 @@
 
 pub mod components;
 pub mod level;
-pub mod material;
 pub mod passes;
 mod read;
+pub mod shader;
 
 pub use passes::{drawn, lower, lower_collision, lower_lights, lower_terrain};
 pub use read::serialized::{ObjectInfo, SerializedFile};
@@ -39,7 +42,8 @@ pub use read::typetree::TypeTree;
 pub use read::value::Value;
 pub use read::version::UnityVersion;
 pub use read::{
-    mesh, player, program, resource, scene, serialized, terrain, texture, tpk, typetree, value, version,
+    material, mesh, player, program, resource, scene, serialized, terrain, texture, tpk, typetree, value,
+    version,
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,

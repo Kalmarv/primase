@@ -58,7 +58,7 @@ use primase_image::{linear_to_srgb, srgb_to_linear};
 
 use crate::components::RenderPipeline;
 use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
-use crate::material::SubShader;
+use crate::shader::SubShader;
 use crate::{Result, invalid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,7 +219,7 @@ const GEOMETRY_LAST: i32 = 2500;
 /// One Zero (opaque: the surface replaces what is behind); SrcAlpha OneMinusSrcAlpha is alpha blending (`Some(None)`);
 /// any other blending is drawn as alpha blending, named for the count (`Some(Some(name))`).
 fn blending(factors: Option<(u8, u8)>) -> Option<Option<&'static str>> {
-    use crate::material::blend_mode::{
+    use crate::shader::blend_mode::{
         DST_COLOR, ONE, ONE_MINUS_SRC_ALPHA, ONE_MINUS_SRC_COLOR, SRC_ALPHA, SRC_COLOR, ZERO,
     };
     let Some((src, dst)) = factors else {
@@ -749,7 +749,7 @@ mod tests {
 
     use super::*;
     use crate::components::UnityObject;
-    use crate::material::fixture;
+    use crate::shader::fixture;
 
     fn material(path_id: i64, shader: Option<&str>, keywords: &[&str]) -> UnityMaterial {
         UnityMaterial {
@@ -923,7 +923,7 @@ mod tests {
     /// after a GrabPass stays opaque. A material's own `RenderType` tag overrides its subshader's.
     #[test]
     fn built_in_shaders_state_their_blending_in_the_base_pass() {
-        use crate::material::PassKind;
+        use crate::shader::PassKind;
         let legacy = |tags: &[(&str, &str)], src, dst| {
             fixture::sub(
                 tags,
@@ -1022,7 +1022,7 @@ mod tests {
             &[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Transparent")],
             vec![
                 fixture::pass(
-                    crate::material::PassKind::Normal,
+                    crate::shader::PassKind::Normal,
                     Some("UniversalForward"),
                     fixture::value(1.0, Some("_SrcBlend")),
                     fixture::value(0.0, Some("_DstBlend")),
@@ -1209,7 +1209,7 @@ mod tests {
     /// read from the material, Standard's fixed `Cull Back`; without a draw pass the material's `_Cull`.
     #[test]
     fn double_sided_follows_the_draw_pass_culling() {
-        use crate::material::PassKind;
+        use crate::shader::PassKind;
         let mut leaves_pass = fixture::own(Some("FORWARDBASE"), 1.0, 0.0);
         leaves_pass.cull = fixture::value(0.0, None);
         let leaves = stated(

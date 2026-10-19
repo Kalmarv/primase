@@ -46,7 +46,7 @@ use crate::components::{
     UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
     UnityTree, UnityTreeInstance,
 };
-use crate::material::{ShaderData, UnityMaterialData};
+use crate::read::material::{ShaderData, UnityMaterialData};
 use crate::read::mesh::UnityMeshData;
 use crate::read::player::{ObjRef, Player};
 use crate::read::scene::{ColliderComponent, ColliderShape};
