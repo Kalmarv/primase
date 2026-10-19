@@ -585,7 +585,14 @@ bake-input identities, its parts are in prototype source-id order (a repeated id
 is refused), and a source material's level variant is
 `bake_<group>_<level>_source_<digest>`, the digest the first 8 bytes of the
 SHA-256 of the material's identity record (the JSON the reader dedupes materials
-by); the lowering's packed ORM textures are `<normal>_orm_<digest>` the same way. Core PBR bindings are
+by); the lowering's packed ORM textures are `<normal>_orm_<digest>` the same way.
+Variants of equal content keep their own names and entities: in the scene slice
+(`baked_area`), 243 of the 680 variants share their content with another, in 98
+sets, each within one group and level, whose sources differ only in their raw GX
+records, which a variant keeps as provenance. No pass merges them; the trigger
+for a merge pass (one that merges materials of equal lowered content and counts
+the GX provenance it drops) is a texture or material budget hit on the Sekiro
+route. Core PBR bindings are
 authoritative. Gloss becomes roughness only in the PBR helper; emission uses its
 normalised sRGB texture and explicit HDR strength. Source materials without a bake
 are lowered by the lowering pass. The bake's pass log counts unique source
