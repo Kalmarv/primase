@@ -16,13 +16,13 @@ use std::path::PathBuf;
 
 use primase_core::World;
 use primase_core::pass::{Pass, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_reskate::BuildOptions;
+use primase_reskate::{EncodingOptions, WriterChoices};
 
 type BoxError = Box<dyn std::error::Error>;
 
 fn main() -> Result<(), BoxError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut o = BuildOptions::default();
+    let (mut o, mut c) = (EncodingOptions::default(), WriterChoices::default());
     let mut scene: Option<PathBuf> = None;
     let mut lod = primase_core::LodChoice::Default;
     let mut max_priority: Option<u8> = None;
@@ -48,9 +48,9 @@ fn main() -> Result<(), BoxError> {
                     name_caps.push((k.clone(), u32::try_from(c)?));
                 }
             }
-            "--lights-max-per-cell" => o.lights_max_per_cell = val()?.parse()?,
-            "--water-ocean" => o.water_ocean = true,
-            "--no-water" => o.no_water = true,
+            "--lights-max-per-cell" => c.lights_max_per_cell = val()?.parse()?,
+            "--water-ocean" => c.water_ocean = true,
+            "--no-water" => c.no_water = true,
             "--piece-log" => o.piece_log = true,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
             "--max-priority" => max_priority = Some(val()?.parse()?),
@@ -97,8 +97,10 @@ fn main() -> Result<(), BoxError> {
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it
     passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));
-    // the markers snapped against the map's collision, for the writer's settings (this example's are its defaults)
-    passes.push(Box::new(primase_reskate::prepare::SnapReskateMarkers::new()));
+    // the markers snapped against the map's collision, for the encoding the map is written with
+    passes.push(Box::new(
+        primase_reskate::prepare::SnapReskateMarkers::for_encoding(&o)?,
+    ));
     // the writer's old cap: stored levels, else the 2 x 2 box down to the cap, normal maps alike
     let mut cap = primase_image::CapTextures::new(tex_cap)?.with_mode(primase_image::CapMode {
         normals: primase_image::NormalDownscale::Box,
@@ -127,7 +129,7 @@ fn main() -> Result<(), BoxError> {
             println!("{}: {:?}", step.pass, step.log.counts);
         }
     }
-    let r = primase_reskate::build(&w, &scene, &o)?;
+    let r = primase_reskate::write_map(&w, &scene, &o, &c)?;
     println!(
         "map '{}': {} tiles, {} merged placements / {:.2} M tris, {} instances of {} prototypes, {} object records, {} materials, {} textures, collision {:.2} M tris, in {:.1}s",
         r.out_dir.display(),

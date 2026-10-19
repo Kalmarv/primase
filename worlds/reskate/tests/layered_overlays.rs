@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{LayeredMaterial, Mesh, World};
-use primase_reskate::BuildOptions;
 use primase_reskate::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
+use primase_reskate::{EncodingOptions, WriterChoices};
 use serde_json::Value;
 
 fn scenes(root: &Path) -> Vec<PathBuf> {
@@ -223,12 +223,12 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         if w.iter::<LayeredMaterial>().count() == 0 {
             continue;
         }
-        let mut o = BuildOptions {
+        let mut o = EncodingOptions {
             out_root: out_root.clone(),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         };
         choose_lod(&mut w);
-        let refused = primase_reskate::build(&w, &scene, &o)
+        let refused = primase_reskate::write_map(&w, &scene, &o, &WriterChoices::default())
             .err()
             .map(|e| e.to_string())
             .unwrap_or_default();
@@ -274,7 +274,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
                 .unwrap()
                 .0,
         );
-        let report = primase_reskate::build(&w, &scene, &o).unwrap();
+        let report = primase_reskate::write_map(&w, &scene, &o, &WriterChoices::default()).unwrap();
         let out = report.out_dir;
         let map: Value = serde_json::from_slice(&std::fs::read(out.join("map.json")).unwrap()).unwrap();
         let blended: BTreeSet<String> = map["materials"]
@@ -347,7 +347,13 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             l.sort();
         }
         assert_eq!(record, record_want, "vertex_blend.json vs map.json objects");
-        check_chain_objects(&map, &out, &by_mesh, &report.blend, o.blend_grid);
+        check_chain_objects(
+            &map,
+            &out,
+            &by_mesh,
+            &report.blend,
+            WriterChoices::default().blend_grid,
+        );
         println!(
             "{}: {} vertex_blend materials, {} blended object primitives, {} other",
             scene.display(),

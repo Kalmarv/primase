@@ -1,6 +1,7 @@
 //! The writer takes geometry as `core.mesh`: a scene read from its folder and loaded (`interchange::load`) writes the
 //! same files as the world it was written from, and one read but not loaded is refused with its reason; a prototype
-//! without geometry that collides is written as collision. A synthetic scene, made here.
+//! without geometry that collides is written as collision; the load reads each file once and the write needs none.
+//! A synthetic scene, made here.
 
 #![allow(clippy::unwrap_used)]
 
@@ -8,13 +9,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{
-    Collision, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology,
-    Transform, World,
+    Collision, ColorSpace, Instance, Light, LightKind, Mesh, MeshFile, Name, Primitive, Semantic, Stream,
+    Surfaces, TexFormat, TexRole, Texture, TextureFile, Topology, Transform, World,
 };
-use primase_reskate::BuildOptions;
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -175,13 +176,14 @@ fn a_loaded_scene_writes_what_its_world_writes() {
     // read but not loaded: the writer reads no GLB
     let mut unloaded = World::new();
     primase_reskate::interchange::read(&scene, &mut unloaded).unwrap();
-    let e = primase_reskate::build(
+    let e = primase_reskate::write_map(
         &unloaded,
         &scene,
-        &BuildOptions {
+        &EncodingOptions {
             out_root: tmp("unloaded"),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         },
+        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();
@@ -198,13 +200,14 @@ fn a_loaded_scene_writes_what_its_world_writes() {
                 &read
             }
         };
-        primase_reskate::build(
+        primase_reskate::write_map(
             w,
             &scene,
-            &BuildOptions {
+            &EncodingOptions {
                 out_root: out_root.clone(),
-                ..BuildOptions::default()
+                ..EncodingOptions::default()
             },
+            &WriterChoices::default(),
         )
         .unwrap();
         let mut f = files(&out_root);
@@ -267,13 +270,14 @@ fn a_spawn_over_no_ground_is_refused() {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         let out_root = tmp(&format!("{tag}-out"));
-        primase_reskate::build(
+        primase_reskate::write_map(
             &w,
             &scene,
-            &BuildOptions {
+            &EncodingOptions {
                 out_root: out_root.clone(),
-                ..BuildOptions::default()
+                ..EncodingOptions::default()
             },
+            &WriterChoices::default(),
         )
         .map(|_| out_root)
         .map_err(|e| e.to_string())
@@ -335,13 +339,14 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let out_root = tmp("collides-out");
-    primase_reskate::build(
+    primase_reskate::write_map(
         &w,
         &scene,
-        &BuildOptions {
+        &EncodingOptions {
             out_root: out_root.clone(),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         },
+        &WriterChoices::default(),
     )
     .unwrap();
     let stats: serde_json::Value =
@@ -363,4 +368,95 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
         "{:?}",
         files(&out_root).keys()
     );
+}
+
+/// The prepared-map boundary: `interchange::load` reads each file the scene names once, however many entities name
+/// it, and the write takes only the loaded world: with the scene folder gone after the load, the map is the same.
+#[test]
+fn the_write_needs_no_scene_file_after_the_load() {
+    let mut w = world();
+    spawn_at(&mut w, [0.0, 0.0]);
+    // one texture both materials draw with
+    let shared = w.spawn();
+    w.insert(shared, Name("shared".into()));
+    w.insert(
+        shared,
+        Texture {
+            width: 4,
+            height: 4,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![200; 64]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let materials: Vec<_> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
+    assert_eq!(materials.len(), 2);
+    for m in materials {
+        w.get_mut::<PbrMaterial>(m).unwrap().base_color_texture = Some(TextureRef::new(shared));
+    }
+    primase_reskate::prepare::raise_skate(
+        &mut w,
+        &RaiseOptions {
+            name: "once".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SnapReskateMarkers::new()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    primase_reskate::interchange::prepare_assets(&mut w, &tmp("once-assets")).unwrap();
+    let scene = tmp("once-scene");
+    primase_reskate::interchange::write(&w, &scene).unwrap();
+    let mut read = World::new();
+    primase_reskate::interchange::read(&scene, &mut read).unwrap();
+    let distinct =
+        |paths: Vec<PathBuf>| paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() as u64;
+    let glbs = distinct(read.iter::<MeshFile>().map(|(_, f)| f.path.clone()).collect());
+    let images = distinct(read.iter::<TextureFile>().map(|(_, f)| f.path.clone()).collect());
+    let loaded = primase_reskate::interchange::load(&scene, &mut read).unwrap();
+    // the prototype placed twice is one file, the texture two materials draw with is one file
+    assert_eq!((glbs, loaded.meshes.files), (1, 1));
+    assert!(images >= 1);
+    assert_eq!(loaded.textures.files, images);
+    assert!(loaded.textures.textures >= images);
+    let write = |tag: &str| {
+        let out_root = tmp(tag);
+        primase_reskate::write_map(
+            &read,
+            &scene,
+            &EncodingOptions {
+                out_root: out_root.clone(),
+                ..EncodingOptions::default()
+            },
+            &WriterChoices::default(),
+        )
+        .unwrap();
+        let mut f = files(&out_root);
+        let stats = f.get_mut("once/stats.json").unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(stats).unwrap();
+        v["totals"].as_object_mut().map(|t| t.remove("seconds"));
+        *stats = serde_json::to_vec(&v).unwrap();
+        f
+    };
+    let with_folder = write("once-out");
+    // the scene folder moved away: its paths lead nowhere
+    let gone = tmp("once-scene-gone");
+    std::fs::rename(&scene, &gone).unwrap();
+    assert!(!scene.exists());
+    let without = write("once-out-gone");
+    assert!(
+        with_folder.keys().any(|k| k.starts_with("once/textures/")),
+        "{:?}",
+        with_folder.keys()
+    );
+    assert_eq!(
+        with_folder.keys().collect::<Vec<_>>(),
+        without.keys().collect::<Vec<_>>()
+    );
+    for (name, bytes) in &with_folder {
+        assert!(bytes == &without[name], "{name} differs");
+    }
 }

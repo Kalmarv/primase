@@ -19,15 +19,54 @@ use crate::texture::TexSource;
 
 use crate::{Error, Result};
 
-/// The options of `scene-skate build`.
+/// How the writer encodes a prepared world ([`write_map`]): where the map folder goes and the format's packing. None
+/// of it chooses content.
 #[derive(Clone, Debug)]
-pub struct BuildOptions {
+pub struct EncodingOptions {
     /// The map folder is `out_root/name`.
     pub out_root: PathBuf,
+    /// `None`: the scene's name.
     pub name: Option<String>,
+    /// The edge (m) of the render tiles the writer merges placements on.
     pub tile: f32,
+    /// A prototype placed at least this often, with at least this many triangles, is written as instances instead
+    /// of merged into its tiles.
     pub min_instances: i64,
     pub min_instance_tris: i64,
+    /// The longest render edge (m) a written triangle keeps before it is split; `None`: the scene's.
+    pub max_render_edge: Option<f32>,
+    /// The map's half extent (m): Studio's limit.
+    pub limit: f32,
+    /// Added to every written coordinate (east, north).
+    pub offset: [f64; 2],
+    /// Write the collision pieces' log.
+    pub piece_log: bool,
+    /// The scene's warnings for the map's stats, taken before a pass left placements out ([`leave_out_optional`]):
+    /// the reference reads them from the whole scene before its writer filters. `None`: from the world as given.
+    pub scene_warnings: Option<Vec<String>>,
+}
+
+impl Default for EncodingOptions {
+    fn default() -> Self {
+        EncodingOptions {
+            out_root: PathBuf::from("work/map"),
+            name: None,
+            tile: 200.0,
+            min_instances: 3,
+            min_instance_tris: 150,
+            max_render_edge: None,
+            limit: 4780.0,
+            offset: [0.0, 0.0],
+            piece_log: false,
+            scene_warnings: None,
+        }
+    }
+}
+
+/// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
+/// overlays and blend chains, water, lights and the pause map's height. Delete a field when its pass lands.
+#[derive(Clone, Debug)]
+pub struct WriterChoices {
     pub overlay_step: f32,
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
     /// and takes a cull ID). `None`: the level's share of ReSkate 2.1.0-pre's cull-ID pool less what the rest of the
@@ -35,6 +74,38 @@ pub struct BuildOptions {
     pub blend_objects: Option<usize>,
     /// The grid the blend-chain objects are cut on ([`crate::map::WriterOptions::blend_grid`]): Studio's 200 m
     /// WorldPartition cell by default.
+    pub blend_grid: f32,
+    pub map_height: usize,
+    pub no_water: bool,
+    pub water_ocean: bool,
+    pub lights_max_per_cell: usize,
+}
+
+impl Default for WriterChoices {
+    fn default() -> Self {
+        WriterChoices {
+            overlay_step: 0.004,
+            blend_objects: None,
+            blend_grid: 200.0,
+            map_height: 2160,
+            no_water: false,
+            water_ocean: false,
+            lights_max_per_cell: 0,
+        }
+    }
+}
+
+/// The options of `scene-skate build`, flat: [`EncodingOptions`] and [`WriterChoices`] in one, for [`build`], the
+/// deprecated composition helper. Removed with it (PRIMASE-PLAN step 10).
+#[derive(Clone, Debug)]
+pub struct BuildOptions {
+    pub out_root: PathBuf,
+    pub name: Option<String>,
+    pub tile: f32,
+    pub min_instances: i64,
+    pub min_instance_tris: i64,
+    pub overlay_step: f32,
+    pub blend_objects: Option<usize>,
     pub blend_grid: f32,
     pub piece_log: bool,
     pub limit: f32,
@@ -44,33 +115,61 @@ pub struct BuildOptions {
     pub lights_max_per_cell: usize,
     pub max_render_edge: Option<f32>,
     pub offset: [f64; 2],
-    /// The scene's warnings as the reference build reports them, taken before a pass left placements out
-    /// ([`leave_out_optional`]): the reference reads them from the whole scene before its writer filters. `None`:
-    /// from the world as given.
     pub scene_warnings: Option<Vec<String>>,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
+        let (e, c) = (EncodingOptions::default(), WriterChoices::default());
         BuildOptions {
-            out_root: PathBuf::from("work/map"),
-            name: None,
-            tile: 200.0,
-            min_instances: 3,
-            min_instance_tris: 150,
-            overlay_step: 0.004,
-            blend_objects: None,
-            blend_grid: 200.0,
-            piece_log: false,
-            limit: 4780.0,
-            map_height: 2160,
-            no_water: false,
-            water_ocean: false,
-            lights_max_per_cell: 0,
-            max_render_edge: None,
-            offset: [0.0, 0.0],
-            scene_warnings: None,
+            out_root: e.out_root,
+            name: e.name,
+            tile: e.tile,
+            min_instances: e.min_instances,
+            min_instance_tris: e.min_instance_tris,
+            overlay_step: c.overlay_step,
+            blend_objects: c.blend_objects,
+            blend_grid: c.blend_grid,
+            piece_log: e.piece_log,
+            limit: e.limit,
+            map_height: c.map_height,
+            no_water: c.no_water,
+            water_ocean: c.water_ocean,
+            lights_max_per_cell: c.lights_max_per_cell,
+            max_render_edge: e.max_render_edge,
+            offset: e.offset,
+            scene_warnings: e.scene_warnings,
         }
+    }
+}
+
+impl BuildOptions {
+    /// The writer's encoding and the choices it still makes.
+    pub fn split(&self) -> (EncodingOptions, WriterChoices) {
+        let a = self.clone();
+        (
+            EncodingOptions {
+                out_root: a.out_root,
+                name: a.name,
+                tile: a.tile,
+                min_instances: a.min_instances,
+                min_instance_tris: a.min_instance_tris,
+                max_render_edge: a.max_render_edge,
+                limit: a.limit,
+                offset: a.offset,
+                piece_log: a.piece_log,
+                scene_warnings: a.scene_warnings,
+            },
+            WriterChoices {
+                overlay_step: a.overlay_step,
+                blend_objects: a.blend_objects,
+                blend_grid: a.blend_grid,
+                map_height: a.map_height,
+                no_water: a.no_water,
+                water_ocean: a.water_ocean,
+                lights_max_per_cell: a.lights_max_per_cell,
+            },
+        )
     }
 }
 
@@ -443,8 +542,16 @@ fn run_passes(
     Ok(report)
 }
 
-/// Build the map folder of the scene in `world` (read from `dir`).
+/// The deprecated composition helper: [`write_map`] with the flat [`BuildOptions`]. Removed when its last callers
+/// switch (PRIMASE-PLAN step 10).
 pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport> {
+    let (e, c) = a.split();
+    write_map(world, dir, &e, &c)
+}
+
+/// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
+/// as `a` says, with the content choices `c` the writer still makes.
+pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoices) -> Result<BuildReport> {
     let mut s = Scene::from_world(world, dir)?;
     let scene_warnings = match &a.scene_warnings {
         Some(w) => w.clone(),
@@ -465,16 +572,16 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         band_rows: 8,
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
-        overlay_step: a.overlay_step,
-        blend_objects: a.blend_objects,
-        blend_grid: a.blend_grid,
+        overlay_step: c.overlay_step,
+        blend_objects: c.blend_objects,
+        blend_grid: c.blend_grid,
         piece_log: a.piece_log,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
-        map_height: a.map_height,
-        water: !a.no_water,
-        water_ocean: a.water_ocean,
-        lights_max_per_cell: a.lights_max_per_cell,
+        map_height: c.map_height,
+        water: !c.no_water,
+        water_ocean: c.water_ocean,
+        lights_max_per_cell: c.lights_max_per_cell,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
         max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),

@@ -23,7 +23,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_meshops::vector::Vec3;
 
-use crate::build::{BuildOptions, SoupWorld, bounds, hulls, writer_placements};
+use crate::build::{EncodingOptions, SoupWorld, bounds, hulls, writer_placements};
 use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
 use crate::dialect::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
@@ -37,9 +37,9 @@ pub struct SnapReskateMarkers {
 }
 
 impl SnapReskateMarkers {
-    /// With the writer's default settings (its `BuildOptions`).
+    /// With the writer's default encoding ([`EncodingOptions::default`]).
     pub fn new() -> SnapReskateMarkers {
-        let o = BuildOptions::default();
+        let o = EncodingOptions::default();
         SnapReskateMarkers {
             basis: SkateMarkerSnaps {
                 limit: o.limit,
@@ -49,6 +49,14 @@ impl SnapReskateMarkers {
                 max_render_edge: o.max_render_edge,
             },
         }
+    }
+
+    /// For the encoding the map will be written with (its limit, offset and instancing), through the setters' checks.
+    pub fn for_encoding(e: &EncodingOptions) -> Result<SnapReskateMarkers, String> {
+        SnapReskateMarkers::new()
+            .with_limit(e.limit)?
+            .with_offset(e.offset.map(|v| v as f32))?
+            .with_instancing(e.min_instances, e.min_instance_tris, e.max_render_edge)
     }
 
     /// The map's half extent the writer is given (finite, above 20 m).
@@ -137,7 +145,7 @@ impl SnapReskateMarkers {
 }
 
 impl Default for SnapReskateMarkers {
-    /// The writer's defaults: what a map written with `BuildOptions::default()` takes.
+    /// The writer's defaults: what a map written with `EncodingOptions::default()` takes.
     fn default() -> Self {
         SnapReskateMarkers::new()
     }

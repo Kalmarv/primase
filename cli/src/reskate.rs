@@ -1,4 +1,4 @@
-//! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`, [`primase_reskate::build`]) of the whole
+//! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`, [`primase_reskate::write_map`]) of the whole
 //! selection as one part, built from the world in memory. The part must have been through the passes the map needs
 //! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>}`
 //! (the skate dialect; a spawn comes from `place-spawn` at selection), `lower-layered-reskate` (blends as decal
@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 use primase_core::convert::{Report, Writer};
 use primase_core::pass::Target;
-use primase_reskate::BuildOptions;
+use primase_reskate::{EncodingOptions, WriterChoices};
 
 use crate::convert::Result;
 
 struct Reskate {
-    options: BuildOptions,
+    encoding: EncodingOptions,
+    choices: WriterChoices,
     report: Report,
     /// What the map writer did not write, not yet taken by the conversion.
     notices: Vec<primase_core::convert::Notice>,
@@ -28,29 +29,30 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "map".into());
-    let mut options = BuildOptions {
+    let mut encoding = EncodingOptions {
         out_root: out.to_path_buf(),
-        ..BuildOptions::default()
+        ..EncodingOptions::default()
     };
+    let mut choices = WriterChoices::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("reskate: {a} needs a value"));
         match a.as_str() {
             "--name" => name.clone_from(value()?),
             "--min-instances" => {
-                options.min_instances = value()?
+                encoding.min_instances = value()?
                     .parse()
                     .map_err(|_| "reskate: --min-instances is a number")?
             }
             "--blend-objects" => {
-                options.blend_objects = Some(
+                choices.blend_objects = Some(
                     value()?
                         .parse()
                         .map_err(|_| "reskate: --blend-objects is a number")?,
                 )
             }
             "--blend-grid" => {
-                options.blend_grid = value()?
+                choices.blend_grid = value()?
                     .parse()
                     .ok()
                     .filter(|g: &f32| g.is_finite() && *g >= 0.0)
@@ -66,12 +68,13 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
     {
         return Err(format!("reskate: the map name {name:?} is not [A-Za-z0-9_-]+ (--name)").into());
     }
-    options.name = Some(name);
+    encoding.name = Some(name);
     // one map: the whole selection in one part
     Ok((
         Box::new(primase_core::convert::WholeWorld::default()),
         Box::new(Reskate {
-            options,
+            encoding,
+            choices,
             report: Report::new(),
             notices: Vec::new(),
         }),
@@ -86,7 +89,7 @@ impl Writer for Reskate {
     }
     fn write(&mut self, part: &World) -> Result<()> {
         // the world carries every input in memory: no scene folder to read from
-        let report = primase_reskate::build(part, &PathBuf::new(), &self.options)?;
+        let report = primase_reskate::write_map(part, &PathBuf::new(), &self.encoding, &self.choices)?;
         self.report.push((
             "reskate".into(),
             format!(

@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
-use primase_reskate::BuildOptions;
 use primase_reskate::dialect::{MarkerKind, Other, SkateMarker, SkateMarkerSnaps, Snap, SnapMode};
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers, snap_reskate_markers};
+use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -139,14 +139,15 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
     );
     // the writer: the spawn 0.3 m over the ground, the ground travel point 0.05 m (its default lift) over it
     let out_root = tmp("snapped");
-    let r = primase_reskate::build(
+    let r = primase_reskate::write_map(
         &w,
         &PathBuf::new(),
-        &BuildOptions {
+        &EncodingOptions {
             out_root: out_root.clone(),
             name: Some("snap".into()),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         },
+        &WriterChoices::default(),
     )
     .unwrap();
     assert!(
@@ -178,14 +179,15 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
 fn the_writer_reports_unsnapped_markers_and_refuses_other_settings() {
     let Fixture { mut w, .. } = fixture();
     // the spawn has no height and nothing put it anywhere: the writer has no height for it
-    let e = primase_reskate::build(
+    let e = primase_reskate::write_map(
         &w,
         &PathBuf::new(),
-        &BuildOptions {
+        &EncodingOptions {
             out_root: tmp("unsnapped"),
             name: Some("snap".into()),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         },
+        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();
@@ -195,14 +197,15 @@ fn the_writer_reports_unsnapped_markers_and_refuses_other_settings() {
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    let e = primase_reskate::build(
+    let e = primase_reskate::write_map(
         &w,
         &PathBuf::new(),
-        &BuildOptions {
+        &EncodingOptions {
             out_root: tmp("other"),
             name: Some("snap".into()),
-            ..BuildOptions::default()
+            ..EncodingOptions::default()
         },
+        &WriterChoices::default(),
     )
     .unwrap_err()
     .to_string();

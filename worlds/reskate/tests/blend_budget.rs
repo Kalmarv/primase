@@ -13,9 +13,9 @@ use primase_core::{
     Collision, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
     Surfaces, Topology, Transform, WeightMapping, World,
 };
-use primase_reskate::BuildOptions;
 use primase_reskate::layered::LowerLayeredReskate;
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -146,14 +146,17 @@ fn world() -> World {
 /// The map's object names, its stats' blend_order record and its mesh files, written with `blend_objects`.
 fn build(blend_objects: Option<usize>, tag: &str) -> (Vec<String>, serde_json::Value, Vec<String>) {
     let out_root = tmp(tag);
-    primase_reskate::build(
+    primase_reskate::write_map(
         &world(),
         &PathBuf::new(),
-        &BuildOptions {
+        &EncodingOptions {
             out_root: out_root.clone(),
             name: Some("budget".into()),
+            ..EncodingOptions::default()
+        },
+        &WriterChoices {
             blend_objects,
-            ..BuildOptions::default()
+            ..WriterChoices::default()
         },
     )
     .unwrap();
