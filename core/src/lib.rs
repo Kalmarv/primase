@@ -34,6 +34,7 @@ pub use provenance::{Origin, Provenance};
 mod priority;
 pub use priority::{DropOptional, Priority, drop_optional};
 pub mod state;
+pub mod summary;
 pub mod texformat;
 pub mod world;
 

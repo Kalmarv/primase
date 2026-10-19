@@ -15,11 +15,15 @@
 //!
 //! Every part states whether it is the whole of what is written ([`Part::whole`]): the source says so, as it alone
 //! knows how it divides the content, and the part's passes read it in [`PartScope::whole`]; an operation that needs
-//! the whole (a map's floor, its spawn, a budget over all of it) refuses a part that is not. A world composed
-//! directly, outside this loop (no `core.part_scope` resource), is by definition the whole of what is written.
+//! the whole (a map's floor, its spawn, a budget over all of it) refuses a part that is not, unless the decision was
+//! made over every part: [`convert_parts_summarized`] goes over the parts twice, the first time for their summaries,
+//! merged and decided on once ([`crate::summary`]), the second time to write each part with those decisions. A world
+//! composed directly, outside this loop (no `core.part_scope` resource), is by definition the whole of what is
+//! written.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::pass::{PassManager, Pipeline, RunReport, Target};
+use crate::summary::SummaryRegistry;
 use crate::{Entity, Resource, World};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -127,25 +131,40 @@ pub trait PartSource {
     fn written(&mut self, _part: &World) -> Result<()> {
         Ok(())
     }
+    /// Give the same parts again, from the first, as planned ([`convert_parts_summarized`] goes over them twice). A
+    /// source that cannot (its parts depend on what was written) refuses.
+    fn restart(&mut self) -> Result<()> {
+        Err("this part source gives its parts once: it cannot be gone over twice".into())
+    }
 }
 
 /// One part: every entity of the selected world.
 #[derive(Debug, Default)]
 pub struct WholeWorld {
-    roots: Option<BTreeSet<Entity>>,
+    planned: BTreeSet<Entity>,
+    given: bool,
 }
 
 impl PartSource for WholeWorld {
     fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
-        self.roots = Some(world.entities().collect());
+        self.planned = world.entities().collect();
+        self.given = false;
         Ok(())
     }
     fn next_part(&mut self) -> Result<Option<Part>> {
-        Ok(self.roots.take().map(|roots| Part {
-            roots,
+        if self.given {
+            return Ok(None);
+        }
+        self.given = true;
+        Ok(Some(Part {
+            roots: self.planned.clone(),
             context: BTreeSet::new(),
             whole: true,
         }))
+    }
+    fn restart(&mut self) -> Result<()> {
+        self.given = false;
+        Ok(())
     }
 }
 
@@ -232,6 +251,7 @@ impl Resource for PartitionPlan {
 /// stands far off is still in its neighbours' operations.
 #[derive(Debug, Default)]
 pub struct PlannedParts {
+    planned: Vec<PartitionGroup>,
     groups: std::vec::IntoIter<PartitionGroup>,
     /// Whether the plan has one group (a part is then the whole when it needs no context).
     single: bool,
@@ -278,7 +298,12 @@ impl PartSource for PlannedParts {
             }
         }
         self.single = groups.len() == 1;
+        self.planned = groups.clone();
         self.groups = groups.into_iter();
+        Ok(())
+    }
+    fn restart(&mut self) -> Result<()> {
+        self.groups = self.planned.clone().into_iter();
         Ok(())
     }
     fn next_part(&mut self) -> Result<Option<Part>> {
@@ -426,6 +451,11 @@ pub struct ConvertReport {
     pub select: RunReport,
     /// The reader's reports on loading, part by part.
     pub loads: Report,
+    /// In a conversion with summaries ([`convert_parts_summarized`]): the reader's reports on loading each part for its
+    /// summary, the summary passes' report per part, and the decision passes' report.
+    pub summary_loads: Report,
+    pub summarized: Vec<RunReport>,
+    pub decided: RunReport,
     pub parts: usize,
     /// The bulk payload of every part, in the order written.
     pub part_sizes: Vec<PartSize>,
@@ -636,6 +666,63 @@ pub fn convert_parts(
         writer,
         manager,
         select,
+        None,
+        passes,
+        &mut report,
+        &mut during,
+    ) {
+        Ok(()) => Ok(report),
+        Err(error) => {
+            report.reported.push(Notice::new(
+                "convert",
+                NoticeKind::FailureContext,
+                format!("failed during {during}: {error}"),
+                1,
+            ));
+            Err(Box::new(ConvertError {
+                error,
+                during,
+                partial: Box::new(report),
+            }))
+        }
+    }
+}
+
+/// The program's summaries and decisions for a conversion in parts ([`convert_parts_summarized`]).
+#[derive(Debug)]
+pub struct Summarized<'a> {
+    /// The summaries and decisions carried from the first traversal to the second.
+    pub registry: &'a SummaryRegistry,
+    /// Run on each part in the first traversal: the passes that make its summaries.
+    pub summarize: &'a Pipeline,
+    /// Run once on the merged summaries: the passes that make the decisions.
+    pub decide: &'a Pipeline,
+}
+
+/// [`convert_parts`] over the parts twice: first each part is loaded and its `summarized.summarize` passes make its
+/// summaries, which are merged over every part (refused when a summary's merge depends on the arrival order); the
+/// `summarized.decide` passes make the decisions from them, once; then each part is loaded again, given the merged
+/// summaries and the decisions, and goes through `passes` and the writer as in [`convert_parts`]. The part source must
+/// give the same parts again ([`PartSource::restart`]).
+#[allow(clippy::too_many_arguments)]
+pub fn convert_parts_summarized(
+    reader: &mut dyn Reader,
+    parts: &mut dyn PartSource,
+    writer: Box<dyn Writer>,
+    manager: &PassManager,
+    select: &Pipeline,
+    summarized: &Summarized,
+    passes: &Pipeline,
+) -> Result<ConvertReport> {
+    let mut report = ConvertReport::default();
+    let mut during = String::new();
+    match run(
+        reader,
+        parts,
+        writer,
+        manager,
+        select,
+        Some(summarized),
         passes,
         &mut report,
         &mut during,
@@ -682,6 +769,7 @@ fn run(
     mut writer: Box<dyn Writer>,
     manager: &PassManager,
     select: &Pipeline,
+    summarized: Option<&Summarized>,
     passes: &Pipeline,
     report: &mut ConvertReport,
     during: &mut String,
@@ -699,6 +787,48 @@ fn run(
     let target = writer.target();
     "plan".clone_into(during);
     parts.plan(&world, &|p| reader.prototype_box(&world, p))?;
+    // the first traversal: each part's summaries, kept (small by contract) and merged order-free; the decisions made
+    // once from them
+    let decided = match summarized {
+        None => None,
+        Some(s) => {
+            let mut kept = Vec::new();
+            while let Some(Part {
+                roots,
+                context,
+                whole,
+            }) = parts.next_part()?
+            {
+                let ordinal = kept.len();
+                *during = format!("summary {ordinal}: load");
+                let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+                let loaded = reader.load(&world, &asked);
+                report.reported.extend(reader.notices());
+                let (mut part, loaded) = loaded?;
+                report.summary_loads.extend(loaded);
+                check_load_emits(&world, &part, reader.emits())?;
+                *during = format!("summary {ordinal}: passes");
+                part.insert_resource(PartScope {
+                    roots,
+                    context,
+                    whole,
+                });
+                let mut r = RunReport::default();
+                let ran = manager.run(&mut part, s.summarize, &mut r);
+                tally(&mut report.counts, &r);
+                report.summarized.push(r);
+                ran?;
+                kept.push(s.registry.take_summaries(&part));
+            }
+            "decide".clone_into(during);
+            let mut merged = s.registry.merge_order_free(&kept)?;
+            drop(kept);
+            manager.run(&mut merged, s.decide, &mut report.decided)?;
+            tally(&mut report.counts, &report.decided.clone());
+            parts.restart()?;
+            Some((s.registry, merged))
+        }
+    };
     while let Some(Part {
         roots,
         context,
@@ -731,6 +861,9 @@ fn run(
         });
         let part_report = report.part_reports.last_mut().expect("pushed");
         let loaded: BTreeSet<Entity> = part.entities().collect();
+        if let Some((registry, decided)) = &decided {
+            registry.hand_on(decided, &mut part);
+        }
         part.insert_resource(PartScope {
             roots: roots.clone(),
             context: context.clone(),
