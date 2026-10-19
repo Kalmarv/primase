@@ -5,8 +5,10 @@
 //! prepared world for this encoding, nothing encoded. `plan-reskate-blend-budget{objects=pool}` decides the chain forms
 //! from it before the map is written.
 //!
-//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains), on the whole
-//! map; a part of a map in several is refused until summaries of parts are merged (step 9's bounded write).
+//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains). The summary
+//! merges over a map's parts (the cull IDs summed, [`primase_core::summary::Summary`]), but counting a part's own
+//! objects needs the writer to lay out parts: until it does (B2c part 2, step 9 incomplete) a part of a map in several
+//! is refused.
 
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -69,7 +71,9 @@ impl Pass for SummarizeReskateMap {
         &["skate.map_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
+        super::require_whole_map(w, self.name()).map_err(|e| {
+            format!("{e}: the writer lays out a map whole until it lays out parts (B2c part 2)")
+        })?;
         if w.resource::<SkateMapSummary>().is_some() {
             return Err("summarize-reskate-map: the map is already summarized (skate.map_summary)".into());
         }

@@ -62,6 +62,7 @@ pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateFloorSummary>();
     reg.summary::<components::SkateLightsSummary>();
     reg.summary::<components::SkateTextureWeights>();
+    reg.summary::<components::SkateMapSummary>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -83,7 +84,7 @@ pub mod vertex_alpha {
 use std::path::PathBuf;
 
 pub use assembly::{AssembledMaterial, EncodingOptions, assembled_materials};
-pub use build::{BuildReport, leave_out_optional, lod_choice, select_lod, target, write_map};
+pub use build::{BuildReport, MapSink, leave_out_optional, lod_choice, select_lod, target, write_map};
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.

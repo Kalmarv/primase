@@ -190,178 +190,290 @@ pub fn target() -> primase_core::pass::Target {
 }
 
 /// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
-/// as `a` says.
+/// as `a` says: the [`MapSink`] given the whole map as its one part.
 pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
-    let prepared = target().check_prepared(world);
-    let unsupported_names: Vec<(String, u64)> = prepared
-        .unsupported
-        .into_iter()
-        .chain(
-            prepared
-                .unsupported_resources
-                .into_iter()
-                .map(|r| (format!("resource {r}"), 1)),
-        )
-        .collect();
-    let mut laid = lay(world, dir, a, true)?;
-    let (writer, extras) = laid.extras();
-    writer.finish(extras)?;
-    let Laid {
-        scene: s,
-        opts: o,
-        placements,
-        mut writer,
-        scene_warnings,
-        failed,
-        ..
-    } = laid;
-    let out_dir = a.out_root.join(&o.name);
-    writer.r.warnings.extend(scene_warnings);
-    // write the folder
-    for (dir_name, files) in [("meshes", &writer.mesh_files)] {
-        let d = out_dir.join(dir_name);
-        if d.exists() {
-            std::fs::remove_dir_all(&d).map_err(|source| Error::Io {
-                path: d.clone(),
-                source,
-            })?;
-        }
-        std::fs::create_dir_all(&d).map_err(|source| Error::Io {
-            path: d.clone(),
+    let mut sink = MapSink::new(dir, a);
+    sink.part(world)?;
+    sink.finish()
+}
+
+/// The map writer as a sink of a map's parts: [`MapSink::part`] takes a part and writes its payloads (its meshes' and
+/// textures' files) to the map folder at once, keeping only what the map's index files and the report need;
+/// [`MapSink::finish`] writes the index files (`map.json`, the records, `stats.json`) and reports. A map is laid out
+/// whole until the writer lays out parts (B2c part 2, step 9 incomplete): the sink takes one part, the whole map, and
+/// refuses another.
+pub struct MapSink {
+    dir: PathBuf,
+    encoding: EncodingOptions,
+    taken: Option<Taken>,
+}
+
+impl std::fmt::Debug for MapSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MapSink")
+            .field("dir", &self.dir)
+            .field("name", &self.encoding.name)
+            .field("taken", &self.taken.as_ref().map(|t| &t.out_dir))
+            .finish()
+    }
+}
+
+/// What the stats need of a collision soup of the scene: its file, mode, triangles read, cut by the region and kept.
+struct SoupFacts {
+    file: String,
+    mode: CollisionMode,
+    read: usize,
+    cut: i64,
+    kept: i64,
+}
+
+/// What the map's index files and report need of its scene.
+struct SceneFacts {
+    dir: PathBuf,
+    soups: Vec<SoupFacts>,
+    stats: Option<serde_json::Value>,
+    floor_plan: Option<crate::components::SkateFloorPlan>,
+    omitted: Vec<(String, u64)>,
+    approximated: Vec<(String, u64)>,
+}
+
+/// What the sink keeps of the part it took: its writer (what it wrote, not its payloads), its scene's facts, its writer
+/// options, how many placements it had and how many prototypes failed, and the names the target does not take.
+struct Taken {
+    out_dir: PathBuf,
+    scene: SceneFacts,
+    opts: WriterOptions,
+    placements: usize,
+    failed: i64,
+    writer: MapWriter,
+    unsupported_names: Vec<(String, u64)>,
+}
+
+/// The files `files` written into the folder `d`, made afresh.
+fn write_folder(d: &Path, files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Result<()> {
+    if d.exists() {
+        std::fs::remove_dir_all(d).map_err(|source| Error::Io {
+            path: d.to_owned(),
             source,
         })?;
-        for (name, bytes) in files {
-            let p = d.join(name);
-            std::fs::write(&p, bytes).map_err(|source| Error::Io { path: p, source })?;
-        }
     }
-    let td = out_dir.join("textures");
-    if td.exists() {
-        std::fs::remove_dir_all(&td).map_err(|source| Error::Io {
-            path: td.clone(),
-            source,
-        })?;
-    }
-    std::fs::create_dir_all(&td).map_err(|source| Error::Io {
-        path: td.clone(),
+    std::fs::create_dir_all(d).map_err(|source| Error::Io {
+        path: d.to_owned(),
         source,
     })?;
-    for (file, bytes) in writer.ctx.tex.files()? {
-        let p = td.join(file);
+    for (name, bytes) in files {
+        let p = d.join(name);
         std::fs::write(&p, bytes).map_err(|source| Error::Io { path: p, source })?;
     }
-    for (name, bytes) in &writer.files {
-        let p = out_dir.join(name);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-                path: parent.to_owned(),
-                source,
-            })?;
-        }
-        std::fs::write(&p, bytes).map_err(|source| Error::Io { path: p, source })?;
-    }
-    if !writer.files.contains_key("trainer.json") {
-        let p = out_dir.join("trainer.json");
-        if p.exists() {
-            std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
+    Ok(())
+}
+
+impl MapSink {
+    /// A sink for the map encoded as `encoding`, its scene from `dir` (recorded in the stats).
+    pub fn new(dir: &Path, encoding: &EncodingOptions) -> MapSink {
+        MapSink {
+            dir: dir.to_owned(),
+            encoding: encoding.clone(),
+            taken: None,
         }
     }
-    let stats = stats_json(&writer, &s, &o, placements.len(), failed)?;
-    let p = out_dir.join("stats.json");
-    std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
-    let r = &writer.r;
-    Ok(BuildReport {
-        out_dir,
-        tiles: r.tiles.len(),
-        merged_entities: r.merged_entities,
-        merged_tris: r.merged_tris,
-        instances: r.instances,
-        prototypes: r.proto_list.len(),
-        object_records: r.object_records,
-        materials: r.materials,
-        textures: writer.ctx.tex.all().iter().filter(|t| !t.removed).count(),
-        collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
-        lights_without_tangent: r.lights_without_tangent,
-        lifts: r.lifts.clone(),
-        blend: r.blend.clone(),
-        warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
-        omitted: s
-            .omitted
-            .iter()
-            .cloned()
+
+    /// Take the prepared part `world`: lay it out and write its meshes and textures (see [`MapSink`]).
+    pub fn part(&mut self, world: &World) -> Result<()> {
+        if self.taken.is_some() {
+            return Err(Error::Unsupported(
+                "a second part of one map: a ReSkate map is laid out whole until the writer lays out parts \
+                 (B2c part 2)"
+                    .into(),
+            ));
+        }
+        let a = &self.encoding;
+        let prepared = target().check_prepared(world);
+        let unsupported_names: Vec<(String, u64)> = prepared
+            .unsupported
+            .into_iter()
             .chain(
-                [
-                    ("water outlines with no area", r.water_without_area as i64),
-                    (
-                        "clip-reskate-region: placements outside the region with nothing within its apron",
-                        r.far_dropped,
-                    ),
-                    (
-                        "instanced placements reaching past the map's limit (Studio's extent)",
-                        r.limit_instances,
-                    ),
-                    ("triangles past the map's limit", r.limit_triangles),
-                    (
-                        "collision triangles past the map's limit less 20 m",
-                        r.collision
-                            .as_ref()
-                            .map_or(0, |c| c.cut_beyond_limit + c.props_beyond_limit),
-                    ),
-                    ("placements with a degenerate matrix", r.degenerate),
-                    (
-                        "trainer spots without a height or past the 64 trainer.json takes",
-                        r.trainer_left_out as i64,
-                    ),
-                    ("grind curves with no usable points", r.grind_unusable as i64),
-                ]
-                .into_iter()
-                .filter(|(_, n)| *n > 0)
-                .map(|(what, n)| (what.to_owned(), n as u64)),
+                prepared
+                    .unsupported_resources
+                    .into_iter()
+                    .map(|r| (format!("resource {r}"), 1)),
             )
-            .collect(),
-        approximated: s
-            .approximated
-            .iter()
-            .cloned()
-            .chain(match writer.stack() {
-                Stack::Off { unstacked } if *unstacked > 0 => Some((
-                    "overlay pieces drawn where authored (prepare-reskate-overlays stacks them)".to_owned(),
-                    *unstacked,
-                )),
-                _ => None,
-            })
-            .chain(
-                [
-                    (
-                        "water outlines cut at the map's extent limit",
-                        r.water_cut_at_limit as i64,
-                    ),
-                    (
-                        "clip-reskate-region: placements outside the region trimmed to its apron",
-                        r.apron_trimmed,
-                    ),
-                ]
-                .into_iter()
-                .filter(|(_, n)| *n > 0)
-                .map(|(what, n)| (what.to_owned(), n as u64)),
-            )
-            .chain(match writer.chains() {
-                Chains::Off { left } if *left > 0 => Some((
-                    "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \
-                     (prepare-reskate-blend-order splits them)"
-                        .to_owned(),
-                    *left,
-                )),
-                _ => None,
-            })
-            .collect(),
-        unsupported_names,
-    })
+            .collect();
+        let mut laid = lay(world, &self.dir, a, true)?;
+        let (writer, extras) = laid.extras();
+        writer.finish(extras)?;
+        let Laid {
+            scene: s,
+            opts: o,
+            placements,
+            mut writer,
+            scene_warnings,
+            failed,
+            ..
+        } = laid;
+        let out_dir = a.out_root.join(&o.name);
+        writer.r.warnings.extend(scene_warnings);
+        // the part's payloads, written now and not kept
+        write_folder(&out_dir.join("meshes"), std::mem::take(&mut writer.mesh_files))?;
+        write_folder(&out_dir.join("textures"), writer.ctx.tex.take_files()?)?;
+        self.taken = Some(Taken {
+            out_dir,
+            scene: SceneFacts {
+                dir: s.dir,
+                soups: s
+                    .soups
+                    .iter()
+                    .map(|sd| SoupFacts {
+                        file: sd.file.clone(),
+                        mode: sd.mode,
+                        read: sd.surf.len(),
+                        cut: sd.cut,
+                        kept: sd.kept,
+                    })
+                    .collect(),
+                stats: s.stats,
+                floor_plan: s.floor_plan,
+                omitted: s.omitted,
+                approximated: s.approximated,
+            },
+            opts: o,
+            placements: placements.len(),
+            failed,
+            writer,
+            unsupported_names,
+        });
+        Ok(())
+    }
+
+    /// The map's index files written, and what the map writer did.
+    pub fn finish(self) -> Result<BuildReport> {
+        let Some(Taken {
+            out_dir,
+            scene: s,
+            opts: o,
+            placements,
+            failed,
+            writer,
+            unsupported_names,
+        }) = self.taken
+        else {
+            return Err(Error::Scene(
+                "the map sink was given no part: a map needs its whole".into(),
+            ));
+        };
+        for (name, bytes) in &writer.files {
+            let p = out_dir.join(name);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+                    path: parent.to_owned(),
+                    source,
+                })?;
+            }
+            std::fs::write(&p, bytes).map_err(|source| Error::Io { path: p, source })?;
+        }
+        if !writer.files.contains_key("trainer.json") {
+            let p = out_dir.join("trainer.json");
+            if p.exists() {
+                std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
+            }
+        }
+        let stats = stats_json(&writer, &s, &o, placements, failed)?;
+        let p = out_dir.join("stats.json");
+        std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
+        let r = &writer.r;
+        Ok(BuildReport {
+            out_dir,
+            tiles: r.tiles.len(),
+            merged_entities: r.merged_entities,
+            merged_tris: r.merged_tris,
+            instances: r.instances,
+            prototypes: r.proto_list.len(),
+            object_records: r.object_records,
+            materials: r.materials,
+            textures: writer.ctx.tex.all().iter().filter(|t| !t.removed).count(),
+            collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
+            lights_without_tangent: r.lights_without_tangent,
+            lifts: r.lifts.clone(),
+            blend: r.blend.clone(),
+            warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
+            omitted: s
+                .omitted
+                .iter()
+                .cloned()
+                .chain(
+                    [
+                        ("water outlines with no area", r.water_without_area as i64),
+                        (
+                            "clip-reskate-region: placements outside the region with nothing within its apron",
+                            r.far_dropped,
+                        ),
+                        (
+                            "instanced placements reaching past the map's limit (Studio's extent)",
+                            r.limit_instances,
+                        ),
+                        ("triangles past the map's limit", r.limit_triangles),
+                        (
+                            "collision triangles past the map's limit less 20 m",
+                            r.collision
+                                .as_ref()
+                                .map_or(0, |c| c.cut_beyond_limit + c.props_beyond_limit),
+                        ),
+                        ("placements with a degenerate matrix", r.degenerate),
+                        (
+                            "trainer spots without a height or past the 64 trainer.json takes",
+                            r.trainer_left_out as i64,
+                        ),
+                        ("grind curves with no usable points", r.grind_unusable as i64),
+                    ]
+                    .into_iter()
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(what, n)| (what.to_owned(), n as u64)),
+                )
+                .collect(),
+            approximated: s
+                .approximated
+                .iter()
+                .cloned()
+                .chain(match writer.stack() {
+                    Stack::Off { unstacked } if *unstacked > 0 => Some((
+                        "overlay pieces drawn where authored (prepare-reskate-overlays stacks them)".to_owned(),
+                        *unstacked,
+                    )),
+                    _ => None,
+                })
+                .chain(
+                    [
+                        (
+                            "water outlines cut at the map's extent limit",
+                            r.water_cut_at_limit as i64,
+                        ),
+                        (
+                            "clip-reskate-region: placements outside the region trimmed to its apron",
+                            r.apron_trimmed,
+                        ),
+                    ]
+                    .into_iter()
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(what, n)| (what.to_owned(), n as u64)),
+                )
+                .chain(match writer.chains() {
+                    Chains::Off { left } if *left > 0 => Some((
+                        "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \
+                         (prepare-reskate-blend-order splits them)"
+                            .to_owned(),
+                        *left,
+                    )),
+                    _ => None,
+                })
+                .collect(),
+            unsupported_names,
+        })
+    }
 }
 
 fn stats_json(
     writer: &MapWriter,
-    s: &Scene,
+    s: &SceneFacts,
     o: &WriterOptions,
     placements: usize,
     failed: i64,
@@ -432,7 +544,7 @@ fn stats_json(
                     CollisionMode::Water => "water",
                     CollisionMode::Hull => "hull",
                 },
-                read: sd.surf.len(),
+                read: sd.read,
                 cut_by_region: sd.cut,
                 kept_before_cleaning: sd.kept,
             })

@@ -18,15 +18,13 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 use primase_core::convert::{Report, Writer};
 use primase_core::pass::Target;
-use primase_reskate::EncodingOptions;
+use primase_reskate::{EncodingOptions, MapSink};
 
 use crate::convert::Result;
 
 struct Reskate {
-    encoding: EncodingOptions,
-    report: Report,
-    /// What the map writer did not write, not yet taken by the conversion.
-    notices: Vec<primase_core::convert::Notice>,
+    /// The map writer: each part's payloads written as the part comes, the index files at the end.
+    sink: MapSink,
 }
 
 /// `[--name N] [--min-instances N]`
@@ -78,9 +76,8 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
     Ok((
         Box::new(primase_core::convert::WholeWorld::default()),
         Box::new(Reskate {
-            encoding,
-            report: Report::new(),
-            notices: Vec::new(),
+            // the world carries every input in memory: no scene folder to read from
+            sink: MapSink::new(&PathBuf::new(), &encoding),
         }),
     ))
 }
@@ -92,28 +89,37 @@ impl Writer for Reskate {
         primase_reskate::target()
     }
     fn write(&mut self, part: &World) -> Result<()> {
-        // the world carries every input in memory: no scene folder to read from
-        let report = primase_reskate::write_map(part, &PathBuf::new(), &self.encoding)?;
-        self.report.push((
-            "reskate".into(),
-            format!(
-                "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={}",
-                report.out_dir.display(),
-                report.tiles,
-                report.merged_tris,
-                report.instances,
-                report.prototypes,
-                report.materials,
-                report.textures,
-                report.collision_tris
+        self.sink.part(part)?;
+        Ok(())
+    }
+    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
+        let report = self.sink.finish()?;
+        let mut lines: Report = vec![
+            (
+                "reskate".into(),
+                format!(
+                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={}",
+                    report.out_dir.display(),
+                    report.tiles,
+                    report.merged_tris,
+                    report.instances,
+                    report.prototypes,
+                    report.materials,
+                    report.textures,
+                    report.collision_tris
+                ),
             ),
-        ));
-        self.report
-            .push(("blend order".into(), format!("{:?}", report.blend)));
+            ("blend order".into(), format!("{:?}", report.blend)),
+        ];
+        // the map's warnings (map.json's), each counted below when it is a loss
+        for w in report.warnings {
+            lines.push(("reskate warning".into(), w));
+        }
         // what it left out, and what it wrote approximately; the names the target does not take the conversion
         // reported itself before writing (report.unsupported_names, for direct callers)
+        let mut notices = Vec::new();
         for (what, n) in report.omitted {
-            self.notices.push(primase_core::convert::Notice::new(
+            notices.push(primase_core::convert::Notice::new(
                 "reskate",
                 primase_core::convert::NoticeKind::Unsupported,
                 format!("{what}: not written"),
@@ -121,23 +127,16 @@ impl Writer for Reskate {
             ));
         }
         for (what, n) in report.approximated {
-            self.notices.push(primase_core::convert::Notice::new(
+            notices.push(primase_core::convert::Notice::new(
                 "reskate",
                 primase_core::convert::NoticeKind::Approximation,
                 what,
                 n,
             ));
         }
-        // the map's warnings (map.json's), each counted above when it is a loss
-        for w in report.warnings {
-            self.report.push(("reskate warning".into(), w));
-        }
-        Ok(())
-    }
-    fn notices(&mut self) -> Vec<primase_core::convert::Notice> {
-        std::mem::take(&mut self.notices)
-    }
-    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
-        Ok(self.report.into())
+        Ok(primase_core::convert::Finished {
+            report: lines,
+            notices,
+        })
     }
 }

@@ -984,6 +984,20 @@ impl Resource for SkateMapSummary {
     }
 }
 
+impl primase_core::summary::Summary for SkateMapSummary {
+    /// A map's cull IDs over its parts: each part's own objects' IDs summed, for one grouping and one pool.
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        if (&self.grouping, self.cull_ids) != (&other.grouping, other.cull_ids) {
+            return Err(format!(
+                "parts summarized for the writer settings {:?} with {} cull IDs and {:?} with {}",
+                self.grouping, self.cull_ids, other.grouping, other.cull_ids
+            ));
+        }
+        self.other_cull_ids += other.other_cull_ids;
+        Ok(())
+    }
+}
+
 impl Resource for SkateBlendBudget {
     const NAME: &'static str = "skate.blend_budget";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {

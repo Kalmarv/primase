@@ -437,3 +437,37 @@ fn the_texture_budget_over_parts_is_the_whole_maps_in_any_order() {
     .to_string();
     assert!(e.contains("the textures were weighed for a budget of 3"), "{e}");
 }
+
+/// The map's summary merges over its parts: each part's own cull IDs summed, for one grouping and one pool; parts
+/// summarized for other settings are refused. (Counting a part's own objects waits for the writer to lay out parts.)
+#[test]
+fn the_map_summary_sums_over_parts() {
+    use primase_reskate::components::{OverlayGrouping, SkateMapSummary};
+    let grouping = OverlayGrouping {
+        tile: 200.0,
+        min_instances: 4,
+        min_instance_tris: 0,
+        max_render_edge: 80.0,
+        limit: 4000.0,
+        offset: [0.0, 0.0],
+    };
+    let mut registry = SummaryRegistry::new();
+    primase_reskate::register_summaries(&mut registry);
+    let part = |other_cull_ids: usize, cull_ids: usize| {
+        let mut w = World::new();
+        w.insert_resource(SkateMapSummary {
+            grouping,
+            cull_ids,
+            other_cull_ids,
+        });
+        registry.take_summaries(&w)
+    };
+    let merged = registry
+        .merge_order_free(&[part(10, 4096), part(0, 4096), part(32, 4096)])
+        .unwrap();
+    assert_eq!(merged.resource::<SkateMapSummary>().unwrap().other_cull_ids, 42);
+    let e = registry
+        .merge_order_free(&[part(10, 4096), part(1, 2048)])
+        .unwrap_err();
+    assert!(e.starts_with("skate.map_summary: parts summarized for"), "{e}");
+}

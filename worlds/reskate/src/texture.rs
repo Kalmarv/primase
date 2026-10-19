@@ -947,9 +947,9 @@ impl TexLib {
         n
     }
 
-    /// The files to write, those not removed: each one's name (under `textures/`) and bytes. A library that
-    /// encodes nothing has none to give (an error).
-    pub fn files(&self) -> Result<Vec<(&str, &[u8])>> {
+    /// The files to write, those not removed: each one's name (under `textures/`) and bytes, moved out (the library
+    /// keeps what it reports of them). A library that encodes nothing has none to give (an error).
+    pub fn take_files(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
         if !self.encode {
             return Err(Error::Texture(
                 "a texture library that encodes nothing has no files to write".into(),
@@ -957,9 +957,9 @@ impl TexLib {
         }
         Ok(self
             .out
-            .iter()
+            .iter_mut()
             .filter(|t| !t.removed)
-            .map(|t| (t.file.as_str(), t.data.as_slice()))
+            .map(|t| (t.file.clone(), std::mem::take(&mut t.data)))
             .collect())
     }
 
