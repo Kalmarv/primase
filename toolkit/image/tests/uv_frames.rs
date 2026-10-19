@@ -194,8 +194,10 @@ fn frames_off_every_map_are_counted_by_area() {
     let t = normal_map(&mut world, NormalConvention::GLTF);
     let m = material(&mut world, t);
     let h = std::f32::consts::FRAC_1_SQRT_2;
-    quad(&mut world, m, 2., PLAIN, Some([h, 0., h, -1.]));
+    let mesh = quad(&mut world, m, 2., PLAIN, Some([h, 0., h, -1.]));
     let report = run(&mut world, "uv-frame-normals{bitangent=+v}").unwrap();
+    // the map stays in the supplied frame, and so do the tangents it is read with
+    assert_eq!(tangents(&world, mesh)[0], [h, 0., h, -1.]);
     let log = &report.steps[0].log;
     assert_eq!(
         log.approximations["triangle area (square metres) read with its material's frame map but not in it"],
@@ -206,6 +208,7 @@ fn frames_off_every_map_are_counted_by_area() {
         1
     );
     assert_eq!(world.get::<Texture>(t).unwrap().levels[0], [10, 20, 30, 255]);
+    assert!(!log.counts.contains_key("primitives given the derived tangent frame"));
 }
 
 #[test]

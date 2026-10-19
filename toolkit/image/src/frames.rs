@@ -27,8 +27,9 @@ pub enum Bitangent {
 /// `uv-frame-normals{bitangent=+v|-v}` (the option is required: it is the target's convention): every normal map a
 /// `pbr.material` binds, in glTF's convention against its meshes' supplied tangents (`normalize-normals` first),
 /// re-expressed against the frame derived from the coordinates it is sampled with: tangent along increasing u,
-/// bitangent `cross(N, T) * w` along the chosen v direction, both in the surface. The meshes' `TANGENT` streams of
-/// every primitive drawn with such a material become that frame, so the pair stays consistent for any writer.
+/// bitangent `cross(N, T) * w` along the chosen v direction, both in the surface. The `TANGENT` streams of every
+/// primitive whose map is re-based become that frame, so the pair stays consistent for any writer; a material none of
+/// whose triangles is near any map keeps its map and its supplied tangents.
 ///
 /// Each triangle's supplied frame is a quarter turn or mirror of the derived one ([`AxisMap`]), or neither (sheared or
 /// turned between). Each material binding a normal map takes the map most of its triangles' area takes; the map is
@@ -153,7 +154,7 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
     }
     let mut votes = BTreeMap::<Entity, Votes>::new();
     // per mesh entity, per primitive: the derived tangents
-    let mut tangents = Vec::<(Entity, usize, Vec<[f32; 4]>)>::new();
+    let mut tangents = Vec::<(Entity, usize, Entity, Vec<[f32; 4]>)>::new();
     for (e, mesh) in world.iter::<Mesh>() {
         for (index, p) in mesh.primitives().iter().enumerate() {
             let Some(r) = p.material.and_then(|m| bound.get(&m)) else {
@@ -233,11 +234,13 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
                     [t.x, t.y, t.z, w]
                 })
                 .collect();
-            tangents.push((e, index, derived));
+            tangents.push((e, index, p.material.expect("bound material"), derived));
         }
     }
     // each material's map, and the maps each texture needs
     let mut needs = BTreeMap::<Entity, BTreeMap<AxisMap, (f64, Vec<Entity>)>>::new();
+    // materials whose texture is read in the derived frame afterwards
+    let mut rebased = std::collections::BTreeSet::new();
     for (material, vote) in &votes {
         let total: f64 = vote.maps.values().map(|(a, _)| a).sum::<f64>() + vote.unrelated;
         let Some((&map, &(area, inexact))) = vote
@@ -264,6 +267,7 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
                 other.round() as u64,
             );
         }
+        rebased.insert(*material);
         let texture = bound[material].texture;
         let need = needs.entry(texture).or_default().entry(map).or_default();
         need.0 += total;
@@ -313,7 +317,11 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
         }
         log.count("normal-map copies for materials in another frame", 1);
     }
-    for (e, index, derived) in tangents {
+    for (e, index, material, derived) in tangents {
+        if !rebased.contains(&material) {
+            // its map stays in the supplied frame, and so do the tangents it is read with
+            continue;
+        }
         let mesh = world.get_mut::<Mesh>(e).expect("listed mesh");
         mesh.primitives_mut()[index]
             .streams
