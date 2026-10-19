@@ -26,9 +26,10 @@ pub fn manager() -> PassManager {
     PassManager::new(registry)
 }
 
-/// Run `pipeline` on `world`.
+/// Run `pipeline` on `world`, with the conservation check enforced: every placement, primitive, triangle and
+/// texture a pass leaves out is one it declares.
 pub fn run(world: &mut World, pipeline: &str) -> Result<RunReport, Box<dyn std::error::Error>> {
-    let m = manager();
+    let m = manager().with_conservation(primase_core::ledger::Conservation::Enforce);
     let mut report = RunReport::default();
     m.run(world, &m.registry.parse(pipeline)?, &mut report)?;
     Ok(report)

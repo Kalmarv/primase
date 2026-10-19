@@ -472,11 +472,17 @@ impl Pass for LowerFromSoftGeometry {
             world.remove::<RigidModel>(prototype);
             let placed = placements.remove(&prototype).unwrap_or_default();
             if out.levels.values().all(|(p, _)| p.is_empty()) {
+                // the placements are core content, dropped by name; the prototype holds none yet (its source
+                // model was lowered to nothing), so it declares nothing and is counted
                 for p in placed {
-                    world.despawn(p);
-                    log.count("placements of prototypes left drawing nothing", 1);
+                    primase_core::ledger::despawn(
+                        world,
+                        p,
+                        log,
+                        "placements of prototypes left drawing nothing",
+                    );
                 }
-                world.despawn(prototype);
+                primase_core::ledger::despawn(world, prototype, log, "prototypes left drawing nothing");
                 log.count("prototypes left drawing nothing", 1);
                 continue;
             }
@@ -514,8 +520,9 @@ impl Pass for LowerFromSoftGeometry {
     }
 }
 
-/// `drop-fromsoft-far`: the placements of distant-backdrop prototypes (`fromsoft.prototype` `far`) and those
-/// prototypes despawned, counted; nothing else changes.
+/// `drop-fromsoft-far`: the placements of distant-backdrop prototypes (`fromsoft.prototype` `far`) dropped by name
+/// (a named drop of each placement), and those prototypes despawned, counted (they hold no core content yet);
+/// nothing else changes.
 #[derive(Clone, Copy, Debug)]
 pub struct DropFromSoftFar;
 
@@ -541,11 +548,10 @@ impl Pass for DropFromSoftFar {
             .map(|(e, _)| e)
             .collect();
         for e in placed {
-            world.despawn(e);
-            log.count("distant-backdrop placements dropped", 1);
+            primase_core::ledger::despawn(world, e, log, "distant-backdrop placements");
         }
         for e in far {
-            world.despawn(e);
+            primase_core::ledger::despawn(world, e, log, "distant-backdrop prototypes");
             log.count("distant-backdrop prototypes dropped", 1);
         }
         Ok(())
@@ -864,6 +870,56 @@ pub fn register(registry: &mut PassRegistry) {
 mod tests {
     use super::*;
     use crate::materials::LayeredMaterial;
+
+    /// The distant backdrop's placements are dropped by name, so the conservation check (enforced) sees every
+    /// placement it removes declared; its prototypes, which hold no core content yet, declare nothing.
+    #[test]
+    fn far_placements_are_declared_drops() {
+        use primase_core::ledger::{Conservation, Measure};
+        use primase_core::pass::{PassManager, Pipeline, RunReport};
+        let mut world = World::new();
+        let far = world.spawn();
+        world.insert(
+            far,
+            PrototypeSource {
+                id: "m9000000".into(),
+                far: true,
+            },
+        );
+        let near = world.spawn();
+        world.insert(
+            near,
+            PrototypeSource {
+                id: "m0000000".into(),
+                far: false,
+            },
+        );
+        for prototype in [far, far, near] {
+            let p = world.spawn();
+            world.insert(
+                p,
+                Instance {
+                    prototype,
+                    variant: 0,
+                },
+            );
+            world.insert(p, Transform::IDENTITY);
+        }
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .with_conservation(Conservation::Enforce)
+            .run(
+                &mut world,
+                &Pipeline {
+                    passes: vec![Box::new(DropFromSoftFar)],
+                },
+                &mut report,
+            )
+            .unwrap();
+        assert_eq!(report.steps[0].log.declared(Measure::Placements), 2);
+        assert_eq!(world.iter::<Instance>().count(), 1);
+        assert!(!world.is_alive(far));
+    }
 
     /// A layered source material (no texture bound), `skip` its skip class.
     fn layered(skip: Option<materials::SkipClass>) -> Material {
