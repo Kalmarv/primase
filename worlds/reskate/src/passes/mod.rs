@@ -34,7 +34,9 @@ pub use floor::{
 };
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use layered_lower::LowerLayeredPbr;
-pub use lights::{SelectReskateLights, select_reskate_lights};
+pub use lights::{
+    SelectReskateLights, SummarizeReskateLights, select_reskate_lights, summarize_reskate_lights,
+};
 pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
 pub use pause_map::{
     PauseExtent, PauseSource, PrepareReskatePauseMap, SkatePauseImage, SkatePausePicture,
@@ -52,8 +54,15 @@ pub use textures::{PrepareReskateTextures, tint_pixels};
 pub use uv_repeats::{PrepareReskateUvRepeats, RepeatBlended, RepeatDecals, prepare_reskate_uv_repeats};
 pub use water::{OceanMaterials, PrepareReskateWater, WaterExtent, prepare_reskate_water};
 
-use primase_core::World;
 use primase_core::convert::PartScope;
+use primase_core::{Entity, World};
+
+/// Whether `e` is this world's own: every entity of a world outside the part protocol or of a whole part, a part's own
+/// roots otherwise (its context is summarized, and written, by the part that owns it).
+pub(crate) fn owned(w: &World) -> impl Fn(Entity) -> bool + '_ {
+    let roots = w.resource::<PartScope>().filter(|s| !s.whole).map(|s| &s.roots);
+    move |e| roots.is_none_or(|r| r.contains(&e))
+}
 
 /// A ReSkate map is written whole. A pass that works on the whole map (its floor, its region, its spawn, the marker
 /// snaps, its lights, water, pause map, overlays, blend chains and their budget) refuses a part that is not the whole

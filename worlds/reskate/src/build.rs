@@ -171,6 +171,7 @@ pub fn target() -> primase_core::pass::Target {
         // a map in parts: the floor's summary and decision, applied by prepare-reskate-floor
         .legal(crate::components::SkateFloorSummary::NAME)
         .legal(crate::components::SkateFloorDecision::NAME)
+        .legal(crate::components::SkateLightsSummary::NAME)
         .legal(SkateMarkerSnaps::NAME)
         .legal(SkateOverlayStack::NAME)
         .legal(SkateBlendChains::NAME)

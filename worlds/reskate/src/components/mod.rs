@@ -619,6 +619,125 @@ impl Resource for SkateFloorDecision {
     }
 }
 
+/// One light as a light cap ranks it (`select-reskate-lights`): its id in the planning world (a conversion in parts
+/// loads every part under those ids, so a light is the same light in both traversals), whether it is of the default
+/// group, its priority, and the fields [`crate::scene::light_order`] orders by. Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RankedLight {
+    pub id: u32,
+    pub default_group: bool,
+    pub priority: f32,
+    pub fields: [f32; 18],
+    pub spot: bool,
+    pub time_of_day: i32,
+    pub cast_shadow: bool,
+    pub group: String,
+    pub source: String,
+}
+
+impl RankedLight {
+    /// The cap's order: the default group first, then the highest priority, then every field, then the id.
+    pub fn rank(&self, other: &RankedLight) -> std::cmp::Ordering {
+        (!self.default_group)
+            .cmp(&!other.default_group)
+            .then(other.priority.total_cmp(&self.priority))
+            .then_with(|| {
+                crate::scene::fields_order(
+                    (
+                        &self.fields,
+                        self.spot,
+                        self.time_of_day,
+                        self.cast_shadow,
+                        &self.group,
+                        &self.source,
+                    ),
+                    (
+                        &other.fields,
+                        other.spot,
+                        other.time_of_day,
+                        other.cast_shadow,
+                        &other.group,
+                        &other.source,
+                    ),
+                )
+            })
+            .then(self.id.cmp(&other.id))
+    }
+}
+
+/// `skate.lights_summary`: the lights a cap of `per_cell` per `cell`-metre ground cell keeps of those a part owns
+/// (`summarize-reskate-lights`), best first by [`RankedLight::rank`], per cell. Merged over the parts (the best
+/// `per_cell` of both, per cell), it is what the cap keeps of the whole map's lights: `select-reskate-lights` keeps
+/// those. Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkateLightsSummary {
+    pub per_cell: usize,
+    pub cell: f32,
+    pub cells: BTreeMap<(i64, i64), Vec<RankedLight>>,
+}
+
+impl SkateLightsSummary {
+    /// Each cell's best `per_cell` of `lights`, for a cap of `per_cell` per `cell` metres.
+    pub fn of(per_cell: usize, cell: f32, lights: Vec<RankedLight>) -> SkateLightsSummary {
+        let mut s = SkateLightsSummary {
+            per_cell,
+            cell,
+            cells: BTreeMap::new(),
+        };
+        for l in lights {
+            let k = (
+                (l.fields[0] / cell).floor() as i64,
+                (l.fields[1] / cell).floor() as i64,
+            );
+            s.cells.entry(k).or_default().push(l);
+        }
+        s.cap();
+        s
+    }
+
+    /// Each cell sorted best first and cut to `per_cell`.
+    fn cap(&mut self) {
+        for g in self.cells.values_mut() {
+            g.sort_by(|a, b| a.rank(b));
+            g.truncate(self.per_cell);
+        }
+        self.cells.retain(|_, g| !g.is_empty());
+    }
+
+    /// The ids of the lights kept.
+    pub fn kept(&self) -> BTreeSet<u32> {
+        self.cells.values().flatten().map(|l| l.id).collect()
+    }
+}
+
+impl Resource for SkateLightsSummary {
+    const NAME: &'static str = "skate.lights_summary";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "per_cell": self.per_cell,
+            "cell": self.cell,
+            "cells": self.cells.len(),
+            "kept": self.cells.values().map(Vec::len).sum::<usize>(),
+        })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateLightsSummary {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        if (self.per_cell, self.cell.to_bits()) != (other.per_cell, other.cell.to_bits()) {
+            return Err(format!(
+                "parts capped for {} per {} m and {} per {} m",
+                self.per_cell, self.cell, other.per_cell, other.cell
+            ));
+        }
+        for (k, g) in other.cells {
+            self.cells.entry(k).or_default().extend(g);
+        }
+        self.cap();
+        Ok(())
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]

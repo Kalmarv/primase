@@ -59,6 +59,7 @@ pub mod prepare {
 /// ([`primase_core::convert::convert_parts_summarized`]).
 pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateFloorSummary>();
+    reg.summary::<components::SkateLightsSummary>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -155,6 +156,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "prepare-reskate-floor",
         passes::prepare_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
+    );
+    // a map in parts: its lights capped over every part (with select-reskate-lights's cap)
+    reg.register_requiring(
+        "summarize-reskate-lights",
+        passes::summarize_reskate_lights,
+        &[("per_cell", "1"), ("cell", "200")],
     );
     // a map in parts: its floor measured on every part, decided once (with prepare-reskate-floor's settings)
     reg.register("summarize-reskate-floor", passes::summarize_reskate_floor);

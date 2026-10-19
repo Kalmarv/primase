@@ -245,46 +245,62 @@ pub fn placed_light(world: &World, e: Entity, l: &SkateLight) -> PlacedLight {
     }
 }
 
-/// A total order over lights by every field (position first), so which lights a cap keeps and how they are numbered
-/// never depends on the order they arrived in.
-pub fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
+/// A light's number fields in [`light_order`]'s order (position first; writer frame).
+pub fn light_fields(l: &PlacedLight) -> [f32; 18] {
     let v = |v: Vec3| [v.x, v.y, v.z];
-    let fields = |l: &PlacedLight| {
-        let [px, py, pz] = v(l.pos);
-        let [dx, dy, dz] = v(l.dir);
-        let [tx, ty, tz] = v(l.tan);
-        [
-            px,
-            py,
-            pz,
-            dx,
-            dy,
-            dz,
-            tx,
-            ty,
-            tz,
-            l.r,
-            l.g,
-            l.b,
-            l.energy,
-            l.range,
-            l.radius,
-            l.spot_size,
-            l.spot_blend,
-            l.priority,
-        ]
-    };
-    fields(a)
-        .iter()
-        .zip(fields(b).iter())
+    let [px, py, pz] = v(l.pos);
+    let [dx, dy, dz] = v(l.dir);
+    let [tx, ty, tz] = v(l.tan);
+    [
+        px,
+        py,
+        pz,
+        dx,
+        dy,
+        dz,
+        tx,
+        ty,
+        tz,
+        l.r,
+        l.g,
+        l.b,
+        l.energy,
+        l.range,
+        l.radius,
+        l.spot_size,
+        l.spot_blend,
+        l.priority,
+    ]
+}
+
+/// The order of two lights' fields: the number fields ([`light_fields`]) by total order, then the spot, time of day,
+/// shadow, group and source.
+#[allow(clippy::too_many_arguments)]
+pub fn fields_order(
+    a: (&[f32; 18], bool, i32, bool, &str, &str),
+    b: (&[f32; 18], bool, i32, bool, &str, &str),
+) -> std::cmp::Ordering {
+    a.0.iter()
+        .zip(b.0.iter())
         .map(|(x, y)| x.total_cmp(y))
         .find(|o| o.is_ne())
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then(a.spot.cmp(&b.spot))
-        .then(a.time_of_day.cmp(&b.time_of_day))
-        .then(a.cast_shadow.cmp(&b.cast_shadow))
-        .then_with(|| a.group.cmp(&b.group))
-        .then_with(|| a.source.cmp(&b.source))
+        .then(a.1.cmp(&b.1))
+        .then(a.2.cmp(&b.2))
+        .then(a.3.cmp(&b.3))
+        .then_with(|| a.4.cmp(b.4))
+        .then_with(|| a.5.cmp(b.5))
+}
+
+/// A total order over lights by every field (position first), so which lights a cap keeps and how they are numbered
+/// never depends on the order they arrived in.
+pub fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
+    let key = |l: &PlacedLight| light_fields(l);
+    let (ka, kb) = (key(a), key(b));
+    fields_order(
+        (&ka, a.spot, a.time_of_day, a.cast_shadow, &a.group, &a.source),
+        (&kb, b.spot, b.time_of_day, b.cast_shadow, &b.group, &b.source),
+    )
 }
 
 /// A grind curve in the writer's frame.

@@ -4,16 +4,17 @@
 //! field ([`crate::scene::light_order`]), so which lights stay never depends on the order they arrived in. Both options
 //! are required: a cap and its grouping are the program's choice, and with no such pass every light is written.
 //!
-//! The cap is the map's, over all its lights: a conversion in more than one part is refused (a part with context, or a
-//! partition plan of more than one group), since each part would cap its own cells on its own.
-
-use std::collections::BTreeMap;
+//! The cap is the map's, over all its lights. A map converted in parts caps them over every part:
+//! `summarize-reskate-lights` with the same cap records what each part's cap keeps of the lights it owns
+//! (`skate.lights_summary`), the summaries merge into what the cap keeps of every light, and this pass keeps those of
+//! each part's own lights (a summary for another cap is refused). A part that is not the whole and has no summary is
+//! refused. The whole map capped at once goes through the same summary.
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, World};
 
-use crate::components::SkateLight;
-use crate::scene::{PlacedLight, light_order, placed_light};
+use crate::components::{RankedLight, SkateLight, SkateLightsSummary};
+use crate::scene::{PlacedLight, light_fields, light_order, placed_light};
 
 /// See the module documentation. Made by [`SelectReskateLights::new`]; from options by the same call.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,27 +66,46 @@ pub fn select_reskate_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
     Ok(Box::new(SelectReskateLights::from_options(o)?))
 }
 
+/// Light `l` as the cap ranks it, `id` naming it.
+fn ranked(l: &PlacedLight, id: u32) -> RankedLight {
+    RankedLight {
+        id,
+        default_group: l.group.is_empty(),
+        priority: l.priority,
+        fields: light_fields(l),
+        spot: l.spot,
+        time_of_day: l.time_of_day,
+        cast_shadow: l.cast_shadow,
+        group: l.group.clone(),
+        source: l.source.clone(),
+    }
+}
+
 /// The indices of `lights` a cap of `per_cell` per `cell`-metre ground cell keeps (see the module documentation), in
 /// [`light_order`].
 pub fn keep_lights(lights: &[PlacedLight], per_cell: usize, cell: f32) -> Vec<usize> {
-    let mut cells: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
-    for (i, l) in lights.iter().enumerate() {
-        let k = ((l.pos.x / cell).floor() as i64, (l.pos.y / cell).floor() as i64);
-        cells.entry(k).or_default().push(i);
-    }
-    let mut out = Vec::new();
-    for (_, mut g) in cells {
-        g.sort_by(|&a, &b| {
-            let (a, b) = (&lights[a], &lights[b]);
-            (!a.group.is_empty())
-                .cmp(&!b.group.is_empty())
-                .then(b.priority.total_cmp(&a.priority))
-                .then_with(|| light_order(a, b))
-        });
-        out.extend(g.into_iter().take(per_cell));
-    }
+    let ranked: Vec<RankedLight> = lights
+        .iter()
+        .enumerate()
+        .map(|(i, l)| ranked(l, i as u32))
+        .collect();
+    let mut out: Vec<usize> = SkateLightsSummary::of(per_cell, cell, ranked)
+        .kept()
+        .into_iter()
+        .map(|i| i as usize)
+        .collect();
     out.sort_by(|&a, &b| light_order(&lights[a], &lights[b]));
     out
+}
+
+/// What a cap of `per_cell` per `cell` metres keeps of the world's lights `owned` accepts, each named by its id.
+fn summarize(w: &World, per_cell: usize, cell: f32, owned: &dyn Fn(Entity) -> bool) -> SkateLightsSummary {
+    let lights: Vec<RankedLight> = w
+        .iter::<SkateLight>()
+        .filter(|(e, _)| owned(*e))
+        .map(|(e, l)| ranked(&placed_light(w, e, l), e.index()))
+        .collect();
+    SkateLightsSummary::of(per_cell, cell, lights)
 }
 
 impl Pass for SelectReskateLights {
@@ -105,20 +125,40 @@ impl Pass for SelectReskateLights {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
-        let lights: Vec<(Entity, PlacedLight)> = w
-            .iter::<SkateLight>()
-            .map(|(e, l)| (e, placed_light(w, e, l)))
-            .collect();
-        let placed: Vec<PlacedLight> = lights.iter().map(|(_, l)| l.clone()).collect();
-        let mut keep = vec![false; lights.len()];
-        for i in keep_lights(&placed, self.per_cell, self.cell) {
-            keep[i] = true;
-        }
+        // what the cap keeps over every part (the merged summary), for this cap; else, on the whole map, here
+        let summary = match w.resource::<SkateLightsSummary>() {
+            Some(s) => {
+                if (s.per_cell, s.cell.to_bits()) != (self.per_cell, self.cell.to_bits()) {
+                    return Err(format!(
+                        "select-reskate-lights: the lights were summarized for {} per {} m cell, this pass caps {} per \
+                         {} m",
+                        s.per_cell, s.cell, self.per_cell, self.cell
+                    ));
+                }
+                s.clone()
+            }
+            None => {
+                super::require_whole_map(w, self.name()).map_err(|e| {
+                    format!(
+                        "{e}: a map in parts caps its lights over every part (summarize-reskate-lights with the same \
+                         cap)"
+                    )
+                })?;
+                summarize(w, self.per_cell, self.cell, &|_| true)
+            }
+        };
+        let kept = summary.kept();
+        let lights: Vec<Entity> = {
+            let owned = super::owned(w);
+            w.iter::<SkateLight>()
+                .map(|(e, _)| e)
+                .filter(|&e| owned(e))
+                .collect()
+        };
         let mut left_out = 0;
-        for ((e, _), kept) in lights.iter().zip(keep) {
-            if !kept {
-                w.despawn(*e);
+        for &e in &lights {
+            if !kept.contains(&e.index()) {
+                w.despawn(e);
                 left_out += 1;
             }
         }
@@ -130,6 +170,46 @@ impl Pass for SelectReskateLights {
             ),
             left_out as u64,
         );
+        Ok(())
+    }
+}
+
+/// `summarize-reskate-lights{per_cell,cell}`: what a cap keeps of the lights this part owns, per cell
+/// (`skate.lights_summary`); merged over the parts, it is what [`SelectReskateLights`] with the same cap keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeReskateLights(SelectReskateLights);
+
+impl SummarizeReskateLights {
+    /// For the cap `select-reskate-lights` applies.
+    pub fn new(cap: SelectReskateLights) -> SummarizeReskateLights {
+        SummarizeReskateLights(cap)
+    }
+}
+
+/// [`SummarizeReskateLights`] from [`SelectReskateLights::from_options`]'s options, as a pass factory.
+pub fn summarize_reskate_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
+    Ok(Box::new(SummarizeReskateLights(
+        SelectReskateLights::from_options(o)?,
+    )))
+}
+
+impl Pass for SummarizeReskateLights {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-lights"
+    }
+    fn options(&self) -> Options {
+        self.0.options()
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.lights_summary"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let s = summarize(w, self.0.per_cell, self.0.cell, &super::owned(w));
+        log.count("lights a part's cap keeps", s.kept().len() as u64);
+        w.insert_resource(s);
         Ok(())
     }
 }

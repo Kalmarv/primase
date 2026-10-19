@@ -26,7 +26,6 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Mesh, Transform, World};
 
@@ -150,13 +149,6 @@ fn select_floor(lows: &[f32], pinned: Option<f32>) -> Option<f32> {
         return None;
     }
     Some(lows[lows.len() / 100])
-}
-
-/// Whether `e` is the world's to measure: every entity of a world outside the part protocol or of a whole part, a
-/// part's own roots otherwise (its context is measured by the part that owns it).
-fn owned(w: &World) -> impl Fn(Entity) -> bool + '_ {
-    let roots = w.resource::<PartScope>().filter(|s| !s.whole).map(|s| &s.roots);
-    move |e| roots.is_none_or(|r| r.contains(&e))
 }
 
 /// What the floor is measured on of the entities `owned` accepts: the lowest point of each part of the placements the
@@ -496,7 +488,7 @@ impl Pass for SummarizeReskateFloor {
         &["skate.floor_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let summary = measure(w, &owned(w));
+        let summary = measure(w, &super::owned(w));
         log.count("placed parts measured", summary.lows.len() as u64);
         log.count(
             "world collision triangles measured",
