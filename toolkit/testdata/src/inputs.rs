@@ -440,14 +440,6 @@ pub const VARIABLES: &[Variable] = &[
         source: "a private dump tool's MSB/EMEVD reading; only its build output is retained, so its independence is not yet shown",
     },
     Variable {
-        name: "PRIMASE_FROMSOFT_STATE_SCENE",
-        kind: Kind::Input,
-        gate: false,
-        about: r#"a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs"#,
-        status: Status::Retired,
-        source: r#"an earlier C# exporter's scene, since deleted; retired with the earlier exporter's other scenes"#,
-    },
-    Variable {
         name: "PRIMASE_FROMSOFT_MATERIAL_ORACLE",
         kind: Kind::Input,
         gate: true,

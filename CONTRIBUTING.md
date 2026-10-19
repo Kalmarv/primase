@@ -359,7 +359,6 @@ than the code it checks.
 | `PRIMASE_FROMSOFT_DDS_ORACLE` | input | blocked | trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md | the C# oracle's decoder source is gone; replacement: a third-party DDS decoder |
 | `PRIMASE_FROMSOFT_SHADOW_ORACLE` | input | live | original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs` | the install's map.msb with shadows.json; the JSON's producer is not recorded yet |
 | `PRIMASE_FROMSOFT_STATE_ORACLE` | input | live | independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md | a private dump tool's MSB/EMEVD reading; only its build output is retained, so its independence is not yet shown |
-| `PRIMASE_FROMSOFT_STATE_SCENE` | input | retired | a scene of one whole block exported with its world states (`extensions.sekiro.world_state`) by an independent implementation; worlds/fromsoft/tests/state_membership.rs | an earlier C# exporter's scene, since deleted; retired with the earlier exporter's other scenes |
 | `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | input | blocked | independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md | the earlier oracle is gone; replacement: SoulsFormats' MTD reading in the dump harness, hand-worked fixtures for assignments and availability |
 | `PRIMASE_FROMSOFT_PBR_ORACLE` | input | live | source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs` | the install's own DDS with statistics computed by a script kept with the private oracle tools |
 | `PRIMASE_FROMSOFT_REFLECTANCE_ORACLE` | input | live | a JSON file naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), whose traced reflectance the static bake must reproduce at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/bake_assembly.rs` | the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them |
@@ -399,7 +398,8 @@ hidden by skips; build one when a whole-route (step 20) or in-game difference po
 - FromSoft: texture packages (TPF census and pixels), material definitions and assignments (MTD), Havok map and
   object collision against an independent decoder, the layer bake (grouping, periods, images: the game's layer
   shaders on WARP), blocker cards, extras (lights, hang edges and markers as stored), MSB part kinds other than map
-  pieces and objects, and map offsets.
+  pieces and objects, map offsets, and world-state membership (the event-script rules that turn flags into placement
+  conditions; the facts they read, MSB entity IDs and the scripts' decode, are checked against the state oracle).
 
 Add a row when you add a variable. Test outputs go to a temporary directory, never into the source tree.
 

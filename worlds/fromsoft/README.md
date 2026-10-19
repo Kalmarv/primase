@@ -197,11 +197,10 @@ present only in some states are written as separate soups (`collision/game_state
 always present. Calls that cannot be decided statically, other common functions that touch parts (m11_00: 20004115,
 20004120) and direct state instructions in story events are not interpreted: the parts they name keep their default
 presence, even when a decided rule also names them, and `Report::states` counts them. A known call whose arguments
-are not exactly seven whole words, or are filled by substitution, counts as undecidable. `PRIMASE_FROMSOFT_STATE_SCENE` is a scene of one whole block exported by
-an independent implementation with `extensions.sekiro.world_state` (`parts`: `source`, `kind`, `states` per flag
-`off`, `on` or `never`); `tests/state_membership.rs` requires the same membership for every part it lists that our
-rules decide, counts and prints the parts we leave at their default because something uninterpreted also names them,
-and fails on a part decided by only one side otherwise.
+are not exactly seven whole words, or are filled by substitution, counts as undecidable. No independent reference
+checks these rules yet (a stated coverage gap, CONTRIBUTING.md); the facts they read, MSB entity IDs and the
+scripts' decode, are checked against `PRIMASE_FROMSOFT_STATE_ORACLE` (`tests/msb_entities.rs`,
+`tests/emevd_census.rs`).
 
 The area's placements are checked against a SoulsFormats dump of its MSB in `tests/sekiro_scene.rs` (below).
 
