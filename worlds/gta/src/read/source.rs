@@ -8,12 +8,11 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Instance, World};
 
 use crate::Result;
 use crate::collision::{BoundsReport, attach_map_bounds};
-use crate::components::{GtaArchetype, GtaEntity};
+use crate::components::GtaArchetype;
 use crate::read::archive::archive_set::ArchiveSet;
 use crate::read::archive::archive_set::Install;
 use crate::read::archive::keys::Keys;
@@ -37,52 +36,6 @@ impl Map {
             Map::Story => "story",
             Map::Online => "online",
         }
-    }
-}
-
-/// The hours GTA's night-only surfaces and lights are on, bit h for hour h: 00-05 and 20-23, the hours the city's
-/// street lamps' light records name (`time_flags` 0xF0003F on the lamps of every region read so far).
-pub const NIGHT_HOURS: u32 = 0x00F0_003F;
-
-/// Hour `hour` (0-23) is a night hour ([`NIGHT_HOURS`]).
-pub fn is_night(hour: u8) -> bool {
-    hour < 24 && NIGHT_HOURS & (1 << hour) != 0
-}
-
-/// `gta-leave-out-interiors`: placements of entities placed in an interior are despawned (counted). The game draws an
-/// interior only from inside it or through its portals; their prototypes stay for other placements.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LeaveOutInteriors;
-
-impl LeaveOutInteriors {
-    pub fn from_options(o: &Options) -> std::result::Result<LeaveOutInteriors, String> {
-        match o.keys().next() {
-            Some(k) => Err(format!("unknown option {k}")),
-            None => Ok(LeaveOutInteriors),
-        }
-    }
-}
-
-impl Pass for LeaveOutInteriors {
-    fn name(&self) -> &'static str {
-        "gta-leave-out-interiors"
-    }
-    fn requires(&self) -> &[&'static str] {
-        &["gta.entity"]
-    }
-    fn despawns_entities(&self) -> bool {
-        true
-    }
-    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let inside: Vec<Entity> = w
-            .iter::<GtaEntity>()
-            .filter(|(_, g)| g.interior.is_some())
-            .map(|(e, _)| e)
-            .collect();
-        for e in inside {
-            primase_core::ledger::despawn(w, e, log, "placements in an interior left out");
-        }
-        Ok(())
     }
 }
 
@@ -206,67 +159,4 @@ pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> 
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)
     Some([[lo[0], lo[2], -hi[1]], [hi[0], hi[2], -lo[1]]])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_night;
-
-    /// The street lamps' hours are night: 00-05 and 20-23.
-    #[test]
-    fn the_lamps_hours_are_night() {
-        let night: Vec<u8> = (0..24).filter(|&h| is_night(h)).collect();
-        assert_eq!(night, vec![0, 1, 2, 3, 4, 5, 20, 21, 22, 23]);
-        assert!(!is_night(24));
-    }
-
-    /// Every GTA pass in the order a conversion runs them (a selection on the read world, then the passes over a
-    /// loaded part, by day, at night and with the hour kept as state; examples, not a recipe: the program chooses its
-    /// own) is accepted by the pass manager: no pass provides what an earlier one settled (core.surfaces after
-    /// lower-gta-surfaces). Declarations only, no game data.
-    #[test]
-    fn the_gta_passes_in_conversion_order_are_not_refused() {
-        use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
-        let mut r = PassRegistry::new();
-        r.register("select-lod", primase_core::select_lod);
-        r.register("resolve-state", primase_core::state::resolve_state);
-        r.register("normalize-normals", |_| {
-            Ok(Box::new(primase_image::NormalizeNormals))
-        });
-        crate::register(&mut r);
-        let m = PassManager::new(r);
-        let rect = "x0=0,y0=0,x1=1,y1=1";
-        let leave = "foliage=leave-out,river=leave-out";
-        let select = |assign: &str, lights: &str| {
-            format!(
-                "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
-                gta-leave-out-interiors, lower-gta-lights{{{lights}{rect}}}, gta-select-collision{{detail=plain}}, \
-                lower-gta-collision{{{rect},{leave}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
-            )
-        };
-        let part = |form: &str, night: &str| {
-            format!(
-                "select-lod{{form={form}}}, lower-gta-embedded-collision{{{leave}}}, lower-gta-surfaces, \
-                gta-pose-fragments, lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, \
-                gta-vertex-colours, lower-gta-water, normalize-normals"
-            )
-        };
-        let pipelines = [
-            select("assign=gta.map:online;gta.hour:12", "state=false,"),
-            part("finest", "false"),
-            select("assign=gta.map:online;gta.hour:22", "hour=22,"),
-            part("1", "true"),
-            select("assign=gta.map:story,keep=gta.hour", "state=true,"),
-            part("finest", "state"),
-        ];
-        for text in pipelines {
-            let p = m.registry.parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
-            // an empty world: the run may stop for other reasons, never this one
-            let r = m.run(&mut primase_core::World::new(), &p, &mut RunReport::default());
-            assert!(
-                !matches!(r, Err(Error::SettledThenChanged { .. })),
-                "{text}: {r:?}"
-            );
-        }
-    }
 }

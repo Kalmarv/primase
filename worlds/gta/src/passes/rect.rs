@@ -3,6 +3,15 @@
 //! the same types.
 use primase_core::pass::Options;
 
+/// The hours GTA's night-only surfaces and lights are on, bit h for hour h: 00-05 and 20-23, the hours the city's
+/// street lamps' light records name (`time_flags` 0xF0003F on the lamps of every region read so far).
+pub const NIGHT_HOURS: u32 = 0x00F0_003F;
+
+/// Hour `hour` (0-23) is a night hour ([`NIGHT_HOURS`]).
+pub fn is_night(hour: u8) -> bool {
+    hour < 24 && NIGHT_HOURS & (1 << hour) != 0
+}
+
 /// A rectangle of GTA's ground: metres east (x) and north (y), half-open (`x0 <= x < x1`, `y0 <= y < y1`), every
 /// value finite with `x0 < x1` and `y0 < y1`.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -72,9 +81,9 @@ impl Hour {
         self.0
     }
 
-    /// Whether it is one of GTA's night hours ([`crate::pipeline::NIGHT_HOURS`]).
+    /// Whether it is one of GTA's night hours ([`crate::passes::rect::NIGHT_HOURS`]).
     pub fn is_night(self) -> bool {
-        crate::pipeline::is_night(self.0)
+        is_night(self.0)
     }
 
     /// Option text `v` (`0`-`23`).
@@ -94,6 +103,14 @@ impl std::fmt::Display for Hour {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The street lamps' hours are night: 00-05 and 20-23.
+    #[test]
+    fn the_lamps_hours_are_night() {
+        let night: Vec<u8> = (0..24).filter(|&h| is_night(h)).collect();
+        assert_eq!(night, vec![0, 1, 2, 3, 4, 5, 20, 21, 22, 23]);
+        assert!(!is_night(24));
+    }
 
     #[test]
     fn a_rectangle_is_checked_once_and_reads_back_as_its_options() {

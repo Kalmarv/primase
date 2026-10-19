@@ -377,7 +377,7 @@ pub fn night_prototypes(w: &mut World, log: &mut PassLog) -> Result<BTreeSet<Ent
     }
     let clause = Clause(vec![Literal {
         axis,
-        values: u64::from(crate::pipeline::NIGHT_HOURS),
+        values: u64::from(crate::passes::rect::NIGHT_HOURS),
     }]);
     let placements: Vec<(Entity, Entity)> = w
         .iter::<primase_core::Instance>()
@@ -503,7 +503,7 @@ pub enum Night {
     /// Both, the hour kept as state: a prototype with night-only geometry or night emission gets a night copy (its
     /// LOD forms with it) that keeps the geometry and draws with night copies of those materials (emission on); the
     /// prototype itself is lowered for day, and each of its placements switches to the night copy while `gta.hour` is
-    /// a night hour ([`crate::pipeline::NIGHT_HOURS`]; a `core.state_override`, first in its list).
+    /// a night hour ([`crate::passes::rect::NIGHT_HOURS`]; a `core.state_override`, first in its list).
     State,
 }
 
@@ -1676,7 +1676,7 @@ mod tests {
             panic!("no prototype override")
         };
         assert_eq!(clause.0[0].axis, hour);
-        assert_eq!(clause.0[0].values, u64::from(crate::pipeline::NIGHT_HOURS));
+        assert_eq!(clause.0[0].values, u64::from(crate::passes::rect::NIGHT_HOURS));
         assert_eq!(w.get::<primase_core::Name>(*copy).unwrap().0, "lamp night");
         let night_head = w.get::<primase_core::Mesh>(*copy).unwrap().primitives()[0]
             .material

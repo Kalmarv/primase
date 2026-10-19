@@ -7,7 +7,7 @@
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Lods};
 use primase_gta::components::{GtaBones, GtaShader};
-use primase_gta::pipeline::{GtaSource, Map};
+use primase_gta::read::source::{GtaSource, Map};
 
 #[test]
 fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {

@@ -9,9 +9,7 @@
 
 pub mod collision;
 pub mod components;
-pub mod convert;
 pub mod passes;
-pub mod pipeline;
 pub mod rage;
 pub mod read;
 pub mod tint;
@@ -19,6 +17,13 @@ pub mod water;
 
 // paths consumers use from before the crate was arranged by role
 pub use passes::{lights, lower, pose, rect, select, surfaces, terrain, winding};
+pub use read::convert;
+/// `pipeline::{Map, LeaveOutInteriors}`, as consumers name them: now [`read::source::Map`] and
+/// [`passes::interiors::LeaveOutInteriors`].
+pub mod pipeline {
+    pub use crate::passes::interiors::LeaveOutInteriors;
+    pub use crate::read::source::Map;
+}
 /// `region::hour_axis`, as consumers name it: now [`components::state::hour_axis`].
 pub mod region {
     pub use crate::components::state::hour_axis;
@@ -119,7 +124,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?))
     });
     reg.register("gta-leave-out-interiors", |o| {
-        Ok(Box::new(pipeline::LeaveOutInteriors::from_options(o)?))
+        Ok(Box::new(passes::interiors::LeaveOutInteriors::from_options(o)?))
     });
 }
 
@@ -205,6 +210,56 @@ mod tests {
             .unwrap();
         for pass in &p.passes {
             assert!(pass.despawns_entities(), "{}", pass.name());
+        }
+    }
+
+    /// Every GTA pass in the order a conversion runs them (a selection on the read world, then the passes over a
+    /// loaded part, by day, at night and with the hour kept as state; examples, not a recipe: the program chooses its
+    /// own) is accepted by the pass manager: no pass provides what an earlier one settled (core.surfaces after
+    /// lower-gta-surfaces). Declarations only, no game data.
+    #[test]
+    fn the_gta_passes_in_conversion_order_are_not_refused() {
+        use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
+        let mut r = PassRegistry::new();
+        r.register("select-lod", primase_core::select_lod);
+        r.register("resolve-state", primase_core::state::resolve_state);
+        r.register("normalize-normals", |_| {
+            Ok(Box::new(primase_image::NormalizeNormals))
+        });
+        crate::register(&mut r);
+        let m = PassManager::new(r);
+        let rect = "x0=0,y0=0,x1=1,y1=1";
+        let leave = "foliage=leave-out,river=leave-out";
+        let select = |assign: &str, lights: &str| {
+            format!(
+                "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
+                gta-leave-out-interiors, lower-gta-lights{{{lights}{rect}}}, gta-select-collision{{detail=plain}}, \
+                lower-gta-collision{{{rect},{leave}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+            )
+        };
+        let part = |form: &str, night: &str| {
+            format!(
+                "select-lod{{form={form}}}, lower-gta-embedded-collision{{{leave}}}, lower-gta-surfaces, \
+                gta-pose-fragments, lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, \
+                gta-vertex-colours, lower-gta-water, normalize-normals"
+            )
+        };
+        let pipelines = [
+            select("assign=gta.map:online;gta.hour:12", "state=false,"),
+            part("finest", "false"),
+            select("assign=gta.map:online;gta.hour:22", "hour=22,"),
+            part("1", "true"),
+            select("assign=gta.map:story,keep=gta.hour", "state=true,"),
+            part("finest", "state"),
+        ];
+        for text in pipelines {
+            let p = m.registry.parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            // an empty world: the run may stop for other reasons, never this one
+            let r = m.run(&mut primase_core::World::new(), &p, &mut RunReport::default());
+            assert!(
+                !matches!(r, Err(Error::SettledThenChanged { .. })),
+                "{text}: {r:?}"
+            );
         }
     }
 }

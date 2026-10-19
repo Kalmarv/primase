@@ -1,5 +1,5 @@
 //! The GTA reader of [`primase_core::convert`]: a region of an install, read once to plan from and loaded part by
-//! part ([`crate::pipeline::GtaSource`]). Which selection and passes a conversion runs is its caller's choice: the
+//! part ([`crate::read::source::GtaSource`]). Which selection and passes a conversion runs is its caller's choice: the
 //! reader reads every entity of both maps within reach, with their state as conditions, and chooses none of it.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use crate::pipeline::{GtaSource, Map, prototype_box};
+use crate::read::source::{GtaSource, Map, prototype_box};
 
 /// What to read: the install and its key folder, the region, how far beyond it entities are read, and which map's
 /// archive set drawables and textures are loaded from (both maps' entities are read either way, with `gta.map`

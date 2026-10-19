@@ -1674,7 +1674,6 @@ fn real_data_variables_are_declared() {
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
     "layout: file=worlds/gta/src/collision.rs",
-    "layout: file=worlds/gta/src/pipeline.rs",
     "layout: file=worlds/gta/src/water.rs",
     "layout: file=worlds/reskate/src/build.rs",
 ];

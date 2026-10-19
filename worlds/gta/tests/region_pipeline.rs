@@ -10,7 +10,7 @@
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
-use primase_gta::pipeline::{GtaSource, Map};
+use primase_gta::read::source::{GtaSource, Map};
 
 /// The gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates: Legion Square, and Vespucci Beach from the
 /// skatepark along the boardwalk to Muscle Beach.

@@ -2,8 +2,10 @@
 //! the world.
 pub mod archive;
 pub mod assets;
+pub mod convert;
 pub mod gtxd;
 pub mod mount;
 pub(crate) mod rbf;
 pub mod region;
+pub mod source;
 pub(crate) mod xml;
