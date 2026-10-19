@@ -11,14 +11,16 @@
 //!   at what size and over what.
 //!
 //! The pass records the choice in [`SkatePausePicture`]; without it the writer writes no pause-map picture. The
-//! picture is the map's: a part of a conversion in several is refused.
+//! picture is the map's: in a part of a map converted in several, `extent=content` with no stated region is the map's
+//! content extent merged over every part (`summarize-reskate-content`), recorded as a rectangle (whole metres, exact
+//! in the record's f32), so every part draws over the same extent; a part without it is refused.
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Resource, World};
 
 pub use crate::components::pause_map::{SkatePauseImage, SkatePausePicture};
 
-use crate::components::SkateScene;
+use crate::components::{SkateContentBounds, SkateScene};
 
 /// What [`PrepareReskatePauseMap`] draws the picture over.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -162,7 +164,6 @@ impl Pass for PrepareReskatePauseMap {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         let picture = match self.source {
             PauseSource::Image => {
                 let bounds = w
@@ -186,7 +187,22 @@ impl Pass for PrepareReskatePauseMap {
                     PauseExtent::Region => Some(w.resource::<SkateScene>().and_then(|s| s.region).ok_or(
                         "extent=region: the scene states no region (extent=content, or x0, y0, x1, y1)",
                     )?),
-                    PauseExtent::Content => None,
+                    // the writer's region: the stated one, else the content's; a part takes the merged content's
+                    PauseExtent::Content => {
+                        let stated = w.resource::<SkateScene>().is_some_and(|s| s.region.is_some());
+                        match w.resource::<SkateContentBounds>() {
+                            _ if stated => None,
+                            Some(b) => Some(b.extent().map(|v| v as f32)),
+                            None => {
+                                super::require_whole_map(w, self.name()).map_err(|e| {
+                                    format!(
+                                        "{e}: extent=content over a map in parts is its content merged over every                                          part (summarize-reskate-content)"
+                                    )
+                                })?;
+                                None
+                            }
+                        }
+                    }
                     PauseExtent::Rect(r) => Some(r),
                 };
                 log.count("pause-map pictures: drawn from the geometry", 1);

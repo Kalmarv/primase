@@ -747,3 +747,96 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
         .unwrap_err();
     assert!(e.contains("summarize-reskate-spawn"), "{e}");
 }
+
+#[test]
+fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
+    use primase_reskate::components::SkateContentBounds;
+    use primase_reskate::passes::{
+        PauseExtent, PauseSource, PrepareReskatePauseMap, SkatePausePicture, SummarizeReskateContent,
+    };
+    let pause = || {
+        PrepareReskatePauseMap::new(PauseSource::Geometry {
+            height: 720,
+            extent: PauseExtent::Content,
+        })
+        .unwrap()
+    };
+    // the whole map leaves the extent to the writer, which takes its region: the content's extent
+    let mut whole = map();
+    pause().run(&mut whole, &mut PassLog::default()).unwrap();
+    assert_eq!(
+        whole.resource::<SkatePausePicture>(),
+        Some(&SkatePausePicture::Geometry {
+            height: 720,
+            extent: None
+        })
+    );
+    let mut measured = map();
+    SummarizeReskateContent
+        .run(&mut measured, &mut PassLog::default())
+        .unwrap();
+    let extent = measured.resource::<SkateContentBounds>().unwrap().extent();
+    // every part draws over that extent, stated
+    struct Got(Rc<RefCell<Vec<SkatePausePicture>>>);
+    impl Writer for Got {
+        fn target(&self) -> Target {
+            primase_reskate::target()
+        }
+        fn write(&mut self, part: &World) -> Result<()> {
+            self.0
+                .borrow_mut()
+                .push(part.resource::<SkatePausePicture>().unwrap().clone());
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<Finished> {
+            Ok(Finished::default())
+        }
+    }
+    let mut registry = SummaryRegistry::new();
+    primase_reskate::register_summaries(&mut registry);
+    for order in [vec![0, 1, 2], vec![2, 0, 1], vec![1, 2, 0]] {
+        let got = Rc::new(RefCell::new(Vec::new()));
+        convert_parts_summarized(
+            &mut Prepared(map()),
+            &mut Groups {
+                parts: 3,
+                order: order.clone(),
+                groups: Vec::new(),
+                next: 0,
+            },
+            Box::new(Got(got.clone())),
+            &PassManager::new(PassRegistry::new()),
+            &Pipeline { passes: Vec::new() },
+            &Summarized {
+                registry: &registry,
+                summarize: &Pipeline {
+                    passes: vec![Box::new(SummarizeReskateContent)],
+                },
+                decide: &Pipeline { passes: Vec::new() },
+            },
+            &Pipeline {
+                passes: vec![Box::new(pause())],
+            },
+        )
+        .unwrap();
+        let stated = SkatePausePicture::Geometry {
+            height: 720,
+            extent: Some(extent.map(|v| v as f32)),
+        };
+        assert_eq!(got.take(), vec![stated; 3], "{order:?}");
+    }
+    // the extent as stated is the writer's region exactly (whole metres)
+    assert!(extent.iter().all(|&v| f64::from(v as f32) == v));
+    // a part without the merged content is refused
+    let mut w = map();
+    let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
+    w.insert_resource(primase_core::convert::PartScope {
+        roots,
+        context: BTreeSet::new(),
+        whole: false,
+        area: None,
+        first_made: None,
+    });
+    let e = pause().run(&mut w, &mut PassLog::default()).unwrap_err();
+    assert!(e.contains("summarize-reskate-content"), "{e}");
+}
