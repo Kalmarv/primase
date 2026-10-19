@@ -149,9 +149,9 @@ fn a_part_writes_its_payloads_and_finish_the_index() {
         after_part.keys()
     );
     assert!(!out.join("map.json").exists() && !out.join("stats.json").exists());
-    // a second part is refused, until the writer lays out parts
+    // a second part of a map without its layout summary is refused: the first was the whole map
     let err = sink.part(&w).unwrap_err().to_string();
-    assert!(err.contains("a second part of one map"), "{err}");
+    assert!(err.contains("a second part of a map taken as whole"), "{err}");
     let r = sink.finish().unwrap();
     assert_eq!(r.out_dir, out);
     assert!(out.join("map.json").exists() && out.join("stats.json").exists());

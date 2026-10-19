@@ -2,7 +2,7 @@
 //! space: textures, materials made on first use, prototypes built from their GLBs, placements, collision soups,
 //! lights, grind curves, water and markers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ pub fn w_at(v: &[f32], o: usize) -> Vec3 {
 }
 
 /// The collision surfaces: Studio packed materials; the first 17 the standard table.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceTable {
     pub list: Vec<(String, i32)>,
 }
@@ -137,6 +137,9 @@ pub struct ProtoDef {
 pub struct SoupDef {
     /// Its entity in the world.
     pub entity: primase_core::Entity,
+    /// Placed by an entity of its own (a reader's `core.collision` not raised into a soup): the scene lists these after
+    /// the raised soups (`skate.collision`), each kind by entity.
+    pub raw: bool,
     /// The first file, relative to the scene folder (for stats).
     pub file: String,
     pub mode: CollisionMode,
@@ -430,6 +433,107 @@ pub struct Scene {
     pub omitted: Vec<(String, u64)>,
     /// What it writes, but not as the world says, by what, with counts (also among the warnings).
     pub approximated: Vec<(String, u64)>,
+    /// The scene's own warnings (`skate.scene` `warnings`), without the notes the writer adds.
+    pub stated_warnings: Vec<String>,
+    /// What the writer leaves out or approximates, as counts: `report_warnings`, `omitted` and `approximated` are
+    /// rendered from them ([`SceneNotes::render`]), and a map written in parts merges them before rendering.
+    pub notes: SceneNotes,
+}
+
+/// What a scene's writer leaves out or approximates, counted so that the parts of a map merge into the whole map's
+/// counts ([`SceneNotes::merge`]): a tinted material by its entity (several parts draw it), the scene's own settings
+/// once, placements, curves and markers summed (each in one part).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SceneNotes {
+    /// Materials with a base texture and a tint (not written).
+    pub tinted: BTreeSet<primase_core::Entity>,
+    /// The scene's texture budget (not applied by the writer).
+    pub texture_budget: Option<f64>,
+    /// The scene states a min_height (not applied by the writer).
+    pub min_height: bool,
+    /// Placements of prototypes without geometry (left out).
+    pub no_geometry: usize,
+    /// Grind curves without a prism (left out).
+    pub unprepared_curves: usize,
+    /// Markers whose snap is unresolved (written where they stand).
+    pub unsnapped: usize,
+}
+
+impl SceneNotes {
+    /// Another part's notes added: tinted materials as a set, the scene's settings as they are (the same in every
+    /// part), the counts summed.
+    pub fn merge(&mut self, o: &SceneNotes) {
+        self.tinted.extend(o.tinted.iter().copied());
+        self.texture_budget = self.texture_budget.or(o.texture_budget);
+        self.min_height |= o.min_height;
+        self.no_geometry += o.no_geometry;
+        self.unprepared_curves += o.unprepared_curves;
+        self.unsnapped += o.unsnapped;
+    }
+
+    /// The warnings, the omitted and the approximated, by what, with counts.
+    #[allow(clippy::type_complexity)]
+    pub fn render(&self) -> (Vec<String>, Vec<(String, u64)>, Vec<(String, u64)>) {
+        let (mut warnings, mut omitted, mut approximated) = (Vec::new(), Vec::new(), Vec::new());
+        let tinted = self.tinted.len();
+        if tinted > 0 {
+            omitted.push((
+                "skate.material tint (prepare-reskate-textures multiplies it into a texture copy)".to_owned(),
+                tinted as u64,
+            ));
+            warnings.push(format!(
+                "{tinted} materials' tints not written: the writer takes base textures as prepared \
+                 (prepare-reskate-textures multiplies a tint in)"
+            ));
+        }
+        if let Some(max) = self.texture_budget {
+            omitted.push((
+                "skate.scene texture_budget (budget-reskate-textures applies a budget)".to_owned(),
+                1,
+            ));
+            warnings.push(format!(
+                "the scene's texture budget ({max}) not applied by the writer: a budget is a pass \
+                 (budget-reskate-textures)"
+            ));
+        }
+        if self.min_height {
+            omitted.push((
+                "skate.scene min_height (prepare-reskate-floor lifts the map)".to_owned(),
+                1,
+            ));
+            warnings.push(
+                "the scene's min_height not applied by the writer: the floor is a pass (prepare-reskate-floor)".into(),
+            );
+        }
+        let no_geometry = self.no_geometry;
+        if no_geometry > 0 {
+            omitted.push((
+                "placements of prototypes without geometry".to_owned(),
+                no_geometry as u64,
+            ));
+            warnings.push(format!(
+                "{no_geometry} placements of prototypes without geometry left out"
+            ));
+        }
+        if self.unprepared_curves > 0 {
+            omitted.push((
+                "skate.grind_curve (prepare-reskate-grinds makes its prism)".to_owned(),
+                self.unprepared_curves as u64,
+            ));
+        }
+        let unsnapped = self.unsnapped;
+        if unsnapped > 0 {
+            approximated.push((
+                "markers whose snap is unresolved, written where they stand (snap-reskate-markers resolves it)"
+                    .to_owned(),
+                unsnapped as u64,
+            ));
+            warnings.push(format!(
+                "{unsnapped} markers' snaps not resolved: the writer snaps nothing (snap-reskate-markers)"
+            ));
+        }
+        (warnings, omitted, approximated)
+    }
 }
 
 fn class(c: MaterialClass) -> VClass {
@@ -616,9 +720,8 @@ impl Scene {
         let mkey = |e: primase_core::Entity| mat_keys.get(&e).cloned();
         let mut protos = Vec::new();
         let mut proto_index = HashMap::new();
-        let mut report_warnings = Vec::new();
-        let mut tinted = 0;
-        for (_, m) in world.iter::<SkateMaterial>() {
+        let mut notes = SceneNotes::default();
+        for (e, m) in world.iter::<SkateMaterial>() {
             for t in [m.base, m.normal, m.mask].into_iter().flatten() {
                 if let Some(key) = unloaded.get(&t) {
                     return Err(Error::Scene(format!(
@@ -627,38 +730,12 @@ impl Scene {
                     )));
                 }
             }
-            tinted += usize::from(m.base.is_some() && m.tint.is_some());
+            if m.base.is_some() && m.tint.is_some() {
+                notes.tinted.insert(e);
+            }
         }
-        let (mut omitted, mut approximated) = (Vec::new(), Vec::new());
-        if tinted > 0 {
-            omitted.push((
-                "skate.material tint (prepare-reskate-textures multiplies it into a texture copy)".to_owned(),
-                tinted as u64,
-            ));
-            report_warnings.push(format!(
-                "{tinted} materials' tints not written: the writer takes base textures as prepared \
-                 (prepare-reskate-textures multiplies a tint in)"
-            ));
-        }
-        if let Some(max) = sc.texture_budget.as_ref().and_then(|b| b.max) {
-            omitted.push((
-                "skate.scene texture_budget (budget-reskate-textures applies a budget)".to_owned(),
-                1,
-            ));
-            report_warnings.push(format!(
-                "the scene's texture budget ({max}) not applied by the writer: a budget is a pass \
-                 (budget-reskate-textures)"
-            ));
-        }
-        if sc.min_height.is_some() {
-            omitted.push((
-                "skate.scene min_height (prepare-reskate-floor lifts the map)".to_owned(),
-                1,
-            ));
-            report_warnings.push(
-                "the scene's min_height not applied by the writer: the floor is a pass (prepare-reskate-floor)".into(),
-            );
-        }
+        notes.texture_budget = sc.texture_budget.as_ref().and_then(|b| b.max);
+        notes.min_height = sc.min_height.is_some();
         for (i, (e, p)) in world.iter::<SkatePrototype>().enumerate() {
             proto_index.insert(e, i);
             // core.mesh is the writer's input; a prototype with only a GLB file has not been loaded
@@ -758,7 +835,6 @@ impl Scene {
         let mut placements = Vec::new();
         // a placement of a prototype with neither geometry nor collision (no skate.prototype: raise-skate raises those
         // with a mesh or a collision) does nothing: left out, counted
-        let mut no_geometry = 0usize;
         for (e, inst) in world.iter::<Instance>() {
             // a non-rigid placement is refused whatever its prototype holds
             let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
@@ -768,7 +844,7 @@ impl Scene {
                 )));
             }
             if !proto_index.contains_key(&inst.prototype) && !world.has::<SkatePrototype>(inst.prototype) {
-                no_geometry += 1;
+                notes.no_geometry += 1;
                 continue;
             }
             let sp = world.get::<SkatePlacement>(e).cloned().unwrap_or_default();
@@ -798,6 +874,7 @@ impl Scene {
         }
         let soup_def = |entity, file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
             entity,
+            raw: c.is_none(),
             file,
             mode: mode_of(c.and_then(|c| c.mode)),
             ground: c.and_then(|c| c.ground).unwrap_or(true),
@@ -932,33 +1009,9 @@ impl Scene {
                 transform: m.m,
             });
         }
-        if no_geometry > 0 {
-            omitted.push((
-                "placements of prototypes without geometry".to_owned(),
-                no_geometry as u64,
-            ));
-            report_warnings.push(format!(
-                "{no_geometry} placements of prototypes without geometry left out"
-            ));
-        }
-        let unprepared = curves.iter().filter(|c| c.prism.is_none()).count();
-        if unprepared > 0 {
-            omitted.push((
-                "skate.grind_curve (prepare-reskate-grinds makes its prism)".to_owned(),
-                unprepared as u64,
-            ));
-        }
-        let unsnapped = markers.iter().filter(|m| m.snap.mode != SnapMode::None).count();
-        if unsnapped > 0 {
-            approximated.push((
-                "markers whose snap is unresolved, written where they stand (snap-reskate-markers resolves it)"
-                    .to_owned(),
-                unsnapped as u64,
-            ));
-            report_warnings.push(format!(
-                "{unsnapped} markers' snaps not resolved: the writer snaps nothing (snap-reskate-markers)"
-            ));
-        }
+        notes.unprepared_curves = curves.iter().filter(|c| c.prism.is_none()).count();
+        notes.unsnapped = markers.iter().filter(|m| m.snap.mode != SnapMode::None).count();
+        let (report_warnings, omitted, approximated) = notes.render();
         Ok(Scene {
             dir: dir.to_owned(),
             name: sc.name.clone(),
@@ -994,6 +1047,8 @@ impl Scene {
                 w.extend(report_warnings.iter().cloned());
                 w
             },
+            stated_warnings: sc.warnings.clone().unwrap_or_default(),
+            notes,
             stats: sc.stats.clone(),
             texture_keys_by_entity: tex_keys,
             labels,

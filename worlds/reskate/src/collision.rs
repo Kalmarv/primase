@@ -70,6 +70,18 @@ impl PropSoup {
     }
 }
 
+/// The 256 m cell a placed prop's collision is filed in: the one its pivot `p` (writer frame) stands in, whole.
+pub(crate) fn prop_cell(p: Vec3) -> (i32, i32) {
+    ((p.x / SRC_TILE).floor() as i32, (p.y / SRC_TILE).floor() as i32)
+}
+
+/// The 256 m cell a world triangle (writer frame corners) is filed in: the one its centre stands in.
+pub(crate) fn triangle_cell(a: Vec3, b: Vec3, c: Vec3) -> (i32, i32) {
+    let cx = (a.x + b.x + c.x) / 3.0;
+    let cy = (a.y + b.y + c.y) / 3.0;
+    ((cx / SRC_TILE).floor() as i32, (cy / SRC_TILE).floor() as i32)
+}
+
 /// Adds a prop's collision placed by (p, ex, ey, ez); with `bbox`, only triangles whose outline box reaches into it.
 #[allow(clippy::too_many_arguments)]
 pub fn add_prop(
@@ -85,7 +97,7 @@ pub fn add_prop(
     ez: Vec3,
     bbox: Option<[f32; 4]>,
 ) -> i64 {
-    let key = ((p.x / SRC_TILE).floor() as i32, (p.y / SRC_TILE).floor() as i32);
+    let key = prop_cell(p);
     let mut added = 0;
     let mut wv = [0f32; 9];
     for t in (0..col_idx.len().saturating_sub(2)).step_by(3) {
@@ -383,25 +395,6 @@ impl<'a> Collision<'a> {
         }
     }
 
-    /// Triangle-mesh collision of the world and the props, each leaf given to `visit`, then the markers on the ground.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build(
-        &mut self,
-        source: &dyn CollisionWorld,
-        region: [f64; 4],
-        queries: &[Query],
-        props: &BTreeMap<(i32, i32), PropSoup>,
-        water: &[WaterQuad],
-        snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
-        visit: &mut LeafVisit<'_>,
-    ) -> Result<CollisionResult> {
-        let mut res = self.cells(source, region, queries, props, "c", false, visit)?;
-        self.extra = hull_tiles(snap_extra);
-        self.snap(queries, water, &mut res.placed, &mut res.ground);
-        self.kept.clear();
-        Ok(res)
-    }
-
     /// Each query's snap against the kept cells and the extra (hull) triangles: its placed position and ground
     /// height, both left as they are when the snap finds nothing.
     fn snap(&self, queries: &[Query], water: &[WaterQuad], placed: &mut [(f32, f32)], ground: &mut [f32]) {
@@ -455,17 +448,6 @@ impl<'a> Collision<'a> {
         }
     }
 
-    /// Water-mode collision: cells like `build`, pieces in collision mode water.
-    pub(crate) fn build_water(
-        &mut self,
-        source: &dyn CollisionWorld,
-        region: [f64; 4],
-        props: &BTreeMap<(i32, i32), PropSoup>,
-        visit: &mut LeafVisit<'_>,
-    ) -> Result<CollisionResult> {
-        self.cells(source, region, &[], props, "w", true, visit)
-    }
-
     fn street_kinds(&self) -> [u8; 256] {
         let mut k = [0u8; 256];
         for (i, s) in self.surf.list.iter().enumerate() {
@@ -481,76 +463,43 @@ impl<'a> Collision<'a> {
         k
     }
 
+    /// One 256 m cell laid out: its world triangles `world` cleaned, the placed props' `props` added, cut into leaves
+    /// named `<prefix>_<tx>_<ty>...`, each given to `visit`; the cell's triangles and how many are the world's static
+    /// ones, `None` when it has none. Cells are independent: a map written in parts lays each out once all of its
+    /// triangles have arrived.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
-    fn cells(
+    pub(crate) fn cell(
         &mut self,
-        source: &dyn CollisionWorld,
-        region: [f64; 4],
-        queries: &[Query],
-        props: &BTreeMap<(i32, i32), PropSoup>,
+        world: Option<TileData>,
+        props: Option<&PropSoup>,
+        (tx, ty): (i32, i32),
         prefix: &str,
         water: bool,
+        res: &mut CollisionResult,
         visit: &mut LeafVisit<'_>,
-    ) -> Result<CollisionResult> {
-        let mut res = CollisionResult {
-            placed: queries.iter().map(|q| (q.x, q.y)).collect(),
-            ground: vec![f32::NAN; queries.len()],
-            ..CollisionResult::default()
-        };
-        self.kept.clear();
-        let tx0 = (region[0] / f64::from(SRC_TILE)).floor() as i32;
-        let tx1 = ((region[2] - 1e-6) / f64::from(SRC_TILE)).floor() as i32;
-        let ty0 = (region[1] / f64::from(SRC_TILE)).floor() as i32;
-        let ty1 = ((region[3] - 1e-6) / f64::from(SRC_TILE)).floor() as i32;
-        let mut jobs: BTreeSet<(i32, i32)> = BTreeSet::new();
-        for ty in ty0..=ty1 {
-            for tx in tx0..=tx1 {
-                jobs.insert((ty, tx));
-            }
+    ) -> Result<Option<(TileData, usize)>> {
+        let mut td = self.clean(world, res);
+        if water {
+            res.water_triangles += (td.t.len() / 3) as i64;
         }
-        for &(tx, ty) in props.keys() {
-            jobs.insert((ty, tx));
+        let n_static = td.ground.unwrap_or(td.s.len());
+        self.merge_props(&mut td, props, res);
+        if td.t.is_empty() {
+            return Ok(None);
         }
-        for (tx, ty) in source.cells() {
-            jobs.insert((ty, tx));
-        }
-        let mut wanted: BTreeSet<(i32, i32)> = BTreeSet::new();
-        for q in queries.iter().filter(|q| q.snap.mode != SnapMode::None) {
-            let (ax0, ay0, ax1, ay1) = place_tiles(q.x, q.y);
-            for ay in ay0..=ay1 {
-                for ax in ax0..=ax1 {
-                    wanted.insert((ax, ay));
-                }
-            }
-        }
-        for (ty, tx) in jobs {
-            let mut td = self.clean(source.cell(tx, ty), &mut res);
-            if water {
-                res.water_triangles += (td.t.len() / 3) as i64;
-            }
-            let n_static = td.ground.unwrap_or(td.s.len());
-            self.merge_props(&mut td, props.get(&(tx, ty)), &mut res);
-            if td.t.is_empty() {
-                continue;
-            }
-            let all: Vec<usize> = (0..td.t.len() / 3).collect();
-            self.split(
-                &td,
-                &all,
-                tx as f32 * SRC_TILE,
-                ty as f32 * SRC_TILE,
-                SRC_TILE,
-                &format!("{prefix}_{tx}_{ty}"),
-                &mut res,
-                water,
-                visit,
-            )?;
-            if wanted.contains(&(tx, ty)) {
-                self.kept.insert((tx, ty), (td, n_static));
-            }
-        }
-        Ok(res)
+        let all: Vec<usize> = (0..td.t.len() / 3).collect();
+        self.split(
+            &td,
+            &all,
+            tx as f32 * SRC_TILE,
+            ty as f32 * SRC_TILE,
+            SRC_TILE,
+            &format!("{prefix}_{tx}_{ty}"),
+            res,
+            water,
+            visit,
+        )?;
+        Ok(Some((td, n_static)))
     }
 
     /// The placed props' triangles of a cell appended to its cleaned world triangles `td` (those past the map limit
@@ -1318,18 +1267,38 @@ mod tests {
             }
         }
         let (limit, offset) = (500.0, [7.0, -3.0]);
+        // the writer's own layout of every cell the queries reach (Collision::cell), snapped against
         let mut writer = Collision::new(&surf, offset[0], offset[1], 0.0, limit);
-        let res = writer
-            .build(
-                &world,
-                [-256.0, -256.0, 512.0, 256.0],
-                &queries,
-                &props,
-                &water,
-                std::slice::from_ref(&hull),
-                &mut |_, _| Ok(()),
-            )
-            .unwrap();
+        let mut res = CollisionResult::default();
+        let mut wanted = BTreeSet::new();
+        for q in queries.iter().filter(|q| q.snap.mode != SnapMode::None) {
+            let (ax0, ay0, ax1, ay1) = place_tiles(q.x, q.y);
+            for ay in ay0..=ay1 {
+                for ax in ax0..=ax1 {
+                    wanted.insert((ax, ay));
+                }
+            }
+        }
+        for &(tx, ty) in &wanted {
+            let laid = writer
+                .cell(
+                    world.cell(tx, ty),
+                    props.get(&(tx, ty)),
+                    (tx, ty),
+                    "c",
+                    false,
+                    &mut res,
+                    &mut |_, _| Ok(()),
+                )
+                .unwrap();
+            if let Some(td) = laid {
+                writer.kept.insert((tx, ty), td);
+            }
+        }
+        writer.extra = hull_tiles(std::slice::from_ref(&hull));
+        res.placed = queries.iter().map(|q| (q.x, q.y)).collect();
+        res.ground = vec![f32::NAN; queries.len()];
+        writer.snap(&queries, &water, &mut res.placed, &mut res.ground);
         let (placed, ground) = snap_queries(
             &surf,
             limit,

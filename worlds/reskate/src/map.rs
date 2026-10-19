@@ -4,8 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::assembly::{SoupWorld, soup_cell};
 use crate::blend_order::{self, Geometry};
-use crate::collision::{Collision, CollisionResult, CollisionWorld, LeafVisit, NoWorld, PropSoup, Query};
+use crate::collision::{Collision, CollisionResult, LeafVisit, PropSoup};
 use crate::components::{
     BlendBudgetMode, ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendBudget, SkateBlendChains,
     SkateOverlayStack, StackedPiece,
@@ -23,12 +24,15 @@ use crate::records::{
     TravelPointJson,
 };
 use crate::scene::{GrindCurve, Marker, PlacedLight, SnapMode, SurfaceTable, WaterQuad};
+
+/// A collision cell: water (`true`) or the triangle mesh, its column and row of 256 m.
+pub(crate) type CellKey = (bool, i32, i32);
 use crate::texture::TexLib;
 use crate::{Error, Result};
 use primase_meshops::vector::Vec3;
 
 /// What the writer is told (defaults are gta-skate's).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WriterOptions {
     pub name: String,
     pub display_name: Option<String>,
@@ -614,6 +618,22 @@ pub struct MapWriter {
     budget: Option<SkateBlendBudget>,
     /// How the collision is written, as `prepare-reskate-collision` planned it (`None`: exactly).
     collision_plan: Option<crate::components::SkateCollisionPlan>,
+    /// The prototypes made, by key: each made and written once, by the first part of the map that draws one.
+    protos: HashMap<[u8; 16], Proto>,
+    /// The placements of each prototype key over the whole map, which decide what is instanced; `None`: the
+    /// placements [`MapWriter::tiles`] is given are the whole map's.
+    counts: Option<HashMap<u32, i64>>,
+    /// The prototype keys placed, over every part.
+    placed_keys: BTreeSet<u32>,
+    /// The world soups (triangle mesh, water) whose cells are not laid out yet ([`MapWriter::lay_cells`]).
+    soups: SoupWorld,
+    water_soups: SoupWorld,
+    /// The collision laid out so far: the triangle mesh's cells and the hulls, the water's cells; the leaves packed.
+    col: CollisionResult,
+    water_col: CollisionResult,
+    leaves_packed: usize,
+    /// Mesh files a later decision dropped (a blend chain's form not taken) after they may have been written.
+    pub discarded: Vec<String>,
     /// Mesh files (meshes/<name>), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
@@ -689,6 +709,7 @@ fn stats_of(t: &OverlayTotals) -> OverlayStats {
 }
 
 /// A proto made once per (key, variant row).
+#[derive(Debug)]
 struct Proto {
     info: usize,
     materials: Vec<String>,
@@ -738,6 +759,15 @@ impl MapWriter {
             water_parts: BTreeMap::new(),
             prop_hulls: Vec::new(),
             collision_plan: None,
+            protos: HashMap::new(),
+            counts: None,
+            placed_keys: BTreeSet::new(),
+            soups: SoupWorld::default(),
+            water_soups: SoupWorld::default(),
+            col: CollisionResult::default(),
+            water_col: CollisionResult::default(),
+            leaves_packed: 0,
+            discarded: Vec::new(),
             pending_chains: BTreeMap::new(),
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
@@ -792,34 +822,149 @@ impl MapWriter {
         &self.surfaces
     }
 
-    /// The collision's leaves as [`MapWriter::finish`] lays them out, each given to `visit`, nothing written.
-    pub(crate) fn collision_leaves(&self, x: &Extras, visit: &mut LeafVisit<'_>) -> Result<()> {
-        self.collision_layout(x, &[], &[], visit).map(|_| ())
+    /// The collision's leaves as [`MapWriter::finish`] lays them out, each given to `visit`, nothing written: every
+    /// cell still waiting laid out now.
+    pub(crate) fn collision_leaves(&mut self, visit: &mut LeafVisit<'_>) -> Result<()> {
+        let waiting = self.waiting_cells();
+        self.lay_cells(&waiting, Some(visit))
     }
 
-    /// The collision laid out: the world's triangle mesh with the placed props' (the markers in `queries` snapped
-    /// against it and `snap_extra`), then the water when there is any, each leaf given to `visit`; the layout's counts.
-    fn collision_layout(
-        &self,
-        x: &Extras,
-        queries: &[Query],
-        snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
-        visit: &mut LeafVisit<'_>,
-    ) -> Result<CollisionResult> {
-        let (r, off) = (self.o.region, self.off);
-        let mut collision = Collision::new(&self.surfaces, off.x, off.y, off.z, self.o.limit);
-        let props = join(&self.prop_parts);
-        let mut col = collision.build(x.world, r, queries, &props, &x.water, snap_extra, visit)?;
-        let water_props = join(&self.water_parts);
-        if x.water_world.is_some() || !water_props.is_empty() {
-            let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
-            let wc = collision.build_water(ww, r, &water_props, visit)?;
-            col.objects.extend(wc.objects);
-            col.pieces += wc.pieces;
-            col.water_triangles += wc.water_triangles + wc.prop_triangles;
-            col.split_cells += wc.split_cells;
+    /// The world soups of a part (triangle mesh, water), held until their cells are laid out.
+    pub(crate) fn add_soups(&mut self, tri: SoupWorld, water: Option<SoupWorld>) {
+        self.soups.absorb_all(tri);
+        if let Some(w) = water {
+            self.water_soups.absorb_all(w);
         }
-        Ok(col)
+    }
+
+    /// The cells holding collision (world soups, placed props) not laid out yet.
+    pub(crate) fn waiting_cells(&self) -> BTreeSet<CellKey> {
+        let mut out = BTreeSet::new();
+        out.extend(self.soups.cell_keys().map(|(x, y)| (false, x, y)));
+        out.extend(self.water_soups.cell_keys().map(|(x, y)| (true, x, y)));
+        out.extend(self.prop_parts.keys().map(|&(x, y)| (false, x, y)));
+        out.extend(self.water_parts.keys().map(|&(x, y)| (true, x, y)));
+        out
+    }
+
+    /// The bytes the waiting cells hold (their soups and props).
+    pub(crate) fn waiting_bytes(&self) -> usize {
+        let props = |p: &PropParts| -> usize {
+            p.values()
+                .flatten()
+                .map(|(_, _, s)| 4 * s.pos.len() + s.surf.len() + s.ground.as_ref().map_or(0, Vec::len))
+                .sum()
+        };
+        self.soups.bytes() + self.water_soups.bytes() + props(&self.prop_parts) + props(&self.water_parts)
+    }
+
+    /// The cells `keys` laid out now, from the soups and props they hold (taken out): each leaf packed as the plan
+    /// says into the mesh files and the collision's objects, or given to `visit` (nothing written). A cell is laid out
+    /// alone ([`Collision::cell`]): its world triangles in the scene's soup order, its props by tile, whatever part
+    /// they came from.
+    pub(crate) fn lay_cells(
+        &mut self,
+        keys: &BTreeSet<CellKey>,
+        visit: Option<&mut LeafVisit<'_>>,
+    ) -> Result<()> {
+        let surf = self.surfaces.clone();
+        let off = self.off;
+        let mut collision = Collision::new(&surf, off.x, off.y, off.z, self.o.limit);
+        let plan = self.collision_plan.take();
+        let (mut col, mut water_col) = (std::mem::take(&mut self.col), std::mem::take(&mut self.water_col));
+        let mut files = crate::collision_pack::Files::new();
+        let laid = (|| -> Result<usize> {
+            let mut pack = crate::collision_pack::Pack::new(&surf, off, plan.as_ref(), &mut files)?;
+            let mut pack_leaf =
+                |leaf: crate::collision::Leaf<'_>, res: &mut CollisionResult| pack.leaf(leaf, res);
+            let visit: &mut LeafVisit<'_> = match visit {
+                Some(v) => v,
+                None => &mut pack_leaf,
+            };
+            for &(water, tx, ty) in keys {
+                let (segs, props, res, prefix) = if water {
+                    (
+                        self.water_soups.take_cell((tx, ty)),
+                        self.water_parts.remove(&(tx, ty)),
+                        &mut water_col,
+                        "w",
+                    )
+                } else {
+                    (
+                        self.soups.take_cell((tx, ty)),
+                        self.prop_parts.remove(&(tx, ty)),
+                        &mut col,
+                        "c",
+                    )
+                };
+                let props = props.map(join);
+                collision.cell(
+                    soup_cell(&segs),
+                    props.as_ref(),
+                    (tx, ty),
+                    prefix,
+                    water,
+                    res,
+                    visit,
+                )?;
+            }
+            drop(pack_leaf);
+            Ok(pack.seen())
+        })();
+        self.collision_plan = plan;
+        self.col = col;
+        self.water_col = water_col;
+        self.leaves_packed += laid?;
+        self.mesh_files.extend(files);
+        Ok(())
+    }
+
+    /// Hulls (a placed prop's, a hull soup's) packed now, each whole, among the triangle mesh's collision.
+    pub(crate) fn lay_hulls(&mut self, hulls: &[Hull]) -> Result<()> {
+        let surf = self.surfaces.clone();
+        let mut files = crate::collision_pack::Files::new();
+        let mut pack = crate::collision_pack::Pack::new(&surf, self.off, None, &mut files)?;
+        for h in hulls {
+            pack.hull(&mut self.col, &h.name, &h.pos, &h.idx, h.surface)?;
+        }
+        self.mesh_files.extend(files);
+        Ok(())
+    }
+
+    /// The placed props' hulls made so far, taken out (to be packed as they come: [`MapWriter::lay_hulls`]).
+    pub(crate) fn take_prop_hulls(&mut self) -> Vec<Hull> {
+        std::mem::take(&mut self.prop_hulls)
+    }
+
+    /// The map's instancing for the placements [`MapWriter::tiles`] is given next: the placements of each prototype
+    /// key over the whole map (`None`: those placements are the whole map's).
+    pub(crate) fn set_counts(&mut self, counts: Option<HashMap<u32, i64>>) {
+        self.counts = counts;
+    }
+
+    /// The textures the materials drawn so far use.
+    pub(crate) fn used_textures(&self) -> BTreeSet<i32> {
+        self.mat_used
+            .iter()
+            .flat_map(|&id| {
+                let m = self.ctx.mats.by_id(id);
+                [m.tex, m.normal, m.mask]
+            })
+            .filter(|t| *t >= 0)
+            .collect()
+    }
+
+    /// The collision cells a part's props fall in: those of the render tiles `tiles`.
+    pub(crate) fn prop_cells_of(&self, tiles: &BTreeSet<(i32, i32)>) -> BTreeSet<CellKey> {
+        let mut out = BTreeSet::new();
+        for (water, parts) in [(false, &self.prop_parts), (true, &self.water_parts)] {
+            for (&(cx, cy), bag) in parts {
+                if bag.iter().any(|(tx, ty, _)| tiles.contains(&(*tx, *ty))) {
+                    out.insert((water, cx, cy));
+                }
+            }
+        }
+        out
     }
 
     /// The blend chains as `chains` says.
@@ -1076,9 +1221,10 @@ impl MapWriter {
         Ok(())
     }
 
-    /// Drops a mesh file written for a form finish did not take.
+    /// Drops a mesh file written for a form finish did not take (written already when the map came in parts).
     fn discard_file(&mut self, file: &str) {
         self.mesh_files.remove(file);
+        self.discarded.push(file.to_owned());
     }
 
     /// Writes `meshes/<stem>.glb` and returns an object per primitive (`<stem>`, or `<stem> / section N`) at
@@ -1435,11 +1581,19 @@ impl MapWriter {
         let o = self.o.clone();
         let r = o.region;
         let off = self.off;
-        let mut arch_count: HashMap<u32, i64> = HashMap::new();
-        for s in sels {
-            *arch_count.entry(s.proto).or_default() += 1;
-        }
-        self.r.archetypes = arch_count.len();
+        // what is instanced: the map's counts when given (a map in parts), else these placements'
+        let arch_count: HashMap<u32, i64> = match &self.counts {
+            Some(c) => c.clone(),
+            None => {
+                let mut c: HashMap<u32, i64> = HashMap::new();
+                for s in sels {
+                    *c.entry(s.proto).or_default() += 1;
+                }
+                c
+            }
+        };
+        self.placed_keys.extend(sels.iter().map(|s| s.proto));
+        self.r.archetypes = self.placed_keys.len();
         let row_min = sels.iter().map(|s| s.ty).min().unwrap_or(0);
         let row_max = sels.iter().map(|s| s.ty).max().unwrap_or(0);
         let n_bands = ((row_max - row_min) / o.band_rows + 1) as usize;
@@ -1454,7 +1608,6 @@ impl MapWriter {
             }
         }
         let mut meshes: HashMap<u32, SrcMesh> = HashMap::new();
-        let mut protos: HashMap<[u8; 16], Proto> = HashMap::new();
         let mut tiles: Vec<TileOut> = Vec::new();
         let edge = apron(r, o.apron);
         let rules = PlacementRules::of(&o);
@@ -1513,7 +1666,14 @@ impl MapWriter {
                         .then_with(|| a.part_off.cmp(&b.part_off))
                 });
                 for s in g {
-                    let fate = placement_fate(meshes.get(&s.proto), s, |h| arch_count[&h], &rules, edge, off);
+                    let fate = placement_fate(
+                        meshes.get(&s.proto),
+                        s,
+                        |h| arch_count.get(&h).copied().unwrap_or(0),
+                        &rules,
+                        edge,
+                        off,
+                    );
                     let (m, inst, kept_parts, collision) = match fate {
                         Fate::EmptyMesh => {
                             self.r.empty_mesh += 1;
@@ -1579,14 +1739,13 @@ impl MapWriter {
                     let m = m.clone();
                     if inst {
                         let key = self.proto_key(&m, row, source)?;
-                        if let std::collections::hash_map::Entry::Vacant(e) = protos.entry(key) {
+                        if !self.protos.contains_key(&key) {
                             let p = self.make_proto(&m, row, key, source)?;
-                            e.insert(p);
+                            self.protos.insert(key, p);
                         }
-                        let pr = &protos[&key];
-                        self.r.proto_list[pr.info].count += 1;
-                        let iname =
-                            format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[pr.info].name);
+                        let info = self.protos[&key].info;
+                        self.r.proto_list[info].count += 1;
+                        let iname = format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[info].name);
                         let rows = MapObject::rows(s.ex, s.ey, s.ez, s.pos + off);
                         if o.draws_pause() {
                             for p in &m.parts {
@@ -1599,7 +1758,7 @@ impl MapWriter {
                                 }
                             }
                         }
-                        let pr = &protos[&key];
+                        let pr = &self.protos[&key];
                         let file = self.r.proto_list[pr.info].file.clone();
                         for (i, mat) in pr.materials.iter().enumerate() {
                             let name = if pr.materials.len() == 1 {
@@ -1805,15 +1964,9 @@ impl MapWriter {
                 }
             }
         }
-        tiles.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
-        self.r.tiles = tiles;
+        self.r.tiles.extend(tiles);
+        self.r.tiles.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
         self.r.prototype_tris = self.r.proto_list.iter().map(|p| p.tris).sum();
-        if self.r.degenerate > 0 {
-            self.r.warnings.push(format!(
-                "{} placements with a degenerate matrix were left out",
-                self.r.degenerate
-            ));
-        }
         Ok(())
     }
 }
@@ -1865,19 +2018,15 @@ fn split_long(a: &mut Acc, max: f32) {
 }
 
 /// Joins the props of each collision tile in map-tile order (row, then column).
-fn join(parts: &PropParts) -> BTreeMap<(i32, i32), PropSoup> {
-    parts
-        .iter()
-        .map(|(k, bag)| {
-            let mut b: Vec<&(i32, i32, PropSoup)> = bag.iter().collect();
-            b.sort_by(|x, y| x.1.cmp(&y.1).then(x.0.cmp(&y.0)));
-            let mut soup = PropSoup::default();
-            for p in b {
-                soup.append(&p.2);
-            }
-            (*k, soup)
-        })
-        .collect()
+/// A cell's props from every render tile that placed some in it, as one soup: by tile (row, then column), whatever
+/// part drew the tile.
+fn join(mut bag: Vec<(i32, i32, PropSoup)>) -> PropSoup {
+    bag.sort_by(|x, y| x.1.cmp(&y.1).then(x.0.cmp(&y.0)));
+    let mut soup = PropSoup::default();
+    for p in &bag {
+        soup.append(&p.2);
+    }
+    soup
 }
 
 /// What `finish` places besides the tiles.
@@ -1896,9 +2045,8 @@ struct LaidOut {
 }
 
 #[derive(Debug)]
-pub struct Extras<'a> {
-    pub world: &'a dyn CollisionWorld,
-    pub water_world: Option<&'a dyn CollisionWorld>,
+pub struct Extras {
+    /// The hull soups not packed yet (named).
     pub hulls: Vec<Hull>,
     pub water: Vec<WaterQuad>,
     pub lights: Vec<PlacedLight>,
@@ -2221,15 +2369,7 @@ impl MapWriter {
         self.emit_chains(other)?;
         // textures
         self.ctx.tex.finish();
-        let used: BTreeSet<i32> = self
-            .mat_used
-            .iter()
-            .flat_map(|&id| {
-                let m = self.ctx.mats.by_id(id);
-                [m.tex, m.normal, m.mask]
-            })
-            .filter(|t| *t >= 0)
-            .collect();
+        let used = self.used_textures();
         self.r.tex_removed = self.ctx.tex.prune(&used);
         self.write_index()?;
         for m in &mut self.ctx.mats.list {
@@ -2514,44 +2654,36 @@ impl MapWriter {
                     .into(),
             ));
         }
-        // the writer snaps nothing (snap-reskate-markers does): a marker still asking for a snap is taken as one whose
-        // snap found nothing
-        let queries: Vec<Query> = markers
-            .iter()
-            .map(|m| Query {
-                x: m.x,
-                y: m.y,
-                z: m.z,
-                snap: crate::scene::SnapSpec::of(SnapMode::None),
-            })
-            .collect();
+        if self.r.degenerate > 0 {
+            self.r.warnings.push(format!(
+                "{} placements with a degenerate matrix were left out",
+                self.r.degenerate
+            ));
+        }
         if let Some(pm) = &mut self.pm {
             pm.sea_tint = !x.water.is_empty();
             for (f, b) in pm.save()? {
                 self.files.insert(f, b);
             }
         }
-        let surfaces = self.surfaces.clone();
-        let mut prop_hulls = std::mem::take(&mut self.prop_hulls);
-        prop_hulls.sort_by(|a, b| a.name.cmp(&b.name));
-        let hulls: Vec<Hull> = std::mem::take(&mut x.hulls)
-            .into_iter()
-            .chain(prop_hulls)
-            .collect();
-        let snap_extra: Vec<(Vec<f32>, Vec<u32>, bool)> = hulls
-            .iter()
-            .map(|h| (h.pos.clone(), h.idx.clone(), h.ground))
-            .collect();
-        let mut col_files = crate::collision_pack::Files::new();
-        let plan = self.collision_plan.take();
-        let mut pack = crate::collision_pack::Pack::new(&surfaces, off, plan.as_ref(), &mut col_files)?;
-        let mut col =
-            self.collision_layout(&x, &queries, &snap_extra, &mut |leaf, res| pack.leaf(leaf, res))?;
-        for h in &hulls {
-            pack.hull(&mut col, &h.name, &h.pos, &h.idx, h.surface)?;
-        }
-        pack.finish()?;
-        self.mesh_files.extend(col_files);
+        // the collision: the cells still waiting (every cell, for a map written whole), the hulls not packed yet;
+        // then the triangle mesh's and the water's counts as one
+        let waiting = self.waiting_cells();
+        self.lay_cells(&waiting, None)?;
+        let mut hulls = std::mem::take(&mut x.hulls);
+        hulls.extend(self.take_prop_hulls());
+        self.lay_hulls(&hulls)?;
+        crate::collision_pack::check_packed(self.collision_plan.as_ref(), self.leaves_packed)?;
+        let mut col = std::mem::take(&mut self.col);
+        let wc = std::mem::take(&mut self.water_col);
+        col.objects.extend(wc.objects);
+        col.pieces += wc.pieces;
+        col.water_triangles += wc.water_triangles + wc.prop_triangles;
+        col.split_cells += wc.split_cells;
+        // the writer snaps nothing (snap-reskate-markers does): a marker still asking for a snap is taken as one whose
+        // snap found nothing
+        col.placed = markers.iter().map(|m| (m.x, m.y)).collect();
+        col.ground = vec![f32::NAN; markers.len()];
 
         // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is
         // (its surface, then its geometry), not the order the curves came in; equal prisms write the same either way

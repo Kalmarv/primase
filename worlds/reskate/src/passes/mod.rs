@@ -9,6 +9,7 @@ pub mod floor;
 pub mod grinds;
 pub mod layered;
 mod layered_lower;
+pub mod layout;
 pub mod lights;
 pub mod lower;
 pub mod overlays;
@@ -36,6 +37,7 @@ pub use floor::{
 };
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use layered_lower::LowerLayeredPbr;
+pub use layout::{SummarizeReskateLayout, summarize_reskate_layout};
 pub use lights::{
     SelectReskateLights, SummarizeReskateLights, select_reskate_lights, summarize_reskate_lights,
 };

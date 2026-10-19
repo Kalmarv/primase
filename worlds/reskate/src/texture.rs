@@ -512,6 +512,8 @@ pub struct OutTexture {
     pub source_variants: BTreeSet<String>,
     pub sources: BTreeSet<String>,
     data: Vec<u8>,
+    /// The file name it was given out under ([`TexLib::take_used`]); `None`: not given out yet.
+    given: Option<String>,
 }
 
 /// The texture files of a map (the reference writer's TexLib): each texture as prepared (its size, its pixels), encoded
@@ -804,6 +806,7 @@ impl TexLib {
             source_variants: BTreeSet::new(),
             sources: BTreeSet::new(),
             data,
+            given: None,
         };
         t.sources.insert(name.to_owned());
         if src.is_some() {
@@ -961,6 +964,38 @@ impl TexLib {
             .filter(|t| !t.removed)
             .map(|t| (t.file.clone(), std::mem::take(&mut t.data)))
             .collect())
+    }
+
+    /// The files of the textures `used` (ids) not given out yet, under their names so far, moved out: a map written in
+    /// parts writes each texture once, when a part first uses it. A name may change while later parts register the same
+    /// pixels under a smaller one: [`TexLib::renamed`] tells which, after [`TexLib::finish`]. A library that encodes
+    /// nothing has none to give (an error).
+    pub fn take_used(&mut self, used: &BTreeSet<i32>) -> Result<Vec<(String, Vec<u8>)>> {
+        if !self.encode {
+            return Err(Error::Texture(
+                "a texture library that encodes nothing has no files to write".into(),
+            ));
+        }
+        Ok(self
+            .out
+            .iter_mut()
+            .filter(|t| !t.removed && t.given.is_none() && used.contains(&(t.id as i32)))
+            .map(|t| {
+                t.given = Some(t.file.clone());
+                (t.file.clone(), std::mem::take(&mut t.data))
+            })
+            .collect())
+    }
+
+    /// The files given out under another name than their final one ([`TexLib::finish`]): (given, final).
+    pub fn renamed(&self) -> Vec<(String, String)> {
+        self.out
+            .iter()
+            .filter_map(|t| match &t.given {
+                Some(g) if *g != t.file => Some((g.clone(), t.file.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Texture files by name, for reports.

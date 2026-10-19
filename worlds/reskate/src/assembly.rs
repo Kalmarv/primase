@@ -3,12 +3,12 @@
 //! the dry assemblies the preparation passes record their decisions from (the overlay stack, the blend chains, the
 //! materials), so a pass and the writer share one calculation and no pass names the writer.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
 
-use crate::collision::{CollisionWorld, SRC_TILE, TileData, surfaces_of};
+use crate::collision::{CollisionWorld, TileData, surfaces_of};
 use crate::components::{
     CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkatePausePicture,
 };
@@ -151,19 +151,51 @@ pub(crate) fn content_bounds(
     b
 }
 
-/// World soups of one mode filed by triangle centre into 256 m cells (ground soups first in each cell).
-#[derive(Debug)]
+/// World soups of one mode filed by triangle centre into 256 m cells, each cell's triangles kept by soup. A cell is
+/// laid out with its ground soups' triangles first, each soup's in the scene's soup order ([`SoupSeg::order`]): a
+/// cell whose soups arrive from several parts ([`SoupWorld::absorb`]) is laid out as the whole map's.
+#[derive(Debug, Default)]
 pub(crate) struct SoupWorld {
-    cells: BTreeMap<(i32, i32), SoupCell>,
+    cells: BTreeMap<(i32, i32), Vec<SoupSeg>>,
 }
 
-/// One cell's triangles (loose), surfaces, natural rock of the ground ones, and how many are ground.
-#[derive(Debug, Default)]
-struct SoupCell {
-    v: Vec<f32>,
-    s: Vec<u8>,
-    rock: Vec<bool>,
-    ground: usize,
+/// One soup's triangles in one cell (loose), their surfaces, and (a ground soup's) natural rock.
+#[derive(Clone, Debug)]
+pub(crate) struct SoupSeg {
+    /// Its soup's place in the scene's order: raised soups before raw ones ([`scene::SoupDef::raw`]), each by entity.
+    pub order: (bool, primase_core::Entity),
+    pub ground: bool,
+    pub v: Vec<f32>,
+    pub s: Vec<u8>,
+    pub rock: Vec<bool>,
+}
+
+impl SoupWorld {
+    /// The cells it files triangles in.
+    pub(crate) fn cell_keys(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.cells.keys().copied()
+    }
+
+    /// Cell `key`'s soups, taken out.
+    pub(crate) fn take_cell(&mut self, key: (i32, i32)) -> Vec<SoupSeg> {
+        self.cells.remove(&key).unwrap_or_default()
+    }
+
+    /// Another part's soups added, cell by cell.
+    pub(crate) fn absorb_all(&mut self, o: SoupWorld) {
+        for (k, segs) in o.cells {
+            self.cells.entry(k).or_default().extend(segs);
+        }
+    }
+
+    /// Every cell's soups, for the bytes a sink holds.
+    pub(crate) fn bytes(&self) -> usize {
+        self.cells
+            .values()
+            .flatten()
+            .map(|g| 4 * g.v.len() + g.s.len() + g.rock.len() + 24)
+            .sum()
+    }
 }
 
 impl SoupWorld {
@@ -173,9 +205,10 @@ impl SoupWorld {
         region: Option<[f64; 4]>,
         drop_below: f32,
     ) -> SoupWorld {
-        let mut cells: BTreeMap<(i32, i32), SoupCell> = BTreeMap::new();
+        let mut cells: BTreeMap<(i32, i32), Vec<SoupSeg>> = BTreeMap::new();
         for pass in [true, false] {
             for sd in s.soups.iter_mut().filter(|x| x.mode == mode && x.ground == pass) {
+                let order = (sd.raw, sd.entity);
                 for t in 0..sd.surf.len() {
                     sd.read += 1;
                     let a = w_at(&sd.pos, sd.idx[t * 3] as usize * 3);
@@ -197,15 +230,24 @@ impl SoupWorld {
                         sd.cut += 1;
                         continue;
                     }
-                    let key = ((cx / SRC_TILE).floor() as i32, (cy / SRC_TILE).floor() as i32);
-                    let cell = cells.entry(key).or_default();
-                    cell.v
+                    let key = crate::collision::triangle_cell(a, b, c);
+                    let segs = cells.entry(key).or_default();
+                    if segs.last().is_none_or(|g| g.order != order) {
+                        segs.push(SoupSeg {
+                            order,
+                            ground: pass,
+                            v: Vec::new(),
+                            s: Vec::new(),
+                            rock: Vec::new(),
+                        });
+                    }
+                    let seg = segs.last_mut().expect("pushed");
+                    seg.v
                         .extend_from_slice(&[a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z]);
                     let surf = sd.surf[t];
-                    cell.s.push(surf & 0x7F);
+                    seg.s.push(surf & 0x7F);
                     if pass {
-                        cell.rock.push(surf & 0x80 != 0);
-                        cell.ground += 1;
+                        seg.rock.push(surf & 0x80 != 0);
                     }
                     sd.kept += 1;
                 }
@@ -215,28 +257,61 @@ impl SoupWorld {
     }
 }
 
+/// A cell's world triangles from its soups: the ground soups' first, each kind's in the scene's soup order.
+pub(crate) fn soup_cell(segs: &[SoupSeg]) -> Option<TileData> {
+    if segs.is_empty() {
+        return None;
+    }
+    let mut order: Vec<&SoupSeg> = segs.iter().collect();
+    order.sort_by_key(|g| (!g.ground, g.order));
+    let mut td = TileData {
+        v: Vec::new(),
+        t: Vec::new(),
+        s: Vec::new(),
+        rock: Vec::new(),
+        ground: Some(0),
+        mask: None,
+    };
+    let mut ground = 0;
+    for g in order {
+        td.v.extend_from_slice(&g.v);
+        td.s.extend_from_slice(&g.s);
+        if g.ground {
+            td.rock.extend_from_slice(&g.rock);
+            ground += g.s.len();
+        }
+    }
+    td.t = (0..(td.s.len() * 3) as u32).collect();
+    td.ground = Some(ground);
+    Some(td)
+}
+
 impl CollisionWorld for SoupWorld {
     fn cells(&self) -> Vec<(i32, i32)> {
         self.cells.keys().copied().collect()
     }
     fn cell(&self, tx: i32, ty: i32) -> Option<TileData> {
-        let c = self.cells.get(&(tx, ty))?;
-        Some(TileData {
-            v: c.v.clone(),
-            t: (0..(c.s.len() * 3) as u32).collect(),
-            s: c.s.clone(),
-            rock: c.rock.clone(),
-            ground: Some(c.ground),
-            mask: None,
-        })
+        soup_cell(self.cells.get(&(tx, ty))?)
     }
 }
 
-/// The hull soups, each whole.
+/// The hull soups, each whole, named by their place among the scene's hull soups.
 pub(crate) fn hulls(s: &mut Scene, region: Option<[f64; 4]>, drop_below: f32) -> Vec<Hull> {
+    hulls_numbered(s, region, drop_below, &|_, n| Ok(n)).expect("numbered in order")
+}
+
+/// The hull soups, each whole, hull `n` of the scene named `hull_<number(soup, n)>`: a part of a map numbers its hull
+/// soups among the whole map's.
+pub(crate) fn hulls_numbered(
+    s: &mut Scene,
+    region: Option<[f64; 4]>,
+    drop_below: f32,
+    number: &dyn Fn(&scene::SoupDef, usize) -> Result<usize>,
+) -> Result<Vec<Hull>> {
     let mut res = Vec::new();
     let mut n = 0;
     for sd in s.soups.iter_mut().filter(|x| x.mode == CollisionMode::Hull) {
+        let number = number(sd, n)?;
         let mut pos = vec![0f32; sd.pos.len()];
         let (mut cx, mut cy, mut top) = (0f64, 0f64, f32::MIN);
         for v in (0..sd.pos.len()).step_by(3) {
@@ -260,7 +335,7 @@ pub(crate) fn hulls(s: &mut Scene, region: Option<[f64; 4]>, drop_below: f32) ->
             continue;
         }
         res.push(Hull {
-            name: format!("hull_{n:04}"),
+            name: format!("hull_{number:04}"),
             pos,
             idx: sd.idx.clone(),
             surface: sd.surf.first().map_or(0, |b| (b & 0x7F) as usize),
@@ -269,7 +344,7 @@ pub(crate) fn hulls(s: &mut Scene, region: Option<[f64; 4]>, drop_below: f32) ->
         n += 1;
         sd.kept = tris;
     }
-    res
+    Ok(res)
 }
 
 /// The scene's prototypes, built when a band needs them.
@@ -497,9 +572,49 @@ pub fn assembled_materials(
 /// The scene reader's warnings as the reference build reports them: unused textures, primitives without normals,
 /// unplaced prototypes and prototypes without geometry, too many travel points.
 pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
+    Ok(SceneWarnings::of(s, world)?.render())
+}
+
+/// The scene reader's warnings by kind, each kind a set (rendered in its order, `render`), and the travel points
+/// counted: the parts of a map merge into the whole map's ([`SceneWarnings::merge`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SceneWarnings {
+    kinds: [BTreeSet<String>; 3],
+    travel: usize,
+}
+
+impl SceneWarnings {
+    pub(crate) fn of(s: &Scene, world: &World) -> Result<SceneWarnings> {
+        let found = scene_warning_kinds(s, world)?;
+        Ok(SceneWarnings {
+            kinds: found.0.map(|k| k.into_iter().collect()),
+            travel: found.1,
+        })
+    }
+
+    /// Another part's added.
+    pub(crate) fn merge(&mut self, o: SceneWarnings) {
+        for (mine, theirs) in self.kinds.iter_mut().zip(o.kinds) {
+            mine.extend(theirs);
+        }
+        self.travel += o.travel;
+    }
+
+    /// Each kind in a stable order (by its text), then the travel points when Studio takes fewer.
+    pub(crate) fn render(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.kinds.iter().flatten().cloned().collect();
+        if self.travel > 25 {
+            out.push(format!("{} travel points: Studio takes at most 25", self.travel));
+        }
+        out
+    }
+}
+
+/// The scene reader's warnings of each kind (unused textures, primitives without normals, unplaced prototypes and
+/// prototypes without geometry), and the travel points.
+fn scene_warning_kinds(s: &Scene, world: &World) -> Result<([Vec<String>; 3], usize)> {
     use crate::components::{SkateMaterial, SkateTexture};
     // each kind in a stable order (by its text), not the order the world's entities came in
-    let mut out = Vec::new();
     let mut used: HashSet<primase_core::Entity> = HashSet::new();
     for (_, m) in world.iter::<SkateMaterial>() {
         used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
@@ -510,7 +625,6 @@ pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
         .map(|(_, t)| format!("texture '{}' is not used", t.key))
         .collect();
     unused.sort();
-    out.extend(unused);
     let mut flat = Vec::new();
     for p in &s.protos {
         if let Some(prims) = p.prims() {
@@ -525,7 +639,6 @@ pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
         }
     }
     flat.sort();
-    out.extend(flat);
     let mut placed = vec![false; s.protos.len()];
     for p in &s.placements {
         placed[p.proto as usize] = true;
@@ -542,37 +655,24 @@ pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
         }
     }
     unplaced.sort();
-    out.extend(unplaced);
     let travel = s.markers.iter().filter(|m| m.kind == "travel").count();
-    if travel > 25 {
-        out.push(format!("{travel} travel points: Studio takes at most 25"));
-    }
-    Ok(out)
+    Ok(([unused, flat, unplaced], travel))
 }
 
-/// What the writer lays out of a prepared world before it emits anything: the scene in its frame, the writer's options,
-/// the placements, the writer with its tiles and prototypes assembled, the collision soups and hulls, the scene's
-/// warnings (when encoding), and the prototypes that failed to build.
+/// What the writer lays out of a prepared world before it emits anything (what a pass asks of the writer's layout):
+/// the scene in its frame, the writer with its tiles and prototypes assembled and the world soups given it, the hulls.
 pub(crate) struct Laid {
     pub scene: Scene,
-    pub opts: WriterOptions,
-    pub placements: Vec<Placement>,
     pub writer: MapWriter,
-    pub tri_world: SoupWorld,
-    pub water_world: Option<SoupWorld>,
     pub hulls: Vec<Hull>,
-    pub scene_warnings: Vec<String>,
-    pub failed: i64,
 }
 
 impl Laid {
     /// What the writer finishes the map with, beside its tiles.
-    pub(crate) fn extras(&mut self) -> (&mut MapWriter, Extras<'_>) {
+    pub(crate) fn extras(&mut self) -> (&mut MapWriter, Extras) {
         (
             &mut self.writer,
             Extras {
-                world: &self.tri_world,
-                water_world: self.water_world.as_ref().map(|w| w as &dyn CollisionWorld),
                 hulls: std::mem::take(&mut self.hulls),
                 water: self.scene.water.clone(),
                 lights: self.scene.lights.clone(),
@@ -589,14 +689,43 @@ impl Laid {
 /// emits and `summarize-reskate-map` counts.
 pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<Laid> {
     let mut s = Scene::from_world(world, dir)?;
-    let scene_warnings = match (&a.scene_warnings, encode) {
-        (Some(w), _) => w.clone(),
-        (None, true) => scene_warnings(&s, world)?,
-        (None, false) => Vec::new(),
-    };
-    let mut o = writer_options(&s, a)?;
-    o.apron = apron_of(world, &s)?;
-    // the pause picture is drawn as the map is written; a count draws none (it adds no object)
+    let mut o = part_options(world, &s, a, encode)?;
+    let cut = s.region;
+    let placements = writer_placements(&s, o.tile);
+    o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
+    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
+    let drop_below = f32::NEG_INFINITY;
+    let mut writer = Records::of(world, &s, a)?.writer(o.clone(), s.surfaces.clone())?;
+    if !encode {
+        writer = writer.without_encoding();
+    }
+    let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
+    let water_world = s
+        .soups
+        .iter()
+        .any(|x| x.mode == CollisionMode::Water)
+        .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
+    writer.add_soups(tri_world, water_world);
+    let hulls = hulls(&mut s, cut, drop_below);
+    assemble(&s, &placements, &mut writer)?;
+    Ok(Laid {
+        scene: s,
+        writer,
+        hulls,
+    })
+}
+
+/// The writer's options for a prepared world (its scene `s`) encoded as `a`: the encoding's, the apron its region
+/// clip recorded, the pause picture (when encoding: a count draws none, it adds no object), checked against the
+/// settings its markers were snapped for. The region is the caller's to set.
+pub(crate) fn part_options(
+    world: &World,
+    s: &Scene,
+    a: &EncodingOptions,
+    encode: bool,
+) -> Result<WriterOptions> {
+    let mut o = writer_options(s, a)?;
+    o.apron = apron_of(world, s)?;
     if encode {
         o.pause = world.resource::<SkatePausePicture>().cloned();
     }
@@ -623,71 +752,69 @@ pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) 
             )));
         }
     }
-    let cut = s.region;
-    let placements = writer_placements(&s, o.tile);
-    o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
-    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
-    let drop_below = f32::NEG_INFINITY;
+    Ok(o)
+}
 
-    // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
-    let stack = match world.resource::<crate::components::SkateOverlayStack>() {
-        Some(rec) => {
-            let mine = grouping(&s, a);
-            if rec.grouping != Some(mine) {
-                return Err(Error::Scene(format!(
-                    "the overlays were stacked for the writer settings {:?}, but the writer's are {mine:?}: give \
-                     prepare-reskate-overlays the writer's",
-                    rec.grouping
-                )));
-            }
-            Stack::Replay(Box::new(rec.clone()))
+/// What the preparation recorded for the writer to replay, each checked against the writer settings it was made for:
+/// the overlay stack (`prepare-reskate-overlays`), the blend chains (`prepare-reskate-blend-order`), their budget
+/// (`plan-reskate-blend-budget`), the collision plan (`prepare-reskate-collision`); `None`: not recorded. Every part
+/// of a map carries the same.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Records {
+    pub stack: Option<crate::components::SkateOverlayStack>,
+    pub chains: Option<crate::components::SkateBlendChains>,
+    pub budget: Option<crate::components::SkateBlendBudget>,
+    pub plan: Option<crate::components::SkateCollisionPlan>,
+}
+
+impl Records {
+    /// The records of `world` (its scene `s`), for the encoding `a`.
+    pub(crate) fn of(world: &World, s: &Scene, a: &EncodingOptions) -> Result<Records> {
+        let mine = grouping(s, a);
+        // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
+        let stack = world.resource::<crate::components::SkateOverlayStack>().cloned();
+        if let Some(rec) = &stack
+            && rec.grouping != Some(mine)
+        {
+            return Err(Error::Scene(format!(
+                "the overlays were stacked for the writer settings {:?}, but the writer's are {mine:?}: give \
+                 prepare-reskate-overlays the writer's",
+                rec.grouping
+            )));
         }
-        None => Stack::Off { unstacked: 0 },
-    };
-    // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
-    let chains = match world.resource::<crate::components::SkateBlendChains>() {
-        Some(rec) => {
-            let mine = grouping(&s, a);
-            if rec.grouping != Some(mine) {
-                return Err(Error::Scene(format!(
-                    "the blend chains were chosen for the writer settings {:?}, but the writer's are {mine:?}: give \
-                     prepare-reskate-blend-order the writer's",
-                    rec.grouping
-                )));
-            }
-            Chains::Replay(Box::new(rec.clone()))
+        // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
+        let chains = world.resource::<crate::components::SkateBlendChains>().cloned();
+        if let Some(rec) = &chains
+            && rec.grouping != Some(mine)
+        {
+            return Err(Error::Scene(format!(
+                "the blend chains were chosen for the writer settings {:?}, but the writer's are {mine:?}: give \
+                 prepare-reskate-blend-order the writer's",
+                rec.grouping
+            )));
         }
-        None => Chains::Off { left: 0 },
-    };
-    let budget = world.resource::<crate::components::SkateBlendBudget>().cloned();
-    let collision_plan = world.resource::<crate::components::SkateCollisionPlan>().cloned();
-    let mut writer = MapWriter::new(o.clone(), s.surfaces.clone())?
-        .with_stack(stack)
-        .with_chains(chains)
-        .with_budget(budget)
-        .with_collision_plan(collision_plan);
-    if !encode {
-        writer = writer.without_encoding();
+        Ok(Records {
+            stack,
+            chains,
+            budget: world.resource::<crate::components::SkateBlendBudget>().cloned(),
+            plan: world.resource::<crate::components::SkateCollisionPlan>().cloned(),
+        })
     }
-    let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
-    let water_world = s
-        .soups
-        .iter()
-        .any(|x| x.mode == CollisionMode::Water)
-        .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
-    let hulls = hulls(&mut s, cut, drop_below);
-    let failed = assemble(&s, &placements, &mut writer)?;
-    Ok(Laid {
-        scene: s,
-        opts: o,
-        placements,
-        writer,
-        tri_world,
-        water_world,
-        hulls,
-        scene_warnings,
-        failed,
-    })
+
+    /// A writer with options `o` and the surface table `surfaces`, replaying these records.
+    pub(crate) fn writer(self, o: WriterOptions, surfaces: crate::scene::SurfaceTable) -> Result<MapWriter> {
+        Ok(MapWriter::new(o, surfaces)?
+            .with_stack(match self.stack {
+                Some(rec) => Stack::Replay(Box::new(rec)),
+                None => Stack::Off { unstacked: 0 },
+            })
+            .with_chains(match self.chains {
+                Some(rec) => Chains::Replay(Box::new(rec)),
+                None => Chains::Off { left: 0 },
+            })
+            .with_budget(self.budget)
+            .with_collision_plan(self.plan))
+    }
 }
 
 /// The summary of the prepared world `world` for the encoding `a` (`summarize-reskate-map`'s): the cull IDs the writer's
@@ -717,11 +844,11 @@ pub(crate) fn collision_plan(
     weld: CollisionWeld,
 ) -> Result<(SkateCollisionPlan, Rewritten)> {
     let mut laid = lay(world, Path::new(""), a, false)?;
-    let (writer, extras) = laid.extras();
+    let writer = &mut laid.writer;
     let surf = writer.surfaces().clone();
     let mut leaves: BTreeMap<String, PlannedLeaf> = BTreeMap::new();
     let mut rewritten = Rewritten::new();
-    writer.collision_leaves(&extras, &mut |leaf, _| {
+    writer.collision_leaves(&mut |leaf, _| {
         let count = leaf.counts(surf.list.len());
         let into = surfaces_of(&surf, &count, surfaces);
         let collapsed = leaf.pieces(&into, weld)?.iter().map(|p| p.collapsed).sum();

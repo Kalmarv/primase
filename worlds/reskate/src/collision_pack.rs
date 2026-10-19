@@ -34,6 +34,18 @@ fn replan(why: String) -> Error {
     ))
 }
 
+/// Done with the layout, `packed` leaves packed (by every packer of the map): an error when the plan has leaves the
+/// layout did not give.
+pub(crate) fn check_packed(plan: Option<&SkateCollisionPlan>, packed: usize) -> Result<()> {
+    match plan {
+        Some(p) if p.leaves.len() != packed => Err(replan(format!(
+            "the plan has {} leaves, the layout {packed}",
+            p.leaves.len()
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// The collision's packer: each leaf of the layout, as the plan says, into GLB files and map objects.
 pub(crate) struct Pack<'a> {
     surf: &'a SurfaceTable,
@@ -185,16 +197,9 @@ impl<'a> Pack<'a> {
         Ok(())
     }
 
-    /// Done with the layout: an error when the plan has leaves the layout did not give.
-    pub(crate) fn finish(self) -> Result<()> {
-        match self.plan {
-            Some(p) if p.leaves.len() != self.seen => Err(replan(format!(
-                "the plan has {} leaves, the layout {}",
-                p.leaves.len(),
-                self.seen
-            ))),
-            _ => Ok(()),
-        }
+    /// The leaves it packed.
+    pub(crate) fn seen(&self) -> usize {
+        self.seen
     }
 
     /// One convex hull of surface `surface`, written whole.
