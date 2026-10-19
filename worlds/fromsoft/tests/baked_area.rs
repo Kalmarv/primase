@@ -1,6 +1,6 @@
 //! Real selected-area assembly, including split geometry and authoritative PBR.
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Mesh, Name, Texture, World};
+use primase_core::{DrawLayer, DrawOrder, MaterialUsage, Mesh, Name, Texture, World};
 use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_testdata::real_data;
 mod common;
@@ -71,6 +71,49 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    // what the source classes state about the surfaces, on the materials drawn: the reader's class, counted by the
+    // lowering, and nothing else carries it
+    let class = |c: &str| {
+        world
+            .iter::<primase_fromsoft::materials::Material>()
+            .filter(|(e, m)| m.class == c && world.has::<PbrMaterial>(*e))
+            .count() as u64
+    };
+    let usage = |u: MaterialUsage| world.iter::<MaterialUsage>().filter(|(_, x)| **x == u).count() as u64;
+    let decals = world
+        .iter::<DrawOrder>()
+        .filter(|(_, d)| d.layer == DrawLayer::Decal)
+        .count() as u64;
+    println!(
+        "water {}, leaves {}, decals {}",
+        usage(MaterialUsage::Water),
+        usage(MaterialUsage::Foliage),
+        decals
+    );
+    assert_eq!(
+        (usage(MaterialUsage::Water), usage(MaterialUsage::Foliage), decals),
+        (1, 79, 4)
+    );
+    assert_eq!(usage(MaterialUsage::Water), class("water"));
+    assert_eq!(usage(MaterialUsage::Foliage), class("leaves"));
+    assert_eq!(decals, class("decal"));
+    assert_eq!(
+        world.iter::<MaterialUsage>().count() as u64,
+        class("water") + class("leaves")
+    );
+    assert_eq!(world.iter::<DrawOrder>().count() as u64, class("decal"));
+    assert_eq!(
+        pbr.counts["materials of class water given their usage"],
+        class("water")
+    );
+    assert_eq!(
+        pbr.counts["materials of class leaves given their usage"],
+        class("leaves")
+    );
+    assert_eq!(
+        pbr.counts["materials of class decal given their draw order"],
+        class("decal")
+    );
     for (entity, texture) in world.iter::<Texture>() {
         if world
             .get::<Name>(entity)

@@ -13,8 +13,8 @@ use crate::rigid::{ApplyRigidSkinning, RigidModel, SourceModel};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::world::Resource;
 use primase_core::{
-    Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Source, Stream, Topology,
-    Transform, World,
+    Component, DrawOrder, Entity, Instance, LodForm, Lods, MaterialUsage, Mesh, Primitive, Semantic, Source,
+    Stream, Topology, Transform, World,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -671,11 +671,16 @@ impl Pass for BakeFromSoftLayers {
         if unplaced > 0 {
             log.count("unplaced meshes whose layer inputs stay", unplaced);
         }
-        // held apart while the world changes, and put back whatever happens
-        let shaders = world.remove_resource::<ShaderPrograms>().unwrap_or_default();
-        let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
+        // held apart while the world changes, and put back whatever happens; nothing is put back that was not there
+        let shaders = world.remove_resource::<ShaderPrograms>();
+        let payloads = world.remove_resource::<TexturePayloads>();
+        let none = BTreeMap::new();
         let result = (|| {
-            let bake = super::layers::AreaBake::with_sources(world, &shaders.0, &payloads.0)?;
+            let bake = super::layers::AreaBake::with_sources(
+                world,
+                shaders.as_ref().map_or(&none, |s| &s.0),
+                payloads.as_ref().map_or(&none, |p| &p.0),
+            )?;
             let prototypes: BTreeMap<String, Entity> = world
                 .iter::<PrototypeSource>()
                 .map(|(e, s)| (s.id.clone(), e))
@@ -688,8 +693,12 @@ impl Pass for BakeFromSoftLayers {
                 world,
             )
         })();
-        world.insert_resource(shaders);
-        world.insert_resource(payloads);
+        if let Some(shaders) = shaders {
+            world.insert_resource(shaders);
+        }
+        if let Some(payloads) = payloads {
+            world.insert_resource(payloads);
+        }
         let (report, baked) = result.map_err(|e| e.to_string())?;
         // counted after the split: a part baked at k levels gives k primitives' streams
         log.count(
@@ -722,7 +731,9 @@ impl Pass for BakeFromSoftLayers {
 /// texture files the reader kept (decoded here, named `<stem>` and `<stem>@normal`): base and normal maps in the
 /// source normal convention (`normalize-normals` converts), gloss to roughness, traced metallic constants and maps
 /// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted),
-/// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings.
+/// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings. What a
+/// lowered material's source class states about its surfaces is set with it ([`super::pbr::class_usage`]): water
+/// and leaves as their `core.material_usage`, decals as their `core.draw_order`.
 ///
 /// A layered material no pass baked needs the program's choice: `layers=preserve` leaves it as source data
 /// (unlowered, its layer inputs kept, counted); `layers=preview` lowers it from its main-layer preview, a counted
@@ -778,7 +789,13 @@ impl Pass for LowerFromSoftMaterials {
         &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material", "core.texture", "core.name"]
+        &[
+            "pbr.material",
+            "core.texture",
+            "core.name",
+            MaterialUsage::NAME,
+            DrawOrder::NAME,
+        ]
     }
     fn removes(&self) -> &[&'static str] {
         &[LayerInputs::NAME]
@@ -791,9 +808,16 @@ impl Pass for LowerFromSoftMaterials {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use super::source::TexturePayloads;
-        let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
-        let lowered = super::pbr::lower_drawn(world, &payloads.0, self.layers);
-        world.insert_resource(payloads);
+        // a world without the reader's payloads has no texture file to decode; nothing is put back that was not there
+        let payloads = world.remove_resource::<TexturePayloads>();
+        let lowered = super::pbr::lower_drawn(
+            world,
+            payloads.as_ref().map_or(&BTreeMap::new(), |p| &p.0),
+            self.layers,
+        );
+        if let Some(payloads) = payloads {
+            world.insert_resource(payloads);
+        }
         let (lowered, previewed) = lowered.map_err(|e| e.to_string())?;
         // the inputs of the layers a preview stands for: not vertex colours, so they go with the layers; the inputs of
         // materials left as source data stay
@@ -1075,5 +1099,88 @@ mod tests {
         // the skipped class was not lowered: its inputs are still the source's
         assert!(mesh.primitives()[1].streams.contains_key(&Semantic::Color(1)));
         assert_eq!(world.get::<LayerInputs>(e).unwrap().primitives, [vec![], vec![1]]);
+    }
+
+    #[test]
+    fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() {
+        use primase_core::pass::{PassManager, Pipeline, RunReport};
+        use primase_core::{DrawLayer, MaterialUsage};
+        // the reader's class from each shader family, as resolve gives it
+        let source = |shader: &str, parameters: Vec<crate::mtd::Parameter>| {
+            materials::resolve(
+                &crate::flver::Material {
+                    name: "fixture".into(),
+                    mtd: "fixture.mtd".into(),
+                    gx: vec![],
+                    textures: vec![],
+                },
+                Some(&crate::mtd::MaterialDefinition {
+                    shader: shader.into(),
+                    description: String::new(),
+                    parameters,
+                    textures: vec![],
+                    block_lengths: vec![],
+                }),
+                |_| false,
+            )
+        };
+        let int = |name: &str, v: i32| crate::mtd::Parameter {
+            name: name.into(),
+            value: crate::mtd::Value::Int(vec![v]),
+        };
+        let mut world = World::new();
+        let mut drawn = Vec::new();
+        for (shader, parameters, class) in [
+            ("GXFlver_Tessellation_Water.spx", vec![], "water"),
+            ("M[Translucency]_Leaves.spx", vec![], "leaves"),
+            ("GXFlver_MeshDecal.spx", vec![], "decal"),
+            ("M[ARSN].spx", vec![int("g_BlendMode", 2)], "alpha"),
+            ("M[ARSN].spx", vec![int("g_AlphaRef", 128)], "cutout"),
+            ("M[ARSN].spx", vec![], "opaque"),
+        ] {
+            let m = source(shader, parameters);
+            assert_eq!(m.class, class, "{shader}");
+            let e = world.spawn();
+            world.insert(e, m);
+            drawn.push(e);
+        }
+        let mesh = world.spawn();
+        world.insert(mesh, Mesh::new(drawn.iter().map(|&m| primitive(m)).collect()));
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut world,
+                &Pipeline {
+                    passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+                },
+                &mut report,
+            )
+            .unwrap();
+        let [water, leaves, decal, alpha, cutout, opaque] = drawn[..] else {
+            unreachable!()
+        };
+        assert_eq!(world.get::<MaterialUsage>(water), Some(&MaterialUsage::Water));
+        assert_eq!(world.get::<MaterialUsage>(leaves), Some(&MaterialUsage::Foliage));
+        assert_eq!(
+            world.get::<DrawOrder>(decal),
+            Some(&DrawOrder::conventional(
+                DrawLayer::Decal,
+                super::super::pbr::DECAL_QUEUE
+            ))
+        );
+        assert!(!world.get::<DrawOrder>(decal).unwrap().depth_write);
+        // the class states nothing more: no usage on a decal, no draw order on water or leaves (their alpha mode's)
+        for e in [decal, alpha, cutout, opaque] {
+            assert!(world.get::<MaterialUsage>(e).is_none());
+        }
+        for e in [water, leaves, alpha, cutout, opaque] {
+            assert!(world.get::<DrawOrder>(e).is_none());
+        }
+        assert_eq!(DrawOrder::of(&world, leaves).layer, DrawLayer::Cutout);
+        assert_eq!(DrawOrder::of(&world, water).layer, DrawLayer::Transparent);
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["materials of class water given their usage"], 1);
+        assert_eq!(log.counts["materials of class leaves given their usage"], 1);
+        assert_eq!(log.counts["materials of class decal given their draw order"], 1);
     }
 }

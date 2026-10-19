@@ -592,7 +592,12 @@ programs of its layered materials (`fromsoft.shader_programs`);
   the primitives drawing a material it previewed (shader inputs, not vertex
   colours); a material it did not lower (a skipped class) keeps its inputs; no
   choice is an error. Normal maps of
-  shaders whose basis is assumed or unclassified are counted.
+  shaders whose basis is assumed or unclassified are counted. What a lowered
+  material's source class states about its surfaces is set with it, counted:
+  `water` (tessellated water shaders) as `core.material_usage` water, `leaves`
+  (`M[Translucency]`) as foliage, `decal` (`MeshDecal`) as `core.draw_order`'s
+  decal layer (queue 2500, after the cutouts: a convention, as Sekiro's own pass
+  sequence is not read). The other classes state only their alpha mode.
 
 The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sample-time=0}` then
 `lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.

@@ -11,7 +11,9 @@ use crate::{
 };
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
-use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, DrawLayer, DrawOrder, Entity, MaterialUsage, Name, TexFormat, TexRole, Texture, World,
+};
 use primase_texcodec::TexDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,6 +32,24 @@ pub fn roughness(gloss: f32) -> Result<f32> {
 /// world these shaders draw is overwhelmingly non-metal; metal must be proven.
 pub(crate) const UNKNOWN_METALLIC: f32 = 0.;
 pub(crate) const UNKNOWN_METALLIC_LOSS: &str = "metallic without source evidence lowered as dielectric 0";
+
+/// The queue a decal class material is given: after the alpha-tested surfaces, before the blended ones. The decal
+/// class is the source's (its `MeshDecal` shaders); the queue is the convention, as Sekiro's own pass sequence is not
+/// read.
+pub const DECAL_QUEUE: i32 = 2500;
+
+/// What a source material class states about its surfaces: `water` (the tessellated water shaders) draws water,
+/// `leaves` (the `M[Translucency]` shaders) vegetation, as `core.material_usage`; `decal` (the `MeshDecal` shaders)
+/// draws over the surface beneath it, as `core.draw_order`'s decal layer with its conventional depth write. The other
+/// classes state only their alpha mode, which is the material's.
+pub fn class_usage(class: &str) -> (Option<MaterialUsage>, Option<DrawOrder>) {
+    match class {
+        "water" => (Some(MaterialUsage::Water), None),
+        "leaves" => (Some(MaterialUsage::Foliage), None),
+        "decal" => (None, Some(DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE))),
+        _ => (None, None),
+    }
+}
 
 /// Pack a baked linear gloss plane as glTF ORM. R/B are neutral multipliers;
 /// this function does not claim to have measured AO or metallic content.
@@ -504,6 +524,18 @@ fn lower_materials(
         }
         world.insert(e, p);
         log.count("PBR materials", 1);
+        let (usage, order) = class_usage(&m.class);
+        if let Some(usage) = usage {
+            world.insert(e, usage);
+            log.count(&format!("materials of class {} given their usage", m.class), 1);
+        }
+        if let Some(order) = order {
+            world.insert(e, order);
+            log.count(
+                &format!("materials of class {} given their draw order", m.class),
+                1,
+            );
+        }
     }
     Ok((log, previews))
 }
