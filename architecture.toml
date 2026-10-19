@@ -1,10 +1,10 @@
-# Known exceptions to the role and layer rules (CONTRIBUTING.md, "Roles"), checked by cli/tests/architecture.rs.
+# Breaks of the role and layer rules (CONTRIBUTING.md, "Roles", "Layout"), checked by cli/tests/architecture.rs.
 #
-# Every entry gives its reason; an exception that is to go says what removes it (`removed_when`). The test fails on a
-# violation not listed here and on an entry that no longer occurs, so fixing a violation means deleting its entry.
-#
-# The list only shrinks. A new entry needs Caleb's approval, recorded as `approved = "Caleb, YYYY-MM-DD"`; agents do
-# not add exceptions to make a check pass (`exceptions_are_approved_or_shrinking`).
+# Readers read, writers write, and everything listed here is a break to remove: each gives its reason and what
+# removes it (`removed_when`). The test fails on a violation not listed here, on an entry that no longer occurs, and on
+# any entry it hasn't seen before (`breaks_only_go`): fixing a violation means deleting its entry, never adding one.
+# Disk access is a rule by crate role, not a list: only `exception` I/O is listed. `parse_crate` is an opt-in to a
+# stricter rule, not a break.
 
 # ---- crate dependencies ----
 
@@ -22,12 +22,13 @@ section = "dependencies"
 reason = "the ReSkate writer and its post-compile step re-read prototype GLBs"
 removed_when = "meshes reach the writer as core.mesh through the reader's load step"
 
-# ---- game and engine names in core, toolkit and formats ----
+# ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
 [[name]]
 crate = "toolkit/frostbite"
 word = "frostbite"
-reason = "the engine's containers; one engine by design"
+reason = "the engine's containers"
+removed_when = "toolkit/frostbite moves to worlds/frostbite, the engine-family crate"
 
 [[name]]
 crate = "toolkit/hash"
@@ -45,9 +46,27 @@ removed_when = "it moves into the Forza reader when one exists, or is deleted"
 crate = "toolkit/hash"
 word = "frostbite"
 reason = "frostbite_toc, the engine's TOC hash"
-removed_when = "it moves into toolkit/frostbite, its only user"
+removed_when = "it moves into the frostbite crate's TOC code, its only user"
 
-# ---- composition without data logic (examples, bins, cli, pipelines) ----
+[[name]]
+crate = "worlds/fromsoft"
+word = "skate"
+reason = "the Sekiro area reader builds skate.* components (materials, collision, markers, lights, grind curves)"
+removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
+
+[[name]]
+crate = "worlds/gta"
+word = "skate"
+reason = "the IPL defaults are the earlier skate exporter's, named in their report"
+removed_when = "the exporter's IPL profile moves to the GTA program (plan step 14)"
+
+[[name]]
+crate = "worlds/reskate"
+word = "gta"
+reason = "the overlay pieces record carries GTA's own fields (centre, drawable, shader, bucket)"
+removed_when = "overlay preparation leaves the writer and GTA's fields go to the GTA program's report (plan step 8)"
+
+# ---- composition without data logic (examples, bins, cli) ----
 
 [[entry_point]]
 file = "cli/examples/scene_to_tiles.rs"
@@ -146,111 +165,6 @@ removed_when = "write serializes in-memory meshes and textures itself"
 # ---- file, environment and process access (clippy.toml), by module role ----
 
 [[io]]
-file = "worlds/reskate/src/interchange/read.rs"
-role = "reader I/O"
-reason = "the skate-scene reader reads its folder"
-
-[[io]]
-file = "worlds/fromsoft/src/archive.rs"
-role = "reader I/O"
-reason = "the FromSoft reader opens the install's archives"
-
-[[io]]
-file = "worlds/gta/src/archive_set.rs"
-role = "reader I/O"
-reason = "the GTA reader opens the install's archives"
-
-[[io]]
-file = "worlds/gta/src/assets.rs"
-role = "reader I/O"
-reason = "the GTA reader loads drawables and textures"
-
-[[io]]
-file = "worlds/gta/src/keys.rs"
-role = "reader I/O"
-reason = "the GTA reader reads the key files its caller names"
-
-[[io]]
-file = "worlds/gta/src/region.rs"
-role = "reader I/O"
-reason = "the GTA reader reads map files"
-
-[[io]]
-file = "worlds/gta/src/rpf.rs"
-role = "reader I/O"
-reason = "the GTA reader reads RPF archives"
-
-[[io]]
-file = "worlds/unity/src/player.rs"
-role = "reader I/O"
-reason = "the Unity reader reads the player's data folder"
-
-[[io]]
-file = "worlds/unity/src/resource.rs"
-role = "reader I/O"
-reason = "the Unity reader reads streamed resources"
-
-[[io]]
-file = "formats/gltf/src/write.rs"
-role = "writer I/O"
-reason = "write_file writes the GLB"
-
-[[io]]
-file = "worlds/reskate/src/interchange/write.rs"
-role = "writer I/O"
-reason = "the skate-scene writer writes its folder and copies the files the scene references"
-
-[[io]]
-file = "formats/web/src/lib.rs"
-role = "writer I/O"
-reason = "the web writer writes tiles, images and the index"
-
-[[io]]
-file = "worlds/reskate/src/build.rs"
-role = "writer I/O"
-reason = "the ReSkate writer writes the map folder"
-
-[[io]]
-file = "worlds/reskate/src/texture.rs"
-role = "writer I/O"
-reason = "the ReSkate writer writes the map's texture files"
-
-[[io]]
-file = "worlds/reskate/src/postcompile/vblend.rs"
-role = "writer I/O"
-reason = "the post-compile step writes the patched Patch folder"
-
-[[io]]
-file = "toolkit/compress/src/oodle.rs"
-role = "toolkit I/O"
-reason = "loads the Oodle library the caller names"
-
-[[io]]
-file = "toolkit/frostbite/src/folder.rs"
-role = "toolkit I/O"
-reason = "opens the container files of a data folder the caller names"
-
-[[io]]
-file = "toolkit/cache/src/disk.rs"
-role = "toolkit I/O"
-reason = "reads, writes and trims entries in the cache folder the caller names"
-
-[[io]]
-file = "formats/web/src/ktx2.rs"
-role = "test I/O"
-reason = "the disk cache test damages an entry; the encoder list is checked against Cargo.lock"
-
-[[io]]
-file = "toolkit/compress/src/oodle.rs"
-role = "test I/O"
-reason = "real-data gates in unit tests"
-
-[[io]]
-file = "worlds/reskate/src/postcompile/vbrecord.rs"
-role = "test I/O"
-reason = "unit tests write and read fixture files"
-
-[[io]]
 file = "formats/gltf/src/load.rs"
 role = "exception"
 reason = "load-mesh-files is a pass that reads GLB files"
@@ -303,11 +217,6 @@ file = "worlds/reskate/src/postcompile/vbrecord.rs"
 role = "exception"
 reason = "the post-compile step reads the map's vertex-blend record and GLBs"
 removed_when = "the record reaches the post-compile step in memory from the writer"
-
-[[io]]
-file = "core/src/print.rs"
-role = "test I/O"
-reason = "unit tests write and read a sink file"
 
 # ---- parse modules: decoding bytes, unchecked arithmetic and indexing denied ----
 

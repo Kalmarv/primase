@@ -77,10 +77,12 @@ Every piece of code has one of these roles. Each rule is checked by the normal g
 Programs are not in this repository: they live with their consumers and hold the recipe, the settings, custom steps and
 the stages after writing.
 
-Known exceptions are listed in `architecture.toml`, each with its reason and what removes it. The test fails on an
-exception that no longer occurs, so fixing a violation means deleting its entry. The list only shrinks: a new entry
-needs Caleb's approval, recorded in the entry (`approved = "Caleb, YYYY-MM-DD"`); an exception is never added to make
-a check pass (`exceptions_are_approved_or_shrinking`).
+Readers read, writers write, and what breaks a rule today is listed in `architecture.toml` as a break to remove,
+each with its reason and what removes it (`removed_when`). The test fails on a violation not listed, on a break that
+no longer occurs (delete its entry), and on any entry it hasn't seen before (`breaks_only_go`, by identity): the list
+only goes down, and nothing is added to make a check pass. Disk access is a rule by crate role, not a list: reader and
+writer I/O in `formats` and `worlds`, toolkit I/O in the toolkit, test I/O only in test code, each module opting in
+with its role (`allow(clippy::disallowed_*, reason = "<role>: ...")`).
 
 ## Drift: shapes to refuse in review
 
@@ -120,16 +122,25 @@ a check pass (`exceptions_are_approved_or_shrinking`).
 ```
 core/                 primase-core: world store, core components, TexFormat, frame, pass manager, conversion helper
 toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, hash, image, meshops, vertex, ...)
-worlds/<name>/        primase-<name>: one crate per game, engine or destination (fromsoft, gta, unity, reskate, ...):
-                      its reader, its passes, and for a destination its preparation passes and writer
+worlds/<name>/        primase-<name>: one crate per game (or game family), engine family or destination (fromsoft,
+                      gta, unity, frostbite, reskate, ...): its reader, its passes, and for a destination its
+                      preparation passes and writer
 formats/<name>/       primase-<name>: file formats that are not one game's or destination's (gltf, web, ...)
 cli/                  primase: a small command line over the library, for trying it; not where recipes live
 ```
 
-Dependencies point down only: `cli -> worlds/formats -> toolkit -> core`. A world crate depends only on the toolkit
-and core: never on a format or another world. A format crate depends on the toolkit, core and `formats/gltf` (the
-container other formats embed) only. What two of them share belongs lower. Dev-dependencies may add format crates
-(round-trip gates) and `toolkit/testdata`, which is never a normal dependency.
+Dependencies point down only: `cli -> worlds/formats -> toolkit -> core`. A world crate depends on the toolkit and
+core, never on a format. Each says what it is in its manifest (`[package.metadata.primase] kind`): a `game` crate (a
+game or a game family) or a `destination` crate may depend on its engine family's `engine` crate (`engine = "<package>"`),
+never the other way round, and an engine crate never depends on a game, a destination or a recipe; no other world
+depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the container other formats embed)
+only. What two of them share belongs lower. Dev-dependencies may add format crates (round-trip gates) and
+`toolkit/testdata`, which is never a normal dependency.
+
+Names are owned: core, toolkit and formats name no game, engine or destination; a world crate uses only its own
+(`[package.metadata.primase] names`): a game crate its games and engine, an engine crate its engine, a destination
+crate its destination and engine. A source crate naming a destination, or any crate naming another game, is a break.
+Vendor formats used across engines (Havok, DXBC, DXIL) are toolkit mechanisms.
 
 Namespaced components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's or destination's
 crate (`skate.*`: `worlds/reskate`, with the skate-scene interchange it carries). `pbr.*` lives in core.

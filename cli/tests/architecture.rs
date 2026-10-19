@@ -1,18 +1,22 @@
-//! The role and layer rules of CONTRIBUTING.md ("Roles"), checked over the workspace's manifests and sources.
+//! The role and layer rules of CONTRIBUTING.md ("Roles", "Layout"), checked over the workspace's manifests and
+//! sources.
 //!
-//! Each check collects every violation, removes the ones `architecture.toml` lists as known exceptions, and fails on
-//! what is left. It also fails on an exception that no longer occurs, so the list only shrinks: fixing a violation
-//! means deleting its entry.
+//! Readers read, writers write, and what breaks a rule today is listed in `architecture.toml` as a break to remove,
+//! each with its reason and what removes it (`removed_when`). Each check collects every violation, removes the listed
+//! breaks, and fails on what is left; it also fails on a break that no longer occurs. The breaks only go:
+//! `breaks_only_go` holds the identity of every one there was, so a new or replaced break fails.
 //!
-//! - `dependencies`: crate edges per layer (`core`, `toolkit`, `formats`, `worlds`, `pipelines`, `cli`).
-//! - `io_opt_ins_are_declared`: every library crate denies `clippy::disallowed_methods`/`disallowed_types`
-//!   (file, environment and process access, listed in `clippy.toml`), and every module that opts back in names its
-//!   role.
-//! - `game_names`: no game or engine names in the identifiers or strings of core, toolkit and formats code, except
-//!   the test-input registry (`toolkit/testdata`), whose role is to describe each game's inputs and which may only be
-//!   a dev-dependency.
-//! - `entry_points`: examples, bins, the cli and pipelines compose library entry points; no world data or format
-//!   handling of their own.
+//! - `dependencies`: crate edges per layer (`core`, `toolkit`, `formats`, `worlds`, `cli`). A `worlds` crate depends
+//!   on the toolkit and core, and a game or destination crate also on the engine crate it names; an engine crate on
+//!   no game, destination or recipe.
+//! - `io_follows_roles`: every library crate denies `clippy::disallowed_methods`/`disallowed_types` (file,
+//!   environment and process access, listed in `clippy.toml`), and every module that opts back in names a role its
+//!   crate has: reader and writer I/O in `formats` and `worlds`, toolkit I/O in the toolkit, test I/O only in test
+//!   code.
+//! - `game_names`: no game, engine or destination names in core, toolkit and formats code (the test-input registry
+//!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`).
+//! - `entry_points`: examples, bins and the cli compose library entry points; no world data or format handling of
+//!   their own.
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
@@ -20,9 +24,9 @@
 //!   real-data registry (`toolkit/testdata/src/inputs.rs`), every declared name is read somewhere, and
 //!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry. Names are whole string
 //!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
-//! - `parse_modules_are_checked`: in the crates `architecture.toml` lists as `parse_crate`, every module that decodes
-//!   bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file says are
-//!   there and are not are its error, never a panic or a wrapped size.
+//! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
+//!   decodes bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file
+//!   says are there and are not are its error, never a panic or a wrapped size.
 
 #![allow(clippy::unwrap_used)]
 
@@ -44,11 +48,19 @@ fn manifest(path: &Path) -> toml::Table {
     toml::from_str(&read(path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// A workspace member: its path relative to the root (`worlds/gta`) and package name.
+/// A workspace member: its path relative to the root (`worlds/gta`), package name, and for a `worlds` crate what
+/// its manifest's `[package.metadata.primase]` says it is.
 #[derive(Clone, Debug)]
 struct Member {
     path: String,
     name: String,
+    /// `game` (a game or a game family: it reads), `engine` (an engine family's shared formats) or `destination`
+    /// (a target it prepares for and writes).
+    kind: Option<String>,
+    /// The game, engine and destination names its code may use.
+    names: Vec<String>,
+    /// The engine crate (package name) a game or destination crate may depend on.
+    engine: Option<String>,
 }
 
 impl Member {
@@ -58,10 +70,7 @@ impl Member {
     /// A library crate: holds readers, passes, writers or mechanisms (everything below the cli but the dev-only
     /// test-data crate).
     fn library(&self) -> bool {
-        matches!(
-            self.layer(),
-            "core" | "toolkit" | "formats" | "worlds" | "pipelines"
-        ) && self.path != "toolkit/testdata"
+        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds") && self.path != "toolkit/testdata"
     }
 }
 
@@ -74,11 +83,38 @@ fn members() -> Vec<Member> {
         .iter()
         .map(|m| {
             let path = m.as_str().unwrap().to_owned();
-            let name = manifest(&root.join(&path).join("Cargo.toml"))["package"]["name"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            Member { path, name }
+            let man = manifest(&root.join(&path).join("Cargo.toml"));
+            let package = &man["package"];
+            let name = package["name"].as_str().unwrap().to_owned();
+            let meta = package.get("metadata").and_then(|m| m.get("primase"));
+            let text = |k: &str| {
+                meta.and_then(|m| m.get(k))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            };
+            let names = meta
+                .and_then(|m| m.get("names"))
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            let (kind, engine) = (text("kind"), text("engine"));
+            if path.starts_with("worlds/") {
+                assert!(
+                    matches!(kind.as_deref(), Some("game" | "engine" | "destination")),
+                    "{path}: [package.metadata.primase] kind is game, engine or destination"
+                );
+                assert!(
+                    kind.as_deref() != Some("engine") || engine.is_none(),
+                    "{path}: an engine crate names no engine of its own"
+                );
+            }
+            Member {
+                path,
+                name,
+                kind,
+                names,
+                engine,
+            }
         })
         .collect()
 }
@@ -342,18 +378,21 @@ fn code(path: &str) -> Vec<Tok> {
 /// reaches a library build. `dependencies` checks both, and `architecture.toml` cannot excuse either.
 const TEST_INPUT_REGISTRY: &str = "toolkit/testdata";
 
-/// Whether a crate in `from_layer` may depend on `to` (a member path); `dev` for dev-dependencies.
-fn edge_allowed(from: &Member, to: &str, dev: bool) -> bool {
-    let to_layer = to.split('/').next().unwrap();
-    if to == TEST_INPUT_REGISTRY {
+/// Whether `from` may depend on `to`; `dev` for dev-dependencies. A game or destination crate may depend on the
+/// engine crate it names, never the other way round.
+fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
+    let to_layer = to.layer();
+    if to.path == TEST_INPUT_REGISTRY {
         return dev;
     }
     let normal = match from.layer() {
         "core" => false,
         "toolkit" => matches!(to_layer, "core" | "toolkit"),
-        "formats" => matches!(to_layer, "core" | "toolkit") || to == "formats/gltf",
-        "worlds" => matches!(to_layer, "core" | "toolkit"),
-        "pipelines" => matches!(to_layer, "core" | "toolkit" | "formats" | "worlds"),
+        "formats" => matches!(to_layer, "core" | "toolkit") || to.path == "formats/gltf",
+        "worlds" => {
+            matches!(to_layer, "core" | "toolkit")
+                || (to.kind.as_deref() == Some("engine") && from.engine.as_deref() == Some(to.name.as_str()))
+        }
         "cli" => true,
         other => panic!("{}: unknown layer {other}", from.path),
     };
@@ -390,7 +429,7 @@ fn dependencies() {
                     m.path,
                     to.path
                 );
-                if !edge_allowed(m, &to.path, dev) {
+                if !edge_allowed(m, to, dev) {
                     found.insert(format!("{} -> {} ({section})", m.path, to.path));
                 }
             }
@@ -413,6 +452,16 @@ fn dependencies() {
 const DENY_IO: &str = "#![deny(clippy::disallowed_methods, clippy::disallowed_types)]";
 const IO_ROLES: &[&str] = &["reader I/O", "writer I/O", "toolkit I/O", "test I/O", "exception"];
 
+/// The I/O roles a crate of `layer` has: readers and writers are formats' and worlds', mechanisms the toolkit's,
+/// and test I/O anyone's test code. `exception` is a break, listed in `architecture.toml`.
+fn io_roles_of(layer: &str) -> &'static [&'static str] {
+    match layer {
+        "formats" | "worlds" => &["reader I/O", "writer I/O", "test I/O"],
+        "toolkit" => &["toolkit I/O", "test I/O"],
+        _ => &["test I/O"],
+    }
+}
+
 /// The roles named by the `allow(clippy::disallowed_*)` attributes of a source text.
 fn io_opt_ins(text: &str) -> Vec<String> {
     let mut roles = Vec::new();
@@ -434,8 +483,9 @@ fn io_opt_ins(text: &str) -> Vec<String> {
 }
 
 #[test]
-fn io_opt_ins_are_declared() {
+fn io_follows_roles() {
     let mut found = BTreeSet::new();
+    let mut misplaced = Vec::new();
     for m in members().iter().filter(|m| m.library()) {
         let lib = format!("{}/src/lib.rs", m.path);
         assert!(
@@ -444,28 +494,42 @@ fn io_opt_ins_are_declared() {
              opt in with their role)"
         );
         for file in rust_files(&root().join(&m.path).join("src")) {
-            for role in io_opt_ins(&read(&root().join(&file))) {
+            let text = read(&root().join(&file));
+            for role in io_opt_ins(&text) {
                 assert!(
                     IO_ROLES.contains(&role.as_str()),
                     "{file}: an I/O opt-in's reason starts with one of {IO_ROLES:?} and a colon, not '{role}'"
                 );
-                found.insert(format!("{file}: {role}"));
+                if role == "exception" {
+                    found.insert(format!("{file}: {role}"));
+                } else if !io_roles_of(m.layer()).contains(&role.as_str()) {
+                    misplaced.push(format!("{file}: {role} in a {} crate", m.layer()));
+                }
+            }
+            // test I/O only in test code: its reason survives in the code without the tests only if it is outside them
+            let outside = without_tests(lex(&text))
+                .iter()
+                .any(|t| matches!(t, Tok::Str(r) if r.starts_with("test I/O:")));
+            if outside {
+                misplaced.push(format!("{file}: test I/O outside test code"));
             }
         }
     }
-    let excused = entries("io")
+    assert!(
+        misplaced.is_empty(),
+        "I/O opt-ins with a role their crate doesn't have: {misplaced:#?}"
+    );
+    let listed = entries("io");
+    let declared: Vec<_> = listed.iter().filter(|e| e["role"] != "exception").collect();
+    assert!(
+        declared.is_empty(),
+        "architecture.toml lists I/O roles, which are a rule by crate now: delete {declared:?}"
+    );
+    let excused = listed
         .iter()
-        .map(|e| {
-            if e["role"] == "exception" {
-                assert!(
-                    e.contains_key("removed_when"),
-                    "io exception {e:?} says when it goes"
-                );
-            }
-            format!("{}: {}", e["file"], e["role"])
-        })
+        .map(|e| format!("{}: {}", e["file"], e["role"]))
         .collect();
-    assert_reconciled("I/O opt-ins", found, excused);
+    assert_reconciled("I/O breaks", found, excused);
 }
 
 // ---- parse modules ----
@@ -547,17 +611,18 @@ fn game_names() {
     let mut found = BTreeSet::new();
     for m in members()
         .iter()
-        .filter(|m| matches!(m.layer(), "core" | "toolkit" | "formats"))
+        .filter(|m| matches!(m.layer(), "core" | "toolkit" | "formats" | "worlds"))
         // the test-input registry describes each game's inputs by role (see TEST_INPUT_REGISTRY)
         .filter(|m| m.path != TEST_INPUT_REGISTRY)
     {
+        // a worlds crate's own names (its games, its engine, its destination); shared code has none
         for file in rust_files(&root().join(&m.path).join("src")) {
             for t in code(&file) {
                 let (Tok::Ident(s) | Tok::Str(s)) = t else {
                     continue;
                 };
                 for w in words(&s) {
-                    if NAMES.contains(&w.as_str()) {
+                    if NAMES.contains(&w.as_str()) && !m.names.contains(&w) {
                         found.insert(format!("{}: {w}", m.path));
                     }
                 }
@@ -571,7 +636,7 @@ fn game_names() {
     assert_reconciled("game and engine names in shared code", found, excused);
 }
 
-// ---- entry points only in examples, bins, the cli and pipelines ----
+// ---- entry points only in examples, bins and the cli ----
 
 /// What composition code may not do, as token patterns, and how to say it.
 fn data_logic(t: &[Tok]) -> BTreeSet<&'static str> {
@@ -647,7 +712,7 @@ fn entry_points() {
         let dir = root().join(&m.path);
         files.extend(rust_files(&dir.join("examples")));
         files.extend(rust_files(&dir.join("src").join("bin")));
-        if matches!(m.layer(), "cli" | "pipelines") {
+        if m.layer() == "cli" {
             files.extend(rust_files(&dir.join("src")));
         }
     }
@@ -997,42 +1062,116 @@ fn real_data_variables_are_declared() {
     }
 }
 
-/// The exceptions agreed before approvals were recorded. The list only shrinks: lower this number when one goes.
-const UNAPPROVED_EXCEPTIONS: usize = 31;
+/// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only
+/// shrinks: when a break goes, delete its identity here too.
+const KNOWN_BREAKS: &[&str] = &[
+    "dependency: from=worlds/fromsoft section=dependencies to=worlds/reskate",
+    "dependency: from=worlds/reskate section=dependencies to=formats/gltf",
+    "entry_point: file=cli/examples/scene_to_tiles.rs what=queries or edits world components",
+    "entry_point: file=cli/examples/scene_to_tiles.rs what=runs a pass outside the pass manager",
+    "entry_point: file=formats/web/examples/ktx2_audit.rs what=reads a format itself",
+    "entry_point: file=formats/web/examples/ktx2_compare.rs what=reads a format itself",
+    "entry_point: file=formats/web/examples/synthetic_tiles.rs what=queries or edits world components",
+    "io: file=formats/gltf/src/load.rs role=exception",
+    "io: file=formats/gltf/src/write.rs role=exception",
+    "io: file=toolkit/image/src/texture.rs role=exception",
+    "io: file=worlds/reskate/src/interchange/assets.rs role=exception",
+    "io: file=worlds/reskate/src/map.rs role=exception",
+    "io: file=worlds/reskate/src/postcompile/vblend.rs role=exception",
+    "io: file=worlds/reskate/src/postcompile/vbrecord.rs role=exception",
+    "io: file=worlds/reskate/src/scene.rs role=exception",
+    "io: file=worlds/reskate/src/texture.rs role=exception",
+    "name: crate=toolkit/frostbite word=frostbite",
+    "name: crate=toolkit/hash word=forza",
+    "name: crate=toolkit/hash word=fromsoft",
+    "name: crate=toolkit/hash word=frostbite",
+    "name: crate=worlds/fromsoft word=skate",
+    "name: crate=worlds/gta word=skate",
+    "name: crate=worlds/reskate word=gta",
+    "pass: file=toolkit/image/src/texture.rs what=pass load-textures is not registered",
+    "pass: file=worlds/fromsoft/src/rigid.rs what=pass fromsoft-apply-rigid-skinning is not registered",
+    "pass: file=worlds/fromsoft/src/sekiro/normals.rs what=lower returns a PassLog but no pass of worlds/fromsoft runs it",
+    "pass: file=worlds/fromsoft/src/sekiro/pbr.rs what=lower returns a PassLog but no pass of worlds/fromsoft runs it",
+    "pass: file=worlds/unity/src/drawn.rs what=pass unity-drawn is not registered",
+    "pass: file=worlds/unity/src/lower.rs what=pass lower-unity-pbr is not registered",
+    "pass: file=worlds/unity/src/lower_collision.rs what=pass lower-unity-collision is not registered",
+    "pass: file=worlds/unity/src/lower_lights.rs what=pass lower-unity-lights is not registered",
+    "pass: file=worlds/unity/src/lower_terrain.rs what=pass lower-unity-terrain is not registered",
+    "writer: file=worlds/reskate/src/interchange/assets.rs what=prepare_assets takes &mut World",
+];
 
-/// An exception is new only with Caleb's approval (`approved = "Caleb, YYYY-MM-DD"`); the unapproved ones only go.
-#[test]
-fn exceptions_are_approved_or_shrinking() {
-    let mut unapproved = 0;
-    for (table, list) in exceptions() {
+/// A break's identity: its table and every field but `reason` and `removed_when`, sorted.
+fn identity(table: &str, e: &toml::Table) -> String {
+    let mut fields: Vec<String> = e
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "reason" | "removed_when"))
+        .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+        .collect();
+    fields.sort();
+    format!("{table}: {}", fields.join(" "))
+}
+
+/// Check a parsed `architecture.toml` against the known breaks: every entry but the `parse_crate` opt-ins is a break
+/// with its `removed_when`, known by identity; a known one that went must leave the list.
+fn check_breaks(all: &toml::Table, known: &[&str]) -> Result<(), String> {
+    let mut present = BTreeSet::new();
+    let mut new = Vec::new();
+    for (table, list) in all {
+        if table == "parse_crate" {
+            continue;
+        }
         for e in list.as_array().into_iter().flatten() {
             let e = e.as_table().unwrap();
-            if table == "io" && e.get("role").and_then(|r| r.as_str()) != Some("exception") {
-                continue;
+            let id = identity(table, e);
+            if !e
+                .get("removed_when")
+                .and_then(|v| v.as_str())
+                .is_some_and(|w| !w.is_empty())
+            {
+                return Err(format!("{id}: a break says what removes it (removed_when)"));
             }
-            match e.get("approved").map(|a| a.as_str().unwrap_or_default()) {
-                Some(a) => {
-                    let date = a.strip_prefix("Caleb, ").unwrap_or_default();
-                    assert!(
-                        date.len() == 10
-                            && date
-                                .bytes()
-                                .enumerate()
-                                .all(|(i, b)| matches!(i, 4 | 7) == (b == b'-')),
-                        "architecture.toml: {table} entry approved as {a:?}, not \"Caleb, YYYY-MM-DD\""
-                    );
-                }
-                None => unapproved += 1,
+            if known.contains(&id.as_str()) {
+                present.insert(id);
+            } else {
+                new.push(id);
             }
         }
     }
+    if !new.is_empty() {
+        return Err(format!(
+            "breaks that are new, or replace a known one (fix the code instead): {new:#?}"
+        ));
+    }
+    let gone: Vec<&&str> = known.iter().filter(|g| !present.contains(**g)).collect();
+    if !gone.is_empty() {
+        return Err(format!("breaks gone: delete them from KNOWN_BREAKS: {gone:#?}"));
+    }
+    Ok(())
+}
+
+#[test]
+fn breaks_only_go() {
+    if let Err(e) = check_breaks(&exceptions(), KNOWN_BREAKS) {
+        panic!("architecture.toml: {e}");
+    }
+}
+
+/// The ratchet counts identities, not entries: a known break replaced by another at the same count fails, as does
+/// one with no `removed_when`, and one that went must leave the known list.
+#[test]
+fn a_replaced_break_is_a_new_one() {
+    let file = |entries: &str| -> toml::Table { toml::from_str(entries).unwrap() };
+    let known = "pass: file=a.rs what=x";
+    let same = file("[[pass]]\nfile = \"a.rs\"\nwhat = \"x\"\nreason = \"r\"\nremoved_when = \"w\"\n");
+    assert!(check_breaks(&same, &[known]).is_ok());
+    let replaced = file("[[pass]]\nfile = \"b.rs\"\nwhat = \"x\"\nreason = \"r\"\nremoved_when = \"w\"\n");
+    let e = check_breaks(&replaced, &[known]).unwrap_err();
+    assert!(e.contains("new") && e.contains("b.rs"), "{e}");
+    let forever = file("[[pass]]\nfile = \"a.rs\"\nwhat = \"x\"\nreason = \"r\"\n");
     assert!(
-        unapproved <= UNAPPROVED_EXCEPTIONS,
-        "architecture.toml has {unapproved} exceptions without an approval, more than {UNAPPROVED_EXCEPTIONS}: a new \
-         exception needs Caleb's approval (approved = \"Caleb, YYYY-MM-DD\")"
+        check_breaks(&forever, &[known])
+            .unwrap_err()
+            .contains("removed_when")
     );
-    assert!(
-        unapproved == UNAPPROVED_EXCEPTIONS,
-        "architecture.toml has {unapproved} unapproved exceptions: lower UNAPPROVED_EXCEPTIONS to {unapproved}"
-    );
+    assert!(check_breaks(&file(""), &[known]).unwrap_err().contains("gone"));
 }

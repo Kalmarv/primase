@@ -27,3 +27,7 @@ sha2.workspace = true
 toml.workspace = true
 [lints]
 workspace = true
+
+[package.metadata.primase]
+kind = "game"
+names = ["gta", "rage"]

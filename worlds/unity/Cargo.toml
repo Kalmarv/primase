@@ -27,3 +27,7 @@ primase-web = { workspace = true, features = ["ktx2"] }
 
 [lints]
 workspace = true
+
+[package.metadata.primase]
+kind = "game"
+names = ["unity"]
