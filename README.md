@@ -1,92 +1,74 @@
 # primase
 
-A compiler-style library for converting 3D game worlds. Programs that use it compose its readers, passes and
-writers and make the conversion's choices; a small command line is there for trying it.
-
-Instead of writing N x M point-to-point exporters, **readers** lift a game or file format into a shared
-entity-component [`World`](core/src/world.rs), **passes** lower and normalise dialects step by step, and **writers**
-serialise the result. Named after the enzyme that lays down the starting primer every new DNA strand is built from.
+A Rust library for reading, transforming and writing 3D game worlds. It brings supported source data into a shared
+`World`, so adding a reader or writer expands the possible conversions without a separate exporter for every pair.
 
 ```text
-  Unity / GTA / FromSoft / glTF / skate-scene
-                       │
-                   [ Reader ]
-                       ▼
-        World (source & core dialects)
-                       │
-           [ PassManager + Target ]   ◄── plans lowering, verifies invariants,
-                       ▼                  tracks losses & state/LOD axes
-        World (legalised for backend)
-                       │
-                   [ Writer ]
-                       ▼
-   ReSkate / glTF / Three.js web tiles / skate-scene
-   (later: USD, STL, pen-plotter drawings)
+read → World (shared + namespaced data) → selected passes → write → later stages
 ```
 
-Status: being built. Design: [`docs/DESIGN.md`](docs/DESIGN.md).
+Readers read supported source information faithfully; they do not bake it for a destination. Passes select and
+transform that information. Writers encode prepared data they support, report what they omit, and reject invalid
+data that prevents valid output. Compilation, stitching and other later stages remain explicit operations.
 
 ## Architecture
 
-The core design is borrowed from **MLIR**:
+| Layer | What belongs here |
+| --- | --- |
+| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; the `World` store and pass/conversion machinery. |
+| [`toolkit`](toolkit/) | Reusable mechanisms such as compression, texture processing and mesh operations, independent of a particular game or destination. |
+| [`formats`](formats/) | Interchange formats and their readers, passes and writers. |
+| [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
+| [`cli`](cli/) | A small command line for trying readers, passes and writers together. |
 
-* **One container, many dialects (`core`)**: a `World` is a deterministic, entity-ordered ECS store. Engine-specific
-  data (`unity.*`, `gta.*`, `skate.*`) lives alongside shared dialects (`core.*`, `pbr.*`) on the same entities, so
-  lowering happens progressively instead of all at once in the reader.
-* **Declarative passes and target legalisation (`core::pass`)**: every pass declares the components it `requires`,
-  `provides`, `removes` and `modifies`, and says in words what it `approximates`. A writer declares a `Target` that
-  gives each component name a legality (`Legal`, `Dynamic`, `Illegal`, `Carry`). `PassManager` plans the lowering
-  pipeline from those declarations, checks the component invariants between passes, and in `Mode::Full` refuses to
-  write a name the target neither accepts nor carries. Approximations are counted in the run report.
-* **First-class world semantics**: coordinate frames (`SourceFrame`), discrete LOD sets (`core.lods`), conditional
-  world states (`core.state_axis`, `core.state_override`), layered material stacks (`core.layered`) and collision
-  (`core.collision`) are modelled in the world and resolved by dedicated passes.
-* **Determinism**: iteration order is creation order (`Entity(u32)` keys in `BTreeMap`s), and the same input and
-  pipeline give the same bytes. Std `HashMap` and `HashSet` are being removed from library code. `WorldPrinter`
-  prints the world around every pass, to a sink the caller supplies, for diffing and debugging.
-* **Enforced boundaries**: an architecture test (`cli/tests/architecture.rs`, exceptions in `architecture.toml`)
-  checks crate layering, keeps game names out of `core`, `toolkit` and `formats`, and requires every library module
-  that touches files, the environment or processes to declare itself a reader or writer (clippy `clippy.toml`
-  bans those calls elsewhere). Writers only read the `&World` they are given.
+A game crate may depend on its engine's crate, never the reverse. Each worlds crate names only its own game,
+engine or destination. Reusable destination preparation belongs alongside that destination's writer, as separately
+selected passes. Complete conversion programs live in consumer repositories and own their recipes and choices.
 
-## Workspace layout
+## What this means
 
-| Directory | Role |
-| :--- | :--- |
-| [`core/`](core/) | The `World`, core/PBR/LOD/state/layered components, `PassManager`, target legalisation and the world printer. |
-| [`toolkit/`](toolkit/) | Format and math primitives with no game knowledge: `bytes`, `compress`, `hash`, `dds`, `texcodec`, `image` (BCn/DDS/PNG textures), `meshops` and `vertex` (mesh and UV operations), `dxbc` (an SM5 shader interpreter), `havok`, `frostbite`, and `testdata` (real-data test configuration). |
-| [`formats/`](formats/) | Interchange readers and writers: `gltf` and `web` (tiled Three.js worlds with KTX2, meshopt and GPU instancing, for a web viewer). |
-| [`worlds/`](worlds/) | Per-game readers, dialect lowerings and builders: `fromsoft` (Sekiro), `unity`, `gta` (GTA V) and `reskate` (*skate.*: its `skate.*` dialect, preparation passes, the skate-scene interchange and the Studio map writer). |
-| [`cli/`](cli/) | The `primase` binary (`primase convert`, for trying a reader, passes and a writer together) and the architecture test. |
+- **You choose what gets produced.** Region, world state, quality, baking, collision generation and placement are
+  program choices. Library operations can still have sensible, documented algorithm defaults.
+- **One read can feed different destinations.** Supported information stays in core or a source namespace until
+  selected passes transform it. Writers do not need to know which reader supplied it; coverage determines what can transfer.
+- **Losses are visible.** Reports retain known approximations, exclusions and unsupported output, including per-part
+  details. Preserving meaning matters; matching an old tool's encoded bytes is not a general requirement.
+- **New code has a home.** Shared concepts go in core, neutral mechanisms in toolkit, domain knowledge in formats
+  or worlds, and recipe choices in the consuming program. A standard shared concept need not wait for a second reader.
 
-## Getting started
+## Using the library
 
-The library is used from Rust. Worked compositions of a reader, passes and a writer are the examples:
+A consumer registers the operations it needs and supplies its reader, writer and explicit pipeline. This small
+sketch chooses to turn curves into polylines with a 1 cm tolerance; a real route also selects its source and
+destination preparation passes.
 
-```sh
-# Export a skate-scene folder as web tiles
-cargo run --release -p primase-cli --example scene_to_tiles -- path/to/scene path/to/out
+```rust
+use primase_core::convert::{convert, ConvertReport, Reader, Result, Writer};
+use primase_core::pass::{PassManager, PassOptions, PassRegistry, Pipeline};
 
-# Export a Unity level (needs the game's data folder and a type-tree package)
-cargo run --release -p primase-unity --example unity_export -- <Game>_Data typetrees.tpk level1 path/to/out --web
+fn export(reader: &mut dyn Reader, writer: Box<dyn Writer>) -> Result<ConvertReport> {
+    let mut registry = PassRegistry::new();
+    primase_meshops::register(&mut registry);
 
-# Run the test suite (includes the architecture checks)
-cargo test --workspace
+    let options = PassOptions::from([(
+        "flatten-curves".into(),
+        [("tolerance".into(), "0.01".into())].into(),
+    )]);
+    let passes = Pipeline {
+        passes: vec![registry.make("flatten-curves", &options["flatten-curves"])?],
+    };
+    let select = Pipeline::default(); // No selection: retain all read content.
+    let manager = PassManager::new(registry);
+    convert(reader, writer, &manager, &select, &passes)
+}
 ```
 
-Local game installs and data dumps are configured outside the repo: copy
-[`primase-data.example.toml`](primase-data.example.toml) to `primase-data.toml`, point `PRIMASE_DATA` at it and
-see the real-data section of [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Inspect the returned report's `notices()`; failures expose a partial report through `ConvertError`.
+Use `convert_parts` for incremental loading with explicit partition planning, or compose library operations directly.
 
-## Documentation
+Status: the library is being aligned with this model; remaining boundary exceptions are tracked in
+[`architecture.toml`](architecture.toml).
 
-* [`docs/DESIGN.md`](docs/DESIGN.md): architecture, dialect model, pass rules and workspace invariants.
-* [`docs/SPEC.md`](docs/SPEC.md): the columnar World Format v2 (`.pwc`).
-* [`docs/research/MLIR.md`](docs/research/MLIR.md): how MLIR's concepts (operations, conversion targets, pass
-  manager, text printing) map to primase.
-* [`CONTRIBUTING.md`](CONTRIBUTING.md): the model (read it first), the reader, pass, writer and program roles, checks
-  and real-data setup.
-
-## Licence
+See [CONTRIBUTING](CONTRIBUTING.md) for rules, checks and real-data setup, and [DESIGN](docs/DESIGN.md) for detail.
 
 [GPL-3.0-or-later](LICENSE)
