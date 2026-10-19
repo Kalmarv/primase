@@ -11,7 +11,7 @@ use crate::{
 };
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
-use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
+use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
 use primase_texcodec::TexDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +29,86 @@ pub fn roughness(gloss: f32) -> Result<f32> {
 /// Metallic factor for a material with no traced source constant or map. The
 /// world these shaders draw is overwhelmingly non-metal; metal must be proven.
 pub(crate) const UNKNOWN_METALLIC: f32 = 0.;
-const UNKNOWN_METALLIC_LOSS: &str = "metallic without source evidence lowered as dielectric 0";
+pub(crate) const UNKNOWN_METALLIC_LOSS: &str = "metallic without source evidence lowered as dielectric 0";
+
+/// Pack a baked linear gloss plane as glTF ORM. R/B are neutral multipliers;
+/// this function does not claim to have measured AO or metallic content.
+pub(crate) fn orm_from_gloss(width: u32, height: u32, gloss: &[f32]) -> Result<Texture> {
+    let n = (width as usize)
+        .checked_mul(height as usize)
+        .filter(|&n| n > 0)
+        .ok_or_else(|| invalid("Sekiro PBR", 0, "invalid gloss dimensions"))?;
+    if n != gloss.len() {
+        return Err(invalid("Sekiro PBR", 0, "gloss plane length mismatch"));
+    }
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(
+        n.checked_mul(4)
+            .ok_or_else(|| invalid("Sekiro PBR", 0, "gloss size overflow"))?,
+    )
+    .map_err(|e| invalid("Sekiro PBR", 0, e))?;
+    for &g in gloss {
+        rgba.extend_from_slice(&[255, (roughness(g)? * 255.).round() as u8, 255, 255]);
+    }
+    Ok(Texture {
+        width,
+        height,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![rgba],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Mask,
+        normal: None,
+    })
+}
+
+/// Encode linear baked emission as sRGB UNORM8 plus a global HDR strength.
+/// The caller binds the texture with emissive factor [1; 3] and this strength.
+/// The last value counts nonzero source texels quantized to black, not channels.
+/// Source pre-exposure and vertex modulation policies belong to the bake log.
+pub(crate) fn emissive_from_linear(width: u32, height: u32, rgb: &[[f32; 3]]) -> Result<(Texture, f32, u64)> {
+    let n = (width as usize)
+        .checked_mul(height as usize)
+        .filter(|&n| n > 0 && n == rgb.len())
+        .ok_or_else(|| invalid("Sekiro emission", 0, "invalid dimensions or plane length"))?;
+    let mut strength = 1f32;
+    for pixel in rgb {
+        for &v in pixel {
+            if !v.is_finite() || v < 0. {
+                return Err(invalid("Sekiro emission", 0, "negative or nonfinite radiance"));
+            }
+            strength = strength.max(v);
+        }
+    }
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(
+        n.checked_mul(4)
+            .ok_or_else(|| invalid("Sekiro emission", 0, "size overflow"))?,
+    )
+    .map_err(|e| invalid("Sekiro emission", 0, e))?;
+    let mut zeroed = 0;
+    for pixel in rgb {
+        let encoded = pixel.map(|v| {
+            (primase_image::linear_to_srgb(f64::from(v) / f64::from(strength)) * 255.).round() as u8
+        });
+        if pixel.iter().any(|&v| v > 0.) && encoded == [0; 3] {
+            zeroed += 1;
+        }
+        rgba.extend_from_slice(&[encoded[0], encoded[1], encoded[2], 255]);
+    }
+    Ok((
+        Texture {
+            width,
+            height,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![rgba],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+        strength,
+        zeroed,
+    ))
+}
 
 fn simple(shader: &str) -> bool {
     matches!(
@@ -115,47 +194,130 @@ fn texture(
         ColorSpace::Srgb
     };
     t.normal = normal.then_some(super::normals::SOURCE);
-    let e = spawn(
-        world,
-        format!("{name}@{}", if normal { "normal" } else { "color" }),
-        t,
-    );
+    let e = spawn(world, texture_name(name, normal), t);
     cache.insert(key, e);
     Ok(e)
 }
-fn transform(m: &Material, b: &Binding) -> Result<UvTransform> {
+/// A source texture's identity in a role: the stem for colour, `<stem>@normal` for a normal map. The area reader
+/// names its textures the same way, so lowering reuses them instead of decoding a second copy.
+fn texture_name(stem: &str, normal: bool) -> String {
+    if normal {
+        format!("{stem}@normal")
+    } else {
+        stem.to_owned()
+    }
+}
+/// Source textures already in the world, by stem and role.
+fn existing_textures(world: &World) -> BTreeMap<(String, bool), Entity> {
+    let mut found = BTreeMap::new();
+    for (e, t) in world.iter::<Texture>() {
+        let Some(Name(name)) = world.get::<Name>(e) else {
+            continue;
+        };
+        let key = match t.role {
+            TexRole::Normal => name.strip_suffix("@normal").map(|stem| (stem.to_owned(), true)),
+            TexRole::Color if !name.ends_with("@normal") => Some((name.clone(), false)),
+            _ => None,
+        };
+        if let Some(key) = key {
+            found.entry(key).or_insert(e);
+        }
+    }
+    found
+}
+/// The preview colour for a material with no base texture, as sRGB bytes: water's translucent blue-grey, else
+/// mid grey. A named approximation, not a source value.
+fn fallback_base_color(m: &Material) -> [f32; 4] {
+    let bytes: [u8; 4] = if m.class == "water" {
+        [48, 98, 122, 190]
+    } else {
+        [128, 128, 128, 255]
+    };
+    let mut c = [0.; 4];
+    for i in 0..3 {
+        c[i] = primase_image::srgb_to_linear(f64::from(bytes[i]) / 255.) as f32;
+    }
+    c[3] = (f64::from(bytes[3]) / 255.) as f32;
+    c
+}
+/// A binding's texture transform for coordinates already multiplied by `applied` (the material's tiling a geometry
+/// pass applied, `[1, 1]` when none was).
+fn transform(applied: [f32; 2], b: &Binding) -> Result<UvTransform> {
     if b.uv_number != 1
-        || !m.uv_scale.iter().all(|v| v.is_finite() && *v > 0.)
+        || !applied.iter().all(|v| v.is_finite() && *v > 0.)
         || !b.scale.iter().all(|v| v.is_finite())
     {
         return Err(invalid("Sekiro PBR", 0, "unsupported UV set or invalid scale"));
     }
     Ok(UvTransform {
-        scale: std::array::from_fn(|i| b.scale[i] / m.uv_scale[i]),
+        scale: std::array::from_fn(|i| b.scale[i] / applied[i]),
         ..UvTransform::IDENTITY
     })
+}
+
+/// What [`lower`] does with a layered material no pass baked (one without PBR bindings).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layers {
+    /// Leave it as source data (its `fromsoft.material`, layered definition and layer inputs), unlowered, counted:
+    /// for a later bake or a writer that blends layers.
+    Preserve,
+    /// Lower it from its selected main-layer preview textures, a counted approximation.
+    Preview,
 }
 
 /// Lower static source materials to core PBR without serializing through a
 /// consumer dialect. A missing required DDS is an error. Baked variants must
 /// carry PBR base/normal bindings; these are never replaced by source layers.
 /// Approximation units are material entities unless a counter says pixels.
-pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<PassLog> {
+///
+/// `layers` says what happens to a layered material no pass baked; `None` refuses one (the program must choose).
+/// Materials of a skipped source class ([`Material::skip`]) are not lowered, counted. Every normal map's shader
+/// basis is checked against [`super::normals::consumer_basis`]; an assumed or unclassified basis is counted.
+pub fn lower(
+    world: &mut World,
+    payloads: &BTreeMap<String, Vec<u8>>,
+    layers: Option<Layers>,
+) -> Result<PassLog> {
     let sources: Vec<_> = world.iter::<Material>().map(|(e, m)| (e, m.clone())).collect();
     let mut log = PassLog::default();
-    let mut cache = BTreeMap::new();
+    let mut cache = existing_textures(world);
     for (e, m) in sources {
         if m.skip.is_some() {
+            log.count("materials of a skipped source class not lowered", 1);
             continue;
         }
-        let baked = m.layered.is_some();
         let existing = world.get::<PbrMaterial>(e).cloned();
-        if baked && existing.is_none() {
-            return Err(invalid(
-                "Sekiro PBR",
-                0,
-                "layered material requires explicit baked PBR bindings",
-            ));
+        let unbaked = m.layered.is_some() && existing.is_none();
+        if unbaked {
+            match layers {
+                None => {
+                    return Err(invalid(
+                        "Sekiro PBR",
+                        0,
+                        "a layered material no pass baked: choose layers=preserve or layers=preview",
+                    ));
+                }
+                Some(Layers::Preserve) => {
+                    log.count("layered materials kept as source data (layers=preserve)", 1);
+                    continue;
+                }
+                Some(Layers::Preview) => log.approximate(
+                    "layered material lowered from its main-layer preview; layers not baked",
+                    1,
+                ),
+            }
+        }
+        let previewed = unbaked;
+        let baked = m.layered.is_some() && !previewed;
+        let applied = world.get::<super::passes::UvTiling>(e).map_or([1.; 2], |t| t.0);
+        if m.normal.is_some() {
+            match super::normals::consumer_basis(&m.shader) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log.approximate("normal maps of shaders whose basis is assumed, not observed", 1)
+                }
+                Err(_) => log.approximate("normal maps of unclassified shaders: basis assumed", 1),
+            }
         }
         // Only a fresh material lacks evidence; an existing factor came from a prior pass.
         let fresh = existing.is_none();
@@ -180,13 +342,16 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 p.base_color_texture = Some(TextureRef::new(texture(
                     world, payloads, &mut cache, name, false,
                 )?));
+            } else if fresh && m.albedo.is_none() {
+                p.base_color = fallback_base_color(&m);
+                log.approximate("missing base texture: preview fallback colour", 1);
             }
             if p.normal_texture.is_none()
                 && let Some(name) = &m.normal
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
                 if let Some(b) = normal_binding(&m) {
-                    r.transform = Some(transform(&m, b)?);
+                    r.transform = Some(transform(applied, b)?);
                 }
                 p.normal_texture = Some(r);
             }
@@ -219,8 +384,8 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
                 }
                 let normal_binding =
                     normal_binding(&m).ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
-                let nt = transform(&m, normal_binding)?;
-                let mt = metal.map(|b| transform(&m, b)).transpose()?;
+                let nt = transform(applied, normal_binding)?;
+                let mt = metal.map(|b| transform(applied, b)).transpose()?;
                 if nt.scale.contains(&0.) {
                     return Err(invalid("Sekiro PBR", 0, "zero normal scale"));
                 }
@@ -283,7 +448,9 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
         if m.definition.is_none() {
             log.approximate("missing material definition", 1);
         }
-        if m.is_emissive || m.shader.contains("Emissive") || m.emissive.is_some() {
+        if p.emissive_texture.is_some() {
+            log.count("existing emission textures preserved", 1);
+        } else if m.is_emissive || m.shader.contains("Emissive") || m.emissive.is_some() {
             log.approximate("source emission without proven radiance; retained dialect", 1);
         }
         // A static parameter may exist only in a subset of shader permutations;
@@ -304,6 +471,104 @@ pub fn lower(world: &mut World, payloads: &BTreeMap<String, Vec<u8>>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn emission_preserves_hdr_and_counts_dim_texels_lost_to_quantization() {
+        let (t, strength, zeroed) =
+            emissive_from_linear(4, 1, &[[4., 1., 0.], [0.; 3], [0.00001; 3], [0.00001, 1., 0.]]).unwrap();
+        assert_eq!(strength, 4.);
+        assert_eq!(zeroed, 1);
+        assert_eq!(
+            t.levels[0],
+            [255, 137, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 137, 0, 255]
+        );
+        assert_eq!(t.color_space, ColorSpace::Srgb);
+        let (_, strength, zeroed) = emissive_from_linear(1, 1, &[[0.; 3]]).unwrap();
+        assert_eq!((strength, zeroed), (1., 0));
+        let (t, strength, _) = emissive_from_linear(1, 1, &[[f32::MAX, 0., 0.]]).unwrap();
+        assert_eq!(strength, f32::MAX);
+        assert_eq!(t.levels[0], [255, 0, 0, 255]);
+        for v in [-0.01, f32::NAN, f32::INFINITY] {
+            assert!(emissive_from_linear(1, 1, &[[v; 3]]).is_err());
+        }
+        assert!(emissive_from_linear(0, 1, &[]).is_err());
+        assert!(emissive_from_linear(2, 2, &[[0.; 3]; 3]).is_err());
+    }
+    #[test]
+    fn gloss_pack_has_orm_channels_and_rejects_invalid_planes() {
+        let t = orm_from_gloss(3, 1, &[0., 0.25, 1.]).unwrap();
+        assert_eq!(
+            t.levels[0],
+            [255, 255, 255, 255, 255, 134, 255, 255, 255, 13, 255, 255]
+        );
+        assert_eq!(t.role, TexRole::Mask);
+        assert_eq!(t.color_space, ColorSpace::Linear);
+        assert!(orm_from_gloss(2, 2, &[0.; 3]).is_err());
+        assert!(orm_from_gloss(0, 1, &[]).is_err());
+        assert!(orm_from_gloss(1, 1, &[f32::NAN]).is_err());
+    }
+    #[test]
+    fn unbaked_layers_use_the_readers_preview_textures_only_when_asked() {
+        let mut world = World::new();
+        let mut m = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                gx: vec![],
+                textures: vec![],
+            },
+            None,
+            |_| false,
+        );
+        m.albedo = Some("main_a".into());
+        m.layered = Some(crate::materials::LayeredMaterial {
+            mtd: m.mtd.clone(),
+            definition: crate::mtd::MaterialDefinition {
+                shader: "M[Multiple].spx".into(),
+                description: String::new(),
+                parameters: vec![],
+                textures: vec![],
+                block_lengths: vec![],
+            },
+            bindings: BTreeMap::new(),
+        });
+        let reader = spawn(
+            &mut world,
+            "main_a".into(),
+            Texture {
+                width: 1,
+                height: 1,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![vec![1, 2, 3, 255]],
+                color_space: ColorSpace::Srgb,
+                role: TexRole::Color,
+                normal: None,
+            },
+        );
+        let e = world.spawn();
+        world.insert(e, m);
+        assert!(lower(&mut world.clone(), &BTreeMap::new(), None).is_err());
+        let mut preserved = world.clone();
+        let log = lower(&mut preserved, &BTreeMap::new(), Some(Layers::Preserve)).unwrap();
+        assert!(preserved.get::<PbrMaterial>(e).is_none());
+        assert_eq!(
+            log.counts["layered materials kept as source data (layers=preserve)"],
+            1
+        );
+        assert!(log.approximations.is_empty());
+        let log = lower(&mut world, &BTreeMap::new(), Some(Layers::Preview)).unwrap();
+        let p = world.get::<PbrMaterial>(e).unwrap();
+        assert_eq!(p.base_color_texture.unwrap().texture, reader);
+        assert_eq!(p.metallic, 0.);
+        assert_eq!(
+            log.approximations["layered material lowered from its main-layer preview; layers not baked"],
+            1
+        );
+        assert_eq!(
+            world.iter::<Texture>().count(),
+            1,
+            "no second decode of the reader's texture"
+        );
+    }
     #[test]
     fn gloss_matches_deferred_ggx_alpha() {
         assert_eq!(roughness(0.).unwrap(), 1.);

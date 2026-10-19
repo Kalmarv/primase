@@ -112,6 +112,12 @@ pub fn real_data(name: &str) -> Option<PathBuf> {
     existing_path(name, found, require).unwrap_or_else(|message| panic!("{message}"))
 }
 
+/// The bytes of a real-data input file, for a unit test inside a library crate, which has no file access of its own:
+/// the file `real_data` resolved, or one its input names.
+pub fn read_input(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path)
+}
+
 const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
 
 /// A configured input that yields nothing is a failure, not a pass: call it after enumerating what `name` gave

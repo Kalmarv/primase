@@ -1082,7 +1082,6 @@ const KNOWN_BREAKS: &[&str] = &[
     "io: file=worlds/reskate/src/texture.rs role=exception",
     "name: crate=toolkit/hash word=forza",
     "name: crate=toolkit/hash word=fromsoft",
-    "name: crate=worlds/fromsoft word=skate",
     "name: crate=worlds/gta word=skate",
     "name: crate=worlds/reskate word=gta",
     "pass: file=toolkit/image/src/texture.rs what=pass load-textures is not registered",

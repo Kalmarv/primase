@@ -453,6 +453,201 @@ impl Pass for DropFromSoftFar {
     }
 }
 
+/// `bake-fromsoft-layers{max-size=N}`: bake the static layered materials of the lowered prototypes (a
+/// `fromsoft.material` with a layered definition, drawn by primitives carrying `fromsoft.layer_inputs`) into core
+/// PBR from the source programs and texture files the reader kept. Each material group's triangles are reduced to
+/// their mean inputs, clustered into at most three constant levels, and each level's shader evaluated into albedo,
+/// normal, gloss (ORM) and HDR emission images at the group's reference size capped at `max-size` (required: the
+/// program's quality choice; the cap is also the size of a group without a colour image), sampled from base mips
+/// with bilinear wrapping in a static frame (unit pre-exposure, fixed camera); parts are split by level through
+/// `World::rebuild_primitives`. Consumes the layer inputs of what it baked. The source resources are kept, also when
+/// it fails. Only prototypes' own meshes are baked: choose a level of detail first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BakeFromSoftLayers {
+    pub max_size: u32,
+}
+
+impl BakeFromSoftLayers {
+    pub fn from_options(o: &Options) -> Result<Self, String> {
+        let mut max_size = None;
+        for (k, v) in o {
+            match k.as_str() {
+                "max-size" => {
+                    max_size = Some(
+                        v.parse::<u32>()
+                            .ok()
+                            .filter(|n| (1..=4096).contains(n))
+                            .ok_or_else(|| format!("max-size={v} is not a size of 1 to 4096 pixels"))?,
+                    )
+                }
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(BakeFromSoftLayers {
+            max_size: max_size
+                .ok_or("max-size is required: the baked images' largest edge is the program's choice")?,
+        })
+    }
+}
+
+impl Pass for BakeFromSoftLayers {
+    fn name(&self) -> &'static str {
+        "bake-fromsoft-layers"
+    }
+    fn options(&self) -> Options {
+        Options::from([("max-size".to_owned(), self.max_size.to_string())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Material::NAME, LayerInputs::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[
+            "pbr.material",
+            "core.texture",
+            "core.name",
+            Material::NAME,
+            materials::LayeredMaterial::NAME,
+        ]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[LayerInputs::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Mesh::NAME]
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn approximates(&self) -> &'static str {
+        "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use super::source::{ShaderPrograms, TexturePayloads};
+        // held apart while the world changes, and put back whatever happens
+        let shaders = world.remove_resource::<ShaderPrograms>().unwrap_or_default();
+        let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
+        let result = (|| {
+            let bake = super::layers::AreaBake::with_sources(world, &shaders.0, &payloads.0)?;
+            let prototypes: BTreeMap<String, Entity> = world
+                .iter::<PrototypeSource>()
+                .map(|(e, s)| (s.id.clone(), e))
+                .collect();
+            super::bake_assembly::assemble(&bake, &prototypes, self.max_size, world)
+        })();
+        world.insert_resource(shaders);
+        world.insert_resource(payloads);
+        let report = result.map_err(|e| e.to_string())?;
+        log.count("layer input streams consumed", LayerInputs::remove_all(world));
+        for (k, v) in [
+            ("source materials baked", report.source_materials),
+            ("bake groups", report.materials),
+            ("bake levels", report.variants),
+            ("bake levels with non-unit UV periods", report.nonunit_uv_variants),
+            ("bake groups with gloss", report.gloss_materials),
+            ("bake groups without gloss", report.missing_gloss_materials),
+            ("bake groups with emission", report.emissive_materials),
+            ("bake groups without emission", report.missing_emissive_materials),
+        ] {
+            log.count(k, v as u64);
+        }
+        for (k, v) in report.policies.counts {
+            log.count(&k, v);
+        }
+        for (k, v) in report.policies.approximations {
+            log.approximate(&k, v);
+        }
+        Ok(())
+    }
+}
+
+/// `lower-fromsoft-materials{layers=preserve|preview}`: source materials as core PBR from their bindings and the
+/// texture files the reader kept (decoded here, named `<stem>` and `<stem>@normal`): base and normal maps in the
+/// source normal convention (`normalize-normals` converts), gloss to roughness, traced metallic constants and maps
+/// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted),
+/// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings.
+///
+/// A layered material no pass baked needs the program's choice: `layers=preserve` leaves it as source data
+/// (unlowered, its layer inputs kept, counted); `layers=preview` lowers it from its main-layer preview, a counted
+/// approximation, and drops the layer inputs (shader inputs, not vertex colours). Without the option such a material
+/// is an error. Materials of a skipped source class are not lowered, counted.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LowerFromSoftMaterials {
+    pub layers: Option<super::pbr::Layers>,
+}
+
+impl LowerFromSoftMaterials {
+    pub fn from_options(o: &Options) -> Result<Self, String> {
+        let mut pass = Self::default();
+        for (k, v) in o {
+            match (k.as_str(), v.as_str()) {
+                ("layers", "preserve") => pass.layers = Some(super::pbr::Layers::Preserve),
+                ("layers", "preview") => pass.layers = Some(super::pbr::Layers::Preview),
+                ("layers", v) => return Err(format!("layers={v} is not preserve or preview")),
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        Ok(pass)
+    }
+}
+
+impl Pass for LowerFromSoftMaterials {
+    fn name(&self) -> &'static str {
+        "lower-fromsoft-materials"
+    }
+    fn options(&self) -> Options {
+        match self.layers {
+            None => Options::new(),
+            Some(l) => Options::from([(
+                "layers".to_owned(),
+                match l {
+                    super::pbr::Layers::Preserve => "preserve",
+                    super::pbr::Layers::Preview => "preview",
+                }
+                .to_owned(),
+            )]),
+        }
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Material::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["pbr.material", "core.texture", "core.name"]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[LayerInputs::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &["pbr.material", "core.texture", Mesh::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "unevidenced metallic as dielectric 0; per-light gloss correction omitted; with layers=preview, unbaked layered materials from their main-layer preview; preview fallback colour"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use super::source::TexturePayloads;
+        let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
+        let lowered = super::pbr::lower(world, &payloads.0, self.layers);
+        world.insert_resource(payloads);
+        let lowered = lowered.map_err(|e| e.to_string())?;
+        if self.layers == Some(super::pbr::Layers::Preview) {
+            // inputs still here drive layers no pass evaluated: not vertex colours, so they go
+            let dropped = LayerInputs::remove_all(world);
+            if dropped > 0 {
+                log.approximate(
+                    "layer input streams dropped with layered materials lowered from previews",
+                    dropped,
+                );
+            }
+        }
+        for (k, v) in lowered.counts {
+            log.count(&k, v);
+        }
+        for (k, v) in lowered.approximations {
+            log.approximate(&k, v);
+        }
+        Ok(())
+    }
+}
+
 fn without_options<P: Pass + Default + 'static>(options: &Options) -> Result<Box<dyn Pass>, String> {
     if let Some(k) = options.keys().next() {
         return Err(format!("unknown option {k}"));
@@ -472,6 +667,14 @@ pub fn register(registry: &mut PassRegistry) {
         Ok(Box::new(LowerFromSoftGeometry::from_options(o)?))
     });
     registry.register("drop-fromsoft-far", without_options::<DropFromSoftFar>);
+    registry.register_requiring(
+        "bake-fromsoft-layers",
+        |o| Ok(Box::new(BakeFromSoftLayers::from_options(o)?)),
+        &[("max-size", "512")],
+    );
+    registry.register("lower-fromsoft-materials", |o| {
+        Ok(Box::new(LowerFromSoftMaterials::from_options(o)?))
+    });
     registry.register(
         "lower-fromsoft-extras",
         without_options::<super::extras::LowerFromSoftExtras>,

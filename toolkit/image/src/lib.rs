@@ -5,7 +5,9 @@
 mod cap;
 pub use cap::{CapTextures, Capped, cap_texture, cap_textures};
 mod channels;
+mod frames;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
+pub use frames::{Bitangent, UvFrameNormals};
 mod layers;
 pub use layers::{BakeLayerChannels, register};
 mod normals;
@@ -24,6 +26,7 @@ use thiserror::Error;
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
+    ("image/frames.rs", include_bytes!("frames.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
     ("image/normals.rs", include_bytes!("normals.rs")),

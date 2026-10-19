@@ -42,6 +42,10 @@ pub struct Prepared {
     alpha: Option<(Source, [f32; 2])>,
     pub policies: BTreeMap<String, u64>,
     pub decoded_bytes: usize,
+    /// Static repeat policy calculated from resources used by this shader.
+    pub period: [f32; 2],
+    pub period_exact: bool,
+    largest_colour_dimension: u32,
 }
 #[derive(Debug)]
 pub struct Bake {
@@ -50,9 +54,31 @@ pub struct Bake {
     /// Source-frame normal: X along cross(N,T)*w, Y along T. Consumer conversion
     /// is deliberately deferred, exactly as for source normal textures.
     pub normal: Vec<u8>,
+    /// The shader's second output, x channel: linear and unquantized. When
+    /// written, contains size * size values in row-major order, like albedo.
+    /// None when the shader does not write this channel. Kept separately from
+    /// normal Z; interpretation as gloss and roughness conversion belong to PBR lowering.
+    pub gloss: Option<Vec<f32>>,
+    /// Linear, unquantized RGB from shader output register 4. When written,
+    /// contains size * size pixels in row-major order, like albedo. None when
+    /// the shader does not write RGB. Values may exceed one; encoding and
+    /// emissive strength conversion belong to PBR lowering.
+    pub emissive: Option<Vec<[f32; 3]>>,
     pub instructions: u64,
     pub samples: u64,
     pub policies: BTreeMap<String, u64>,
+}
+/// Internal transport only: output3 remains encoded bits plus executed RGB mask.
+/// Public bake callers retain the original result shape and allocate no capture.
+#[derive(Debug)]
+pub(crate) struct BakedChannels {
+    pub image: Bake,
+    pub reflectance: Option<Vec<OutputRgb>>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputRgb {
+    pub bits: [u32; 3],
+    pub mask: u8,
 }
 fn dxbc(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer DXBC", e.word * 4, e.detail)
@@ -189,7 +215,21 @@ impl Prepared {
             }
         }
         let mut sources = BTreeMap::new();
+        let sampled_scales: Vec<_> = reflection
+            .resources
+            .iter()
+            .filter(|r| r.kind == 2)
+            .filter_map(|r| r.name.rsplit_once("Texture2D_")?.1.parse::<u32>().ok())
+            .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
+            .collect();
+        let main_scale = slots
+            .get(&8)
+            .map(|(_, b)| b.scale)
+            .or_else(|| sampled_scales.first().copied())
+            .unwrap_or([1.; 2]);
+        let (period, period_exact) = super::period::common_period(&sampled_scales, main_scale)?;
         let mut cache = BTreeMap::<(String, bool), Option<Arc<BaseMipBilinearWrap>>>::new();
+        let mut largest_colour_dimension = 0;
         for resource in reflection.resources.iter().filter(|r| r.kind == 2) {
             if resource.count != 1 || resource.dimension != 4 {
                 return Err(invalid(
@@ -223,6 +263,12 @@ impl Prepared {
                     cache.insert(key.clone(), image(&key.0, key.1)?);
                 }
                 source = cache[&key].clone().map(Source::Image);
+                if role == "AlbedoMap"
+                    && let Some(t) = &cache[&key]
+                {
+                    largest_colour_dimension =
+                        largest_colour_dimension.max(*t.dimensions().iter().max().expect("two axes") as u32);
+                }
                 set(
                     "FC_TextureTilingScale",
                     resource.slot as usize * 4,
@@ -266,6 +312,12 @@ impl Prepared {
             &[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         );
         set("SC_RenderCameraPos", 0, &[0., 1000., 0., 1.]);
+        // Material radiance is baked at unit exposure, not a runtime camera's
+        // pre-exposure. Otherwise zero-initialized constants suppress emission.
+        set("SC_PreExposure", 0, &[1.]);
+        if offsets.contains_key("SC_PreExposure") {
+            policies.insert("unit pre-exposure for static material bake".into(), 1);
+        }
         for name in offsets
             .keys()
             .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
@@ -339,9 +391,41 @@ impl Prepared {
             alpha,
             policies,
             decoded_bytes,
+            period,
+            period_exact,
+            largest_colour_dimension,
+        })
+    }
+    /// Largest sampled colour layer, bounded by the caller's cap; the cap for a
+    /// material without a colour image.
+    pub fn bake_size(&self, cap: u32) -> Result<u32> {
+        if cap == 0 || cap > 4096 {
+            return Err(invalid("layer bake", 0, "invalid size cap"));
+        }
+        Ok(if self.largest_colour_dimension == 0 {
+            cap
+        } else {
+            self.largest_colour_dimension.min(cap)
         })
     }
     pub fn bake(&self, size: u32, period: [f32; 2], params: Inputs) -> Result<Bake> {
+        Ok(self.bake_channels(size, period, params, false)?.image)
+    }
+    pub(crate) fn bake_with_reflectance(
+        &self,
+        size: u32,
+        period: [f32; 2],
+        params: Inputs,
+    ) -> Result<BakedChannels> {
+        self.bake_channels(size, period, params, true)
+    }
+    fn bake_channels(
+        &self,
+        size: u32,
+        period: [f32; 2],
+        params: Inputs,
+        capture_reflectance: bool,
+    ) -> Result<BakedChannels> {
         if !params
             .weights_snow
             .iter()
@@ -405,6 +489,11 @@ impl Prepared {
         let refs: Vec<_> = self.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
         let mut albedo = Vec::with_capacity(size as usize * size as usize * 4);
         let mut normal = Vec::with_capacity(albedo.capacity());
+        let mut gloss = None;
+        let mut writes_gloss = None;
+        let mut emissive = None;
+        let mut writes_emissive = None;
+        let mut reflectance = capture_reflectance.then(|| Vec::with_capacity(size as usize * size as usize));
         let (mut instructions, mut samples) = (0, 0);
         let byte = |f: f32| -> u8 { (f.clamp(0., 1.) * 255.).round_ties_even() as u8 };
         for y in 0..size {
@@ -428,6 +517,44 @@ impl Prepared {
                     || result.output_masks.get(2).is_none_or(|m| m & 7 != 7)
                 {
                     return Err(invalid("layer bake", 0, "missing G-buffer normal or albedo"));
+                }
+                if let Some(pixels) = &mut reflectance {
+                    pixels.push(OutputRgb {
+                        bits: result.outputs.get(3).map_or([0; 3], |v| [v[0], v[1], v[2]]),
+                        mask: result.output_masks.get(3).copied().unwrap_or(0) & 7,
+                    });
+                }
+                let writes = result.output_masks.get(1).is_some_and(|mask| mask & 1 != 0);
+                if writes_gloss.is_some_and(|previous| previous != writes) {
+                    return Err(invalid("layer bake", 0, "inconsistent second-output x coverage"));
+                }
+                writes_gloss = Some(writes);
+                if writes {
+                    let value = f32::from_bits(result.outputs[1][0]);
+                    if !value.is_finite() {
+                        return Err(invalid("layer bake", 0, "nonfinite second-output x"));
+                    }
+                    gloss
+                        .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                        .push(value);
+                }
+                let rgb_mask = result.output_masks.get(4).copied().unwrap_or(0) & 7;
+                if rgb_mask != 0 && rgb_mask != 7 {
+                    return Err(invalid("layer bake", 0, "partial emission RGB output"));
+                }
+                let writes = rgb_mask == 7;
+                if writes_emissive.is_some_and(|previous| previous != writes) {
+                    return Err(invalid("layer bake", 0, "inconsistent emission RGB coverage"));
+                }
+                writes_emissive = Some(writes);
+                if writes {
+                    let rgb = std::array::from_fn(|c| f32::from_bits(result.outputs[4][c]));
+                    if !rgb.iter().all(|v| v.is_finite()) {
+                        return Err(invalid("layer bake", 0, "nonfinite emission RGB"));
+                    }
+                    emissive
+                        .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                        .push(rgb);
                 }
                 let color = result.outputs[2].map(f32::from_bits);
                 let n = result.outputs[0].map(f32::from_bits);
@@ -465,17 +592,195 @@ impl Prepared {
             }
         }
         let mut policies = self.policies.clone();
+        // A per-material decision for this bake; area censuses deduplicate
+        // weight variants by their source material before summing this count.
+        policies.insert(
+            if gloss.is_some() {
+                "material writes second-output x"
+            } else {
+                "material omits second-output x"
+            }
+            .into(),
+            1,
+        );
+        policies.insert(
+            if emissive.is_some() {
+                "material writes emission RGB"
+            } else {
+                "material omits emission RGB"
+            }
+            .into(),
+            1,
+        );
         policies.insert(
             "constant layer weights, tint and detail".into(),
             size as u64 * size as u64,
         );
-        Ok(Bake {
-            size,
-            albedo,
-            normal,
-            instructions,
-            samples,
-            policies,
+        Ok(BakedChannels {
+            image: Bake {
+                size,
+                albedo,
+                normal,
+                gloss,
+                emissive,
+                instructions,
+                samples,
+                policies,
+            },
+            reflectance,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prepared(writes: bool) -> Prepared {
+        prepared_output(writes, None)
+    }
+    fn prepared_output(writes: bool, output: Option<(u8, [u32; 4])>) -> Prepared {
+        let mut words = vec![0x50, 0];
+        let operand = |kind: u32, index| [2 | (15 << 4) | (kind << 12) | (1 << 20), index];
+        let mut instruction = |opcode: u32, args: &[u32]| {
+            words.push(opcode | (((args.len() + 1) as u32) << 24));
+            words.extend_from_slice(args);
+        };
+        instruction(98, &operand(1, 0));
+        for index in [0, 2] {
+            instruction(101, &operand(2, index));
+        }
+        if output.is_some() {
+            instruction(101, &operand(2, 3));
+        }
+        if writes {
+            instruction(101, &operand(2, 1));
+            instruction(101, &operand(2, 4));
+        }
+        for index in [0, 2] {
+            let mut args = operand(2, index).to_vec();
+            args.extend([
+                2 | (4 << 12),
+                0.5f32.to_bits(),
+                0.75f32.to_bits(),
+                0.5f32.to_bits(),
+                0,
+            ]);
+            instruction(54, &args);
+        }
+        if writes {
+            for index in [1, 4] {
+                let mut args = operand(2, index).to_vec();
+                args.extend([2 | (1 << 2) | (0xe4 << 4) | (1 << 12) | (1 << 20), 0]);
+                instruction(54, &args);
+            }
+        }
+        if let Some((mask, bits)) = output {
+            let mut destination = operand(2, 3);
+            destination[0] = (destination[0] & !(15 << 4)) | ((mask as u32) << 4);
+            let mut args = destination.to_vec();
+            args.push(2 | (4 << 12));
+            args.extend(bits);
+            instruction(54, &args);
+        }
+        instruction(62, &[]);
+        words[1] = words.len() as u32;
+        Prepared {
+            program: Program::from_words(&words).unwrap(),
+            reflection: Reflection {
+                buffers: vec![],
+                resources: vec![],
+                outputs: vec![],
+                inputs: vec![primase_dxbc::Semantic {
+                    name: "TEXCOORD".into(),
+                    index: 0,
+                    system_value: 0,
+                    component_type: 3,
+                    register: 0,
+                    mask: 15,
+                    used_mask: 15,
+                }],
+            },
+            buffers: vec![],
+            sources: BTreeMap::new(),
+            alpha: None,
+            policies: BTreeMap::new(),
+            decoded_bytes: 0,
+            period: [1.; 2],
+            period_exact: true,
+            largest_colour_dimension: 0,
+        }
+    }
+
+    #[test]
+    fn optional_capture_preserves_bits_masks_and_public_bake() {
+        for output in [
+            None,
+            Some((7, [0x3e31_5cac; 4])),
+            Some((3, [0x3e31_5cac; 4])),
+            Some((7, [f32::NAN.to_bits(); 4])),
+            Some((7, [f32::INFINITY.to_bits(); 4])),
+        ] {
+            let prepared = prepared_output(true, output);
+            let public = prepared
+                .bake_channels(2, [1.; 2], Inputs::default(), false)
+                .unwrap();
+            assert!(public.reflectance.is_none());
+            let internal = prepared
+                .bake_with_reflectance(2, [1.; 2], Inputs::default())
+                .unwrap();
+            assert_eq!(public.image.albedo, internal.image.albedo);
+            assert_eq!(public.image.normal, internal.image.normal);
+            assert_eq!(public.image.gloss, internal.image.gloss);
+            assert_eq!(public.image.emissive, internal.image.emissive);
+            assert_eq!(public.image.policies, internal.image.policies);
+            assert_eq!(public.image.instructions, internal.image.instructions);
+            assert_eq!(public.image.samples, internal.image.samples);
+            let pixels = internal.reflectance.unwrap();
+            assert_eq!(pixels.len(), 4);
+            for pixel in pixels {
+                assert_eq!(pixel.mask, output.map_or(0, |v| v.0));
+                for c in 0..3 {
+                    if pixel.mask & (1 << c) != 0 {
+                        assert_eq!(pixel.bits[c], output.unwrap().1[c]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn emission_preserves_hdr_rgb_and_row_major_layout() {
+        let present = prepared(true).bake(3, [4., 2.], Inputs::default()).unwrap();
+        let absent = prepared(false).bake(3, [4., 2.], Inputs::default()).unwrap();
+        let values = present.emissive.as_ref().unwrap();
+        assert_eq!(values.len(), (present.size * present.size) as usize);
+        for (i, &value) in values.iter().enumerate() {
+            let u = ((i % 3) as f32 + 0.5) / 3. * 4.;
+            let v = ((i / 3) as f32 + 0.5) / 3. * 2.;
+            assert_eq!(value.map(f32::to_bits), [u, v, u].map(f32::to_bits));
+        }
+        assert!(values.iter().flatten().any(|&v| v > 1.));
+        assert!(absent.emissive.is_none());
+        assert_eq!(present.albedo, absent.albedo);
+        assert_eq!(present.normal, absent.normal);
+        assert_eq!(present.policies["material writes emission RGB"], 1);
+        assert_eq!(absent.policies["material omits emission RGB"], 1);
+    }
+
+    #[test]
+    fn gloss_preserves_shader_channel_and_row_major_layout() {
+        let present = prepared(true).bake(3, [1.; 2], Inputs::default()).unwrap();
+        let absent = prepared(false).bake(3, [1.; 2], Inputs::default()).unwrap();
+        let values = present.gloss.as_ref().unwrap();
+        assert_eq!(values.len(), (present.size * present.size) as usize);
+        for (i, &value) in values.iter().enumerate() {
+            assert_eq!(value.to_bits(), (((i % 3) as f32 + 0.5) / 3.).to_bits());
+        }
+        assert!(absent.gloss.is_none());
+        assert_eq!(present.albedo, absent.albedo);
+        assert_eq!(present.normal, absent.normal);
+        assert_eq!(present.policies["material writes second-output x"], 1);
+        assert_eq!(absent.policies["material omits second-output x"], 1);
     }
 }

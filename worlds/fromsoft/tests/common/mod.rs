@@ -33,3 +33,61 @@ pub fn oodle(path: std::path::PathBuf) -> primase_compress::Result<primase_compr
     // SAFETY: the test configuration names a trusted native library.
     unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
 }
+
+/// One quad on the ground, u along +x and v along +z, with Sekiro's stored frame for its most common class: the
+/// tangent along +v and the bitangent `cross(N, T) * w` along +u, so source red follows u and green v. Its material
+/// binds `texture` (in the source convention) as its normal map.
+pub fn quad(
+    texture: primase_core::Texture,
+) -> (primase_core::World, primase_core::Entity, primase_core::Entity) {
+    use primase_core::pbr::{PbrMaterial, TextureRef};
+    use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
+    let mut world = World::default();
+    let t = world.spawn();
+    world.insert(t, texture);
+    let m = world.spawn();
+    world.insert(
+        m,
+        PbrMaterial {
+            normal_texture: Some(TextureRef::new(t)),
+            ..Default::default()
+        },
+    );
+    let e = world.spawn();
+    world.insert(
+        e,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: std::collections::BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.], [1., 0., 1.]]),
+                ),
+                (Semantic::Normal, Stream::F32x3(vec![[0., 1., 0.]; 4])),
+                (Semantic::Tangent, Stream::F32x4(vec![[0., 0., 1., 1.]; 4])),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]]),
+                ),
+            ]),
+            indices: Some(vec![0, 2, 1, 1, 2, 3]),
+            material: Some(m),
+        }]),
+    );
+    (world, t, e)
+}
+
+pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_core::pass::RunReport {
+    let mut registry = primase_core::pass::PassRegistry::new();
+    primase_image::register(&mut registry);
+    let manager = primase_core::pass::PassManager::new(registry);
+    let mut report = primase_core::pass::RunReport::default();
+    manager
+        .run(
+            world,
+            &manager.registry.parse(pipeline).expect("pipeline parses"),
+            &mut report,
+        )
+        .expect("passes run");
+    report
+}

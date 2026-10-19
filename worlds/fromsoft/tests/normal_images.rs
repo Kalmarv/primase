@@ -1,7 +1,8 @@
 //! Offline normal-image differential against the committed consumer rule.
 //! Only unambiguous cached source DDS names are compared; uncovered names counted.
-use primase_core::{TexRole, Texture, World};
-use primase_fromsoft::sekiro::normals::{self, Consumer};
+use primase_core::{TexRole, Texture};
+mod common;
+use primase_fromsoft::sekiro::normals;
 use primase_testdata::real_data;
 use std::collections::{BTreeMap, BTreeSet};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -78,10 +79,9 @@ fn source_normals_against_consumer_export() -> Result<()> {
             }
             normalized_hist[3][255u8.abs_diff(q[3]) as usize] += 1;
         }
-        let mut w = World::default();
-        let e = w.spawn();
-        w.insert(e, texture);
-        normals::lower(&mut w, Consumer::Skate)?;
+        // the earlier skate rule, as the frames give it for Sekiro's most common stored frame
+        let (mut w, e, _) = common::quad(texture);
+        common::image_passes(&mut w, "normalize-normals, uv-frame-normals{bitangent=-v}");
         let got = &w.get::<Texture>(e).unwrap().levels[0];
         assert_eq!(got.len(), want.len());
         for (p, q) in decoded.as_chunks::<4>().0.iter().zip(got.as_chunks::<4>().0) {

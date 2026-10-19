@@ -124,7 +124,7 @@ impl Pass for LoadTextures {
         Ok(())
     }
 }
-fn level_dimensions(t: &Texture, level: usize) -> Result<(u32, u32)> {
+pub(crate) fn level_dimensions(t: &Texture, level: usize) -> Result<(u32, u32)> {
     if t.width == 0
         || t.height == 0
         || t.levels.is_empty()

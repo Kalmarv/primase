@@ -2,14 +2,17 @@
 //! texture files and layered-shader programs they bind, raw collision, lights, hang edges and spawn points, with
 //! typed source identities ([`source`]). Reading lowers nothing: geometry, materials, lights and extras become core
 //! data through the passes in [`passes`], which a program chooses and orders.
+mod bake_assembly;
 pub mod blockers;
 pub mod collision;
 pub mod extras;
+pub mod layers;
 pub mod lights;
 pub mod normals;
 pub mod objects;
 pub mod passes;
 pub mod pbr;
+mod reflectance;
 mod shadows;
 pub mod source;
 pub mod states;

@@ -1,0 +1,760 @@
+//! Opt-in static bake assembly. The reader's source convention remains intact;
+//! consumer normal conversion still happens after this step.
+use super::{
+    layers::{AreaBake, BakeReport},
+    normals, pbr,
+    reflectance::Reflectance,
+};
+use crate::{
+    Result, invalid,
+    layer_bake::{Inputs, grouping},
+};
+use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
+use primase_core::{
+    ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+fn texture(world: &mut World, name: String, value: Texture) -> Entity {
+    let entity = world.spawn();
+    world.insert(entity, Name(name));
+    world.insert(entity, value);
+    entity
+}
+fn rgba(size: u32, pixels: Vec<u8>, normal: bool) -> Texture {
+    Texture {
+        width: size,
+        height: size,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![pixels],
+        color_space: if normal {
+            ColorSpace::Linear
+        } else {
+            ColorSpace::Srgb
+        },
+        role: if normal { TexRole::Normal } else { TexRole::Color },
+        normal: normal.then_some(normals::SOURCE),
+    }
+}
+
+// Neutral ORM B is a multiplier. The traced dielectric output uses factor zero;
+// unsupported output has no metallic evidence and is the counted dielectric default.
+fn channel_material(
+    world: &mut World,
+    name: &str,
+    source: &crate::materials::Material,
+    image: crate::layer_bake::Bake,
+    reflectance: Reflectance,
+    log: &mut primase_core::pass::PassLog,
+) -> Result<PbrMaterial> {
+    let size = image.size;
+    let base = texture(world, format!("{name}_a"), rgba(size, image.albedo, false));
+    let normal = texture(world, format!("{name}_n"), rgba(size, image.normal, true));
+    let mut material = PbrMaterial {
+        base_color_texture: Some(TextureRef::new(base)),
+        normal_texture: Some(TextureRef::new(normal)),
+        alpha_mode: match source.class.as_str() {
+            "cutout" | "leaves" => AlphaMode::Mask {
+                cutoff: source.cutoff,
+            },
+            "alpha" | "decal" | "water" => AlphaMode::Blend,
+            _ => AlphaMode::Opaque,
+        },
+        double_sided: source.two_sided,
+        ..Default::default()
+    };
+    if let Some(gloss) = &image.gloss {
+        let orm = texture(
+            world,
+            format!("{name}_orm"),
+            pbr::orm_from_gloss(size, size, gloss)?,
+        );
+        material.metallic_roughness_texture = Some(TextureRef::new(orm));
+        material.roughness = 1.;
+        log.approximate("per-light gloss correction omitted", 1);
+        log.approximate("roughness quantized to UNORM8", 1);
+    }
+    if let Some(emission) = &image.emissive {
+        let (pixels, strength, zeroed) = pbr::emissive_from_linear(size, size, emission)?;
+        let emission = texture(world, format!("{name}_e"), pixels);
+        material.emissive_texture = Some(TextureRef::new(emission));
+        material.emissive = [1.; 3];
+        material.emissive_strength = strength;
+        log.approximate("emission quantized to sRGB UNORM8", 1);
+        log.count("nonzero emission texels quantized entirely black", zeroed);
+    }
+    material.metallic = match reflectance {
+        Reflectance::Dielectric => 0.,
+        Reflectance::Unsupported => pbr::UNKNOWN_METALLIC,
+    };
+    Ok(material)
+}
+
+fn source_variant(
+    world: &mut World,
+    original: Entity,
+    template: &PbrMaterial,
+    name: String,
+) -> Result<Entity> {
+    let source = world
+        .get::<crate::materials::Material>(original)
+        .ok_or_else(|| invalid("area bake", 0, "missing source provenance"))?
+        .clone();
+    let mut material = template.clone();
+    material.alpha_mode = match source.class.as_str() {
+        "cutout" | "leaves" => AlphaMode::Mask {
+            cutoff: source.cutoff,
+        },
+        "alpha" | "decal" | "water" => AlphaMode::Blend,
+        _ => AlphaMode::Opaque,
+    };
+    material.double_sided = source.two_sided;
+    let entity = world.spawn();
+    world.insert(entity, Name(name));
+    if let Some(layered) = &source.layered {
+        world.insert(entity, layered.clone());
+    }
+    world.insert(entity, source);
+    world.insert(entity, material);
+    Ok(entity)
+}
+
+/// Bake every group at its reference size capped at `max_size`, and replace the grouped parts by their levels'
+/// parts ([`World::rebuild_primitives`], every per-primitive component following).
+pub(super) fn assemble(
+    bake: &AreaBake,
+    prototypes: &BTreeMap<String, Entity>,
+    max_size: u32,
+    world: &mut World,
+) -> Result<BakeReport> {
+    let mut report = BakeReport::default();
+    let mut replacements = BTreeMap::<(Entity, usize), Vec<Primitive>>::new();
+    let mut replaced_materials = BTreeSet::new();
+    let mut variants = BTreeMap::new();
+    for (group_index, group) in bake.groups.iter().enumerate() {
+        let prepared = bake.prepare(group_index)?;
+        let size = prepared.bake_size(max_size)?;
+        let mut templates = Vec::new();
+        for (level, center) in group.centers.iter().enumerate() {
+            let channels = prepared.bake_with_reflectance(
+                size,
+                group.period,
+                Inputs {
+                    weights_snow: center[..4].try_into().expect("four weights"),
+                    tint_color: [center[4], center[5], center[6], 1.],
+                    detail: center[7],
+                },
+            )?;
+            let reflectance = Reflectance::classify(&group.material, size, channels.reflectance.as_deref());
+            let image = channels.image;
+            if level == 0 {
+                report.materials += 1;
+                report.gloss_materials += usize::from(image.gloss.is_some());
+                report.missing_gloss_materials += usize::from(image.gloss.is_none());
+                report.emissive_materials += usize::from(image.emissive.is_some());
+                report.missing_emissive_materials += usize::from(image.emissive.is_none());
+                for (policy, count) in &image.policies {
+                    if policy != "constant layer weights, tint and detail" {
+                        report.policies.approximate(policy, *count);
+                    }
+                }
+            }
+            // This policy counts output texels, unlike source-group policies.
+            if let Some(&texels) = image.policies.get("constant layer weights, tint and detail") {
+                report
+                    .policies
+                    .approximate("constant layer weights, tint and detail", texels);
+            }
+            report.variants += 1;
+            report.nonunit_uv_variants += usize::from(group.period != [1.; 2]);
+            let name = format!("bake_{group_index:04}_{level}");
+            let material = channel_material(
+                world,
+                &name,
+                &group.material,
+                image,
+                reflectance,
+                &mut report.policies,
+            )?;
+            templates.push((material, reflectance));
+        }
+        for source in &group.parts {
+            let entity = *prototypes
+                .get(&source.prototype)
+                .ok_or_else(|| invalid("area bake", source.part, "missing prototype"))?;
+            let primitive = world
+                .get::<Mesh>(entity)
+                .and_then(|m| m.primitives().get(source.part))
+                .ok_or_else(|| invalid("area bake", source.part, "missing source part"))?
+                .clone();
+            let original = primitive
+                .material
+                .ok_or_else(|| invalid("area bake", source.part, "missing source material"))?;
+            if world.get::<crate::materials::Material>(original).is_none() {
+                return Err(invalid("area bake", source.part, "missing source provenance"));
+            }
+            // the tiling the geometry pass multiplied into these coordinates, if it did
+            let scale = world
+                .get::<super::passes::UvTiling>(original)
+                .map_or([1.; 2], |t| t.0);
+            replaced_materials.insert(original);
+            // Only instantiate levels used by this source part. Equal bake inputs
+            // share textures, never the full source material/GX identity.
+            let mut materials = vec![original; templates.len()];
+            for &level in &source.assignments {
+                if level >= templates.len() {
+                    return Err(invalid("area bake", source.part, "invalid level"));
+                }
+                let key = (original, group_index, level);
+                let material = if let Some(&e) = variants.get(&key) {
+                    e
+                } else {
+                    let e = source_variant(
+                        world,
+                        original,
+                        &templates[level].0,
+                        format!("bake_{group_index:04}_{level}_source_{}", original.index()),
+                    )?;
+                    templates[level].1.record_material(&mut report.policies);
+                    variants.insert(key, e);
+                    e
+                };
+                materials[level] = material;
+            }
+            let parts = split(&primitive, &source.assignments, &materials, scale, group.period)?;
+            if replacements.insert((entity, source.part), parts).is_some() {
+                return Err(invalid("area bake", source.part, "source part grouped twice"));
+            }
+        }
+    }
+    report.source_materials = replaced_materials.len();
+    let candidates = world.closure(replaced_materials);
+    for &entity in prototypes.values() {
+        // the baked parts replace their source part; every per-primitive component follows
+        world
+            .rebuild_primitives(entity, |original| {
+                let mut primitives = Vec::new();
+                let mut from = Vec::new();
+                for (index, primitive) in original.primitives().iter().enumerate() {
+                    match replacements.remove(&(entity, index)) {
+                        Some(baked) => {
+                            from.extend(std::iter::repeat_n(index, baked.len()));
+                            primitives.extend(baked);
+                        }
+                        None => {
+                            from.push(index);
+                            primitives.push(primitive.clone());
+                        }
+                    }
+                }
+                Ok((primitives, from))
+            })
+            .map_err(|e| invalid("area bake", 0, e))?;
+    }
+    let retained = world.closure(world.entities().filter(|e| !candidates.contains(e)));
+    for entity in candidates.difference(&retained) {
+        world.despawn(*entity);
+    }
+    Ok(report)
+}
+
+fn split(
+    source: &Primitive,
+    assignments: &[usize],
+    materials: &[Entity],
+    scale: [f32; 2],
+    period: [f32; 2],
+) -> Result<Vec<Primitive>> {
+    let denominator: [f32; 2] = std::array::from_fn(|i| scale[i] * period[i]);
+    if denominator.iter().any(|x| !x.is_finite() || *x == 0.) {
+        return Err(invalid("area bake", 0, "invalid bake UV scale"));
+    }
+    let mut split = grouping::split(source, assignments, materials.len())?;
+    // Preserve authored ordering whenever this primitive uses only one level,
+    // even if other primitives sharing its material use additional levels.
+    if split.len() == 1 {
+        split[0].1 = source.clone();
+    }
+    split
+        .into_iter()
+        .map(|(level, mut part)| {
+            let Some(Stream::F32x2(uv)) = part.streams.get_mut(&Semantic::TexCoord(0)) else {
+                return Err(invalid("area bake", 0, "missing main UV stream"));
+            };
+            for uv in uv {
+                for i in 0..2 {
+                    uv[i] /= denominator[i];
+                }
+            }
+            part.material = Some(materials[level]);
+            Ok(part)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn real_jar_reflectance_and_unchanged_channels() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::layer_bake::{BaseMipBilinearWrap, Prepared};
+        use primase_texcodec::TexDecoder;
+        use sha2::{Digest, Sha256};
+        use std::sync::Arc;
+        let Some(path) = primase_testdata::real_data("PRIMASE_FROMSOFT_REFLECTANCE_ORACLE") else {
+            return Ok(());
+        };
+        let oracle: serde_json::Value = serde_json::from_slice(&primase_testdata::read_input(path)?)?;
+        let read = |path: &str, expected: &str| -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let bytes = primase_testdata::read_input(path)?;
+            assert_eq!(
+                Sha256::digest(&bytes)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+                expected
+            );
+            Ok(bytes)
+        };
+        let shader = read(
+            oracle["shader"].as_str().unwrap(),
+            oracle["shader_sha256"].as_str().unwrap(),
+        )?;
+        assert_eq!(
+            oracle["shader_sha256"],
+            "bdb79b8f5c974834ea03232810d9edd28d54f3edc23c7573f5484fdebf010daf"
+        );
+        let offset = oracle["literal_offset"].as_u64().unwrap() as usize;
+        let literal = u32::from_le_bytes(shader[offset..offset + 4].try_into()?);
+        assert_eq!(literal, oracle["literal_bits"].as_u64().unwrap() as u32);
+        assert_eq!(literal, 0x3e31_5cac);
+        // Reconstruct through the existing source resolver; these source types
+        // intentionally have no public Deserialize contract.
+        let src = &oracle["source"];
+        let def = &src["definition"];
+        let definition = crate::mtd::MaterialDefinition {
+            shader: def["shader"].as_str().unwrap().into(),
+            description: def["description"].as_str().unwrap().into(),
+            parameters: def["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    let value = &p["value"];
+                    crate::mtd::Parameter {
+                        name: p["name"].as_str().unwrap().into(),
+                        value: if let Some(b) = value["Bool"].as_bool() {
+                            crate::mtd::Value::Bool(b)
+                        } else if let Some(v) = value.get("Int") {
+                            crate::mtd::Value::Int(serde_json::from_value(v.clone()).unwrap())
+                        } else {
+                            crate::mtd::Value::Float(serde_json::from_value(value["Float"].clone()).unwrap())
+                        },
+                    }
+                })
+                .collect(),
+            textures: def["textures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| crate::mtd::Texture {
+                    kind: t["kind"].as_str().unwrap().into(),
+                    path: t["path"].as_str().unwrap().into(),
+                    uv_number: t["uv_number"].as_i64().unwrap() as i32,
+                    shader_data_index: t["shader_data_index"].as_i64().unwrap() as i32,
+                    extra: serde_json::from_value(t["extra"].clone()).unwrap(),
+                })
+                .collect(),
+            block_lengths: def["block_lengths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| crate::mtd::BlockLength {
+                    start: b["start"].as_u64().unwrap() as usize,
+                    kind: b["kind"].as_u64().unwrap() as u32,
+                    declared: b["declared"].as_u64().unwrap() as usize,
+                    consumed: b["consumed"].as_u64().unwrap() as usize,
+                })
+                .collect(),
+        };
+        let source = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "jar".into(),
+                mtd: format!("{}.mtd", src["mtd"].as_str().unwrap()),
+                gx: vec![],
+                textures: src["bindings"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(kind, b)| crate::flver::Texture {
+                        kind: kind.clone(),
+                        path: format!("{}.dds", b["texture"].as_str().unwrap()),
+                        scale: serde_json::from_value(b["scale"].clone()).unwrap(),
+                    })
+                    .collect(),
+            },
+            Some(&definition),
+            |_| true,
+        );
+        assert_eq!(serde_json::to_value(&source.layered)?, src["layered"]);
+        assert_eq!(source.mtd, "M[m11_01]_OBJ_Pot1");
+        let mut images = BTreeMap::new();
+        for (name, entry) in oracle["images"].as_object().unwrap() {
+            let bytes = read(entry["path"].as_str().unwrap(), entry["sha256"].as_str().unwrap())?;
+            let texture = primase_dds::read(&bytes)?;
+            let rgba = primase_texcodec::Decoder::default().decode_rgba8(
+                texture.format,
+                texture.width,
+                texture.height,
+                &texture.levels[0],
+            )?;
+            images.insert(name.clone(), (texture.width, texture.height, rgba));
+        }
+        let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), |name, srgb| {
+            let (w, h, rgba) = images.get(name).expect("complete jar source texture closure");
+            Ok(Some(Arc::new(BaseMipBilinearWrap::new(*w, *h, rgba, srgb)?)))
+        })?;
+        for inputs in [
+            Inputs::default(),
+            Inputs {
+                weights_snow: [0.25, 0.5, 0.75, 0.25],
+                tint_color: [0.8, 0.7, 0.6, 1.],
+                detail: 1.,
+            },
+            Inputs {
+                weights_snow: [1.; 4],
+                detail: 0.,
+                ..Inputs::default()
+            },
+        ] {
+            let public = prepared.bake(32, prepared.period, inputs)?;
+            let captured = prepared.bake_with_reflectance(32, prepared.period, inputs)?;
+            for pixel in captured.reflectance.as_ref().unwrap() {
+                assert_eq!(pixel.mask, 7);
+                assert_eq!(pixel.bits, [literal; 3]);
+            }
+            assert_eq!(public.albedo, captured.image.albedo);
+            assert_eq!(public.normal, captured.image.normal);
+            assert_eq!(public.gloss, captured.image.gloss);
+            assert_eq!(public.emissive, captured.image.emissive);
+            assert_eq!(public.policies, captured.image.policies);
+            assert_eq!(public.instructions, captured.image.instructions);
+            assert_eq!(public.samples, captured.image.samples);
+            let classification = Reflectance::classify(&source, 32, captured.reflectance.as_deref());
+            assert_eq!(classification, Reflectance::Dielectric);
+            let mut before = World::default();
+            let mut after = World::default();
+            let mut log = primase_core::pass::PassLog::default();
+            let old = channel_material(
+                &mut before,
+                "jar",
+                &source,
+                public,
+                Reflectance::Unsupported,
+                &mut Default::default(),
+            )?;
+            let new = channel_material(
+                &mut after,
+                "jar",
+                &source,
+                captured.image,
+                classification,
+                &mut log,
+            )?;
+            // Both are dielectric now; tracing changes only which loss is named.
+            assert_eq!((old.metallic, new.metallic), (0., 0.));
+            assert_eq!(old, new, "traced reflectance changes no lowered value");
+            let pixels = |world: &World| {
+                world
+                    .iter::<Texture>()
+                    .map(|(_, t)| (t.format, t.color_space, t.role, t.levels.clone()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(pixels(&before), pixels(&after));
+            classification.record_material(&mut log);
+            assert_eq!(
+                log.approximations["source dielectric F0 0.03 mapped to target F0 0.04"],
+                1
+            );
+            assert!(!log.approximations.contains_key(pbr::UNKNOWN_METALLIC_LOSS));
+        }
+        println!(
+            "jar M[Multiple]_1: 3 x 1024 executed RGB samples equal independent literal 0x{literal:08x}; all baked channels/policies and lowered images exact; traced dielectric, metallic 0"
+        );
+        Ok(())
+    }
+    #[test]
+    fn equal_bake_inputs_share_images_but_keep_referenced_source_gx() {
+        let mut world = World::default();
+        let mut source = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                textures: vec![],
+                gx: vec![],
+            },
+            None,
+            |_| false,
+        );
+        source.layered = Some(crate::materials::LayeredMaterial {
+            mtd: source.mtd.clone(),
+            definition: crate::mtd::MaterialDefinition {
+                shader: "M[Multiple]".into(),
+                description: String::new(),
+                parameters: vec![],
+                textures: vec![],
+                block_lengths: vec![],
+            },
+            bindings: BTreeMap::new(),
+        });
+        let original_a = world.spawn();
+        source.gx = vec![crate::flver::GxItem {
+            id: *b"GXMD",
+            version: 123,
+            data: vec![1, 2, 3, 4],
+        }];
+        world.insert(original_a, source.clone());
+        let original_b = world.spawn();
+        let mut other = source.clone();
+        other.gx[0].data = vec![4, 3, 2, 1];
+        world.insert(original_b, other.clone());
+        assert_eq!(
+            super::super::layers::bake_identity(&source).unwrap(),
+            super::super::layers::bake_identity(&other).unwrap()
+        );
+        assert_ne!(
+            serde_json::to_value(&source).unwrap(),
+            serde_json::to_value(&other).unwrap()
+        );
+        // Prepared consumes these identical definition/binding values; GX must
+        // neither alter the clustering pool nor cause another image execution.
+        assert_eq!(
+            serde_json::to_value(&source.layered).unwrap(),
+            serde_json::to_value(&other.layered).unwrap()
+        );
+        let mut changed_uv = other.clone();
+        changed_uv.uv_scale = [2., 1.];
+        assert_ne!(
+            super::super::layers::bake_identity(&source).unwrap(),
+            super::super::layers::bake_identity(&changed_uv).unwrap()
+        );
+        let mut changed_alpha = other.clone();
+        changed_alpha.cutoff = 0.9;
+        assert_ne!(
+            super::super::layers::bake_identity(&source).unwrap(),
+            super::super::layers::bake_identity(&changed_alpha).unwrap()
+        );
+        let image = crate::layer_bake::Bake {
+            size: 1,
+            albedo: vec![10, 20, 30, 40],
+            normal: vec![64, 128, 192, 255],
+            gloss: Some(vec![0.25]),
+            emissive: Some(vec![[4., 1., 0.]]),
+            instructions: 0,
+            samples: 0,
+            policies: BTreeMap::new(),
+        };
+        let template = channel_material(
+            &mut world,
+            "bake_shared",
+            &source,
+            image,
+            Reflectance::Unsupported,
+            &mut Default::default(),
+        )
+        .unwrap();
+        let pixels_before: Vec<_> = world
+            .iter::<Texture>()
+            .map(|(e, t)| (e, t.levels.clone()))
+            .collect();
+        let a = source_variant(&mut world, original_a, &template, "a".into()).unwrap();
+        let b = source_variant(&mut world, original_b, &template, "b".into()).unwrap();
+        assert_ne!(a, b);
+        let mesh = world.spawn();
+        world.insert(
+            mesh,
+            Mesh::new(
+                [a, b]
+                    .into_iter()
+                    .map(|material| Primitive {
+                        topology: primase_core::Topology::Triangles,
+                        material: Some(material),
+                        streams: BTreeMap::new(),
+                        indices: Some(vec![]),
+                    })
+                    .collect(),
+            ),
+        );
+        for (primitive, expected) in world
+            .get::<Mesh>(mesh)
+            .unwrap()
+            .primitives()
+            .iter()
+            .zip([source, other])
+        {
+            let entity = primitive.material.unwrap();
+            assert_eq!(
+                serde_json::to_value(world.get::<crate::materials::Material>(entity).unwrap()).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+            assert_eq!(world.get::<PbrMaterial>(entity).unwrap(), &template);
+        }
+        assert_eq!(
+            pixels_before,
+            world
+                .iter::<Texture>()
+                .map(|(e, t)| (e, t.levels.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn assembled_channels_preserve_conventions_factors_and_absence() {
+        let mut source = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                textures: vec![],
+                gx: vec![],
+            },
+            None,
+            |_| false,
+        );
+        source.class = "cutout".into();
+        source.cutoff = 0.4;
+        source.two_sided = true;
+        for emission in [None, Some([0.; 3]), Some([4., 1., 0.])] {
+            let mut world = World::default();
+            let mut log = primase_core::pass::PassLog::default();
+            let image = crate::layer_bake::Bake {
+                size: 1,
+                albedo: vec![10, 20, 30, 40],
+                normal: vec![64, 128, 192, 255],
+                gloss: emission.map(|_| vec![0.25]),
+                emissive: emission.map(|rgb| vec![rgb]),
+                instructions: 0,
+                samples: 0,
+                policies: BTreeMap::new(),
+            };
+            let material = channel_material(
+                &mut world,
+                "bake_fixture",
+                &source,
+                image,
+                Reflectance::Unsupported,
+                &mut log,
+            )
+            .unwrap();
+            Reflectance::Unsupported.record_material(&mut log);
+            assert_eq!(material.metallic, 0.);
+            assert_eq!(material.roughness, 1.);
+            assert_eq!(material.alpha_mode, AlphaMode::Mask { cutoff: 0.4 });
+            assert!(material.double_sided);
+            assert_eq!(log.approximations[pbr::UNKNOWN_METALLIC_LOSS], 1);
+            assert!(material.occlusion_texture.is_none());
+            let base = world
+                .get::<Texture>(material.base_color_texture.unwrap().texture)
+                .unwrap();
+            assert_eq!(
+                (base.role, base.color_space, base.normal),
+                (TexRole::Color, ColorSpace::Srgb, None)
+            );
+            assert_eq!(base.levels[0], [10, 20, 30, 40]);
+            let normal = world
+                .get::<Texture>(material.normal_texture.unwrap().texture)
+                .unwrap();
+            assert_eq!(
+                (normal.role, normal.color_space, normal.normal),
+                (TexRole::Normal, ColorSpace::Linear, Some(normals::SOURCE))
+            );
+            assert_eq!(normal.levels[0], [64, 128, 192, 255]);
+            match emission {
+                None => {
+                    assert!(material.metallic_roughness_texture.is_none());
+                    assert!(material.emissive_texture.is_none());
+                    assert_eq!(material.emissive, [0.; 3]);
+                    assert_eq!(material.emissive_strength, 1.);
+                }
+                Some(rgb) => {
+                    let orm = world
+                        .get::<Texture>(material.metallic_roughness_texture.unwrap().texture)
+                        .unwrap();
+                    assert_eq!(
+                        (orm.role, orm.color_space, orm.normal),
+                        (TexRole::Mask, ColorSpace::Linear, None)
+                    );
+                    assert_eq!(orm.levels[0], [255, 134, 255, 255]);
+                    let light = world
+                        .get::<Texture>(material.emissive_texture.unwrap().texture)
+                        .unwrap();
+                    assert_eq!(
+                        (light.role, light.color_space, light.normal),
+                        (TexRole::Color, ColorSpace::Srgb, None)
+                    );
+                    assert_eq!(material.emissive, [1.; 3]);
+                    assert_eq!(material.emissive_strength, rgb[0].max(1.));
+                    assert_eq!(
+                        light.levels[0],
+                        if rgb[0] == 0. {
+                            vec![0, 0, 0, 255]
+                        } else {
+                            vec![255, 137, 0, 255]
+                        }
+                    );
+                }
+            }
+            for (entity, texture) in world.iter::<Texture>() {
+                assert_eq!((texture.width, texture.height), (1, 1));
+                assert!(world.get::<Name>(entity).unwrap().0.starts_with("bake_"));
+            }
+        }
+    }
+
+    #[test]
+    fn split_preserves_single_level_order_and_remaps_every_stream() {
+        let mut world = World::default();
+        let materials = [world.spawn(), world.spawn()];
+        let source = Primitive {
+            topology: primase_core::Topology::Triangles,
+            streams: BTreeMap::from([
+                (Semantic::Position, Stream::F32x3(vec![[0.; 3]; 5])),
+                (Semantic::TexCoord(0), Stream::F32x2(vec![[8., 12.]; 5])),
+                (
+                    Semantic::Color(1),
+                    Stream::F32x4((0..5).map(|i| [i as f32; 4]).collect()),
+                ),
+            ]),
+            indices: Some(vec![2, 0, 1, 1, 3, 2]),
+            material: None,
+        };
+        let one = split(&source, &[0, 0], &materials[..1], [2., 3.], [2., 2.]).unwrap();
+        assert_eq!(one[0].indices, source.indices);
+        assert_eq!(
+            one[0].streams[&Semantic::Color(1)],
+            source.streams[&Semantic::Color(1)]
+        );
+        assert_eq!(
+            one[0].streams[&Semantic::TexCoord(0)],
+            Stream::F32x2(vec![[2., 2.]; 5])
+        );
+        // Other primitives can use level zero while this one uses only level one.
+        // Preserve its unused vertex and authored order, not just its triangles.
+        let nonzero = split(&source, &[1, 1], &materials, [2., 3.], [2., 2.]).unwrap();
+        assert_eq!(nonzero.len(), 1);
+        assert_eq!(nonzero[0].material, Some(materials[1]));
+        assert_eq!(nonzero[0].indices, source.indices);
+        assert_eq!(nonzero[0].streams, one[0].streams);
+        let two = split(&source, &[1, 0], &materials, [2., 3.], [2., 2.]).unwrap();
+        assert_eq!(two.len(), 2);
+        for (level, expected) in [[1., 3., 2.], [2., 0., 1.]].iter().enumerate() {
+            assert_eq!(two[level].material, Some(materials[level]));
+            assert_eq!(two[level].indices, Some(vec![0, 1, 2]));
+            assert_eq!(
+                two[level].streams[&Semantic::Color(1)],
+                Stream::F32x4(expected.iter().map(|i| [*i; 4]).collect())
+            );
+        }
+        assert!(split(&source, &[0], &materials, [1.; 2], [1.; 2]).is_err());
+        assert!(split(&source, &[0, 0], &materials, [0., 1.], [1.; 2]).is_err());
+    }
+}

@@ -30,12 +30,6 @@ reason = "forza_string, a hash with no user yet"
 removed_when = "it moves into the Forza reader when one exists, or is deleted"
 
 [[name]]
-crate = "worlds/fromsoft"
-word = "skate"
-reason = "the Sekiro area reader builds skate.* components (materials, collision, markers, lights, grind curves)"
-removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
-
-[[name]]
 crate = "worlds/gta"
 word = "skate"
 reason = "the IPL defaults are the earlier skate exporter's, named in their report"

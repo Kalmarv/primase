@@ -25,6 +25,11 @@ pub fn register(reg: &mut PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(crate::NormalizeNormals)),
     });
+    reg.register_requiring(
+        "uv-frame-normals",
+        |o: &Options| Ok(Box::new(crate::UvFrameNormals::from_options(o)?)),
+        &[("bitangent", "-v")],
+    );
     reg.register("bake-normal-scale", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(crate::BakeNormalScale)),

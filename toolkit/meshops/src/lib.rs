@@ -3,6 +3,7 @@
 
 mod curves;
 mod distance;
+pub mod frames;
 mod layered;
 pub use curves::{Chain, SurfaceIndex, chain};
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};

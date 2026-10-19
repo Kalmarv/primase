@@ -91,10 +91,10 @@ fn curl_verdicts_are_named_measurements() -> Result<()> {
 }
 
 #[test]
-fn source_bytes_wait_for_consumer_selection() {
-    use primase_core::{ColorSpace, NormalConvention, TexFormat, TexRole, Texture, World};
-    use primase_fromsoft::sekiro::normals::{self, Consumer};
-    // In-disk XY isolates consumer axis/sign selection from radial projection.
+fn source_bytes_wait_for_the_programs_choice() {
+    use primase_core::{ColorSpace, Mesh, NormalConvention, Semantic, Stream, TexFormat, TexRole, Texture};
+    use primase_fromsoft::sekiro::normals;
+    // In-disk XY isolates axis/sign selection from radial projection.
     let source = vec![vec![100, 120, 30, 40, 150, 160, 70, 80], vec![90, 100, 110, 120]];
     let t = Texture {
         width: 2,
@@ -105,48 +105,60 @@ fn source_bytes_wait_for_consumer_selection() {
         role: TexRole::Normal,
         normal: Some(normals::SOURCE),
     };
-    let mut world = World::default();
-    let e = world.spawn();
-    world.insert(e, t);
-    let mut skate = World::default();
-    let se = skate.spawn();
-    skate.insert(se, world.get::<Texture>(e).unwrap().clone());
-    normals::lower(&mut skate, Consumer::Skate).unwrap();
-    let st = skate.get::<Texture>(se).unwrap();
-    for (got, raw) in st.levels.iter().zip(&source) {
-        for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
-            assert_eq!([g[0], g[1], g[3]], [r[0], 255 - r[1], r[3]]);
-        }
-    }
-    assert_eq!(st.normal, Some(NormalConvention::GLTF));
-    assert!(
-        normals::lower(&mut skate, Consumer::Skate)
-            .unwrap()
-            .counts
-            .is_empty()
-    );
-    assert_eq!(world.get::<Texture>(e).unwrap().levels, source);
-    assert_eq!(world.get::<Texture>(e).unwrap().normal, Some(normals::SOURCE));
-    let log = normals::lower(&mut world, Consumer::Gltf).unwrap();
+    // a writer reading supplied tangents (glTF): the source axes swapped against the stored frame
+    let (mut world, texture, _) = common::quad(t.clone());
+    let log = &common::image_passes(&mut world, "normalize-normals").steps[0].log;
     assert_eq!(log.counts["normal tangent-plane axes swapped"], 1);
-    let t = world.get::<Texture>(e).unwrap();
-    assert_eq!(t.normal, Some(NormalConvention::GLTF));
-    for (got, raw) in t.levels.iter().zip(&source) {
+    let got = world.get::<Texture>(texture).unwrap();
+    assert_eq!(got.normal, Some(NormalConvention::GLTF));
+    for (got, raw) in got.levels.iter().zip(&source) {
         for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
             assert_eq!([g[0], g[1], g[3]], [r[1], r[0], r[3]]);
         }
     }
-    assert!(
-        normals::lower(&mut world, Consumer::Gltf)
-            .unwrap()
-            .counts
-            .is_empty()
-    );
+    // a target deriving its frame from the coordinates with the bitangent towards -v (ReSkate's Studio): the earlier
+    // skate rule, red kept and green flipped, comes out of the frames, and the mesh gets the derived frame
+    let (mut world, texture, mesh) = common::quad(t);
+    let report = common::image_passes(&mut world, "normalize-normals, uv-frame-normals{bitangent=-v}");
+    let got = world.get::<Texture>(texture).unwrap();
+    for (got, raw) in got.levels.iter().zip(&source) {
+        for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
+            assert_eq!([g[0], g[1], g[3]], [r[0], 255 - r[1], r[3]]);
+        }
+    }
+    let log = &report.steps[1].log;
+    assert_eq!(log.counts["primitives given the derived tangent frame"], 1);
+    assert!(log.approximations.is_empty(), "{log:?}");
+    let Some(Stream::F32x4(tangents)) = world.get::<Mesh>(mesh).unwrap().primitives()[0]
+        .streams
+        .get(&Semantic::Tangent)
+    else {
+        panic!("tangents")
+    };
+    // T along +u (+x); cross(N, T) * w = cross(+y, +x) = -z: along -v
+    assert_eq!(tangents[0], [1., 0., 0., 1.]);
+    // the bitangent towards +v instead: red and green swapped back to the source's, nothing negated
+    let (mut world, texture, _) = common::quad(world.get::<Texture>(texture).unwrap().clone());
+    let mut source_again = world.get::<Texture>(texture).unwrap().clone();
+    source_again.normal = Some(normals::SOURCE);
+    for level in &mut source_again.levels {
+        for p in level.as_chunks_mut::<4>().0 {
+            p[1] = 255 - p[1];
+        }
+    }
+    world.insert(texture, source_again);
+    common::image_passes(&mut world, "normalize-normals, uv-frame-normals{bitangent=+v}");
+    for (got, raw) in world.get::<Texture>(texture).unwrap().levels.iter().zip(&source) {
+        for (g, r) in got.as_chunks::<4>().0.iter().zip(raw.as_chunks::<4>().0) {
+            assert_eq!([g[0], g[1]], [r[0], r[1]]);
+        }
+    }
 }
+
 #[test]
-fn consumer_selection_projects_outside_disk_without_mutating_source() {
-    use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
-    use primase_fromsoft::sekiro::normals::{self, Consumer};
+fn projection_outside_the_disk_is_the_same_in_either_frame() {
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    use primase_fromsoft::sekiro::normals;
     let source = Texture {
         width: 1,
         height: 1,
@@ -156,23 +168,30 @@ fn consumer_selection_projects_outside_disk_without_mutating_source() {
         role: TexRole::Normal,
         normal: Some(normals::SOURCE),
     };
-    // Source XY = (-235, -215)/255, outside the disk. Normalize by
-    // sqrt(235^2 + 215^2), set Z=0 (encoded 128), then encode XY.
-    // Skate flips green: (33,214); glTF swaps the source axes: (41,33).
-    for (consumer, expected) in [
-        (Consumer::Skate, vec![33, 214, 128, 40]),
-        (Consumer::Gltf, vec![41, 33, 128, 40]),
+    // Source XY = (-235, -215)/255, outside the disk. Normalize by sqrt(235^2 + 215^2), set Z=0 (encoded 128),
+    // then encode XY: against the stored frame the axes swap (41, 33); against the -v derived frame red stays and
+    // green flips (33, 214), the bytes the earlier skate rule gave.
+    for (pipeline, expected) in [
+        ("normalize-normals", vec![41, 33, 128, 40]),
+        (
+            "normalize-normals, uv-frame-normals{bitangent=-v}",
+            vec![33, 214, 128, 40],
+        ),
     ] {
-        let mut world = World::default();
-        let e = world.spawn();
-        world.insert(e, source.clone());
-        assert_eq!(world.get::<Texture>(e).unwrap().levels, source.levels);
-        let log = normals::lower(&mut world, consumer).unwrap();
-        assert_eq!(log.counts["normal pixels projected onto unit disk"], 1);
-        assert_eq!(world.get::<Texture>(e).unwrap().levels, vec![expected]);
-        assert_eq!(source.levels, vec![vec![10, 20, 30, 40]]);
+        let (mut world, texture, _) = common::quad(source.clone());
+        let report = common::image_passes(&mut world, pipeline);
+        assert_eq!(
+            report.steps[0].log.counts["normal pixels projected onto unit disk"],
+            1
+        );
+        assert_eq!(
+            world.get::<Texture>(texture).unwrap().levels,
+            vec![expected],
+            "{pipeline}"
+        );
     }
 }
+
 #[test]
 fn uv_frame_classes_remain_measurements() -> Result<()> {
     let Some(path) = real_data("PRIMASE_FROMSOFT_UV_FRAME_CENSUS") else {
@@ -208,26 +227,24 @@ fn uv_frame_classes_remain_measurements() -> Result<()> {
 
 #[test]
 fn gx_emissive_basis_rebuilds_z_independent_of_blue() {
-    use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
-    use primase_fromsoft::sekiro::normals::{self, Consumer};
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    use primase_fromsoft::sekiro::normals;
     assert!(consumer_basis("GXFlver_ColDifSpcBumpEmiIbl").unwrap());
-    for consumer in [Consumer::Gltf, Consumer::Skate] {
-        let mut world = World::default();
-        let e = world.spawn();
-        world.insert(
-            e,
-            Texture {
-                width: 2,
-                height: 1,
-                format: TexFormat::Rgba8Unorm,
-                levels: vec![vec![100, 120, 0, 255, 100, 120, 255, 255]],
-                color_space: ColorSpace::Linear,
-                role: TexRole::Normal,
-                normal: Some(normals::SOURCE),
-            },
-        );
-        normals::lower(&mut world, consumer).unwrap();
-        let pixels = &world.get::<Texture>(e).unwrap().levels[0];
+    for pipeline in [
+        "normalize-normals",
+        "normalize-normals, uv-frame-normals{bitangent=-v}",
+    ] {
+        let (mut world, texture, _) = common::quad(Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![100, 120, 0, 255, 100, 120, 255, 255]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Normal,
+            normal: Some(normals::SOURCE),
+        });
+        common::image_passes(&mut world, pipeline);
+        let pixels = &world.get::<Texture>(texture).unwrap().levels[0];
         assert_eq!(&pixels[..4], &pixels[4..]);
         assert!(pixels[2] > 200);
     }

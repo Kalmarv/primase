@@ -333,25 +333,28 @@ bytes and declares `BitangentTangent`, green positive along the stored tangent,
 and Z to rebuild. Stored tangent xyz/w survives compaction. The LH-to-RH frame
 conversion reflects xyz and negates w exactly once, in the geometry reader.
 
-Call `sekiro::normals::lower(world, Consumer::Gltf)` for consumers that honor
-supplied tangents: the shared image pass swaps R/G and rebuilds Z, preserving
-alpha and all mips. It does not flip w again. Curl/integrability verdicts describe
-authoring patterns; they never select a per-texture sign exception.
+For writers that honor supplied tangents (glTF), run `normalize-normals`: it
+swaps R/G and rebuilds Z against the stored frame, preserving alpha and all mips,
+and does not flip w again. Curl/integrability verdicts describe authoring
+patterns; they never select a per-texture sign exception.
 
-`Consumer::Skate` keeps the source R/G order, flips green and rebuilds Z.
-A consumer test found green inverted relative to Studio's UV-derived frame;
-Studio ignores supplied tangents. This rule applies to every texture with no
-curl-based exceptions. The stored frame is replaced by the UV-derived frame as
-a counted approximation: measured sheared/other regions do not become exact
-merely by choosing a green sign. Both lowerings preserve alpha and all mips,
-update scene normal declarations and discard stale file provenance.
+For a target that derives its frame from texture coordinates (ReSkate's Studio
+ignores supplied tangents), run `normalize-normals` then
+`uv-frame-normals{bitangent=-v}` (toolkit/image). That pass measures each
+triangle's stored frame against the frame its coordinates give, picks per
+material the quarter turn or mirror most of its area takes, re-expresses the
+normal map's red and green bytes exactly (a copy where materials sharing a map
+take different ones), counts the area that takes another map or none (sheared
+regions) and gives the meshes the derived tangents. For Sekiro's most common
+stored frame (red along +u, green along +v) it keeps red and flips green, the
+earlier skate rule; GTA's stored frames are its derived frames (worlds/gta
+`tests/uv_frames.rs`), so the pass leaves its normal maps as they are.
 
 `sekiro::normals::consumer_basis` lists the inspected families. Three legacy
 families (`GXFlver_Col`, `GXFlver_ColDif`, `GXFlver_ColDifSpcBumpIbl`) are absent
 from the inspected shaderbdle bundle (not proven absent from the install) and
-use the same mapping as a named assumption,
-counted per emitted part in `Report::normal_basis_assumptions`. Unclassified
-families are errors. Water's static texture uses this basis, but its runtime
+use the same mapping as a named assumption, counted by `lower-fromsoft-materials`
+with unclassified families. Water's static texture uses this basis, but its runtime
 normal buffer remains an unsupported dynamic effect. Layer blending also remains
 part of the later shader bake; this conversion only preserves the chosen static
 texture contribution. Downstream consumers must preserve the emitted tangent
@@ -471,3 +474,112 @@ uses the D3D BC convention. The original decoder differs from that convention;
 the shader amplifies its input differences to measured albedo maxima [2,3,4,0]
 and normal maxima [2,2,1,0]. Those original-oracle differences remain reported
 diagnostics. The same-input arithmetic bound remains one level.
+
+Area grouping is an explicit static approximation: triangle-mean layer inputs,
+snow weighted by the upward-facing normal, triangle area times placement count,
+at most three weighted clusters, and weights quantized to 1/64. Groups below
+two percent or within 0.08 on every component merge. Numeric lexicographic
+ordering makes equal-weight groups deterministic without a text-format dependency.
+Splitting preserves every vertex stream through the shared primitive compactor.
+The bounded common-period policy searches up to sixteen UV units and records
+when it falls back to the main texture's repeat. These policies are not runtime
+shader behavior or format requirements.
+
+`PRIMASE_FROMSOFT_LAYER_AREA` holds `counts.json`, keyed by `slice` and `castle`,
+with `region` (the manifest rectangle unchanged, or null), `variants`,
+`nonunit_variants` and `records` (each has `material` and eight quantized `weights`).
+`<scope>-materials.json` is an array of `{key,mtd,bindings,period}`; each binding
+contains `{kind,path,scale}`. Keys identify the independent producer's material
+variants. The gate joins source bindings and checks quantized group identities
+and UV periods before any image bake. This gate is separate from pixel parity.
+
+The opt-in `layer_area_pixels` tests additionally require
+`<scope>-d3d-control/<record-index>-{albedo,normal}.rgba`, with indices in the
+`counts.json` record order and RGBA8 at each record's `size`. The independent
+producer receives D3D-decoded source pixels, as in the pilot. Four workers
+prepare one material each; output sizes follow the largest sampled colour
+layer, capped at 512. The gate reports unit and non-unit UV periods separately,
+per-channel maximum and worst-image p99, and worker/wall time. No area output
+is accepted merely because the fixtures exist: group identities, sizes and
+periods must match before each image comparison.
+
+An experimental reference control can be selected explicitly with
+`PRIMASE_FROMSOFT_LAYER_AREA_CONTROL`. It contains `control.json` documenting
+the producer revision and modifications, plus `<scope>/<record-index>-{albedo,normal}.rgba`.
+The gate prints that provenance and retains the same one-level bound. A control
+that preserves qualified texture bindings isolates the independent producer's
+numeric-slot overwrite; it is not a replacement oracle or runtime binding proof.
+Acceptance against a corrected producer still requires a separate comparison.
+
+
+### Material passes: layer bake and PBR lowering
+
+The reader keeps material data: each FLVER material's `fromsoft.material`, every
+texture a selected material binds (`fromsoft.texture_payloads`) and the G-buffer
+programs of its layered materials (`fromsoft.shader_programs`);
+`lower-fromsoft-geometry` gives a layered part's raw FLVER Byte4C UV members as
+`Color(n)` UNORM8 streams listed by `fromsoft.layer_inputs`. Two passes in
+`sekiro::passes` lower them:
+
+- `bake-fromsoft-layers{max-size=N}` (`BakeFromSoftLayers`) bakes static layered
+  materials with base-mip bilinear-wrap sampling at each material's reference
+  size, capped at `max-size` (required: the program's choice; also the size of a
+  group without a colour image). It groups per-triangle inputs into the gated
+  weight levels and splits indexed parts by level through
+  `World::rebuild_primitives`, preserving the other vertex streams and source
+  material definitions and dividing main-layer UVs by the tiling the geometry
+  pass applied (`fromsoft.uv_tiling`) and the bake period. A single weight level
+  preserves the source vertex order. The source resources are put back also when
+  it fails, and the layer inputs are consumed only after it succeeded.
+- `lower-fromsoft-materials{layers=preserve|preview}` (`LowerFromSoftMaterials`)
+  lowers every source material to core PBR, texture transforms relative to the
+  applied tiling. A layered material no pass baked needs the program's choice:
+  `preserve` keeps it as source data (layer inputs included), counted; `preview`
+  lowers it from its main-layer preview, counted, and drops the layer inputs
+  (shader inputs, not vertex colours); no choice is an error. Normal maps of
+  shaders whose basis is assumed or unclassified are counted.
+
+The earlier skate route's materials are `bake-fromsoft-layers{max-size=512}` then
+`lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.
+
+Generated texture names begin with `bake_`, including colour, normal, ORM and
+emission, so downstream web caps remain a separate policy. Core PBR bindings are
+authoritative. Gloss becomes roughness only in the PBR helper; emission uses its
+normalised sRGB texture and explicit HDR strength. Source materials without a bake
+are lowered by the lowering pass. The bake's pass log counts unique source
+materials separately from weight levels, including channel presence/absence and
+non-unit periods, and names frozen inputs and quantisation; the lowering's log
+retains the source lowering's losses.
+
+The `baked_area` installed-data test exercises the bake pass using the existing
+Sekiro directory, decoder and scene-reference inputs. Its inventory and binding
+assertions do not replace the independent per-image and written-scene gates.
+
+Baked reflectance lowering captures output3 internally without changing public
+`Prepared::bake` results or allocating another RGB plane for public callers.
+For the traced Multiple, MultipleGround and Multiple_Emissive switches 0..33,
+except variable Multiple18, fully written RGB must equal the exact source
+encoded dielectric literal at every texel. These materials use metallic factor
+0 and count the source F0 .03 to target .04 approximation. Missing, partial,
+nonfinite, variable and unsupported values have no metallic evidence: they also
+use factor 0, counted as unsupported reflectance and as the unevidenced-metallic
+approximation; ORM blue 255 remains a neutral multiplier. Counts are per
+newly referenced output material, excluding unused bake levels and repeated
+primitive uses. The optional `PRIMASE_FROMSOFT_REFLECTANCE_ORACLE` gate checks the
+picked jar's original shader literal and DDS inputs, capture-path neutrality,
+and unchanged other lowered channels; final old/new export parity is separate.
+
+
+`AreaBake::from_world` groups the inputs of a lowered area, the inventory the
+bake pass bakes, without decoding or baking pixels.
+
+Static clustering uses the material identity with only raw GX projected out.
+The interpreter does not consume GX, so retaining extra source bytes must not
+change the weight clustering pool or image results. Full source identities,
+including exact GX payloads, remain on each referenced output material; equal
+bake inputs share image entities and weight centers, not source provenance.
+The bake log's `source materials baked` counts those full source identities,
+while `bake groups` and the gloss/emission presence counters count bake-input
+groups. `bake levels` counts baked images' weight levels, not per-source
+material entities.
+UV scale, alpha policy and every other material field remain in the group key.
