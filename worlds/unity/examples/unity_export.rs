@@ -64,8 +64,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.lod_forms
     );
     println!(
-        "not decoded {:?}; not reproduced {:?}",
-        report.textures_not_decoded, report.not_reproduced
+        "not decoded {:?}; not reproduced {:?}; notices {:?}",
+        report.textures_not_decoded, report.not_reproduced, report.notices
     );
     // the lowering, as a pipeline: each pass whose input the level has, verified after each
     let unit = |v| primase_gltf::prepare::UnitValue::new(v).expect("a unit value");

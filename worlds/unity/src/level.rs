@@ -154,6 +154,9 @@ pub struct LevelReport {
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
     /// properties.
     pub not_reproduced: BTreeMap<String, u64>,
+    /// Source data read with an approximation or not read because core has no slot for it, by what, over the meshes
+    /// read ([`crate::mesh::UvNotices`]).
+    pub notices: BTreeMap<&'static str, u64>,
     pub skipped: Skipped,
 }
 
@@ -398,6 +401,21 @@ impl Builder<'_> {
         if !literals.is_empty() {
             w.insert(e, Condition(vec![Clause(literals)]));
             *self.report.conditioned.entry(kind).or_default() += 1;
+        }
+    }
+
+    /// Count what a mesh's texture coordinates could not put into core ([`LevelReport::notices`]).
+    fn note_uvs(&mut self, uv: crate::mesh::UvNotices) {
+        for (what, n) in [
+            (
+                "texture coordinates of 3 or 4 components: those beyond u and v not read (vertices)",
+                uv.components_not_read,
+            ),
+            ("non-finite texture coordinates read as 0", uv.non_finite),
+        ] {
+            if n > 0 {
+                *self.report.notices.entry(what).or_default() += n;
+            }
         }
     }
 
@@ -962,7 +980,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 Vec::new()
             };
             if !meshes.contains_key(&r.mesh) {
-                meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
+                let data = UnityMeshData::read(player, &r.mesh)?;
+                b.note_uvs(data.uv_notices());
+                meshes.insert(r.mesh.clone(), data);
             }
             let data = &meshes[&r.mesh];
             let (first, count) = match r.submeshes {
@@ -1095,7 +1115,9 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             let mut forms = Vec::with_capacity(key.2.len());
             for (level, (mesh, mats)) in key.2.iter().enumerate() {
                 if !meshes.contains_key(mesh) {
-                    meshes.insert(mesh.clone(), UnityMeshData::read(player, mesh)?);
+                    let data = UnityMeshData::read(player, mesh)?;
+                    b.note_uvs(data.uv_notices());
+                    meshes.insert(mesh.clone(), data);
                 }
                 let data = &meshes[mesh];
                 let (drawn, mut primitives): (Vec<u32>, Vec<_>) = data
