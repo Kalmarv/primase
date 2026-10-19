@@ -260,47 +260,69 @@ impl Pass for SelectCollision {
     }
 }
 
-/// Which flagged composite children the collision lowerings keep: their `foliage` and `river` options, each `keep`
-/// or `leave-out`, required (whether collision is dropped is the caller's choice).
+/// What a collision lowering does with the composite children carrying one flag (option values `keep`,
+/// `leave-out`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flagged {
+    Keep,
+    LeaveOut,
+}
+
+impl Flagged {
+    /// The option value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Flagged::Keep => "keep",
+            Flagged::LeaveOut => "leave-out",
+        }
+    }
+
+    /// Option `k`'s value in `o`, required.
+    fn from_option(o: &Options, k: &str) -> std::result::Result<Flagged, String> {
+        match o.get(k).map(String::as_str) {
+            Some("keep") => Ok(Flagged::Keep),
+            Some("leave-out") => Ok(Flagged::LeaveOut),
+            Some(v) => Err(format!("{k}={v}: keep or leave-out")),
+            None => Err(format!(
+                "{k} is required (keep or leave-out): whether collision flagged {k} is dropped is the caller's choice"
+            )),
+        }
+    }
+}
+
+/// Which flagged composite children the collision lowerings keep: their `foliage` and `river` options, both required
+/// (whether collision is dropped is the caller's choice). Any value is valid: the fields are public.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlaggedVolumes {
-    /// Children flagged foliage (type flag bit 19).
-    pub foliage: bool,
-    /// Children flagged river (type flag bit 27).
-    pub river: bool,
+    /// Children flagged foliage (type flag bit 19: bushes a body passes through).
+    pub foliage: Flagged,
+    /// Children flagged river (type flag bit 27: water volumes).
+    pub river: Flagged,
 }
 
 impl FlaggedVolumes {
     /// Both kept.
     pub const KEEP: FlaggedVolumes = FlaggedVolumes {
-        foliage: true,
-        river: true,
+        foliage: Flagged::Keep,
+        river: Flagged::Keep,
     };
     /// Both left out.
     pub const LEAVE_OUT: FlaggedVolumes = FlaggedVolumes {
-        foliage: false,
-        river: false,
+        foliage: Flagged::LeaveOut,
+        river: Flagged::LeaveOut,
     };
 
     /// The `foliage` and `river` options of `o`.
     pub fn from_options(o: &Options) -> std::result::Result<FlaggedVolumes, String> {
-        let kept = |k: &str| match o.get(k).map(String::as_str) {
-            Some("keep") => Ok(true),
-            Some("leave-out") => Ok(false),
-            Some(v) => Err(format!("{k}={v}: keep or leave-out")),
-            None => Err(format!(
-                "{k} is required (keep or leave-out): whether collision flagged {k} is dropped is the caller's choice"
-            )),
-        };
         Ok(FlaggedVolumes {
-            foliage: kept("foliage")?,
-            river: kept("river")?,
+            foliage: Flagged::from_option(o, "foliage")?,
+            river: Flagged::from_option(o, "river")?,
         })
     }
 
     fn insert_options(self, o: &mut Options) {
-        for (k, keep) in [("foliage", self.foliage), ("river", self.river)] {
-            o.insert(k.to_owned(), if keep { "keep" } else { "leave-out" }.to_owned());
+        for (k, f) in [("foliage", self.foliage), ("river", self.river)] {
+            o.insert(k.to_owned(), f.as_str().to_owned());
         }
     }
 }
@@ -309,15 +331,42 @@ impl FlaggedVolumes {
 const APPROXIMATES: &str = "spheres as 32-triangle spheres, capsule and cylinder polygons as 8-sided tubes, capsule, \
                             disc and cylinder bounds as their bounding boxes";
 
-/// `lower-gta-collision` (see the module documentation).
+/// `lower-gta-collision` (see the module documentation): every triangle ([`LowerGtaCollision::new`]) or those of a
+/// region ([`LowerGtaCollision::within`], checked).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaCollision {
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every triangle.
-    pub region: Option<[f32; 4]>,
+    /// `[x0, y0, x1, y1]`, GTA ground coordinates, finite with x0 < x1 and y0 < y1; `None`: every triangle.
+    region: Option<[f32; 4]>,
     pub volumes: FlaggedVolumes,
 }
 
 impl LowerGtaCollision {
+    /// Every triangle, the flagged volumes as `volumes` says.
+    pub fn new(volumes: FlaggedVolumes) -> LowerGtaCollision {
+        LowerGtaCollision {
+            region: None,
+            volumes,
+        }
+    }
+
+    /// Only the triangles whose centre lies in `[x0, y0, x1, y1]` (GTA ground coordinates, half-open): an error unless
+    /// every value is finite, x0 < x1 and y0 < y1.
+    pub fn within(mut self, region: [f32; 4]) -> std::result::Result<LowerGtaCollision, String> {
+        let [x0, y0, x1, y1] = region;
+        if !region.iter().all(|v| v.is_finite()) || x0 >= x1 || y0 >= y1 {
+            return Err(format!(
+                "region {region:?}: x0, y0, x1, y1 finite, with x0 < x1 and y0 < y1"
+            ));
+        }
+        self.region = Some(region);
+        Ok(self)
+    }
+
+    /// The region, if any.
+    pub fn region(&self) -> Option<[f32; 4]> {
+        self.region
+    }
+
     pub fn from_options(o: &Options) -> std::result::Result<LowerGtaCollision, String> {
         let num = |k: &str| -> std::result::Result<Option<f32>, String> {
             o.get(k)
@@ -329,15 +378,12 @@ impl LowerGtaCollision {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let region = match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
-            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
-            [None, None, None, None] => None,
-            _ => return Err("x0, y0, x1 and y1 go together".into()),
-        };
-        Ok(LowerGtaCollision {
-            region,
-            volumes: FlaggedVolumes::from_options(o)?,
-        })
+        let pass = LowerGtaCollision::new(FlaggedVolumes::from_options(o)?);
+        match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
+            [Some(a), Some(b), Some(c), Some(d)] => pass.within([a, b, c, d]),
+            [None, None, None, None] => Ok(pass),
+            _ => Err("x0, y0, x1 and y1 go together".into()),
+        }
     }
 }
 
@@ -587,13 +633,13 @@ impl Soup {
                     // the caller's choice: foliage and river volumes kept or left out; a child is left out when
                     // a flag it has is (counted by the first), else counted kept by each flag it has
                     let flags = c.flags[0];
-                    let flagged: Vec<(&str, bool)> =
+                    let flagged: Vec<(&str, Flagged)> =
                         [(19, "foliage", volumes.foliage), (27, "river", volumes.river)]
                             .into_iter()
                             .filter(|(bit, _, _)| flags & (1 << bit) != 0)
-                            .map(|(_, what, keep)| (what, keep))
+                            .map(|(_, what, f)| (what, f))
                             .collect();
-                    if let Some((what, _)) = flagged.iter().find(|(_, keep)| !keep) {
+                    if let Some((what, _)) = flagged.iter().find(|(_, f)| *f == Flagged::LeaveOut) {
                         log.count(&format!("composite children flagged {what}, left out"), 1);
                         continue;
                     }
@@ -959,12 +1005,11 @@ mod tests {
             b.bound.header.box_max[0] = 101.0;
         }
         let mut log = PassLog::default();
-        LowerGtaCollision {
-            region: Some([-10.0, -10.0, 10.0, 10.0]),
-            volumes: FlaggedVolumes::LEAVE_OUT,
-        }
-        .run(&mut w, &mut log)
-        .unwrap();
+        LowerGtaCollision::new(FlaggedVolumes::LEAVE_OUT)
+            .within([-10.0, -10.0, 10.0, 10.0])
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
         assert_eq!(w.get::<Collision>(inside).map(|c| c.triangles.len()), Some(12));
         assert!(w.get::<GtaBounds>(inside).is_none());
         assert!(!w.is_alive(outside));
@@ -1008,8 +1053,8 @@ mod tests {
             (
                 "foliage=keep,river=leave-out",
                 FlaggedVolumes {
-                    foliage: true,
-                    river: false,
+                    foliage: Flagged::Keep,
+                    river: Flagged::LeaveOut,
                 },
                 1,
             ),
@@ -1047,9 +1092,9 @@ mod tests {
             assert_eq!(log.approximations.len(), 2, "{:?}", log.approximations);
             // the child flagged both: left out by foliage first, or counted kept by both
             let (foliage, river) = match (volumes.foliage, volumes.river) {
-                (false, _) => (("left out", 2), ("left out", 1)),
-                (true, false) => (("kept", 1), ("left out", 2)),
-                (true, true) => (("kept", 2), ("kept", 2)),
+                (Flagged::LeaveOut, _) => (("left out", 2), ("left out", 1)),
+                (Flagged::Keep, Flagged::LeaveOut) => (("kept", 1), ("left out", 2)),
+                (Flagged::Keep, Flagged::Keep) => (("kept", 2), ("kept", 2)),
             };
             for (what, (done, n)) in [("foliage", foliage), ("river", river)] {
                 assert_eq!(
@@ -1060,6 +1105,35 @@ mod tests {
                 );
             }
         }
+        // the struct and its options are one: made from options, printed back as the same options
+        let o: Options = [
+            ("x0", "-1"),
+            ("y0", "-2"),
+            ("x1", "3"),
+            ("y1", "4"),
+            ("foliage", "keep"),
+            ("river", "leave-out"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let made = LowerGtaCollision::from_options(&o).unwrap();
+        assert_eq!(made.options(), o);
+        assert_eq!(made.region(), Some([-1.0, -2.0, 3.0, 4.0]));
+        // a region the constructor refuses, from options or not
+        for bad in [
+            [1.0, 0.0, 1.0, 2.0],
+            [0.0, 3.0, 1.0, 2.0],
+            [f32::NAN, 0.0, 1.0, 1.0],
+        ] {
+            assert!(
+                LowerGtaCollision::new(FlaggedVolumes::KEEP).within(bad).is_err(),
+                "{bad:?}"
+            );
+        }
+        let mut reversed = o.clone();
+        reversed.insert("x1".into(), "-5".into());
+        assert!(LowerGtaCollision::from_options(&reversed).is_err());
         for missing in ["foliage=keep", "river=keep", ""] {
             let o: Options = missing
                 .split_once('=')
