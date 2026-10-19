@@ -8,6 +8,11 @@
     clippy::disallowed_types,
     reason = "reader I/O: reads the key files the caller names"
 )]
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use std::path::Path;
 
 use sha1::{Digest, Sha1};
@@ -82,8 +87,14 @@ impl Keys {
             )));
         }
         let mut keys = Vec::with_capacity(NG_KEY_COUNT);
-        for (i, k) in ng_keys.as_chunks::<NG_KEY_BYTES>().0.iter().enumerate() {
-            if sha1(k) != key_hashes::NG_KEYS[i] {
+        for (i, (k, want)) in ng_keys
+            .as_chunks::<NG_KEY_BYTES>()
+            .0
+            .iter()
+            .zip(key_hashes::NG_KEYS.iter())
+            .enumerate()
+        {
+            if sha1(k) != *want {
                 return Err(Error::Keys(format!(
                     "NG key {i} does not match its published digest"
                 )));
@@ -95,20 +106,28 @@ impl Keys {
             keys.push(key);
         }
         let mut tables = Vec::with_capacity(NG_ROUNDS);
-        for (r, round) in ng_tables
+        for (r, (round, wants)) in ng_tables
             .as_chunks::<{ 16 * NG_TABLE_BYTES }>()
             .0
             .iter()
+            .zip(key_hashes::NG_DECRYPT_TABLES.chunks(16))
             .enumerate()
         {
             let mut t = [[0u32; 256]; 16];
-            for (j, table) in round.as_chunks::<NG_TABLE_BYTES>().0.iter().enumerate() {
-                if sha1(table) != key_hashes::NG_DECRYPT_TABLES[r * 16 + j] {
+            for (j, ((table, want), out)) in round
+                .as_chunks::<NG_TABLE_BYTES>()
+                .0
+                .iter()
+                .zip(wants)
+                .zip(t.iter_mut())
+                .enumerate()
+            {
+                if sha1(table) != *want {
                     return Err(Error::Keys(format!(
                         "NG decrypt table {r}/{j} does not match its published digest"
                     )));
                 }
-                for (d, s) in t[j].iter_mut().zip(words(table)) {
+                for (d, s) in out.iter_mut().zip(words(table)) {
                     *d = s;
                 }
             }
@@ -169,17 +188,16 @@ impl Keys {
     pub fn from_legacy_executable(exe: &[u8]) -> Result<Self> {
         let find = |len: usize, wanted: &[[u8; 20]]| -> Vec<Option<Vec<u8>>> {
             let mut found: Vec<Option<Vec<u8>>> = vec![None; wanted.len()];
-            let mut left = wanted.len();
-            let mut p = 0;
-            while p + len <= exe.len() && left > 0 {
-                let h = sha1(&exe[p..p + len]);
-                for (i, w) in wanted.iter().enumerate() {
-                    if found[i].is_none() && h == *w {
-                        found[i] = Some(exe[p..p + len].to_vec());
-                        left -= 1;
+            for window in exe.windows(len).step_by(8) {
+                if found.iter().all(Option::is_some) {
+                    break;
+                }
+                let h = sha1(window);
+                for (slot, w) in found.iter_mut().zip(wanted) {
+                    if slot.is_none() && h == *w {
+                        *slot = Some(window.to_vec());
                     }
                 }
-                p += 8;
             }
             found
         };
@@ -217,16 +235,20 @@ impl Keys {
     pub fn name_hash(&self, name: &str) -> u32 {
         let mut h: u32 = 0;
         for c in name.bytes() {
-            let t = 1025u32.wrapping_mul(u32::from(self.hash_lut[usize::from(c)]).wrapping_add(h));
+            // a byte indexes every one of the table's 256 entries
+            let mapped = self.hash_lut.get(usize::from(c)).copied().unwrap_or_default();
+            let t = 1025u32.wrapping_mul(u32::from(mapped).wrapping_add(h));
             h = (t >> 6) ^ t;
         }
         let n = 9u32.wrapping_mul(h);
         32769u32.wrapping_mul((n >> 11) ^ n)
     }
 
-    /// The NG key of an archive or entry: chosen by its name's hash and its length.
-    pub fn ng_key(&self, name: &str, length: u32) -> &NgKey {
-        let i = self.name_hash(name).wrapping_add(length).wrapping_add(101 - 40) % 101;
-        &self.ng_keys[i as usize]
+    /// The NG key of an archive or entry: chosen by its name's hash and its length; an error without NG key material.
+    pub fn ng_key(&self, name: &str, length: u32) -> Result<&NgKey> {
+        let i = self.name_hash(name).wrapping_add(length).wrapping_add(61) % 101;
+        self.ng_keys
+            .get(usize::try_from(i).unwrap_or(usize::MAX))
+            .ok_or_else(|| Error::Keys("an NG archive needs the NG key material".into()))
     }
 }

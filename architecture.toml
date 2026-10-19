@@ -315,10 +315,3 @@ reason = "unit tests write and read a sink file"
 path = "worlds/gta"
 reason = "the GTA reader reads untrusted archive and resource bytes"
 
-[[parse]]
-file = "worlds/gta/src/assets.rs"
-reason = "builds the world from drawables and textures already read and checked; its byte reads are fixed-size array readers"
-
-[[parse]]
-file = "worlds/gta/src/keys.rs"
-reason = "reads the key files its caller names, checked against published digests before use"

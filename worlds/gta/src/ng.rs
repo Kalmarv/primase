@@ -53,10 +53,7 @@ fn ng_block(block: &mut [u8; 16], key: &NgKey, tables: &[NgRound]) {
 /// NG-decrypt `data` in place with the key chosen by `name` and `length` (an archive's file name and size, or an
 /// entry's name and its size as the archive records it).
 pub fn ng_decrypt(keys: &Keys, name: &str, length: u32, data: &mut [u8]) -> Result<()> {
-    if keys.ng_keys.is_empty() {
-        return Err(Error::Keys("an NG archive needs the NG key material".into()));
-    }
-    let key = keys.ng_key(name, length);
+    let key = keys.ng_key(name, length)?;
     for block in data.as_chunks_mut::<16>().0 {
         ng_block(block, key, &keys.ng_tables);
     }

@@ -22,6 +22,11 @@
     clippy::disallowed_types,
     reason = "reader I/O: reads drawables and textures from the install"
 )]
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 
@@ -122,9 +127,12 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
         ),
         (16, 0x1C) => (Semantic::Weights(0), Stream::U8x4(u8x4(&bytes))),
         (20, 0x1E) => (Semantic::Joints(0), Stream::U8x4(u8x4(&bytes))),
-        (24..=27, 0x1C) => (Semantic::Color(e.slot - 24), Stream::U8x4(u8x4(&bytes))),
+        (24..=27, 0x1C) => (
+            Semantic::Color(e.slot.wrapping_sub(24)),
+            Stream::U8x4(u8x4(&bytes)),
+        ),
         (28..=51, 0x10) => (
-            Semantic::TexCoord(e.slot - 28),
+            Semantic::TexCoord(e.slot.wrapping_sub(28)),
             Stream::F32x2(bytes.as_chunks::<8>().0.iter().map(le::f32x2_of).collect()),
         ),
         _ => {
@@ -137,6 +145,11 @@ fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream
     })
 }
 
+/// Count one more.
+fn bump(n: &mut usize) {
+    *n = n.saturating_add(1);
+}
+
 fn u8x4(b: &[u8]) -> Vec<[u8; 4]> {
     b.as_chunks::<4>().0.to_vec()
 }
@@ -147,11 +160,8 @@ fn model_bones(d: &Drawable, models: &[Model]) -> Vec<Option<u16>> {
     models
         .iter()
         .map(|m| {
-            let (bone, skinned) = (
-                (m.skeleton_binding >> 24) & 0xFF,
-                (m.skeleton_binding >> 8) & 0xFF != 0,
-            );
-            (d.skeleton.is_some() && !skinned).then_some(bone as u16)
+            let [bone, _, skinned, _] = m.skeleton_binding.to_be_bytes();
+            (d.skeleton.is_some() && skinned == 0).then_some(u16::from(bone))
         })
         .collect()
 }
@@ -188,7 +198,7 @@ fn mesh(
                             format!("{path}: positions that are not finite"),
                         ));
                     }
-                    *non_finite.entry(format!("{sem:?}")).or_default() += 1;
+                    bump(non_finite.entry(format!("{sem:?}")).or_default());
                     continue;
                 }
                 streams.insert(sem, s);
@@ -204,9 +214,20 @@ fn mesh(
     Ok(Mesh::new(primitives))
 }
 
+/// The archive a file reference names.
+fn archive(set: &ArchiveSet, f: crate::archive_set::FileRef) -> Result<&crate::rpf::Archive> {
+    set.install.archives.get(f.archive).ok_or_else(|| {
+        invalid(
+            "archive set",
+            0,
+            format!("archive {} of {}", f.archive, set.install.archives.len()),
+        )
+    })
+}
+
 impl Ctx<'_> {
     fn decode(&self, f: crate::archive_set::FileRef) -> Result<crate::resource::Resource> {
-        let a = &self.set.install.archives[f.archive];
+        let a = archive(self.set, f)?;
         a.resource(&mut File::open(&a.file)?, f.entry, self.keys)
     }
 
@@ -221,7 +242,7 @@ impl Ctx<'_> {
             };
             self.dicts.insert(txd, d);
         }
-        Ok(self.dicts[&txd].as_ref())
+        Ok(self.dicts.get(&txd).and_then(Option::as_ref))
     }
 
     fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
@@ -234,14 +255,29 @@ impl Ctx<'_> {
             .texture()
             .ok_or_else(|| invalid("texture", 0, format!("{}: format {:#x}", t.name, t.format.0)))?;
         let mut levels = Vec::new();
-        let mut at = 0usize;
+        let mut rest = t.data.as_slice();
         for level in 0..u32::from(t.levels) {
-            let n = format.level_size(
-                (u32::from(t.width) >> level).max(1),
-                (u32::from(t.height) >> level).max(1),
-            ) * usize::from(t.depth);
-            levels.push(t.data[at..at + n].to_vec());
-            at += n;
+            let n = format
+                .level_size(
+                    (u32::from(t.width) >> level).max(1),
+                    (u32::from(t.height) >> level).max(1),
+                )
+                .checked_mul(usize::from(t.depth))
+                .filter(|&n| n <= rest.len())
+                .ok_or_else(|| {
+                    invalid(
+                        "texture",
+                        0,
+                        format!(
+                            "{}: level {level} runs past the texture's {} bytes",
+                            t.name,
+                            t.data.len()
+                        ),
+                    )
+                })?;
+            let (this, next) = rest.split_at(n);
+            levels.push(this.to_vec());
+            rest = next;
         }
         let e = w.spawn();
         w.insert(
@@ -260,7 +296,7 @@ impl Ctx<'_> {
         w.insert(e, Source(format!("{source}#{}", t.name)));
         w.insert(e, Provenance::new(origin(source, Some(&t.name))));
         self.textures.insert(key, e);
-        self.report.textures += 1;
+        bump(&mut self.report.textures);
         Ok(e)
     }
 
@@ -279,7 +315,8 @@ impl Ctx<'_> {
                 .hashes
                 .iter()
                 .position(|&x| x == h)
-                .and_then(|i| own.textures[i].as_ref())
+                .and_then(|i| own.textures.get(i))
+                .and_then(Option::as_ref)
         {
             return self.texture_entity(w, ydr, t).map(Some);
         }
@@ -290,17 +327,18 @@ impl Ctx<'_> {
         {
             let found = self.dictionary(d)?.and_then(|(path, dict)| {
                 let i = dict.hashes.iter().position(|&x| x == h)?;
-                dict.textures[i].clone().map(|t| (path.clone(), t))
+                dict.textures.get(i)?.clone().map(|t| (path.clone(), t))
             });
             if let Some((path, t)) = found {
                 return self.texture_entity(w, &path, &t).map(Some);
             }
         }
-        *self
-            .report
-            .textures_not_found
-            .entry(name.to_lowercase())
-            .or_default() += 1;
+        bump(
+            self.report
+                .textures_not_found
+                .entry(name.to_lowercase())
+                .or_default(),
+        );
         Ok(None)
     }
 }
@@ -351,7 +389,7 @@ pub struct LightsReport {
 pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<LightsReport> {
     let mut report = LightsReport::default();
     let decode = |f: crate::archive_set::FileRef| -> Result<crate::resource::Resource> {
-        let a = &set.install.archives[f.archive];
+        let a = archive(set, f)?;
         a.resource(&mut File::open(&a.file)?, f.entry, keys)
     };
     let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
@@ -364,7 +402,7 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
                 let ext = if a.asset_type == 2 { "ydr" } else { "yft" };
                 match live(ext, a.asset_name) {
                     Some(f) => files.push((proto, ext, f)),
-                    None => report.asset_missing += 1,
+                    None => bump(&mut report.asset_missing),
                 }
             }
             3 => match live("ydd", a.drawable_dictionary) {
@@ -373,7 +411,7 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
                     .or_insert_with(|| (f, Vec::new()))
                     .1
                     .push((proto, a.asset_name)),
-                None => report.asset_missing += 1,
+                None => bump(&mut report.asset_missing),
             },
             _ => {}
         }
@@ -422,10 +460,10 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
     }
     all.sort_by_key(|(e, _)| *e);
     for (proto, lights) in all {
-        report.prototypes_read += 1;
+        bump(&mut report.prototypes_read);
         if !lights.0.is_empty() {
-            report.prototypes_with_lights += 1;
-            report.lights += lights.0.len();
+            bump(&mut report.prototypes_with_lights);
+            report.lights = report.lights.saturating_add(lights.0.len());
             let (records, bones) = lights;
             w.insert(proto, GtaLights { records });
             if !bones.is_empty() {
@@ -479,7 +517,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             // a drawable
             2 => {
                 let Some(f) = live("ydr", a.asset_name) else {
-                    ctx.report.asset_missing += 1;
+                    bump(&mut ctx.report.asset_missing);
                     continue;
                 };
                 (set.path(f).to_string(), Drawable::read_resource(&ctx.decode(f)?)?)
@@ -487,34 +525,39 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             // a fragment: its main drawable
             1 => {
                 let Some(f) = live("yft", a.asset_name) else {
-                    ctx.report.asset_missing += 1;
+                    bump(&mut ctx.report.asset_missing);
                     continue;
                 };
                 let mut frag = Fragment::read_resource(&ctx.decode(f)?)?;
                 bound = frag.physics.take();
                 let Some(d) = frag.drawable else {
-                    ctx.report.asset_missing += 1;
+                    bump(&mut ctx.report.asset_missing);
                     continue;
                 };
                 fragment_pose = frag.pose;
-                ctx.report.fragments += 1;
+                bump(&mut ctx.report.fragments);
                 (set.path(f).to_string(), d)
             }
             // an entry of a drawable dictionary
             3 => {
                 let Some(f) = live("ydd", a.drawable_dictionary) else {
-                    ctx.report.asset_missing += 1;
+                    bump(&mut ctx.report.asset_missing);
                     continue;
                 };
                 if !ctx.ydds.contains_key(&a.drawable_dictionary) {
                     let dict = DrawableDictionary::read_resource(&ctx.decode(f)?)?;
                     ctx.ydds.insert(a.drawable_dictionary, dict);
                 }
-                let Some(d) = ctx.ydds[&a.drawable_dictionary].get(a.asset_name).cloned() else {
-                    ctx.report.asset_missing += 1;
+                let Some(d) = ctx
+                    .ydds
+                    .get(&a.drawable_dictionary)
+                    .and_then(|dict| dict.get(a.asset_name))
+                    .cloned()
+                else {
+                    bump(&mut ctx.report.asset_missing);
                     continue;
                 };
-                ctx.report.dictionary_entries += 1;
+                bump(&mut ctx.report.dictionary_entries);
                 (format!("{}#{:#010x}", set.path(f), a.asset_name), d)
             }
             _ => continue,
@@ -527,7 +570,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     bound,
                 },
             );
-            ctx.report.embedded_bounds += 1;
+            bump(&mut ctx.report.embedded_bounds);
         }
         let mut materials = Vec::with_capacity(d.shaders.len());
         for (i, s) in d.shaders.iter().enumerate() {
@@ -553,7 +596,8 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                 m,
                 GtaShader {
                     drawable: path.clone(),
-                    index: i as u32,
+                    index: u32::try_from(i)
+                        .map_err(|_| invalid("drawable", 0, format!("{path}: shader {i}")))?,
                     name: s.name,
                     preset: s.preset,
                     render_bucket: s.render_bucket,
@@ -563,7 +607,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             );
             w.insert(m, Provenance::new(origin(&path, Some(&format!("shader {i}")))));
             materials.push(m);
-            ctx.report.materials += 1;
+            bump(&mut ctx.report.materials);
         }
         // the bones as stored; a model on a bone is drawn at its pose, which gta-pose-fragments composes
         let bones = Bones {
@@ -573,38 +617,42 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
         if !bones.is_empty() {
             w.insert(proto, GtaSkeleton(bones));
         }
-        let on_bones: [Vec<Option<u16>>; 4] = std::array::from_fn(|i| model_bones(&d, &d.lods[i]));
+        let on_bones: [Vec<Option<u16>>; 4] = d.lods.each_ref().map(|l| model_bones(&d, l));
         // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the
         // others are its forms
         let mut forms = Vec::new();
-        for (lod, models) in d.lods.iter().enumerate() {
+        for (lod, ((models, bones), lod_name)) in (0u8..).zip(d.lods.iter().zip(&on_bones).zip(LOD_NAMES)) {
             if lod > 0 && models.is_empty() {
                 continue;
             }
             let m = mesh(&path, models, &materials, &mut ctx.report.non_finite_streams)?;
             // per primitive its model's bone, for gta-pose-fragments
-            let posed = (models.iter().zip(&on_bones[lod]))
+            let posed = (models.iter().zip(bones))
                 .flat_map(|(model, p)| std::iter::repeat_n(*p, model.geometries.len()))
                 .collect::<Vec<_>>();
             if lod == 0 {
-                ctx.report.posed_models += on_bones[0].iter().flatten().count();
+                ctx.report.posed_models = ctx
+                    .report
+                    .posed_models
+                    .saturating_add(bones.iter().flatten().count());
+            }
+            let mut primitive_sources = Vec::new();
+            for (i, model) in (0u32..).zip(models) {
+                let geometries = u32::try_from(model.geometries.len())
+                    .map_err(|_| invalid("drawable", 0, format!("{path}: model {i}'s geometries")))?;
+                primitive_sources.extend((0..geometries).map(|g| [i, g]));
             }
             let sources = GtaSources {
-                lod: lod as u8,
-                sources: (models.iter().enumerate())
-                    .flat_map(|(i, model)| (0..model.geometries.len() as u32).map(move |g| [i as u32, g]))
-                    .collect(),
+                lod,
+                sources: primitive_sources,
             };
             let holder = if lod == 0 {
-                ctx.report.geometries += m.primitives().len();
+                ctx.report.geometries = ctx.report.geometries.saturating_add(m.primitives().len());
                 proto
             } else {
                 let f = w.spawn();
-                forms.push(LodForm {
-                    detail: lod as u8,
-                    form: f,
-                });
-                ctx.report.lod_forms += 1;
+                forms.push(LodForm { detail: lod, form: f });
+                bump(&mut ctx.report.lod_forms);
                 f
             };
             // the prototype keeps what the map said of it (its archetype); a form is its drawable's alone
@@ -615,7 +663,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             };
             for (i, model) in models.iter().enumerate() {
                 for g in 0..model.geometries.len() {
-                    let item = format!("{} model {i} geometry {g}", LOD_NAMES[lod]);
+                    let item = format!("{lod_name} model {i} geometry {g}");
                     provenance.push_part(origin(&path, Some(&item)));
                 }
             }
@@ -644,10 +692,13 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                 bounding_sphere: (d.bounding_centre, d.bounding_radius),
                 lod_dist: d.lod_dist,
                 render_masks: d.render_masks,
-                model_masks: std::array::from_fn(|i| d.lods[i].iter().map(|m| m.render_mask).collect()),
+                model_masks: d
+                    .lods
+                    .each_ref()
+                    .map(|l| l.iter().map(|m| m.render_mask).collect()),
             },
         );
-        ctx.report.drawables += 1;
+        bump(&mut ctx.report.drawables);
     }
     Ok(ctx.report)
 }
