@@ -1,7 +1,8 @@
 //! The GTA side of every conversion: an install opened once, a region read into a world of placements (both maps'
 //! states, every entity within reach), and the subsets a writer asks for loaded with their drawables and textures.
-//! The reader only reads: which map state, hour and placements a conversion keeps are passes ([`select_passes`]), run
-//! on the read world before a writer plans; what a loaded world becomes is passes too ([`DEFAULT_PASSES`]). A writer
+//! The reader only reads: which map state, hour and placements a conversion keeps are passes the program chooses
+//! (`resolve-state`, `gta-select-region`, ...), run on the read world before its parts are planned; what a loaded
+//! world becomes is passes too (`lower-gta-pbr`, ...), in the program's order with its options. A writer
 //! that writes a large region cell by cell loads each cell's roots ([`GtaSource::load`]); one that writes everything
 //! loads every placement once.
 use std::collections::BTreeSet;
@@ -18,14 +19,6 @@ use crate::gtxd::TextureParents;
 use crate::keys::Keys;
 use crate::region::{Region, RegionReport, States, archive_sets, read_region};
 use crate::{Install, Result};
-
-/// The passes a loaded GTA world goes through before a writer, in order: each prototype's finest level of detail (a
-/// writer that draws chooses no level itself; the passes after it then have no discarded forms to lower), the embedded
-/// collision bounds of props as their prototypes' collision (their surfaces classified), fragments'
-/// models at their bones' poses, shaders lowered to `pbr.material`, winding turned to the stored normals, tint palettes
-/// as per-vertex colour, terrain as layered materials, vertex colours to glTF's meaning, water surfaces as meshes,
-/// normal maps to glTF's convention.
-pub const DEFAULT_PASSES: &str = "select-lod{form=finest}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
 
 /// Which of GTA's maps a conversion draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,49 +39,6 @@ impl Map {
     }
 }
 
-/// What a conversion keeps of a read region: how far outside it entities are read, the map state, the hour, the region
-/// rules' minimum size and maximum priority, and whether entities placed in interiors stay. Each is the composing
-/// program's choice; [`Selection::new`] keeps everything the region holds.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Selection {
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates.
-    pub region: [f32; 4],
-    /// How far outside the region entities are read (metres), so large pieces of the world that reach in are seen.
-    pub reach: f32,
-    pub map: Map,
-    /// The hour time archetypes are resolved at; `None`: the `gta.hour` axis's default (12).
-    pub hour: Option<u8>,
-    /// Keep the hour as state instead (when no `hour` is given): `gta.hour` survives the selection, lights carry their
-    /// hours as conditions, and the loaded world carries its night as prototypes the placements switch to by
-    /// `gta.hour` (`lower-gta-pbr{night=state}`), for a consumer that picks the time itself.
-    pub keep_hour: bool,
-    /// The region rules' minimum placement size ([`crate::select::SelectRegion::min_size`]).
-    pub min_size: f32,
-    /// The region rules' maximum priority level ([`crate::select::SelectRegion::max_priority`]; 3 keeps every
-    /// placement, 2 leaves out the optional ones the game does not spawn at its default density).
-    pub max_priority: u8,
-    /// Keep the entities placed in interiors. The game draws an interior only from inside it (or through its portals),
-    /// so a view of the streets leaves them out.
-    pub interiors: bool,
-}
-
-impl Selection {
-    /// The region `[x0, y0, x1, y1]` of `map` as read: entities only inside it, at the `gta.hour` axis's default hour,
-    /// every size and priority, interiors kept.
-    pub fn new(region: [f32; 4], map: Map) -> Selection {
-        Selection {
-            region,
-            reach: 0.0,
-            map,
-            hour: None,
-            keep_hour: false,
-            min_size: 0.0,
-            max_priority: 3,
-            interiors: true,
-        }
-    }
-}
-
 /// The hours GTA's night-only surfaces and lights are on, bit h for hour h: 00-05 and 20-23, the hours the city's
 /// street lamps' light records name (`time_flags` 0xF0003F on the lamps of every region read so far).
 pub const NIGHT_HOURS: u32 = 0x00F0_003F;
@@ -96,59 +46,6 @@ pub const NIGHT_HOURS: u32 = 0x00F0_003F;
 /// Hour `hour` (0-23) is a night hour ([`NIGHT_HOURS`]).
 pub fn is_night(hour: u8) -> bool {
     hour < 24 && NIGHT_HOURS & (1 << hour) != 0
-}
-
-/// The passes a loaded world goes through for the selection: [`DEFAULT_PASSES`], lowered for night
-/// (`lower-gta-pbr{night=true}`: night emission on, night-only geometry kept) when its hour is a night hour, so the
-/// materials agree with the hour the selection resolves the time archetypes and lights at (the default hour, 12, is
-/// day).
-pub fn default_passes(s: &Selection) -> String {
-    if s.hour.is_some_and(is_night) {
-        DEFAULT_PASSES.replacen("lower-gta-pbr", "lower-gta-pbr{night=true}", 1)
-    } else if s.keep_hour && s.hour.is_none() {
-        DEFAULT_PASSES.replacen("lower-gta-pbr", "lower-gta-pbr{night=state}", 1)
-    } else {
-        DEFAULT_PASSES.to_string()
-    }
-}
-
-/// The selection as passes on the read world: `resolve-state` to the map state (and hour), `gta-select-region` with
-/// the region rules, unless interiors stay `gta-leave-out-interiors`, then `lower-gta-lights` for the placements kept
-/// (inside the region; given an hour, those on then), `gta-select-collision` (the plain map bounds) and
-/// `lower-gta-collision` for them (triangles inside the region).
-pub fn select_passes(s: &Selection) -> String {
-    let mut assign = format!("gta.map:{}", s.map.value());
-    if let Some(h) = s.hour {
-        assign.push_str(&format!(";gta.hour:{h}"));
-    }
-    let [x0, y0, x1, y1] = s.region;
-    let keep = s.keep_hour && s.hour.is_none();
-    let kept = if keep { ",keep=gta.hour" } else { "" };
-    let mut p = format!(
-        "resolve-state{{assign={assign}{kept}}}, gta-select-region{{x0={x0},y0={y0},x1={x1},y1={y1},min_size={},max_priority={}}}",
-        s.min_size, s.max_priority
-    );
-    if !s.interiors {
-        p.push_str(", gta-leave-out-interiors");
-    }
-    // every light the kept placements carry (each with its hours) unless an hour is asked for
-    let hour = match s.hour {
-        Some(h) => format!("hour={h},"),
-        None if keep => "state=true,".to_string(),
-        None => String::new(),
-    };
-    p.push_str(&format!(
-        ", lower-gta-lights{{{hour}x0={x0},y0={y0},x1={x1},y1={y1}}}"
-    ));
-    p.push_str(", gta-select-collision");
-    p.push_str(&format!(
-        ", lower-gta-collision{{x0={x0},y0={y0},x1={x1},y1={y1}}}"
-    ));
-    p.push_str(", lower-gta-surfaces");
-    p.push_str(&format!(
-        ", gta-select-water{{x0={x0},y0={y0},x1={x1},y1={y1},clip=kept}}"
-    ));
-    p
 }
 
 /// `gta-leave-out-interiors`: placements of entities placed in an interior are despawned (counted). The game draws an
@@ -313,30 +210,22 @@ pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> 
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_PASSES, Selection, default_passes, is_night};
+    use super::is_night;
 
-    /// The street lamps' hours are night: 00-05 and 20-23; a selection at a night hour lowers for night, the default
-    /// (no hour: 12) and day hours as the default passes.
+    /// The street lamps' hours are night: 00-05 and 20-23.
     #[test]
-    fn the_selection_hour_decides_night() {
+    fn the_lamps_hours_are_night() {
         let night: Vec<u8> = (0..24).filter(|&h| is_night(h)).collect();
         assert_eq!(night, vec![0, 1, 2, 3, 4, 5, 20, 21, 22, 23]);
         assert!(!is_night(24));
-        let mut s = Selection::new([0.0, 0.0, 1.0, 1.0], super::Map::Online);
-        assert_eq!(default_passes(&s), DEFAULT_PASSES);
-        s.hour = Some(12);
-        assert_eq!(default_passes(&s), DEFAULT_PASSES);
-        s.hour = Some(22);
-        let p = default_passes(&s);
-        assert!(p.contains("lower-gta-pbr{night=true}") && p.matches("lower-gta-pbr").count() == 1);
     }
 
-    /// The pipelines a conversion runs (the selection, the default passes by day and at night, and the GTA part of
-    /// the city program's per-cell list, a fixture: its own cap-textures pass and the skate passes after it are left
-    /// out) are accepted by the pass manager: no pass provides what an earlier one settled (core.surfaces after
+    /// Every GTA pass in the order a conversion runs them (a selection on the read world, then the passes over a
+    /// loaded part, by day, at night and with the hour kept as state; examples, not a recipe: the program chooses its
+    /// own) is accepted by the pass manager: no pass provides what an earlier one settled (core.surfaces after
     /// lower-gta-surfaces). Declarations only, no game data.
     #[test]
-    fn the_conversion_pipelines_are_not_refused() {
+    fn the_gta_passes_in_conversion_order_are_not_refused() {
         use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
         let mut r = PassRegistry::new();
         r.register("select-lod", primase_core::select_lod);
@@ -346,18 +235,32 @@ mod tests {
         });
         crate::register(&mut r);
         let m = PassManager::new(r);
-        let mut s = Selection::new([0.0, 0.0, 1.0, 1.0], super::Map::Online);
-        let mut pipelines = vec![super::select_passes(&s), default_passes(&s)];
-        s.hour = Some(22);
-        pipelines.extend([super::select_passes(&s), default_passes(&s)]);
-        pipelines.push(
-            "select-lod{form=1}, lower-gta-embedded-collision, gta-pose-fragments, lower-gta-pbr, gta-winding, \
-             gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals"
-                .to_string(),
-        );
+        let rect = "x0=0,y0=0,x1=1,y1=1";
+        let select = |assign: &str, lights: &str| {
+            format!(
+                "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
+                gta-leave-out-interiors, lower-gta-lights{{{lights}{rect}}}, gta-select-collision{{detail=plain}}, \
+                lower-gta-collision{{{rect}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+            )
+        };
+        let part = |form: &str, night: &str| {
+            format!(
+                "select-lod{{form={form}}}, lower-gta-embedded-collision, lower-gta-surfaces, \
+                gta-pose-fragments, lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, \
+                gta-vertex-colours, lower-gta-water, normalize-normals"
+            )
+        };
+        let pipelines = [
+            select("assign=gta.map:online;gta.hour:12", "state=false,"),
+            part("finest", "false"),
+            select("assign=gta.map:online;gta.hour:22", "hour=22,"),
+            part("1", "true"),
+            select("assign=gta.map:story,keep=gta.hour", "state=true,"),
+            part("finest", "state"),
+        ];
         for text in pipelines {
             let p = m.registry.parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
-            // an empty world: the run may stop for other reasons (an axis the assignment names), never this one
+            // an empty world: the run may stop for other reasons, never this one
             let r = m.run(&mut primase_core::World::new(), &p, &mut RunReport::default());
             assert!(
                 !matches!(r, Err(Error::SettledThenChanged { .. })),

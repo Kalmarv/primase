@@ -1,49 +1,58 @@
 //! The GTA reader of [`primase_core::convert`]: a region of an install, read once to plan from and loaded part by
-//! part ([`crate::pipeline::GtaSource`]). Which selection and passes a conversion runs is its caller's choice
-//! ([`crate::pipeline`] documents one recipe).
+//! part ([`crate::pipeline::GtaSource`]). Which selection and passes a conversion runs is its caller's choice: the
+//! reader reads every entity of both maps within reach, with their state as conditions, and chooses none of it.
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use primase_core::convert::{Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use crate::pipeline::{GtaSource, Map, Selection, prototype_box};
+use crate::pipeline::{GtaSource, Map, prototype_box};
 
-/// What to read: the install and its key folder, and the selection (region, map, hour, sizes, interiors).
+/// What to read: the install and its key folder, the region, how far beyond it entities are read, and which map's
+/// archive set drawables and textures are loaded from (both maps' entities are read either way, with `gta.map`
+/// conditions).
 #[derive(Clone, Debug)]
 pub struct GtaOptions {
     pub install: PathBuf,
     pub keys: PathBuf,
-    pub selection: Selection,
+    /// `[x0, y0, x1, y1]`, GTA ground coordinates.
+    pub region: [f32; 4],
+    /// Metres outside the region entities are read, so large pieces of the world that reach in are seen.
+    pub reach: f32,
+    pub map: Map,
 }
 
 /// The GTA reader (see the module documentation).
 pub struct GtaReader {
     source: GtaSource,
-    selection: Selection,
+    region: [f32; 4],
+    reach: f32,
 }
 
 impl std::fmt::Debug for GtaReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GtaReader")
-            .field("selection", &self.selection)
-            .finish()
+            .field("region", &self.region)
+            .field("reach", &self.reach)
+            .finish_non_exhaustive()
     }
 }
 
 impl GtaReader {
-    /// Opens the install for the selection's map.
+    /// Opens the install, its assets loaded from `o.map`'s archive set.
     pub fn open(o: &GtaOptions) -> Result<GtaReader> {
         Ok(GtaReader {
-            source: GtaSource::open(&o.install, &o.keys, o.selection.map)?,
-            selection: o.selection.clone(),
+            source: GtaSource::open(&o.install, &o.keys, o.map)?,
+            region: o.region,
+            reach: o.reach,
         })
     }
 }
 
 impl Reader for GtaReader {
     fn read(&mut self) -> Result<(World, Report)> {
-        let (w, r) = self.source.read(self.selection.region, self.selection.reach)?;
+        let (w, r) = self.source.read(self.region, self.reach)?;
         Ok((
             w,
             vec![

@@ -10,15 +10,15 @@ pub type Result<T> = primase_core::convert::Result<T>;
 
 pub const USAGE: &str = "usage: primase convert --from <reader> [reader options] --select \"<pipeline>\" --passes \"<pipeline>\" --to <writer> \
 <out> [writer options]
---select and --passes are the conversion's choices (no reader supplies them). For a GTA region the gta crate documents
-one recipe: primase_gta::pipeline::select_passes and DEFAULT_PASSES.
+--select and --passes are the conversion's choices, written out (no reader or writer supplies them): for a GTA region
+the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
+lights, collision and water, then each part's GTA passes.
 readers:
-  gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--hour H | --keep-hour]
-        [--min-size M] [--max-priority N] [--interiors none|all]
+  gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--reach M]
 writers:
   web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--plain]
-  reskate  [--name N] [--blend-objects N] (after --passes \"<reader's>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate\"; a spawn from place-spawn at --select)";
+  reskate  [--name N] [--blend-objects N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate\"; a spawn from place-spawn at --select)";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -149,28 +149,35 @@ pub fn run(args: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use primase_gta::pipeline::{Map, Selection, default_passes, select_passes};
-
-    /// Every pipeline a conversion composes from this crate's readers and writers passes the checks made from the
-    /// passes' declarations (Pipeline::check), with no game data: the reader's selection and its default passes for
-    /// the selection's variants, apart and in the order convert runs them, and the ReSkate writer's documented passes
-    /// after them.
+    /// Pipelines a GTA conversion may be given (examples of the passes in their order: a selection by day, at night
+    /// and with the hour kept, each part's GTA passes, and the ReSkate writer's documented passes after them) pass the
+    /// checks made from the passes' declarations (Pipeline::check), apart and in the order convert runs them, with no
+    /// game data.
     #[test]
-    fn every_default_pipeline_passes_the_declaration_checks() {
+    fn gta_pipelines_pass_the_declaration_checks() {
         let registry = super::registry();
+        let rect = "x0=0,y0=0,x1=100,y1=100";
         let mut pipelines = Vec::new();
-        for map in [Map::Story, Map::Online] {
-            for hour in [None, Some(12), Some(23)] {
-                for interiors in [true, false] {
-                    let mut s = Selection::new([0.0, 0.0, 100.0, 100.0], map);
-                    s.hour = hour;
-                    s.interiors = interiors;
-                    let (select, passes) = (select_passes(&s), default_passes(&s));
-                    let reskate =
-                        format!("{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate");
-                    pipelines.push(format!("{select}, {passes}"));
-                    pipelines.extend([select, passes, reskate]);
-                }
+        for (assign, lights, night) in [
+            ("assign=gta.map:online;gta.hour:12", "", "false"),
+            ("assign=gta.map:story;gta.hour:23", "hour=23,", "true"),
+            ("assign=gta.map:online,keep=gta.hour", "state=true,", "state"),
+        ] {
+            for interiors in ["", " gta-leave-out-interiors,"] {
+                let select = format!(
+                    "resolve-state{{{assign}}}, gta-select-region{{{rect},min_size=0.5}},{interiors} \
+                     lower-gta-lights{{{lights}{rect}}}, gta-select-collision, lower-gta-collision{{{rect}}}, \
+                     lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+                );
+                let passes = format!(
+                    "select-lod{{form=finest}}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, \
+                     lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, \
+                     lower-gta-water, normalize-normals"
+                );
+                let reskate =
+                    format!("{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate");
+                pipelines.push(format!("{select}, {passes}"));
+                pipelines.extend([select, passes, reskate]);
             }
         }
         for text in pipelines {

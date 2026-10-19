@@ -5,11 +5,12 @@
 //!   only carries a `core.condition` on the global axis `gta.map` {story, online} (default story, the game's start
 //!   state). Entities are the same in both when their map file is.
 //! - Time archetypes are shown in some hours only: their placements carry a `core.condition` on the global axis
-//!   `gta.hour` {0..23} (default 12) with the hours their timeFlags name; `resolve-state` picks the hour.
+//!   `gta.hour` {0..23} with the hours their timeFlags name; `resolve-state` picks the hour. The axis has no default:
+//!   the game's clock is the save's or a script's.
 //! - Script-managed maps (`CMapData` flags bit 0: the game streams them only when a script requests them, an IPL):
 //!   each is a global bool axis `gta.ipl.<map name>` (class `ipl`), and the placements of that map, and of maps whose
-//!   LOD parent chain reaches it, carry a condition on it. The default (whether the game's start scripts load it) is
-//!   [`crate::ipl::ipl_default`].
+//!   LOD parent chain reaches it, carry a condition on it. The axis has no default: whether the game's start scripts
+//!   load it is in those scripts, not read ([`crate::ipl`]).
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
 //! - Transforms: GTA's frame is east-north-up ([`GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
@@ -85,11 +86,9 @@ pub struct RegionReport {
     pub time_placements: usize,
     /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
     pub time_placements_never_shown: usize,
-    /// Script-managed maps with placements here (each a `gta.ipl.<name>` axis), those on by default, and the
-    /// placements they govern. Every axis's default is the earlier skate exporter's start-state rules
-    /// ([`crate::ipl::ipl_default`]), not read from the game's scripts: an approximation of the game's start state.
+    /// Script-managed maps with placements here (each a `gta.ipl.<name>` axis, its start state unknown), and the
+    /// placements they govern.
     pub ipl_axes: usize,
-    pub ipl_axes_on: usize,
     pub ipl_placements: usize,
     /// Interior instances read, the entities placed in them, and their entity sets (not read yet).
     pub interiors: usize,
@@ -494,21 +493,19 @@ pub fn read_region(
         // a script-managed map's placements exist while its IPL is loaded
         if let Some(name) = ipl {
             let axis = *ipl_axes.entry(name.clone()).or_insert_with(|| {
-                let (on, why) = crate::ipl::ipl_default(name);
                 report.ipl_axes += 1;
-                report.ipl_axes_on += usize::from(on);
                 let e = w.spawn();
                 w.insert(
                     e,
                     StateAxis {
                         key: format!("gta.ipl.{name}"),
                         domain: Domain::Bool,
-                        default: Some(u32::from(on)),
+                        default: None,
                         scope: Scope::Global,
                         class: "ipl".into(),
                         source: format!(
-                            "script-managed map {name} (CMapData flags bit 0); default by the earlier skate exporter's \
-                             start-state rules, not read from the game's scripts: {why}"
+                            "script-managed map {name} (CMapData flags bit 0); its start state is in the game's \
+                             scripts, not read: unknown"
                         ),
                     },
                 );
@@ -529,7 +526,7 @@ pub fn read_region(
     Ok((w, report))
 }
 
-/// The global `gta.hour` axis of `w` ({0..23}, value h is hour h, default 12, class `time`): the one there, or a new
+/// The global `gta.hour` axis of `w` ({0..23}, value h is hour h, no default, class `time`): the one there, or a new
 /// one. The reader makes it for time archetypes; a pass that keeps the hour as state (lights by their hours) makes it
 /// when the region has none.
 pub fn hour_axis(w: &mut World) -> primase_core::Entity {
@@ -542,7 +539,7 @@ pub fn hour_axis(w: &mut World) -> primase_core::Entity {
         StateAxis {
             key: "gta.hour".into(),
             domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
-            default: Some(12),
+            default: None,
             scope: Scope::Global,
             class: "time".into(),
             source: "the game's hours: time archetypes' timeFlags (CTimeArchetypeDef), lights' time_flags"

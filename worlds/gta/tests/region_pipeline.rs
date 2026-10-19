@@ -1,17 +1,16 @@
-//! The GTA pipeline on each gate region ([`REGIONS`]): the region read from the install with 600 m of reach, the
-//! selection passes run (GTA Online's map, default hour, the region rules at 0.5 m, interiors left out), every
-//! placement loaded, and [`DEFAULT_PASSES`] run, as every writer gets it. The world must verify after the passes, every placement's prototype must have a drawable or be
+//! The GTA passes on each gate region ([`REGIONS`]): the region read from the install with 600 m of reach, a selection
+//! run ([`select`]: GTA Online's map at noon, the script-managed maps left unresolved since their start state is
+//! unknown, the region rules at 0.5 m, interiors left out), every placement loaded, and every GTA pass over a loaded
+//! world run ([`PART`]). The world must verify after the passes, every placement's prototype must have a drawable or be
 //! counted (no live file, or nothing a surface draws), and every material on a drawn primitive must be lowered
 //! (`pbr.material`, or a layered terrain material). The counts that review a region (tinted primitives and the
 //! triangles straddling palette columns, decals, vertex-alpha surfaces, layered terrain, LOD forms) are printed.
 //!
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_REGION` limits it to one named region.
-//!
-//! [`DEFAULT_PASSES`]: primase_gta::pipeline::DEFAULT_PASSES
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
-use primase_gta::pipeline::{DEFAULT_PASSES, GtaSource, Map, Selection, select_passes};
+use primase_gta::pipeline::{GtaSource, Map};
 
 /// The gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates: Legion Square, and Vespucci Beach from the
 /// skatepark along the boardwalk to Muscle Beach.
@@ -19,6 +18,22 @@ const REGIONS: &[(&str, [f32; 4])] = &[
     ("legion", [95.0, -1034.0, 295.0, -834.0]),
     ("vespucci", [-1500.0, -1650.0, -1150.0, -1330.0]),
 ];
+
+/// The selection on the read world of `[x0, y0, x1, y1]`.
+fn select([x0, y0, x1, y1]: [f32; 4]) -> String {
+    let rect = format!("x0={x0},y0={y0},x1={x1},y1={y1}");
+    format!(
+        "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
+         gta-leave-out-interiors, lower-gta-lights{{{rect}}}, gta-select-collision{{detail=plain}}, \
+         lower-gta-collision{{{rect}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
+    )
+}
+
+/// Every GTA pass over a loaded world: the finest level of detail, embedded collision with its surfaces, fragments
+/// posed, shaders lowered for day, winding, tints, terrain layers, vertex colours, water meshes, normal maps.
+const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision, lower-gta-surfaces, gta-pose-fragments, \
+                    lower-gta-pbr, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, \
+                    normalize-normals";
 
 #[test]
 fn every_named_region_through_the_gta_passes() {
@@ -37,21 +52,17 @@ fn every_named_region_through_the_gta_passes() {
         Ok(Box::new(primase_image::NormalizeNormals))
     });
     primase_gta::register(&mut registry);
-    let pipeline = registry.parse(DEFAULT_PASSES).expect("default passes");
+    let pipeline = registry.parse(PART).expect("part passes");
     let manager = PassManager::new(registry);
     for (name, region) in REGIONS {
         if only.as_deref().is_some_and(|o| o != *name) {
             continue;
         }
-        let mut selection = Selection::new(*region, Map::Online);
-        selection.reach = 600.0;
-        selection.min_size = 0.5;
-        selection.interiors = false;
-        let (mut read, report) = source.read(*region, selection.reach).expect("region");
+        let (mut read, report) = source.read(*region, 600.0).expect("region");
         println!("{name}: {:?}; {:?}", report.region, report.lights);
         let select = manager
             .registry
-            .parse(&select_passes(&selection))
+            .parse(&select(*region))
             .expect("selection passes");
         let mut picked = RunReport::default();
         manager.run(&mut read, &select, &mut picked).expect("selection");

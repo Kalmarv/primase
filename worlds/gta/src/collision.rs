@@ -960,20 +960,16 @@ mod tests {
         assert_eq!(log.counts.get("prototypes copied without collision"), Some(&1));
     }
 
-    /// The default passes classify the surfaces a loaded part's props bring: a prop of a material the map's surface
-    /// table lacks (METAL_SOLID_SMALL, the map's only surface concrete, classified at selection) is metal after the
-    /// default passes' collision and surface steps, in their order.
+    /// The surfaces a loaded part's props bring are classified when `lower-gta-surfaces` runs after
+    /// `lower-gta-embedded-collision`: a prop of a material the map's surface table lacks (METAL_SOLID_SMALL, the
+    /// map's only surface concrete, classified at selection) is metal after them.
     #[test]
-    fn surfaces_props_bring_are_classified_by_the_default_passes() {
-        let steps: Vec<&str> = crate::pipeline::DEFAULT_PASSES
-            .split(", ")
-            .map(|p| p.split('{').next().unwrap_or(p))
-            .filter(|n| ["lower-gta-embedded-collision", "lower-gta-surfaces"].contains(n))
-            .collect();
-        assert_eq!(steps, ["lower-gta-embedded-collision", "lower-gta-surfaces"]);
+    fn surfaces_props_bring_are_classified_after_their_collision() {
         let mut reg = primase_core::pass::PassRegistry::new();
         crate::register(&mut reg);
-        let pipeline = reg.parse(&steps.join(", ")).unwrap();
+        let pipeline = reg
+            .parse("lower-gta-embedded-collision, lower-gta-surfaces")
+            .unwrap();
 
         let mut w = World::new();
         w.insert_resource(GtaMaterials(vec!["DEFAULT".into(), "METAL_SOLID_SMALL".into()]));

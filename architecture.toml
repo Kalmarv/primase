@@ -30,12 +30,6 @@ reason = "forza_string, a hash with no user yet"
 removed_when = "it moves into the Forza reader when one exists, or is deleted"
 
 [[name]]
-crate = "worlds/gta"
-word = "skate"
-reason = "the IPL defaults are the earlier skate exporter's, named in their report"
-removed_when = "the exporter's IPL profile moves to the GTA program (plan step 14)"
-
-[[name]]
 crate = "worlds/reskate"
 word = "gta"
 reason = "the overlay pieces record carries GTA's own fields (centre, drawable, shader, bucket)"
