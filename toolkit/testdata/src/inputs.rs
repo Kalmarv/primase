@@ -456,6 +456,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead"#,
     },
     Variable {
+        name: "PRIMASE_WEB_KTX2_TILES",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a web tile export with KTX2 textures and its plain set: tiles.json, the tiles, images/, plain/tiles.json and its tiles (scene_to_tiles <scene> <out> --ktx2); formats/web/tests/ktx2_audit.rs"#,
+        status: Status::Live,
+        source: r#"our own output (scene_to_tiles --ktx2 of PRIMASE_FROMSOFT_SCENE), checked with an independent decoder (the pure-Rust basisu transcoder) against its own plain set; the hashes it prints are compared with the viewer's WASM transcoder by the viewer's audit"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_BHD_ORACLE",
         kind: Kind::Input,
         gate: true,

@@ -171,15 +171,23 @@ to the example). The default remains PNG. The optional encoder is pinned to
 `basisu_c_sys = 0.9.1`; see [source identity and licences](third-party/README.md).
 Only this feature adds the native Basis encoder and bindgen/libclang requirement.
 
-The web lowering uses UASTC LDR 4x4 with Zstandard, quality 75, effort 2,
-threaded encoding disabled, and a complete wrapping mip chain. Colour maps are
+The web lowering uses UASTC LDR 4x4 with Zstandard, effort 2, threaded encoding
+disabled, and a complete wrapping mip chain. Colour maps are
 sRGB; normal and mask maps are linear. A shared source used for different roles
 gets separate texture bindings. The DFD primaries are BT709 for colour and
 unspecified for data, as required by
 [KHR_texture_basisu](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_texture_basisu).
 
 Colour uses UASTC quality 100 (RDO disabled), effort 2; normal maps are
-lossless PNG. The writer encodes each image at the size it is given and never
+lossless PNG. The settings come from a finished comparison (the `ktx2_compare`
+example, deleted by the commit "web: ktx2_audit is a gate on the synthetic and
+a real export; ktx2_compare deleted"): quality 75 / effort 2 and quality 100 at
+effort 2, 5 and 10 on 262,144 normal-map pixels, none of which met the normal
+angle target, so normal maps stay PNG (commit 2ffb77fc); colour at quality 100 /
+effort 2 measured a codec error p99 of at most 4 levels per channel on GTA V
+Legion (commit 81d03016; not re-measured since). On Sekiro slice A the codec
+error p99 is 5, 4, 5 (R, G, B), measured by `ktx2_audit` over the whole slice and
+over its one-cell gate input; 81d03016's figure of 4 for slice A does not hold. The writer encodes each image at the size it is given and never
 resizes it; an image whose sides are not multiples of 4 is written as PNG.
 Sizes are chosen before the writer by `prepare-web-textures` (`prepare` module),
 a pass a program runs: `{color=N,normal=N,mask=N}` caps per role (required;
@@ -217,10 +225,17 @@ not a bound for arbitrary images. Real-corpus colour and normal-angular error,
 an independent WASM transcoder and peak browser memory are measured separately
 for each export.
 
-The `ktx2_audit` example hashes every decoded mip with the pure-Rust oracle;
-primase-viewer's `audit-ktx2.mjs` produces corresponding hashes with Three.js' pinned WASM
-transcoder. When `plain/tiles.json` is available, the Rust audit additionally
-reports per-role channel maxima/means and normal-angle maxima/means/p99.
+`tests/ktx2_audit.rs` is the KTX2 gate: it decodes every mip of every KTX2
+image with the pure-Rust oracle and prints their hashes, which primase-viewer's
+`audit-ktx2.mjs` compares with Three.js' pinned WASM transcoder; against the
+export's `plain/` set it requires PNG images to equal the prepared pixels, the
+cut-out and blend bounds above, and reports per-role channel maxima/means and
+normal-angle maxima/means/p99. It runs on the synthetic fixture
+(`fixture::synthetic_world`; colour p99 within 8) and on a real export,
+`PRIMASE_WEB_KTX2_TILES` (`scene_to_tiles <scene> <out> --ktx2`; colour p99
+within 5, as measured on slice A). A reference image is found in the plain set by
+its name, in whichever plain tile holds it: the plain set tiles on its own (its
+PNG tiles are larger, so a cell may split where the KTX2 one does not).
 Quality samples are deduplicated by source content, role, output dimensions and encoded content.
 Two comparisons distinguish codec error against capped reference pixels from
 end-to-end error against original pixels with nearest-centre reconstruction.
