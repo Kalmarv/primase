@@ -1221,7 +1221,7 @@ fn the_reference_validator_accepts_the_fixture_and_our_output() {
     };
     let src = fixture("oracle_src");
     reference(&v, &src).unwrap();
-    let (w, _) = read(&src);
+    let (w, _) = read_loaded(&src);
     let out = tmp("oracle_out");
     interchange::write(&w, &out).unwrap();
     reference(&v, &out).unwrap();

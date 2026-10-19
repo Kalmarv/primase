@@ -331,9 +331,9 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_SCENE_SKATE",
         kind: Kind::Input,
         gate: true,
-        about: r#"our own earlier skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable); not an independent oracle"#,
-        status: Status::Blocked,
-        source: "our own earlier C# validator, a build from before its LOD checks: not normative for the current writer contract; retire it when the frozen interchange tests cover the format, or rebuild it from maintained source",
+        about: r#"our own skate-scene validator built from its last source (`scene-skate.dll`, run with `dotnet`, or its executable); not an independent oracle"#,
+        status: Status::Live,
+        source: "our own C# validator, rebuilt from its last source (commit d78228a; the earlier build predated its byte-range and level-of-detail checks): it refuses every invalid case of the interchange tests for the same reason and accepts the fixture and our output; a second implementation of the same rules, not an independent oracle",
     },
     Variable {
         name: "PRIMASE_GLTF_VALIDATOR",
