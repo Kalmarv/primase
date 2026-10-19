@@ -20,27 +20,94 @@ use primase_core::{Curve, Entity, Marker, Resource, Transform, World};
 
 /// `partition-grid{cell=C[,origin=E,N][,halo=H][,region=E0,N0,E1,N1]}`: see the module documentation. `cell` has no
 /// default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
-/// left out and counted.
+/// left out and counted. Built by [`PartitionGrid::new`] and its setters, which check every value; the pipeline text
+/// goes through the same constructor ([`PartitionGrid::from_options`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartitionGrid {
-    pub cell: f64,
-    pub origin: [f64; 2],
-    pub halo: f64,
-    pub region: Option<[f64; 4]>,
+    cell: f64,
+    origin: [f64; 2],
+    halo: f64,
+    region: Option<[f64; 4]>,
+}
+
+fn finite(what: &str, x: f64) -> Result<f64, String> {
+    if x.is_finite() {
+        Ok(x)
+    } else {
+        Err(format!("{what} {x} is not a finite number"))
+    }
 }
 
 impl PartitionGrid {
+    /// A grid of `cell`-metre cells from the origin (0, 0), no halo, no region. `cell` is finite and above 0.
+    pub fn new(cell: f64) -> Result<PartitionGrid, String> {
+        // finite, so a plain comparison: not above 0
+        if finite("cell", cell)? <= 0.0 {
+            return Err(format!("cell {cell} is not above 0 metres"));
+        }
+        Ok(PartitionGrid {
+            cell,
+            origin: [0.0; 2],
+            halo: 0.0,
+            region: None,
+        })
+    }
+
+    /// The cells' origin `[east, north]`, metres.
+    pub fn with_origin(mut self, origin: [f64; 2]) -> Result<PartitionGrid, String> {
+        self.origin = [
+            finite("origin east", origin[0])?,
+            finite("origin north", origin[1])?,
+        ];
+        Ok(self)
+    }
+
+    /// The halo, metres, finite and not negative: other cells' content standing within it is a part's context.
+    pub fn with_halo(mut self, halo: f64) -> Result<PartitionGrid, String> {
+        if finite("halo", halo)? < 0.0 {
+            return Err(format!("halo {halo} is negative"));
+        }
+        self.halo = halo;
+        Ok(self)
+    }
+
+    /// The region `[west, south, east, north]` (half-open, finite, west < east, south < north).
+    pub fn with_region(mut self, r: [f64; 4]) -> Result<PartitionGrid, String> {
+        for x in r {
+            finite("region", x)?;
+        }
+        if !(r[0] < r[2] && r[1] < r[3]) {
+            return Err(format!(
+                "region {r:?}: not west,south,east,north with west < east, south < north"
+            ));
+        }
+        self.region = Some(r);
+        Ok(self)
+    }
+
+    pub fn cell(&self) -> f64 {
+        self.cell
+    }
+    pub fn origin(&self) -> [f64; 2] {
+        self.origin
+    }
+    pub fn halo(&self) -> f64 {
+        self.halo
+    }
+    pub fn region(&self) -> Option<[f64; 4]> {
+        self.region
+    }
+
+    /// From the pipeline text's options, through [`PartitionGrid::new`] and the setters.
     pub fn from_options(o: &Options) -> Result<PartitionGrid, String> {
-        let number = |k: &str, v: &str| -> Result<f64, String> {
-            v.parse::<f64>()
-                .ok()
-                .filter(|x| x.is_finite())
-                .ok_or_else(|| format!("{k}={v} is not a finite number"))
-        };
         let numbers = |k: &str, v: &str, n: usize| -> Result<Vec<f64>, String> {
             let xs: Vec<f64> = v
                 .split(',')
-                .map(|x| number(k, x.trim()))
+                .map(|x| {
+                    x.trim()
+                        .parse::<f64>()
+                        .map_err(|_| format!("{k}={v}: not numbers"))
+                })
                 .collect::<Result<_, _>>()?;
             if xs.len() == n {
                 Ok(xs)
@@ -48,38 +115,24 @@ impl PartitionGrid {
                 Err(format!("{k}={v}: {n} numbers expected"))
             }
         };
-        let mut grid = PartitionGrid {
-            cell: f64::NAN,
-            origin: [0.0; 2],
-            halo: 0.0,
-            region: None,
-        };
-        for (k, v) in o {
-            match k.as_str() {
-                "cell" => grid.cell = number(k, v)?,
-                "origin" => {
-                    let xs = numbers(k, v, 2)?;
-                    grid.origin = [xs[0], xs[1]];
-                }
-                "halo" => grid.halo = number(k, v)?,
-                "region" => {
-                    let xs = numbers(k, v, 4)?;
-                    if !(xs[0] < xs[2] && xs[1] < xs[3]) {
-                        return Err(format!(
-                            "region={v}: not west,south,east,north with west < east, south < north"
-                        ));
-                    }
-                    grid.region = Some([xs[0], xs[1], xs[2], xs[3]]);
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
+        if let Some(k) = o
+            .keys()
+            .find(|k| !matches!(k.as_str(), "cell" | "origin" | "halo" | "region"))
+        {
+            return Err(format!("unknown option {k}"));
         }
-        // NaN (not given) or not above 0
-        if grid.cell.is_nan() || grid.cell <= 0.0 {
-            return Err("cell=C (metres, above 0) is required".into());
+        let cell = o.get("cell").ok_or("cell=C (metres, above 0) is required")?;
+        let mut grid = PartitionGrid::new(numbers("cell", cell, 1)?[0])?;
+        if let Some(v) = o.get("origin") {
+            let xs = numbers("origin", v, 2)?;
+            grid = grid.with_origin([xs[0], xs[1]])?;
         }
-        if grid.halo < 0.0 {
-            return Err(format!("halo={} is negative", grid.halo));
+        if let Some(v) = o.get("halo") {
+            grid = grid.with_halo(numbers("halo", v, 1)?[0])?;
+        }
+        if let Some(v) = o.get("region") {
+            let xs = numbers("region", v, 4)?;
+            grid = grid.with_region([xs[0], xs[1], xs[2], xs[3]])?;
         }
         Ok(grid)
     }
@@ -283,6 +336,25 @@ mod tests {
             .unwrap();
         assert_eq!(w2.resource::<PartitionPlan>().unwrap().groups.len(), 1);
         assert_eq!(log.counts["content outside the region, left out"], 1);
+    }
+
+    /// The typed constructor and the text refuse the same values: no zero, negative or NaN cell, no negative halo,
+    /// no empty region.
+    #[test]
+    fn typed_and_text_construction_check_the_same() {
+        assert!(PartitionGrid::new(0.0).is_err());
+        assert!(PartitionGrid::new(-5.0).is_err());
+        assert!(PartitionGrid::new(f64::NAN).is_err());
+        let g = PartitionGrid::new(100.0).unwrap();
+        assert!(g.clone().with_halo(-1.0).is_err());
+        assert!(g.clone().with_region([10.0, 0.0, 10.0, 5.0]).is_err());
+        assert_eq!(
+            PartitionGrid::from_options(&Options::from([("cell".to_owned(), "100".to_owned())])).unwrap(),
+            g
+        );
+        assert!(
+            PartitionGrid::from_options(&Options::from([("cell".to_owned(), "NaN".to_owned())])).is_err()
+        );
     }
 
     #[test]
