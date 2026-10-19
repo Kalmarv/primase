@@ -11,12 +11,12 @@ use std::path::Path;
 use primase_core::{Entity, Instance, World};
 
 use crate::Result;
-use crate::collision::{BoundsReport, attach_map_bounds};
 use crate::components::GtaArchetype;
 use crate::read::archive::archive_set::ArchiveSet;
 use crate::read::archive::archive_set::Install;
 use crate::read::archive::keys::Keys;
 use crate::read::assets::{AssetReport, LightsReport, attach_assets_with, attach_lights};
+use crate::read::collision::{BoundsReport, attach_map_bounds};
 use crate::read::gtxd::TextureParents;
 use crate::read::region::{Region, RegionReport, States, archive_sets, read_region};
 
@@ -101,7 +101,7 @@ impl GtaSource {
     /// Every entity of both maps within `reach` metres of `region` (`[x0, y0, x1, y1]`), with its prototype and its
     /// map-state and hour conditions ([`crate::read::region::read_region`]), each prototype's light records
     /// ([`crate::read::assets::attach_lights`]), the static map bounds meeting the region
-    /// ([`crate::collision::attach_map_bounds`]) and every water file ([`crate::water::attach_water`]: each quad of
+    /// ([`crate::read::collision::attach_map_bounds`]) and every water file ([`crate::water::attach_water`]: each quad of
     /// the whole map placed with its file's `gta.water` condition, the rest of each file a `gta.water`); no geometry
     /// or textures yet.
     pub fn read(&self, region: [f32; 4], reach: f32) -> Result<(World, ReadReport)> {

@@ -1673,7 +1673,6 @@ fn real_data_variables_are_declared() {
 /// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
-    "layout: file=worlds/gta/src/collision.rs",
     "layout: file=worlds/gta/src/water.rs",
     "layout: file=worlds/reskate/src/build.rs",
 ];

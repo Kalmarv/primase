@@ -36,8 +36,8 @@ use primase_core::{
 };
 use primase_core::{LodForm, Lods, Origin, Provenance};
 
-use crate::collision::GtaEmbeddedBounds;
 use crate::components::GTA;
+use crate::components::collision::GtaEmbeddedBounds;
 use crate::components::{
     GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
 };

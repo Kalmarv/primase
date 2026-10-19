@@ -9,6 +9,7 @@
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
+pub mod collision;
 pub mod state;
 
 use primase_core::frame::SourceFrame;

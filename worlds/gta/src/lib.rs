@@ -7,7 +7,6 @@
 //! crate checks it against published digests before using it.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-pub mod collision;
 pub mod components;
 pub mod passes;
 pub mod rage;
@@ -16,7 +15,7 @@ pub mod tint;
 pub mod water;
 
 // paths consumers use from before the crate was arranged by role
-pub use passes::{lights, lower, pose, rect, select, surfaces, terrain, winding};
+pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, winding};
 pub use read::convert;
 /// `pipeline::{Map, LeaveOutInteriors}`, as consumers name them: now [`read::source::Map`] and
 /// [`passes::interiors::LeaveOutInteriors`].
@@ -96,7 +95,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     let volumes = [("foliage", "leave-out"), ("river", "leave-out")];
     reg.register_requiring(
         "lower-gta-collision",
-        |o| Ok(Box::new(collision::LowerGtaCollision::from_options(o)?)),
+        |o| Ok(Box::new(passes::collision::LowerGtaCollision::from_options(o)?)),
         &volumes,
     );
     // the levels a far view draws are the caller's choice: no default
@@ -106,11 +105,15 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("levels", "2;3;4")],
     );
     reg.register("gta-select-collision", |o| {
-        Ok(Box::new(collision::SelectCollision::from_options(o)?))
+        Ok(Box::new(passes::collision::SelectCollision::from_options(o)?))
     });
     reg.register_requiring(
         "lower-gta-embedded-collision",
-        |o| Ok(Box::new(collision::LowerGtaEmbeddedCollision::from_options(o)?)),
+        |o| {
+            Ok(Box::new(
+                passes::collision::LowerGtaEmbeddedCollision::from_options(o)?,
+            ))
+        },
         &volumes,
     );
     reg.register("lower-gta-surfaces", |o| {

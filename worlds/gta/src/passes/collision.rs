@@ -1,10 +1,6 @@
-//! Collision: the reader's side, raw ([`attach_map_bounds`]: the ybn bounds of the region's map archives, with the
-//! material names they index; [`GtaEmbeddedBounds`]: the bound a prototype's drawable or fragment embeds, attached
-//! with its geometry), and `lower-gta-collision` and `lower-gta-embedded-collision`, which make them `core.collision`.
-//!
-//! Which bounds: the live ybn files whose box meets the region (every live one is read for its box, as the game
-//! streams them by those boxes), each with its detail: the prefix of a file named `hi@...` or `ma@...` (the finer
-//! copies the game keeps for weapons and vehicles), none for the plain bounds a body walks or rolls on.
+//! GTA's collision made `core.collision`: the reader keeps it raw ([`crate::read::collision`]: the map's ybn bounds
+//! with their detail and the material names they index; [`GtaEmbeddedBounds`]: the bound a prototype's drawable or
+//! fragment embeds, attached with its geometry), and these passes select and lower it.
 //!
 //! `gta-select-collision{detail}`: the map bounds of the details asked for kept (`plain`, `hi`, `ma`, `;` between;
 //! `plain` unless given), the others despawned, counted per detail.
@@ -30,172 +26,13 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Collision, Component, Entity, Instance, JsonError, Surfaces, Transform, World};
+use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
 
 use crate::components::GTA;
 use crate::components::GtaEntity;
+use crate::components::collision::{EMBEDDED_COLLISION_DISABLED, GtaBounds, GtaEmbeddedBounds, GtaMaterials};
 use crate::passes::rect::GroundRect;
-use crate::rage::bounds::{Bound, Contents, Polygon, read_ybn};
-use crate::read::archive::archive_set::ArchiveSet;
-use crate::read::archive::keys::Keys;
-use crate::{Result, invalid};
-
-/// One ybn's bound as stored (GTA's frame, metres, world space for map bounds), its file and its detail.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct GtaBounds {
-    pub path: String,
-    /// The file name's prefix before `@` (`hi`, `ma`: the game's finer copies), lowercase; `None` for plain bounds.
-    pub detail: Option<String>,
-    pub bound: Bound,
-}
-
-/// A ybn file name's detail: what precedes an `@` in it, lowercase.
-pub fn ybn_detail(file_name: &str) -> Option<String> {
-    file_name.split_once('@').map(|(d, _)| d.to_ascii_lowercase())
-}
-
-impl Component for GtaBounds {
-    const NAME: &'static str = "gta.bounds";
-    /// 2: `detail` added.
-    const VERSION: u32 = 2;
-    /// Bulk data (a bound's every vertex and polygon): not shown.
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(None)
-    }
-}
-
-/// The collision bound a prototype's asset embeds, as stored (GTA's frame, metres, the asset's own space): a
-/// fragment's first physics LOD's, or a drawable's own; and the asset's file.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct GtaEmbeddedBounds {
-    pub path: String,
-    pub bound: Bound,
-}
-
-impl Component for GtaEmbeddedBounds {
-    const NAME: &'static str = "gta.embedded_bounds";
-    /// Bulk data (a bound's every vertex and polygon): not shown.
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        Ok(None)
-    }
-}
-
-/// Entity flag bit 2: the placement does not collide by its asset's embedded bound.
-pub const EMBEDDED_COLLISION_DISABLED: u32 = 1 << 2;
-
-/// The install's collision material names (`materials.dat`), by material index.
-#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize)]
-pub struct GtaMaterials(pub Vec<String>);
-
-impl primase_core::Resource for GtaMaterials {
-    const NAME: &'static str = "gta.materials";
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
-
-/// The material names of a `materials.dat`: after its version line, the first word of every line that is not a
-/// comment (`#`) or blank, in order.
-pub fn material_names(text: &str) -> Result<Vec<String>> {
-    let mut lines = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'));
-    let version = lines.next().ok_or_else(|| invalid("materials.dat", 0, "empty"))?;
-    if version.parse::<f32>().is_err() {
-        return Err(invalid("materials.dat", 0, format!("version line {version:?}")));
-    }
-    Ok(lines
-        .filter_map(|l| l.split_whitespace().next())
-        .map(str::to_string)
-        .collect())
-}
-
-/// What [`attach_map_bounds`] did.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct BoundsReport {
-    /// Live ybn files, those whose box meets the region (read), and the `hi@`/`ma@` copies among those.
-    pub ybn_live: usize,
-    pub ybn_read: usize,
-    pub ybn_finer_read: usize,
-    pub material_names: usize,
-}
-
-/// The static map bounds whose box meets `region` (`[x0, y0, x1, y1]`, GTA ground coordinates), each as an entity
-/// with [`GtaBounds`], and the material names as the [`GtaMaterials`] resource (see the module documentation). Every
-/// live ybn is read for its box (in parallel); the game streams them by those boxes.
-pub fn attach_map_bounds(
-    w: &mut World,
-    set: &ArchiveSet,
-    keys: &Keys,
-    region: [f32; 4],
-) -> Result<BoundsReport> {
-    let mut report = BoundsReport::default();
-    let mut files: Vec<crate::read::archive::archive_set::FileRef> = set
-        .tables
-        .get("ybn")
-        .into_iter()
-        .flat_map(|t| t.values().copied())
-        .collect();
-    report.ybn_live = files.len();
-    files.sort();
-    let [x0, y0, x1, y1] = region;
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let read = |f: crate::read::archive::archive_set::FileRef| -> Result<Option<Bound>> {
-        let r = set.install.resource(f, keys)?;
-        let bound = read_ybn(&r)?;
-        let (lo, hi) = (bound.header.box_min, bound.header.box_max);
-        let meets = hi[0] >= x0 && lo[0] <= x1 && hi[1] >= y0 && lo[1] <= y1;
-        Ok(meets.then_some(bound))
-    };
-    let results: Vec<Result<Vec<(usize, Bound)>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..threads)
-            .map(|_| {
-                s.spawn(|| -> Result<Vec<(usize, Bound)>> {
-                    let mut out = Vec::new();
-                    loop {
-                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&f) = files.get(k) else { break };
-                        if let Some(b) = read(f)? {
-                            out.push((k, b));
-                        }
-                    }
-                    Ok(out)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err(invalid("ybn", 0, "a reading thread panicked")))
-            })
-            .collect()
-    });
-    let mut found = Vec::new();
-    for r in results {
-        found.extend(r?);
-    }
-    found.sort_by_key(|(k, _)| *k);
-    for (k, bound) in found {
-        report.ybn_read += 1;
-        let path = set.path(files[k]).to_string();
-        let detail = ybn_detail(path.rsplit('\\').next().unwrap_or(&path));
-        if detail.is_some() {
-            report.ybn_finer_read += 1;
-        }
-        let e = w.spawn();
-        w.insert(e, GtaBounds { path, detail, bound });
-    }
-    if let Some(f) = set.live("dat", "materials") {
-        let bytes = set.install.binary(f, keys)?;
-        let names = material_names(&String::from_utf8_lossy(&bytes))?;
-        report.material_names = names.len();
-        w.insert_resource(GtaMaterials(names));
-    }
-    Ok(report)
-}
+use crate::rage::bounds::{Bound, Contents, Polygon};
 
 /// A map bound's detail: the plain bounds a body walks or rolls on, or the finer copies the game keeps for weapons
 /// (`hi@`) and vehicles (`ma@`). Option values `plain`, `hi`, `ma`.
@@ -1315,13 +1152,9 @@ mod tests {
         }
     }
 
-    /// A ybn's detail is its name's prefix before `@`; `gta-select-collision` keeps plain bounds unless asked for
-    /// others, and the details named.
+    /// `gta-select-collision` keeps plain bounds unless asked for others, and the details named.
     #[test]
     fn map_bounds_are_chosen_by_detail_in_a_pass() {
-        assert_eq!(ybn_detail("hi@cs1_08_3.ybn"), Some("hi".into()));
-        assert_eq!(ybn_detail("MA@x.ybn"), Some("ma".into()));
-        assert_eq!(ybn_detail("cs1_08_3.ybn"), None);
         let mut w = World::new();
         let mut spawn = |detail: Option<&str>| {
             let e = w.spawn();
