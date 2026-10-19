@@ -13,7 +13,11 @@
 //! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own), then
 //! `prepare-reskate-collision{surfaces=coalesce,weld=mm}` (how the collision is written; without it, exactly), then
 //! `summarize-reskate-map` and `plan-reskate-blend-budget{objects=pool}` (how many chain objects, decided before
-//! writing; a map with blend chains and no budget is refused).
+//! writing; a map with blend chains and no budget is refused). A map in parts plans its collision and decides its
+//! budget over every part instead (`convert --gather` with `share-reskate-collision` and `summarize-reskate-map`,
+//! `--group` with `prepare-reskate-cell-collision`, `--finalize` with `finalize-reskate-blend-budget`), so its parts'
+//! passes take none of `prepare-reskate-collision`, `plan-reskate-blend-budget` (both refuse a part) and
+//! `summarize-reskate-map` (a part is handed the map's summary already).
 use std::path::{Path, PathBuf};
 
 use primase_reskate::spool::CellSpool;
@@ -47,8 +51,9 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
             "--spool" => spool = Some(PathBuf::from(value()?)),
             "--blend-objects" => {
                 return Err(
-                    "reskate: the chain-object budget is plan-reskate-blend-budget's: --passes \"..., \
-                     plan-reskate-blend-budget{objects=N}\""
+                    "reskate: the chain-object budget is plan-reskate-blend-budget's (whole: --passes \"..., \
+                     plan-reskate-blend-budget{objects=N}\"; in parts: --finalize \
+                     \"finalize-reskate-blend-budget{objects=N}\")"
                         .into(),
                 );
             }

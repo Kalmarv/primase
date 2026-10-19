@@ -1490,3 +1490,54 @@ fn lights_two_parts_make_under_one_index_are_counted_apart() {
         basis(&plain).other_cull_ids + ROCKS.len()
     );
 }
+
+/// Brightens the shared light (at east 300) in the part holding the holder at east 610 only: the two parts then
+/// prepare one loaded light differently.
+#[derive(Debug)]
+struct BrightenShared;
+impl Pass for BrightenShared {
+    fn name(&self) -> &'static str {
+        "brighten-shared"
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &["skate.light"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let holds = w.resource::<primase_core::convert::PartScope>().is_some_and(|s| {
+            s.roots
+                .iter()
+                .any(|&e| w.has::<Holds>(e) && w.get::<Transform>(e).is_some_and(|t| t.cols[3][0] == 610.0))
+        });
+        if holds && let Some(mut lights) = w.column_mut::<primase_reskate::components::SkateLight>() {
+            for (_, l) in lights.iter_mut().filter(|(_, l)| l.position[0] == 300.0) {
+                l.energy *= 2.0;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A light two parts both reach, prepared differently by them, is refused, naming both parts; written alike, once.
+#[test]
+fn shared_content_prepared_differently_is_refused() {
+    let stages = Stages {
+        passes: vec![Box::new(BrightenShared)],
+        ..Stages::default()
+    }
+    .planned();
+    let e = in_parts_of(
+        shared_map(),
+        &encoding(&tmp("shared-differently")),
+        &aligned(),
+        None,
+        stages,
+        200.0,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        e.contains("Light") && e.contains("prepared differently by part") && e.matches("part ").count() >= 2,
+        "{e}"
+    );
+}

@@ -27,8 +27,11 @@ summarize-reskate-instances, summarize-reskate-content\", and the summaries the 
 reskate --parts): after the decisions, each part again through the gather passes, its contributions kept by the writer's
 spool; each group the spool gives (a ReSkate collision cell) through the group passes and written on its own; the
 finalize passes once on every summary; then each part through --passes (a ReSkate map in parts: --gather \"<the part
-passes that shape its collision>, share-reskate-collision\", --group \"prepare-reskate-cell-collision{surfaces=coalesce,
-weld=mm}\").
+passes up to prepare-reskate-blend-order>, share-reskate-collision, summarize-reskate-map\", --group
+\"prepare-reskate-cell-collision{surfaces=coalesce,weld=mm}\", --finalize
+\"finalize-reskate-blend-budget{objects=pool}\", and --passes without prepare-reskate-collision, summarize-reskate-map
+or plan-reskate-blend-budget: the cells plan the collision, the gather traversal summarizes and the finalize stage
+budgets, so a part refuses all three).
 --select and --passes are the conversion's choices, written out (no reader or writer supplies them): for a GTA region
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
@@ -44,7 +47,9 @@ writers:
            uncompressed, not instanced, PNG textures: the plain comparison set is its own conversion)
   reskate  [--name N] [--parts [--spool <folder>]] (--parts: the parts of the partition plan --select makes,
            partition-grid{cell=C,tile=200,halo=H}, written as one map; with --summarize and --gather, the collision
-           cells kept in the spool folder, by default <out>/<name>.cells, empty or new) (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N,light_scale=standard}, lower-layered-reskate{overlays=all},
+           cells kept in the spool folder, by default <out>/<name>.cells, empty or new; the collision planned and the
+           blend budget decided in the gather, group and finalize stages, above) (whole, after --passes \"<the part
+           passes>, bake-normal-scale, raise-skate{name=N,light_scale=standard}, lower-layered-reskate{overlays=all},
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
            prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004},
            prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},

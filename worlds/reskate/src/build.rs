@@ -329,6 +329,7 @@ impl std::fmt::Debug for MapSink {
 
 /// What the stats need of a collision soup of the scene: its place in the scene's order, its file, mode, triangles
 /// read, cut by the region and kept.
+#[derive(Clone, Debug)]
 struct SoupFacts {
     order: (bool, primase_core::Entity),
     file: String,
@@ -363,15 +364,204 @@ struct Content {
 /// Whether the sink has not written `e` (of kind `kind`) yet, marking it written: content loaded (below `first_made`,
 /// the layout summary's: one id in every part) is written once, however many parts reach it; content a part made, and
 /// everything of a map written whole (`first_made` none), is its own.
+///
+/// A later part's copy of loaded content must be the first's: one prepared differently by two parts (a light of
+/// another energy) is refused, naming both parts by their tags (`part`: this one's; `None`: it holds none of its roots).
+/// Content of different identities stays apart, whatever its values.
 fn fresh(
-    written: &mut BTreeSet<(Kind, u32)>,
+    written: &mut BTreeMap<(Kind, u32), (Option<u64>, Written)>,
     first_made: Option<u32>,
-    kind: Kind,
+    part: Option<u64>,
     e: primase_core::Entity,
-) -> bool {
-    match first_made {
-        Some(f) if e.index() < f => written.insert((kind, e.index())),
-        _ => true,
+    payload: Written,
+) -> Result<bool> {
+    let loaded = first_made.is_some_and(|f| e.index() < f);
+    if !loaded {
+        return Ok(true);
+    }
+    match written.entry((payload.kind(), e.index())) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert((part, payload));
+            Ok(true)
+        }
+        std::collections::btree_map::Entry::Occupied(o) if o.get().1.identity() == payload.identity() => {
+            Ok(false)
+        }
+        std::collections::btree_map::Entry::Occupied(o) => {
+            let name = |p: Option<u64>| {
+                p.map_or_else(
+                    || "a part holding none of its roots".to_owned(),
+                    |t| format!("part {t}"),
+                )
+            };
+            Err(Error::Scene(format!(
+                "the {:?} {e:?}, which two parts both reach, is prepared differently by {} and {}: every part of a \
+                 map prepares what it shares alike",
+                payload.kind(),
+                name(o.get().0),
+                name(part)
+            )))
+        }
+    }
+}
+
+/// Loaded content a map in parts writes once, as the first part that holds it gave it.
+#[derive(Clone, Debug)]
+enum Written {
+    Light(PlacedLight),
+    Marker(bool, Marker),
+    Water(WaterQuad),
+    Grind(GrindCurve),
+    Soup(SoupFacts),
+    Hull(crate::model::Hull),
+}
+
+/// A record's exact identity: its numbers (every float by its bits: -0.0 and 0.0 apart, a NaN equal to itself) and
+/// its text, in field order.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Identity {
+    numbers: Vec<u64>,
+    text: Vec<String>,
+}
+
+impl Identity {
+    fn f32(&mut self, v: f32) -> &mut Identity {
+        self.numbers.push(u64::from(v.to_bits()));
+        self
+    }
+    fn f64(&mut self, v: f64) -> &mut Identity {
+        self.numbers.push(v.to_bits());
+        self
+    }
+    fn int(&mut self, v: i64) -> &mut Identity {
+        self.numbers.push(v as u64);
+        self
+    }
+    fn vec3(&mut self, v: primase_meshops::vector::Vec3) -> &mut Identity {
+        self.f32(v.x).f32(v.y).f32(v.z)
+    }
+    fn text(&mut self, s: &str) -> &mut Identity {
+        self.text.push(s.to_owned());
+        self
+    }
+    fn option(&mut self, present: bool) -> &mut Identity {
+        self.int(i64::from(present))
+    }
+}
+
+impl Written {
+    /// Its exact identity, compared between the parts that hold it. A marker without a name of its own is compared
+    /// without the name its part numbered it by (the map numbers markers over every part).
+    fn identity(&self) -> Identity {
+        let mut i = Identity::default();
+        match self {
+            Written::Light(l) => {
+                i.int(l.entity.index().into()).int(l.spot.into());
+                i.vec3(l.pos).vec3(l.dir).vec3(l.tan);
+                i.f32(l.r)
+                    .f32(l.g)
+                    .f32(l.b)
+                    .f32(l.energy)
+                    .f32(l.range)
+                    .f32(l.radius);
+                i.f32(l.spot_size)
+                    .f32(l.spot_blend)
+                    .int(l.time_of_day.into())
+                    .int(l.cast_shadow.into());
+                i.f32(l.priority).text(&l.group).text(&l.source);
+            }
+            Written::Marker(named, m) => {
+                i.int((*named).into()).text(m.kind);
+                match (&m.name, named) {
+                    (Some(n), true) => {
+                        i.option(true).text(n);
+                    }
+                    _ => {
+                        i.option(false);
+                    }
+                }
+                i.f32(m.x).f32(m.y).f32(m.z).f64(m.yaw);
+                let s = &m.snap;
+                i.int(s.mode as i64)
+                    .f32(s.above)
+                    .int(s.from_all.into())
+                    .f32(s.min_up);
+                i.int(s.rings.len() as i64);
+                for &r in &s.rings {
+                    i.f32(r);
+                }
+                i.int(s.directions.into()).f32(s.max_above_ground).f32(s.headroom);
+                i.f64(m.lift).int(m.shelter.into()).int(m.trainer.into());
+                i.option(m.blueprint.is_some())
+                    .text(m.blueprint.as_deref().unwrap_or(""));
+                i.option(m.transform.is_some());
+                for &v in m.transform.iter().flatten() {
+                    i.f32(v);
+                }
+            }
+            Written::Water(q) => {
+                i.f32(q.x0)
+                    .f32(q.y0)
+                    .f32(q.x1)
+                    .f32(q.y1)
+                    .f32(q.z)
+                    .int(q.corners.len() as i64);
+                for &(x, y) in &q.corners {
+                    i.f32(x).f32(y);
+                }
+            }
+            Written::Grind(g) => {
+                i.int(g.entity.index().into())
+                    .int(g.surface as i64)
+                    .option(g.prism.is_some());
+                if let Some(p) = &g.prism {
+                    i.int(p.positions.len() as i64);
+                    for &v in &p.positions {
+                        i.vec3(v);
+                    }
+                    i.int(p.indices.len() as i64);
+                    for &x in &p.indices {
+                        i.int(x.into());
+                    }
+                    i.int(p.pieces.into()).f32(p.length);
+                }
+            }
+            Written::Soup(f) => {
+                i.int(f.order.0.into())
+                    .int(f.order.1.index().into())
+                    .text(&f.file);
+                i.text(&format!("{:?}", f.mode))
+                    .int(f.read as i64)
+                    .int(f.cut)
+                    .int(f.kept);
+            }
+            Written::Hull(h) => {
+                i.int(h.entity.index().into())
+                    .text(&h.name)
+                    .int(h.surface as i64)
+                    .int(h.ground.into());
+                i.int(h.pos.len() as i64);
+                for &v in &h.pos {
+                    i.f32(v);
+                }
+                i.int(h.idx.len() as i64);
+                for &x in &h.idx {
+                    i.int(x.into());
+                }
+            }
+        }
+        i
+    }
+
+    fn kind(&self) -> Kind {
+        match self {
+            Written::Light(_) => Kind::Light,
+            Written::Marker(..) => Kind::Marker,
+            Written::Water(_) => Kind::Water,
+            Written::Grind(_) => Kind::Grind,
+            Written::Soup(_) => Kind::Soup,
+            Written::Hull(_) => Kind::Hull,
+        }
     }
 }
 
@@ -444,7 +634,7 @@ struct Taken {
     parts: usize,
     /// The loaded content written so far, by kind and planning id: a light, marker, water surface, grind curve or soup
     /// two parts both reach is written once.
-    written: BTreeSet<(Kind, u32)>,
+    written: BTreeMap<(Kind, u32), (Option<u64>, Written)>,
     /// The bytes of each mesh file written (the map's mesh bytes; a file a later decision removed taken out).
     mesh_sizes: BTreeMap<String, u64>,
     /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
@@ -573,7 +763,7 @@ impl MapSink {
                 stack_meshes: BTreeMap::new(),
                 proto_pieces: BTreeMap::new(),
                 chain_tiles: BTreeSet::new(),
-                written: BTreeSet::new(),
+                written: BTreeMap::new(),
             });
         }
         let t = self.taken.as_mut().expect("taken");
@@ -690,10 +880,24 @@ impl MapSink {
                 }
             }
         })?;
-        let world_hulls: Vec<_> = world_hulls
-            .into_iter()
-            .filter(|h| fresh(&mut t.written, first_made, Kind::Hull, h.entity))
-            .collect();
+        // the part, by its tag: named when two parts prepare what they share differently
+        let tag = match &t.layout {
+            Some(l) => l.part_of(world)?,
+            None => None,
+        };
+        let mut hulls = Vec::with_capacity(world_hulls.len());
+        for h in world_hulls {
+            if fresh(
+                &mut t.written,
+                first_made,
+                tag,
+                h.entity,
+                Written::Hull(h.clone()),
+            )? {
+                hulls.push(h);
+            }
+        }
+        let world_hulls = hulls;
         t.writer.lay_hulls(&world_hulls)?;
         // a placement is in one part (its tile's), so its prototype's hulls are
         let prop_hulls = t.writer.take_prop_hulls();
@@ -748,45 +952,49 @@ impl MapSink {
             mine.merge(found);
         }
         let w = &mut t.written;
-        t.scene.soups.extend(
-            s.soups
-                .iter()
-                .filter(|sd| fresh(w, first_made, Kind::Soup, sd.entity))
-                .map(|sd| SoupFacts {
-                    order: (sd.raw, sd.entity),
-                    file: sd.file.clone(),
-                    mode: sd.mode,
-                    read: sd.surf.len(),
-                    cut: sd.cut,
-                    kept: sd.kept,
-                }),
-        );
+        for sd in &s.soups {
+            let f = SoupFacts {
+                order: (sd.raw, sd.entity),
+                file: sd.file.clone(),
+                mode: sd.mode,
+                read: sd.surf.len(),
+                cut: sd.cut,
+                kept: sd.kept,
+            };
+            if fresh(w, first_made, tag, sd.entity, Written::Soup(f.clone()))? {
+                t.scene.soups.push(f);
+            }
+        }
         let c = &mut t.content;
-        c.markers.extend(
-            world
-                .iter::<crate::components::SkateMarker>()
-                .map(|(e, _)| (e, world.has::<primase_core::Name>(e)))
-                .zip(std::mem::take(&mut s.markers))
-                .filter(|((e, _), _)| fresh(w, first_made, Kind::Marker, *e))
-                .map(|((e, named), m)| (e, named, m)),
-        );
-        c.water.extend(
-            world
-                .iter::<crate::components::SkateWater>()
-                .map(|(e, _)| e)
-                .zip(std::mem::take(&mut s.water))
-                .filter(|(e, _)| fresh(w, first_made, Kind::Water, *e)),
-        );
-        c.lights.extend(
-            std::mem::take(&mut s.lights)
-                .into_iter()
-                .filter(|l| fresh(w, first_made, Kind::Light, l.entity)),
-        );
-        c.grind.extend(
-            std::mem::take(&mut s.curves)
-                .into_iter()
-                .filter(|g| fresh(w, first_made, Kind::Grind, g.entity)),
-        );
+        let markers = world
+            .iter::<crate::components::SkateMarker>()
+            .map(|(e, _)| (e, world.has::<primase_core::Name>(e)))
+            .zip(std::mem::take(&mut s.markers));
+        for ((e, named), m) in markers {
+            // an unnamed marker's name is the part's numbering, renamed over the map at the end: not compared
+            if fresh(w, first_made, tag, e, Written::Marker(named, m.clone()))? {
+                c.markers.push((e, named, m));
+            }
+        }
+        let water = world
+            .iter::<crate::components::SkateWater>()
+            .map(|(e, _)| e)
+            .zip(std::mem::take(&mut s.water));
+        for (e, q) in water {
+            if fresh(w, first_made, tag, e, Written::Water(q.clone()))? {
+                c.water.push((e, q));
+            }
+        }
+        for l in std::mem::take(&mut s.lights) {
+            if fresh(w, first_made, tag, l.entity, Written::Light(l.clone()))? {
+                c.lights.push(l);
+            }
+        }
+        for g in std::mem::take(&mut s.curves) {
+            if fresh(w, first_made, tag, g.entity, Written::Grind(g.clone()))? {
+                c.grind.push(g);
+            }
+        }
         Ok(())
     }
 
