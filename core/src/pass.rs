@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-pub use crate::ledger::Measure;
+pub use crate::ledger::{Conservation, Gap, Measure};
 use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
@@ -731,6 +731,13 @@ impl fmt::Display for VerifyFailure {
 pub enum Error {
     #[error("{0}")]
     Parse(String),
+    #[error("pass {pass} left out {dropped} {measure} but declared {declared} (PassLog::dropped)")]
+    Conservation {
+        pass: String,
+        measure: Measure,
+        dropped: u64,
+        declared: u64,
+    },
     #[error("no pass named {0:?}")]
     UnknownPass(String),
     #[error("pass {pass}: {message}")]
@@ -822,6 +829,9 @@ pub struct StepReport {
     /// Component names that appeared and disappeared.
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    /// With conservation diagnostics reporting ([`Conservation::Report`]): each measure whose losses differ from what
+    /// the pass declared. Empty otherwise.
+    pub conservation: Vec<Gap>,
 }
 
 /// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
@@ -866,6 +876,9 @@ impl fmt::Display for RunReport {
             }
             for ((m, why), n) in &s.log.drops {
                 write!(f, " -{m}:{why}={n}")?;
+            }
+            for g in &s.conservation {
+                write!(f, " !{g}")?;
             }
             writeln!(f)?;
         }
@@ -921,6 +934,7 @@ const INF: u32 = u32::MAX;
 pub struct PassManager {
     pub registry: PassRegistry,
     validators: Vec<Box<dyn Validator>>,
+    conservation: Conservation,
 }
 
 impl fmt::Debug for PassManager {
@@ -940,7 +954,18 @@ impl PassManager {
         PassManager {
             registry,
             validators: Vec::new(),
+            conservation: Conservation::Off,
         }
+    }
+
+    /// Run the conservation diagnostics around every pass ([`crate::ledger`]): off by default.
+    pub fn with_conservation(mut self, c: Conservation) -> Self {
+        self.conservation = c;
+        self
+    }
+
+    pub fn conservation(&self) -> Conservation {
+        self.conservation
     }
 
     pub fn add_validator(&mut self, v: Box<dyn Validator>) {
@@ -1051,10 +1076,27 @@ impl PassManager {
         };
         let mut log = PassLog::default();
         let first_made = w.next_index();
-        p.run(w, &mut log).map_err(|message| Error::Pass {
+        let ledger = (self.conservation != Conservation::Off).then(|| {
+            w.start_rebuild_log();
+            crate::ledger::Before::take(w)
+        });
+        let ran = p.run(w, &mut log);
+        let rebuilds = w.take_rebuild_log();
+        ran.map_err(|message| Error::Pass {
             pass: text.to_owned(),
             message,
         })?;
+        let conservation = ledger.map_or_else(Vec::new, |b| b.gaps(w, &rebuilds, &log));
+        if self.conservation == Conservation::Enforce
+            && let Some(g) = conservation.first()
+        {
+            return Err(Error::Conservation {
+                pass: text.to_owned(),
+                measure: g.measure,
+                dropped: g.dropped,
+                declared: g.declared,
+            });
+        }
         // what it placed it made, and it is there
         if let Some(e) = log
             .placed
@@ -1141,6 +1183,7 @@ impl PassManager {
             log,
             added,
             removed,
+            conservation,
         })
     }
 

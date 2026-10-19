@@ -467,6 +467,26 @@ pub struct World {
     opaque: BTreeMap<String, BTreeMap<Entity, Opaque>>,
     resources: BTreeMap<TypeId, Box<dyn AnyResource>>,
     opaque_resources: BTreeMap<String, Opaque>,
+    /// While a pass runs with conservation diagnostics on ([`crate::ledger`]): per entity whose primitives it rebuilt
+    /// ([`World::rebuild_primitives`]), the rebuilds composed; `None` for an entity whose mesh was also replaced another
+    /// way in between (counted net).
+    rebuilds: Option<RebuildLog>,
+}
+
+/// The primitive rebuilds a pass made, per entity; `None` when its mesh was also replaced another way between two of
+/// them.
+pub(crate) type RebuildLog = BTreeMap<Entity, Option<Rebuilt>>;
+
+/// One mesh's rebuilds in a pass, composed.
+#[derive(Clone, Debug)]
+pub(crate) struct Rebuilt {
+    /// The mesh the first rebuild started from ([`crate::Mesh`]'s identity) and its primitive count.
+    pub(crate) source: u64,
+    pub(crate) first: usize,
+    /// For each primitive of the mesh the last rebuild made, the source primitive it comes from.
+    pub(crate) from: Vec<usize>,
+    /// The mesh the last rebuild made.
+    pub(crate) made: u64,
 }
 
 impl Clone for World {
@@ -479,6 +499,7 @@ impl Clone for World {
             opaque: self.opaque.clone(),
             resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
             opaque_resources: self.opaque_resources.clone(),
+            rebuilds: None,
         }
     }
 }
@@ -701,13 +722,45 @@ impl World {
                 from.len()
             ));
         }
-        let old = mesh.primitives().len();
+        let (old, source) = (mesh.primitives().len(), mesh.id());
         if let Some(&i) = from.iter().find(|&&i| i >= old) {
             return Err(format!("source primitive {i} of {old}"));
         }
         self.remap_primitives(e, &from)?;
-        self.insert(e, crate::Mesh::new(primitives));
+        let made = crate::Mesh::new(primitives);
+        if let Some(log) = &mut self.rebuilds {
+            match log.entry(e) {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(Some(Rebuilt {
+                        source,
+                        first: old,
+                        from,
+                        made: made.id(),
+                    }));
+                }
+                // compose with the earlier rebuild, unless this one starts from another mesh (replaced in between)
+                std::collections::btree_map::Entry::Occupied(mut o) => {
+                    let composed = o.get_mut().take().filter(|r| r.made == source).map(|r| Rebuilt {
+                        from: from.iter().map(|&i| r.from[i]).collect(),
+                        made: made.id(),
+                        ..r
+                    });
+                    *o.get_mut() = composed;
+                }
+            }
+        }
+        self.insert(e, made);
         Ok(())
+    }
+
+    /// Start recording primitive rebuilds (the pass manager, around a pass with conservation diagnostics on).
+    pub(crate) fn start_rebuild_log(&mut self) {
+        self.rebuilds = Some(BTreeMap::new());
+    }
+
+    /// Stop recording and return what was recorded since [`World::start_rebuild_log`].
+    pub(crate) fn take_rebuild_log(&mut self) -> RebuildLog {
+        self.rebuilds.take().unwrap_or_default()
     }
 
     pub fn is_alive(&self, e: Entity) -> bool {
@@ -804,6 +857,7 @@ impl World {
                 .map(|(k, v)| (k.clone(), subset_of(v, keep)))
                 .collect(),
             opaque_resources: self.opaque_resources.clone(),
+            rebuilds: None,
         }
     }
 
@@ -838,6 +892,7 @@ impl World {
             resources: self.resources_for(&alive),
             alive,
             opaque_resources: self.opaque_resources.clone(),
+            rebuilds: None,
         }
     }
 

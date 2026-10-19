@@ -428,13 +428,26 @@ impl Primitive {
 /// component (material variants, dialect provenance) in step: a mesh is built whole ([`Mesh::new`]), read
 /// ([`Mesh::primitives`]) and edited primitive by primitive in place ([`Mesh::primitives_mut`], a slice: neither the
 /// count nor the order can change).
-#[derive(Clone, Debug, PartialEq, Default)]
+///
+/// Each mesh built with [`Mesh::new`] has an identity of its own, which a clone and an edit in place keep, so the
+/// conservation diagnostics ([`crate::ledger`]) tell a mesh edited in place from one replaced by another. Equality and
+/// `Debug` ignore it; nothing writes it.
+#[derive(Clone)]
 pub struct Mesh {
     primitives: Vec<Primitive>,
+    id: u64,
 }
+static NEXT_MESH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 impl Mesh {
     pub fn new(primitives: Vec<Primitive>) -> Self {
-        Mesh { primitives }
+        Mesh {
+            primitives,
+            id: NEXT_MESH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+    /// This mesh's identity (see [`Mesh`]).
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
     pub fn primitives(&self) -> &[Primitive] {
         &self.primitives
@@ -445,6 +458,23 @@ impl Mesh {
     }
     pub fn into_primitives(self) -> Vec<Primitive> {
         self.primitives
+    }
+}
+impl Default for Mesh {
+    fn default() -> Self {
+        Mesh::new(Vec::new())
+    }
+}
+impl PartialEq for Mesh {
+    fn eq(&self, other: &Self) -> bool {
+        self.primitives == other.primitives
+    }
+}
+impl std::fmt::Debug for Mesh {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Mesh")
+            .field("primitives", &self.primitives)
+            .finish()
     }
 }
 impl Component for Mesh {
@@ -1008,14 +1038,12 @@ mod tests {
             (Semantic::Normal, Stream::F32x3(vec![[0.0, 0.0, 1.0]; 3])),
             (Semantic::TexCoord(0), Stream::F32x2(vec![[0.0; 2]; 3])),
         ]);
-        let mesh = Mesh {
-            primitives: vec![Primitive {
-                topology: Topology::Triangles,
-                streams,
-                indices: Some(vec![0, 1, 2]),
-                material: None,
-            }],
-        };
+        let mesh = Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: Some(vec![0, 1, 2]),
+            material: None,
+        }]);
         assert_eq!(mesh.payload_bytes(), 108);
         // a 4 x 4 RGBA8 texture with its 2 x 2 and 1 x 1 levels: 64 + 16 + 4
         let texture = Texture {

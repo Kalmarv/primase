@@ -10,6 +10,8 @@ pub type Result<T> = primase_core::convert::Result<T>;
 
 pub const USAGE: &str = "usage: primase convert --from <reader> [reader options] --select \"<pipeline>\" --passes \"<pipeline>\" --to <writer> \
 <out> [writer options]
+--conservation off|report|enforce: count what each pass leaves out against what it declares (off unless given;
+report: differences as diagnostic notices; enforce: a difference fails the pass).
 --select and --passes are the conversion's choices, written out (no reader or writer supplies them): for a GTA region
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
@@ -113,6 +115,12 @@ pub fn run(args: &[String]) -> Result<()> {
     };
     let passes_text = take("--passes")?;
     let select_text = take("--select")?;
+    let conservation = match take("--conservation")?.as_deref() {
+        None | Some("off") => primase_core::pass::Conservation::Off,
+        Some("report") => primase_core::pass::Conservation::Report,
+        Some("enforce") => primase_core::pass::Conservation::Enforce,
+        Some(v) => return Err(format!("--conservation {v}: off, report or enforce").into()),
+    };
     let writer_name = &args[to + 1];
     let out = Path::new(args.get(to + 2).ok_or(USAGE)?);
     let mut reader = find(READERS, reader_name, "reader")?(&reader_args)?;
@@ -126,7 +134,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let passes = registry.parse(&passes_text)?;
     println!("select: {select}");
     println!("passes: {passes}");
-    let manager = PassManager::new(registry);
+    let manager = PassManager::new(registry).with_conservation(conservation);
     let report = match convert_parts(
         reader.as_mut(),
         parts.as_mut(),

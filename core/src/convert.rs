@@ -277,6 +277,8 @@ pub enum NoticeKind {
     Selection,
     /// What a stage was doing when it failed.
     FailureContext,
+    /// What a diagnostic the program turned on found (conservation: a pass's losses differ from what it declared).
+    Diagnostic,
 }
 
 /// The most examples a notice keeps; its count still counts every case.
@@ -323,6 +325,7 @@ impl std::fmt::Display for Notice {
             NoticeKind::Approximation => "approximation",
             NoticeKind::Selection => "selection",
             NoticeKind::FailureContext => "failure",
+            NoticeKind::Diagnostic => "diagnostic",
         };
         write!(f, "{kind} {}: {} x {}", self.stage, self.reason, self.count)?;
         if !self.examples.is_empty() {
@@ -425,6 +428,9 @@ impl ConvertReport {
                     None,
                 );
             }
+            for g in &step.conservation {
+                add(&step.pass, NoticeKind::Diagnostic, &g.to_string(), 1, None);
+            }
         }
         for p in &self.part_reports {
             for step in &p.explicit.steps {
@@ -440,6 +446,15 @@ impl ConvertReport {
                         NoticeKind::Selection,
                         &format!("{m}: {why}"),
                         *v,
+                        Some(p.ordinal),
+                    );
+                }
+                for g in &step.conservation {
+                    add(
+                        &step.pass,
+                        NoticeKind::Diagnostic,
+                        &g.to_string(),
+                        1,
                         Some(p.ordinal),
                     );
                 }
