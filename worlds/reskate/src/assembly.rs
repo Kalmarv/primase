@@ -989,7 +989,7 @@ pub(crate) fn map_summary(
     }
     let count = writer.non_chain_cull_ids(extras)?;
     let mut shared = BTreeMap::new();
-    for ((kind, e), n) in count.shared {
+    for (kind, e, n) in count.shared {
         let k = key(e).ok_or_else(|| {
             Error::Scene(format!(
                 "{kind:?} {e:?} is counted, but it is not the part's output"

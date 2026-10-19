@@ -1091,19 +1091,32 @@ fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
 /// (`finalize-reskate-blend-budget` on the gather traversal's summaries and the cells' counts), each written as
 /// `cull_ids` say: the two decisions, with their bases; the maps compared byte for byte.
 fn pool_budgets(w: &dyn Fn() -> World, cull_ids: usize, tag: &str) -> (SkateBlendBudget, SkateBlendBudget) {
+    pool_budgets_with(w, cull_ids, tag, &Vec::new)
+}
+
+/// [`pool_budgets`], `extra` first in the whole map's passes and in each part's (both traversals).
+fn pool_budgets_with(
+    w: &dyn Fn() -> World,
+    cull_ids: usize,
+    tag: &str,
+    extra: &dyn Fn() -> Vec<Box<dyn Pass>>,
+) -> (SkateBlendBudget, SkateBlendBudget) {
     let reference = tmp(&format!("whole-{tag}"));
     let kept = KeepBudget::default();
     let recorded = kept.0.clone();
-    let mut passes = prepared(cull_ids);
+    let mut passes = extra();
+    passes.extend(prepared(cull_ids));
     passes.push(Box::new(kept));
     converted_whole_of(w(), &encoding_with(&reference, cull_ids), passes);
     let out = tmp(&format!("parts-{tag}"));
     let kept = KeepBudget::default();
     let made = kept.0.clone();
     let e = encoding_with(&out, cull_ids);
-    let mut passes = part_prepared(cull_ids);
+    let mut passes = extra();
+    passes.extend(part_prepared(cull_ids));
     passes.push(Box::new(kept));
-    let mut gather = part_prepared(cull_ids);
+    let mut gather = extra();
+    gather.extend(part_prepared(cull_ids));
     gather.push(Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()));
     let stages = Stages {
         passes,
@@ -1406,4 +1419,74 @@ fn content_two_parts_reach_is_written_once() {
             &format!("shared {order:?}"),
         );
     }
+}
+
+/// Puts a light 3 m above each rock the world owns (a part's roots; the whole map's every rock), placed for it: lights
+/// each part makes, two parts' under one local index (each part's first made id is the same).
+#[derive(Debug)]
+struct LightOverRocks;
+impl Pass for LightOverRocks {
+    fn name(&self) -> &'static str {
+        "light-over-rocks"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.light"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let roots = w
+            .resource::<primase_core::convert::PartScope>()
+            .map(|s| s.roots.clone());
+        let at: Vec<[f32; 3]> = w
+            .iter::<Instance>()
+            .filter(|(e, i)| {
+                roots.as_ref().is_none_or(|r| r.contains(e))
+                    && w.get::<Name>(i.prototype).is_some_and(|n| n.0 == "rock")
+            })
+            .filter_map(|(e, _)| {
+                w.get::<Transform>(e)
+                    .map(|t| [t.cols[3][0], t.cols[3][1] + 3.0, t.cols[3][2]])
+            })
+            .collect();
+        for position in at {
+            let l = w.spawn();
+            w.insert(
+                l,
+                primase_reskate::components::SkateLight {
+                    spot: false,
+                    position,
+                    direction: [0.0, -1.0, 0.0],
+                    tangent: [0.0; 3],
+                    color: [1.0; 3],
+                    energy: 40.0,
+                    range: 15.0,
+                    radius: 0.1,
+                    spot_size: 0.0,
+                    spot_blend: 0.0,
+                    time_of_day: 127,
+                    cast_shadow: false,
+                    priority: None,
+                    group: String::new(),
+                    unknown_flags: 0,
+                },
+            );
+            log.place(l);
+        }
+        Ok(())
+    }
+}
+
+/// Lights two parts each make under one local index are two lights, counted apart: the pool budget's basis in parts
+/// counts every light the whole map does, and the decision and the map are the whole map's.
+#[test]
+fn lights_two_parts_make_under_one_index_are_counted_apart() {
+    let extra = || -> Vec<Box<dyn Pass>> { vec![Box::new(LightOverRocks)] };
+    let (whole, parts) = pool_budgets_with(&map, 1_000_000, "made-lights", &extra);
+    let basis = |b: &SkateBlendBudget| b.decision.as_ref().unwrap().pool.unwrap();
+    assert_eq!(parts, whole);
+    let (_, plain) = pool_budgets_with(&map, 1_000_000, "no-made-lights", &Vec::new);
+    // a light per rock: as many cull IDs more as there are rocks
+    assert_eq!(
+        basis(&whole).other_cull_ids,
+        basis(&plain).other_cull_ids + ROCKS.len()
+    );
 }

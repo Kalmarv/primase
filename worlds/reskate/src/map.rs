@@ -2163,8 +2163,10 @@ struct LaidOut {
 pub(crate) struct CullCount {
     /// What only the part laid out writes: its tiles, instances, placed props' hulls and collision cells.
     pub summed: usize,
-    /// Standalone content another part may write too: its lights, grind prisms and hull soups, by their entity.
-    pub shared: BTreeMap<(crate::components::SharedContent, primase_core::Entity), usize>,
+    /// Standalone content another part may write too: its lights, grind prisms and hull soups, each with its entity
+    /// and its cull IDs. A list, not keyed: an entity is one of a part's, and a map written from several parts may hold
+    /// two parts' made content under one local index (its count keys each by [`crate::passes::Owned::key`]).
+    pub shared: Vec<(crate::components::SharedContent, primase_core::Entity, usize)>,
     /// Whether it writes the water (one object for the whole map).
     pub water: bool,
 }
@@ -2172,7 +2174,7 @@ pub(crate) struct CullCount {
 impl CullCount {
     /// Every cull ID counted.
     pub(crate) fn total(&self) -> usize {
-        self.summed + self.shared.values().sum::<usize>() + usize::from(self.water)
+        self.summed + self.shared.iter().map(|&(_, _, n)| n).sum::<usize>() + usize::from(self.water)
     }
 }
 
@@ -2806,7 +2808,7 @@ impl MapWriter {
         self.lay_cells(&waiting, None)?;
         // the hull soups one by one, each one's objects counted as its own (another part may write it too), then the
         // placed props' hulls
-        let mut shared = BTreeMap::new();
+        let mut shared = Vec::new();
         for h in std::mem::take(&mut x.hulls) {
             let before = self.col.objects.len();
             self.lay_hulls(std::slice::from_ref(&h))?;
@@ -2815,7 +2817,7 @@ impl MapWriter {
                 .map(|ob| ob.cells as usize)
                 .sum();
             if cells > 0 {
-                shared.insert((crate::components::SharedContent::HullSoup, h.entity), cells);
+                shared.push((crate::components::SharedContent::HullSoup, h.entity, cells));
             }
         }
         let prop_hulls = self.take_prop_hulls();
@@ -2896,10 +2898,11 @@ impl MapWriter {
             ob.collision_mode = "triangle_mesh";
             ob.collision_packed = grind::SURFACES[surface].1;
             ob.grind_source = Some(name);
-            shared.insert(
-                (crate::components::SharedContent::GrindPrism, entity),
+            shared.push((
+                crate::components::SharedContent::GrindPrism,
+                entity,
                 ob.cells as usize,
-            );
+            ));
             col.objects.push(ob);
             self.r.grind_curves += 1;
             self.r.grind_pieces += i64::from(pieces);
@@ -2920,7 +2923,7 @@ impl MapWriter {
         shared.extend(
             kept_lights
                 .iter()
-                .map(|l| ((crate::components::SharedContent::Light, l.entity), 1)),
+                .map(|l| (crate::components::SharedContent::Light, l.entity, 1)),
         );
         let all = self
             .objects
@@ -2933,8 +2936,8 @@ impl MapWriter {
             summed: all
                 - shared
                     .iter()
-                    .filter(|((kind, _), _)| *kind != crate::components::SharedContent::Light)
-                    .map(|(_, n)| n)
+                    .filter(|(kind, _, _)| *kind != crate::components::SharedContent::Light)
+                    .map(|(_, _, n)| n)
                     .sum::<usize>(),
             shared,
             water: water.is_some(),
