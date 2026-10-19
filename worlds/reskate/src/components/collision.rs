@@ -75,8 +75,10 @@ pub struct SkateCollisionPlan {
     pub weld: CollisionWeld,
     /// The surface table's names, in order: what the leaves' surface indices index.
     pub table: Vec<String>,
-    /// Every leaf, by name.
-    pub leaves: BTreeMap<String, PlannedLeaf>,
+    /// Every leaf, by name: the plan made for the whole map's layout. `None`: each leaf planned as the writer lays the
+    /// collision out, by the same rule ([`crate::collision_pack::plan_leaf`]): a map written in parts, no part of which
+    /// holds every cell whole; the writer reports the plan it made (`BuildReport::collision_plan`).
+    pub leaves: Option<BTreeMap<String, PlannedLeaf>>,
 }
 
 impl Resource for SkateCollisionPlan {
@@ -92,9 +94,9 @@ impl Resource for SkateCollisionPlan {
                 CollisionWeld::Exact => "exact",
             },
             "table": self.table,
-            "leaves": self.leaves.len(),
-            "rewritten": self.leaves.values().map(|l| l.into.keys().map(|s| l.counts[s]).sum::<usize>()).sum::<usize>(),
-            "collapsed": self.leaves.values().map(|l| l.collapsed).sum::<usize>(),
+            "leaves": self.leaves.as_ref().map(BTreeMap::len),
+            "rewritten": self.leaves.as_ref().map(|ls| ls.values().map(|l| l.into.keys().map(|s| l.counts[s]).sum::<usize>()).sum::<usize>()),
+            "collapsed": self.leaves.as_ref().map(|ls| ls.values().map(|l| l.collapsed).sum::<usize>()),
         })))
     }
 }

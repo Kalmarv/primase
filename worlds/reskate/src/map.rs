@@ -632,6 +632,8 @@ pub struct MapWriter {
     col: CollisionResult,
     water_col: CollisionResult,
     leaves_packed: usize,
+    /// The leaves it planned itself (a plan without leaves: a map in parts), by name.
+    leaves_made: BTreeMap<String, crate::components::PlannedLeaf>,
     /// Mesh files a later decision dropped (a blend chain's form not taken) after they may have been written.
     pub discarded: Vec<String>,
     /// Mesh files (meshes/<name>), written at the end.
@@ -767,6 +769,7 @@ impl MapWriter {
             col: CollisionResult::default(),
             water_col: CollisionResult::default(),
             leaves_packed: 0,
+            leaves_made: BTreeMap::new(),
             discarded: Vec::new(),
             pending_chains: BTreeMap::new(),
             stack: Stack::Off { unstacked: 0 },
@@ -873,7 +876,7 @@ impl MapWriter {
         let plan = self.collision_plan.take();
         let (mut col, mut water_col) = (std::mem::take(&mut self.col), std::mem::take(&mut self.water_col));
         let mut files = crate::collision_pack::Files::new();
-        let laid = (|| -> Result<usize> {
+        let laid = (|| -> Result<(usize, BTreeMap<String, crate::components::PlannedLeaf>)> {
             let mut pack = crate::collision_pack::Pack::new(&surf, off, plan.as_ref(), &mut files)?;
             let mut pack_leaf =
                 |leaf: crate::collision::Leaf<'_>, res: &mut CollisionResult| pack.leaf(leaf, res);
@@ -909,12 +912,18 @@ impl MapWriter {
                 )?;
             }
             drop(pack_leaf);
-            Ok(pack.seen())
+            Ok((pack.seen(), pack.take_made()))
         })();
         self.collision_plan = plan;
         self.col = col;
         self.water_col = water_col;
-        self.leaves_packed += laid?;
+        let (packed, made) = laid?;
+        self.leaves_packed += packed;
+        for (name, leaf) in made {
+            if self.leaves_made.insert(name.clone(), leaf).is_some() {
+                return Err(Error::Scene(format!("two collision leaves are named {name}")));
+            }
+        }
         self.mesh_files.extend(files);
         Ok(())
     }
@@ -940,6 +949,16 @@ impl MapWriter {
     /// key over the whole map (`None`: those placements are the whole map's).
     pub(crate) fn set_counts(&mut self, counts: Option<HashMap<u32, i64>>) {
         self.counts = counts;
+    }
+
+    /// The collision plan it made leaf by leaf (a map written in parts, the record without leaves), the record's rule
+    /// with every leaf it laid out; `None`: the record had the leaves, or there is none.
+    pub(crate) fn plan_made(&self) -> Option<crate::components::SkateCollisionPlan> {
+        let p = self.collision_plan.as_ref()?;
+        p.leaves.is_none().then(|| crate::components::SkateCollisionPlan {
+            leaves: Some(self.leaves_made.clone()),
+            ..p.clone()
+        })
     }
 
     /// The textures the materials drawn so far use.

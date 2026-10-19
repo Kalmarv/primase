@@ -112,8 +112,9 @@ fn a_minor_surface_is_coalesced_or_kept() {
     let mut w = world(&[(METAL, false)]);
     let log = plan(&mut w, CollisionSurfaces::Coalesce, CollisionWeld::Millimetre);
     let p = w.resource::<SkateCollisionPlan>().unwrap();
-    assert_eq!(p.leaves.len(), 1);
-    let leaf = p.leaves.values().next().unwrap();
+    let leaves = p.leaves.as_ref().unwrap();
+    assert_eq!(leaves.len(), 1);
+    let leaf = leaves.values().next().unwrap();
     assert_eq!(leaf.into, [(METAL as usize, CONCRETE as usize)].into());
     assert_eq!(
         log.approximations["collision triangles of surface metal written as their leaf's concrete"],
@@ -186,8 +187,9 @@ fn a_plan_for_another_layout_is_refused() {
     let mut w = world(&[(METAL, false)]);
     plan(&mut w, CollisionSurfaces::Coalesce, CollisionWeld::Millimetre);
     let mut p = w.resource::<SkateCollisionPlan>().unwrap().clone();
-    let leaf = p.leaves.values().next().unwrap().clone();
-    p.leaves.insert("c_9_9".into(), leaf);
+    let leaves = p.leaves.as_mut().unwrap();
+    let leaf = leaves.values().next().unwrap().clone();
+    leaves.insert("c_9_9".into(), leaf);
     w.insert_resource(p);
     let e = written(&w, "extra").unwrap_err().to_string();
     assert!(e.contains("the plan has 2 leaves, the layout 1"), "{e}");

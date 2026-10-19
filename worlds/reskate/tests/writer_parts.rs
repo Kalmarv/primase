@@ -25,9 +25,11 @@ use primase_core::{
     Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
 };
 use primase_meshops::PartitionGrid;
+use primase_reskate::components::{CollisionSurfaces, CollisionWeld, SkateCollisionPlan};
 use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateWater};
 use primase_reskate::passes::{
-    RaiseOptions, SummarizeReskateContent, SummarizeReskateInstances, SummarizeReskateLayout,
+    PrepareReskateCollision, RaiseOptions, SummarizeReskateContent, SummarizeReskateInstances,
+    SummarizeReskateLayout,
 };
 use primase_reskate::{BuildReport, EncodingOptions, MapSink};
 
@@ -122,6 +124,7 @@ fn map() -> World {
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     let wood = surfaces.index("wood").unwrap();
+    let metal = surfaces.index("metal").unwrap();
     w.insert_resource(surfaces);
     let tex = w.spawn();
     w.insert(tex, Name("stone".into()));
@@ -147,7 +150,7 @@ fn map() -> World {
         },
     );
     let deck = prototype(&mut w, "deck", 10, 40.0, 2.0, material, wood);
-    let rock = prototype(&mut w, "rock", 1, 3.0, 1.0, material, concrete);
+    let rock = prototype(&mut w, "rock", 1, 3.0, 1.0, material, metal);
     for (e, n) in DECKS {
         place(&mut w, deck, e, n);
     }
@@ -294,13 +297,29 @@ fn encoding(out: &Path) -> EncodingOptions {
     }
 }
 
-/// The map written whole, after `passes`.
+/// The map written whole, after `passes`; and the collision plan they recorded.
 fn whole(out: &Path, passes: Vec<Box<dyn Pass>>) -> BuildReport {
+    whole_planned(out, passes).0
+}
+
+fn whole_planned(out: &Path, passes: Vec<Box<dyn Pass>>) -> (BuildReport, Option<SkateCollisionPlan>) {
     let mut w = map();
     for p in passes {
         p.run(&mut w, &mut PassLog::default()).unwrap();
     }
-    primase_reskate::write_map(&w, Path::new(""), &encoding(out)).unwrap()
+    (
+        primase_reskate::write_map(&w, Path::new(""), &encoding(out)).unwrap(),
+        w.resource::<SkateCollisionPlan>().cloned(),
+    )
+}
+
+fn plan() -> PrepareReskateCollision {
+    PrepareReskateCollision::new(
+        CollisionSurfaces::Coalesce,
+        CollisionWeld::Millimetre,
+        &EncodingOptions::default(),
+    )
+    .unwrap()
 }
 
 /// Loads each part's closure under the same ids; any prototype's box is the deck's.
@@ -478,4 +497,43 @@ fn a_misaligned_partition_and_unannounced_collision_are_refused() {
         .unwrap()
         .to_string();
     assert!(e.contains("does not announce"), "{e}");
+}
+
+/// The collision plan over parts: each part records the rule only, the writer plans each leaf as it lays the cell out by
+/// the pass's own rule, and the plan it reports is the one the pass records for the whole map (leaf by leaf), the map
+/// byte for byte the same; the rocks' few metal triangles are written as their leaf's wood or concrete.
+#[test]
+fn the_collision_plan_over_parts_is_the_whole_maps_leaf_by_leaf() {
+    let reference = tmp("whole-planned");
+    let (r, recorded) = whole_planned(&reference, vec![Box::new(plan())]);
+    let recorded = recorded.unwrap();
+    assert!(
+        r.collision_plan.is_none(),
+        "a whole map's plan is the pass's record"
+    );
+    let leaves = recorded.leaves.as_ref().unwrap();
+    assert!(
+        leaves.values().any(|l| !l.into.is_empty()),
+        "the plan rewrites a minor surface somewhere: {leaves:?}"
+    );
+    let mut order: Option<Vec<usize>> = None;
+    for _ in 0..2 {
+        let out = tmp("parts-planned");
+        let (r, n) = in_parts(&out, &aligned(), order.as_deref(), vec![Box::new(plan())]).unwrap();
+        assert!(n >= 2);
+        assert_eq!(r.collision_plan.as_ref(), Some(&recorded), "{order:?}");
+        assert!(
+            r.approximated
+                .iter()
+                .any(|(what, _)| what.starts_with("collision triangles of surface metal")),
+            "{:?}",
+            r.approximated
+        );
+        same_maps(
+            &reference.join("parts"),
+            &out.join("parts"),
+            &format!("planned {order:?}"),
+        );
+        order = Some((0..n).rev().collect());
+    }
 }

@@ -30,6 +30,9 @@ pub struct BuildReport {
     pub parts: usize,
     /// How much collision the sink held between parts, and what it laid out at the end.
     pub held: HeldCells,
+    /// The collision plan the writer made leaf by leaf, by `prepare-reskate-collision`'s rule (a map in parts, whose
+    /// record holds the rule only); `None` otherwise.
+    pub collision_plan: Option<crate::components::SkateCollisionPlan>,
     pub tiles: usize,
     pub merged_entities: i64,
     pub merged_tris: i64,
@@ -750,10 +753,28 @@ impl MapSink {
         let p = out_dir.join("stats.json");
         std::fs::write(&p, stats).map_err(|source| Error::Io { path: p, source })?;
         let r = &writer.r;
+        // a plan the writer made: what it rewrote and dropped, reported as the pass reports a whole map's
+        let plan_made = writer.plan_made();
+        let mut plan_rewritten: BTreeMap<String, u64> = BTreeMap::new();
+        let mut plan_collapsed = 0u64;
+        if let Some(p) = &plan_made {
+            for l in p.leaves.iter().flat_map(BTreeMap::values) {
+                plan_collapsed += l.collapsed as u64;
+                for (&from, &to) in &l.into {
+                    *plan_rewritten
+                        .entry(format!(
+                            "collision triangles of surface {} written as their leaf's {}",
+                            p.table[from], p.table[to]
+                        ))
+                        .or_default() += l.counts[&from] as u64;
+                }
+            }
+        }
         Ok(BuildReport {
             out_dir,
             parts,
             held,
+            collision_plan: plan_made,
             tiles: r.tiles.len(),
             merged_entities: r.merged_entities,
             merged_tris: r.merged_tris,
@@ -794,6 +815,7 @@ impl MapSink {
                             r.trainer_left_out as i64,
                         ),
                         ("grind curves with no usable points", r.grind_unusable as i64),
+                        ("collision triangles the 1 mm weld collapses", plan_collapsed as i64),
                     ]
                     .into_iter()
                     .filter(|(_, n)| *n > 0)
@@ -824,6 +846,7 @@ impl MapSink {
                     .filter(|(_, n)| *n > 0)
                     .map(|(what, n)| (what.to_owned(), n as u64)),
                 )
+                .chain(plan_rewritten)
                 .chain(match writer.chains() {
                     Chains::Off { left } if *left > 0 => Some((
                         "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \

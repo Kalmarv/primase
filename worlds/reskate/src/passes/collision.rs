@@ -17,8 +17,15 @@
 //! that changes the collision); without a plan it writes the collision exactly (as `surfaces=exact,weld=exact`). The writer used to coalesce
 //! and weld by itself. It runs on the whole map, after every pass that changes the map's collision or what the writer
 //! groups, and before `summarize-reskate-map` (whose count of the collision's cull IDs is the planned collision's).
+//!
+//! A part of a map converted in several holds none of its boundary cells whole, so it cannot plan their leaves: it
+//! records the surfaces and the weld only (`leaves` none), and the writer plans each leaf as it lays the cell out, by
+//! the same rule ([`crate::collision_pack::plan_leaf`]), reporting the plan it made and what it rewrote and dropped.
+
+use std::path::Path;
 
 use primase_core::World;
+use primase_core::convert::PartScope;
 use primase_core::ledger::Measure;
 use primase_core::pass::{Options, Pass, PassLog};
 
@@ -109,11 +116,25 @@ impl Pass for PrepareReskateCollision {
         "minor collision surfaces of a leaf written as its most common one"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateCollisionPlan>().is_some() {
             return Err(
                 "prepare-reskate-collision: the collision is already planned (skate.collision_plan)".into(),
             );
+        }
+        // a part of a map in several: the rule only, each leaf planned by the writer as it lays the cell out
+        if w.resource::<PartScope>().is_some_and(|s| !s.whole) {
+            let s = crate::scene::Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
+            w.insert_resource(SkateCollisionPlan {
+                surfaces: self.surfaces,
+                weld: self.weld,
+                table: s.surfaces.list.iter().map(|(n, _)| n.clone()).collect(),
+                leaves: None,
+            });
+            log.count(
+                "collision plans left to the writer, leaf by leaf (a part of a map in several)",
+                1,
+            );
+            return Ok(());
         }
         let (plan, rewritten) =
             collision_plan(w, &self.encoding, self.surfaces, self.weld).map_err(|e| e.to_string())?;
@@ -123,12 +144,13 @@ impl Pass for PrepareReskateCollision {
                 n as u64,
             );
         }
+        let leaves = plan.leaves.as_ref().expect("a whole map's plan has its leaves");
         log.dropped(
             Measure::CollisionTriangles,
             "collision triangles the 1 mm weld collapses",
-            plan.leaves.values().map(|l| l.collapsed as u64).sum(),
+            leaves.values().map(|l| l.collapsed as u64).sum(),
         );
-        log.count("collision leaves", plan.leaves.len() as u64);
+        log.count("collision leaves", leaves.len() as u64);
         w.insert_resource(plan);
         Ok(())
     }

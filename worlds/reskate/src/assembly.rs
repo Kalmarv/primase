@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use primase_core::World;
 
-use crate::collision::{CollisionWorld, TileData, surfaces_of};
+use crate::collision::{CollisionWorld, TileData};
 use crate::components::{
     CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkatePausePicture,
 };
@@ -849,22 +849,11 @@ pub(crate) fn collision_plan(
     let mut leaves: BTreeMap<String, PlannedLeaf> = BTreeMap::new();
     let mut rewritten = Rewritten::new();
     writer.collision_leaves(&mut |leaf, _| {
-        let count = leaf.counts(surf.list.len());
-        let into = surfaces_of(&surf, &count, surfaces);
-        let collapsed = leaf.pieces(&into, weld)?.iter().map(|p| p.collapsed).sum();
-        let mut planned = PlannedLeaf {
-            counts: BTreeMap::new(),
-            into: BTreeMap::new(),
-            collapsed,
-        };
-        for (s, &n) in count.iter().enumerate().filter(|&(_, &n)| n > 0) {
-            planned.counts.insert(s, n);
-            if into[s] != s {
-                planned.into.insert(s, into[s]);
-                *rewritten
-                    .entry((surf.list[s].0.clone(), surf.list[into[s]].0.clone()))
-                    .or_default() += n;
-            }
+        let planned = crate::collision_pack::plan_leaf(&surf, &leaf, surfaces, weld)?;
+        for (&s, &to) in &planned.into {
+            *rewritten
+                .entry((surf.list[s].0.clone(), surf.list[to].0.clone()))
+                .or_default() += planned.counts[&s];
         }
         if leaves.insert(leaf.name.to_owned(), planned).is_some() {
             return Err(Error::Scene(format!(
@@ -879,7 +868,7 @@ pub(crate) fn collision_plan(
             surfaces,
             weld,
             table: surf.list.iter().map(|(n, _)| n.clone()).collect(),
-            leaves,
+            leaves: Some(leaves),
         },
         rewritten,
     ))
