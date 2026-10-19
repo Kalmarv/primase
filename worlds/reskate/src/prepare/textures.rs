@@ -109,8 +109,9 @@ impl Pass for PrepareReskateTextures {
     fn name(&self) -> &'static str {
         "prepare-reskate-textures"
     }
+    // the materials are optional: a map without them has no texture to prepare
     fn requires(&self) -> &[&'static str] {
-        &["skate.material"]
+        &["skate.scene"]
     }
     fn provides(&self) -> &[&'static str] {
         &["core.texture", "skate.texture", "core.name"]

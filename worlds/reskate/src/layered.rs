@@ -413,8 +413,9 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             }
         }
     }
+    // the blends are optional: a map without them has nothing to lower
     fn requires(&self) -> &[&'static str] {
-        &["core.layered", "core.mesh", "skate.material"]
+        &["skate.scene"]
     }
     fn provides(&self) -> &[&'static str] {
         &["skate.material", "reskate.vertex_blend", "reskate.blend_opacity"]

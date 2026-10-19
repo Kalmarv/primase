@@ -5,7 +5,8 @@
 //! prism hung under each run with one edge on the line ([`PrismRules`]; Studio's by default), of the curve's radius
 //! (5-250 mm; 30 mm when it states none). A curve with no usable points gets an empty prism (the writer warns of it);
 //! a curve whose surface is not one of Studio's five smooth-grind surfaces is refused. The writer writes the prisms and
-//! makes none: a curve without one is reported unsupported. Run it after the passes that move the curves (the floor).
+//! makes none: a curve without one is reported unsupported. A world without grind curves gets nothing. Run it after the
+//! passes that move the curves (the floor).
 
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -100,14 +101,17 @@ impl Pass for PrepareReskateGrinds {
             ("corner_degrees".to_owned(), r.corner_degrees.to_string()),
         ])
     }
+    // the curves are optional: a map without them gets no prism (after raise-skate, as any map's preparation)
     fn requires(&self) -> &[&'static str] {
-        &["skate.grind_curve"]
+        &["skate.scene"]
     }
     fn provides(&self) -> &[&'static str] {
         &["skate.grind_prism"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let curves: Vec<_> = w.iter::<SkateGrindCurve>().map(|(e, c)| (e, c.clone())).collect();
+        // recorded when there are none, too
+        log.count("grind curves made prisms", 0);
         for (e, c) in curves {
             if w.has::<SkateGrindPrism>(e) {
                 return Err(

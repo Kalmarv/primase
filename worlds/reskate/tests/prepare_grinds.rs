@@ -194,6 +194,33 @@ fn the_writer_writes_prisms_and_builds_none() {
     );
 }
 
+/// A world without grind curves, run through the pass manager as a program runs it: nothing to make, nothing made.
+#[test]
+fn a_world_without_curves_gets_nothing() {
+    let (mut w, curves) = world();
+    for c in curves {
+        w.despawn(c);
+    }
+    let mut report = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            &mut w,
+            &primase_core::pass::Pipeline {
+                passes: vec![Box::new(PrepareReskateGrinds::new())],
+            },
+            &mut report,
+        )
+        .unwrap();
+    assert_eq!(w.iter::<SkateGrindPrism>().count(), 0);
+    let (r, map) = write(&w, "no-curves");
+    assert!(grind_objects(&map).is_empty());
+    assert!(
+        r.unsupported.iter().all(|(what, _)| !what.contains("grind")),
+        "{:?}",
+        r.unsupported
+    );
+}
+
 /// Every rule prints back and reads back the same; bad values and unknown keys are refused.
 #[test]
 fn the_grind_options_round_trip_and_are_checked() {

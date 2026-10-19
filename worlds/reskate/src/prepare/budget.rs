@@ -169,8 +169,9 @@ impl Pass for BudgetReskateTextures {
             ("aux_weight".to_owned(), self.aux_weight.to_string()),
         ])
     }
+    // the materials are optional: a map without them has no texture to prepare
     fn requires(&self) -> &[&'static str] {
-        &["skate.material"]
+        &["skate.scene"]
     }
     fn provides(&self) -> &[&'static str] {
         &["skate.base_factor"]
