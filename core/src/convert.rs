@@ -250,21 +250,47 @@ impl PartScope {
         out
     }
 
+    /// What the part owns in `w` now: the closure of its roots and of what its passes declared as its own.
+    pub fn owned(&self, w: &World) -> BTreeSet<Entity> {
+        let own = self.placed.iter().filter(|(e, own)| **own && w.is_alive(**e));
+        w.closure(self.roots.iter().copied().chain(own.map(|(e, _)| *e)))
+    }
+
     /// A pass's declarations (`placed`, with their sources `placed_from`) added to `w`'s part scope, each classified
-    /// now, while its source is in the world: the part's own unless placed from an entity outside the roots' closure.
-    /// Nothing without a scope (a world outside conversion).
-    pub fn declare(w: &mut World, placed: &BTreeSet<Entity>, placed_from: &BTreeMap<Entity, Entity>) {
+    /// now: the part's own when placed with no source or from an entity the part owns, else its context's. The part
+    /// owns what [`PartScope::owned`] gives after the pass, what it gave before the pass (`owned_before`: a source
+    /// the pass consumed still counts), and this pass's own declarations, so a chain of them (placed from one placed
+    /// from a root) is the part's whatever their order. Nothing without a scope (a world outside conversion).
+    pub fn declare(
+        w: &mut World,
+        placed: &BTreeSet<Entity>,
+        placed_from: &BTreeMap<Entity, Entity>,
+        owned_before: &BTreeSet<Entity>,
+    ) {
         let Some(scope) = w.resource::<PartScope>() else {
             return;
         };
         if placed.is_empty() {
             return;
         }
-        let owned = w.closure(scope.roots.iter().copied());
-        let classified: Vec<(Entity, bool)> = placed
-            .iter()
-            .map(|e| (*e, placed_from.get(e).is_none_or(|s| owned.contains(s))))
-            .collect();
+        let mut owned = scope.owned(w);
+        owned.extend(owned_before);
+        let mut own: BTreeSet<Entity> = BTreeSet::new();
+        // to a fixpoint: one declared from another of this pass's own is the part's too
+        loop {
+            let found: Vec<Entity> = placed
+                .iter()
+                .filter(|e| !own.contains(e))
+                .filter(|e| placed_from.get(e).is_none_or(|s| owned.contains(s)))
+                .copied()
+                .collect();
+            if found.is_empty() {
+                break;
+            }
+            owned.extend(w.closure(found.iter().copied()));
+            own.extend(found);
+        }
+        let classified: Vec<(Entity, bool)> = placed.iter().map(|e| (*e, own.contains(e))).collect();
         if let Some(scope) = w.resource_mut::<PartScope>() {
             scope.placed.extend(classified);
         }

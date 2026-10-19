@@ -1388,6 +1388,7 @@ fn a_parts_output_is_its_roots_and_what_it_declared() {
         &mut w,
         &BTreeSet::from([from_root, from_halo, alone]),
         &BTreeMap::from([(from_root, root), (from_halo, halo)]),
+        &BTreeSet::new(),
     );
     // the root a later step removes: what was placed from it stays the part's
     w.despawn(root);
@@ -1396,4 +1397,62 @@ fn a_parts_output_is_its_roots_and_what_it_declared() {
     assert_eq!(out.from_context, BTreeSet::from([from_halo]));
     assert!(!out.keep.contains(&temporary) && !out.keep.contains(&halo));
     assert!(out.keep.contains(&from_root) && out.keep.contains(&alone));
+}
+
+/// Declared output derived from declared output is the part's, whatever generation and order: a placement from one an
+/// earlier pass placed, chains within one pass declared in any order, and one from a source the same pass consumed
+/// (what the part owned before the pass). A chain from context stays context's.
+#[test]
+fn declared_output_from_declared_output_is_the_parts() {
+    let mut w = World::new();
+    let root = w.spawn();
+    w.insert(root, Name("root".into()));
+    let halo = w.spawn();
+    w.insert(halo, Name("halo".into()));
+    let made: Vec<Entity> = (0..7)
+        .map(|_| {
+            let e = w.spawn();
+            w.insert(e, Name("made".into()));
+            e
+        })
+        .collect();
+    let [a, b, late, early, eaten_from, ctx1, ctx2] = made[..] else {
+        unreachable!()
+    };
+    w.insert_resource(PartScope {
+        roots: BTreeSet::from([root]),
+        context: BTreeSet::from([halo]),
+        whole: false,
+        area: None,
+        first_made: Some(a.index()),
+        placed: BTreeMap::new(),
+    });
+    // pass 1 places a on its own
+    PartScope::declare(&mut w, &BTreeSet::from([a]), &BTreeMap::new(), &BTreeSet::new());
+    // pass 2 places b from a (a reaches no root)
+    let before = w.resource::<PartScope>().unwrap().owned(&w);
+    PartScope::declare(&mut w, &BTreeSet::from([b]), &BTreeMap::from([(b, a)]), &before);
+    // pass 3: a chain within one pass, the later link first in declaration order (late < early is not needed: both
+    // orders must hold), plus one from a root the pass consumed, and a chain from context
+    let before = w.resource::<PartScope>().unwrap().owned(&w);
+    w.despawn(root);
+    PartScope::declare(
+        &mut w,
+        &BTreeSet::from([late, early, eaten_from, ctx1, ctx2]),
+        &BTreeMap::from([
+            (late, early),
+            (early, b),
+            (eaten_from, root),
+            (ctx1, halo),
+            (ctx2, ctx1),
+        ]),
+        &before,
+    );
+    let out = w.resource::<PartScope>().unwrap().output(&w);
+    assert_eq!(out.placed, BTreeSet::from([a, b, late, early, eaten_from]));
+    assert_eq!(out.from_context, BTreeSet::from([ctx1, ctx2]));
+    for e in [a, b, late, early, eaten_from] {
+        assert!(out.keep.contains(&e), "{e:?} kept");
+    }
+    assert!(!out.keep.contains(&ctx1) && !out.keep.contains(&ctx2));
 }
