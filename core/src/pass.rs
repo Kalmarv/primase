@@ -435,6 +435,11 @@ pub enum Legality {
     Legal,
     /// Legal for the entities the predicate accepts; the others must be lowered.
     Dynamic(LegalityCheck),
+    /// Written through another component: legal on the entities the check accepts (a `core.light` with the
+    /// `skate.light` it was raised to); on the rest as an unlisted name (kept and reported as not written in
+    /// [`Mode::Partial`], illegal in [`Mode::Full`], unless the target carries unknown names). See
+    /// [`Target::covered`].
+    Covered(fn(&World, Entity) -> bool),
     /// Must be lowered before writing.
     Illegal,
     /// Not interpreted, passed through untouched (glTF extras, v2 opaque tables).
@@ -450,6 +455,7 @@ impl fmt::Debug for Legality {
         f.write_str(match self {
             Legality::Legal => "Legal",
             Legality::Dynamic(_) => "Dynamic",
+            Legality::Covered(_) => "Covered",
             Legality::Illegal => "Illegal",
             Legality::Carry => "Carry",
             Legality::LowerAndCarry => "LowerAndCarry",
@@ -527,6 +533,13 @@ impl Target {
         self.rule(name, Legality::Dynamic(Arc::new(check)))
     }
 
+    /// A name the writer writes through another component: legal on the entities `check` accepts, `what` naming the
+    /// cover (`"covered by skate.light"`); the rest are reported as `<name> not <what>` ([`Legality::Covered`]).
+    pub fn covered(mut self, name: &str, what: &str, check: fn(&World, Entity) -> bool) -> Self {
+        self.rule_words.insert(name.to_owned(), what.to_owned());
+        self.rule(name, Legality::Covered(check))
+    }
+
     /// The legal checks of a typed component: legal when `check` accepts the value.
     pub fn dynamic_typed<T: Component>(self, check: impl Fn(&T) -> bool + Send + Sync + 'static) -> Self {
         self.dynamic(T::NAME, move |w, e| w.get::<T>(e).is_some_and(&check))
@@ -561,8 +574,8 @@ impl Target {
         self
     }
 
-    /// The words naming the value rule on `name` (a component's [`Target::check`] or a resource's
-    /// [`Target::check_resource`]), if it has a named one.
+    /// The words naming the value rule on `name` (a component's [`Target::check`], a covered name's cover
+    /// ([`Target::covered`]) or a resource's [`Target::check_resource`]), if it has a named one.
     pub fn rule_words(&self, name: &str) -> Option<&str> {
         self.rule_words
             .get(name)
@@ -590,7 +603,8 @@ impl Target {
     }
 
     /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
-    /// unless carried, an unlisted name: [`Prepared::unsupported`], entity counts by name; a resource it neither
+    /// unless carried, an unlisted name, and a covered name's uncovered entities: [`Prepared::unsupported`], entity
+    /// counts by name; a resource it neither
     /// lists, rules on nor carries: [`Prepared::unsupported_resources`]; the conversion's own resources,
     /// [`crate::convert::OPERATIONAL_RESOURCES`], aside), and values of names it writes that its value rule refuses
     /// ([`Prepared::invalid`], by name with the rule's words) or resources it refuses ([`Prepared::invalid_resources`]).
@@ -609,6 +623,13 @@ impl Target {
                     }
                 }
                 None if self.carry_unknown => {}
+                Some(Legality::Covered(f)) => {
+                    let uncovered = all.iter().filter(|&&e| !f(w, e)).count();
+                    if uncovered > 0 && !self.carry_unknown {
+                        let words = self.rule_words(name).unwrap_or_default();
+                        out.unsupported.push((format!("{name} not {words}"), uncovered as u64));
+                    }
+                }
                 Some(Legality::Illegal) | None => out.unsupported.push((name.to_owned(), all.len() as u64)),
             }
         }
@@ -635,6 +656,8 @@ impl Target {
             Some(Legality::Legal | Legality::Carry | Legality::LowerAndCarry) => Vec::new(),
             Some(Legality::Illegal) => all,
             Some(Legality::Dynamic(f)) => all.into_iter().filter(|&e| !f(w, e)).collect(),
+            Some(Legality::Covered(_)) if mode == Mode::Partial || self.carry_unknown => Vec::new(),
+            Some(Legality::Covered(f)) => all.into_iter().filter(|&e| !f(w, e)).collect(),
             None if mode == Mode::Partial || self.carry_unknown => Vec::new(),
             None => all,
         }
@@ -658,6 +681,15 @@ impl Target {
                     Need::Fix
                 }
             }
+            // the uncovered entities, as an unlisted name's
+            Some(Legality::Covered(_)) if mode == Mode::Partial || self.carry_unknown => Need::Nothing,
+            Some(Legality::Covered(f)) => {
+                if w.entities_named(name).into_iter().all(|e| f(w, e)) {
+                    Need::Nothing
+                } else {
+                    Need::Remove
+                }
+            }
             None if mode == Mode::Partial || self.carry_unknown => Need::Nothing,
             None => Need::Remove,
         }
@@ -667,7 +699,8 @@ impl Target {
 /// What [`Target::check_prepared`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prepared {
-    /// Names the writer doesn't write, with how many entities hold them.
+    /// Names the writer doesn't write, with how many entities hold them; a covered name ([`Target::covered`]) as
+    /// `<name> not <its cover>` (`core.light not covered by skate.light`), for its uncovered entities.
     pub unsupported: Vec<(String, u64)>,
     /// Names it writes whose values its rule refuses: the name, the rule's words, the entities.
     pub invalid: Vec<(String, String, Vec<Entity>)>,
@@ -3171,6 +3204,31 @@ mod tests {
             "no pass lowers `toy.table` to anything `t` accepts"
         );
         assert_eq!(classified().rule_words("toy.table"), Some("every row classified"));
+    }
+
+    /// A covered name is legal where its cover is: the uncovered entity is reported, by its cover's words and count,
+    /// and kept in Partial; in Full it is illegal, the covered one still not.
+    #[test]
+    fn a_covered_name_reports_only_its_uncovered_entities() {
+        let mut w = World::new();
+        let covered = w.spawn();
+        w.insert(covered, File(1));
+        w.insert(covered, Pbr(1));
+        let bare = w.spawn();
+        w.insert(bare, File(2));
+        let t = Target::new("cover")
+            .legal(Pbr::NAME)
+            .covered(File::NAME, "covered by toy.pbr", |w, e| w.has::<Pbr>(e));
+        assert_eq!(
+            t.check_prepared(&w).unsupported,
+            vec![("toy.file not covered by toy.pbr".to_owned(), 1)]
+        );
+        assert_eq!(t.rule_words(File::NAME), Some("covered by toy.pbr"));
+        assert!(t.illegal_entities(&w, File::NAME, Mode::Partial).is_empty());
+        assert_eq!(t.illegal_entities(&w, File::NAME, Mode::Full), vec![bare]);
+        // every entity covered: nothing to report
+        w.insert(bare, Pbr(2));
+        assert!(t.check_prepared(&w).unsupported.is_empty());
     }
 
     #[test]
