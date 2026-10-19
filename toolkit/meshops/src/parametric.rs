@@ -18,20 +18,7 @@ pub(crate) fn register(reg: &mut PassRegistry) {
         Ok(Box::new(TessellateColliders))
     });
     reg.register("flatten-curves", |o: &Options| {
-        let mut tolerance = FlattenCurves::DEFAULT_TOLERANCE;
-        for (k, v) in o {
-            match k.as_str() {
-                "tolerance" => {
-                    tolerance = v
-                        .parse()
-                        .ok()
-                        .filter(|t: &f32| t.is_finite() && *t > 0.0)
-                        .ok_or_else(|| format!("tolerance {v} is not a positive number of metres"))?;
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(Box::new(FlattenCurves { tolerance }))
+        Ok(Box::new(FlattenCurves::from_options(o)?))
     });
 }
 
@@ -175,14 +162,54 @@ fn heightfield(f: &Heightfield, surface: u16) -> (Vec<V>, Vec<[u32; 3]>, Vec<u16
 /// no further than `tolerance` metres from the curve, each segment subdivided at equal parameter steps until its
 /// control polygon lies within the tolerance of its chord. Up directions are interpolated along each segment and
 /// renormalised. Polylines are unchanged.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlattenCurves {
-    pub tolerance: f32,
+    tolerance: f32,
 }
 
 impl FlattenCurves {
     /// 5 mm.
     pub const DEFAULT_TOLERANCE: f32 = 0.005;
+
+    /// Within `tolerance` metres of each curve: an error unless it is finite and above 0.
+    pub fn new(tolerance: f32) -> Result<FlattenCurves, String> {
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(format!(
+                "tolerance {tolerance} is not a positive number of metres"
+            ));
+        }
+        Ok(FlattenCurves { tolerance })
+    }
+
+    pub fn tolerance(&self) -> f32 {
+        self.tolerance
+    }
+
+    /// From its options (`tolerance`, [`FlattenCurves::DEFAULT_TOLERANCE`] unless given), through
+    /// [`FlattenCurves::new`].
+    pub fn from_options(o: &Options) -> Result<FlattenCurves, String> {
+        let mut tolerance = FlattenCurves::DEFAULT_TOLERANCE;
+        for (k, v) in o {
+            match k.as_str() {
+                "tolerance" => {
+                    tolerance = v
+                        .parse()
+                        .map_err(|_| format!("tolerance {v} is not a positive number of metres"))?;
+                }
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        FlattenCurves::new(tolerance)
+    }
+}
+
+impl Default for FlattenCurves {
+    /// Within [`FlattenCurves::DEFAULT_TOLERANCE`].
+    fn default() -> Self {
+        FlattenCurves {
+            tolerance: FlattenCurves::DEFAULT_TOLERANCE,
+        }
+    }
 }
 
 impl Pass for FlattenCurves {

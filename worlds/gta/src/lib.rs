@@ -111,9 +111,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(collision::LowerGtaCollision::from_options(o)?)),
         &volumes,
     );
-    reg.register("gta-select-stand-ins", |o| {
-        Ok(Box::new(select::SelectStandIns::from_options(o)?))
-    });
+    // the levels a far view draws are the caller's choice: no default
+    reg.register_requiring(
+        "gta-select-stand-ins",
+        |o| Ok(Box::new(select::SelectStandIns::from_options(o)?)),
+        &[("levels", "2;3;4")],
+    );
     reg.register("gta-select-collision", |o| {
         Ok(Box::new(collision::SelectCollision::from_options(o)?))
     });
@@ -138,7 +141,8 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
 #[cfg(test)]
 mod tests {
     /// GTA registers exactly these passes, and each is made under its own name: with no options, but for the
-    /// collision lowerings, which require their `foliage` and `river` choices, and the region rules, their region.
+    /// collision lowerings, which require their `foliage` and `river` choices, the region rules their region and the
+    /// stand-in selection its levels.
     #[test]
     fn the_gta_passes_register_by_name() {
         let mut reg = primase_core::pass::PassRegistry::new();
@@ -176,6 +180,13 @@ mod tests {
                 Some(volumes.clone())
             } else if name == "gta-select-region" {
                 Some(region)
+            } else if name == "gta-select-stand-ins" {
+                Some(
+                    [("levels", "2;3;4")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect(),
+                )
             } else {
                 None
             };
@@ -203,7 +214,7 @@ mod tests {
         super::register(&mut reg);
         let p = reg
             .parse(
-                "gta-select-region{x0=0,y0=0,x1=1,y1=1}, gta-select-stand-ins, gta-select-collision, \
+                "gta-select-region{x0=0,y0=0,x1=1,y1=1}, gta-select-stand-ins{levels=2;3;4}, gta-select-collision, \
                  gta-leave-out-interiors, gta-select-water, lower-gta-collision{foliage=leave-out,river=leave-out}",
             )
             .unwrap();

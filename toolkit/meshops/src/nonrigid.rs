@@ -30,11 +30,36 @@ use primase_core::{
     World,
 };
 
-/// See the module documentation.
+/// What `bake-nonrigid` does with a mirrored transform (option `mirrors`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mirrors {
+    /// Baked like a sheared one (`mirrors=bake`, the default: a mirror is re-expressed, nothing is lost).
+    #[default]
+    Bake,
+    /// Kept as it is; only sheared transforms are baked (`mirrors=keep`).
+    Keep,
+}
+
+/// See the module documentation. Every value is valid: the field is public.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BakeNonrigid {
-    /// `mirrors=keep`: mirrored transforms stay as they are; only sheared ones are baked.
-    pub keep_mirrors: bool,
+    pub mirrors: Mirrors,
+}
+
+impl BakeNonrigid {
+    /// From its options (`mirrors=bake|keep`).
+    pub fn from_options(o: &Options) -> Result<BakeNonrigid, String> {
+        let mut pass = BakeNonrigid::default();
+        for (k, v) in o {
+            match (k.as_str(), v.as_str()) {
+                ("mirrors", "keep") => pass.mirrors = Mirrors::Keep,
+                ("mirrors", "bake") => pass.mirrors = Mirrors::Bake,
+                ("mirrors", v) => return Err(format!("bake-nonrigid: mirrors={v} is not keep or bake")),
+                _ => return Err(format!("bake-nonrigid: unknown option {k}")),
+            }
+        }
+        Ok(pass)
+    }
 }
 
 impl Pass for BakeNonrigid {
@@ -42,10 +67,9 @@ impl Pass for BakeNonrigid {
         "bake-nonrigid"
     }
     fn options(&self) -> Options {
-        if self.keep_mirrors {
-            Options::from([("mirrors".to_owned(), "keep".to_owned())])
-        } else {
-            Options::new()
+        match self.mirrors {
+            Mirrors::Keep => Options::from([("mirrors".to_owned(), "keep".to_owned())]),
+            Mirrors::Bake => Options::new(),
         }
     }
     fn modifies(&self) -> &[&'static str] {
@@ -74,18 +98,7 @@ impl Pass for BakeNonrigid {
 
 /// Register `bake-nonrigid` (option `mirrors=keep|bake`, default `bake`).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register("bake-nonrigid", |o| {
-        let mut pass = BakeNonrigid::default();
-        for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("mirrors", "keep") => pass.keep_mirrors = true,
-                ("mirrors", "bake") => pass.keep_mirrors = false,
-                ("mirrors", v) => return Err(format!("bake-nonrigid: mirrors={v} is not keep or bake")),
-                _ => return Err(format!("bake-nonrigid: unknown option {k}")),
-            }
-        }
-        Ok(Box::new(pass))
-    });
+    reg.register("bake-nonrigid", |o| Ok(Box::new(BakeNonrigid::from_options(o)?)));
 }
 
 /// `M F`: the transform with its local x negated (exact: negation only).
@@ -173,7 +186,7 @@ pub fn bake_nonrigid(w: &mut World, pass: &BakeNonrigid) -> PassLog {
     for (e, t, proto) in placed {
         let kind = t.classify();
         if !matches!(kind, TransformKind::Mirrored | TransformKind::Sheared)
-            || (pass.keep_mirrors && kind == TransformKind::Mirrored)
+            || (pass.mirrors == Mirrors::Keep && kind == TransformKind::Mirrored)
         {
             continue;
         }

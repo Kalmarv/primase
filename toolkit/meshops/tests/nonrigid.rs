@@ -294,7 +294,12 @@ fn own_geometry_soups_lights_and_kept_mirrors() {
     );
     let snapshot = w.clone();
     // mirrors kept: nothing here is sheared, so nothing changes
-    let log = bake_nonrigid(&mut w, &BakeNonrigid { keep_mirrors: true });
+    let log = bake_nonrigid(
+        &mut w,
+        &BakeNonrigid {
+            mirrors: primase_meshops::Mirrors::Keep,
+        },
+    );
     assert!(log.counts.is_empty(), "{:?}", log.counts);
     assert_eq!(w.get::<Transform>(kept), snapshot.get::<Transform>(kept));
     // mirrors baked

@@ -17,39 +17,81 @@ pub enum SpawnAt {
 /// (its height left to the consumer, which snaps it), facing `yaw` ([`Marker::yaw`]). The caller states where; a
 /// world whose source already places a spawn is refused (the source's own stands). It runs as a selection pass, on
 /// the world a writer plans from, so one spawn serves every part of a conversion; the marker is content of its own
-/// ([`PassLog::place`]).
+/// ([`PassLog::place`]). Made by [`PlaceSpawn::centre`] or [`PlaceSpawn::at_ground`], facing [`PlaceSpawn::with_yaw`];
+/// from options by the same calls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaceSpawn {
-    pub at: SpawnAt,
-    pub yaw: Option<f32>,
+    at: SpawnAt,
+    yaw: Option<f32>,
 }
 
-/// The pass factory (`PassRegistry::register("place-spawn", place_spawn)`).
-pub fn place_spawn(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let number = |k: &str, v: &str| {
-        v.parse::<f32>()
-            .ok()
-            .filter(|n| n.is_finite())
-            .ok_or_else(|| format!("{k}={v} is not a finite number"))
-    };
-    let (mut centre, mut east, mut north, mut yaw) = (false, None, None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "at" if v == "centre" => centre = true,
-            "at" => return Err(format!("at={v}: only at=centre (or east, north)")),
-            "east" => east = Some(number(k, v)?),
-            "north" => north = Some(number(k, v)?),
-            "yaw" => yaw = Some(number(k, v)?),
-            _ => return Err(format!("unknown option {k}")),
+impl PlaceSpawn {
+    /// A spawn at the median of the placements' ground positions.
+    pub fn centre() -> PlaceSpawn {
+        PlaceSpawn {
+            at: SpawnAt::Centre,
+            yaw: None,
         }
     }
-    let at = match (centre, east, north) {
-        (_, None, None) => SpawnAt::Centre,
-        (false, Some(e), Some(n)) => SpawnAt::Ground([e, n]),
-        (true, _, _) => return Err("at=centre or east, north: not both".into()),
-        _ => return Err("east and north go together".into()),
-    };
-    Ok(Box::new(PlaceSpawn { at, yaw }))
+
+    /// A spawn at this ground position; finite metres.
+    pub fn at_ground(east: f32, north: f32) -> Result<PlaceSpawn, String> {
+        if !(east.is_finite() && north.is_finite()) {
+            return Err(format!("({east}, {north}) is not a finite ground position"));
+        }
+        Ok(PlaceSpawn {
+            at: SpawnAt::Ground([east, north]),
+            yaw: None,
+        })
+    }
+
+    /// Facing `degrees` (finite) about the up axis ([`Marker::yaw`]).
+    pub fn with_yaw(mut self, degrees: f32) -> Result<PlaceSpawn, String> {
+        if !degrees.is_finite() {
+            return Err(format!("yaw {degrees} is not finite"));
+        }
+        self.yaw = Some(degrees);
+        Ok(self)
+    }
+
+    pub fn at(&self) -> SpawnAt {
+        self.at
+    }
+
+    pub fn yaw(&self) -> Option<f32> {
+        self.yaw
+    }
+
+    /// From its options (`at=centre`, or `east` and `north`; `yaw`), through the same constructors.
+    pub fn from_options(o: &Options) -> Result<PlaceSpawn, String> {
+        let number = |k: &str, v: &str| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number"));
+        let (mut centre, mut east, mut north, mut yaw) = (false, None, None, None);
+        for (k, v) in o {
+            match k.as_str() {
+                "at" if v == "centre" => centre = true,
+                "at" => return Err(format!("at={v}: only at=centre (or east, north)")),
+                "east" => east = Some(number(k, v)?),
+                "north" => north = Some(number(k, v)?),
+                "yaw" => yaw = Some(number(k, v)?),
+                _ => return Err(format!("unknown option {k}")),
+            }
+        }
+        let pass = match (centre, east, north) {
+            (_, None, None) => PlaceSpawn::centre(),
+            (false, Some(e), Some(n)) => PlaceSpawn::at_ground(e, n)?,
+            (true, _, _) => return Err("at=centre or east, north: not both".into()),
+            _ => return Err("east and north go together".into()),
+        };
+        match yaw {
+            Some(y) => pass.with_yaw(y),
+            None => Ok(pass),
+        }
+    }
+}
+
+/// [`PlaceSpawn::from_options`] as a pass factory.
+pub fn place_spawn(o: &Options) -> Result<Box<dyn Pass>, String> {
+    Ok(Box::new(PlaceSpawn::from_options(o)?))
 }
 
 impl Pass for PlaceSpawn {
@@ -194,6 +236,10 @@ mod tests {
                 .contains("already has a spawn")
         );
         // nothing to centre on
+        // a position or yaw that is not a finite number is refused, typed or from options
+        assert!(PlaceSpawn::at_ground(f32::NAN, 0.0).is_err());
+        assert!(PlaceSpawn::centre().with_yaw(f32::INFINITY).is_err());
+        assert!(run(&mut World::new(), "place-spawn{east=inf,north=0}").is_err());
         assert!(
             run(&mut World::new(), "place-spawn{at=centre}")
                 .unwrap_err()

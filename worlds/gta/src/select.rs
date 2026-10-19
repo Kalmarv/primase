@@ -356,47 +356,90 @@ impl Pass for SelectRegion {
     }
 }
 
+/// A LOD stand-in level, GTA's `rage__eLodType` (option values 1-4 and 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StandInLevel {
+    Lod = 1,
+    Slod1 = 2,
+    Slod2 = 3,
+    Slod3 = 4,
+    Slod4 = 6,
+}
+
+impl StandInLevel {
+    /// Option text `v`.
+    pub fn parse(v: &str) -> Result<StandInLevel, String> {
+        match v.trim() {
+            "1" => Ok(StandInLevel::Lod),
+            "2" => Ok(StandInLevel::Slod1),
+            "3" => Ok(StandInLevel::Slod2),
+            "4" => Ok(StandInLevel::Slod3),
+            "6" => Ok(StandInLevel::Slod4),
+            _ => Err(format!("levels: {v} is no stand-in level (1-4, 6)")),
+        }
+    }
+
+    /// The `rage__eLodType` value.
+    pub fn number(self) -> i32 {
+        self as i32
+    }
+}
+
 /// `gta-select-stand-ins{levels,x0,y0,x1,y1}`: a far view of the map from GTA's own LOD stand-ins. Only the placements
-/// whose LOD level (`rage__eLodType`: 1 LOD, 2 SLOD1, 3 SLOD2, 4 SLOD3, 6 SLOD4) is one of `levels` (`2;3;4`, SLOD1
-/// to SLOD3, unless given) are kept,
+/// whose LOD level ([`StandInLevel`]: 1 LOD, 2 SLOD1, 3 SLOD2, 4 SLOD3, 6 SLOD4) is one of `levels` (required: which
+/// levels a far view draws is the caller's choice) are kept,
 /// given a region only those whose pivot lies in it; every other placement is despawned (the real geometry, the
 /// other levels, interiors and what is placed in them), counted per level kept. The levels nest (a SLOD2 stands in
 /// for its SLOD1 children, which stand in for their LODs), so levels kept together overlap where both are placed: a
 /// pipeline picks the levels it draws.
+///
+/// Made by [`SelectStandIns::new`] (the levels, at least one) and [`SelectStandIns::within`]; from options by the same.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectStandIns {
-    pub levels: BTreeSet<i32>,
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: the whole map read.
-    pub region: Option<[f32; 4]>,
+    levels: BTreeSet<StandInLevel>,
+    region: Option<GroundRect>,
 }
 
 impl SelectStandIns {
+    /// The stand-ins of `levels` over the whole map read: an error for no level.
+    pub fn new(levels: BTreeSet<StandInLevel>) -> Result<SelectStandIns, String> {
+        if levels.is_empty() {
+            return Err("levels: at least one stand-in level".into());
+        }
+        Ok(SelectStandIns { levels, region: None })
+    }
+
+    /// Only those whose pivot lies in `region`.
+    pub fn within(mut self, region: GroundRect) -> SelectStandIns {
+        self.region = Some(region);
+        self
+    }
+
+    pub fn levels(&self) -> &BTreeSet<StandInLevel> {
+        &self.levels
+    }
+
+    pub fn region(&self) -> Option<GroundRect> {
+        self.region
+    }
+
     pub fn from_options(o: &Options) -> Result<SelectStandIns, String> {
         for k in o.keys() {
             if !["levels", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let levels: BTreeSet<i32> = o
+        let levels = o
             .get("levels")
-            .map_or("2;3;4", String::as_str)
+            .ok_or("levels is required (1-4, 6): which stand-ins a far view draws is the caller's choice")?
             .split(';')
-            .map(|v| match v.trim().parse() {
-                Ok(l @ (1..=4 | 6)) => Ok(l),
-                _ => Err(format!("levels: {v} is no stand-in level (1-4, 6)")),
-            })
+            .map(StandInLevel::parse)
             .collect::<Result<_, _>>()?;
-        let num = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
-                .map(|v| v.parse().map_err(|_| format!("{k}: not a number: {v}")))
-                .transpose()
-        };
-        let region = match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
-            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
-            [None, None, None, None] => None,
-            _ => return Err("x0, y0, x1 and y1 go together".into()),
-        };
-        Ok(SelectStandIns { levels, region })
+        let pass = SelectStandIns::new(levels)?;
+        Ok(match GroundRect::from_options(o)? {
+            Some(r) => pass.within(r),
+            None => pass,
+        })
     }
 }
 
@@ -410,14 +453,12 @@ impl Pass for SelectStandIns {
             "levels".to_string(),
             self.levels
                 .iter()
-                .map(i32::to_string)
+                .map(|l| l.number().to_string())
                 .collect::<Vec<_>>()
                 .join(";"),
         );
-        if let Some([x0, y0, x1, y1]) = self.region {
-            for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
-                o.insert(k.to_string(), v.to_string());
-            }
+        if let Some(r) = self.region {
+            r.insert_options(&mut o);
         }
         o
     }
@@ -436,16 +477,15 @@ impl Pass for SelectStandIns {
             };
             let reason = if ge.interior.is_some() {
                 Some("interior or placed in one")
-            } else if !self.levels.contains(&ge.lod_level) {
+            } else if !self.levels.iter().any(|l| l.number() == ge.lod_level) {
                 Some("not a stand-in of the levels kept")
-            } else if let Some([x0, y0, x1, y1]) = self.region {
+            } else if let Some(r) = self.region {
                 let p = w
                     .get::<Transform>(e)
                     .ok_or("a placement without a transform")?
                     .cols[3];
                 // core (x, y, z) is GTA (x, -z, y)
-                let (gx, gy) = (p[0], -p[2]);
-                (!(gx >= x0 && gx < x1 && gy >= y0 && gy < y1)).then_some("outside the region")
+                (!r.contains(p[0], -p[2])).then_some("outside the region")
             } else {
                 None
             };
@@ -604,15 +644,20 @@ mod stand_in_tests {
         );
     }
 
-    /// Levels are stand-in levels; with none given, SLOD1 to SLOD3.
+    /// Levels are stand-in levels, at least one, required; the struct and its options are one.
     #[test]
     fn levels_are_stand_in_levels() {
         let mut o = Options::new();
         o.insert("levels".into(), "0;2".into());
         assert!(SelectStandIns::from_options(&o).is_err());
+        assert!(SelectStandIns::from_options(&Options::new()).is_err());
+        assert!(SelectStandIns::new(BTreeSet::new()).is_err());
+        o.insert("levels".into(), "2;3;4".into());
+        let made = SelectStandIns::from_options(&o).unwrap();
         assert_eq!(
-            SelectStandIns::from_options(&Options::new()).unwrap().levels,
-            BTreeSet::from([2, 3, 4])
+            made.levels(),
+            &BTreeSet::from([StandInLevel::Slod1, StandInLevel::Slod2, StandInLevel::Slod3])
         );
+        assert_eq!(made.options(), o);
     }
 }

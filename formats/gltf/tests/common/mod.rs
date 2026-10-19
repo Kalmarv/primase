@@ -462,7 +462,12 @@ pub fn build(dir: &Path) -> Built {
         .into_iter()
         .collect();
     // as a glTF pipeline runs it: shears baked, mirrors kept (glTF carries them)
-    let log = primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid { keep_mirrors: true });
+    let log = primase_meshops::bake_nonrigid(
+        &mut w,
+        &primase_meshops::BakeNonrigid {
+            mirrors: primase_meshops::Mirrors::Keep,
+        },
+    );
     assert_eq!(
         log.counts.get("mirrored transforms made rigid"),
         None,

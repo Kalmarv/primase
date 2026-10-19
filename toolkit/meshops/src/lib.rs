@@ -14,7 +14,7 @@ pub use layered_plan::{
 };
 mod hull;
 mod nonrigid;
-pub use nonrigid::{BakeNonrigid, bake_nonrigid};
+pub use nonrigid::{BakeNonrigid, Mirrors, bake_nonrigid};
 mod parametric;
 pub use parametric::{FlattenCurves, TessellateColliders};
 
