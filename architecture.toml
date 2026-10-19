@@ -43,6 +43,12 @@ reason = "the Sekiro area reader builds skate.* components (materials, collision
 removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
 
 [[name]]
+crate = "worlds/fromsoft"
+word = "reskate"
+reason = "the Sekiro area reader builds skate.* components, now through primase_reskate (the dialect's owner since skate-scene folded into it)"
+removed_when = "the FromSoft reader keeps source data and its passes give core data (plan steps 11-12)"
+
+[[name]]
 crate = "worlds/gta"
 word = "skate"
 reason = "the IPL defaults are the earlier skate exporter's, named in their report"
