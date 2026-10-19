@@ -1091,7 +1091,8 @@ pub enum OverlayPiece {
 }
 
 impl OverlayPiece {
-    fn entity(&self) -> Entity {
+    /// The entity it comes from: the placement, or the prototype.
+    pub fn entity(&self) -> Entity {
         match *self {
             OverlayPiece::Placed { placement, .. } => placement,
             OverlayPiece::Proto { prototype, .. } => prototype,
@@ -1123,6 +1124,9 @@ pub struct SkateOverlayStack {
     pub pieces: BTreeMap<OverlayPiece, StackedPiece>,
     pub under: BTreeSet<(OverlayPiece, OverlayPiece)>,
     pub totals: OverlayTotals,
+    /// Each stacked mesh's totals (`totals` is their sum): a map written in parts counts a prototype stacked by several
+    /// parts once.
+    pub meshes: BTreeMap<String, OverlayTotals>,
 }
 
 /// One piece of a stacked mesh: the mesh (`t_<column>_<row>`, a render tile; `proto <name>`, an instanced prototype),
@@ -1230,13 +1234,22 @@ pub enum BlendBudgetMode {
     Pool,
 }
 
-/// The blend-chain budget `plan-reskate-blend-budget` decided: its mode, the tiles with a chain form in the order they
-/// are given one (row, then column), and the tiles that take it (the others are written plain). In pool mode, the
-/// cull-ID basis it was decided on (from `skate.map_summary`): the writer replays the decision and refuses a map whose
-/// own count differs. Not part of scene-interchange v1.
+/// The blend-chain budget `plan-reskate-blend-budget` planned: its mode and its decision. Not part of scene-interchange
+/// v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateBlendBudget {
     pub mode: BlendBudgetMode,
+    /// What it decided; `None`: left to the writer, which decides by the same rule
+    /// ([`crate::passes::blend_budget::plan`]) once it has laid the map out: a part of a map in several, whose tiles to
+    /// rank, and in pool mode whose other objects, are the whole map's.
+    pub decision: Option<BudgetDecision>,
+}
+
+/// A blend-chain budget's decision: the tiles with a chain form in the order they are given one (row, then column),
+/// and the tiles that take it (the others are written plain). In pool mode, the cull-ID basis it was decided on (from
+/// `skate.map_summary`): the writer replays the decision and refuses a map whose own count differs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BudgetDecision {
     pub ranked: Vec<String>,
     pub chosen: BTreeSet<String>,
     pub pool: Option<PoolBasis>,
@@ -1297,9 +1310,11 @@ impl Resource for SkateBlendBudget {
                 BlendBudgetMode::Objects(n) => serde_json::json!({ "objects": n }),
                 BlendBudgetMode::Pool => serde_json::json!("pool"),
             },
-            "ranked": self.ranked,
-            "chosen": self.chosen,
-            "pool": self.pool,
+            "decision": self.decision.as_ref().map(|d| serde_json::json!({
+                "ranked": d.ranked,
+                "chosen": d.chosen,
+                "pool": d.pool,
+            })),
         })))
     }
 }

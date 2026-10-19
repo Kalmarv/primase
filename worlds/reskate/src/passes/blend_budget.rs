@@ -10,14 +10,21 @@
 //! every tile still to be decided, so the plain forms always fit. The decision is recorded with the basis it was made
 //! on; the writer replays it and refuses a map whose own count differs. A map with blend chains and no budget is
 //! refused by the writer. A map without chain forms gets an empty plan.
+//!
+//! A part of a map converted in several holds only its own tiles, and in pool mode not the whole map's other objects:
+//! it records the mode only, and the writer decides by this pass's own rule ([`plan`]) once it has laid the whole map
+//! out, on the whole map's chains and its own count, reporting the decision with its basis.
 
 use std::collections::BTreeSet;
 
 use primase_core::World;
+use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::blend_order::take_chains;
-use crate::components::{BlendBudgetMode, PoolBasis, SkateBlendBudget, SkateBlendChains, SkateMapSummary};
+use crate::components::{
+    BlendBudgetMode, BudgetDecision, PoolBasis, SkateBlendBudget, SkateBlendChains, SkateMapSummary,
+};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,9 +80,7 @@ pub(crate) fn plan(
         .collect::<BTreeSet<String>>();
     Ok(SkateBlendBudget {
         mode,
-        ranked,
-        chosen,
-        pool,
+        decision: Some(BudgetDecision { ranked, chosen, pool }),
     })
 }
 
@@ -140,20 +145,32 @@ impl Pass for PlanReskateBlendBudget {
         &["skate.blend_budget"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateBlendBudget>().is_some() {
             return Err(
                 "plan-reskate-blend-budget: the budget is already planned (skate.blend_budget)".into(),
             );
+        }
+        // a part of a map in several: the mode only, decided by the writer by this rule over the whole map
+        if w.resource::<PartScope>().is_some_and(|s| !s.whole) {
+            w.insert_resource(SkateBlendBudget {
+                mode: self.mode,
+                decision: None,
+            });
+            log.count(
+                "blend budgets left to the writer, over the whole map (a part of a map in several)",
+                1,
+            );
+            return Ok(());
         }
         let p = plan(
             w.resource::<SkateBlendChains>(),
             self.mode,
             w.resource::<SkateMapSummary>(),
         )?;
-        log.count("tiles ranked for the chain form", p.ranked.len() as u64);
-        log.count("tiles given the chain form", p.chosen.len() as u64);
-        let plain = (p.ranked.len() - p.chosen.len()) as u64;
+        let d = p.decision.as_ref().expect("plan decides");
+        log.count("tiles ranked for the chain form", d.ranked.len() as u64);
+        log.count("tiles given the chain form", d.chosen.len() as u64);
+        let plain = (d.ranked.len() - d.chosen.len()) as u64;
         if plain > 0 {
             log.approximate(
                 "tiles whose blend chains are written plain, past the chain-object budget (drawn in an unstable order)",

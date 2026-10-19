@@ -616,6 +616,10 @@ pub struct MapWriter {
     chains: Chains,
     /// The chain-object budget `plan-reskate-blend-budget` planned (`None`: none planned, every tile plain).
     budget: Option<SkateBlendBudget>,
+    /// The whole map's blend chains, for a budget left to the writer (a map in parts).
+    budget_chains: Option<SkateBlendChains>,
+    /// The budget it decided itself (a map in parts), by the pass's rule.
+    budget_made: Option<SkateBlendBudget>,
     /// How the collision is written, as `prepare-reskate-collision` planned it (`None`: exactly).
     collision_plan: Option<crate::components::SkateCollisionPlan>,
     /// The prototypes made, by key: each made and written once, by the first part of the map that draws one.
@@ -680,6 +684,15 @@ impl Stack {
             Stack::Compute(r) | Stack::Replay(r) => r.step,
         }
     }
+}
+
+/// Meshes' overlay totals summed.
+pub(crate) fn sum_totals<'a>(totals: impl IntoIterator<Item = &'a OverlayTotals>) -> OverlayTotals {
+    let mut sum = OverlayStats::default();
+    for t in totals {
+        sum.add(&stats_of(t));
+    }
+    totals_of(&sum)
 }
 
 fn totals_of(s: &OverlayStats) -> OverlayTotals {
@@ -775,6 +788,8 @@ impl MapWriter {
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
             budget: None,
+            budget_chains: None,
+            budget_made: None,
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
@@ -803,6 +818,31 @@ impl MapWriter {
 
     pub(crate) fn take_stack(&mut self) -> Stack {
         std::mem::replace(&mut self.stack, Stack::Off { unstacked: 0 })
+    }
+
+    /// The overlay stack for the meshes laid out next (a part of a map in several: its own).
+    pub(crate) fn set_stack(&mut self, stack: Stack) {
+        self.stack = stack;
+    }
+
+    /// The blend chains for the tiles laid out next (a part of a map in several: its own).
+    pub(crate) fn set_chains(&mut self, chains: Chains) {
+        self.chains = chains;
+    }
+
+    /// The whole map's blend chains, from which a budget left to the writer is decided.
+    pub(crate) fn set_budget_chains(&mut self, chains: Option<SkateBlendChains>) {
+        self.budget_chains = chains;
+    }
+
+    /// The budget it decided itself (a map in parts), with its basis.
+    pub(crate) fn budget_made(&self) -> Option<&SkateBlendBudget> {
+        self.budget_made.as_ref()
+    }
+
+    /// The overlay totals as the map's: given (the sum of every stacked mesh, a map in parts).
+    pub(crate) fn set_overlay_totals(&mut self, t: &OverlayTotals) {
+        self.r.overlay = stats_of(t);
     }
 
     /// The chain-object budget `plan-reskate-blend-budget` planned.
@@ -1178,14 +1218,34 @@ impl MapWriter {
         }
         // the budget is the preparation's decision (plan-reskate-blend-budget); the writer replays it, never choosing a
         // form of its own
-        let b = self.budget.as_ref().ok_or_else(|| {
+        let b = self.budget.clone().ok_or_else(|| {
             Error::Scene(format!(
                 "{} tiles have blend chains (prepare-reskate-blend-order) but no budget decides their form: run \
                  plan-reskate-blend-budget (objects=0 writes every tile plain)",
                 names.len()
             ))
         })?;
-        if b.ranked != names {
+        let d = match b.decision {
+            Some(d) => d,
+            // left to the writer (a map in parts): the pass's own rule, on the whole map's chains and this layout's
+            // count
+            None => {
+                let chains = self.budget_chains.as_ref();
+                let summary = crate::components::SkateMapSummary {
+                    grouping: chains
+                        .and_then(|c| c.grouping)
+                        .ok_or_else(|| Error::Scene("the blend chains state no writer settings".into()))?,
+                    cull_ids: self.o.cull_ids,
+                    other_cull_ids: other,
+                };
+                let made = crate::passes::blend_budget::plan(chains, b.mode, Some(&summary))
+                    .map_err(Error::Scene)?;
+                let d = made.decision.clone().expect("plan decides");
+                self.budget_made = Some(made);
+                d
+            }
+        };
+        if d.ranked != names {
             return Err(Error::Scene(
                 "the blend budget (skate.blend_budget) ranks other tiles than the writer's blend chains: run \
                  plan-reskate-blend-budget after prepare-reskate-blend-order"
@@ -1195,7 +1255,7 @@ impl MapWriter {
         let (cap, from_pool) = match b.mode {
             BlendBudgetMode::Objects(n) => (n, false),
             BlendBudgetMode::Pool => {
-                let basis = b.pool.ok_or_else(|| {
+                let basis = d.pool.ok_or_else(|| {
                     Error::Scene(
                         "the blend budget for the pool names no cull-ID basis it was decided on".into(),
                     )
@@ -1211,7 +1271,7 @@ impl MapWriter {
                 (self.o.cull_ids.saturating_sub(other), true)
             }
         };
-        let take: Vec<bool> = names.iter().map(|t| b.chosen.contains(t)).collect();
+        let take: Vec<bool> = names.iter().map(|t| d.chosen.contains(t)).collect();
         let st = &mut self.r.blend;
         st.cap = cap;
         st.cap_from_pool = from_pool;
@@ -1330,6 +1390,7 @@ impl MapWriter {
                     let mut totals = stats_of(&rec.totals);
                     totals.add(&stacked.stats);
                     rec.totals = totals_of(&totals);
+                    rec.meshes.insert(mesh.to_owned(), totals_of(&stacked.stats));
                     for (k, p) in pieces.iter().enumerate() {
                         // its centre after the lift, the mesh's frame in scene axes
                         let pos = &*view.pos[p.part];

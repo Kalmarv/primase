@@ -12,6 +12,9 @@
 //! tile takes past the object budget, which stays the writer's until the global preparation) and refuses tiles that
 //! differ. Without this pass every tile's chain overlays stay in its mesh (reported). A map without chain overlays gets
 //! an empty record. Run it after every pass that changes geometry, materials or textures.
+//!
+//! A part of a map converted in several records its own render tiles, as the writer lays them out (the map's instancing
+//! and region, merged over every part).
 
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -84,14 +87,17 @@ impl Pass for PrepareReskateBlendOrder {
         &["skate.blend_chains"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateBlendChains>().is_some() {
             return Err(
                 "prepare-reskate-blend-order: the blend chains are already chosen (skate.blend_chains)"
                     .into(),
             );
         }
-        let rec = blend_chains(w, &self.encoding, self.grid).map_err(|e| e.to_string())?;
+        let mut rec = blend_chains(w, &self.encoding, self.grid).map_err(|e| e.to_string())?;
+        // a part: its own tiles (each held whole by one part)
+        let owned = super::Owned::of(w);
+        rec.tiles
+            .retain(|_, t| t.pieces.iter().all(|p| owned.contains(p.entity())));
         let (mut tiles, mut objects, mut clipped, mut refused) = (0u64, 0u64, 0u64, 0u64);
         for t in rec.tiles.values() {
             if t.steps.is_none() {

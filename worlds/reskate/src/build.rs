@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::assembly::{
-    EncodingOptions, Records, SceneWarnings, SoupWorld, assemble, bounds, hulls_numbered, part_options,
-    scene_warnings, writer_placements,
+    EncodingOptions, Records, SceneWarnings, SoupWorld, assemble, hulls_numbered, map_counts, map_region,
+    part_options, scene_warnings, writer_placements,
 };
-use crate::components::{SkateContentBounds, SkateInstanceCounts, SkateLayoutSummary};
-use crate::map::{CellKey, Chains, Extras, MapWriter, Stack, WriterOptions};
+use crate::components::{OverlayPiece, OverlayTotals, SkateBlendChains, SkateLayoutSummary, StackedPiece};
+use crate::map::{CellKey, Chains, Extras, MapWriter, Stack, WriterOptions, sum_totals};
 use crate::model::CollisionMode;
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{GrindCurve, Marker, PlacedLight, Scene, SceneNotes, WaterQuad};
@@ -33,6 +33,9 @@ pub struct BuildReport {
     /// The collision plan the writer made leaf by leaf, by `prepare-reskate-collision`'s rule (a map in parts, whose
     /// record holds the rule only); `None` otherwise.
     pub collision_plan: Option<crate::components::SkateCollisionPlan>,
+    /// The blend budget the writer decided over the whole map by `plan-reskate-blend-budget`'s rule, with its basis (a
+    /// map in parts, whose record holds the mode only); `None` otherwise.
+    pub blend_budget: Option<crate::components::SkateBlendBudget>,
     pub tiles: usize,
     pub merged_entities: i64,
     pub merged_tris: i64,
@@ -357,6 +360,11 @@ struct Taken {
     held: HeldCells,
     /// The bytes of each mesh file written (the map's mesh bytes; a file a later decision removed taken out).
     mesh_sizes: BTreeMap<String, u64>,
+    /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
+    stack_meshes: BTreeMap<String, OverlayTotals>,
+    proto_pieces: BTreeMap<OverlayPiece, StackedPiece>,
+    /// The whole map's blend chains, over every part.
+    chains: Option<SkateBlendChains>,
 }
 
 /// The folder `d` made afresh (empty).
@@ -414,43 +422,12 @@ impl MapSink {
         let mut o = part_options(world, &s, &a, true)?;
         let cut = s.region;
         let placements = writer_placements(&s, o.tile);
-        o.region = match (cut, summary) {
-            (Some(r), _) => r,
-            (None, None) => bounds(&s, &placements),
-            (None, Some(_)) => world
-                .resource::<SkateContentBounds>()
-                .ok_or_else(|| {
-                    Error::Scene(
-                        "a map in parts without a stated region takes its content's extent over every part: \
-                         summarize-reskate-content"
-                            .into(),
-                    )
-                })?
-                .extent(),
-        };
+        let in_parts = summary.is_some();
+        o.region = map_region(world, &s, &placements, in_parts)?;
         o.warnings = s.stated_warnings.clone();
         let records = Records::of(world, &s, &a)?;
-        // the map's instancing, in parts: its counts over every part, by prototype key
-        let counts = match summary {
-            None => None,
-            Some(_) => {
-                let c = world.resource::<SkateInstanceCounts>().ok_or_else(|| {
-                    Error::Scene(
-                        "a map in parts instances by its placements over every part: summarize-reskate-instances"
-                            .into(),
-                    )
-                })?;
-                let mut by_key: HashMap<u32, i64> = HashMap::new();
-                for p in &s.protos {
-                    let n = c
-                        .by_prototype
-                        .get(&u64::from(p.entity.index()))
-                        .map_or(0, BTreeSet::len);
-                    *by_key.entry(p.key).or_default() += n as i64;
-                }
-                Some(by_key)
-            }
-        };
+        // the map's instancing: in parts, its counts over every part, by prototype key
+        let counts = map_counts(world, &s, in_parts)?;
         let out_dir = a.out_root.join(&o.name);
         if self.taken.is_none() {
             fresh_folder(&out_dir.join("meshes"))?;
@@ -480,11 +457,14 @@ impl MapSink {
                 layout: summary.filter(|l| l.parts.len() > 1).map(Layout::new),
                 parts: 0,
                 mesh_sizes: BTreeMap::new(),
+                stack_meshes: BTreeMap::new(),
+                proto_pieces: BTreeMap::new(),
+                chains: None,
                 held: HeldCells::default(),
             });
         }
         let t = self.taken.as_mut().expect("taken");
-        if o != t.first || records != t.records || s.surfaces != *t.writer.surfaces() {
+        if o != t.first || !records.alike(&t.records) || s.surfaces != *t.writer.surfaces() {
             return Err(Error::Scene(
                 "the parts of one map disagree on the writer's settings, the preparation records or the surface \
                  table: every part of a map is prepared and written alike"
@@ -500,6 +480,57 @@ impl MapSink {
         }
         t.parts += 1;
         t.writer.set_counts(counts);
+        // the part's own overlay stack and blend chains, replayed on its meshes and tiles; a prototype stacked by
+        // several parts must be stacked alike (counted once), a tile chained by one
+        if let Some(st) = records.stack {
+            for (m, totals) in &st.meshes {
+                match t.stack_meshes.get(m) {
+                    Some(seen) if seen != totals => {
+                        return Err(Error::Scene(format!(
+                            "{m} is stacked differently by two parts of the map (skate.overlay_stack)"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        t.stack_meshes.insert(m.clone(), *totals);
+                    }
+                }
+            }
+            for (p, piece) in st
+                .pieces
+                .iter()
+                .filter(|(p, _)| matches!(p, OverlayPiece::Proto { .. }))
+            {
+                match t.proto_pieces.get(p) {
+                    Some(seen) if seen != piece => {
+                        return Err(Error::Scene(format!(
+                            "{} is stacked differently by two parts of the map (skate.overlay_stack)",
+                            piece.mesh
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        t.proto_pieces.insert(*p, piece.clone());
+                    }
+                }
+            }
+            t.writer.set_stack(Stack::Replay(Box::new(st)));
+        }
+        if let Some(ch) = records.chains {
+            let all = t.chains.get_or_insert_with(|| SkateBlendChains {
+                grid: ch.grid,
+                grouping: ch.grouping,
+                tiles: BTreeMap::new(),
+            });
+            for (name, tile) in &ch.tiles {
+                if all.tiles.insert(name.clone(), tile.clone()).is_some() {
+                    return Err(Error::Scene(format!(
+                        "{name}'s blend chains are recorded by two parts of the map (skate.blend_chains)"
+                    )));
+                }
+            }
+            t.writer.set_chains(Chains::Replay(Box::new(ch)));
+        }
         // in parts: which part this is, and every tile it draws held whole by it
         let tiles: BTreeSet<(i32, i32)> = placements.iter().map(|p| (p.tx, p.ty)).collect();
         let tag = match &t.layout {
@@ -664,6 +695,9 @@ impl MapSink {
             parts,
             mut held,
             mut mesh_sizes,
+            records,
+            stack_meshes,
+            chains,
             ..
         }) = self.taken
         else {
@@ -691,6 +725,12 @@ impl MapSink {
         }
         water.sort_by_key(|(e, _)| *e);
         let (notes, omitted, approximated) = s.notes.render();
+        // the overlay totals over every stacked mesh, a prototype once; the whole map's chains for a budget left to the
+        // writer
+        if records.stack.is_some() {
+            writer.set_overlay_totals(&sum_totals(stack_meshes.values()));
+        }
+        writer.set_budget_chains(chains);
         writer.o.warnings = s.stated_warnings.iter().chain(&notes).cloned().collect();
         writer.finish(Extras {
             hulls: Vec::new(),
@@ -775,6 +815,7 @@ impl MapSink {
             parts,
             held,
             collision_plan: plan_made,
+            blend_budget: writer.budget_made().cloned(),
             tiles: r.tiles.len(),
             merged_entities: r.merged_entities,
             merged_tris: r.merged_tris,

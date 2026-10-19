@@ -473,10 +473,14 @@ fn assembly(
     let mut o = writer_options(&s, a)?;
     o.apron = apron_of(world, &s)?;
     let placements = writer_placements(&s, o.tile);
-    o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
+    let in_parts = world
+        .resource::<primase_core::convert::PartScope>()
+        .is_some_and(|p| !p.whole);
+    o.region = map_region(world, &s, &placements, in_parts)?;
     let mut writer = MapWriter::new(o, s.surfaces.clone())?
         .with_stack(stack)
         .with_chains(chains);
+    writer.set_counts(map_counts(world, &s, in_parts)?);
     if !encode {
         writer = writer.without_encoding();
     }
@@ -715,6 +719,53 @@ pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) 
     })
 }
 
+/// The writer's region for a prepared world (its scene `s`, its `placements`): the region the scene states; else the
+/// content's, the whole map's merged over every part when given (`skate.content_bounds`), else these placements'. A
+/// part of a map in several (`in_parts`) without either is refused.
+pub(crate) fn map_region(
+    world: &World,
+    s: &Scene,
+    placements: &[Placement],
+    in_parts: bool,
+) -> Result<[f64; 4]> {
+    if let Some(r) = s.region {
+        return Ok(r);
+    }
+    match world.resource::<crate::components::SkateContentBounds>() {
+        Some(b) => Ok(b.extent()),
+        None if !in_parts => Ok(bounds(s, placements)),
+        None => Err(Error::Scene(
+            "a map in parts without a stated region takes its content's extent over every part: \
+             summarize-reskate-content"
+                .into(),
+        )),
+    }
+}
+
+/// The map's instancing by prototype key, its placements merged over every part (`skate.instance_counts`): `None` when
+/// not given and the world is the whole map; a part of a map in several (`in_parts`) without them is refused.
+pub(crate) fn map_counts(world: &World, s: &Scene, in_parts: bool) -> Result<Option<HashMap<u32, i64>>> {
+    let Some(c) = world.resource::<crate::components::SkateInstanceCounts>() else {
+        return if in_parts {
+            Err(Error::Scene(
+                "a map in parts instances by its placements over every part: summarize-reskate-instances"
+                    .into(),
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    let mut by_key: HashMap<u32, i64> = HashMap::new();
+    for p in &s.protos {
+        let n = c
+            .by_prototype
+            .get(&u64::from(p.entity.index()))
+            .map_or(0, BTreeSet::len);
+        *by_key.entry(p.key).or_default() += n as i64;
+    }
+    Ok(Some(by_key))
+}
+
 /// The writer's options for a prepared world (its scene `s`) encoded as `a`: the encoding's, the apron its region
 /// clip recorded, the pause picture (when encoding: a count draws none, it adds no object), checked against the
 /// settings its markers were snapped for. The region is the caller's to set.
@@ -768,6 +819,18 @@ pub(crate) struct Records {
 }
 
 impl Records {
+    /// Whether the parts of one map were prepared alike: the same collision plan and blend budget (each part's whole:
+    /// a rule, the writer deciding over the whole map), an overlay stack and blend chains of the same settings or
+    /// neither (each part's own meshes and tiles).
+    pub(crate) fn alike(&self, o: &Records) -> bool {
+        self.plan == o.plan
+            && self.budget == o.budget
+            && self.stack.as_ref().map(|s| (s.step, s.grouping))
+                == o.stack.as_ref().map(|s| (s.step, s.grouping))
+            && self.chains.as_ref().map(|c| (c.grid, c.grouping))
+                == o.chains.as_ref().map(|c| (c.grid, c.grouping))
+    }
+
     /// The records of `world` (its scene `s`), for the encoding `a`.
     pub(crate) fn of(world: &World, s: &Scene, a: &EncodingOptions) -> Result<Records> {
         let mine = grouping(s, a);

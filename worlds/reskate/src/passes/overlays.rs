@@ -10,6 +10,10 @@
 //! meshes depend on (render tile, instancing, limit, offset). The writer puts the stack on the same pieces again and
 //! orders their materials by it; it refuses a stack made for other settings, pieces or materials. Without this pass
 //! the writer stacks nothing (reported). Run it after every pass that changes geometry, materials or textures.
+//!
+//! A part of a map converted in several stacks its own meshes, as the writer lays them out (the map's instancing and
+//! region, merged over every part): its render tiles and the prototypes it draws. A prototype drawn by several parts is
+//! stacked by each, the same; the writer checks they agree and counts it once.
 
 use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -184,13 +188,20 @@ impl Pass for PrepareReskateOverlays {
         &["skate.overlay_stack"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateOverlayStack>().is_some() {
             return Err(
                 "prepare-reskate-overlays: the overlays are already stacked (skate.overlay_stack)".into(),
             );
         }
-        let rec = overlay_stack(w, &self.encoding, self.step).map_err(|e| e.to_string())?;
+        let mut rec = overlay_stack(w, &self.encoding, self.step).map_err(|e| e.to_string())?;
+        // a part: its own meshes' pieces (its placements', the prototypes it draws)
+        let owned = super::Owned::of(w);
+        rec.pieces.retain(|p, _| owned.contains(p.entity()));
+        rec.under
+            .retain(|(a, b)| owned.contains(a.entity()) && owned.contains(b.entity()));
+        let kept: std::collections::BTreeSet<&str> = rec.pieces.values().map(|p| p.mesh.as_str()).collect();
+        rec.meshes.retain(|m, _| kept.contains(m.as_str()));
+        rec.totals = crate::map::sum_totals(rec.meshes.values());
         log.count("overlay pieces stacked", rec.totals.pieces.max(0) as u64);
         log.count(
             "overlay pieces lifted",

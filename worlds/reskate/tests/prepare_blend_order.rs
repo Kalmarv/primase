@@ -385,7 +385,13 @@ fn a_fixed_budget_is_decided_by_the_pass() {
         let mut log = PassLog::default();
         PlanReskateBlendBudget::objects(n).run(&mut w, &mut log).unwrap();
         let plan = w.resource::<SkateBlendBudget>().unwrap();
-        assert_eq!((plan.ranked.len(), plan.chosen.len()), (1, split));
+        assert_eq!(
+            (
+                plan.decision.as_ref().unwrap().ranked.len(),
+                plan.decision.as_ref().unwrap().chosen.len()
+            ),
+            (1, split)
+        );
         assert_eq!(
             log.approximations.values().sum::<u64>(),
             1 - split as u64,
@@ -444,7 +450,7 @@ fn the_pool_is_decided_before_writing_and_replayed() {
     ] {
         let (w, _, log) = pool_planned(cull_ids);
         let plan = w.resource::<SkateBlendBudget>().unwrap();
-        assert_eq!(plan.chosen.len(), split, "{cull_ids}");
+        assert_eq!(plan.decision.as_ref().unwrap().chosen.len(), split, "{cull_ids}");
         assert_eq!(
             log.approximations.values().sum::<u64>(),
             1 - split as u64,
@@ -510,7 +516,15 @@ fn the_pool_is_decided_before_writing_and_replayed() {
     PlanReskateBlendBudget::pool()
         .run(&mut w2, &mut PassLog::default())
         .unwrap();
-    assert!(w2.resource::<SkateBlendBudget>().unwrap().chosen.is_empty());
+    assert!(
+        w2.resource::<SkateBlendBudget>()
+            .unwrap()
+            .decision
+            .as_ref()
+            .unwrap()
+            .chosen
+            .is_empty()
+    );
     let (r, _) = write(&w2, "pool-lit", &room).unwrap();
     assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
     // decided for one encoding, written with another
@@ -528,6 +542,9 @@ fn the_pool_is_decided_before_writing_and_replayed() {
 fn the_writer_replays_only() {
     let (mut w, _, _) = pool_planned(EncodingOptions::default().cull_ids);
     w.resource_mut::<SkateBlendBudget>()
+        .unwrap()
+        .decision
+        .as_mut()
         .unwrap()
         .ranked
         .push("t_9_9".into());

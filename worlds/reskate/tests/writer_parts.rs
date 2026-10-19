@@ -21,15 +21,21 @@ use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Tar
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::summary::SummaryRegistry;
 use primase_core::{
-    Collision, ColorSpace, Entity, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream,
-    Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
+    Collision, ColorSpace, DrawLayer, DrawOrder, Entity, Instance, Layer, LayerWeights, LayeredMaterial,
+    Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole, Texture,
+    Topology, Transform, WeightMapping, World,
 };
 use primase_meshops::PartitionGrid;
-use primase_reskate::components::{CollisionSurfaces, CollisionWeld, SkateCollisionPlan};
+use primase_reskate::components::{
+    BlendBudgetMode, CollisionSurfaces, CollisionWeld, SkateBlendBudget, SkateCollisionPlan,
+    SkateOverlayStack,
+};
 use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateWater};
+use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
-    PrepareReskateCollision, RaiseOptions, SummarizeReskateContent, SummarizeReskateInstances,
-    SummarizeReskateLayout,
+    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision, PrepareReskateOverlays,
+    RaiseOptions, SummarizeReskateContent, SummarizeReskateInstances, SummarizeReskateLayout,
+    SummarizeReskateMap,
 };
 use primase_reskate::{BuildReport, EncodingOptions, MapSink};
 
@@ -63,19 +69,41 @@ fn grid(n: u32, size: f32, y: f32) -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
     (pos, tris)
 }
 
-/// A prototype of a grid mesh with its collision, drawn with `material`.
-fn prototype(w: &mut World, name: &str, n: u32, size: f32, y: f32, material: Entity, surface: u16) -> Entity {
+/// A prototype of a grid mesh with its collision, drawn with `material`, and a 1 m decal `decal` lying on it.
+#[allow(clippy::too_many_arguments)]
+fn prototype(
+    w: &mut World,
+    name: &str,
+    n: u32,
+    size: f32,
+    y: f32,
+    material: Entity,
+    surface: u16,
+    decal: Entity,
+) -> Entity {
     let (pos, tris) = grid(n, size, y);
     let e = w.spawn();
     w.insert(e, Name(name.into()));
+    let (dpos, dtris) = grid(1, 1.0, y);
     w.insert(
         e,
-        Mesh::new(vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(pos.clone()))]),
-            indices: Some(tris.iter().flatten().copied().collect()),
-            material: Some(material),
-        }]),
+        Mesh::new(vec![
+            Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(pos.clone()))]),
+                indices: Some(tris.iter().flatten().copied().collect()),
+                material: Some(material),
+            },
+            Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(
+                    Semantic::Position,
+                    Stream::F32x3(dpos.iter().map(|p| [p[0] + 0.5, p[1], p[2] - 0.5]).collect()),
+                )]),
+                indices: Some(dtris.iter().flatten().copied().collect()),
+                material: Some(decal),
+            },
+        ]),
     );
     let mut c = Collision::default();
     c.extend(&pos, &tris, surface, |p| p);
@@ -116,6 +144,79 @@ const ROCKS: [(f32, f32); 6] = [
     (1450.0, 60.0),
 ];
 
+/// Where the blended squares stand (merged into their tiles): in three parts.
+const BLENDS: [(f32, f32); 3] = [(60.0, 60.0), (500.0, 300.0), (850.0, 60.0)];
+
+/// A 20 m square of stone blended with moss (by its second colour), as a prototype: lowered, its moss layer is a chain
+/// overlay of its tile.
+fn blended(w: &mut World) -> Entity {
+    let layer = |w: &mut World, name: &str, base: [f32; 4]| {
+        let m = w.spawn();
+        w.insert(m, Name(name.into()));
+        w.insert(
+            m,
+            PbrMaterial {
+                base_color: base,
+                metallic: 0.0,
+                ..PbrMaterial::default()
+            },
+        );
+        Some(Layer {
+            material: m,
+            texcoord: None,
+            transform: None,
+        })
+    };
+    let layers = vec![
+        layer(w, "stone layer", [0.5, 0.5, 0.5, 1.0]),
+        layer(w, "moss", [0.2, 0.5, 0.2, 1.0]),
+    ];
+    let blend = w.spawn();
+    w.insert(blend, Name("stone and moss".into()));
+    w.insert(
+        blend,
+        LayeredMaterial {
+            layers,
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+        },
+    );
+    let proto = w.spawn();
+    w.insert(proto, Name("blended".into()));
+    w.insert(
+        proto,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            material: Some(blend),
+            indices: Some(vec![0, 1, 2, 2, 1, 3]),
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![
+                        [0., 0.5, 0.],
+                        [20., 0.5, 0.],
+                        [0., 0.5, -20.],
+                        [20., 0.5, -20.],
+                    ]),
+                ),
+                (
+                    Semantic::TexCoord(0),
+                    Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]]),
+                ),
+                (
+                    Semantic::Color(1),
+                    Stream::F32x4(vec![
+                        [1., 0., 0., 0.],
+                        [0.5, 0.5, 0., 0.],
+                        [1., 0., 0., 0.],
+                        [0.5, 0.5, 0., 0.],
+                    ]),
+                ),
+            ]),
+        }]),
+    );
+    proto
+}
+
 /// A raised map: decks and rocks sharing one textured material, flat ground over east -100..1500, north -100..500 (a
 /// soup of its own, no transform: a part of its own in a partition), four lights, a spawn, two unnamed travel points and
 /// an unnamed trainer spot, one water surface.
@@ -149,8 +250,16 @@ fn map() -> World {
             ..PbrMaterial::default()
         },
     );
-    let deck = prototype(&mut w, "deck", 10, 40.0, 2.0, material, wood);
-    let rock = prototype(&mut w, "rock", 1, 3.0, 1.0, material, metal);
+    let paint = w.spawn();
+    w.insert(paint, Name("paint".into()));
+    w.insert(paint, PbrMaterial::default());
+    w.insert(paint, DrawOrder::conventional(DrawLayer::Decal, 2500));
+    let deck = prototype(&mut w, "deck", 10, 40.0, 2.0, material, wood, paint);
+    let rock = prototype(&mut w, "rock", 1, 3.0, 1.0, material, metal, paint);
+    let blended = blended(&mut w);
+    for (e, n) in BLENDS {
+        place(&mut w, blended, e, n);
+    }
     for (e, n) in DECKS {
         place(&mut w, deck, e, n);
     }
@@ -200,6 +309,9 @@ fn map() -> World {
         &RaiseOptions::new("parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
     )
     .unwrap();
+    LowerLayeredReskate::new(OverlayLimit::All)
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     let marker = |w: &mut World, kind: MarkerKind, at: [f32; 2], name: Option<&str>| {
         let e = w.spawn();
         w.insert(
@@ -290,9 +402,15 @@ impl Pass for AddSoup {
 }
 
 fn encoding(out: &Path) -> EncodingOptions {
+    encoding_with(out, EncodingOptions::default().cull_ids)
+}
+
+/// The map's encoding with `cull_ids` cull IDs.
+fn encoding_with(out: &Path, cull_ids: usize) -> EncodingOptions {
     EncodingOptions {
         out_root: out.to_path_buf(),
         name: Some("parts".into()),
+        cull_ids,
         ..EncodingOptions::default()
     }
 }
@@ -303,14 +421,17 @@ fn whole(out: &Path, passes: Vec<Box<dyn Pass>>) -> BuildReport {
 }
 
 fn whole_planned(out: &Path, passes: Vec<Box<dyn Pass>>) -> (BuildReport, Option<SkateCollisionPlan>) {
+    let (r, w) = whole_with(&encoding(out), passes);
+    (r, w.resource::<SkateCollisionPlan>().cloned())
+}
+
+/// The map written whole as `e` says, after `passes`; and the world written.
+fn whole_with(e: &EncodingOptions, passes: Vec<Box<dyn Pass>>) -> (BuildReport, World) {
     let mut w = map();
     for p in passes {
         p.run(&mut w, &mut PassLog::default()).unwrap();
     }
-    (
-        primase_reskate::write_map(&w, Path::new(""), &encoding(out)).unwrap(),
-        w.resource::<SkateCollisionPlan>().cloned(),
-    )
+    (primase_reskate::write_map(&w, Path::new(""), e).unwrap(), w)
 }
 
 fn plan() -> PrepareReskateCollision {
@@ -332,7 +453,7 @@ impl Reader for Planned {
         Ok((world.subset(&world.closure(roots.iter().copied())), Vec::new()))
     }
     fn emits(&self) -> &'static [&'static str] {
-        &["core", "skate", "pbr"]
+        &["core", "skate", "reskate", "pbr"]
     }
     fn prototype_box(&self, _world: &World, _prototype: Entity) -> Option<[[f64; 3]; 2]> {
         Some([[0.0, 0.0, -40.0], [40.0, 2.0, 0.0]])
@@ -363,6 +484,16 @@ fn in_parts(
     order: Option<&[usize]>,
     passes: Vec<Box<dyn Pass>>,
 ) -> Result<(BuildReport, usize)> {
+    in_parts_with(&encoding(out), grid, order, passes)
+}
+
+/// The map written as `e` says in the parts of `grid`, as [`in_parts`].
+fn in_parts_with(
+    e: &EncodingOptions,
+    grid: &PartitionGrid,
+    order: Option<&[usize]>,
+    passes: Vec<Box<dyn Pass>>,
+) -> Result<(BuildReport, usize)> {
     let mut w = map();
     grid.run(&mut w, &mut PassLog::default()).unwrap();
     let mut plan = w.resource::<PartitionPlan>().unwrap().clone();
@@ -382,10 +513,7 @@ fn in_parts(
     convert_parts_summarized(
         &mut Planned(w),
         &mut PlannedParts::default(),
-        Box::new(Sink(
-            Some(MapSink::new(Path::new(""), &encoding(out))),
-            report.clone(),
-        )),
+        Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
         &PassManager::new(PassRegistry::new()),
         &Pipeline { passes: Vec::new() },
         &Summarized {
@@ -535,5 +663,103 @@ fn the_collision_plan_over_parts_is_the_whole_maps_leaf_by_leaf() {
             &format!("planned {order:?}"),
         );
         order = Some((0..n).rev().collect());
+    }
+}
+
+/// The routes' preparation, for a map encoded with `cull_ids`: the overlays stacked, the blend chains split, the
+/// collision planned, the map summarized, the chain objects budgeted from the cull-ID pool.
+fn prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
+    let e = EncodingOptions {
+        cull_ids,
+        ..EncodingOptions::default()
+    };
+    vec![
+        Box::new(
+            PrepareReskateOverlays::new(0.004)
+                .unwrap()
+                .for_encoding(&e)
+                .unwrap(),
+        ),
+        Box::new(
+            PrepareReskateBlendOrder::new(200.0)
+                .unwrap()
+                .for_encoding(&e)
+                .unwrap(),
+        ),
+        Box::new(plan()),
+        Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()),
+        Box::new(PlanReskateBlendBudget::pool()),
+    ]
+}
+
+/// The whole map's recorded budget for `cull_ids`: how many tiles it ranks and gives the chain form.
+fn budget_for(cull_ids: usize) -> SkateBlendBudget {
+    let mut w = map();
+    for p in prepared(cull_ids) {
+        p.run(&mut w, &mut PassLog::default()).unwrap();
+    }
+    w.resource::<SkateBlendBudget>().unwrap().clone()
+}
+
+/// The overlays, blend chains, collision plan and pool budget over parts: each part stacks its own meshes (the deck,
+/// drawn by several parts, stacked alike by each) and chains its own tiles, the writer decides the pool budget over the
+/// whole map by the pass's rule on its own count: the decision, with its basis, is the whole map's, at the pool's
+/// boundary (room for every tile's chain objects) and one ID short of it, and the maps are the same byte for byte.
+#[test]
+fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
+    // the boundary: the fewest cull IDs with which every ranked tile takes the chain form
+    let ranked = |b: &SkateBlendBudget| b.decision.as_ref().unwrap().ranked.len();
+    let chosen = |b: &SkateBlendBudget| b.decision.as_ref().unwrap().chosen.len();
+    let roomy = budget_for(1_000_000);
+    assert_eq!(ranked(&roomy), BLENDS.len(), "{roomy:?}");
+    assert_eq!(chosen(&roomy), BLENDS.len());
+    let other = roomy.decision.as_ref().unwrap().pool.unwrap().other_cull_ids;
+    let mut boundary = other;
+    while chosen(&budget_for(boundary)) < BLENDS.len() {
+        boundary += 1;
+    }
+    assert!(chosen(&budget_for(boundary - 1)) < BLENDS.len());
+    for cull_ids in [boundary, boundary - 1] {
+        let reference = tmp(&format!("whole-pool-{cull_ids}"));
+        let (r, w) = whole_with(&encoding_with(&reference, cull_ids), prepared(cull_ids));
+        let recorded = w.resource::<SkateBlendBudget>().unwrap().clone();
+        // the deck (drawn by several parts) and tiles were stacked
+        let stack = w.resource::<SkateOverlayStack>().unwrap();
+        assert!(
+            stack.meshes.contains_key("proto deck"),
+            "{:?}",
+            stack.meshes.keys()
+        );
+        assert!(
+            stack.meshes.keys().any(|m| m.starts_with("t_")),
+            "{:?}",
+            stack.meshes.keys()
+        );
+        assert!(
+            r.blend_budget.is_none(),
+            "a whole map's budget is the pass's record"
+        );
+        assert!(
+            r.blend.tiles_split + r.blend.tiles_shared == BLENDS.len(),
+            "{:?}",
+            r.blend
+        );
+        let out = tmp(&format!("parts-pool-{cull_ids}"));
+        let (p, n) = in_parts_with(
+            &encoding_with(&out, cull_ids),
+            &aligned(),
+            None,
+            prepared(cull_ids),
+        )
+        .unwrap();
+        assert!(n >= 3);
+        let made = p.blend_budget.unwrap();
+        assert_eq!(made.mode, BlendBudgetMode::Pool);
+        assert_eq!(made.decision, recorded.decision, "{cull_ids}");
+        same_maps(
+            &reference.join("parts"),
+            &out.join("parts"),
+            &format!("pool {cull_ids}"),
+        );
     }
 }

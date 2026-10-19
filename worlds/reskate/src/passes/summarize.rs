@@ -5,12 +5,13 @@
 //! prepared world for this encoding, nothing encoded. `plan-reskate-blend-budget{objects=pool}` decides the chain forms
 //! from it before the map is written.
 //!
-//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains). The summary
-//! merges over a map's parts (the cull IDs summed, [`primase_core::summary::Summary`]), but counting a part's own
-//! objects needs the writer to lay out parts: until it does (B2c part 2, step 9 incomplete) a part of a map in several
-//! is refused.
+//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains). A part of a map
+//! in several cannot count: its collision cells are laid out from every part's triangles. It records nothing, and the
+//! writer counts the whole map as it lays it out, for the budget it decides (`plan-reskate-blend-budget` leaves a part's
+//! budget to the writer).
 
 use primase_core::World;
+use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::assembly::{EncodingOptions, map_summary};
@@ -71,9 +72,13 @@ impl Pass for SummarizeReskateMap {
         &["skate.map_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name()).map_err(|e| {
-            format!("{e}: the writer lays out a map whole until it lays out parts (B2c part 2)")
-        })?;
+        if w.resource::<PartScope>().is_some_and(|s| !s.whole) {
+            log.count(
+                "map summaries left to the writer, which counts the whole map (a part of a map in several)",
+                1,
+            );
+            return Ok(());
+        }
         if w.resource::<SkateMapSummary>().is_some() {
             return Err("summarize-reskate-map: the map is already summarized (skate.map_summary)".into());
         }
