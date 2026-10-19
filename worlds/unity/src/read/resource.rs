@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::value::Value;
+use crate::read::value::Value;
 use crate::{Error, Result, invalid};
 
 /// Where an object's streamed data is.
@@ -94,7 +94,7 @@ pub fn streaming_infos(v: &Value) -> Vec<(String, &Value)> {
                     walk(x, &format!("{path}.{k}"), out);
                 }
             }
-            Value::Array(crate::value::Array::Values(items)) => {
+            Value::Array(crate::read::value::Array::Values(items)) => {
                 for (i, x) in items.iter().enumerate() {
                     walk(x, &format!("{path}[{i}]"), out);
                 }

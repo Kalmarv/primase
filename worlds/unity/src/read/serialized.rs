@@ -14,11 +14,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::tpk::TypeTreePackage;
-use crate::typetree::TypeTree;
-use crate::value::Value;
-use crate::version::UnityVersion;
-use crate::{Error, Reader, Result, invalid};
+use super::Reader;
+use crate::read::tpk::TypeTreePackage;
+use crate::read::typetree::TypeTree;
+use crate::read::value::Value;
+use crate::read::version::UnityVersion;
+use crate::{Error, Result, invalid};
 
 /// Container versions read (verified on real files).
 pub const VERSIONS: std::ops::RangeInclusive<u32> = 21..=22;

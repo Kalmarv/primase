@@ -10,10 +10,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::serialized::SerializedFile;
-use crate::tpk::TypeTreePackage;
-use crate::typetree::TypeTree;
-use crate::value::Value;
+use crate::read::serialized::SerializedFile;
+use crate::read::tpk::TypeTreePackage;
+use crate::read::typetree::TypeTree;
+use crate::read::value::Value;
 use crate::{Error, Result, invalid};
 
 /// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
@@ -148,7 +148,7 @@ impl Player {
         let o = f
             .object(r.path_id)
             .ok_or_else(|| invalid(format!("{}: no object {}", r.file, r.path_id)))?;
-        if o.class_id != crate::serialized::MONO_BEHAVIOUR {
+        if o.class_id != crate::read::serialized::MONO_BEHAVIOUR {
             return Err(invalid(format!("{}/{}: not a MonoBehaviour", r.file, r.path_id)));
         }
         let d = f.decode_with(o, &*self.tree(&r.file, f, o.class_id)?)?;
@@ -208,7 +208,7 @@ impl Player {
         };
         let default = class(graphics.get("m_CustomRenderPipeline"))?;
         let mut levels = Vec::new();
-        if let Some(Value::Array(crate::value::Array::Values(qs))) = one("QualitySettings")?
+        if let Some(Value::Array(crate::read::value::Array::Values(qs))) = one("QualitySettings")?
             .as_ref()
             .and_then(|q| q.get("m_QualitySettings"))
         {

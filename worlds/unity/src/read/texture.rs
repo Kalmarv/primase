@@ -11,9 +11,9 @@ use primase_core::{
 };
 use primase_texcodec::{Decoder, flip_vertical};
 
-use crate::player::{ObjRef, Player};
-use crate::resource::StreamingInfo;
-use crate::value::Value;
+use crate::read::player::{ObjRef, Player};
+use crate::read::resource::StreamingInfo;
+use crate::read::value::Value;
 use crate::{Error, Result, invalid};
 
 /// Unity's TextureUsageMode for a normal map stored as DXT5nm: X in alpha, Y in green.

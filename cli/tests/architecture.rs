@@ -1674,13 +1674,6 @@ const KNOWN_BREAKS: &[&str] = &[
     "layout: file=worlds/unity/src/lower.rs",
     "layout: file=worlds/unity/src/lower_lights.rs",
     "layout: file=worlds/unity/src/material.rs",
-    "layout: file=worlds/unity/src/mesh.rs",
-    "layout: file=worlds/unity/src/player.rs",
-    "layout: file=worlds/unity/src/program.rs",
-    "layout: file=worlds/unity/src/resource.rs",
-    "layout: file=worlds/unity/src/scene.rs",
-    "layout: file=worlds/unity/src/terrain.rs",
-    "layout: file=worlds/unity/src/texture.rs",
 ];
 
 /// A break's identity: its table and every field but `reason` and `removed_when`, sorted.

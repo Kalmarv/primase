@@ -6,9 +6,10 @@ use primase_compress::{Decompressor, Lz4};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::typetree::{Node, TypeTree};
-use crate::version::UnityVersion;
-use crate::{Error, Reader, Result, invalid};
+use super::Reader;
+use crate::read::typetree::{Node, TypeTree};
+use crate::read::version::UnityVersion;
+use crate::{Error, Result, invalid};
 
 const MAGIC: u32 = 0x2A4B_5054;
 const HAS_EDITOR_ROOT: u8 = 64;

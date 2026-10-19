@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 
 use crate::components::UnityAmbient;
-use crate::player::{ObjRef, Player};
-use crate::value::{Array, Value};
+use crate::read::player::{ObjRef, Player};
+use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
 
 /// A 4x4 matrix, rows of columns (`m[row][col]`), column vectors: Unity's `Matrix4x4` layout, in f64.
@@ -195,7 +195,7 @@ impl Scene {
             path_id: pid,
         };
         let name_of =
-            |o: &crate::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
+            |o: &crate::read::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
         let mut nodes = BTreeMap::new();
         let mut rects: BTreeMap<i64, Value> = BTreeMap::new();
         let mut game_objects = BTreeMap::new();

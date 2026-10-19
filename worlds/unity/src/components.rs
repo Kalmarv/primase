@@ -4,7 +4,7 @@ use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
 use crate::material::{PassKind, ShaderPass, SubShader};
-use crate::player::{ObjRef, RenderPipeline};
+use crate::read::player::{ObjRef, RenderPipeline};
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -505,7 +505,7 @@ impl Component for UnityTerrain {
 }
 
 /// On the entity of a collision shape lowered apart from its collider (`unity.collider_of`, see
-/// [`crate::lower_collision`]): the entity of that `unity.collider` or `unity.terrain`.
+/// [`crate::passes::lower_collision`]): the entity of that `unity.collider` or `unity.terrain`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct UnityColliderOf(pub Entity);
 
@@ -623,7 +623,7 @@ pub struct UnityRenderSettings {
     /// that does not shine.
     pub sun: Option<Entity>,
     /// The player's render pipeline; `None` when the player has no GraphicsSettings.
-    pub pipeline: Option<crate::player::RenderPipeline>,
+    pub pipeline: Option<crate::read::player::RenderPipeline>,
     /// Its ambient lighting; `None` when the scene has no RenderSettings or they store no ambient mode.
     pub ambient: Option<UnityAmbient>,
 }

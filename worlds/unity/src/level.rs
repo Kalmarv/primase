@@ -47,13 +47,13 @@ use crate::components::{
     UnityTree, UnityTreeInstance,
 };
 use crate::material::{ShaderData, UnityMaterialData};
-use crate::mesh::UnityMeshData;
-use crate::player::{ObjRef, Player};
-use crate::scene::{ColliderComponent, ColliderShape};
-use crate::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, Scene, Skipped};
-use crate::terrain::{TerrainData, TerrainLayerData};
-use crate::texture::UnityTexture as UnityTextureData;
-use crate::value::Value;
+use crate::read::mesh::UnityMeshData;
+use crate::read::player::{ObjRef, Player};
+use crate::read::scene::{ColliderComponent, ColliderShape};
+use crate::read::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, Scene, Skipped};
+use crate::read::terrain::{TerrainData, TerrainLayerData};
+use crate::read::texture::UnityTexture as UnityTextureData;
+use crate::read::value::Value;
 
 /// Unity's frame: left-handed, +Y up, +Z forward, metres. Into the world (right-handed, +Y up, -Z north): x, y, -z,
 /// so Unity's forward is north; a mirroring frame (the mesh reader reverses triangle winding).
@@ -93,8 +93,8 @@ fn unity_renderer(r: &Renderer) -> UnityRenderer {
 
 /// A terrain tree's matrix: T(terrain position + position x size) Ry(rotation) S(width, height, width).
 fn tree_matrix(
-    t: &crate::scene::TerrainComponent,
-    tree: &crate::terrain::TreeInstance,
+    t: &crate::read::scene::TerrainComponent,
+    tree: &crate::read::terrain::TreeInstance,
     size: [f64; 3],
 ) -> Matrix {
     let (s, c) = f64::from(tree.rotation).sin_cos();
@@ -410,7 +410,7 @@ impl Builder<'_> {
     }
 
     /// Count what reading a mesh could not put into core as stored ([`LevelReport::notices`]).
-    fn note_mesh(&mut self, notices: crate::mesh::MeshNotices) {
+    fn note_mesh(&mut self, notices: crate::read::mesh::MeshNotices) {
         for (what, n) in notices {
             *self.report.notices.entry(what.to_owned()).or_default() += n;
         }
@@ -544,7 +544,7 @@ impl Builder<'_> {
     /// renderers' LODGroup roles go into `roles`.
     fn trees(
         &mut self,
-        t: &crate::scene::TerrainComponent,
+        t: &crate::read::scene::TerrainComponent,
         td: &TerrainData,
         prefabs: &mut BTreeMap<String, Scene>,
         roles: &mut BTreeMap<ObjRef, Role>,
@@ -587,7 +587,7 @@ impl Builder<'_> {
                 let mut r = r.clone();
                 // `<terrain>/tree<i>:<prefab>/<renderer's path in the prefab, its root included>`
                 r.path = format!("{name}/tree{i}:{prefab_path}/{}", r.path);
-                r.world = crate::scene::mul(&m, &r.world);
+                r.world = crate::read::scene::mul(&m, &r.world);
                 out.push((i, r));
             }
         }
@@ -712,7 +712,7 @@ impl Builder<'_> {
     /// prefab's colliders (every one, flagged) at the tree's matrix times their matrix relative to the prefab root.
     fn tree_colliders(
         &mut self,
-        t: &crate::scene::TerrainComponent,
+        t: &crate::read::scene::TerrainComponent,
         td: &TerrainData,
         prefabs: &mut BTreeMap<String, Scene>,
     ) -> Result<Vec<(usize, ColliderComponent)>> {
@@ -745,7 +745,7 @@ impl Builder<'_> {
             for c in cs {
                 let mut c = c.clone();
                 c.path = format!("{name}/tree{i}:{prefab_path}/{}", c.path);
-                c.world = crate::scene::mul(&m, &c.world);
+                c.world = crate::read::scene::mul(&m, &c.world);
                 out.push((i, c));
             }
         }

@@ -2,8 +2,8 @@
 //! and offset, floats, integers, colours), keywords, tags and render queue. What they mean depends on the shader;
 //! lowering to `pbr.material` is [`crate::lower`].
 
-use crate::player::{ObjRef, Player};
-use crate::value::{Array, Value};
+use crate::read::player::{ObjRef, Player};
+use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
 
 /// A texture property: the texture (`None`: no texture set) and its tiling (`_ST`) with Unity's bottom-left origin.

@@ -24,7 +24,7 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, MeshFile, World};
 use crate::components::{UnityCamera, UnityMaterial, UnityMesh, UnityRenderSettings, UnityRenderer};
 use crate::level::procedural;
 use crate::lower::modelled;
-use crate::player::RenderPipeline;
+use crate::read::player::RenderPipeline;
 
 /// Whether a material is on a shader the lowering does not model whose draw pass under `pipeline` blends additively.
 fn additive_unmodelled(m: &UnityMaterial, pipeline: &RenderPipeline) -> bool {

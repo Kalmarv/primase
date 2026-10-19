@@ -43,7 +43,7 @@ use primase_image::srgb_to_linear;
 
 use crate::Result;
 use crate::components::{UnityLight, UnityRenderSettings};
-use crate::player::RenderPipeline;
+use crate::read::player::RenderPipeline;
 
 /// Lower every `unity.light` (see the module documentation).
 pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
@@ -298,7 +298,7 @@ mod tests {
             Some(RenderPipeline::BuiltIn),
             Some(RenderPipeline::Other(vec![
                 "built-in".into(),
-                crate::player::URP_ASSET.into(),
+                crate::read::player::URP_ASSET.into(),
             ])),
         ] {
             let mut other = w.clone();

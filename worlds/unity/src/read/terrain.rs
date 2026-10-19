@@ -7,8 +7,8 @@
 //! one byte per cell, 0 a hole (none stored: no holes). Alphamaps hold four layer weights per texel (RGBA), texel
 //! row 0 at z = 0 as Unity stores rows.
 
-use crate::player::{ObjRef, Player};
-use crate::value::{Array, Value};
+use crate::read::player::{ObjRef, Player};
+use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
 
 /// A tree placed on a terrain: position as 0..1 of the terrain's size, scales, rotation about y (radians), colour,

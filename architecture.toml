@@ -164,41 +164,6 @@ file = "worlds/unity/src/material.rs"
 reason = "Other names the I/O module primase_unity::player"
 removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
 
-[[layout]]
-file = "worlds/unity/src/mesh.rs"
-reason = "Other names the I/O module primase_unity::player; Other names the I/O module primase_unity::resource"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/player.rs"
-reason = "reader I/O in Other"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/program.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/resource.rs"
-reason = "reader I/O in Other"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/scene.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/terrain.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/texture.rs"
-reason = "Other names the I/O module primase_unity::player; Other names the I/O module primase_unity::resource"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
 # ---- composition without data logic (examples, bins, cli) ----
 
 # ---- passes registered, lowerings run as passes ----

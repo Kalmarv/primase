@@ -58,7 +58,7 @@ use primase_image::{linear_to_srgb, srgb_to_linear};
 
 use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
 use crate::material::SubShader;
-use crate::player::RenderPipeline;
+use crate::read::player::RenderPipeline;
 use crate::{Result, invalid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -10,8 +10,8 @@
 
 use primase_compress::{Decompressor, Lz4};
 
-use crate::player::{ObjRef, Player};
-use crate::value::{Array, Value};
+use crate::read::player::{ObjRef, Player};
+use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
 
 /// A constant-buffer field: its name, byte offset in the buffer, element type (Unity's `ShaderParamType`: 0 float, 1
@@ -379,7 +379,7 @@ impl ShaderPrograms {
             .position(|&x| x == platform)
             .ok_or_else(|| invalid(format!("shader {}: no blob for platform {platform}", self.name)))?;
         let table = self.segment(p, 0)?;
-        let mut r = crate::Reader::new(&table, false);
+        let mut r = super::Reader::new(&table, false);
         let count = usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative entry count"))?;
         let at = 4 + usize::try_from(index).map_err(|_| invalid("shader blob: an entry index"))? * 12;
         if index as usize >= count {
@@ -407,14 +407,14 @@ impl ShaderPrograms {
                 ))
             })?;
         // Unity's program record: version, program type, a 12-byte header, (2016.2+) 4 more, keywords, code
-        let mut r = crate::Reader::new(entry, false);
+        let mut r = super::Reader::new(entry, false);
         let version = r.i32()?;
         let _program_type = r.i32()?;
         r.take(12)?;
         if version >= 201_608_170 {
             r.take(4)?;
         }
-        let strings = |r: &mut crate::Reader<'_>| -> Result<()> {
+        let strings = |r: &mut super::Reader<'_>| -> Result<()> {
             let n =
                 usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative keyword count"))?;
             for _ in 0..n {
