@@ -81,8 +81,9 @@ fn main() -> Result<(), BoxError> {
         .resource::<primase_reskate::dialect::SkateScene>()
         .and_then(|s| s.region)
     {
+        // with the 30 m apron the writer kept around a region
         passes.push(Box::new(primase_reskate::prepare::ClipReskateRegion::new(
-            region,
+            region, 30.0,
         )?));
     }
     // a scene that states a floor is lifted by it (the writer lifts nothing of its own): its height (100.01 m when it

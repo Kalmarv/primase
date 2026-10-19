@@ -76,7 +76,7 @@ fn placements_are_marked_and_world_collision_is_cut() {
     t.cols[3] = [100.0, 0.0, 0.0];
     w.insert(far, t);
     let mut log = PassLog::default();
-    ClipReskateRegion::new([0.0, 0.0, 10.0, 10.0])
+    ClipReskateRegion::new([0.0, 0.0, 10.0, 10.0], 30.0)
         .unwrap()
         .run(&mut w, &mut log)
         .unwrap();
@@ -137,7 +137,7 @@ fn a_hull_is_kept_or_cut_whole() {
     // region east [0, 8): the first hull's mean (4.5) inside though its second triangle's centroid (5.33) is too;
     // shifted 4 m, the mean (8.5) is outside
     let (kept, cut) = (hull(&mut w, 0.0), hull(&mut w, 4.0));
-    ClipReskateRegion::new([0.0, 0.0, 8.0, 10.0])
+    ClipReskateRegion::new([0.0, 0.0, 8.0, 10.0], 30.0)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -146,18 +146,53 @@ fn a_hull_is_kept_or_cut_whole() {
     assert_eq!(w.get::<SkateCollision>(kept).unwrap().0.region_cut, Some(true));
 }
 
-/// The region is the program's: all four bounds, finite, not empty.
+/// The region and its apron are the program's: all four bounds, finite, not empty; the apron finite, 0 or more.
 #[test]
 fn the_region_is_required_and_checked() {
     let o = |pairs: &[(&str, &str)]| -> Options {
         pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
     };
-    assert!(clip_reskate_region(&o(&[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")])).is_ok());
+    let given = o(&[
+        ("x0", "0"),
+        ("y0", "0"),
+        ("x1", "1"),
+        ("y1", "1"),
+        ("apron", "30"),
+    ]);
+    let pass = clip_reskate_region(&given).unwrap();
+    assert_eq!(pass.options(), given);
     for bad in [
-        o(&[("x0", "0"), ("y0", "0"), ("x1", "1")]),
-        o(&[("x0", "0"), ("y0", "0"), ("x1", "0"), ("y1", "1")]),
-        o(&[("x0", "nan"), ("y0", "0"), ("x1", "1"), ("y1", "1")]),
-        o(&[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1"), ("z", "1")]),
+        o(&[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")]),
+        o(&[("x0", "0"), ("y0", "0"), ("x1", "1"), ("apron", "30")]),
+        o(&[
+            ("x0", "0"),
+            ("y0", "0"),
+            ("x1", "0"),
+            ("y1", "1"),
+            ("apron", "30"),
+        ]),
+        o(&[
+            ("x0", "nan"),
+            ("y0", "0"),
+            ("x1", "1"),
+            ("y1", "1"),
+            ("apron", "30"),
+        ]),
+        o(&[
+            ("x0", "0"),
+            ("y0", "0"),
+            ("x1", "1"),
+            ("y1", "1"),
+            ("apron", "-1"),
+        ]),
+        o(&[
+            ("x0", "0"),
+            ("y0", "0"),
+            ("x1", "1"),
+            ("y1", "1"),
+            ("apron", "30"),
+            ("z", "1"),
+        ]),
     ] {
         assert!(clip_reskate_region(&bad).is_err(), "{bad:?}");
     }

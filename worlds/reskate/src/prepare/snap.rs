@@ -194,7 +194,8 @@ impl Pass for SnapReskateMarkers {
             .collect();
         let b = &self.basis;
         if queries.iter().any(|q| q.snap.mode != SnapMode::None) {
-            let (placed, ground) = self.snap(&mut s, &queries)?;
+            let apron_width = crate::build::apron_of(w, &s).map_err(|e| e.to_string())?;
+            let (placed, ground) = self.snap(&mut s, &queries, apron_width)?;
             let entities: Vec<primase_core::Entity> = w.iter::<SkateMarker>().map(|(e, _)| e).collect();
             for (i, e) in entities.into_iter().enumerate() {
                 if queries[i].snap.mode == SnapMode::None {
@@ -237,12 +238,12 @@ impl Pass for SnapReskateMarkers {
 
 impl SnapReskateMarkers {
     /// Each query's placed position and ground (NaN: nothing found), as the writer's collision answers it.
-    fn snap(&self, s: &mut Scene, queries: &[Query]) -> Result<Snapped, String> {
+    fn snap(&self, s: &mut Scene, queries: &[Query], apron_width: f32) -> Result<Snapped, String> {
         let b = &self.basis;
         // the placements as the writer takes them, its region and the region's apron
         let placements = writer_placements(s, 200.0);
         let region = s.region.unwrap_or_else(|| bounds(s, &placements));
-        let edge = apron(region);
+        let edge = apron(region, apron_width);
         let rules = PlacementRules {
             min_instances: b.min_instances,
             min_instance_tris: b.min_instance_tris,

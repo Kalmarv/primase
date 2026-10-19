@@ -40,6 +40,8 @@ pub struct WriterOptions {
     pub min_instances: i64,
     pub min_instance_tris: i64,
     pub offset: [f64; 3],
+    /// The apron `clip-reskate-region` recorded around the region (0 when nothing is clipped).
+    pub apron: f32,
     /// The cull IDs the map may take ([`crate::build::EncodingOptions::cull_ids`]).
     pub cull_ids: usize,
     pub limit: f32,
@@ -76,8 +78,14 @@ pub struct WriteResult {
     /// Placements of prototypes that collide without drawing (their collision placed, nothing drawn).
     pub collision_only: i64,
     pub peak_mesh_bytes: i64,
+    /// Placements marked outside the region with nothing within its apron, left out (`clip-reskate-region`'s).
     pub far_dropped: i64,
-    pub clipped: i64,
+    /// Placements marked outside the region trimmed to its apron (`clip-reskate-region`'s).
+    pub apron_trimmed: i64,
+    /// Instanced placements reaching past the map's limit, left out.
+    pub limit_instances: i64,
+    /// Merged triangles past the map's limit, left out.
+    pub limit_triangles: i64,
     pub degenerate: i64,
     pub tex_removed: u64,
     pub tex_bytes: u64,
@@ -287,12 +295,12 @@ impl PlacementRules {
 }
 
 /// The region `r` with the writer's apron around it.
-pub(crate) fn apron(r: [f64; 4]) -> [f32; 4] {
+pub(crate) fn apron(r: [f64; 4], margin: f32) -> [f32; 4] {
     [
-        r[0] as f32 - APRON,
-        r[1] as f32 - APRON,
-        r[2] as f32 + APRON,
-        r[3] as f32 + APRON,
+        r[0] as f32 - margin,
+        r[1] as f32 - margin,
+        r[2] as f32 + margin,
+        r[3] as f32 + margin,
     ]
 }
 
@@ -686,8 +694,6 @@ struct Proto {
     /// Each primitive's local box (`None`: no positions), for the Studio cells a placement meets.
     boxes: Vec<Option<(Vec3, Vec3)>>,
 }
-
-const APRON: f32 = 30.0;
 
 impl MapWriter {
     pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
@@ -1399,7 +1405,7 @@ impl MapWriter {
         let mut meshes: HashMap<u32, SrcMesh> = HashMap::new();
         let mut protos: HashMap<[u8; 16], Proto> = HashMap::new();
         let mut tiles: Vec<TileOut> = Vec::new();
-        let edge = apron(r);
+        let edge = apron(r, o.apron);
         let rules = PlacementRules::of(&o);
         let mut colours: HashMap<usize, u32> = HashMap::new();
         for (band, band_sels) in per_band.iter().enumerate() {
@@ -1463,8 +1469,11 @@ impl MapWriter {
                             continue;
                         }
                         Fate::Degenerate => {
-                            self.r.degenerate += 1;
-                            continue;
+                            return Err(Error::Scene(format!(
+                                "placement {:?}: its transform is degenerate (an axis of length 0 or not finite); \
+                                 leave it out or fix it before the writer",
+                                s.entity.expect("a scene placement has its entity")
+                            )));
                         }
                         Fate::FarDropped => {
                             self.r.far_dropped += 1;
@@ -1494,8 +1503,11 @@ impl MapWriter {
                         } => {
                             to.entities += 1;
                             if clipped {
-                                self.r.clipped += 1;
+                                self.r.limit_instances += 1;
                                 continue;
+                            }
+                            if kept_parts.as_ref().is_some_and(|k| k.iter().any(Option::is_some)) {
+                                self.r.apron_trimmed += 1;
                             }
                             (meshes.get(&s.proto).expect("drawn"), inst, kept_parts, collision)
                         }
@@ -1636,7 +1648,7 @@ impl MapWriter {
                                 }
                             }
                             if keep_idx.len() != a.idx.len() {
-                                self.r.clipped += ((a.idx.len() - keep_idx.len()) / 3) as i64;
+                                self.r.limit_triangles += ((a.idx.len() - keep_idx.len()) / 3) as i64;
                                 let mut remap = vec![u32::MAX; a.pos.len() / 3];
                                 let (mut cp, mut cn, mut cu, mut cl, mut cb) =
                                     (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());

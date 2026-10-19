@@ -1,4 +1,4 @@
-//! `clip-reskate-region{x0=,y0=,x1=,y1=}`: the map's region, chosen by the program, and what falls outside it.
+//! `clip-reskate-region{x0=,y0=,x1=,y1=,apron=}`: the map's region, chosen by the program, and what falls outside it.
 //!
 //! The region is a ground-frame rectangle `[east0, north0, east1, north1)`, half-open. The pass records it as the
 //! scene's (`skate.scene` `region`: the map's extent), marks each placement whose position lies outside it as clipped
@@ -7,25 +7,36 @@
 //! flag (a hull soup is kept or left out whole, by the mean of its vertices, as Studio takes a hull whole), and a soup
 //! left with none is removed; a `skate.collision` entry is marked cut (`region_cut`), so a scene
 //! written from the world says so. A placement that already states its clip, or a soup entry that states
-//! `region_cut = false`, keeps it. Every placement clipped and every triangle cut is counted. The writer obeys the
-//! flags and decides nothing from the region itself; without this pass nothing is clipped.
+//! `region_cut = false`, keeps it. Every placement clipped and every triangle cut is counted. It records the region
+//! and the apron around it (`skate.region_clip`): a placement marked outside keeps the triangles of its own that reach
+//! into the apron (its geometry and its collision; [`crate::map::placement_fate`]) and is left out when none reaches
+//! the region; the writer and the passes that assemble its geometry apply that, reported as this pass's. The writer
+//! decides nothing from the region itself; without this pass nothing is clipped, and a placement marked outside by its
+//! scene is refused.
 
 use std::collections::BTreeSet;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Transform, World};
 
-use crate::dialect::{CollisionMode, SkateCollision, SkatePlacement, SkatePrototype, SkateRock, SkateScene};
+use crate::dialect::{
+    CollisionMode, SkateCollision, SkatePlacement, SkatePrototype, SkateRegionClip, SkateRock, SkateScene,
+};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClipReskateRegion {
     region: [f32; 4],
+    apron: f32,
 }
 
 impl ClipReskateRegion {
-    /// The region `[east0, north0, east1, north1)`, metres: finite, the far bounds above the near ones.
-    pub fn new(region: [f32; 4]) -> Result<ClipReskateRegion, String> {
+    /// The region `[east0, north0, east1, north1)`, metres: finite, the far bounds above the near ones; with an apron
+    /// of `apron` metres around it (finite, 0 or more).
+    pub fn new(region: [f32; 4], apron: f32) -> Result<ClipReskateRegion, String> {
+        if !(apron.is_finite() && apron >= 0.0) {
+            return Err(format!("apron={apron}: finite metres of 0 or more"));
+        }
         let [x0, y0, x1, y1] = region;
         if !region.iter().all(|v| v.is_finite()) {
             return Err(format!(
@@ -35,22 +46,27 @@ impl ClipReskateRegion {
         if !(x1 > x0 && y1 > y0) {
             return Err(format!("the region [{x0}, {y0}, {x1}, {y1}) is empty"));
         }
-        Ok(ClipReskateRegion { region })
+        Ok(ClipReskateRegion { region, apron })
     }
 
     pub fn region(&self) -> [f32; 4] {
         self.region
     }
 
-    /// From its options (all four bounds required), through [`ClipReskateRegion::new`].
+    pub fn apron(&self) -> f32 {
+        self.apron
+    }
+
+    /// From its options (all four bounds and the apron required), through [`ClipReskateRegion::new`].
     pub fn from_options(o: &Options) -> Result<ClipReskateRegion, String> {
-        let mut b = [None; 4];
+        let mut b = [None; 5];
         for (k, v) in o {
             let i = match k.as_str() {
                 "x0" => 0,
                 "y0" => 1,
                 "x1" => 2,
                 "y1" => 3,
+                "apron" => 4,
                 _ => return Err(format!("unknown option {k}")),
             };
             b[i] = Some(
@@ -58,10 +74,14 @@ impl ClipReskateRegion {
                     .map_err(|_| format!("{k}={v} is not a number of metres"))?,
             );
         }
-        let [Some(x0), Some(y0), Some(x1), Some(y1)] = b else {
-            return Err("x0, y0, x1 and y1 are required: the region's ground-frame bounds, metres".into());
+        let [Some(x0), Some(y0), Some(x1), Some(y1), Some(apron)] = b else {
+            return Err(
+                "x0, y0, x1, y1 and apron are required: the region's ground-frame bounds and the apron around it, \
+                 metres"
+                    .into(),
+            );
         };
-        ClipReskateRegion::new([x0, y0, x1, y1])
+        ClipReskateRegion::new([x0, y0, x1, y1], apron)
     }
 }
 
@@ -75,14 +95,18 @@ impl Pass for ClipReskateRegion {
         "clip-reskate-region"
     }
     fn options(&self) -> Options {
-        ["x0", "y0", "x1", "y1"]
+        ["x0", "y0", "x1", "y1", "apron"]
             .into_iter()
-            .zip(self.region)
+            .zip(self.region.into_iter().chain([self.apron]))
             .map(|(k, v)| (k.to_owned(), v.to_string()))
             .collect()
     }
     fn requires(&self) -> &[&'static str] {
         &["skate.scene"]
+    }
+    /// The region and its apron, for the writer.
+    fn provides(&self) -> &[&'static str] {
+        &["skate.region_clip"]
     }
     fn modifies(&self) -> &[&'static str] {
         &[
@@ -107,6 +131,10 @@ impl Pass for ClipReskateRegion {
             .resource_mut::<SkateScene>()
             .ok_or("clip-reskate-region: the world is no skate scene (raise-skate first)")?;
         scene.region = Some(r);
+        w.insert_resource(SkateRegionClip {
+            region: r,
+            apron: self.apron,
+        });
         // a placement's ground position: scene (x, y, z) is (east, north) = (x, -z), as the writer reads it
         let inside = |t: &Transform| {
             let (east, north) = (f64::from(t.cols[3][0]), -f64::from(t.cols[3][2]));

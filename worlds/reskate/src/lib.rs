@@ -90,7 +90,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "clip-reskate-region",
         prepare::clip_reskate_region,
-        &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")],
+        &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1"), ("apron", "0")],
     );
     // the budget is the program's number: no default
     reg.register_requiring(

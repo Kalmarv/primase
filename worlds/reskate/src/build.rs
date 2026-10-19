@@ -522,6 +522,7 @@ fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
         offset: [a.offset[0], a.offset[1], 0.0],
+        apron: 0.0,
         cull_ids: a.cull_ids,
         limit: a.limit,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
@@ -531,6 +532,28 @@ fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
         warnings: s.warnings.clone(),
         pause: None,
     })
+}
+
+/// The apron `clip-reskate-region` recorded around the scene's region (0 when nothing is clipped). Refused: a record
+/// for another region than the scene's, and placements marked outside the region with no record of its apron.
+pub(crate) fn apron_of(world: &World, s: &Scene) -> Result<f32> {
+    match world.resource::<crate::dialect::SkateRegionClip>() {
+        Some(c) => {
+            let mine = s.region.map(|r| r.map(|v| v as f32));
+            if mine != Some(c.region) {
+                return Err(Error::Scene(format!(
+                    "the region clip (skate.region_clip) was made for the region {:?}, but the scene's is {mine:?}",
+                    c.region
+                )));
+            }
+            Ok(c.apron)
+        }
+        None if s.placements.iter().any(|p| p.clip == Some(true)) => Err(Error::Scene(
+            "placements are marked outside the region, but no apron was recorded: run clip-reskate-region"
+                .into(),
+        )),
+        None => Ok(0.0),
+    }
 }
 
 /// The writer's tiles and prototypes of `placements` (the scene's, [`writer_placements`]), assembled by `writer` from
@@ -608,6 +631,7 @@ fn assembly(
 ) -> Result<MapWriter> {
     let s = Scene::from_world(world, Path::new(""))?;
     let mut o = writer_options(&s, a)?;
+    o.apron = apron_of(world, &s)?;
     let placements = writer_placements(&s, o.tile);
     o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
     let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?
@@ -719,6 +743,7 @@ fn write_map_with(
         None => scene_warnings(&s, world)?,
     };
     let mut o = writer_options(&s, a)?;
+    o.apron = apron_of(world, &s)?;
     o.pause = world.resource::<SkatePausePicture>().cloned();
     // markers snapped before the writer were snapped against this writer's collision: the same settings
     if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
@@ -889,6 +914,30 @@ fn write_map_with(
                         r.water_cut_at_limit,
                     ),
                     ("water outlines with no area, not drawn", r.water_without_area),
+                ]
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(what, n)| (what.to_owned(), n as u64)),
+            )
+            .chain(
+                [
+                    (
+                        "clip-reskate-region: placements outside the region with nothing within its apron, left out",
+                        writer.r.far_dropped,
+                    ),
+                    (
+                        "clip-reskate-region: placements outside the region trimmed to its apron",
+                        writer.r.apron_trimmed,
+                    ),
+                    (
+                        "instanced placements reaching past the map's limit (Studio's extent), left out",
+                        writer.r.limit_instances,
+                    ),
+                    ("triangles past the map's limit, left out", writer.r.limit_triangles),
+                    (
+                        "collision triangles past the map's limit less 20 m, left out",
+                        writer.r.collision.as_ref().map_or(0, |c| c.cut_beyond_limit + c.props_beyond_limit),
+                    ),
                 ]
                 .into_iter()
                 .filter(|(_, n)| *n > 0)

@@ -132,6 +132,8 @@ pub struct CollisionResult {
     pub down_tris: i64,
     pub cut_degenerate: i64,
     pub cut_beyond_limit: i64,
+    /// Placed props' collision triangles past the map's limit less 20 m, left out.
+    pub props_beyond_limit: i64,
     pub water_triangles: i64,
     pub hulls: i64,
     pub placed: Vec<(f32, f32)>,
@@ -501,6 +503,7 @@ impl<'a> Collision<'a> {
                 let cx = (soup.pos[p] + soup.pos[p + 3] + soup.pos[p + 6]) / 3.0;
                 let cy = (soup.pos[p + 1] + soup.pos[p + 4] + soup.pos[p + 7]) / 3.0;
                 if (cx + off_x).abs() > limit - 20.0 || (cy + off_y).abs() > limit - 20.0 {
+                    res.props_beyond_limit += 1;
                     continue;
                 }
                 kept_tris.push(i);

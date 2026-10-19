@@ -750,6 +750,22 @@ impl Resource for SkateBlendBudget {
     }
 }
 
+/// The region `clip-reskate-region` clipped the map to and the apron around it (metres): a placement it marked outside
+/// keeps what of it lies within the apron, and is left out when nothing of it reaches the region. Not part of
+/// scene-interchange v1.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SkateRegionClip {
+    pub region: [f32; 4],
+    pub apron: f32,
+}
+
+impl Resource for SkateRegionClip {
+    const NAME: &'static str = "skate.region_clip";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 /// The overlay stack's totals over every mesh.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize)]
 pub struct OverlayTotals {

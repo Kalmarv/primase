@@ -1,6 +1,7 @@
 //! A ReSkate map is one part: the passes that work on the whole map (floor, region, spawn, marker snaps, lights, water,
 //! pause map) refuse a part of a world planned in two cells with a halo, and run on the whole world, as a conversion
-//! gives them each.
+//! gives them each; and every preparation pass, run by the pass manager as a program runs it, keeps to its
+//! declarations.
 
 #![allow(clippy::unwrap_used)]
 
@@ -9,9 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::convert::{
     Part, PartScope, PartSource, PartitionGroup, PartitionPlan, PlannedParts, WholeWorld,
 };
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport};
+use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Collision, Entity, Instance, Mesh, Primitive, Semantic, Stream, Surfaces, Topology, Transform, World,
+    Collision, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology, Transform,
+    World,
 };
 use primase_reskate::prepare::{
     ClipReskateRegion, OceanMaterials, PauseExtent, PauseSource, PlaceReskateSpawn, PrepareReskateFloor,
@@ -20,8 +23,8 @@ use primase_reskate::prepare::{
 };
 
 /// Flat concrete over east 0..512, north 0..256 at height 0; one prototype placed in each 256 m cell (east 10 and
-/// east 300, north 10), raised.
-fn world() -> (World, [Entity; 2]) {
+/// east 300, north 10).
+fn unraised() -> (World, [Entity; 2]) {
     let mut w = World::new();
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
@@ -40,6 +43,9 @@ fn world() -> (World, [Entity; 2]) {
         |p| p,
     );
     w.insert(ground, c);
+    let material = w.spawn();
+    w.insert(material, Name("stone".into()));
+    w.insert(material, PbrMaterial::default());
     let proto = w.spawn();
     w.insert(
         proto,
@@ -50,7 +56,7 @@ fn world() -> (World, [Entity; 2]) {
                 Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
             )]),
             indices: None,
-            material: None,
+            material: Some(material),
         }]),
     );
     let place = |w: &mut World, east: f32| {
@@ -68,6 +74,12 @@ fn world() -> (World, [Entity; 2]) {
         e
     };
     let placed = [place(&mut w, 10.0), place(&mut w, 300.0)];
+    (w, placed)
+}
+
+/// [`unraised`], raised.
+fn world() -> (World, [Entity; 2]) {
+    let (mut w, placed) = unraised();
     primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("parts").unwrap()).unwrap();
     (w, placed)
 }
@@ -102,7 +114,7 @@ fn parts(source: &mut dyn PartSource, w: &World) -> Vec<Part> {
 fn passes() -> Vec<Box<dyn Pass>> {
     vec![
         Box::new(PrepareReskateFloor::new(100.0, 250.0).unwrap()),
-        Box::new(ClipReskateRegion::new([0.0, 0.0, 512.0, 256.0]).unwrap()),
+        Box::new(ClipReskateRegion::new([0.0, 0.0, 512.0, 256.0], 30.0).unwrap()),
         Box::new(PlaceReskateSpawn::centre()),
         Box::new(SnapReskateMarkers::for_default_encoding()),
         Box::new(SelectReskateLights::new(8, 200.0).unwrap()),
@@ -171,4 +183,22 @@ fn a_part_of_a_map_is_refused_and_the_whole_map_is_taken() {
     for (name, r) in run_each(&whole[0], false) {
         assert!(r.is_ok(), "{name}: {r:?}");
     }
+}
+
+/// Every ReSkate preparation pass, parsed from a program's text and run by the pass manager on the whole world from
+/// raise-skate to the blend budget: each one's declarations hold (a name or resource it adds, changes or removes is
+/// one it declares), as a conversion's program runs them.
+#[test]
+fn the_preparation_passes_run_under_the_pass_manager() {
+    let (mut w, _) = unraised();
+    let mut registry = PassRegistry::new();
+    primase_reskate::register(&mut registry);
+    let program = "raise-skate{name=parts}, lower-layered-reskate{overlays=all}, lower-tint-reskate,                    lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250},                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds,                    place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200},                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content},                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-overlays{step=0.004},                    prepare-reskate-blend-order{grid=200}, plan-reskate-blend-budget{objects=pool}";
+    let pipeline = registry.parse(program).unwrap();
+    let n = pipeline.passes.len();
+    let mut report = RunReport::default();
+    PassManager::new(registry)
+        .run(&mut w, &pipeline, &mut report)
+        .unwrap();
+    assert_eq!(report.steps.len(), n);
 }
