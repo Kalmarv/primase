@@ -223,11 +223,19 @@ pub struct PlacedLight {
 /// A grind curve in the writer's frame.
 #[derive(Clone, Debug)]
 pub struct GrindCurve {
-    pub points: Vec<Vec3>,
-    pub closed: bool,
-    pub radius: f32,
+    /// Its smooth-grind surface ([`crate::grind::SURFACES`]).
     pub surface: usize,
-    pub kind: i32,
+    /// Its prism (`skate.grind_prism`, writer frame); `None`: not prepared.
+    pub prism: Option<GrindPrism>,
+}
+
+/// A grind curve's prism in the writer's frame.
+#[derive(Clone, Debug)]
+pub struct GrindPrism {
+    pub positions: Vec<Vec3>,
+    pub indices: Vec<u32>,
+    pub pieces: u32,
+    pub length: f32,
 }
 
 /// A water surface: convex outline (ground frame) at a height, with its box.
@@ -759,18 +767,18 @@ impl Scene {
                 source: world.get::<Source>(e).map(|s| s.0.clone()).unwrap_or_default(),
             })
             .collect();
-        let curves = world
+        let curves: Vec<GrindCurve> = world
             .iter::<SkateGrindCurve>()
-            .map(|(_, c)| GrindCurve {
-                points: c.points.iter().map(|p| Vec3::new(p[0], -p[2], p[1])).collect(),
-                closed: c.closed,
-                radius: if c.radius == 0.0 {
-                    0.03
-                } else {
-                    c.radius.clamp(0.005, 0.25)
-                },
+            .map(|(e, c)| GrindCurve {
                 surface: c.surface as usize,
-                kind: i32::from(c.kind),
+                prism: world
+                    .get::<crate::dialect::SkateGrindPrism>(e)
+                    .map(|p| GrindPrism {
+                        positions: p.positions.iter().map(|q| w(q[0], q[1], q[2])).collect(),
+                        indices: p.triangles.iter().flatten().copied().collect(),
+                        pieces: p.pieces,
+                        length: p.length,
+                    }),
             })
             .collect();
         let water = world
@@ -833,6 +841,13 @@ impl Scene {
         if no_geometry > 0 {
             report_warnings.push(format!(
                 "{no_geometry} placements of prototypes without geometry left out"
+            ));
+        }
+        let unprepared = curves.iter().filter(|c| c.prism.is_none()).count();
+        if unprepared > 0 {
+            unsupported.push((
+                "skate.grind_curve (prepare-reskate-grinds makes its prism)".to_owned(),
+                unprepared as u64,
             ));
         }
         let unsnapped = markers.iter().filter(|m| m.snap.mode != SnapMode::None).count();

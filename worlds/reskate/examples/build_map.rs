@@ -1,7 +1,7 @@
 //! A skate-scene folder -> a ReSkate Studio normalized map folder: read, its meshes and textures loaded, the chosen
 //! level of detail and placements, the scene's region clipped and its floor lifted when it states them
-//! (`clip-reskate-region`, `prepare-reskate-floor`), a spawn when the scene has none, the markers snapped
-//! (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
+//! (`clip-reskate-region`, `prepare-reskate-floor`), the grind curves' prisms (`prepare-reskate-grinds`), a spawn
+//! when the scene has none, the markers snapped (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
 //! (`budget-reskate-textures`), then the writer.
 //!
@@ -94,6 +94,8 @@ fn main() -> Result<(), BoxError> {
         }
         passes.push(Box::new(floor));
     }
+    // the grind curves' prisms, as Studio builds them, from the curves where the floor put them
+    passes.push(Box::new(primase_reskate::prepare::PrepareReskateGrinds::new()));
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it
     passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));

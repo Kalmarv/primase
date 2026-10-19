@@ -5,7 +5,8 @@
 //! overlays; the target refuses an unlowered blend), then the texture choices: `cap-textures{max=N}` (the writer
 //! writes textures at the size they come; the old writer's own cap was `cap-textures{max=256,normals=box}`) and
 //! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), a budget
-//! if wanted (`budget-reskate-textures{max=N}`), and `snap-reskate-markers` (the writer snaps no marker).
+//! if wanted (`budget-reskate-textures{max=N}`), `prepare-reskate-grinds` for grind curves (the writer builds no
+//! prism) and `snap-reskate-markers` (the writer snaps no marker).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;

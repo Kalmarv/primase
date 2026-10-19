@@ -2117,9 +2117,12 @@ impl MapWriter {
         }
         self.mesh_files.extend(col_files);
 
-        // grind curves: an invisible prism each, world baked
+        // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked
         for (i, g) in x.grind.iter().enumerate() {
-            let (gpos, gidx, pieces, length) = grind::build(g);
+            let Some(p) = &g.prism else {
+                continue;
+            };
+            let (gpos, gidx, pieces, length) = (&p.positions, p.indices.clone(), p.pieces, p.length);
             if gidx.is_empty() {
                 self.r
                     .warnings
@@ -2127,9 +2130,9 @@ impl MapWriter {
                 continue;
             }
             let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-            for p in &gpos {
-                lo = lo.min(*p);
-                hi = hi.max(*p);
+            for q in gpos {
+                lo = lo.min(*q);
+                hi = hi.max(*q);
             }
             if gidx.len() as f32 / (hi - lo).length().max(1e-6) > 900.0 {
                 self.r.warnings.push(format!(
@@ -2138,7 +2141,7 @@ impl MapWriter {
             }
             let flat: Vec<f32> = gpos
                 .iter()
-                .flat_map(|p| [p.x + off.x, p.y + off.y, p.z + off.z])
+                .flat_map(|q| [q.x + off.x, q.y + off.y, q.z + off.z])
                 .collect();
             let name = format!("grind_{i:05}");
             self.mesh_files.insert(

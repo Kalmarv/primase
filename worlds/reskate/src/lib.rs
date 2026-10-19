@@ -43,6 +43,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     dialect::lower::register(reg);
     reg.register("place-reskate-spawn", prepare::place_reskate_spawn);
     reg.register("snap-reskate-markers", prepare::snap_reskate_markers);
+    reg.register("prepare-reskate-grinds", prepare::prepare_reskate_grinds);
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",

@@ -394,6 +394,17 @@ pub struct SkateGrindCurve {
     pub unknown_flags: u32,
 }
 
+/// A grind curve's invisible collision prism, as `prepare-reskate-grinds` built it from the curve: scene space,
+/// triangles wound outward, `pieces` runs `length` metres long in all. Empty: the curve has no usable points. Not part
+/// of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateGrindPrism {
+    pub positions: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub pieces: u32,
+    pub length: f32,
+}
+
 /// A flat water surface: a convex outline in the ground frame.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SkateWater {
@@ -574,6 +585,7 @@ shown!(
     SkateCollision = "skate.collision",
     SkateLight = "skate.light",
     SkateGrindCurve = "skate.grind_curve",
+    SkateGrindPrism = "skate.grind_prism",
     SkateWater = "skate.water",
     SkateMarker = "skate.marker",
 );
