@@ -67,12 +67,6 @@ role = "exception"
 reason = "the post-compile step reads the compiled Patch and the installed game's stock material rows"
 removed_when = "a ReSkate reader reads them into the world for the post-compile writer step"
 
-[[io]]
-file = "worlds/reskate/src/postcompile/vbrecord.rs"
-role = "exception"
-reason = "the post-compile step reads the map's vertex-blend record and GLBs"
-removed_when = "the record reaches the post-compile step in memory from the writer"
-
 # ---- parse modules: decoding bytes, unchecked arithmetic and indexing denied ----
 
 [[parse_crate]]

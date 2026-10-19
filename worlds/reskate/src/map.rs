@@ -2502,8 +2502,9 @@ impl MapWriter {
                 }
             }
             let doc = serde_json::json!({ "format": 1, "materials": record });
-            let bytes = crate::json_bytes("vertex_blend.json", &doc, true)?;
-            self.files.insert("vertex_blend.json".into(), bytes);
+            let record = crate::postcompile::map_folder::RECORD;
+            let bytes = crate::json_bytes(record, &doc, true)?;
+            self.files.insert(record.into(), bytes);
         }
 
         // trainer.json: the trainer spots and the travel points listed too

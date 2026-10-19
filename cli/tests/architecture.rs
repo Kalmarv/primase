@@ -1073,7 +1073,6 @@ const KNOWN_BREAKS: &[&str] = &[
     "entry_point: file=formats/web/examples/synthetic_tiles.rs what=queries or edits world components",
     "io: file=formats/gltf/src/write.rs role=exception",
     "io: file=worlds/reskate/src/postcompile/vblend.rs role=exception",
-    "io: file=worlds/reskate/src/postcompile/vbrecord.rs role=exception",
 ];
 
 /// A break's identity: its table and every field but `reason` and `removed_when`, sorted.

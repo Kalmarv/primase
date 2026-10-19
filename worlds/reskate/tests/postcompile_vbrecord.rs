@@ -30,9 +30,10 @@ use std::process::Command;
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
 use primase_compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
+use primase_reskate::postcompile::map_folder;
 use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, StockPrograms, decal_opacity};
-use primase_reskate::postcompile::vbrecord::{self, Record};
+use primase_reskate::postcompile::vbrecord;
 use primase_testdata::real_data;
 use serde_json::Value;
 
@@ -57,7 +58,7 @@ fn vbrecord_gate() -> R {
     };
     let decal = Donor::find(&game, BAM, ROOT, DECAL_DONOR)?;
     let stock = StockPrograms::find(&game, ROOT)?;
-    let record = Record::read(&map)?.ok_or("the map has no vertex_blend.json")?;
+    let input = map_folder::read(&map)?.ok_or("the map has no vertex_blend.json")?;
     // ---- resolution, with its margins
     let fo = Folder::open(&patch)?;
     let so = Source {
@@ -66,7 +67,7 @@ fn vbrecord_gate() -> R {
         oodle: Some(&oodle),
     };
     let sections = vbrecord::blend_sections(&so)?;
-    let resolution = vbrecord::resolve(&record, &map, &sections)?;
+    let resolution = vbrecord::resolve(&input, &sections)?;
     // a primitive whose own weights fit another key too is decided by its material's other primitives or by a
     // key belonging to one material (the module's rule); counted, and the read-back below checks the result
     let mut shared = 0;
@@ -91,14 +92,14 @@ fn vbrecord_gate() -> R {
     println!(
         "{} materials -> {} keys over {} primitives, {} vertex-blend sections; largest next-best containment {:.1}%; \
          sections in primitive order: {:?}",
-        record.materials.len(),
+        input.record.materials.len(),
         resolution.keys.values().collect::<BTreeSet<_>>().len(),
         resolution.primitives.len(),
         sections.len(),
         100.0 * worst,
         resolution.in_primitive_order
     );
-    assert_eq!(resolution.keys.len(), record.materials.len());
+    assert_eq!(resolution.keys.len(), input.record.materials.len());
     // ---- apply, read back
     let root = primase_testdata::real_data_value("PRIMASE_OUT")
         .map(PathBuf::from)
@@ -107,8 +108,7 @@ fn vbrecord_gate() -> R {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     let run = |out: &Path| -> R<vbrecord::Resolution> {
-        let (report, res) = vbrecord::apply(&patch, out, &map, Some(&base), Some(&oodle), &decal, &stock)?
-            .ok_or("no record")?;
+        let (report, res) = vbrecord::apply(&patch, out, &input, Some(&base), Some(&oodle), &decal, &stock)?;
         println!(
             "rewrote {} sections in {} MeshSets, max position error {} m",
             report.sections, report.meshsets, report.max_position_error

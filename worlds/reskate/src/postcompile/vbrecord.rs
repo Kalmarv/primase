@@ -33,76 +33,24 @@
 //! cross-check).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use primase_compress::oodle::Oodle;
 
 use crate::postcompile::fb::MESHSET;
 use crate::postcompile::fb::folder::{Folder, Source};
+use crate::postcompile::map_folder::{BlendMap, MapObject, Record};
 use crate::postcompile::meshset;
 use crate::postcompile::vblend::{
     self, Donor, Report, Request, SectionInput, SectionValues, StockPrograms, Target, decal_opacity,
     lod_geometry, patch_bundles, surface,
 };
-use crate::postcompile::{Error, Result, bad};
+use crate::postcompile::{Result, bad};
 
 const W: &str = "vertex-blend record";
 
 /// The Studio build the weight match was established on.
 pub const STUDIO_BUILD: &str = "ReSkate Studio 20261012";
-
-/// The record's file name in the map folder.
-pub const RECORD: &str = "vertex_blend.json";
-
-/// `vertex_blend.json`: material name -> the (GLB relative to the map folder, primitive) pairs drawing it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Record {
-    pub materials: BTreeMap<String, Vec<(String, usize)>>,
-}
-
-impl Record {
-    /// The record of map folder `map`; `None` when the map has no vertex-blend material (no record).
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: reads the map's vertex-blend record"
-    )]
-    pub fn read(map: &Path) -> Result<Option<Record>> {
-        let path = map.join(RECORD);
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(Error::Io { path, source }),
-        };
-        let v: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| bad(W, 0, format!("{RECORD}: {e}")))?;
-        if v["format"] != 1 {
-            return Err(bad(W, 0, format!("{RECORD}: format {} is not 1", v["format"])));
-        }
-        let materials = v["materials"]
-            .as_object()
-            .ok_or_else(|| bad(W, 0, format!("{RECORD}: no materials object")))?
-            .iter()
-            .map(|(name, pairs)| {
-                let pairs = pairs
-                    .as_array()
-                    .ok_or_else(|| bad(W, 0, format!("{RECORD}: {name} is not a list")))?
-                    .iter()
-                    .map(|p| match (p[0].as_str(), p[1].as_u64()) {
-                        (Some(mesh), Some(prim)) => Ok((mesh.to_owned(), prim as usize)),
-                        _ => Err(bad(
-                            W,
-                            0,
-                            format!("{RECORD}: {name}: {p} is not [mesh, primitive]"),
-                        )),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok((name.clone(), pairs))
-            })
-            .collect::<Result<_>>()?;
-        Ok(Some(Record { materials }))
-    }
-}
 
 /// One vertex-blend section of the compile: its MeshSet, where it is, its key and its weights as half-float bits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,152 +189,6 @@ fn half_choices(w: f32) -> [u16; 2] {
     }
 }
 
-/// A recorded file of map folder `map`: `rel` must be a relative path with forward slashes that stays inside the
-/// folder and goes through no link (as the scene reader requires of its files).
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "exception: checks the record's paths inside the map folder"
-)]
-fn map_file(map: &Path, rel: &str) -> Result<PathBuf> {
-    let refuse = |why: &str| bad(W, 0, format!("{RECORD}: '{rel}' {why}"));
-    if rel.is_empty() || rel.contains('\\') || rel.starts_with('/') || rel.as_bytes().get(1) == Some(&b':') {
-        return Err(refuse("is not a relative path with forward slashes"));
-    }
-    let mut parts: Vec<&str> = Vec::new();
-    for c in Path::new(rel).components() {
-        match c {
-            std::path::Component::Normal(x) => parts.push(x.to_str().unwrap_or_default()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                if parts.pop().is_none() {
-                    return Err(refuse("is outside the map folder"));
-                }
-            }
-            _ => return Err(refuse("is not a relative path with forward slashes")),
-        }
-    }
-    let mut full = map.to_path_buf();
-    for p in &parts {
-        full.push(p);
-        if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(refuse("goes through a link: the map folder must hold its files"));
-        }
-    }
-    Ok(full)
-}
-
-/// A map GLB, read and parsed once.
-struct MapGlb {
-    path: PathBuf,
-    gltf: primase_gltf::Gltf,
-}
-
-/// Reads and parses the map GLB at `path`, which must hold the writer's one mesh.
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "exception: reads the map's GLBs"
-)]
-fn load_glb(path: &Path) -> Result<MapGlb> {
-    let bytes = std::fs::read(path).map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let fail = |d: String| bad(W, 0, format!("{}: {d}", path.display()));
-    let gltf = primase_gltf::Gltf::from_glb(&bytes).map_err(|e| fail(e.to_string()))?;
-    // the writer writes one mesh per GLB, and the record's primitive indices are that mesh's
-    let meshes = gltf.json()["meshes"].as_array().map_or(0, Vec::len);
-    if meshes != 1 {
-        return Err(fail(format!("{meshes} meshes, not the writer's one")));
-    }
-    Ok(MapGlb {
-        path: path.to_path_buf(),
-        gltf,
-    })
-}
-
-/// The `_RESKATE_BLEND` weights of the vertices `primitive` of a map GLB draws (all of them without indices), in
-/// vertex order.
-fn glb_weights(glb: &MapGlb, primitive: usize) -> Result<Vec<f32>> {
-    let (g, path) = (&glb.gltf, &glb.path);
-    let fail = |d: String| bad(W, 0, format!("{}: {d}", path.display()));
-    let j = g.json();
-    let attr = &j["meshes"][0]["primitives"][primitive]["attributes"]["_RESKATE_BLEND"];
-    let a = &j["accessors"][attr
-        .as_u64()
-        .ok_or_else(|| fail(format!("primitive {primitive} has no _RESKATE_BLEND")))?
-        as usize];
-    if a["componentType"] != 5126 || a["type"] != "SCALAR" {
-        return Err(fail(format!(
-            "primitive {primitive}: _RESKATE_BLEND is not a float scalar"
-        )));
-    }
-    let view = a["bufferView"]
-        .as_u64()
-        .ok_or_else(|| fail("_RESKATE_BLEND has no buffer view".into()))? as usize;
-    if j["bufferViews"][view].get("byteStride").is_some_and(|s| s != 4) {
-        return Err(fail("_RESKATE_BLEND is interleaved".into()));
-    }
-    let data = g.buffer_view(view).map_err(|e| fail(e.to_string()))?;
-    let past = |e: String| fail(format!("_RESKATE_BLEND runs past its buffer view: {e}"));
-    let int = |k: &str| usize::try_from(a[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
-    let span = primase_bytes::checked_span(int("byteOffset")?, int("count")?, 4, data.len())
-        .map_err(|e| past(e.to_string()))?;
-    let weights: Vec<f32> = data[span]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| f32::from_le_bytes(*c))
-        .collect();
-    // Studio compiles only the vertices the primitive's triangles use; a lowered overlay shares its source
-    // primitive's vertices, and the unused ones may carry weights of other triangles
-    let Some(ix) = j["meshes"][0]["primitives"][primitive]["indices"].as_u64() else {
-        return Ok(weights);
-    };
-    let ia = &j["accessors"][ix as usize];
-    let size = match ia["componentType"].as_u64() {
-        Some(5121) => 1,
-        Some(5123) => 2,
-        Some(5125) => 4,
-        _ => {
-            return Err(fail(format!(
-                "primitive {primitive}: indices are not unsigned integers"
-            )));
-        }
-    };
-    let iview = ia["bufferView"]
-        .as_u64()
-        .ok_or_else(|| fail("indices have no buffer view".into()))? as usize;
-    if j["bufferViews"][iview].get("byteStride").is_some() {
-        return Err(fail("indices are interleaved".into()));
-    }
-    let idata = g.buffer_view(iview).map_err(|e| fail(e.to_string()))?;
-    let iint = |k: &str| usize::try_from(ia[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
-    let ispan = primase_bytes::checked_span(iint("byteOffset")?, iint("count")?, size, idata.len())
-        .map_err(|e| fail(format!("indices run past their buffer view: {e}")))?;
-    let mut used = vec![false; weights.len()];
-    for c in idata[ispan].chunks_exact(size) {
-        let i = match size {
-            1 => usize::from(c[0]),
-            2 => usize::from(u16::from_le_bytes([c[0], c[1]])),
-            _ => u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as usize,
-        };
-        *used.get_mut(i).ok_or_else(|| {
-            fail(format!(
-                "primitive {primitive}: index {i} past its {} vertices",
-                weights.len()
-            ))
-        })? = true;
-    }
-    Ok(weights
-        .into_iter()
-        .zip(used)
-        .filter(|(_, u)| *u)
-        .map(|(w, _)| w)
-        .collect())
-}
-
 /// Record that `material` is `key`: refused when the material already resolved to another key or the key to another
 /// material.
 fn claim(
@@ -417,17 +219,22 @@ fn claim(
     Ok(())
 }
 
-/// Resolves every recorded primitive of map folder `map` among `sections` (from [`blend_sections`]).
-pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result<Resolution> {
-    let mut glbs: BTreeMap<&str, MapGlb> = BTreeMap::new();
-    for (mesh, _) in record.materials.values().flatten() {
-        if !glbs.contains_key(mesh.as_str()) {
-            glbs.insert(mesh, load_glb(&map_file(map, mesh)?)?);
-        }
-    }
-    let (names, peers) = object_glbs(map)?;
-    resolve_by(record, sections, &names, &peers, |mesh, primitive| {
-        glb_weights(&glbs[mesh], primitive)
+/// Resolves every recorded primitive of a map's input (from [`crate::postcompile::map_folder::read`]) among `sections`
+/// (from [`blend_sections`]).
+pub fn resolve(input: &BlendMap, sections: &[BlendSection]) -> Result<Resolution> {
+    let (names, peers) = object_glbs(&input.objects)?;
+    resolve_by(&input.record, sections, &names, &peers, |mesh, primitive| {
+        input
+            .weights
+            .get(&(mesh.to_owned(), primitive))
+            .cloned()
+            .ok_or_else(|| {
+                bad(
+                    W,
+                    0,
+                    format!("{mesh} primitive {primitive}: no weights in the map's input"),
+                )
+            })
     })
 }
 
@@ -437,31 +244,19 @@ pub fn resolve(record: &Record, map: &Path, sections: &[BlendSection]) -> Result
 type Peers = BTreeMap<String, BTreeSet<String>>;
 
 /// The map's object names as Studio writes them into a MeshSet's name (`" / "` and spaces as `___` and `_`, lower case,
-/// before any `___section`), each with the stem of the GLB it draws (from `map.json`): an instance's objects are named
-/// after their tile and prototype, not after its GLB. An object name drawing two GLBs is refused. With them, each GLB's
-/// placement [`Peers`].
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "exception: the post-compile step reads the map's vertex-blend record and GLBs"
-)]
-fn object_glbs(map: &Path) -> Result<(BTreeMap<String, String>, Peers)> {
-    let path = map.join("map.json");
-    let bytes = std::fs::read(&path).map_err(|source| Error::Io { path, source })?;
-    let v: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| bad(W, 0, format!("map.json: {e}")))?;
+/// before any `___section`), each with the stem of the GLB it draws (from `map.json`'s `objects`): an instance's objects
+/// are named after their tile and prototype, not after its GLB. An object name drawing two GLBs is refused. With them,
+/// each GLB's placement [`Peers`].
+fn object_glbs(objects: &[MapObject]) -> Result<(BTreeMap<String, String>, Peers)> {
     let mut out = BTreeMap::new();
     let mut placed: BTreeMap<Vec<u64>, BTreeSet<String>> = BTreeMap::new();
-    for o in v["objects"].as_array().into_iter().flatten() {
-        let (Some(name), Some(mesh)) = (o["name"].as_str(), o["mesh"].as_str()) else {
-            continue;
-        };
-        let at: Vec<u64> = o["transform"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|x| x.as_f64().map_or(u64::MAX, f64::to_bits))
-            .collect();
+    for MapObject {
+        name,
+        mesh,
+        transform,
+    } in objects
+    {
+        let at: Vec<u64> = transform.iter().map(|x| x.to_bits()).collect();
         placed.entry(at).or_default().insert(glb_stem(mesh));
         let base = name
             .split(" / ")
@@ -824,28 +619,25 @@ pub fn blend_values(input: &SectionInput) -> Result<SectionValues> {
     })
 }
 
-/// Applies map folder `map`'s record to Patch `patch` into `out` ([`vblend::apply`]): every recorded material's key
-/// onto the stock decal row of `decal`, its opacities from Studio's weights, and the game's program records `stock`
-/// in place of Studio's. `None` (and nothing written) when the map has no record.
+/// Applies a map's vertex-blend input (from [`crate::postcompile::map_folder::read`]) to Patch `patch` into `out`
+/// ([`vblend::apply`]): every recorded material's key onto the stock decal row of `decal`, its opacities from Studio's
+/// weights, and the game's program records `stock` in place of Studio's.
 pub fn apply(
     patch: &Path,
     out: &Path,
-    map: &Path,
+    input: &BlendMap,
     base: Option<&Folder>,
     oodle: Option<&Oodle>,
     decal: &Donor,
     stock: &StockPrograms,
-) -> Result<Option<(Report, Resolution)>> {
-    let Some(record) = Record::read(map)? else {
-        return Ok(None);
-    };
+) -> Result<(Report, Resolution)> {
     let folder = Folder::open(patch)?;
     let src = Source {
         folder: &folder,
         base,
         oodle,
     };
-    let resolution = resolve(&record, map, &blend_sections(&src)?)?;
+    let resolution = resolve(input, &blend_sections(&src)?)?;
     let requests: Vec<Request> = resolution
         .keys
         .values()
@@ -860,15 +652,10 @@ pub fn apply(
     let report = vblend::apply(patch, out, base, oodle, stock, &requests, &mut |s| {
         blend_values(s)
     })?;
-    Ok(Some((report, resolution)))
+    Ok((report, resolution))
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "test I/O: writes and reads fixture files"
-)]
 mod tests {
     use super::*;
 
@@ -1169,103 +956,6 @@ mod tests {
         };
         let e = message(resolve_by_files(&rec, &sections(), weights));
         assert!(e.contains("share a file stem"), "{e}");
-    }
-
-    /// A GLB with `meshes` copies of one primitive whose `_RESKATE_BLEND` accessor has `count` floats, over a buffer
-    /// of 0.25 and 0.5.
-    fn glb_file(name: &str, meshes: usize, count: u64) -> std::path::PathBuf {
-        let mesh = serde_json::json!({"primitives": [{"attributes": {"_RESKATE_BLEND": 0}}]});
-        let json = serde_json::json!({
-            "asset": {"version": "2.0"},
-            "buffers": [{"byteLength": 8}],
-            "bufferViews": [{"buffer": 0, "byteLength": 8}],
-            "accessors": [{"bufferView": 0, "componentType": 5126, "count": count, "type": "SCALAR"}],
-            "meshes": vec![mesh; meshes],
-        });
-        let bin: Vec<u8> = [0.25f32, 0.5].iter().flat_map(|w| w.to_le_bytes()).collect();
-        let bytes = primase_gltf::glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
-        let path = std::env::temp_dir().join(format!("vbrecord-{name}-{}.glb", std::process::id()));
-        std::fs::write(&path, bytes).unwrap();
-        path
-    }
-
-    fn weights_at(path: &Path, primitive: usize) -> Result<Vec<f32>> {
-        glb_weights(&load_glb(path)?, primitive)
-    }
-
-    #[test]
-    fn record_paths_stay_in_the_map_folder() {
-        let map = std::env::temp_dir();
-        assert_eq!(
-            map_file(&map, "meshes/a.glb").unwrap(),
-            map.join("meshes").join("a.glb")
-        );
-        assert_eq!(map_file(&map, "meshes/../b.glb").unwrap(), map.join("b.glb"));
-        for (rel, why) in [
-            ("../a.glb", "outside the map folder"),
-            ("meshes/../../a.glb", "outside the map folder"),
-            ("/a.glb", "not a relative path"),
-            ("C:/a.glb", "not a relative path"),
-            ("meshes\\a.glb", "not a relative path"),
-            ("", "not a relative path"),
-        ] {
-            let e = map_file(&map, rel).unwrap_err().to_string();
-            assert!(e.contains(why), "{rel}: {e}");
-        }
-    }
-
-    #[test]
-    fn glb_weights_are_read_strictly() {
-        let ok = glb_file("ok", 1, 2);
-        assert_eq!(weights_at(&ok, 0).unwrap(), vec![0.25, 0.5]);
-        let two = glb_file("two", 2, 2);
-        let e = weights_at(&two, 0).unwrap_err().to_string();
-        assert!(e.contains("2 meshes"), "{e}");
-        // a count whose byte length overflows is an error, not a panic
-        let huge = glb_file("huge", 1, u64::MAX / 2);
-        let e = weights_at(&huge, 0).unwrap_err().to_string();
-        assert!(e.contains("runs past its buffer view"), "{e}");
-        for p in [ok, two, huge] {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-
-    /// A GLB whose primitive has four weights and the u16 indices `idx`.
-    fn indexed_glb(name: &str, idx: &[u16]) -> std::path::PathBuf {
-        let mesh = serde_json::json!({"primitives": [{"attributes": {"_RESKATE_BLEND": 0}, "indices": 1}]});
-        let json = serde_json::json!({
-            "asset": {"version": "2.0"},
-            "buffers": [{"byteLength": 16 + 2 * idx.len()}],
-            "bufferViews": [{"buffer": 0, "byteLength": 16}, {"buffer": 0, "byteOffset": 16, "byteLength": 2 * idx.len()}],
-            "accessors": [
-                {"bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR"},
-                {"bufferView": 1, "componentType": 5123, "count": idx.len(), "type": "SCALAR"},
-            ],
-            "meshes": [mesh],
-        });
-        let mut bin: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .collect();
-        bin.extend(idx.iter().flat_map(|i| i.to_le_bytes()));
-        let bytes = primase_gltf::glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
-        let path = std::env::temp_dir().join(format!("vbrecord-{name}-{}.glb", std::process::id()));
-        std::fs::write(&path, bytes).unwrap();
-        path
-    }
-
-    #[test]
-    fn only_the_vertices_a_primitive_draws_give_its_weights() {
-        // vertex 2 is not drawn (an overlay sharing its source primitive's vertices): its weight is not the
-        // primitive's, since Studio compiles only drawn vertices
-        let p = indexed_glb("idx", &[0, 1, 3]);
-        assert_eq!(weights_at(&p, 0).unwrap(), vec![0.1, 0.2, 0.4]);
-        let bad = indexed_glb("idx-bad", &[0, 1, 7]);
-        let e = weights_at(&bad, 0).unwrap_err().to_string();
-        assert!(e.contains("index 7 past its 4 vertices"), "{e}");
-        for p in [p, bad] {
-            let _ = std::fs::remove_file(p);
-        }
     }
 
     #[test]
