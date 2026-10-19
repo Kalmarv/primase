@@ -107,19 +107,20 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::prepare::SnapReskateMarkers::for_encoding(&o)?,
     ));
-    // the water as the writer drew it: the surfaces touching the scene's region, clipped 400 m beyond it (none with
-    // --no-water); without a region every surface as given (extent=all). --water-ocean: water materials as Studio's ocean
+    // the water as the writer drew it: the surfaces touching the scene's region (its content without one), clipped
+    // 400 m beyond it (none with --no-water). --water-ocean: water materials as Studio's ocean
     let region = w
         .resource::<primase_reskate::dialect::SkateScene>()
         .and_then(|s| s.region);
     let extent = if no_water {
-        Some(primase_reskate::prepare::WaterExtent::None)
+        primase_reskate::prepare::WaterExtent::None
+    } else if region.is_some() {
+        primase_reskate::prepare::WaterExtent::Region { margin: 400.0 }
     } else {
-        region.map(|_| primase_reskate::prepare::WaterExtent::Region { margin: 400.0 })
+        primase_reskate::prepare::WaterExtent::Content { margin: 400.0 }
     };
     passes.push(Box::new(primase_reskate::prepare::PrepareReskateWater::new(
-        extent.unwrap_or(primase_reskate::prepare::WaterExtent::All),
-        ocean,
+        extent, ocean,
     )?));
     // the pause-map picture as the writer made it: the scene's own when it names one, else its geometry drawn top-down
     // over its region (its content without one), --map-height pixels high (2160)

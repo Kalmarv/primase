@@ -1,11 +1,13 @@
-//! `prepare-reskate-water{extent=none|region|x0,y0,x1,y1, margin=M, ocean=stated|all}`: the skate water surfaces a
-//! map writes, and which water materials draw as Studio's ocean.
+//! `prepare-reskate-water{extent=none|all|region|content|x0,y0,x1,y1, margin=M, ocean=stated|all}`: the skate water
+//! surfaces a map writes, and which water materials draw as Studio's ocean.
 //!
 //! - **Extent** (required): `none` leaves every water surface out, `all` keeps every one as given; `region` keeps
-//!   those that touch the scene's
-//!   stated region (`skate.scene` region; an error without one), `x0,y0,x1,y1` those that touch that ground
-//!   rectangle; either way each kept outline is clipped to the rectangle grown by `margin` metres on every side (the
-//!   writer's former 400 m), and what is left with less than 1 m² is left out (counted). Outlines stay convex: a
+//!   those that touch the scene's stated region (`skate.scene` region; an error without one), `content` those that
+//!   touch the map's content as the writer measures it (the ground bounds of every placement's position, its
+//!   prototype's box corners and the world collision, whole metres out), `x0,y0,x1,y1` those that touch that ground
+//!   rectangle; each kept outline is clipped to
+//!   the rectangle grown by `margin` metres on every side, and what is left with less than 1 m² is left out
+//!   (counted). The writer used to do this itself over the region, else the content, with a 400 m margin. Outlines stay convex: a
 //!   convex outline clipped by a rectangle is convex; one the source gives not convex is kept and reported (the
 //!   writer draws an outline as a fan from its first corner).
 //! - **Ocean** (`stated` unless given): `all` makes every water-class skate material that states nothing draw as
@@ -18,11 +20,14 @@
 //! water surface it is given, as given (clipped only to the map's extent limit), and no material as ocean unless it
 //! says so.
 
+use std::path::Path;
+
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, World};
 
+use crate::build::{bounds, writer_placements};
 use crate::dialect::{MaterialClass, SkateMaterial, SkateScene, SkateWater};
-use crate::scene::WaterQuad;
+use crate::scene::{Scene, WaterQuad};
 
 /// Which water surfaces [`PrepareReskateWater`] keeps, and where it clips them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,6 +38,9 @@ pub enum WaterExtent {
     All,
     /// Those touching the scene's stated region, clipped to it grown by `margin` metres.
     Region { margin: f32 },
+    /// Those touching the map's content (placements and world collision) as the writer measures it, clipped to its
+    /// ground bounds grown by `margin` metres.
+    Content { margin: f32 },
     /// Those touching ground rectangle `[x0, y0, x1, y1]`, clipped to it grown by `margin` metres.
     Rect { rect: [f32; 4], margin: f32 },
 }
@@ -60,7 +68,7 @@ impl PrepareReskateWater {
     pub fn new(extent: WaterExtent, ocean: OceanMaterials) -> Result<PrepareReskateWater, String> {
         let margin = match extent {
             WaterExtent::None | WaterExtent::All => 0.0,
-            WaterExtent::Region { margin } => margin,
+            WaterExtent::Region { margin } | WaterExtent::Content { margin } => margin,
             WaterExtent::Rect { rect, margin } => {
                 let [x0, y0, x1, y1] = rect;
                 if !rect.iter().all(|v| v.is_finite()) || x0 >= x1 || y0 >= y1 {
@@ -85,8 +93,8 @@ impl PrepareReskateWater {
         self.ocean
     }
 
-    /// From its options, through [`PrepareReskateWater::new`]: `extent=none`, `extent=region` with `margin`, or
-    /// `x0,y0,x1,y1` with `margin`; `ocean=stated|all`.
+    /// From its options, through [`PrepareReskateWater::new`]: `extent=none`, `extent=all`, `extent=region` or
+    /// `extent=content` with `margin`, or `x0,y0,x1,y1` with `margin`; `ocean=stated|all`.
     pub fn from_options(o: &Options) -> Result<PrepareReskateWater, String> {
         const KEYS: [&str; 7] = ["extent", "margin", "x0", "y0", "x1", "y1", "ocean"];
         if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
@@ -98,24 +106,29 @@ impl PrepareReskateWater {
                 .transpose()
         };
         let margin = || -> Result<f32, String> {
-            num("margin")?
-                .ok_or_else(|| "margin is required (metres) with a region or a rectangle".to_owned())
+            num("margin")?.ok_or_else(|| {
+                "margin is required (metres) with a region, the content or a rectangle".to_owned()
+            })
         };
         let rect = [num("x0")?, num("y0")?, num("x1")?, num("y1")?];
         let extent = match (o.get("extent").map(String::as_str), rect) {
             (Some("none"), [None, None, None, None]) if !o.contains_key("margin") => WaterExtent::None,
             (Some("all"), [None, None, None, None]) if !o.contains_key("margin") => WaterExtent::All,
             (Some("region"), [None, None, None, None]) => WaterExtent::Region { margin: margin()? },
+            (Some("content"), [None, None, None, None]) => WaterExtent::Content { margin: margin()? },
             (None, [Some(x0), Some(y0), Some(x1), Some(y1)]) => WaterExtent::Rect {
                 rect: [x0, y0, x1, y1],
                 margin: margin()?,
             },
-            (Some(v), _) if !["none", "all", "region"].contains(&v) => {
-                return Err(format!("extent={v}: none, all or region (or x0, y0, x1, y1)"));
+            (Some(v), _) if !["none", "all", "region", "content"].contains(&v) => {
+                return Err(format!(
+                    "extent={v}: none, all, region or content (or x0, y0, x1, y1)"
+                ));
             }
             _ => {
                 return Err(
-                    "the extent is required: extent=none, extent=all, extent=region with margin, or x0, y0, x1, y1 with margin"
+                    "the extent is required: extent=none, extent=all, extent=region or extent=content with margin, \
+                     or x0, y0, x1, y1 with margin"
                         .into(),
                 );
             }
@@ -217,6 +230,10 @@ impl Pass for PrepareReskateWater {
                 o.insert("extent".into(), "region".into());
                 o.insert("margin".into(), margin.to_string());
             }
+            WaterExtent::Content { margin } => {
+                o.insert("extent".into(), "content".into());
+                o.insert("margin".into(), margin.to_string());
+            }
             WaterExtent::Rect { rect, margin } => {
                 for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(rect) {
                     o.insert(k.into(), v.to_string());
@@ -256,7 +273,7 @@ impl Pass for PrepareReskateWater {
             }
         }
         let water: Vec<Entity> = w.iter::<SkateWater>().map(|(e, _)| e).collect();
-        let (rect, margin) = match self.extent {
+        let (r, margin): ([f64; 4], f32) = match self.extent {
             WaterExtent::None => {
                 log.count("water surfaces left out: extent=none", water.len() as u64);
                 for e in water {
@@ -282,18 +299,25 @@ impl Pass for PrepareReskateWater {
                 let region = w
                     .resource::<SkateScene>()
                     .and_then(|s| s.region)
-                    .ok_or("extent=region: the scene states no region (give x0, y0, x1, y1)")?;
-                (region, margin)
+                    .ok_or("extent=region: the scene states no region (extent=content, or x0, y0, x1, y1)")?;
+                (region.map(f64::from), margin)
             }
-            WaterExtent::Rect { rect, margin } => (rect, margin),
+            WaterExtent::Content { margin } => {
+                if water.is_empty() {
+                    return Ok(());
+                }
+                // the writer's measure: the placements as it takes them (positions and box corners) and the soups
+                let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
+                (bounds(&s, &writer_placements(&s, 200.0)), margin)
+            }
+            WaterExtent::Rect { rect, margin } => (rect.map(f64::from), margin),
         };
         let grown = [
-            rect[0] - margin,
-            rect[1] - margin,
-            rect[2] + margin,
-            rect[3] + margin,
+            r[0] as f32 - margin,
+            r[1] as f32 - margin,
+            r[2] as f32 + margin,
+            r[3] as f32 + margin,
         ];
-        let r = rect.map(f64::from);
         for e in water {
             let s = w.get::<SkateWater>(e).expect("listed");
             let height = s.height.unwrap_or(0.0) as f32;
@@ -303,7 +327,7 @@ impl Pass for PrepareReskateWater {
                 || f64::from(q.y1) <= r[1]
                 || f64::from(q.y0) >= r[3]);
             if !touches {
-                log.count("water surfaces left out: outside the region", 1);
+                log.count("water surfaces left out: outside the extent", 1);
                 w.despawn(e);
                 continue;
             }
@@ -320,7 +344,7 @@ impl Pass for PrepareReskateWater {
                 continue;
             }
             if cs != q.corners {
-                log.count("water surfaces clipped to the region and its margin", 1);
+                log.count("water surfaces clipped to the extent and its margin", 1);
             }
             let s = w.get_mut::<SkateWater>(e).expect("listed");
             s.corners = cs.into_iter().map(|(x, y)| [x, y]).collect();
@@ -387,7 +411,7 @@ mod tests {
         );
         assert!(!w.is_alive(beyond));
         assert!(w.is_alive(sliver), "1.1 m2 inside: kept");
-        assert_eq!(log.counts["water surfaces left out: outside the region"], 1);
+        assert_eq!(log.counts["water surfaces left out: outside the extent"], 1);
         let tiny = water(
             &mut w,
             &[[99.0, 20.0], [104.0, 20.0], [104.0, 20.1], [99.0, 20.1]],
@@ -402,6 +426,59 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         assert_eq!(w.iter::<SkateWater>().count(), 0);
+    }
+
+    /// extent=content measures the map as the writer does: world collision over east 0..512, north 0..256 (no
+    /// placements) gives the bounds 0..513 x 0..257 (whole metres out), grown by 10. A strip from east -50 to 50 is cut
+    /// at -10; one from east 520 does not touch the bounds and is left out.
+    #[test]
+    fn the_content_is_measured_as_the_writer_measures_it() {
+        let mut w = World::new();
+        let mut surfaces = primase_core::Surfaces::default();
+        let concrete = surfaces.index("concrete").unwrap();
+        w.insert_resource(surfaces);
+        let ground = w.spawn();
+        let mut c = primase_core::Collision::default();
+        c.extend(
+            &[
+                [0.0, 0.0, 0.0],
+                [512.0, 0.0, 0.0],
+                [0.0, 0.0, -256.0],
+                [512.0, 0.0, -256.0],
+            ],
+            &[[0, 1, 2], [2, 1, 3]],
+            concrete,
+            |p| p,
+        );
+        w.insert(ground, c);
+        crate::prepare::raise_skate(
+            &mut w,
+            &crate::prepare::RaiseOptions {
+                name: "content".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(w.resource::<SkateScene>().unwrap().region.is_none());
+        let strip = water(
+            &mut w,
+            &[[-50.0, 100.0], [50.0, 100.0], [50.0, 120.0], [-50.0, 120.0]],
+        );
+        let east = water(
+            &mut w,
+            &[[520.0, 0.0], [600.0, 0.0], [600.0, 50.0], [520.0, 50.0]],
+        );
+        let mut log = PassLog::default();
+        PrepareReskateWater::new(WaterExtent::Content { margin: 10.0 }, OceanMaterials::Stated)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert_eq!(
+            w.get::<SkateWater>(strip).unwrap().corners,
+            [[-10.0, 100.0], [50.0, 100.0], [50.0, 120.0], [-10.0, 120.0]]
+        );
+        assert!(!w.is_alive(east));
+        assert_eq!(log.counts["water surfaces left out: outside the extent"], 1);
     }
 
     /// A rectangle needs no scene region, extent=region does; a non-convex outline is kept and reported.
@@ -497,6 +574,7 @@ mod tests {
             o(&[("extent", "none"), ("ocean", "stated")]),
             o(&[("extent", "all"), ("ocean", "all")]),
             o(&[("extent", "region"), ("margin", "400"), ("ocean", "all")]),
+            o(&[("extent", "content"), ("margin", "400"), ("ocean", "stated")]),
             o(&[
                 ("x0", "0"),
                 ("y0", "0"),
@@ -512,6 +590,7 @@ mod tests {
             o(&[]),
             o(&[("extent", "region")]),
             o(&[("extent", "region"), ("margin", "-1")]),
+            o(&[("extent", "content")]),
             o(&[("extent", "none"), ("margin", "5")]),
             o(&[("extent", "sea")]),
             o(&[
