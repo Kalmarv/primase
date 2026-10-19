@@ -85,13 +85,11 @@ pub(super) fn prepare(s: &Scene, placements: &mut Vec<Placement>, a: &BuildOptio
         groups.entry(p.proto).or_default().push(i);
     }
     for proto in &s.protos {
-        let (Some(indices), Some(glb)) = (groups.get(&proto.key), &proto.glb) else {
+        // its geometry as loaded (core.mesh): a prototype read from a GLB and one made in memory alike
+        let (Some(indices), Some(prims)) = (groups.get(&proto.key), proto.prims()) else {
             continue;
         };
-        let parts: Vec<_> = scene::read_glb(glb, proto.mesh)?
-            .into_iter()
-            .map(|p| p.pos)
-            .collect();
+        let parts: Vec<_> = prims.iter().map(|p| p.pos.clone()).collect();
         for &i in indices {
             bounds[i] = Some(spans(&parts, &placements[i]));
         }

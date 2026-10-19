@@ -18,7 +18,8 @@ readers:
 writers:
   web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--plain]
-  reskate  [--name N] [--blend-objects N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate\"; a spawn from place-spawn at --select)";
+  reskate  [--name N] [--blend-objects N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate,
+           cap-textures{max=256,normals=box}, prepare-reskate-textures\"; a spawn from place-spawn at --select)";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -176,8 +177,10 @@ mod tests {
                      lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, \
                      lower-gta-water, normalize-normals"
                 );
-                let reskate =
-                    format!("{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate");
+                let reskate = format!(
+                    "{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate, \
+                     cap-textures{{max=256,normals=box}}, prepare-reskate-textures, budget-reskate-textures{{max=64}}"
+                );
                 pipelines.push(format!("{select}, {passes}"));
                 pipelines.extend([select, passes, reskate]);
             }

@@ -38,6 +38,16 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the scene's name has no default
     reg.register_requiring("raise-skate", prepare::raise_skate_pass, &[("name", "n")]);
     dialect::lower::register(reg);
+    // the budget is the program's number: no default
+    reg.register_requiring(
+        "budget-reskate-textures",
+        prepare::budget_reskate_textures,
+        &[("max", "1")],
+    );
+    reg.register("prepare-reskate-textures", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(prepare::PrepareReskateTextures)),
+    });
     reg.register("lower-layered-reskate", layered::lower_layered_reskate);
     reg.register("lower-tint-reskate", |o| {
         let mut pass = tint::LowerTintReskate::default();

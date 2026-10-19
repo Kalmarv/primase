@@ -34,8 +34,6 @@ pub struct WriterOptions {
     pub band_rows: i32,
     pub min_instances: i64,
     pub min_instance_tris: i64,
-    pub tex_cap: u32,
-    pub tex_caps: Option<String>,
     pub overlay_step: f32,
     /// The most objects the writer adds to draw blend-chain overlays in chain order (one per tile, dominant axis and
     /// chain rank: [`crate::blend_order`]); past it a tile's chain overlays stay in its mesh, in an unstable order.
@@ -56,8 +54,6 @@ pub struct WriterOptions {
     pub light_prefix: String,
     pub streaming_distances: [f64; 3],
     pub max_render_edge: f32,
-    pub tex_budget: i32,
-    pub tex_aux_weight: f32,
     pub trainer_note: Option<String>,
     pub warnings: Vec<String>,
     pub pause_picture: Option<(usize, usize, Vec<u8>, [f64; 4])>,
@@ -104,7 +100,6 @@ pub struct WriteResult {
     pub grind_length: f32,
     pub trainer_spots: usize,
     pub travel_points: usize,
-    pub budget_flattened: i64,
     pub warnings: Vec<String>,
 }
 
@@ -476,17 +471,6 @@ fn record_lifts(r: &mut WriteResult, file: String, lifts: Vec<Vec<f32>>) {
     }
 }
 
-fn area(pos: &[f32], idx: &[u32]) -> f64 {
-    let mut s = 0f64;
-    for t in idx.as_chunks::<3>().0 {
-        let a = Vec3::at(pos, t[0] as usize * 3);
-        let b = Vec3::at(pos, t[1] as usize * 3);
-        let c = Vec3::at(pos, t[2] as usize * 3);
-        s += f64::from((b - a).cross(c - a).length()) * 0.5;
-    }
-    s
-}
-
 /// What `tiles` needs from the scene: the prototypes of a band, and a part's material for a variant row.
 pub trait MeshSource {
     fn load(&mut self, band: &[Placement], meshes: &mut HashMap<u32, SrcMesh>, ctx: &mut Ctx) -> Result<()>;
@@ -511,7 +495,6 @@ pub struct MapWriter {
     pm: PauseMap,
     objects: Vec<MapObject>,
     mat_tris: HashMap<usize, i64>,
-    tile_area: BTreeMap<(i32, i32), HashMap<usize, f64>>,
     mat_used: BTreeSet<usize>,
     prop_parts: PropParts,
     water_parts: PropParts,
@@ -532,38 +515,18 @@ struct Proto {
     origins: Vec<Option<[f32; 3]>>,
     /// Each primitive's local box (`None`: no positions), for the Studio cells a placement meets.
     boxes: Vec<Option<(Vec3, Vec3)>>,
-    area: Option<HashMap<usize, f64>>,
 }
 
 const APRON: f32 = 30.0;
 
 impl MapWriter {
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: reads a texture caps file; the caller should pass the caps"
-    )]
     pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
         let off = Vec3::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
         let pm = match &o.pause_picture {
             Some((w, h, rgba, b)) => PauseMap::given(*w, *h, rgba, *b, off),
             None => PauseMap::new(o.region, off, o.map_height),
         };
-        let mut tex = TexLib::new(tex_dir, o.tex_cap);
-        if let Some(caps) = &o.tex_caps {
-            let text = std::fs::read(caps).map_err(|source| crate::Error::Io {
-                path: caps.into(),
-                source,
-            })?;
-            let v: serde_json::Value =
-                serde_json::from_slice(&text).map_err(|e| crate::Error::Scene(format!("{caps}: {e}")))?;
-            if let Some(m) = v.get("caps").and_then(|c| c.as_object()) {
-                for (k, c) in m {
-                    tex.cap_by_name
-                        .insert(k.to_lowercase(), c.as_i64().unwrap_or(0) as u32);
-                }
-            }
-        }
+        let tex = TexLib::new(tex_dir);
         Ok(MapWriter {
             piece_log: o.piece_log.then(Vec::new),
             o,
@@ -577,7 +540,6 @@ impl MapWriter {
             pm,
             objects: Vec::new(),
             mat_tris: HashMap::new(),
-            tile_area: BTreeMap::new(),
             mat_used: BTreeSet::new(),
             prop_parts: BTreeMap::new(),
             water_parts: BTreeMap::new(),
@@ -1069,8 +1031,6 @@ impl MapWriter {
             count: 0,
             tree: m.is_tree,
         });
-        let area =
-            (self.o.tex_budget > 0).then(|| parts.iter().map(|(k, a)| (*k, area(&a.pos, &a.idx))).collect());
         let stem = format!("p_{}", key.iter().map(|b| format!("{b:02x}")).collect::<String>());
         self.r.proto_list[info].file = format!("{stem}.glb");
         let mats = &self.ctx.mats;
@@ -1108,7 +1068,6 @@ impl MapWriter {
                 .collect(),
             origins,
             boxes,
-            area,
         })
     }
 
@@ -1144,7 +1103,6 @@ impl MapWriter {
             r[2] as f32 + APRON,
             r[3] as f32 + APRON,
         ];
-        let budget = o.tex_budget > 0;
         let mut colours: HashMap<usize, u32> = HashMap::new();
         for (band, band_sels) in per_band.iter().enumerate() {
             if band_sels.is_empty() {
@@ -1171,7 +1129,6 @@ impl MapWriter {
                 let mut soups: BTreeMap<(i32, i32), PropSoup> = BTreeMap::new();
                 let mut water_soups: BTreeMap<(i32, i32), PropSoup> = BTreeMap::new();
                 let mut soup_order = Vec::new();
-                let mut inst_area: Option<HashMap<usize, f64>> = budget.then(HashMap::new);
                 // a total order that every part shares: by content, not the scene's prototype key (an identity
                 // within one part only), then everything of the placement that reaches the output (position, basis,
                 // variant row, flags, parts left off); placements equal in all of these write the same thing in either
@@ -1298,32 +1255,6 @@ impl MapWriter {
                                 let pc = self.map_colour(&mut colours, mat);
                                 if pc != 0 {
                                     self.pm.draw(&p.pos, &p.idx, s.pos + off, s.ex, s.ey, s.ez, pc);
-                                }
-                            }
-                        }
-                        let pr = &protos[&key];
-                        if let (Some(pa), Some(ia)) = (&pr.area, &mut inst_area) {
-                            let lx = s.ex.length();
-                            if (s.ey.length() - lx).abs() <= 1e-4 * lx
-                                && (s.ez.length() - lx).abs() <= 1e-4 * lx
-                            {
-                                for (k, v) in pa {
-                                    *ia.entry(*k).or_default() += v * f64::from(lx) * f64::from(lx);
-                                }
-                            } else {
-                                for p in &m.parts {
-                                    let mat = source.material_of(p, row, &mut self.ctx)?;
-                                    let vv = |i: u32| {
-                                        s.ex * p.pos[i as usize * 3]
-                                            + s.ey * p.pos[i as usize * 3 + 1]
-                                            + s.ez * p.pos[i as usize * 3 + 2]
-                                    };
-                                    let mut ar = 0f64;
-                                    for t in p.idx.as_chunks::<3>().0 {
-                                        let a0 = vv(t[0]);
-                                        ar += f64::from((vv(t[1]) - a0).cross(vv(t[2]) - a0).length()) * 0.5;
-                                    }
-                                    *ia.entry(mat).or_default() += ar;
                                 }
                             }
                         }
@@ -1469,7 +1400,7 @@ impl MapWriter {
                         if off.z != 0.0 { origin.z + off.z } else { origin.z },
                     );
                     // the chain overlays' materials and triangles count as the tile's, whichever form finish takes
-                    let mut chained: BTreeMap<usize, (i64, i64, f64)> = BTreeMap::new();
+                    let mut chained: BTreeMap<usize, (i64, i64)> = BTreeMap::new();
                     for (&k, a) in &parts {
                         if self
                             .ctx
@@ -1479,14 +1410,7 @@ impl MapWriter {
                             .and_then(|v| v.chain_rank())
                             .is_some()
                         {
-                            chained.insert(
-                                k,
-                                (
-                                    (a.idx.len() / 3) as i64,
-                                    (a.pos.len() / 3) as i64,
-                                    area(&a.pos, &a.idx),
-                                ),
-                            );
+                            chained.insert(k, ((a.idx.len() / 3) as i64, (a.pos.len() / 3) as i64));
                         }
                     }
                     let tile = format!("t_{tx}_{ty}");
@@ -1501,31 +1425,22 @@ impl MapWriter {
                     let obs = self.write_mesh(&tile, &pr, at)?;
                     self.objects.extend(obs);
                     to.parts = pr.len();
-                    for (&k, &(t, v, ar)) in &chained {
+                    for (&k, &(t, v)) in &chained {
                         to.tris += t;
                         to.verts += v;
                         *self.mat_tris.entry(k).or_default() += t;
                         self.mat_used.insert(k);
-                        if let Some(ia) = &mut inst_area {
-                            *ia.entry(k).or_default() += ar;
-                        }
                     }
                     for (k, a) in &parts {
                         to.tris += (a.idx.len() / 3) as i64;
                         to.verts += (a.pos.len() / 3) as i64;
                         *self.mat_tris.entry(*k).or_default() += (a.idx.len() / 3) as i64;
                         self.mat_used.insert(*k);
-                        if let Some(ia) = &mut inst_area {
-                            *ia.entry(*k).or_default() += area(&a.pos, &a.idx);
-                        }
                     }
                     self.r.merged_tris += to.tris;
                     if let Some(c) = chain {
                         self.pending_chains.insert((ty, tx), c);
                     }
-                }
-                if let Some(ia) = inst_area {
-                    self.tile_area.insert((tx, ty), ia);
                 }
                 if to.mesh.is_some() || to.instances > 0 {
                     tiles.push(to);
@@ -1873,98 +1788,6 @@ impl MapWriter {
         Ok(Some(ob))
     }
 
-    /// --tex-budget: the colour textures covering the least area become a shared white texture with their mean.
-    fn budget(&mut self) {
-        let used: Vec<usize> = self
-            .ctx
-            .mats
-            .list
-            .iter()
-            .filter(|m| self.mat_used.contains(&m.id))
-            .map(|m| m.id)
-            .collect();
-        let mut area: HashMap<usize, f64> = HashMap::new();
-        let mut tiles: Vec<_> = self.tile_area.iter().collect();
-        tiles.sort_by(|a, b| a.0.1.cmp(&b.0.1).then(a.0.0.cmp(&b.0.0)));
-        for (_, kv) in tiles {
-            let mut items: Vec<(&usize, &f64)> = kv.iter().collect();
-            items.sort_by_key(|(m, _)| **m);
-            for (m, a) in items {
-                *area.entry(*m).or_default() += a;
-            }
-        }
-        let mut weight: HashMap<i32, f64> = HashMap::new();
-        let mut order: Vec<i32> = Vec::new();
-        let mut add = |t: i32, v: f64, weight: &mut HashMap<i32, f64>| {
-            if t >= 0 {
-                if !weight.contains_key(&t) {
-                    order.push(t);
-                }
-                *weight.entry(t).or_default() += v;
-            }
-        };
-        // materials in first-use order, ties between textures by their first registration: never by name, since
-        // names end in a content hash
-        for &id in &used {
-            let m = self.ctx.mats.by_id(id);
-            let a = area.get(&id).copied().unwrap_or(0.0);
-            let (t, n, k) = (m.tex, m.normal, m.mask);
-            add(t, a, &mut weight);
-            add(n, a * f64::from(self.o.tex_aux_weight), &mut weight);
-            add(k, a * f64::from(self.o.tex_aux_weight), &mut weight);
-        }
-        if weight.len() <= self.o.tex_budget as usize {
-            return;
-        }
-        let files = self.ctx.tex.all().to_vec();
-        let mut ranked: Vec<i32> = order.clone();
-        ranked.sort_by(|a, b| {
-            weight[b]
-                .partial_cmp(&weight[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cmp(b))
-        });
-        let keep: BTreeSet<i32> = ranked.into_iter().take(self.o.tex_budget as usize - 1).collect();
-        let mut white = -1;
-        for id in used {
-            let m = self.ctx.mats.list[id].clone();
-            let mut m2 = m.clone();
-            if m.normal >= 0 && !keep.contains(&m.normal) {
-                m2.normal = -1;
-            }
-            if m.mask >= 0 && !keep.contains(&m.mask) {
-                m2.mask = -1;
-            }
-            if m.tex >= 0 && !keep.contains(&m.tex) {
-                let mean = files[m.tex as usize].mean;
-                let lin = |c: u32| {
-                    let v = c as f32 / 255.0;
-                    if !m.srgb {
-                        v
-                    } else {
-                        primase_image::srgb_to_linear_f32(v)
-                    }
-                };
-                m2.base_factor = Some([
-                    lin((mean >> 16) & 255),
-                    lin((mean >> 8) & 255),
-                    lin(mean & 255),
-                    1.0,
-                ]);
-                if white < 0 {
-                    white = self.ctx.tex.register_flat(0xFFFFFF, 255);
-                }
-                m2.tex = white;
-                self.r.budget_flattened += 1;
-            }
-            self.ctx.mats.list[id] = m2;
-        }
-        self.r.warnings.push(format!(
-            "texture budget {}: {} materials flattened to their mean colour",
-            self.o.tex_budget, self.r.budget_flattened
-        ));
-    }
-
     fn material_json(&self, m: &Material) -> MaterialJson {
         let files = self.ctx.tex.all();
         if m.ocean.unwrap_or(self.o.water_ocean) && m.class == VClass::Water {
@@ -2113,13 +1936,10 @@ impl MapWriter {
     }
 
     fn write_index(&mut self) -> Result<()> {
-        let o = &self.o;
         let mut out_tex: Vec<&crate::texture::OutTexture> =
             self.ctx.tex.all().iter().filter(|t| !t.removed).collect();
         out_tex.sort_by(|a, b| a.file.cmp(&b.file));
         let index = TexturesIndex {
-            tex_cap: o.tex_cap,
-            tex_caps: o.tex_caps.as_deref().unwrap_or(""),
             textures: out_tex
                 .iter()
                 .map(|t| TextureEntry {
@@ -2286,9 +2106,6 @@ impl MapWriter {
 
         // textures
         self.ctx.tex.finish();
-        if o.tex_budget > 0 {
-            self.budget();
-        }
         let used: BTreeSet<i32> = self
             .mat_used
             .iter()

@@ -1,8 +1,11 @@
 //! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`, [`primase_reskate::build`]) of the whole
 //! selection as one part, built from the world in memory. The part must have been through the passes the map needs
-//! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>,
-//! spawn=centre}` (the skate dialect, a spawn at the centre of the placements snapped to the ground) and
-//! `lower-layered-reskate` (blends as decal overlays); the target refuses an unlowered blend.
+//! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>}`
+//! (the skate dialect; a spawn comes from `place-spawn` at selection), `lower-layered-reskate` (blends as decal
+//! overlays; the target refuses an unlowered blend), then the texture choices: `cap-textures{max=N}` (the writer
+//! writes textures at the size they come; the old writer's own cap was `cap-textures{max=256,normals=box}`) and
+//! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), and a
+//! budget if wanted (`budget-reskate-textures{max=N}`).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
@@ -15,6 +18,8 @@ use crate::convert::Result;
 struct Reskate {
     options: BuildOptions,
     report: Report,
+    /// What the map writer did not write, not yet taken by the conversion.
+    notices: Vec<primase_core::convert::Notice>,
 }
 
 /// `[--name N] [--blend-objects N] [--min-instances N]`
@@ -68,6 +73,7 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         Box::new(Reskate {
             options,
             report: Report::new(),
+            notices: Vec::new(),
         }),
     ))
 }
@@ -97,7 +103,18 @@ impl Writer for Reskate {
         ));
         self.report
             .push(("blend order".into(), format!("{:?}", report.blend)));
+        for (what, n) in report.unsupported {
+            self.notices.push(primase_core::convert::Notice::new(
+                "reskate",
+                primase_core::convert::NoticeKind::Unsupported,
+                format!("{what}: not written"),
+                n,
+            ));
+        }
         Ok(())
+    }
+    fn notices(&mut self) -> Vec<primase_core::convert::Notice> {
+        std::mem::take(&mut self.notices)
     }
     fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
         Ok(self.report.into())

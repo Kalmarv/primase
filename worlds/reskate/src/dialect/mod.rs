@@ -513,7 +513,14 @@ impl Component for SkateMaterial {
     }
 }
 
+/// A colour factor a material's base texture is drawn with (linear RGBA), written as Studio's base colour factor: the
+/// mean colour a texture budget left a material with in place of its texture (`budget-reskate-textures`). Not part of
+/// scene-interchange v1 (its writer leaves it out).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SkateBaseFactor(pub [f32; 4]);
+
 shown!(
+    SkateBaseFactor = "skate.base_factor",
     SkateTexture = "skate.texture",
     SkatePrototype = "skate.prototype",
     SkateForm = "skate.form",

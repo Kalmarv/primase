@@ -27,9 +27,6 @@ pub struct BuildOptions {
     /// The map folder is `out_root/name`.
     pub out_root: PathBuf,
     pub name: Option<String>,
-    pub tex_cap: u32,
-    /// The caps file as given (its text is written into textures_index.json).
-    pub tex_caps: Option<String>,
     pub tile: f32,
     pub min_instances: i64,
     pub min_instance_tris: i64,
@@ -48,7 +45,6 @@ pub struct BuildOptions {
     pub water_ocean: bool,
     pub lights_max_per_cell: usize,
     pub max_render_edge: Option<f32>,
-    pub tex_budget: Option<i32>,
     pub min_height: Option<f32>,
     pub stub_below: Option<f32>,
     pub floor: Option<f32>,
@@ -64,8 +60,6 @@ impl Default for BuildOptions {
         BuildOptions {
             out_root: PathBuf::from("work/map"),
             name: None,
-            tex_cap: 256,
-            tex_caps: None,
             tile: 200.0,
             min_instances: 3,
             min_instance_tris: 150,
@@ -79,7 +73,6 @@ impl Default for BuildOptions {
             water_ocean: false,
             lights_max_per_cell: 0,
             max_render_edge: None,
-            tex_budget: None,
             min_height: None,
             stub_below: None,
             floor: None,
@@ -108,6 +101,10 @@ pub struct BuildReport {
     pub lifts: BTreeMap<String, Vec<Vec<f32>>>,
     /// The blend-chain overlays as objects of their own.
     pub blend: crate::blend_order::Stats,
+    /// What the writer noticed (`map.json`'s warnings, then `stats.json`'s).
+    pub warnings: Vec<String>,
+    /// What the world holds that the writer does not write, by what, with counts.
+    pub unsupported: Vec<(String, u64)>,
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
@@ -128,7 +125,7 @@ fn writer_placements(s: &Scene, tile: f32, region: Option<[f64; 4]>) -> Vec<Plac
                 no_collision: p.no_collision,
                 no_instance: p.split,
                 index: pi,
-                split_whole: p.split && proto.glb.is_some(),
+                split_whole: p.split && proto.prims.is_some(),
                 ..Placement::default()
             };
             pl.outside = match p.clip {
@@ -373,7 +370,7 @@ fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
         }
     }
     for p in &s.protos {
-        if let Some(prims) = p.prims()? {
+        if let Some(prims) = p.prims() {
             for (i, prim) in prims.iter().enumerate() {
                 if prim.nrm.is_none() {
                     out.push(format!(
@@ -391,7 +388,7 @@ fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
     for (p, placed) in s.protos.iter().zip(placed) {
         if !placed {
             out.push(format!("prototype '{}' is not placed", p.id));
-        } else if p.glb.is_none() && p.prims.is_none() {
+        } else if p.prims.is_none() {
             out.push(format!(
                 "prototype '{}' has no geometry; its placements draw nothing",
                 p.id
@@ -474,8 +471,6 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         band_rows: 8,
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
-        tex_cap: a.tex_cap,
-        tex_caps: a.tex_caps.clone(),
         overlay_step: a.overlay_step,
         blend_objects: a.blend_objects,
         blend_grid: a.blend_grid,
@@ -489,8 +484,6 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
         max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),
-        tex_budget: a.tex_budget.unwrap_or(s.tex_budget),
-        tex_aux_weight: s.tex_aux_weight,
         trainer_note: s.trainer_note.clone(),
         warnings: s.warnings.clone(),
         pause_picture: None,
@@ -607,6 +600,8 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         lights_without_tangent: r.lights_without_tangent,
         lifts: r.lifts.clone(),
         blend: r.blend.clone(),
+        warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
+        unsupported: s.unsupported.clone(),
     })
 }
 
@@ -658,7 +653,6 @@ fn stats_json(
             collision_hulls: col.hulls,
             materials: r.materials,
             textures: kept.len(),
-            textures_flattened_by_budget: r.budget_flattened,
             texture_file_bytes: r.tex_bytes,
             texture_pixels: r.tex_pixels,
             mesh_file_bytes: r.mesh_bytes,

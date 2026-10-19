@@ -1,6 +1,6 @@
-//! The writer's two geometry inputs agree: a scene built from its prototypes' `core.mesh` (each GLB loaded into the
-//! world first) writes the same files as the same scene built from the GLB files; a prototype without geometry that
-//! collides is written as collision. A synthetic scene, made here.
+//! The writer takes geometry as `core.mesh`: a scene read from its folder and loaded (`interchange::load`) writes the
+//! same files as the world it was written from, and one read but not loaded is refused with its reason; a prototype
+//! without geometry that collides is written as collision. A synthetic scene, made here.
 
 #![allow(clippy::unwrap_used)]
 
@@ -120,6 +120,19 @@ fn world() -> World {
     w
 }
 
+/// A spawn snapped to the ground at (east, north) (the writer makes none of its own).
+fn spawn_at(w: &mut World, at: [f32; 2]) {
+    let spawn = w.spawn();
+    w.insert(
+        spawn,
+        primase_core::Marker {
+            kind: "spawn".into(),
+            ground: Some(at),
+            yaw: None,
+        },
+    );
+}
+
 fn files(root: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut out = BTreeMap::new();
     let mut stack = vec![root.to_owned()];
@@ -138,8 +151,9 @@ fn files(root: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 #[test]
-fn core_mesh_input_writes_what_the_file_input_writes() {
+fn a_loaded_scene_writes_what_its_world_writes() {
     let mut w = world();
+    spawn_at(&mut w, [0.0, 0.0]);
     primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
@@ -153,16 +167,34 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
     primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
-    let build = |from_mesh: bool| {
-        let out_root = tmp(if from_mesh { "mesh" } else { "file" });
-        let mut w = World::new();
-        primase_reskate::interchange::read(&scene, &mut w).unwrap();
-        if from_mesh {
-            let r = primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
-            assert_eq!(r.meshes, 1);
-        }
+    // read but not loaded: the writer reads no GLB
+    let mut unloaded = World::new();
+    primase_reskate::interchange::read(&scene, &mut unloaded).unwrap();
+    let e = primase_reskate::build(
+        &unloaded,
+        &scene,
+        &BuildOptions {
+            out_root: tmp("unloaded"),
+            ..BuildOptions::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("has no core.mesh"), "{e}");
+    let build = |source: Option<&World>| {
+        let out_root = tmp(if source.is_some() { "world" } else { "loaded" });
+        let mut read = World::new();
+        let w = match source {
+            Some(w) => w,
+            None => {
+                primase_reskate::interchange::read(&scene, &mut read).unwrap();
+                let r = primase_reskate::interchange::load(&scene, &mut read).unwrap();
+                assert_eq!(r.meshes.meshes, 1);
+                &read
+            }
+        };
         primase_reskate::build(
-            &w,
+            w,
             &scene,
             &BuildOptions {
                 out_root: out_root.clone(),
@@ -179,18 +211,18 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
         }
         f
     };
-    let (by_file, by_mesh) = (build(false), build(true));
+    let (from_world, loaded) = (build(Some(&w)), build(None));
     assert!(
-        by_file.keys().any(|k| k.ends_with(".glb")),
+        from_world.keys().any(|k| k.ends_with(".glb")),
         "{:?}",
-        by_file.keys()
+        from_world.keys()
     );
     assert_eq!(
-        by_file.keys().collect::<Vec<_>>(),
-        by_mesh.keys().collect::<Vec<_>>()
+        from_world.keys().collect::<Vec<_>>(),
+        loaded.keys().collect::<Vec<_>>()
     );
-    for (name, bytes) in &by_file {
-        assert!(bytes == &by_mesh[name], "{name} differs");
+    for (name, bytes) in &from_world {
+        assert!(bytes == &loaded[name], "{name} differs");
     }
 }
 
@@ -224,6 +256,7 @@ fn a_spawn_over_no_ground_is_refused() {
         primase_reskate::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
         primase_reskate::interchange::read(&scene, &mut w).unwrap();
+        primase_reskate::interchange::load(&scene, &mut w).unwrap();
         let out_root = tmp(&format!("{tag}-out"));
         primase_reskate::build(
             &w,
@@ -250,6 +283,7 @@ fn a_spawn_over_no_ground_is_refused() {
 #[test]
 fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let mut w = world();
+    spawn_at(&mut w, [0.0, 0.0]);
     let fence = w.spawn();
     w.insert(fence, Name("fence".into()));
     let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
@@ -286,6 +320,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
+    primase_reskate::interchange::load(&scene, &mut w).unwrap();
     let out_root = tmp("collides-out");
     primase_reskate::build(
         &w,

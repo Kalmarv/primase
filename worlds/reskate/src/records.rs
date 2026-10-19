@@ -197,11 +197,10 @@ pub struct SpawnJson {
     pub yaw: f64,
 }
 
-/// `textures_index.json`.
+/// `textures_index.json`: each texture file as written and what it was made from (the texture as the writer received
+/// it: a cap is a pass, `cap-textures`, before the writer).
 #[derive(Debug, Serialize)]
 pub struct TexturesIndex<'a> {
-    pub tex_cap: u32,
-    pub tex_caps: &'a str,
     pub textures: Vec<TextureEntry<'a>>,
 }
 
@@ -313,7 +312,6 @@ pub struct Totals {
     pub collision_hulls: i64,
     pub materials: usize,
     pub textures: usize,
-    pub textures_flattened_by_budget: i64,
     pub texture_file_bytes: u64,
     pub texture_pixels: u64,
     pub mesh_file_bytes: u64,

@@ -13,8 +13,8 @@ use crate::dialect::{
 };
 use crate::hash::skate_fnv_string;
 use primase_core::{
-    Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
-    TextureFile, Tile, Transform, TransformKind, World,
+    Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream, Tile,
+    Transform, TransformKind, World,
 };
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -114,20 +114,18 @@ pub struct PartDef {
 pub struct ProtoDef {
     pub index: usize,
     pub id: String,
-    /// The legacy input: the prototype's GLB file, read when its geometry is needed and it has no `core.mesh`.
-    pub glb: Option<PathBuf>,
-    /// The prototype's `core.mesh` primitives, the writer's input: they take precedence over `glb`.
+    /// The prototype's `core.mesh` primitives, the writer's input (a prototype's GLB is loaded before:
+    /// `interchange::load`); `None`: no geometry.
     pub prims: Option<Vec<GlbPrim>>,
     pub name: String,
     pub col_mode: CollisionMode,
-    pub mesh: u32,
     pub key: u32,
     pub foliage: bool,
     pub ground: bool,
     pub collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)>,
     pub parts: Vec<PartDef>,
-    /// Local box (glTF space): the `core.mesh` positions, else the GLB's POSITION accessors, else (a prototype that
-    /// collides without drawing) its collision's; `None`: neither.
+    /// Local box (glTF space): the `core.mesh` positions, else (a prototype that collides without drawing) its
+    /// collision's; `None`: neither.
     pub min: Option<[f32; 3]>,
     pub max: Option<[f32; 3]>,
 }
@@ -313,6 +311,8 @@ pub struct Scene {
     pub materials: HashMap<String, SkateMaterial>,
     /// The materials with `reskate.vertex_blend` (their parts carry a weight per vertex), by key.
     pub vertex_blend: BTreeMap<String, VertexBlend>,
+    /// Materials' base colour factors (`skate.base_factor`), by material key.
+    pub base_factors: BTreeMap<String, [f32; 4]>,
     pub protos: Vec<ProtoDef>,
     pub placements: Vec<ScenePlacement>,
     pub soups: Vec<SoupDef>,
@@ -321,8 +321,6 @@ pub struct Scene {
     pub water: Vec<WaterQuad>,
     pub markers: Vec<Marker>,
     pub streaming: Option<[f64; 3]>,
-    pub tex_budget: i32,
-    pub tex_aux_weight: f32,
     pub min_height: f32,
     pub stub_below: f32,
     pub floor: f32,
@@ -336,6 +334,8 @@ pub struct Scene {
     pub labels: HashMap<String, String>,
     pub material_keys_by_entity: HashMap<primase_core::Entity, String>,
     pub report_warnings: Vec<String>,
+    /// What the world holds that the writer does not write, by what, with counts (also among the warnings).
+    pub unsupported: Vec<(String, u64)>,
 }
 
 fn class(c: MaterialClass) -> VClass {
@@ -409,61 +409,6 @@ fn snap_of(s: &Option<Snap>, no_height: bool) -> SnapSpec {
     }
 }
 
-/// A prototype's local box as the reference reader takes it: per primitive the POSITION accessor's min/max when it
-/// has both, else the box of its positions; then the box of the primitives.
-fn proto_bounds(g: &primase_gltf::Gltf, mesh: usize) -> Result<([f32; 3], [f32; 3])> {
-    let j = g.json();
-    let m = g.read_mesh(mesh).map_err(|e| Error::Scene(e.to_string()))?;
-    let prims = j
-        .get("meshes")
-        .and_then(|v| v.get(mesh))
-        .and_then(|v| v.get("primitives"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let (mut mn, mut mx) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for (pi, p) in prims.iter().enumerate() {
-        let acc = p
-            .get("attributes")
-            .and_then(|a| a.get("POSITION"))
-            .and_then(|a| a.as_u64())
-            .and_then(|a| j.get("accessors").and_then(|v| v.get(a as usize)));
-        let get = |k: &str| -> Option<[f32; 3]> {
-            let v = acc?.get(k)?.as_array()?;
-            if v.len() != 3 {
-                return None;
-            }
-            Some([
-                v[0].as_f64()? as f32,
-                v[1].as_f64()? as f32,
-                v[2].as_f64()? as f32,
-            ])
-        };
-        let (lo, hi) = match (get("min"), get("max")) {
-            (Some(lo), Some(hi)) => (lo, hi),
-            _ => {
-                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-                for v in m.primitives[pi].primitive.positions().unwrap_or(&[]) {
-                    for k in 0..3 {
-                        lo[k] = lo[k].min(v[k]);
-                        hi[k] = hi[k].max(v[k]);
-                    }
-                }
-                (lo, hi)
-            }
-        };
-        for k in 0..3 {
-            if lo[k] < mn[k] {
-                mn[k] = lo[k];
-            }
-            if hi[k] > mx[k] {
-                mx[k] = hi[k];
-            }
-        }
-    }
-    Ok((mn, mx))
-}
-
 /// A placement record of the scene.
 #[derive(Clone, Debug)]
 pub struct ScenePlacement {
@@ -479,11 +424,6 @@ pub struct ScenePlacement {
 
 impl Scene {
     /// The scene a skate-scene reader attached to `w`, read from `dir`.
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: the writer re-reads prototype GLBs for their bounds"
-    )]
     pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
         if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
             return Err(Error::Scene(format!(
@@ -512,35 +452,18 @@ impl Scene {
         };
         let mut textures = BTreeMap::new();
         let mut tex_keys = HashMap::new();
+        let mut unloaded: BTreeMap<primase_core::Entity, String> = BTreeMap::new();
         for (e, t) in world.iter::<SkateTexture>() {
-            // the pixels in the world (`core.texture`, from a reader's load step) where it has them, else the file
-            let (name, src) = match (world.get::<primase_core::Texture>(e), world.get::<TextureFile>(e)) {
-                (Some(tex), _) => {
-                    let name = world
-                        .get::<Name>(e)
-                        .map_or_else(|| t.key.clone(), |n| n.0.clone());
-                    let src = TexSource::from_texture(&name, tex, t.source_format.as_deref(), t.source_size)?;
-                    (name, src)
-                }
-                (None, Some(file)) => {
-                    let path = &file.path;
-                    let name = world.get::<Name>(e).map(|n| n.0.clone()).unwrap_or_else(|| {
-                        path.file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default()
-                    });
-                    (
-                        name,
-                        TexSource::open(path, t.source_format.as_deref(), t.source_size)?,
-                    )
-                }
-                (None, None) => {
-                    return Err(Error::Scene(format!(
-                        "texture '{}' has neither pixels (core.texture) nor a file",
-                        t.key
-                    )));
-                }
+            // the pixels in the world (`core.texture`, from a reader's load step, as the passes prepared them) are the
+            // writer's input; a texture with none is refused below if a material draws with it
+            let Some(tex) = world.get::<primase_core::Texture>(e) else {
+                unloaded.insert(e, t.key.clone());
+                continue;
             };
+            let name = world
+                .get::<Name>(e)
+                .map_or_else(|| t.key.clone(), |n| n.0.clone());
+            let src = TexSource::from_texture(&name, tex, t.source_format.as_deref(), t.source_size)?;
             textures.insert(
                 t.key.clone(),
                 TexDef {
@@ -557,6 +480,7 @@ impl Scene {
         }
         let mut materials = HashMap::new();
         let mut vertex_blend = BTreeMap::new();
+        let mut base_factors = BTreeMap::new();
         let mut mat_keys = HashMap::new();
         let mut labels = HashMap::new();
         for (e, m) in world.iter::<SkateMaterial>() {
@@ -570,6 +494,9 @@ impl Scene {
             if let Some(&v) = world.get::<VertexBlend>(e) {
                 vertex_blend.insert(m.key.clone(), v);
             }
+            if let Some(f) = world.get::<crate::dialect::SkateBaseFactor>(e) {
+                base_factors.insert(m.key.clone(), f.0);
+            }
             mat_keys.insert(e, m.key.clone());
             if let Some(n) = world.get::<Name>(e) {
                 labels.insert(m.key.clone(), n.0.clone());
@@ -579,12 +506,50 @@ impl Scene {
         let mut protos = Vec::new();
         let mut proto_index = HashMap::new();
         let mut report_warnings = Vec::new();
+        let mut tinted = 0;
+        for (_, m) in world.iter::<SkateMaterial>() {
+            for t in [m.base, m.normal, m.mask].into_iter().flatten() {
+                if let Some(key) = unloaded.get(&t) {
+                    return Err(Error::Scene(format!(
+                        "texture '{key}' has no pixels: the writer takes textures loaded (core.texture) and prepared \
+                         (interchange::load reads a scene's files)"
+                    )));
+                }
+            }
+            tinted += usize::from(m.base.is_some() && m.tint.is_some());
+        }
+        let mut unsupported = Vec::new();
+        if tinted > 0 {
+            unsupported.push((
+                "skate.material tint (prepare-reskate-textures multiplies it into a texture copy)".to_owned(),
+                tinted as u64,
+            ));
+            report_warnings.push(format!(
+                "{tinted} materials' tints not written: the writer takes base textures as prepared \
+                 (prepare-reskate-textures multiplies a tint in)"
+            ));
+        }
+        if let Some(max) = sc.texture_budget.as_ref().and_then(|b| b.max) {
+            unsupported.push((
+                "skate.scene texture_budget (budget-reskate-textures applies a budget)".to_owned(),
+                1,
+            ));
+            report_warnings.push(format!(
+                "the scene's texture budget ({max}) not applied by the writer: a budget is a pass \
+                 (budget-reskate-textures)"
+            ));
+        }
         for (i, (e, p)) in world.iter::<SkatePrototype>().enumerate() {
             proto_index.insert(e, i);
-            let mf = world.get::<MeshFile>(e);
-            // core.mesh is the writer's input; a prototype with only core.mesh_file is still read from its file (the
-            // legacy path), and one with both uses core.mesh (what the passes produced).
+            // core.mesh is the writer's input; a prototype with only a GLB file has not been loaded
             let mesh = world.get::<Mesh>(e);
+            if mesh.is_none() && world.has::<MeshFile>(e) {
+                return Err(Error::Scene(format!(
+                    "prototype '{}' has no core.mesh: the writer takes meshes loaded (interchange::load reads a \
+                     scene's GLBs)",
+                    p.id
+                )));
+            }
             let variants = world.get::<MaterialVariants>(e);
             let parts: Vec<PartDef> = world
                 .get::<SkateParts>(e)
@@ -605,11 +570,9 @@ impl Scene {
                         _ => {}
                     }
                     PartDef {
-                        material: match mesh {
-                            Some(m) => m.primitives().get(pi).and_then(|p| p.material),
-                            None => mf.and_then(|m| m.materials.get(pi).copied().flatten()),
-                        }
-                        .and_then(mkey),
+                        material: mesh
+                            .and_then(|m| m.primitives().get(pi).and_then(|p| p.material))
+                            .and_then(mkey),
                         variants: (part.variants_key
                             || variants.is_some_and(|v| v.0.get(pi).is_some_and(|m| !m.is_empty())))
                         .then(|| {
@@ -638,20 +601,10 @@ impl Scene {
                 )),
                 _ => None,
             };
-            let (min, max) = match (mesh, mf) {
-                (Some(m), _) => mesh_bounds(m).map_or((None, None), |(a, b)| (Some(a), Some(b))),
-                (None, Some(mf)) => {
-                    let bytes = std::fs::read(&mf.path).map_err(|source| Error::Io {
-                        path: mf.path.clone(),
-                        source,
-                    })?;
-                    let g = primase_gltf::Gltf::from_glb(&bytes)
-                        .map_err(|e| Error::Scene(format!("{}: {e}", mf.path.display())))?;
-                    let (a, b) = proto_bounds(&g, mf.mesh as usize)?;
-                    (Some(a), Some(b))
-                }
+            let (min, max) = match mesh {
+                Some(m) => mesh_bounds(m).map_or((None, None), |(a, b)| (Some(a), Some(b))),
                 // collision without geometry: the collision's box (same local frame as a mesh's positions)
-                (None, None) => collision
+                None => collision
                     .as_ref()
                     .and_then(|(pos, _, _)| box_of(pos.as_chunks::<3>().0))
                     .map_or((None, None), |(a, b)| (Some(a), Some(b))),
@@ -659,7 +612,6 @@ impl Scene {
             protos.push(ProtoDef {
                 index: i,
                 id: p.id.clone(),
-                glb: mf.map(|m| m.path.clone()),
                 prims: mesh.map(|m| {
                     let opacity = world.get::<BlendOpacity>(e);
                     m.primitives()
@@ -673,7 +625,6 @@ impl Scene {
                 }),
                 name: world.get::<Name>(e).map_or_else(|| p.id.clone(), |n| n.0.clone()),
                 col_mode: mode_of(p.collision.as_ref().and_then(|c| c.mode)),
-                mesh: mf.map_or(0, |m| m.mesh),
                 key: p.key.unwrap_or_else(|| primase_hash::prototype_key(&p.id)),
                 foliage: p.foliage == Some(true),
                 ground: p.ground == Some(true),
@@ -883,6 +834,7 @@ impl Scene {
             textures,
             materials,
             vertex_blend,
+            base_factors,
             protos,
             placements,
             soups,
@@ -897,16 +849,6 @@ impl Scene {
                     s.far.unwrap_or(500.0),
                 ]
             }),
-            tex_budget: sc
-                .texture_budget
-                .as_ref()
-                .and_then(|t| t.max)
-                .map_or(0, |m| m as i32),
-            tex_aux_weight: sc
-                .texture_budget
-                .as_ref()
-                .and_then(|t| t.aux_weight)
-                .map_or(0.25, |a| a as f32),
             min_height: sc
                 .min_height
                 .as_ref()
@@ -934,6 +876,7 @@ impl Scene {
             labels,
             material_keys_by_entity: mat_keys,
             report_warnings,
+            unsupported,
         })
     }
 
@@ -957,24 +900,6 @@ pub struct GlbPrim {
     pub idx: Vec<u32>,
     /// Per-vertex blend weight (`reskate.blend_opacity`; only from `core.mesh`).
     pub blend: Option<Vec<f32>>,
-}
-
-#[allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "exception: the writer re-reads prototype GLBs"
-)]
-pub fn read_glb(path: &std::path::Path, mesh: u32) -> Result<Vec<GlbPrim>> {
-    let bytes = std::fs::read(path).map_err(|source| Error::Io {
-        path: path.to_owned(),
-        source,
-    })?;
-    let g =
-        primase_gltf::Gltf::from_glb(&bytes).map_err(|e| Error::Scene(format!("{}: {e}", path.display())))?;
-    let m = g
-        .read_mesh(mesh as usize)
-        .map_err(|e| Error::Scene(format!("{}: {e}", path.display())))?;
-    Ok(m.primitives.iter().map(|p| glb_prim(&p.primitive)).collect())
 }
 
 /// The writer's view of a primitive (positions, normals, first texture coordinates, triangle indices); the GLB file
@@ -1027,13 +952,9 @@ fn box_of<'a>(positions: impl IntoIterator<Item = &'a [f32; 3]>) -> Option<([f32
 }
 
 impl ProtoDef {
-    /// The prototype's primitives: its `core.mesh`, else its GLB file read now (legacy); `None`: no geometry.
-    pub fn prims(&self) -> Result<Option<std::borrow::Cow<'_, [GlbPrim]>>> {
-        Ok(match (&self.prims, &self.glb) {
-            (Some(p), _) => Some(std::borrow::Cow::Borrowed(p.as_slice())),
-            (None, Some(glb)) => Some(std::borrow::Cow::Owned(read_glb(glb, self.mesh)?)),
-            (None, None) => None,
-        })
+    /// The prototype's primitives (its `core.mesh`); `None`: no geometry.
+    pub fn prims(&self) -> Option<&[GlbPrim]> {
+        self.prims.as_deref()
     }
 }
 
@@ -1042,7 +963,7 @@ impl ProtoDef {
 pub struct Materializer {
     refs: HashMap<String, Arc<TexRef>>,
     ids: HashMap<(String, bool), usize>,
-    derived: HashMap<(String, u32), i32>,
+    derived: HashMap<String, i32>,
 }
 
 impl Default for Materializer {
@@ -1169,6 +1090,7 @@ impl Materializer {
         spec.ocean = e.ocean;
         spec.cast_shadows = e.cast_shadows;
         spec.vertex_blend = scene.vertex_blend.get(key).copied();
+        spec.base_factor = scene.base_factors.get(key).copied();
         let key_of =
             |te: Option<primase_core::Entity>| te.and_then(|t| scene.texture_keys_by_entity.get(&t)).cloned();
         let base_key = key_of(e.base);
@@ -1181,42 +1103,28 @@ impl Materializer {
         let base_ref = base_tex.map(|t| self.tex_ref(t));
         if let Some(bt) = base_tex {
             spec.srgb = !bt.linear;
-            if let Some(t) = e.tint {
-                spec.tint = u32::from(t[0]) << 16 | u32::from(t[1]) << 8 | u32::from(t[2]);
-            }
         } else if let Some(bc) = e.base_color {
             spec.flat = u32::from(bc[0]) << 16 | u32::from(bc[1]) << 8 | u32::from(bc[2]);
             spec.flat_alpha = bc[3];
         }
-        let cap_name = base_tex
-            .map(|t| t.stem.clone().unwrap_or_else(|| t.name.clone()))
-            .unwrap_or_else(|| key.to_owned())
-            .to_lowercase();
         if let Some(nk) = key_of(e.normal) {
-            spec.normal = self.derived(scene, tex, &nk, &cap_name, NORMAL_TAG)?;
+            spec.normal = self.derived(scene, tex, &nk, NORMAL_TAG)?;
         }
         if let Some(mk) = key_of(e.mask) {
-            spec.mask = self.derived(scene, tex, &mk, &cap_name, MASK_TAG)?;
+            spec.mask = self.derived(scene, tex, &mk, MASK_TAG)?;
         }
         spec.base = base_ref.as_deref();
         mats.resolve(tex, &spec)
     }
 
-    /// A normal or mask texture at its material's base cap, in Studio's convention.
-    fn derived(
-        &mut self,
-        scene: &Scene,
-        tex: &mut TexLib,
-        key: &str,
-        cap_name: &str,
-        tag: u32,
-    ) -> Result<i32> {
+    /// A normal or mask texture as prepared, in Studio's convention (a normal map's green flipped up and its Z stored
+    /// when the scene says otherwise: exact re-encodings).
+    fn derived(&mut self, scene: &Scene, tex: &mut TexLib, key: &str, tag: u32) -> Result<i32> {
         let t = &scene.textures[key];
-        let cap = tex.cap_for(cap_name);
-        if let Some(&id) = self.derived.get(&(key.to_owned(), cap)) {
+        if let Some(&id) = self.derived.get(key) {
             return Ok(id);
         }
-        let id = match tex.decode(&t.src, cap)? {
+        let id = match tex.decode(&t.src)? {
             None => -1,
             Some(p) => {
                 let mut px = p.rgba;
@@ -1243,7 +1151,7 @@ impl Materializer {
                 )
             }
         };
-        self.derived.insert((key.to_owned(), cap), id);
+        self.derived.insert(key.to_owned(), id);
         Ok(id)
     }
 }
@@ -1263,9 +1171,9 @@ pub fn build_mesh(
     counters: &mut MeshCounters,
 ) -> Result<Option<SrcMesh>> {
     // a prototype that collides without drawing is a mesh without parts
-    let prims = match p.prims()? {
+    let prims = match p.prims() {
         Some(prims) => prims,
-        None if p.collision.is_some() => std::borrow::Cow::Borrowed(&[][..]),
+        None if p.collision.is_some() => &[][..],
         None => return Ok(None),
     };
     let has_variants = p.parts.iter().any(|x| x.variants.is_some());

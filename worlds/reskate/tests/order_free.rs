@@ -175,6 +175,16 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
         |p| p,
     );
     w.insert(ground, c);
+    // the spawn: the writer makes none of its own
+    let spawn = w.spawn();
+    w.insert(
+        spawn,
+        primase_core::Marker {
+            kind: "spawn".into(),
+            ground: Some([0.0, 0.0]),
+            yaw: None,
+        },
+    );
     primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
@@ -189,6 +199,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
     primase_reskate::interchange::read(&scene, &mut w).unwrap();
+    primase_reskate::interchange::load(&scene, &mut w).unwrap();
     let out_root = tmp("out");
     let report = primase_reskate::build(
         &w,

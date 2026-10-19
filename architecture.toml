@@ -12,8 +12,8 @@
 from = "worlds/reskate"
 to = "formats/gltf"
 section = "dependencies"
-reason = "the ReSkate writer and its post-compile step re-read prototype GLBs"
-removed_when = "meshes reach the writer as core.mesh through the reader's load step"
+reason = "the interchange loads and writes prototype GLBs, and the post-compile step re-reads the map's"
+removed_when = "the post-compile step takes the map's meshes in memory, and GLB encoding is a toolkit mechanism"
 
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
@@ -140,22 +140,10 @@ reason = "prepare_assets writes assets and repoints the world before the writer 
 removed_when = "write serializes in-memory meshes and textures itself"
 
 [[io]]
-file = "worlds/reskate/src/map.rs"
-role = "exception"
-reason = "the ReSkate writer reads a texture caps file"
-removed_when = "the caller passes the caps as options"
-
-[[io]]
-file = "worlds/reskate/src/scene.rs"
-role = "exception"
-reason = "the ReSkate writer re-reads prototype GLBs"
-removed_when = "meshes reach the writer as core.mesh through the reader's load step"
-
-[[io]]
 file = "worlds/reskate/src/texture.rs"
 role = "exception"
-reason = "the ReSkate writer reads source texture files"
-removed_when = "textures reach the writer as core.texture through the reader's load step"
+reason = "the ReSkate writer reads the pause map's image file (its textures arrive as core.texture)"
+removed_when = "the pause map's image reaches the writer in memory"
 
 [[io]]
 file = "worlds/reskate/src/postcompile/vblend.rs"

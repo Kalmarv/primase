@@ -58,7 +58,6 @@ pub struct MaterialSpec<'a> {
     pub base: Option<&'a TexRef>,
     pub flat: u32,
     pub flat_alpha: u8,
-    pub tint: u32,
     pub label: Option<String>,
     pub emissive: bool,
     pub alpha: i32,
@@ -74,6 +73,8 @@ pub struct MaterialSpec<'a> {
     pub ocean: Option<bool>,
     pub cast_shadows: Option<bool>,
     pub vertex_blend: Option<VertexBlend>,
+    /// Studio's base colour factor (linear RGBA), as a budget left the material (`skate.base_factor`).
+    pub base_factor: Option<[f32; 4]>,
 }
 
 impl<'a> MaterialSpec<'a> {
@@ -84,7 +85,6 @@ impl<'a> MaterialSpec<'a> {
             base: None,
             flat: 0x808080,
             flat_alpha: 255,
-            tint: 0xFFFFFF,
             label: None,
             emissive: false,
             alpha: 1,
@@ -100,6 +100,7 @@ impl<'a> MaterialSpec<'a> {
             ocean: None,
             cast_shadows: None,
             vertex_blend: None,
+            base_factor: None,
         };
         match class {
             VClass::Cutout => {
@@ -156,7 +157,7 @@ impl MatLib {
     /// Writes the spec's base texture (or flat colour) and returns its material id.
     pub fn resolve(&mut self, tex: &mut TexLib, s: &MaterialSpec) -> Result<usize> {
         let t = match s.base {
-            Some(b) => tex.register(b, s.alpha != 1, s.tint)?,
+            Some(b) => tex.register(b, s.alpha != 1)?,
             None => tex.register_flat(s.flat, s.flat_alpha),
         };
         Ok(self.get(tex, s, t))
@@ -194,6 +195,15 @@ impl MatLib {
         }
         if let Some(c) = s.cast_shadows {
             extra += &format!("|h{}", i32::from(c));
+        }
+        if let Some(f) = s.base_factor {
+            extra += &format!(
+                "|f{:08x}{:08x}{:08x}{:08x}",
+                f[0].to_bits(),
+                f[1].to_bits(),
+                f[2].to_bits(),
+                f[3].to_bits()
+            );
         }
         // a chain overlay's rank is part of its identity: two overlays alike in everything else (two black layers)
         // stay two materials, each drawn at its own place in the chain
@@ -255,7 +265,7 @@ impl MatLib {
             wrap: s.wrap.clone(),
             ocean: s.ocean,
             cast_shadows: s.cast_shadows,
-            base_factor: None,
+            base_factor: s.base_factor,
             vertex_blend: s.vertex_blend,
         });
         self.map.insert(key, id);

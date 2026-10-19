@@ -107,7 +107,7 @@ impl TexSource {
     #[allow(
         clippy::disallowed_methods,
         clippy::disallowed_types,
-        reason = "exception: the writer reads source texture files"
+        reason = "exception: the writer reads the pause map's image file"
     )]
     pub fn open(
         path: &Path,
@@ -347,7 +347,7 @@ impl TexSource {
     #[allow(
         clippy::disallowed_methods,
         clippy::disallowed_types,
-        reason = "exception: the writer reads source texture files"
+        reason = "exception: the writer reads the pause map's image file"
     )]
     pub fn data(&self) -> Result<Option<Vec<u8>>> {
         if self.kind != Kind::Dxt {
@@ -377,7 +377,7 @@ impl TexSource {
     #[allow(
         clippy::disallowed_methods,
         clippy::disallowed_types,
-        reason = "exception: the writer reads source texture files"
+        reason = "exception: the writer reads the pause map's image file"
     )]
     fn stored_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
         if mip >= self.file_levels {
@@ -539,13 +539,13 @@ pub struct OutTexture {
     data: Vec<u8>,
 }
 
-/// The texture files of a map (the reference writer's TexLib).
+/// The texture files of a map (the reference writer's TexLib): each texture as prepared (its size, its pixels), encoded
+/// once per content; the writer chooses no size and changes no pixel (caps and tints are passes: `cap-textures`,
+/// `prepare-reskate-textures`).
 #[derive(Debug)]
 pub struct TexLib {
     out_dir: PathBuf,
-    pub cap: u32,
-    pub cap_by_name: HashMap<String, u32>,
-    by_key: HashMap<(u64, bool, u32), usize>,
+    by_key: HashMap<(u64, bool), usize>,
     by_content: HashMap<u64, usize>,
     out: Vec<OutTexture>,
     pub unsupported: u64,
@@ -571,8 +571,9 @@ pub fn mean_color(rgba: &[u8]) -> u32 {
     (((r / wsum) as i32) << 16 | ((g / wsum) as i32) << 8 | (b / wsum) as i32) as u32
 }
 
-/// The largest level whose larger side is at most `cap` (or the smallest there is).
-pub fn mip_for(width: u32, height: u32, levels: u32, cap: u32) -> (u32, u32, u32) {
+/// The largest level whose larger side is at most `cap` (or the smallest there is): the level a passed-through
+/// texture's mean colour is measured on.
+fn mip_for(width: u32, height: u32, levels: u32, cap: u32) -> (u32, u32, u32) {
     let (mut w, mut h, mut mip) = (width, height, 0);
     let levels = levels.max(1);
     while mip < levels - 1 && w.max(h) > cap {
@@ -581,14 +582,6 @@ pub fn mip_for(width: u32, height: u32, levels: u32, cap: u32) -> (u32, u32, u32
         mip += 1;
     }
     (mip, w, h)
-}
-
-fn to_lin(i: u8) -> f32 {
-    primase_image::srgb_to_linear_f32(f32::from(i) / 255.0)
-}
-
-fn from_lin(v: f32) -> u8 {
-    primase_image::linear_to_srgb8_f32(v)
 }
 
 fn png_bytes(w: u32, h: u32, rgba: &[u8], alpha: bool) -> Vec<u8> {
@@ -645,20 +638,14 @@ pub struct Pixels {
 }
 
 impl TexLib {
-    pub fn new(out_dir: &Path, cap: u32) -> TexLib {
+    pub fn new(out_dir: &Path) -> TexLib {
         TexLib {
             out_dir: out_dir.to_owned(),
-            cap,
-            cap_by_name: HashMap::new(),
             by_key: HashMap::new(),
             by_content: HashMap::new(),
             out: Vec::new(),
             unsupported: 0,
         }
-    }
-
-    pub fn cap_for(&self, name: &str) -> u32 {
-        self.cap_by_name.get(name).copied().unwrap_or(self.cap)
     }
 
     pub fn all(&self) -> &[OutTexture] {
@@ -681,8 +668,13 @@ impl TexLib {
         }
     }
 
-    /// The source's level whose larger side is at most `cap`, as RGBA8 (`None` counts as unsupported).
-    pub fn decode(&mut self, tex: &TexSource, cap: u32) -> Result<Option<Pixels>> {
+    /// The texture as prepared (its first level), as RGBA8 (`None` counts as unsupported).
+    pub fn decode(&mut self, tex: &TexSource) -> Result<Option<Pixels>> {
+        self.decode_within(tex, u32::MAX)
+    }
+
+    /// The texture's level whose larger side is at most `cap`, as RGBA8 (`None` counts as unsupported).
+    fn decode_within(&mut self, tex: &TexSource, cap: u32) -> Result<Option<Pixels>> {
         let (mip, w, h) = mip_for(tex.width, tex.height, tex.levels, cap);
         let px = tex.decode(mip, w, h).unwrap_or(None);
         match px {
@@ -694,15 +686,15 @@ impl TexLib {
         }
     }
 
-    /// Texture id of `r`, written on first use; `tint` (0xRRGGBB, 0xFFFFFF none) multiplied in in linear light.
-    pub fn register(&mut self, r: &TexRef, alpha: bool, tint: u32) -> Result<i32> {
+    /// Texture id of `r` as prepared, written on first use (with alpha or without, as the material draws it).
+    pub fn register(&mut self, r: &TexRef, alpha: bool) -> Result<i32> {
         let alpha = alpha && r.has_alpha;
-        if let Some(&id) = self.by_key.get(&(r.key, alpha, tint)) {
+        if let Some(&id) = self.by_key.get(&(r.key, alpha)) {
             return Ok(id as i32);
         }
-        let id = self.write(r, alpha, tint)?;
+        let id = self.write(r, alpha)?;
         if id >= 0 {
-            self.by_key.insert((r.key, alpha, tint), id as usize);
+            self.by_key.insert((r.key, alpha), id as usize);
         }
         Ok(id)
     }
@@ -710,7 +702,7 @@ impl TexLib {
     /// A 4 x 4 texture of one colour.
     pub fn register_flat(&mut self, rgb: u32, a: u8) -> i32 {
         let key = 0x4000_0000_0000_0000u64 | (u64::from(a) << 24) | u64::from(rgb);
-        if let Some(&id) = self.by_key.get(&(key, a < 255, 0xFFFFFF)) {
+        if let Some(&id) = self.by_key.get(&(key, a < 255)) {
             return id as i32;
         }
         let mut px = vec![0u8; 64];
@@ -730,7 +722,7 @@ impl TexLib {
             ".png",
             rgb,
         );
-        self.by_key.insert((key, a < 255, 0xFFFFFF), id);
+        self.by_key.insert((key, a < 255), id);
         id as i32
     }
 
@@ -835,12 +827,10 @@ impl TexLib {
         id
     }
 
-    fn write(&mut self, r: &TexRef, alpha: bool, tint: u32) -> Result<i32> {
+    fn write(&mut self, r: &TexRef, alpha: bool) -> Result<i32> {
         let tex = &*r.src;
-        let cap = self.cap_for(&r.name);
-        let (mip, w, h) = mip_for(tex.width, tex.height, tex.levels, cap);
-        if tint == 0xFFFFFF
-            && w >= 4
+        let (mip, w, h) = (0, tex.width, tex.height);
+        if w >= 4
             && h >= 4
             && let Some(four) = tex.fourcc
         {
@@ -873,7 +863,7 @@ impl TexLib {
                 let mut hh = Hash64::new();
                 hh.int(w as i32).int(h as i32).string(four).int(i32::from(alpha));
                 hh.bytes(&data[off as usize..(off + len) as usize]);
-                let small = self.decode(tex, 32u32.max(w.max(h) >> (levels - 1)))?;
+                let small = self.decode_within(tex, 32u32.max(w.max(h) >> (levels - 1)))?;
                 let mean0 = small.map_or(0x808080, |p| mean_color(&p.rgba));
                 let format = match four {
                     "DXT1" => TexFormat::Bc1,
@@ -904,33 +894,10 @@ impl TexLib {
                 ) as i32);
             }
         }
-        let Some(p) = self.decode(tex, cap)? else {
+        let Some(p) = self.decode(tex)? else {
             return Ok(-1);
         };
-        let mut rgba = p.rgba;
-        if tint != 0xFFFFFF {
-            let (tr, tg, tb) = (
-                to_lin((tint >> 16) as u8),
-                to_lin((tint >> 8) as u8),
-                to_lin(tint as u8),
-            );
-            let byte = |v: f32| ((v * 255.0 + 0.5) as i32).clamp(0, 255) as u8;
-            let mut lut = [[0u8; 3]; 256];
-            for (i, e) in lut.iter_mut().enumerate() {
-                *e = if r.linear {
-                    let c = i as f32 / 255.0;
-                    [byte(c * tr), byte(c * tg), byte(c * tb)]
-                } else {
-                    let l = to_lin(i as u8);
-                    [from_lin(l * tr), from_lin(l * tg), from_lin(l * tb)]
-                };
-            }
-            for px in rgba.as_chunks_mut::<4>().0 {
-                px[0] = lut[px[0] as usize][0];
-                px[1] = lut[px[1] as usize][1];
-                px[2] = lut[px[2] as usize][2];
-            }
-        }
+        let rgba = p.rgba;
         let mut ch = Hash64::new();
         ch.int(p.w as i32).int(p.h as i32).int(i32::from(alpha));
         if alpha {
