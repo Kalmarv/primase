@@ -54,6 +54,13 @@ impl Format {
     }
     /// Decode exactly one element; missing components are zero. Reject NaN/infinity.
     pub fn decode(self, data: &[u8]) -> Result<[f32; 4]> {
+        let out = self.decode_raw(data)?;
+        finite(&out)?;
+        Ok(out)
+    }
+    /// [`Format::decode`] keeping NaN and infinity as stored, for a reader whose own rules say what a non-finite
+    /// value means.
+    pub fn decode_raw(self, data: &[u8]) -> Result<[f32; 4]> {
         if data.len() != self.size() {
             return Err(Error(format!(
                 "expected {} element bytes, got {}",
@@ -98,7 +105,6 @@ impl Format {
                 ];
             }
         }
-        finite(&out)?;
         Ok(out)
     }
 }
@@ -148,12 +154,30 @@ pub struct Stream<'a> {
     pub offset: usize,
 }
 /// Decode consecutive vertices from a resolved element and its bound stream.
-/// All arithmetic and bounds are checked before reading; stream padding is allowed.
+/// All arithmetic and bounds are checked before reading; stream padding is allowed. Rejects NaN/infinity.
 pub fn decode_stream(
     element: &ResolvedElement,
     stream: Stream<'_>,
     first: usize,
     count: usize,
+) -> Result<Vec<[f32; 4]>> {
+    stream_with(element, stream, first, count, Format::decode)
+}
+/// [`decode_stream`] keeping NaN and infinity as stored ([`Format::decode_raw`]); bounds are checked the same.
+pub fn decode_stream_raw(
+    element: &ResolvedElement,
+    stream: Stream<'_>,
+    first: usize,
+    count: usize,
+) -> Result<Vec<[f32; 4]>> {
+    stream_with(element, stream, first, count, Format::decode_raw)
+}
+fn stream_with(
+    element: &ResolvedElement,
+    stream: Stream<'_>,
+    first: usize,
+    count: usize,
+    decode: fn(Format, &[u8]) -> Result<[f32; 4]>,
 ) -> Result<Vec<[f32; 4]>> {
     let size = element.element.format.size();
     let end = element
@@ -186,7 +210,7 @@ pub fn decode_stream(
     (0..count)
         .map(|i| {
             let off = start + i * stream.stride;
-            element.element.format.decode(&stream.bytes[off..off + size])
+            decode(element.element.format, &stream.bytes[off..off + size])
         })
         .collect()
 }

@@ -14,7 +14,7 @@ use std::ops::Range;
 
 use primase_core::{Primitive, Semantic, Stream, Topology};
 use primase_meshops::compact_primitive;
-use primase_vertex::{Element, Format, Stream as VertexStream, decode_stream, resolve_layout};
+use primase_vertex::{Element, Format, Stream as VertexStream, decode_stream_raw, resolve_layout};
 
 use crate::level::UNITY;
 use crate::player::{ObjRef, Player};
@@ -324,7 +324,8 @@ impl UnityMeshData {
                 }])
                 .map_err(|e| invalid(format!("{}: {e}", CHANNELS[ch])))?;
                 let (base, stride) = stream_at[s];
-                let v = decode_stream(
+                // non-finite values kept as stored: `make_finite` decides by what the stream is
+                let v = decode_stream_raw(
                     &layout[0],
                     VertexStream {
                         bytes: &data,

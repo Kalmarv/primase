@@ -92,6 +92,42 @@ fn layout_and_invalid_streams() {
     assert!(Format::Float2.decode(&[0; 7]).is_err());
     assert!(Format::Float2.decode(&[0, 0, 128, 127, 0, 0, 0, 0]).is_err());
 }
+/// The raw decodes keep a stored NaN or infinity for the reader's own rules; sizes and bounds are checked the same.
+#[test]
+fn raw_decodes_keep_non_finite_values() {
+    let inf_nan = [0, 0, 128, 127, 0, 0, 192, 127];
+    let v = Format::Float2.decode_raw(&inf_nan).unwrap();
+    assert_eq!(v[0], f32::INFINITY);
+    assert!(v[1].is_nan());
+    assert!(Format::Float2.decode_raw(&[0; 7]).is_err());
+    let half_inf = [0, 0x7c, 0, 0x3c];
+    assert!(Format::Half2.decode(&half_inf).is_err());
+    assert_eq!(
+        Format::Half2.decode_raw(&half_inf).unwrap(),
+        [f32::INFINITY, 1., 0., 0.]
+    );
+    let layout = resolve_layout(&[Element {
+        semantic: "TEXCOORD".into(),
+        index: 0,
+        format: Format::Half2,
+        slot: 0,
+        offset: None,
+    }])
+    .unwrap();
+    let bytes = [0, 0x3c, 0, 0x3c, 0, 0x7c, 0, 0x3c];
+    let stream = Stream {
+        bytes: &bytes,
+        stride: 4,
+        offset: 0,
+    };
+    assert!(decode_stream(&layout[0], stream, 0, 2).is_err());
+    assert_eq!(
+        decode_stream_raw(&layout[0], stream, 0, 2).unwrap(),
+        vec![[1., 1., 0., 0.], [f32::INFINITY, 1., 0., 0.]]
+    );
+    assert!(decode_stream_raw(&layout[0], stream, 0, 3).is_err());
+    assert!(decode_stream_raw(&layout[0], stream, usize::MAX, 1).is_err());
+}
 #[test]
 fn topology_boundaries_and_joint_parity() {
     assert_eq!(strip_to_list(&[0, 1, 2, 2, 3, 4], true), vec![1, 0, 2, 2, 3, 4]);
