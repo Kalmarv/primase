@@ -22,7 +22,8 @@ writers:
            [--budget-mib N | --no-budget] [--plain]
   reskate  [--name N] [--blend-objects N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate,
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
-           prepare-reskate-overlays{step=0.004}\"; a spawn from place-spawn at --select)";
+           prepare-reskate-overlays{step=0.004}\", and a pause map if wanted:
+           prepare-reskate-pause-map{from=geometry,height=2160,extent=content}; a spawn from place-spawn at --select)";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -189,6 +190,7 @@ mod tests {
                 let reskate = format!(
                     "{passes}, bake-normal-scale, raise-skate{{name=n}}, lower-layered-reskate, \
                      cap-textures{{max=256,normals=box}}, prepare-reskate-textures, budget-reskate-textures{{max=64}}, snap-reskate-markers, \
+                     prepare-reskate-pause-map{{from=geometry,height=2160,extent=content}}, \
                      prepare-reskate-overlays{{step=0.004}}"
                 );
                 pipelines.push(format!("{select}, {passes}"));

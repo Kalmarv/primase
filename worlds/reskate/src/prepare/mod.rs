@@ -6,6 +6,7 @@ pub mod floor;
 pub mod grinds;
 pub mod lights;
 pub mod overlays;
+pub mod pause_map;
 pub mod raise;
 pub mod region;
 pub mod snap;
@@ -18,6 +19,10 @@ pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use lights::{SelectReskateLights, select_reskate_lights};
 pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
+pub use pause_map::{
+    PauseExtent, PauseSource, PrepareReskatePauseMap, SkatePauseImage, SkatePausePicture,
+    prepare_reskate_pause_map,
+};
 pub use raise::{
     RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate, raise_skate_pass, studio_watts,
 };

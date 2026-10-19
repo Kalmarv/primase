@@ -5,6 +5,7 @@
     reason = "writer I/O: writes the map folder"
 )]
 
+use crate::prepare::pause_map::SkatePausePicture;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,6 @@ use crate::map::{Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
-use crate::texture::TexSource;
 
 use crate::{Error, Result};
 
@@ -61,7 +61,7 @@ impl Default for EncodingOptions {
 }
 
 /// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
-/// blend chains and the pause map's height. Delete a field when its pass lands.
+/// blend chains. Delete a field when its pass lands.
 #[derive(Clone, Debug)]
 pub struct WriterChoices {
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
@@ -71,7 +71,6 @@ pub struct WriterChoices {
     /// The grid the blend-chain objects are cut on ([`crate::map::WriterOptions::blend_grid`]): Studio's 200 m
     /// WorldPartition cell by default.
     pub blend_grid: f32,
-    pub map_height: usize,
 }
 
 impl Default for WriterChoices {
@@ -79,7 +78,6 @@ impl Default for WriterChoices {
         WriterChoices {
             blend_objects: None,
             blend_grid: 200.0,
-            map_height: 2160,
         }
     }
 }
@@ -98,7 +96,6 @@ pub struct BuildOptions {
     pub blend_objects: Option<usize>,
     pub blend_grid: f32,
     pub limit: f32,
-    pub map_height: usize,
     pub max_render_edge: Option<f32>,
     pub offset: [f64; 2],
     pub scene_warnings: Option<Vec<String>>,
@@ -117,7 +114,6 @@ impl Default for BuildOptions {
             blend_objects: c.blend_objects,
             blend_grid: c.blend_grid,
             limit: e.limit,
-            map_height: c.map_height,
             max_render_edge: e.max_render_edge,
             offset: e.offset,
             scene_warnings: e.scene_warnings,
@@ -144,7 +140,6 @@ impl BuildOptions {
             WriterChoices {
                 blend_objects: a.blend_objects,
                 blend_grid: a.blend_grid,
-                map_height: a.map_height,
             },
         )
     }
@@ -542,13 +537,12 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         blend_grid: c.blend_grid,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
-        map_height: c.map_height,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
         max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),
         trainer_note: s.trainer_note.clone(),
         warnings: s.warnings.clone(),
-        pause_picture: None,
+        pause: None,
     })
 }
 
@@ -675,6 +669,7 @@ fn write_map_with(
         None => scene_warnings(&s, world)?,
     };
     let mut o = writer_options(&s, a, c)?;
+    o.pause = world.resource::<SkatePausePicture>().cloned();
     // markers snapped before the writer were snapped against this writer's collision: the same settings
     if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
         let mine = (
@@ -697,21 +692,6 @@ fn write_map_with(
                  max_render_edge) {theirs:?}, but the writer's are {mine:?}: give snap-reskate-markers the writer's"
             )));
         }
-    }
-    let sc = world
-        .resource::<crate::dialect::SkateScene>()
-        .expect("checked by Scene::from_world");
-    if let Some(pm) = &sc.pause_map {
-        let src = TexSource::open(&pm.image_file, None, None)?;
-        let px = src
-            .decode(0, src.width, src.height)?
-            .ok_or_else(|| Error::Scene("pause_map: the image cannot be decoded".into()))?;
-        o.pause_picture = Some((
-            src.width as usize,
-            src.height as usize,
-            px,
-            pm.bounds.map(f64::from),
-        ));
     }
     let cut = s.region;
     let placements = writer_placements(&s, o.tile);

@@ -13,6 +13,7 @@ use crate::material::{MatLib, Material, VClass};
 use crate::model::{CollisionMode, Hull, MapObject, Placement, ProtoInfo, SrcMesh, SrcPart, TileOut};
 use crate::overlay::{self, OverlayStats, Parts, Piece};
 use crate::pausemap::PauseMap;
+use crate::prepare::pause_map::SkatePausePicture;
 use crate::records::{
     Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, SpawnJson,
     StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
@@ -46,13 +47,20 @@ pub struct WriterOptions {
     pub blend_grid: f32,
     pub offset: [f64; 3],
     pub limit: f32,
-    pub map_height: usize,
     pub light_prefix: String,
     pub streaming_distances: [f64; 3],
     pub max_render_edge: f32,
     pub trainer_note: Option<String>,
     pub warnings: Vec<String>,
-    pub pause_picture: Option<(usize, usize, Vec<u8>, [f64; 4])>,
+    /// The pause-map picture to write (`prepare-reskate-pause-map`); `None`: none.
+    pub pause: Option<SkatePausePicture>,
+}
+
+impl WriterOptions {
+    /// Whether the writer draws its geometry into the pause-map picture.
+    fn draws_pause(&self) -> bool {
+        matches!(self.pause, Some(SkatePausePicture::Geometry { .. }))
+    }
 }
 
 /// What the writer did, for stats.json.
@@ -584,7 +592,7 @@ pub struct MapWriter {
     pub surfaces: SurfaceTable,
     pub r: WriteResult,
     off: Vec3,
-    pm: PauseMap,
+    pm: Option<PauseMap>,
     objects: Vec<MapObject>,
     mat_tris: HashMap<usize, i64>,
     mat_used: BTreeSet<usize>,
@@ -663,9 +671,25 @@ const APRON: f32 = 30.0;
 impl MapWriter {
     pub fn new(o: WriterOptions, surfaces: SurfaceTable, tex_dir: &std::path::Path) -> Result<MapWriter> {
         let off = Vec3::new(o.offset[0] as f32, o.offset[1] as f32, o.offset[2] as f32);
-        let pm = match &o.pause_picture {
-            Some((w, h, rgba, b)) => PauseMap::given(*w, *h, rgba, *b, off),
-            None => PauseMap::new(o.region, off, o.map_height),
+        let pm = match &o.pause {
+            Some(SkatePausePicture::Image {
+                width,
+                height,
+                rgba,
+                bounds,
+            }) => Some(PauseMap::given(
+                *width as usize,
+                *height as usize,
+                rgba,
+                bounds.map(f64::from),
+                off,
+            )),
+            Some(SkatePausePicture::Geometry { height, extent }) => Some(PauseMap::new(
+                extent.map_or(o.region, |e| e.map(f64::from)),
+                off,
+                *height,
+            )),
+            None => None,
         };
         let tex = TexLib::new(tex_dir);
         Ok(MapWriter {
@@ -1401,12 +1425,14 @@ impl MapWriter {
                         let iname =
                             format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[pr.info].name);
                         let rows = MapObject::rows(s.ex, s.ey, s.ez, s.pos + off);
-                        if o.pause_picture.is_none() {
+                        if o.draws_pause() {
                             for p in &m.parts {
                                 let mat = source.material_of(p, row, &mut self.ctx)?;
                                 let pc = self.map_colour(&mut colours, mat);
-                                if pc != 0 {
-                                    self.pm.draw(&p.pos, &p.idx, s.pos + off, s.ex, s.ey, s.ez, pc);
+                                if pc != 0
+                                    && let Some(pm) = &mut self.pm
+                                {
+                                    pm.draw(&p.pos, &p.idx, s.pos + off, s.ex, s.ey, s.ez, pc);
                                 }
                             }
                         }
@@ -1475,13 +1501,15 @@ impl MapWriter {
                 let under = self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"))?;
                 if !parts.is_empty() {
                     to.mesh = Some(format!("t_{tx}_{ty}.glb"));
-                    if o.pause_picture.is_none() {
+                    if o.draws_pause() {
                         let keys: Vec<usize> = parts.keys().copied().collect();
                         for k in keys {
                             let pc = self.map_colour(&mut colours, k);
-                            if pc != 0 {
+                            if pc != 0
+                                && let Some(pm) = &mut self.pm
+                            {
                                 let a = &parts[&k];
-                                self.pm.draw(
+                                pm.draw(
                                     &a.pos,
                                     &a.idx,
                                     Vec3::new(origin.x + off.x, origin.y + off.y, off.z),
@@ -2025,9 +2053,11 @@ impl MapWriter {
                 snap: crate::scene::SnapSpec::of(SnapMode::None),
             })
             .collect();
-        self.pm.sea_tint = !x.water.is_empty();
-        for (f, b) in self.pm.save()? {
-            self.files.insert(f, b);
+        if let Some(pm) = &mut self.pm {
+            pm.sea_tint = !x.water.is_empty();
+            for (f, b) in pm.save()? {
+                self.files.insert(f, b);
+            }
         }
         let surfaces = self.surfaces.clone();
         let mut collision = Collision::new(&surfaces, off.x, off.y, off.z, o.limit);

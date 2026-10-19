@@ -6,7 +6,7 @@
 //! (`budget-reskate-textures`), the overlays stacked (`prepare-reskate-overlays`, 4 mm), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
-//! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--name N] [--lod default|highest|N]
+//! [--tex-caps FILE] [--water-ocean] [--no-water] [--map-height N] [--lights-max-per-cell N] [--name N] [--lod default|highest|N]
 //! [--max-priority N]`
 //!
 //! `--tex-cap` (256 when not given) caps every texture's larger side; `--tex-caps` is a JSON file whose `caps` object
@@ -30,6 +30,7 @@ fn main() -> Result<(), BoxError> {
     let mut lights_per_cell: Option<usize> = None;
     let mut ocean = primase_reskate::prepare::OceanMaterials::Stated;
     let mut no_water = false;
+    let mut map_height: usize = 2160;
     let mut name_caps: Vec<(String, u32)> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -54,6 +55,7 @@ fn main() -> Result<(), BoxError> {
             "--lights-max-per-cell" => lights_per_cell = Some(val()?.parse()?),
             "--water-ocean" => ocean = primase_reskate::prepare::OceanMaterials::All,
             "--no-water" => no_water = true,
+            "--map-height" => map_height = val()?.parse()?,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
             "--max-priority" => max_priority = Some(val()?.parse()?),
             s if s.starts_with("--") => return Err(format!("unknown option {s}").into()),
@@ -118,6 +120,26 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(primase_reskate::prepare::PrepareReskateWater::new(
         extent.unwrap_or(primase_reskate::prepare::WaterExtent::All),
         ocean,
+    )?));
+    // the pause-map picture as the writer made it: the scene's own when it names one, else its geometry drawn top-down
+    // over its region (its content without one), --map-height pixels high (2160)
+    let named = w
+        .resource::<primase_reskate::dialect::SkateScene>()
+        .is_some_and(|s| s.pause_map.is_some());
+    let pause = if named {
+        primase_reskate::prepare::PauseSource::Image
+    } else {
+        primase_reskate::prepare::PauseSource::Geometry {
+            height: map_height,
+            extent: if region.is_some() {
+                primase_reskate::prepare::PauseExtent::Region
+            } else {
+                primase_reskate::prepare::PauseExtent::Content
+            },
+        }
+    };
+    passes.push(Box::new(primase_reskate::prepare::PrepareReskatePauseMap::new(
+        pause,
     )?));
     // the lights capped per Studio 200 m cell when asked (the writer caps nothing of its own)
     if let Some(n) = lights_per_cell {

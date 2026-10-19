@@ -11,6 +11,9 @@
 //! - **Ocean** (`stated` unless given): `all` makes every water-class skate material that states nothing draw as
 //!   Studio's ocean (`ocean: true`); a material that states `ocean` keeps it.
 //!
+//! Marker snaps (`snap-reskate-markers`) see the water outlines as they are when the snap runs: run it before this
+//! pass to snap against the uncut water, as the writer did.
+//!
 //! The water is the map's: a part of a conversion in several is refused. Without this pass the writer writes every
 //! water surface it is given, as given (clipped only to the map's extent limit), and no material as ocean unless it
 //! says so.
