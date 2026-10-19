@@ -15,6 +15,7 @@ mod provenance;
 mod spanning;
 pub use images::{IMAGE_DIR, ImageFiles};
 pub use spanning::{LocalBox, PIVOT_MARGIN, Spans, spanning};
+pub mod fixture;
 #[cfg(feature = "ktx2")]
 pub mod ktx2;
 #[cfg(feature = "ktx2")]

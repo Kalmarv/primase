@@ -1646,7 +1646,6 @@ fn real_data_variables_are_declared() {
 const KNOWN_BREAKS: &[&str] = &[
     "entry_point: file=formats/web/examples/ktx2_audit.rs what=reads a format itself",
     "entry_point: file=formats/web/examples/ktx2_compare.rs what=reads a format itself",
-    "entry_point: file=formats/web/examples/synthetic_tiles.rs what=queries or edits world components",
     "layout: file=worlds/fromsoft/src/archive.rs",
     "layout: file=worlds/fromsoft/src/dcx.rs",
     "layout: file=worlds/fromsoft/src/sekiro/collision.rs",

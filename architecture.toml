@@ -213,12 +213,6 @@ what = "reads a format itself"
 reason = "an audit tool comparing written KTX2 files"
 removed_when = "it becomes a gate under formats/web/tests"
 
-[[entry_point]]
-file = "formats/web/examples/synthetic_tiles.rs"
-what = "queries or edits world components"
-reason = "builds a synthetic world to demonstrate the writer"
-removed_when = "the synthetic world comes from a library fixture function"
-
 # ---- passes registered, lowerings run as passes ----
 
 # ---- writers take the world read-only ----
