@@ -5,13 +5,14 @@
 //! does not lower: geometry, materials, collision, lights and extras become core data through the passes in
 //! [`passes`], [`collision`] and [`objects`], which a program chooses and orders. What the read leaves out or cannot
 //! read is in its [`Report::notices`].
-pub mod collision;
 mod components;
 pub mod extras;
 pub mod objects;
 pub mod passes;
 mod read;
 pub use components::source;
+pub use passes::collision;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::area::{Options, Report, StateClasses, read_area, world_bounds};
+pub use read::collision::Report as CollisionReport;
 pub use read::{convert, states};

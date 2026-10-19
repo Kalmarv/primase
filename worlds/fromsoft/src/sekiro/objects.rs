@@ -2,7 +2,7 @@
 //! main HKX bodies (`fromsoft.object_collision`): meshes as their posed triangles, convex shapes as their stored core
 //! and radius. How convex shapes become triangles, which motion types and HitMtrl classes become collision, the
 //! surface of convex bodies (which store none) and the crop are `lower-fromsoft-object-collision`'s options.
-use super::collision::{attach, beyond, crop, owned, push, surface_of};
+use super::passes::collision::{attach, beyond, crop, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
 use super::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry};
 use crate::collision::{BodyGeometry, pose_columns, posed};

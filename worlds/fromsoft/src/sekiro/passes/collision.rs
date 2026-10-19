@@ -1,44 +1,13 @@
-//! Map collision as the area stores it, and the pass that lowers it. The reader keeps, whole, every file of the
-//! area's high-resolution collision binder that MSB collision parts name (`fromsoft.map_collision`); which parts are
-//! ground, what each HitMtrl class becomes and how far around the read region to keep are `lower-fromsoft-collision`'s
-//! options. Raw collision is never roof-smoothed here.
+//! The pass that lowers the area's map collision (`fromsoft.map_collision`): which parts are ground, what each
+//! HitMtrl class becomes and how far around the read region to keep are `lower-fromsoft-collision`'s options. Raw
+//! collision is never roof-smoothed here.
 use super::settings::{HitClass, HitFilters, Metres, joined};
-use super::source::{CollisionPart, CollisionSource, MapCollision, ReadScope};
-use crate::{
-    Archive, Binder, Result, collision,
-    dcx::Decoder,
-    invalid,
-    msb::{MapLayout, PartKind},
-};
+use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
 use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::{Clause, Condition};
-use primase_core::{
-    Collision, Component, Entity, Name, Surfaces, Transform, World,
-    frame::{Axis, SourceFrame},
-    world::Resource,
-};
-use primase_havok::Compendium;
+use primase_core::{Collision, Component, Entity, Name, Surfaces, Transform, World, world::Resource};
 use std::collections::{BTreeMap, BTreeSet};
-const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
-
-/// What the reader found of the area's map collision.
-#[derive(Debug, Default)]
-pub struct Report {
-    /// Files read: those some MSB collision part names.
-    pub files: usize,
-    /// MSB collision parts by hit filter.
-    pub parts_by_filter: BTreeMap<u8, usize>,
-    /// Files of the binder no MSB collision part names: not read.
-    pub unnamed_files: usize,
-    pub triangles: usize,
-    /// Triangles whose shape key binds no HitMtrl.
-    pub unbound_triangles: usize,
-    /// Collision files the MSB's parts name that the area's binder does not hold.
-    pub missing_files: Vec<String>,
-    /// Bodies of the read files whose shape class has no decoder, by class: listed on their file, not read.
-    pub unread_bodies: BTreeMap<String, usize>,
-}
 
 /// The core surface a HitMtrl class (an ID's base value, modulo 100) stands for, where its class is known to stand
 /// for one; `None` for the other classes.
@@ -59,7 +28,7 @@ pub fn known_surface(class: i32) -> Option<&'static str> {
 
 /// The surface a triangle of HitMtrl ID `material` is lowered with: its class's known surface, else `default`,
 /// counted as approximations in `log`.
-pub(super) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
+pub(crate) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
     if material < 0 {
         log.approximate(
             "triangles whose shape key binds no HitMtrl, given the default surface",
@@ -76,15 +45,7 @@ pub(super) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
     })
 }
 
-fn leaf(name: &str) -> String {
-    name.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .trim_end_matches(".dcx")
-        .to_ascii_lowercase()
-}
-
-pub(super) fn push(
+pub(crate) fn push(
     soup: &mut Collision,
     vertices: [[f32; 3]; 3],
     surface: u16,
@@ -102,7 +63,7 @@ pub(super) fn push(
 
 /// A non-empty soup as its own entity, with the group it was lowered into; with `condition`, present only while it
 /// holds (the entity carries it and an identity transform: state sits on placed things).
-pub(super) fn attach(
+pub(crate) fn attach(
     world: &mut World,
     soup: Collision,
     group: &str,
@@ -131,110 +92,9 @@ pub(super) fn attach(
     Some(entity)
 }
 
-/// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`
-/// entities in file-name order; with `states`, each part's clause.
-pub fn read(
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    area: &str,
-    layout: &MapLayout,
-    mut states: Option<&mut super::states::States>,
-    world: &mut World,
-) -> Result<Report> {
-    let mut report = Report::default();
-    let mut named = BTreeMap::<String, Vec<CollisionPart>>::new();
-    for part in layout.parts.iter().filter(|p| p.kind == PartKind::Collision) {
-        let filter = part
-            .hit_filter
-            .ok_or_else(|| invalid("collision", part.index, "missing hit filter"))?;
-        let model = part
-            .model
-            .and_then(|i| layout.models.get(i))
-            .ok_or_else(|| invalid("collision", part.index, "missing collision model"))?;
-        let suffix = model
-            .name
-            .strip_prefix('h')
-            .ok_or_else(|| invalid("collision", part.index, "unexpected collision model name"))?;
-        *report.parts_by_filter.entry(filter).or_default() += 1;
-        named
-            .entry(format!("h{}_{suffix}.hkx", &area[1..]))
-            .or_default()
-            .push(CollisionPart {
-                name: part.name.clone(),
-                hit_filter: filter,
-                condition: states.as_deref_mut().and_then(|s| s.clause(part)),
-            });
-    }
-    let base = format!("/map/{area}/h{}", &area[1..]);
-    let binder = Binder::read_split(
-        &archive.read(&format!("{base}.hkxbhd"), decoder)?,
-        &archive.read(&format!("{base}.hkxbdt"), decoder)?,
-        decoder,
-    )?;
-    let comp = binder
-        .files
-        .iter()
-        .find(|f| {
-            f.name
-                .as_deref()
-                .is_some_and(|n| leaf(n).ends_with(".compendium"))
-        })
-        .ok_or_else(|| invalid("collision", 0, "missing compendium"))?;
-    let comp = Compendium::read(&decoder.decode_if_dcx(&comp.bytes)?)?;
-    if layout.map_offsets.len() > 1 {
-        return Err(invalid("collision", 0, "multiple map offsets"));
-    }
-    let transform = layout
-        .map_offsets
-        .first()
-        .map(|o| o.transform())
-        .transpose()?
-        .unwrap_or(Transform::IDENTITY);
-    let mut files = binder
-        .files
-        .iter()
-        .filter(|f| f.name.as_deref().is_some_and(|n| leaf(n).ends_with(".hkx")))
-        .collect::<Vec<_>>();
-    files.sort_by_key(|f| leaf(f.name.as_deref().unwrap_or("")));
-    for file in files {
-        let name = leaf(file.name.as_deref().unwrap_or(""));
-        let Some(parts) = named.remove(&name) else {
-            report.unnamed_files += 1;
-            continue;
-        };
-        let raw = collision::read_map(&decoder.decode_if_dcx(&file.bytes)?, Some(&comp))?;
-        report.files += 1;
-        report.triangles += raw.triangles.len();
-        report.unbound_triangles += raw.unmapped;
-        for shape in &raw.unread_bodies {
-            *report.unread_bodies.entry(shape.clone()).or_default() += 1;
-        }
-        let e = world.spawn();
-        world.insert(e, Name(name.clone()));
-        world.insert(
-            e,
-            MapCollision {
-                file: name,
-                parts,
-                triangles: raw
-                    .triangles
-                    .into_iter()
-                    .map(|t| t.map(|v| crate::pose::point(&transform, FRAME.point(v))))
-                    .collect(),
-                materials: raw.materials,
-                invalid_material_keys: raw.invalid_material_keys,
-                dead_primitives: raw.dead_primitives,
-                unread_bodies: raw.unread_bodies,
-            },
-        );
-    }
-    report.missing_files = named.into_keys().collect();
-    Ok(report)
-}
-
 /// The entities whose input a pass lowers: in a part of a conversion (`core.part_scope`), what the part's roots
 /// reach, as what it only loaded as context is its owner's to lower; without one, everything (`None`).
-pub(super) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
+pub(crate) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
     world
         .resource::<PartScope>()
         .map(|s| world.closure(s.roots.iter().copied()))
@@ -242,7 +102,7 @@ pub(super) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
 
 /// The read region around which a pass crops at `reach`, if it crops: `None` without a reach or after a read of the
 /// whole area.
-pub(super) fn crop(
+pub(crate) fn crop(
     world: &World,
     reach: Option<Metres>,
 ) -> std::result::Result<Option<([f32; 4], f32)>, String> {
@@ -256,7 +116,7 @@ pub(super) fn crop(
 }
 
 /// Whether a world-frame triangle's centre lies beyond `reach` metres outside the east/north rectangle `r`.
-pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
+pub(crate) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
     let x = (v[0][0] + v[1][0] + v[2][0]) / 3.;
     let z = -(v[0][2] + v[1][2] + v[2][2]) / 3.;
     x < r[0] - reach || x >= r[2] + reach || z < r[1] - reach || z >= r[3] + reach
@@ -446,11 +306,11 @@ impl Pass for LowerFromSoftCollision {
                 );
                 continue;
             }
-            let (solid, water) = match super::states::States::any(&clauses) {
+            let (solid, water) = match super::any_of(&clauses) {
                 None => (&mut solid, &mut water),
                 Some(c) => {
                     let entry = conditioned
-                        .entry(super::passes::condition_key(&c))
+                        .entry(super::condition_key(&c))
                         .or_insert_with(|| (c, Collision::default(), Collision::default()));
                     (&mut entry.1, &mut entry.2)
                 }
@@ -507,6 +367,7 @@ impl Pass for LowerFromSoftCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sekiro::source::CollisionPart;
 
     fn record(file: &str, filter: u8, triangles: Vec<[[f32; 3]; 3]>, materials: Vec<i32>) -> MapCollision {
         MapCollision {

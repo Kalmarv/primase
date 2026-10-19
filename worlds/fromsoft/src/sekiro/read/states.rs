@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::World;
-use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
+use primase_core::state::{Clause, Domain, Literal, Scope, StateAxis};
 
 use crate::emevd::Script;
 use crate::msb::{Part, PartKind};
@@ -197,19 +197,5 @@ impl States {
         literals.dedup();
         *self.report.decided_parts.entry(kind).or_default() += 1;
         Some(Clause(literals))
-    }
-
-    /// A condition holding when any of the clauses holds; None (always present) when any input is None.
-    pub fn any(clauses: &[Option<Clause>]) -> Option<Condition> {
-        let mut out: Vec<Clause> = Vec::new();
-        for c in clauses {
-            let c = c.clone()?;
-            if !out.contains(&c) {
-                out.push(c);
-            }
-        }
-        // one order for the same set of clauses
-        out.sort_by_key(|c| c.0.iter().map(|l| (l.axis, l.values)).collect::<Vec<_>>());
-        Some(Condition(out))
     }
 }

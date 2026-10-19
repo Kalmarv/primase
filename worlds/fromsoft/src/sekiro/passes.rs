@@ -6,6 +6,7 @@
 //! through the same calls.
 pub(super) mod bake_assembly;
 pub mod blockers;
+pub mod collision;
 pub mod layers;
 pub mod lights;
 pub mod normals;
@@ -933,6 +934,22 @@ impl Pass for DropFromSoftTextureTransforms {
     }
 }
 
+/// A condition holding when any of the clauses holds; None (always present) when any input is None.
+pub(crate) fn any_of(
+    clauses: &[Option<primase_core::state::Clause>],
+) -> Option<primase_core::state::Condition> {
+    let mut out: Vec<primase_core::state::Clause> = Vec::new();
+    for c in clauses {
+        let c = c.clone()?;
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    // one order for the same set of clauses
+    out.sort_by_key(|c| c.0.iter().map(|l| (l.axis, l.values)).collect::<Vec<_>>());
+    Some(primase_core::state::Condition(out))
+}
+
 /// A condition's stable text, for grouping soups by condition.
 pub(crate) fn condition_key(c: &primase_core::state::Condition) -> String {
     c.0.iter()
@@ -978,11 +995,7 @@ pub fn register(registry: &mut PassRegistry) {
     });
     registry.register_requiring(
         "lower-fromsoft-collision",
-        |o| {
-            Ok(Box::new(super::collision::LowerFromSoftCollision::from_options(
-                o,
-            )?))
-        },
+        |o| Ok(Box::new(collision::LowerFromSoftCollision::from_options(o)?)),
         &[("hit-filters", "8+27")],
     );
     registry.register_requiring(
