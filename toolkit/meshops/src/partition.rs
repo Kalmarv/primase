@@ -208,11 +208,26 @@ impl Pass for PartitionGrid {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // independent content: what nothing refers to (entities with no component are nothing)
         let names = w.component_names();
-        let content: Vec<Entity> = w
-            .unreferenced()
-            .into_iter()
-            .filter(|&e| names.iter().any(|n| w.entity_has_named(e, n)))
-            .collect();
+        let has_any = |e: Entity| names.iter().any(|n| w.entity_has_named(e, n));
+        let mut content: Vec<Entity> = w.unreferenced().into_iter().filter(|&e| has_any(e)).collect();
+        // content only reachable from itself (a reference cycle, a self-reference) has no unreferenced root: each
+        // such group gets its smallest entity as a root, so it is in exactly one part, never left out or duplicated
+        let mut covered = w.closure(content.iter().copied());
+        let mut cycles = 0u64;
+        for e in w.entities().collect::<Vec<_>>() {
+            if covered.contains(&e) || !has_any(e) {
+                continue;
+            }
+            content.push(e);
+            covered.extend(w.closure([e]));
+            cycles += 1;
+        }
+        if cycles > 0 {
+            log.count(
+                "content reached only from itself (reference cycles), rooted at its smallest entity",
+                cycles,
+            );
+        }
         let mut cells: BTreeMap<(i64, i64), BTreeSet<Entity>> = BTreeMap::new();
         let mut at: Vec<(Entity, [f64; 2])> = Vec::new();
         let mut unplaced = BTreeSet::new();
@@ -336,6 +351,94 @@ mod tests {
             .unwrap();
         assert_eq!(w2.resource::<PartitionPlan>().unwrap().groups.len(), 1);
         assert_eq!(log.counts["content outside the region, left out"], 1);
+    }
+
+    /// Content no unreferenced entity reaches (an isolated two-entity cycle, a self-reference) is rooted once, at its
+    /// smallest entity, so the parts cover exactly what the whole world holds, each entity in one part's roots'
+    /// closure; a cycle a normal root already reaches gets no root of its own, and a shared prototype stays shared.
+    #[test]
+    fn reference_cycles_are_rooted_once_and_nothing_is_left_out() {
+        let mut w = World::new();
+        let proto = w.spawn();
+        let a = placement(&mut w, proto, 10.0, 10.0);
+        let b = placement(&mut w, proto, 150.0, 10.0);
+        // an isolated two-entity cycle: each places the other
+        let (c1, c2) = (w.spawn(), w.spawn());
+        for (e, other, x) in [(c1, c2, 20.0f32), (c2, c1, 30.0)] {
+            w.insert(
+                e,
+                Instance {
+                    prototype: other,
+                    variant: 0,
+                },
+            );
+            let mut t = Transform::IDENTITY;
+            t.cols[3] = [x, 0.0, -10.0];
+            w.insert(e, t);
+        }
+        // a self-reference, unplaced
+        let selfish = w.spawn();
+        w.insert(
+            selfish,
+            Instance {
+                prototype: selfish,
+                variant: 0,
+            },
+        );
+        // a cycle a normal placement already reaches: a places r1, r1 and r2 place each other
+        let (r1, r2) = (w.spawn(), w.spawn());
+        w.insert(
+            r1,
+            Instance {
+                prototype: r2,
+                variant: 0,
+            },
+        );
+        w.insert(
+            r2,
+            Instance {
+                prototype: r1,
+                variant: 0,
+            },
+        );
+        let reaching = placement(&mut w, r1, 12.0, 10.0);
+        let mut log = PassLog::default();
+        grid(&[("cell", "100")]).run(&mut w, &mut log).unwrap();
+        let plan = w.resource::<PartitionPlan>().unwrap().clone();
+        // two cycles needed a root of their own: {c1, c2} and {selfish}
+        assert_eq!(
+            log.counts["content reached only from itself (reference cycles), rooted at its smallest entity"],
+            2
+        );
+        let roots: Vec<Entity> = plan.groups.iter().flat_map(|g| g.roots.iter().copied()).collect();
+        let unique: BTreeSet<Entity> = roots.iter().copied().collect();
+        assert_eq!(unique.len(), roots.len(), "a root in two parts: {roots:?}");
+        assert!(
+            unique.contains(&c1) && !unique.contains(&c2),
+            "the cycle rooted at its smallest entity"
+        );
+        assert!(unique.contains(&selfish));
+        assert!(
+            !unique.contains(&r1) && !unique.contains(&r2),
+            "reached from a normal root"
+        );
+        // what the parts write together is what the whole world holds
+        let covered: BTreeSet<Entity> = plan
+            .groups
+            .iter()
+            .flat_map(|g| w.closure(g.roots.iter().copied()))
+            .collect();
+        // (the whole world's conversion writes the closure of every entity: all of them here)
+        let whole: BTreeSet<Entity> = w.closure(w.entities());
+        assert_eq!(covered, whole);
+        for e in [a, b, c1, c2, selfish, r1, r2, reaching, proto] {
+            assert!(covered.contains(&e), "{e:?}");
+        }
+        assert!(
+            plan.groups
+                .iter()
+                .any(|g| g.key == "unplaced" && g.roots.contains(&selfish))
+        );
     }
 
     /// The typed constructor and the text refuse the same values: no zero, negative or NaN cell, no negative halo,
