@@ -537,6 +537,7 @@ impl Pass for BakeFromSoftLayers {
         world.insert_resource(shaders);
         world.insert_resource(payloads);
         let report = result.map_err(|e| e.to_string())?;
+        // counted after the split: a part baked at k levels gives k primitives' streams
         log.count("layer input streams consumed", LayerInputs::remove_all(world));
         for (k, v) in [
             ("source materials baked", report.source_materials),
@@ -569,7 +570,7 @@ impl Pass for BakeFromSoftLayers {
 /// A layered material no pass baked needs the program's choice: `layers=preserve` leaves it as source data
 /// (unlowered, its layer inputs kept, counted); `layers=preview` lowers it from its main-layer preview, a counted
 /// approximation, and drops the layer inputs (shader inputs, not vertex colours). Without the option such a material
-/// is an error. Materials of a skipped source class are not lowered, counted.
+/// is an error. Materials of a skipped source class, and source materials no primitive draws, are not lowered, counted.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LowerFromSoftMaterials {
     pub layers: Option<super::pbr::Layers>,
@@ -625,7 +626,7 @@ impl Pass for LowerFromSoftMaterials {
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use super::source::TexturePayloads;
         let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
-        let lowered = super::pbr::lower(world, &payloads.0, self.layers);
+        let lowered = super::pbr::lower_drawn(world, &payloads.0, self.layers);
         world.insert_resource(payloads);
         let lowered = lowered.map_err(|e| e.to_string())?;
         if self.layers == Some(super::pbr::Layers::Preview) {

@@ -278,7 +278,42 @@ pub fn lower(
     payloads: &BTreeMap<String, Vec<u8>>,
     layers: Option<Layers>,
 ) -> Result<PassLog> {
-    let sources: Vec<_> = world.iter::<Material>().map(|(e, m)| (e, m.clone())).collect();
+    lower_materials(world, payloads, layers, None)
+}
+
+/// [`lower`] for the source materials some mesh primitive draws; the others (the slots of meshes a geometry pass
+/// left out or recorded apart) stay as source data, counted.
+pub fn lower_drawn(
+    world: &mut World,
+    payloads: &BTreeMap<String, Vec<u8>>,
+    layers: Option<Layers>,
+) -> Result<PassLog> {
+    let drawn: BTreeSet<Entity> = world
+        .iter::<primase_core::Mesh>()
+        .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
+        .collect();
+    let undrawn = world
+        .iter::<Material>()
+        .filter(|(e, _)| !drawn.contains(e))
+        .count();
+    let mut log = lower_materials(world, payloads, layers, Some(&drawn))?;
+    if undrawn > 0 {
+        log.count("source materials no primitive draws, not lowered", undrawn as u64);
+    }
+    Ok(log)
+}
+
+fn lower_materials(
+    world: &mut World,
+    payloads: &BTreeMap<String, Vec<u8>>,
+    layers: Option<Layers>,
+    only: Option<&BTreeSet<Entity>>,
+) -> Result<PassLog> {
+    let sources: Vec<_> = world
+        .iter::<Material>()
+        .filter(|(e, _)| only.is_none_or(|o| o.contains(e)))
+        .map(|(e, m)| (e, m.clone()))
+        .collect();
     let mut log = PassLog::default();
     let mut cache = existing_textures(world);
     for (e, m) in sources {

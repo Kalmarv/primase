@@ -208,7 +208,10 @@ fn frames_off_every_map_are_counted_by_area() {
         1
     );
     assert_eq!(world.get::<Texture>(t).unwrap().levels[0], [10, 20, 30, 255]);
-    assert!(!log.counts.contains_key("primitives given the derived tangent frame"));
+    assert!(
+        !log.counts
+            .contains_key("primitives given the derived tangent frame")
+    );
 }
 
 #[test]
