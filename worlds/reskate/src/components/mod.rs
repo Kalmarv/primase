@@ -30,12 +30,12 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub mod collision;
-mod layered_lower;
-pub mod lower;
+pub mod layered;
+pub mod pause_map;
 
-pub use collision::{SkateRock, scene_surfaces, soup};
-pub use layered_lower::LowerLayeredPbr;
-pub use lower::{LowerSkateLights, LowerSkatePbr, MskError, lower_light, lower_material, msk_to_orm};
+pub use collision::SkateRock;
+pub use layered::{BlendOpacity, VertexBlend};
+pub use pause_map::{SkatePauseImage, SkatePausePicture};
 
 /// Keys of a manifest object this crate does not model, carried untouched (`extras`, `extensions`, unknown keys).
 pub type Other = Map<String, Value>;

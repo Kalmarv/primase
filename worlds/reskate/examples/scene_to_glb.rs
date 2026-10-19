@@ -16,7 +16,7 @@ use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_gltf::{GroupBy, WriteOptions, write_file};
 use primase_image::NormalizeNormals;
-use primase_reskate::dialect::SkateScene;
+use primase_reskate::components::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
 

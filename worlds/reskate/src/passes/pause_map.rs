@@ -16,38 +16,9 @@
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Resource, World};
 
-use crate::dialect::SkateScene;
+pub use crate::components::pause_map::{SkatePauseImage, SkatePausePicture};
 
-/// The scene's own pause-map picture, decoded (RGBA8, row 0 north), as the reader's loader puts it in the world.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SkatePauseImage {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
-
-impl Resource for SkatePauseImage {
-    const NAME: &'static str = "skate.pause_image";
-}
-
-/// The pause-map picture a map writer writes ([`PrepareReskatePauseMap`]).
-#[derive(Clone, Debug, PartialEq)]
-pub enum SkatePausePicture {
-    /// This picture (RGBA8, row 0 north) covering ground `bounds` `[east0, north0, east1, north1]`.
-    Image {
-        width: u32,
-        height: u32,
-        rgba: Vec<u8>,
-        bounds: [f32; 4],
-    },
-    /// The map's geometry drawn top-down, `height` pixels high, over ground `extent` (`None`: the map's own content
-    /// bounds as the writer measures them).
-    Geometry { height: usize, extent: Option<[f32; 4]> },
-}
-
-impl Resource for SkatePausePicture {
-    const NAME: &'static str = "skate.pause_picture";
-}
+use crate::components::SkateScene;
 
 /// What [`PrepareReskatePauseMap`] draws the picture over.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -311,8 +282,8 @@ mod tests {
         let image = PrepareReskatePauseMap::new(PauseSource::Image).unwrap();
         assert!(image.run(&mut w, &mut PassLog::default()).is_err());
         let mut scene = w.resource::<SkateScene>().unwrap().clone();
-        scene.pause_map = Some(crate::dialect::PauseMap {
-            image: crate::dialect::FileRef {
+        scene.pause_map = Some(crate::components::PauseMap {
+            image: crate::components::FileRef {
                 path: "ui/front.png".into(),
                 sha256: None,
             },

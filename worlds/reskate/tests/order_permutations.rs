@@ -18,8 +18,8 @@ use primase_core::{
     Primitive, Semantic, Stream, Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::SkateGrindCurve;
-use primase_reskate::prepare::{PlanReskateBlendBudget, RaiseOptions};
+use primase_reskate::components::SkateGrindCurve;
+use primase_reskate::passes::{PlanReskateBlendBudget, RaiseOptions};
 
 /// The orders a list of `n` things is made in: as listed, reversed, and rotated by one.
 #[derive(Clone, Copy, Debug)]
@@ -261,7 +261,7 @@ fn world(order: Order) -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("orders").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("orders").unwrap()).unwrap();
     // two rails 1 m up, along east (scene x), in the first and second cells
     let rails = [
         vec![[100.0, 1.0, -50.0], [104.0, 1.0, -50.0]],

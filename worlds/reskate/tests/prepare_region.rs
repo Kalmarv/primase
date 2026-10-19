@@ -5,8 +5,8 @@
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Transform, World};
-use primase_reskate::dialect::{SkatePlacement, SkateRock, SkateScene};
-use primase_reskate::prepare::{ClipReskateRegion, clip_reskate_region};
+use primase_reskate::components::{SkatePlacement, SkateRock, SkateScene};
+use primase_reskate::passes::{ClipReskateRegion, clip_reskate_region};
 
 /// A placement at scene (x, 0, z) of a prototype with nothing on it.
 fn place(w: &mut World, proto: Entity, x: f32, z: f32, clip: Option<bool>) -> Entity {
@@ -100,7 +100,7 @@ fn placements_are_marked_and_world_collision_is_cut() {
 /// A hull soup is kept or cut whole, by the mean of its vertices, though a triangle of it lies outside.
 #[test]
 fn a_hull_is_kept_or_cut_whole() {
-    use primase_reskate::dialect::{CollisionMode, SkateCollision, SoupRef, TableRef};
+    use primase_reskate::components::{CollisionMode, SkateCollision, SoupRef, TableRef};
     let hull = |w: &mut World, dx: f32| {
         let e = w.spawn();
         // vertices' mean east 5 + dx; the last triangle's centroid at east 9 + dx

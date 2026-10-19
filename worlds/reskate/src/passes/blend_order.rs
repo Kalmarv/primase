@@ -17,7 +17,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::build::{EncodingOptions, blend_chains};
-use crate::dialect::SkateBlendChains;
+use crate::components::SkateBlendChains;
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,8 +42,8 @@ impl PrepareReskateBlendOrder {
     /// For the encoding the map will be written with (its render tile, instancing, limit and offset), checked as
     /// `prepare-reskate-overlays` checks it.
     pub fn for_encoding(mut self, e: &EncodingOptions) -> Result<PrepareReskateBlendOrder, String> {
-        crate::prepare::overlays::check_grouping(e)?;
-        self.encoding = crate::prepare::overlays::grouping_only(e);
+        crate::passes::overlays::check_grouping(e)?;
+        self.encoding = crate::passes::overlays::grouping_only(e);
         Ok(self)
     }
 
@@ -58,7 +58,7 @@ impl PrepareReskateBlendOrder {
             .remove("grid")
             .ok_or("grid is required (metres of the grid chain objects are cut on; 0: not cut)")?;
         let grid: f32 = grid.parse().map_err(|_| format!("grid={grid} is not a number"))?;
-        let e = crate::prepare::overlays::encoding_of(&rest)?;
+        let e = crate::passes::overlays::encoding_of(&rest)?;
         PrepareReskateBlendOrder::new(grid)?.for_encoding(&e)
     }
 }
@@ -73,7 +73,7 @@ impl Pass for PrepareReskateBlendOrder {
         "prepare-reskate-blend-order"
     }
     fn options(&self) -> Options {
-        let mut o = crate::prepare::overlays::encoding_options(&self.encoding);
+        let mut o = crate::passes::overlays::encoding_options(&self.encoding);
         o.insert("grid".into(), self.grid.to_string());
         o
     }

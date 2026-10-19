@@ -129,72 +129,67 @@ removed_when = "worlds/gta is arranged by role before the final review: a struct
 [[layout]]
 file = "worlds/reskate/src/build.rs"
 reason = "writer I/O in Other"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"
 
 [[layout]]
 file = "worlds/reskate/src/interchange/mod.rs"
-reason = "reader I/O in Other; Other names the I/O module primase_reskate::interchange::read; Other names the I/O module primase_reskate::interchange::write; Other names the I/O module primase_gltf::LoadReport; Other names the I/O module primase_image::TextureLoadReport; Other names the I/O module primase_gltf::load_mesh_files; Other names the I/O module primase_image::load_textures; Other names the I/O module primase_reskate::texture"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+reason = "Other names the I/O module primase_reskate::read::interchange; Other names the I/O module primase_reskate::write::interchange"
+removed_when = "B5: interchange/ keeps the format (schema, tables, soups, layered syntax); read, load and write are reached from read/ and write/"
 
 [[layout]]
-file = "worlds/reskate/src/layered.rs"
-reason = "Other names the I/O module primase_reskate::postcompile::vblend"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/layered.rs"
+reason = "Passes names the I/O module primase_reskate::postcompile::vblend"
+removed_when = "B2: decal_opacity (the stock decal row's opacity encoding) moves to an I/O-free module shared by passes/layered and postcompile/vblend"
 
 [[layout]]
 file = "worlds/reskate/src/map.rs"
 reason = "Other names the I/O module primase_reskate::texture; Other names the I/O module primase_reskate::postcompile::map_folder"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+removed_when = "B2/B1: the tile assembly moves to the I/O-free assembly module, serialization to write/map, the chain decision to finalize-reskate-map"
 
 [[layout]]
 file = "worlds/reskate/src/material.rs"
 reason = "Other names the I/O module primase_reskate::texture"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+removed_when = "B5: texture.rs's source reading moves to read/ and its encoding to write/map, leaving the I/O-free texture calculations the passes use"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/blend_order.rs"
-reason = "Other names the I/O module primase_reskate::build"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/blend_order.rs"
+reason = "Passes names the I/O module primase_reskate::build"
+removed_when = "B2: the writer's dry assembly (build.rs) moves to an I/O-free assembly module that passes and write/map share"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/budget.rs"
-reason = "Other names the I/O module primase_reskate::texture"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/budget.rs"
+reason = "Passes names the I/O module primase_reskate::texture"
+removed_when = "B5: texture.rs's source reading moves to read/ and its encoding to write/map, leaving the I/O-free texture calculations the passes use"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/overlays.rs"
-reason = "Other names the I/O module primase_reskate::build"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/overlays.rs"
+reason = "Passes names the I/O module primase_reskate::build"
+removed_when = "B2: the writer's dry assembly (build.rs) moves to an I/O-free assembly module that passes and write/map share"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/raise.rs"
-reason = "a #[path] attribute (a module's place is its file's path)"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/snap.rs"
+reason = "Passes names the I/O module primase_reskate::build"
+removed_when = "B2: the writer's dry assembly (build.rs) moves to an I/O-free assembly module that passes and write/map share"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/snap.rs"
-reason = "Other names the I/O module primase_reskate::build"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/textures.rs"
+reason = "Passes names the I/O module primase_reskate::texture"
+removed_when = "B5: texture.rs's source reading moves to read/ and its encoding to write/map, leaving the I/O-free texture calculations the passes use"
 
 [[layout]]
-file = "worlds/reskate/src/prepare/textures.rs"
-reason = "Other names the I/O module primase_reskate::texture"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
-
-[[layout]]
-file = "worlds/reskate/src/prepare/water.rs"
-reason = "Other names the I/O module primase_reskate::build"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+file = "worlds/reskate/src/passes/water.rs"
+reason = "Passes names the I/O module primase_reskate::build"
+removed_when = "B2: the writer's dry assembly (build.rs) moves to an I/O-free assembly module that passes and write/map share"
 
 [[layout]]
 file = "worlds/reskate/src/scene.rs"
 reason = "Other names the I/O module primase_reskate::texture"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+removed_when = "B3: the UV-repeat policy moves to passes/; the writer-facing scene to write/map"
 
 [[layout]]
 file = "worlds/reskate/src/texture.rs"
 reason = "writer I/O in Other"
-removed_when = "worlds/reskate is arranged by role before step 20: the structural commit, then review (b)'s B1-B5 split each mixed module into read/, passes/, write/ or an I/O-free module"
+removed_when = "B5: texture.rs's source reading moves to read/ and its encoding to write/map, leaving the I/O-free texture calculations the passes use"
 
 [[layout]]
 file = "worlds/unity/src/components.rs"

@@ -66,14 +66,13 @@ use primase_core::{
     Texture, Transform, World,
 };
 
-use crate::dialect::{
+use crate::components::{
     AlphaMode, CollisionMode, Domain, FileRef, MarkerKind, MaterialClass, Other, Part, STANDARD_SURFACES,
     SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype, SkateRock,
     SkateScene, SkateTexture, Snap, SnapMode, SoupRef, TableRef, Wrap,
 };
 use crate::{Error, Result};
 
-#[path = "raise_materials.rs"]
 mod materials;
 pub use materials::{SKATE_F0, fold_reflectance};
 

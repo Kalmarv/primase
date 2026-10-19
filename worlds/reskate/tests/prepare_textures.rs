@@ -13,8 +13,10 @@ use primase_core::{
     Topology, Transform, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{FileRef, MaterialClass, Other, SkateBaseFactor, SkateMaterial, SkateTexture};
-use primase_reskate::prepare::{BudgetReskateTextures, PrepareReskateTextures};
+use primase_reskate::components::{
+    FileRef, MaterialClass, Other, SkateBaseFactor, SkateMaterial, SkateTexture,
+};
+use primase_reskate::passes::{BudgetReskateTextures, PrepareReskateTextures};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -284,7 +286,7 @@ fn the_writer_writes_textures_as_prepared() {
     let t = texture(&mut w, "big", 512, [90, 90, 90, 255]);
     let m = material(&mut w, "m", Some(t), Some([255, 0, 0]));
     quad(&mut w, m, 2.0, 0.0);
-    w.insert_resource(primase_reskate::dialect::SkateScene {
+    w.insert_resource(primase_reskate::components::SkateScene {
         name: "prepared".into(),
         ..Default::default()
     });
@@ -293,7 +295,7 @@ fn the_writer_writes_textures_as_prepared() {
     for (i, p) in protos.into_iter().enumerate() {
         w.insert(
             p,
-            primase_reskate::dialect::SkatePrototype {
+            primase_reskate::components::SkatePrototype {
                 id: format!("p{i}"),
                 glb: Some(FileRef {
                     path: format!("prototypes/p{i}.glb"),
@@ -308,15 +310,15 @@ fn the_writer_writes_textures_as_prepared() {
         );
         w.insert(
             p,
-            primase_reskate::dialect::SkateParts(vec![primase_reskate::dialect::Part::default()]),
+            primase_reskate::components::SkateParts(vec![primase_reskate::components::Part::default()]),
         );
     }
     // a spawn with its height (the map has no ground to snap to)
     let spawn = w.spawn();
     w.insert(
         spawn,
-        primase_reskate::dialect::SkateMarker {
-            kind: primase_reskate::dialect::MarkerKind::Spawn,
+        primase_reskate::components::SkateMarker {
+            kind: primase_reskate::components::MarkerKind::Spawn,
             position: Some(([1.0, 1.0], Some(0.0))),
             yaw: Some(0.0),
             m: None,
@@ -330,7 +332,7 @@ fn the_writer_writes_textures_as_prepared() {
     );
     let placements: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
     for e in placements {
-        w.insert(e, primase_reskate::dialect::SkatePlacement::default());
+        w.insert(e, primase_reskate::components::SkatePlacement::default());
     }
     let out_root = tmp("writer");
     let r = primase_reskate::write_map(

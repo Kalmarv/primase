@@ -17,8 +17,8 @@ use primase_core::{
     Source, TextureFile, Tile, Transform, World,
 };
 
-use super::tables::{self, flags};
-use crate::dialect::*;
+use crate::components::*;
+use crate::interchange::tables::{self, flags};
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 
@@ -530,7 +530,7 @@ impl Reader<'_> {
                 list.len()
             }
         };
-        self.surface_names = crate::dialect::collision::scene_surfaces(surfaces.as_deref());
+        self.surface_names = crate::interchange::soup::scene_surfaces(surfaces.as_deref());
         scene.surfaces = surfaces;
 
         let v_textures = top.take("textures", self.rep);
@@ -866,7 +866,7 @@ impl Reader<'_> {
             }
         }
         for (entity, layers, weights) in layered {
-            super::layered::read(self.w, entity, layers, weights, &out)?;
+            crate::interchange::layered::read(self.w, entity, layers, weights, &out)?;
         }
         for (entity, material) in self.w.iter::<primase_core::LayeredMaterial>() {
             primase_core::Component::verify(material, entity, self.w).map_err(bad)?;
@@ -988,7 +988,7 @@ impl Reader<'_> {
                 Some((mut sref, paths)) => {
                     let soup = read_soups(&mut sref.table, &paths, n_surfaces)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
-                    crate::dialect::collision::insert_soup(self.w, p, soup, &self.surface_names)
+                    crate::interchange::soup::insert_soup(self.w, p, soup, &self.surface_names)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
                     Some(sref)
                 }
@@ -1349,7 +1349,7 @@ impl Reader<'_> {
             let (mut sref, paths) = self.soup_ref(e, &what, true)?;
             let soup = read_soups(&mut sref.table, &paths, n_surfaces)?;
             let ent = self.w.spawn();
-            crate::dialect::collision::insert_soup(self.w, ent, soup, &self.surface_names)
+            crate::interchange::soup::insert_soup(self.w, ent, soup, &self.surface_names)
                 .map_err(|e| bad(format!("{what}: {e}")))?;
             self.w.insert(ent, SkateCollision(sref));
         }
@@ -1754,4 +1754,52 @@ struct PendingForm {
     mesh: Option<u32>,
     parts: ReadParts,
     other: Other,
+}
+
+/// What [`load`] read: the prototypes' meshes, the textures, and the scene's own pause-map picture.
+#[derive(Clone, Debug, Default)]
+pub struct LoadReport {
+    pub meshes: primase_gltf::LoadReport,
+    pub textures: primase_image::TextureLoadReport,
+    /// Whether the scene names a pause-map picture, read into [`crate::passes::SkatePauseImage`].
+    pub pause_image: bool,
+}
+
+/// Read every file a scene read by [`read`] references into the world: each `core.mesh_file` as `core.mesh` (the glTF
+/// crate's GLB reader), each `core.texture_file` without pixels as `core.texture` (the image toolkit's PNG and DDS
+/// readers), paths relative to the scene folder `dir`, and the scene's pause-map picture (`pause_map`, decoded to
+/// RGBA8) as [`crate::passes::SkatePauseImage`] for `prepare-reskate-pause-map`. The file references stay, as the
+/// payloads' origin.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the scene's pause-map picture"
+)]
+pub fn load(dir: &Path, world: &mut primase_core::World) -> Result<LoadReport> {
+    let mut report = LoadReport {
+        meshes: primase_gltf::load_mesh_files(world, dir)?,
+        textures: primase_image::load_textures(world, dir)?,
+        pause_image: false,
+    };
+    let image_file = world
+        .resource::<crate::components::SkateScene>()
+        .and_then(|s| s.pause_map.as_ref())
+        .map(|p| p.image_file.clone());
+    if let Some(file) = image_file {
+        let bytes = std::fs::read(&file).map_err(|source| crate::Error::Io {
+            path: file.clone(),
+            source,
+        })?;
+        let src = crate::texture::TexSource::from_file_bytes(&file.display().to_string(), bytes, None, None)?;
+        let rgba = src
+            .decode(0, src.width, src.height)?
+            .ok_or_else(|| crate::Error::Scene("pause_map: the image cannot be decoded".into()))?;
+        world.insert_resource(crate::passes::SkatePauseImage {
+            width: src.width,
+            height: src.height,
+            rgba,
+        });
+        report.pause_image = true;
+    }
+    Ok(report)
 }

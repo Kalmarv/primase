@@ -16,7 +16,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::blend_order::take_chains;
-use crate::dialect::{BlendBudgetMode, SkateBlendBudget, SkateBlendChains};
+use crate::components::{BlendBudgetMode, SkateBlendBudget, SkateBlendChains};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]

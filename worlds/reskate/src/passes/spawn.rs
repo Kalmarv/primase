@@ -10,7 +10,7 @@
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Instance, Transform, World};
 
-use crate::dialect::{MarkerKind, SkateMarker, SkateScene, Snap, SnapMode};
+use crate::components::{MarkerKind, SkateMarker, SkateScene, Snap, SnapMode};
 
 /// Where [`PlaceReskateSpawn`] puts the spawn.
 #[derive(Clone, Copy, Debug, PartialEq)]

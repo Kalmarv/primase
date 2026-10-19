@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateGrindCurve, SkateGrindPrism, SkateMarker};
+use primase_reskate::components::{MarkerKind, Other, SkateGrindCurve, SkateGrindPrism, SkateMarker};
 use primase_reskate::grind::PrismRules;
-use primase_reskate::prepare::{PrepareReskateGrinds, RaiseOptions, prepare_reskate_grinds};
+use primase_reskate::passes::{PrepareReskateGrinds, RaiseOptions, prepare_reskate_grinds};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -59,7 +59,7 @@ fn world() -> (World, [Entity; 3]) {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("grinds").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("grinds").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

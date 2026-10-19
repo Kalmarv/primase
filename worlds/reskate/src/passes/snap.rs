@@ -25,7 +25,7 @@ use primase_meshops::vector::Vec3;
 
 use crate::build::{EncodingOptions, SoupWorld, bounds, hulls, writer_placements};
 use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
-use crate::dialect::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
+use crate::components::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
 use crate::model::CollisionMode;
 use crate::scene::{MeshCounters, Scene, SnapMode, build_geometry};

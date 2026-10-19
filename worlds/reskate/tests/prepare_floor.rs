@@ -9,11 +9,11 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
     Collision, Entity, Instance, Mesh, Primitive, Semantic, Stream, Topology, Transform, World,
 };
-use primase_reskate::dialect::{
+use primase_reskate::components::{
     FileRef, MarkerKind, MinHeight, Other, SkateFloorPlan, SkateGrindCurve, SkateLight, SkateMarker,
     SkatePartsOff, SkatePrototype, SkateScene, SkateWater,
 };
-use primase_reskate::prepare::{PrepareReskateFloor, prepare_reskate_floor};
+use primase_reskate::passes::{PrepareReskateFloor, prepare_reskate_floor};
 
 /// A part spanning heights `y0..y1` in its prototype.
 fn part(y0: f32, y1: f32) -> Primitive {

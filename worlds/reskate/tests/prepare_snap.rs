@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateMarker, SkateMarkerSnaps, Snap, SnapMode};
-use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers, snap_reskate_markers};
+use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateMarkerSnaps, Snap, SnapMode};
+use primase_reskate::passes::{RaiseOptions, SnapReskateMarkers, snap_reskate_markers};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -72,7 +72,7 @@ fn fixture() -> Fixture {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("snap").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("snap").unwrap()).unwrap();
     let spawn = marker(&mut w, MarkerKind::Spawn, ([20.0, -20.0], None), None);
     let on_ground = marker(
         &mut w,

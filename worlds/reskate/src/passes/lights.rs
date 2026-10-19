@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, World};
 
-use crate::dialect::SkateLight;
+use crate::components::SkateLight;
 use crate::scene::{PlacedLight, light_order, placed_light};
 
 /// See the module documentation. Made by [`SelectReskateLights::new`]; from options by the same call.

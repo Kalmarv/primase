@@ -14,8 +14,8 @@ use primase_core::{
 };
 use primase_meshops::vector::Vec3;
 use primase_reskate::EncodingOptions;
-use primase_reskate::prepare::lights::keep_lights;
-use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::passes::lights::keep_lights;
+use primase_reskate::passes::{RaiseOptions, SnapReskateMarkers};
 use primase_reskate::scene::PlacedLight;
 
 fn tmp(name: &str) -> PathBuf {
@@ -186,7 +186,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("benches").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("benches").unwrap()).unwrap();
     let scene = tmp("scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();

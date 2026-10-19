@@ -12,7 +12,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_meshops::vector::Vec3;
 
-use crate::dialect::{SkateGrindCurve, SkateGrindPrism};
+use crate::components::{SkateGrindCurve, SkateGrindPrism};
 use crate::grind::{self, PrismRules, SURFACES};
 use crate::scene;
 

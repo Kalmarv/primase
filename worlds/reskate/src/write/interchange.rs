@@ -22,9 +22,9 @@ use primase_core::{
     Priority, Source, Texture, TextureFile, Tile, Transform, World,
 };
 
-use super::read::sha256_file;
-use super::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
-use crate::dialect::*;
+use crate::components::*;
+use crate::interchange::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
+use crate::read::interchange::sha256_file;
 use crate::{Error, Result};
 use primase_core::json::{f32_value, f32s_value, f64_value};
 use serde_json::{Map, Value};
@@ -564,7 +564,7 @@ impl Writer<'_> {
                         m.key
                     )));
                 }
-                let (layers, weights) = super::layered::write(w, e)?;
+                let (layers, weights) = crate::interchange::layered::write(w, e)?;
                 o.put("layers", layers);
                 o.put("weights", weights);
             } else if w.has::<primase_core::LayeredMaterial>(e) {
@@ -700,7 +700,7 @@ impl Writer<'_> {
             o.opt("foliage", p.foliage, Value::Bool);
             o.opt("ground", p.ground, Value::Bool);
             o.put("parts", parts);
-            let soup = crate::dialect::collision::soup(w, e, Some(scene))
+            let soup = crate::interchange::soup::soup(w, e, Some(scene))
                 .map_err(|m| bad(format!("{what} collision: {m}")))?;
             match (&p.collision, soup.as_ref()) {
                 (Some(r), Some(soup)) => {
@@ -857,7 +857,7 @@ impl Writer<'_> {
         // world soups: the scene's, then collision placed by an entity of its own (in scene space through its transform)
         let mut soups = Vec::new();
         for (e, c) in w.iter::<SkateCollision>() {
-            let soup = crate::dialect::collision::soup(w, e, Some(scene))
+            let soup = crate::interchange::soup::soup(w, e, Some(scene))
                 .map_err(|m| bad(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| bad(format!("collision {e:?}: no collision")))?;
             soups.push(self.soup_tables(&c.0, &soup, &format!("collision {e:?}"))?);
@@ -866,7 +866,7 @@ impl Writer<'_> {
             if w.has::<SkateCollision>(e) || w.has::<SkatePrototype>(e) {
                 continue;
             }
-            let mut soup = crate::dialect::collision::soup(w, e, Some(scene))
+            let mut soup = crate::interchange::soup::soup(w, e, Some(scene))
                 .map_err(|m| bad(format!("collision {e:?}: {m}")))?
                 .expect("core.collision");
             if let Some(t) = w.get::<Transform>(e) {

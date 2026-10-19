@@ -16,7 +16,7 @@ use primase_core::{
     Collision, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology, Transform,
     World,
 };
-use primase_reskate::prepare::{
+use primase_reskate::passes::{
     ClipReskateRegion, OceanMaterials, PauseExtent, PauseSource, PlaceReskateSpawn, PrepareReskateFloor,
     PrepareReskatePauseMap, PrepareReskateWater, RaiseOptions, SelectReskateLights, SnapReskateMarkers,
     WaterExtent,
@@ -80,7 +80,7 @@ fn unraised() -> (World, [Entity; 2]) {
 /// [`unraised`], raised.
 fn world() -> (World, [Entity; 2]) {
     let (mut w, placed) = unraised();
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("parts").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("parts").unwrap()).unwrap();
     (w, placed)
 }
 

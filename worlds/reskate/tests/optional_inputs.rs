@@ -9,8 +9,8 @@ use std::path::Path;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Collision, Surfaces, World};
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateMarker};
-use primase_reskate::prepare::RaiseOptions;
+use primase_reskate::components::{MarkerKind, Other, SkateMarker};
+use primase_reskate::passes::RaiseOptions;
 
 #[test]
 fn a_map_without_the_optional_features_is_prepared_and_written() {
@@ -33,7 +33,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
         |p| p,
     );
     w.insert(ground, c);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("bare").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("bare").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

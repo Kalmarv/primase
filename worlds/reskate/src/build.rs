@@ -5,7 +5,7 @@
     reason = "writer I/O: writes the map folder"
 )]
 
-use crate::prepare::pause_map::SkatePausePicture;
+use crate::passes::pause_map::SkatePausePicture;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -343,7 +343,7 @@ impl MeshSource for Meshes<'_> {
 /// The scene reader's warnings as the reference build reports them: unused textures, primitives without normals,
 /// unplaced prototypes and prototypes without geometry, too many travel points.
 fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
-    use crate::dialect::{SkateMaterial, SkateTexture};
+    use crate::components::{SkateMaterial, SkateTexture};
     // each kind in a stable order (by its text), not the order the world's entities came in
     let mut out = Vec::new();
     let mut used: HashSet<primase_core::Entity> = HashSet::new();
@@ -478,7 +478,7 @@ fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
 /// The apron `clip-reskate-region` recorded around the scene's region (0 when nothing is clipped). Refused: a record
 /// for another region than the scene's, and placements marked outside the region with no record of its apron.
 pub(crate) fn apron_of(world: &World, s: &Scene) -> Result<f32> {
-    match world.resource::<crate::dialect::SkateRegionClip>() {
+    match world.resource::<crate::components::SkateRegionClip>() {
         Some(c) => {
             let mine = s.region.map(|r| r.map(|v| v as f32));
             if mine != Some(c.region) {
@@ -513,8 +513,8 @@ pub(crate) fn assemble(s: &Scene, placements: &[Placement], writer: &mut MapWrit
 }
 
 /// The writer settings an overlay stack depends on, for the scene `s` written as `a` says.
-pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::OverlayGrouping {
-    crate::dialect::OverlayGrouping {
+pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::components::OverlayGrouping {
+    crate::components::OverlayGrouping {
         tile: a.tile,
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
@@ -532,14 +532,14 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::Overla
 /// a blend (`core.layered`) is lowered first (`lower-layered-reskate`), one form per prototype chosen first
 /// (`select-lod`). Every other name is reported as not written: the map has no place for it.
 pub fn target() -> primase_core::pass::Target {
-    use crate::dialect::{
+    use crate::components::{
         SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateFloorPlan, SkateForm,
         SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMarker, SkateMarkerSnaps, SkateMaterial,
         SkateOverlayStack, SkateParts, SkatePartsOff, SkatePlacement, SkatePrototype, SkateRegionClip,
         SkateRock, SkateScene, SkateSoup, SkateTexture, SkateWater,
     };
-    use crate::layered::{BlendOpacity, VertexBlend};
-    use crate::prepare::pause_map::{SkatePauseImage, SkatePausePicture};
+    use crate::passes::layered::{BlendOpacity, VertexBlend};
+    use crate::passes::pause_map::{SkatePauseImage, SkatePausePicture};
     use primase_core::pbr::PbrMaterial;
     use primase_core::{
         Collision, Component, DrawOrder, Instance, LayeredMaterial, Light, Lods, Marker, MaterialUsage,
@@ -625,9 +625,9 @@ pub(crate) fn overlay_stack(
     world: &World,
     a: &EncodingOptions,
     step: f32,
-) -> Result<crate::dialect::SkateOverlayStack> {
+) -> Result<crate::components::SkateOverlayStack> {
     let s = Scene::from_world(world, Path::new(""))?;
-    let rec = crate::dialect::SkateOverlayStack {
+    let rec = crate::components::SkateOverlayStack {
         step,
         grouping: Some(grouping(&s, a)),
         ..Default::default()
@@ -653,9 +653,9 @@ pub(crate) fn blend_chains(
     world: &World,
     a: &EncodingOptions,
     grid: f32,
-) -> Result<crate::dialect::SkateBlendChains> {
+) -> Result<crate::components::SkateBlendChains> {
     let s = Scene::from_world(world, Path::new(""))?;
-    let rec = crate::dialect::SkateBlendChains {
+    let rec = crate::components::SkateBlendChains {
         grid,
         grouping: Some(grouping(&s, a)),
         ..Default::default()
@@ -715,7 +715,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
     o.apron = apron_of(world, &s)?;
     o.pause = world.resource::<SkatePausePicture>().cloned();
     // markers snapped before the writer were snapped against this writer's collision: the same settings
-    if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
+    if let Some(b) = world.resource::<crate::components::SkateMarkerSnaps>() {
         let mine = (
             o.limit,
             [a.offset[0] as f32, a.offset[1] as f32],
@@ -745,7 +745,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
 
     let out_dir = a.out_root.join(&o.name);
     // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
-    let stack = match world.resource::<crate::dialect::SkateOverlayStack>() {
+    let stack = match world.resource::<crate::components::SkateOverlayStack>() {
         Some(rec) => {
             let mine = grouping(&s, a);
             if rec.grouping != Some(mine) {
@@ -760,7 +760,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
         None => Stack::Off { unstacked: 0 },
     };
     // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
-    let chains = match world.resource::<crate::dialect::SkateBlendChains>() {
+    let chains = match world.resource::<crate::components::SkateBlendChains>() {
         Some(rec) => {
             let mine = grouping(&s, a);
             if rec.grouping != Some(mine) {
@@ -774,7 +774,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
         }
         None => Chains::Off { left: 0 },
     };
-    let budget = world.resource::<crate::dialect::SkateBlendBudget>().cloned();
+    let budget = world.resource::<crate::components::SkateBlendBudget>().cloned();
     let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?
         .with_stack(stack)
         .with_chains(chains)

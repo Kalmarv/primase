@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::Result;
-use crate::layered::VertexBlend;
+use crate::passes::layered::VertexBlend;
 use crate::texture::{Hash64, TexLib, TexRef, safe_label};
 
 /// A surface class as the writer sees it.

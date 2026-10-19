@@ -9,24 +9,64 @@
 pub mod blend_order;
 pub mod build;
 pub mod collision;
-pub mod dialect;
+pub mod components;
 pub mod glb;
 pub mod grind;
 pub mod hash;
 pub mod interchange;
-pub mod layered;
 pub mod map;
 pub mod material;
 pub mod model;
 pub mod overlay;
+pub mod passes;
 pub mod pausemap;
 pub mod postcompile;
-pub mod prepare;
+mod read;
 pub mod records;
 pub mod scene;
 pub mod texture;
-pub mod tint;
-pub mod vertex_alpha;
+mod write;
+
+/// The `skate.*` dialect by its former path: the components programs name, and the dialect's lowerings back to core.
+pub mod dialect {
+    pub use crate::components::{
+        MarkerKind, MaterialClass, Part, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkateScene,
+        Snap, SnapMode,
+    };
+    pub use crate::interchange::soup::soup;
+    pub use crate::passes::lower::{LowerSkateLights, LowerSkatePbr};
+}
+
+/// The preparation passes by their former path ([`crate::passes`]).
+pub mod prepare {
+    pub use crate::passes::{
+        BudgetReskateTextures, ClipReskateRegion, OceanMaterials, PauseExtent, PauseSource,
+        PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateFloor,
+        PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
+        PrepareReskateWater, RaiseOptions, RaiseSkate, ReskateSpawnAt, SKATE_LIGHT_SCALE,
+        SelectReskateLights, SkatePauseImage, SkatePausePicture, SnapReskateMarkers, WaterExtent,
+        budget_reskate_textures, class_to_skate, clip_reskate_region, place_reskate_spawn,
+        plan_reskate_blend_budget, prepare_reskate_blend_order, prepare_reskate_floor,
+        prepare_reskate_grinds, prepare_reskate_overlays, prepare_reskate_pause_map, prepare_reskate_water,
+        raise_skate, raise_skate_pass, select_reskate_lights, snap_reskate_markers, studio_watts,
+        tint_pixels,
+    };
+}
+
+/// `lower-layered-reskate` and its components by their former path.
+pub mod layered {
+    pub use crate::passes::layered::{LowerLayeredReskate, OverlayLimit};
+}
+
+/// `lower-tint-reskate` by its former path.
+pub mod tint {
+    pub use crate::passes::tint::LowerTintReskate;
+}
+
+/// `lower-vertex-alpha-reskate` by its former path.
+pub mod vertex_alpha {
+    pub use crate::passes::vertex_alpha::LowerVertexAlphaReskate;
+}
 
 use std::path::PathBuf;
 
@@ -39,81 +79,81 @@ pub use build::{
 /// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the scene's name has no default
-    reg.register_requiring("raise-skate", prepare::raise_skate_pass, &[("name", "n")]);
-    dialect::lower::register(reg);
-    reg.register("place-reskate-spawn", prepare::place_reskate_spawn);
-    reg.register("snap-reskate-markers", prepare::snap_reskate_markers);
-    reg.register("prepare-reskate-grinds", prepare::prepare_reskate_grinds);
+    reg.register_requiring("raise-skate", passes::raise_skate_pass, &[("name", "n")]);
+    passes::lower::register(reg);
+    reg.register("place-reskate-spawn", passes::place_reskate_spawn);
+    reg.register("snap-reskate-markers", passes::snap_reskate_markers);
+    reg.register("prepare-reskate-grinds", passes::prepare_reskate_grinds);
     // the step is the program's: no default
     reg.register_requiring(
         "prepare-reskate-overlays",
-        prepare::prepare_reskate_overlays,
+        passes::prepare_reskate_overlays,
         &[("step", "0")],
     );
     // which water a map draws and how far is the program's: no default
     reg.register_requiring(
         "prepare-reskate-water",
-        prepare::prepare_reskate_water,
+        passes::prepare_reskate_water,
         &[("extent", "none")],
     );
     // the pause-map picture, and its size and extent, are the program's: no default
     reg.register_requiring(
         "prepare-reskate-pause-map",
-        prepare::prepare_reskate_pause_map,
+        passes::prepare_reskate_pause_map,
         &[("from", "geometry"), ("height", "9"), ("extent", "content")],
     );
     // a light cap and its grouping are the program's: no default
     reg.register_requiring(
         "select-reskate-lights",
-        prepare::select_reskate_lights,
+        passes::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
     // the budget is the program's: no default
     reg.register_requiring(
         "plan-reskate-blend-budget",
-        prepare::plan_reskate_blend_budget,
+        passes::plan_reskate_blend_budget,
         &[("objects", "pool")],
     );
     // the grid is the program's: no default
     reg.register_requiring(
         "prepare-reskate-blend-order",
-        prepare::prepare_reskate_blend_order,
+        passes::prepare_reskate_blend_order,
         &[("grid", "0")],
     );
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",
-        prepare::prepare_reskate_floor,
+        passes::prepare_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
     );
     // the region is the program's: no default
     reg.register_requiring(
         "clip-reskate-region",
-        prepare::clip_reskate_region,
+        passes::clip_reskate_region,
         &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1"), ("apron", "0")],
     );
     // the budget is the program's number: no default
     reg.register_requiring(
         "budget-reskate-textures",
-        prepare::budget_reskate_textures,
+        passes::budget_reskate_textures,
         &[("max", "1")],
     );
     reg.register("prepare-reskate-textures", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(prepare::PrepareReskateTextures)),
+        None => Ok(Box::new(passes::PrepareReskateTextures)),
     });
     // how many overlays a triangle may get is the program's: no default
     reg.register_requiring(
         "lower-layered-reskate",
-        layered::lower_layered_reskate,
+        passes::layered::lower_layered_reskate,
         &[("overlays", "all")],
     );
     reg.register("lower-tint-reskate", |o| {
-        Ok(Box::new(tint::LowerTintReskate::from_options(o)?))
+        Ok(Box::new(passes::tint::LowerTintReskate::from_options(o)?))
     });
     reg.register("lower-vertex-alpha-reskate", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(vertex_alpha::LowerVertexAlphaReskate)),
+        None => Ok(Box::new(passes::vertex_alpha::LowerVertexAlphaReskate)),
     });
 }
 

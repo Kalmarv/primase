@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::dialect::SkateMaterial;
+use crate::components::SkateMaterial;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World};
 
@@ -348,7 +348,7 @@ impl LowerTintReskate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::MaterialClass;
+    use crate::components::MaterialClass;
 
     fn material(w: &mut World) -> Entity {
         let e = w.spawn();

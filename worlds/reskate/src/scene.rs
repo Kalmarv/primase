@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::dialect::{
+use crate::components::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
     SkateScene, SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
@@ -17,9 +17,9 @@ use primase_core::{
     Tile, Transform, TransformKind, World,
 };
 
-use crate::layered::{BlendOpacity, VertexBlend};
 use crate::material::{MatLib, MaterialSpec, VClass};
 use crate::model::{CollisionMode, SrcMesh, SrcPart};
+use crate::passes::layered::{BlendOpacity, VertexBlend};
 use crate::texture::{MASK_TAG, NORMAL_TAG, TexLib, TexRef, TexSource};
 use crate::{Error, Result};
 use primase_meshops::vector::Vec3;
@@ -397,7 +397,7 @@ pub struct Scene {
     pub markers: Vec<Marker>,
     pub streaming: Option<[f64; 3]>,
     /// The floor prepare-reskate-floor applied (for the stats).
-    pub floor_plan: Option<crate::dialect::SkateFloorPlan>,
+    pub floor_plan: Option<crate::components::SkateFloorPlan>,
     pub max_render_edge: f32,
     pub trainer_note: Option<String>,
     pub light_prefix: Option<String>,
@@ -585,7 +585,7 @@ impl Scene {
             if let Some(&v) = world.get::<VertexBlend>(e) {
                 vertex_blend.insert(m.key.clone(), v);
             }
-            if let Some(f) = world.get::<crate::dialect::SkateBaseFactor>(e) {
+            if let Some(f) = world.get::<crate::components::SkateBaseFactor>(e) {
                 base_factors.insert(m.key.clone(), f.0);
             }
             mat_keys.insert(e, m.key.clone());
@@ -688,7 +688,7 @@ impl Scene {
                     }
                 })
                 .collect();
-            let soup = crate::dialect::soup(world, e, Some(sc))
+            let soup = crate::interchange::soup::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
             let collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)> = match (soup.as_ref(), &p.collision) {
                 (Some(s), Some(_)) => Some((
@@ -771,7 +771,9 @@ impl Scene {
                 clip: sp.clip,
                 no_collision: sp.no_collision,
                 split: sp.split_by_tile,
-                parts_off: world.get::<crate::dialect::SkatePartsOff>(e).map(|p| p.0.clone()),
+                parts_off: world
+                    .get::<crate::components::SkatePartsOff>(e)
+                    .map(|p| p.0.clone()),
             });
         }
         let soup_def = |file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
@@ -793,7 +795,7 @@ impl Scene {
         };
         let mut soups = Vec::new();
         for (e, c) in world.iter::<SkateCollision>() {
-            let s = crate::dialect::soup(world, e, Some(sc))
+            let s = crate::interchange::soup::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| Error::Scene(format!("collision {e:?} has no soup")))?;
             let file =
@@ -813,7 +815,7 @@ impl Scene {
             if world.has::<SkateCollision>(e) || world.has::<SkatePrototype>(e) || prototypes.contains(&e) {
                 continue;
             }
-            let mut s = crate::dialect::soup(world, e, Some(sc))
+            let mut s = crate::interchange::soup::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .expect("core.collision");
             if let Some(t) = world.get::<Transform>(e) {
@@ -838,7 +840,7 @@ impl Scene {
             .map(|(e, c)| GrindCurve {
                 surface: c.surface as usize,
                 prism: world
-                    .get::<crate::dialect::SkateGrindPrism>(e)
+                    .get::<crate::components::SkateGrindPrism>(e)
                     .map(|p| GrindPrism {
                         positions: p.positions.iter().map(|q| w(q[0], q[1], q[2])).collect(),
                         indices: p.triangles.iter().flatten().copied().collect(),
@@ -952,7 +954,7 @@ impl Scene {
                     s.far.unwrap_or(500.0),
                 ]
             }),
-            floor_plan: world.resource::<crate::dialect::SkateFloorPlan>().cloned(),
+            floor_plan: world.resource::<crate::components::SkateFloorPlan>().cloned(),
             max_render_edge: sc.max_render_edge.unwrap_or(0.0) as f32,
             trainer_note: sc.trainer_note.clone(),
             light_prefix: sc.light_prefix.clone(),
@@ -1492,7 +1494,7 @@ pub fn class_of(c: MaterialClass) -> VClass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{MaterialClass, SkateMaterial, SkateScene};
+    use crate::components::{MaterialClass, SkateMaterial, SkateScene};
 
     #[test]
     fn out_of_range_placement_priority_is_refused() {

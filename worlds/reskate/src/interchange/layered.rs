@@ -1,6 +1,6 @@
 //! Scene-interchange layered material syntax. Core owns the blend semantics;
 //! this component retains optional spelling and unknown fields for round trips.
-use crate::dialect::SkateMaterial;
+use crate::components::SkateMaterial;
 use crate::{Error, Result};
 use primase_core::pbr::UvTransform;
 use primase_core::{Component, Entity, Layer, LayerWeights, LayeredMaterial, Semantic, WeightMapping, World};

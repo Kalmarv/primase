@@ -16,8 +16,8 @@ use primase_core::{
     Topology, Transform, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{Other, SkateScene, SkateWater};
-use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::components::{Other, SkateScene, SkateWater};
+use primase_reskate::passes::{RaiseOptions, SnapReskateMarkers};
 
 /// A 10 x 10 quad grid (200 triangles, over the instancing threshold of 150) drawn with `material`.
 fn grid(material: Entity) -> Mesh {
@@ -125,7 +125,7 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("role").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("role").unwrap()).unwrap();
     w.resource_mut::<SkateScene>().unwrap().region = Some([0.0, 0.0, 100.0, 100.0]);
     let water = w.spawn();
     w.insert(

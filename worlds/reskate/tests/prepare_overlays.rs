@@ -13,8 +13,8 @@ use primase_core::{
     World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
-use primase_reskate::prepare::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
+use primase_reskate::components::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
+use primase_reskate::passes::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -101,7 +101,7 @@ fn fixture() -> Fixture {
     place(&mut w, floor, 10.0, -14.0);
     let decal = place(&mut w, a, 10.5, -13.5);
     let second = place(&mut w, b, 11.0, -13.0);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("overlays").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("overlays").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

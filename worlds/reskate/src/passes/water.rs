@@ -26,7 +26,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, World};
 
 use crate::build::{bounds, writer_placements};
-use crate::dialect::{MaterialClass, SkateMaterial, SkateScene, SkateWater};
+use crate::components::{MaterialClass, SkateMaterial, SkateScene, SkateWater};
 use crate::scene::{Scene, WaterQuad};
 
 /// Which water surfaces [`PrepareReskateWater`] keeps, and where it clips them.
@@ -454,7 +454,7 @@ mod tests {
             |p| p,
         );
         w.insert(ground, c);
-        crate::prepare::raise_skate(&mut w, &crate::prepare::RaiseOptions::new("content").unwrap()).unwrap();
+        crate::passes::raise_skate(&mut w, &crate::passes::RaiseOptions::new("content").unwrap()).unwrap();
         assert!(w.resource::<SkateScene>().unwrap().region.is_none());
         let strip = water(
             &mut w,

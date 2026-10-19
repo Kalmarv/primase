@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::blend_order::{self, Geometry};
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
-use crate::dialect::{
+use crate::components::{
     BlendBudgetMode, ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendBudget, SkateBlendChains,
     SkateOverlayStack, StackedPiece,
 };
@@ -15,8 +15,8 @@ use crate::grind;
 use crate::material::{MatLib, Material, VClass};
 use crate::model::{CollisionMode, Hull, MapObject, Placement, ProtoInfo, SrcMesh, SrcPart, TileOut};
 use crate::overlay::{self, OverlayStats, Parts, Piece};
+use crate::passes::pause_map::SkatePausePicture;
 use crate::pausemap::PauseMap;
-use crate::prepare::pause_map::SkatePausePicture;
 use crate::records::{
     Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, SpawnJson,
     StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
@@ -1911,11 +1911,11 @@ impl MapWriter {
         let (mut pos, mut nrm, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u32>::new());
         for q in quads {
             let z = q.z;
-            let mut cs = crate::prepare::water::clip_rect(&q.corners, bounds);
+            let mut cs = crate::passes::water::clip_rect(&q.corners, bounds);
             if cs != q.corners {
                 self.r.water_cut_at_limit += 1;
             }
-            let a = crate::prepare::water::signed_area2(&cs);
+            let a = crate::passes::water::signed_area2(&cs);
             if cs.len() < 3 || a == 0.0 {
                 self.r.water_without_area += 1;
                 continue;

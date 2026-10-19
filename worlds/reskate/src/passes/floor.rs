@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Mesh, Transform, World};
 
-use crate::dialect::{
+use crate::components::{
     CollisionMode, SkateCollision, SkateFloorPlan, SkateGrindCurve, SkateLight, SkateMarker, SkatePartsOff,
     SkatePrototype, SkateRock, SkateScene, SkateWater,
 };

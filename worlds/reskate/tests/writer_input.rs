@@ -16,8 +16,8 @@ use primase_core::{
     World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateMarker};
-use primase_reskate::prepare::{PrepareReskateOverlays, RaiseOptions, SnapReskateMarkers};
+use primase_reskate::components::{MarkerKind, Other, SkateMarker};
+use primase_reskate::passes::{PrepareReskateOverlays, RaiseOptions, SnapReskateMarkers};
 
 /// A component of a namespace the writer does not know.
 #[derive(Clone, Debug)]
@@ -71,7 +71,7 @@ fn world() -> (World, Entity) {
     };
     let first = place(&mut w, 0.0);
     place(&mut w, 30.0);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("foreign").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("foreign").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

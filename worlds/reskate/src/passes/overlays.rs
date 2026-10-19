@@ -15,7 +15,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::build::{EncodingOptions, overlay_stack};
-use crate::dialect::SkateOverlayStack;
+use crate::components::SkateOverlayStack;
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]

@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{LayeredMaterial, Mesh, World};
 use primase_reskate::EncodingOptions;
-use primase_reskate::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
-use primase_reskate::prepare::{PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays};
+use primase_reskate::passes::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
+use primase_reskate::passes::{PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays};
 
 /// The grid the blend chains are cut on: Studio's WorldPartition cell.
 const GRID: f32 = 200.0;

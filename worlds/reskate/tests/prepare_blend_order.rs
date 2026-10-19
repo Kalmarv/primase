@@ -13,9 +13,9 @@ use primase_core::{
     Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateMarker};
-use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
-use primase_reskate::prepare::{
+use primase_reskate::components::{MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateMarker};
+use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
+use primase_reskate::passes::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions,
     plan_reskate_blend_budget, prepare_reskate_blend_order,
 };
@@ -104,7 +104,7 @@ fn world(corners: [[f32; 3]; 4], at: [f32; 3]) -> World {
     let mut t = Transform::IDENTITY;
     t.cols[3] = at;
     w.insert(placed, t);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("chains").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("chains").unwrap()).unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)
         .run(&mut w, &mut PassLog::default())
         .unwrap();

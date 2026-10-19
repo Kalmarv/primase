@@ -15,7 +15,7 @@ use primase_core::{
     Surfaces, TexFormat, TexRole, Texture, TextureFile, Topology, Transform, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::passes::{RaiseOptions, SnapReskateMarkers};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -156,7 +156,7 @@ fn files(root: &Path) -> BTreeMap<String, Vec<u8>> {
 fn a_loaded_scene_writes_what_its_world_writes() {
     let mut w = world();
     spawn_at(&mut w, [0.0, 0.0]);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("mesh_input").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("mesh_input").unwrap()).unwrap();
     // the markers snapped before the writer, which snaps nothing
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
@@ -238,7 +238,7 @@ fn a_spawn_over_no_ground_is_refused() {
                 yaw: None,
             },
         );
-        primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("spawned").unwrap()).unwrap();
+        primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("spawned").unwrap()).unwrap();
         let scene = tmp(&format!("{tag}-scene"));
         primase_reskate::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
@@ -297,7 +297,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let mut t = Transform::IDENTITY;
     t.cols[3] = [10.0, 0.0, 10.0];
     w.insert(at, t);
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("collides").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("collides").unwrap()).unwrap();
     let scene = tmp("collides-scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
@@ -364,7 +364,7 @@ fn the_write_needs_no_scene_file_after_the_load() {
     for m in materials {
         w.get_mut::<PbrMaterial>(m).unwrap().base_color_texture = Some(TextureRef::new(shared));
     }
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("once").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("once").unwrap()).unwrap();
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();

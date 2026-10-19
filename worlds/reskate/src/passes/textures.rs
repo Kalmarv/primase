@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
 
-use crate::dialect::{FileRef, Other, SkateMaterial, SkateTexture};
+use crate::components::{FileRef, Other, SkateMaterial, SkateTexture};
 use crate::texture::TexSource;
 
 /// See the module documentation.

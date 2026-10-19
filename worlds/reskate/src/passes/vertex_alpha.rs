@@ -13,11 +13,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::dialect::{MaterialClass, SkateMaterial};
+use crate::components::{MaterialClass, SkateMaterial};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, World};
 
-use crate::layered::{BlendOpacity, VertexBlend};
+use crate::passes::layered::{BlendOpacity, VertexBlend};
 
 /// A primitive's `COLOR_0` alpha per vertex, 0..1 (`None`: no `COLOR_0`).
 fn alpha(p: &Primitive) -> Result<Option<Vec<f32>>, String> {

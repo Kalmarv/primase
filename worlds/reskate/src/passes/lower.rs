@@ -11,7 +11,7 @@ use primase_core::{
     TexRole, Texture, Transform, World,
 };
 
-use crate::dialect::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkateTexture, Wrap};
+use crate::components::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkateTexture, Wrap};
 
 /// Register the dialect's lowerings.
 pub(crate) fn register(reg: &mut PassRegistry) {
@@ -154,8 +154,8 @@ impl Pass for LowerSkatePbr {
     }
 }
 
-/// `skate.light` -> `core.light`, the inverse of [`crate::prepare::raise_skate`]'s lights: intensity in candela from the
-/// Studio watts by the same named policy (`P = 4 pi^2 I`, [`crate::prepare::studio_watts`]); a spot's outer cone half its full
+/// `skate.light` -> `core.light`, the inverse of [`crate::passes::raise_skate`]'s lights: intensity in candela from the
+/// Studio watts by the same named policy (`P = 4 pi^2 I`, [`crate::passes::studio_watts`]); a spot's outer cone half its full
 /// `spot_size` and the inner `outer x (1 - spot_blend)`; range 0 unlimited. The entity gets a `core.transform` at
 /// `position` whose local -Z is `direction` and whose +Y is as near world +Y as possible (+Z when the light points
 /// straight up or down): a point light and a round spot cone look the same under any roll, so `tangent` is not
@@ -208,10 +208,10 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
     } else {
         LightKind::Point
     };
-    // the inverse of raise-skate's default calibration (crate::prepare::SKATE_LIGHT_SCALE)
+    // the inverse of raise-skate's default calibration (crate::passes::SKATE_LIGHT_SCALE)
     let intensity = (f64::from(l.energy)
         / (4.0 * std::f64::consts::PI * std::f64::consts::PI)
-        / crate::prepare::SKATE_LIGHT_SCALE) as f32;
+        / crate::passes::SKATE_LIGHT_SCALE) as f32;
     let light = Light {
         kind,
         color: l.color,

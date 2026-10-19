@@ -11,8 +11,10 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World};
 use primase_reskate::EncodingOptions;
-use primase_reskate::dialect::{MarkerKind, Other, SkateMarker, SkatePlacement, SkateRegionClip, SkateScene};
-use primase_reskate::prepare::{ClipReskateRegion, RaiseOptions};
+use primase_reskate::components::{
+    MarkerKind, Other, SkateMarker, SkatePlacement, SkateRegionClip, SkateScene,
+};
+use primase_reskate::passes::{ClipReskateRegion, RaiseOptions};
 
 /// A row of ten 5 m triangles along east, from the placement out to 50 m.
 fn strip(w: &mut World) -> Entity {
@@ -65,7 +67,7 @@ fn world() -> (World, [Entity; 4]) {
         place(&mut w, proto, -60.0, 50.0),
         place(&mut w, proto, -200.0, 50.0),
     ];
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("apron").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("apron").unwrap()).unwrap();
     let spawn = w.spawn();
     w.insert(
         spawn,

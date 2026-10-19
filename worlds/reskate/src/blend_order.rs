@@ -26,7 +26,7 @@ pub const LIFT_STEP: f32 = 0.0002;
 /// The largest step [`lift_step`] widens to: the top of a chain then sits at most `MAX_RANK` x 2.5 mm = 1 cm off its
 /// surface. Past it (or a translation that is not finite) a tile keeps its chain overlays in its mesh.
 pub const MAX_LIFT_STEP: f32 = 0.0025;
-/// The highest chain rank ([`crate::layered::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4).
+/// The highest chain rank ([`crate::passes::layered::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4).
 pub const MAX_RANK: u8 = 4;
 /// The padding triangles' legs, in metres (shorter where the box is thinner).
 const PAD: f32 = 0.01;

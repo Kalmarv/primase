@@ -14,8 +14,8 @@ use primase_core::{
     Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
-use primase_reskate::prepare::{
+use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
+use primase_reskate::passes::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers,
 };
 
@@ -127,7 +127,7 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("budget").unwrap()).unwrap();
+    primase_reskate::passes::raise_skate(&mut w, &RaiseOptions::new("budget").unwrap()).unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)
         .run(&mut w, &mut PassLog::default())
         .unwrap();

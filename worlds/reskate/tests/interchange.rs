@@ -10,7 +10,7 @@ use primase_core::{
     ColorSpace, Instance, NormalConvention, NormalGreen, NormalX, NormalZ, Source, TexFormat, TexRole,
     Texture, Transform, World,
 };
-use primase_reskate::dialect::{self, SkateLight, SkatePrototype, SkateScene};
+use primase_reskate::components::{self, SkateLight, SkatePrototype, SkateScene};
 use primase_reskate::interchange;
 use primase_reskate::interchange::tables::{
     self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags,
@@ -350,12 +350,12 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     let dir = fixture("layered_cell");
     let (mut world, _) = read(&dir);
     let ordinary = world
-        .iter::<dialect::SkateMaterial>()
+        .iter::<components::SkateMaterial>()
         .find(|(_, m)| m.key == "wall")
         .unwrap()
         .0;
     let base = world
-        .get::<dialect::SkateMaterial>(ordinary)
+        .get::<components::SkateMaterial>(ordinary)
         .unwrap()
         .base
         .unwrap();
@@ -372,7 +372,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
             normal: None,
         },
     );
-    world.get_mut::<dialect::SkateMaterial>(ordinary).unwrap().mask = Some(mask);
+    world.get_mut::<components::SkateMaterial>(ordinary).unwrap().mask = Some(mask);
     let layered = world.spawn();
     world.insert(
         layered,
@@ -409,10 +409,10 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     let mut cell = world.subset(&closure);
     primase_gltf::load_mesh_files(&mut cell, &dir).unwrap();
     primase_image::load_textures(&mut cell, &dir).unwrap();
-    dialect::LowerSkatePbr
+    primase_reskate::passes::lower::LowerSkatePbr
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
-    dialect::LowerLayeredPbr
+    primase_reskate::passes::LowerLayeredPbr
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
     primase_image::normalize_normals(&mut cell).unwrap();
@@ -598,13 +598,13 @@ fn markers_and_curves_are_core_facts_too() {
 fn parts_follow_a_pass_that_rebuilds_the_primitives() {
     let (mut w, _) = read(&fixture("remap_parts"));
     let (proto, parts) = w
-        .iter::<dialect::SkateParts>()
+        .iter::<components::SkateParts>()
         .find(|(_, p)| p.0.len() == 2)
         .map(|(e, p)| (e, p.0.clone()))
         .unwrap();
     // the second primitive split in two ahead of the first
     w.remap_primitives(proto, &[1, 1, 0]).unwrap();
-    let after = &w.get::<dialect::SkateParts>(proto).unwrap().0;
+    let after = &w.get::<components::SkateParts>(proto).unwrap().0;
     assert_eq!(after, &vec![parts[1].clone(), parts[1].clone(), parts[0].clone()]);
     let err = w.remap_primitives(proto, &[3]).unwrap_err();
     assert!(
@@ -702,7 +702,7 @@ fn placement_priority_round_trips_and_rejects_overflow() {
         .to_string();
     assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
     w.insert(placed, primase_core::Priority(3));
-    w.get_mut::<dialect::SkatePlacement>(placed)
+    w.get_mut::<components::SkatePlacement>(placed)
         .unwrap()
         .unknown_flags |= 1 << 8;
     let error = interchange::write(&w, &tmp("priority_conflict"))
@@ -717,7 +717,10 @@ fn placement_priority_round_trips_and_rejects_overflow() {
 #[test]
 fn normal_maps_with_x_in_alpha_are_refused() {
     let (mut w, _) = read(&fixture("alpha_x_src"));
-    let (te, _) = w.iter::<primase_reskate::dialect::SkateTexture>().next().unwrap();
+    let (te, _) = w
+        .iter::<primase_reskate::components::SkateTexture>()
+        .next()
+        .unwrap();
     w.insert(
         te,
         Texture {
@@ -1244,7 +1247,7 @@ fn lowering_to_pbr() {
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::pbr::{AlphaMode, PbrMaterial, Wrap};
     use primase_core::{ColorSpace, NormalGreen, NormalZ, TexFormat, TexRole, Texture};
-    use primase_reskate::dialect::{SkateMaterial, SkateTexture};
+    use primase_reskate::components::{SkateMaterial, SkateTexture};
 
     let (mut w, _) = read(&fixture("lower"));
     let key = |w: &World, k: &str| w.iter::<SkateMaterial>().find(|(_, m)| m.key == k).unwrap().0;
@@ -1313,7 +1316,7 @@ fn lowering_to_pbr() {
     let mut faded = w.get::<SkateMaterial>(key(&w, "trim_red")).unwrap().clone();
     faded.vertex_alpha = Some(true);
     let mut log = primase_core::pass::PassLog::default();
-    let lowered = primase_reskate::dialect::lower_material(&faded, None, &w, &mut log);
+    let lowered = primase_reskate::passes::lower::lower_material(&faded, None, &w, &mut log);
     assert_eq!(lowered.alpha_mode, AlphaMode::Blend);
     assert_eq!(
         log.approximations
@@ -1349,7 +1352,7 @@ fn soups_become_core_collision() {
     for (e, c) in soups.iter().filter(|(_, c)| !c.triangles.is_empty()) {
         // fixture soups: surface byte 1, then rock | 2
         assert_eq!(c.surfaces[..2], [1, 2], "{e:?}");
-        let rock = w.get::<dialect::SkateRock>(*e).unwrap();
+        let rock = w.get::<components::SkateRock>(*e).unwrap();
         assert_eq!(rock.0[..2], [false, true]);
     }
     assert_eq!(w.verify_components(), Vec::new());
@@ -1359,7 +1362,7 @@ fn soups_become_core_collision() {
 fn collision_placed_by_an_entity_is_a_world_soup() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_self"));
-    let before = w.iter::<dialect::SkateCollision>().count();
+    let before = w.iter::<components::SkateCollision>().count();
     let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt").unwrap();
     let e = w.spawn();
     let mut c = Collision::default();
@@ -1401,7 +1404,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
 fn mirrored_collision_keeps_its_fronts() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_mirror"));
-    let before = w.iter::<dialect::SkateCollision>().count();
+    let before = w.iter::<components::SkateCollision>().count();
     let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
     // a triangle facing up (+y), placed through a mirror in x
     let e = w.spawn();
@@ -1477,11 +1480,14 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
     );
     assert_eq!(w.get::<MaterialVariants>(coarse).unwrap().0[0].len(), 2);
     assert_eq!(
-        w.get::<dialect::SkateParts>(coarse).unwrap().0[0].source,
+        w.get::<components::SkateParts>(coarse).unwrap().0[0].source,
         Some(json!("lod1"))
     );
-    assert_eq!(w.get::<dialect::SkateForm>(coarse).unwrap().other["note"], "kept");
-    assert!(!w.has::<MeshFile>(nothing) && w.get::<dialect::SkateParts>(nothing).unwrap().0.is_empty());
+    assert_eq!(
+        w.get::<components::SkateForm>(coarse).unwrap().other["note"],
+        "kept"
+    );
+    assert!(!w.has::<MeshFile>(nothing) && w.get::<components::SkateParts>(nothing).unwrap().0.is_empty());
     assert_eq!(
         w.get::<Lods>(protos[1]).unwrap(),
         &Lods {

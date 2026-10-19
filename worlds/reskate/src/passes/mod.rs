@@ -1,12 +1,15 @@
 //! Preparation for the ReSkate target: passes a program selects to turn core data into the `skate.*` dialect
-//! ([`crate::dialect`]) its writers take.
+//! ([`crate::components`]) its writers take.
 
 pub mod blend_budget;
 pub mod blend_order;
 pub mod budget;
 pub mod floor;
 pub mod grinds;
+pub mod layered;
+mod layered_lower;
 pub mod lights;
+pub mod lower;
 pub mod overlays;
 pub mod pause_map;
 pub mod raise;
@@ -14,6 +17,8 @@ pub mod region;
 pub mod snap;
 pub mod spawn;
 pub mod textures;
+pub mod tint;
+pub mod vertex_alpha;
 pub mod water;
 
 pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
@@ -21,6 +26,7 @@ pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
 pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
+pub use layered_lower::LowerLayeredPbr;
 pub use lights::{SelectReskateLights, select_reskate_lights};
 pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
 pub use pause_map::{

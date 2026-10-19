@@ -1,5 +1,5 @@
 //! Explicit strongest-triangle approximation for PBR consumers of layered scenes.
-use crate::dialect::SkateParts;
+use crate::components::SkateParts;
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
 

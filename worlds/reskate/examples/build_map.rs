@@ -30,7 +30,7 @@ fn main() -> Result<(), BoxError> {
     let mut max_priority: Option<u8> = None;
     let mut tex_cap: u32 = 256;
     let mut lights_per_cell: Option<usize> = None;
-    let mut ocean = primase_reskate::prepare::OceanMaterials::Stated;
+    let mut ocean = primase_reskate::passes::OceanMaterials::Stated;
     let mut no_water = false;
     let mut map_height: usize = 2160;
     let mut name_caps: Vec<(String, u32)> = Vec::new();
@@ -55,7 +55,7 @@ fn main() -> Result<(), BoxError> {
                 }
             }
             "--lights-max-per-cell" => lights_per_cell = Some(val()?.parse()?),
-            "--water-ocean" => ocean = primase_reskate::prepare::OceanMaterials::All,
+            "--water-ocean" => ocean = primase_reskate::passes::OceanMaterials::All,
             "--no-water" => no_water = true,
             "--map-height" => map_height = val()?.parse()?,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
@@ -78,21 +78,21 @@ fn main() -> Result<(), BoxError> {
     let mut passes: Vec<Box<dyn Pass>> = Vec::new();
     // a scene that states its region is clipped to it (the writer clips nothing of its own)
     if let Some(region) = w
-        .resource::<primase_reskate::dialect::SkateScene>()
+        .resource::<primase_reskate::components::SkateScene>()
         .and_then(|s| s.region)
     {
         // with the 30 m apron the writer kept around a region
-        passes.push(Box::new(primase_reskate::prepare::ClipReskateRegion::new(
+        passes.push(Box::new(primase_reskate::passes::ClipReskateRegion::new(
             region, 30.0,
         )?));
     }
     // a scene that states a floor is lifted by it (the writer lifts nothing of its own): its height (100.01 m when it
     // gives none), the cutoff below the floor (250 m) and a pinned floor when it gives one, as the writer read them
     if let Some(m) = w
-        .resource::<primase_reskate::dialect::SkateScene>()
+        .resource::<primase_reskate::components::SkateScene>()
         .and_then(|s| s.min_height.clone())
     {
-        let mut floor = primase_reskate::prepare::PrepareReskateFloor::new(
+        let mut floor = primase_reskate::passes::PrepareReskateFloor::new(
             m.height.unwrap_or(100.01) as f32,
             m.stub_below.unwrap_or(250.0) as f32,
         )?;
@@ -102,52 +102,52 @@ fn main() -> Result<(), BoxError> {
         passes.push(Box::new(floor));
     }
     // the grind curves' prisms, as Studio builds them, from the curves where the floor put them
-    passes.push(Box::new(primase_reskate::prepare::PrepareReskateGrinds::studio()));
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateGrinds::studio()));
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it
-    passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));
+    passes.push(Box::new(primase_reskate::passes::PlaceReskateSpawn::centre()));
     // the markers snapped against the map's collision, for the encoding the map is written with
     passes.push(Box::new(
-        primase_reskate::prepare::SnapReskateMarkers::for_encoding(&o)?,
+        primase_reskate::passes::SnapReskateMarkers::for_encoding(&o)?,
     ));
     // the water as the writer drew it: the surfaces touching the scene's region (its content without one), clipped
     // 400 m beyond it (none with --no-water). --water-ocean: water materials as Studio's ocean
     let region = w
-        .resource::<primase_reskate::dialect::SkateScene>()
+        .resource::<primase_reskate::components::SkateScene>()
         .and_then(|s| s.region);
     let extent = if no_water {
-        primase_reskate::prepare::WaterExtent::None
+        primase_reskate::passes::WaterExtent::None
     } else if region.is_some() {
-        primase_reskate::prepare::WaterExtent::Region { margin: 400.0 }
+        primase_reskate::passes::WaterExtent::Region { margin: 400.0 }
     } else {
-        primase_reskate::prepare::WaterExtent::Content { margin: 400.0 }
+        primase_reskate::passes::WaterExtent::Content { margin: 400.0 }
     };
-    passes.push(Box::new(primase_reskate::prepare::PrepareReskateWater::new(
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateWater::new(
         extent, ocean,
     )?));
     // the pause-map picture as the writer made it: the scene's own when it names one, else its geometry drawn top-down
     // over its region (its content without one), --map-height pixels high (2160)
     let named = w
-        .resource::<primase_reskate::dialect::SkateScene>()
+        .resource::<primase_reskate::components::SkateScene>()
         .is_some_and(|s| s.pause_map.is_some());
     let pause = if named {
-        primase_reskate::prepare::PauseSource::Image
+        primase_reskate::passes::PauseSource::Image
     } else {
-        primase_reskate::prepare::PauseSource::Geometry {
+        primase_reskate::passes::PauseSource::Geometry {
             height: map_height,
             extent: if region.is_some() {
-                primase_reskate::prepare::PauseExtent::Region
+                primase_reskate::passes::PauseExtent::Region
             } else {
-                primase_reskate::prepare::PauseExtent::Content
+                primase_reskate::passes::PauseExtent::Content
             },
         }
     };
-    passes.push(Box::new(primase_reskate::prepare::PrepareReskatePauseMap::new(
+    passes.push(Box::new(primase_reskate::passes::PrepareReskatePauseMap::new(
         pause,
     )?));
     // the lights capped per Studio 200 m cell when asked (the writer caps nothing of its own)
     if let Some(n) = lights_per_cell {
-        passes.push(Box::new(primase_reskate::prepare::SelectReskateLights::new(
+        passes.push(Box::new(primase_reskate::passes::SelectReskateLights::new(
             n, 200.0,
         )?));
     }
@@ -160,29 +160,29 @@ fn main() -> Result<(), BoxError> {
         cap = cap.with_name_cap(&name, c)?;
     }
     passes.push(Box::new(cap));
-    passes.push(Box::new(primase_reskate::prepare::PrepareReskateTextures));
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateTextures));
     let budget = w
-        .resource::<primase_reskate::dialect::SkateScene>()
+        .resource::<primase_reskate::components::SkateScene>()
         .and_then(|s| s.texture_budget.clone());
     if let Some(max) = budget.as_ref().and_then(|b| b.max).filter(|&m| m >= 1.0) {
         let aux = budget
             .and_then(|b| b.aux_weight)
-            .unwrap_or(primase_reskate::prepare::budget::AUX_WEIGHT);
+            .unwrap_or(primase_reskate::passes::budget::AUX_WEIGHT);
         passes.push(Box::new(
-            primase_reskate::prepare::BudgetReskateTextures::new(max as usize)?.with_aux_weight(aux)?,
+            primase_reskate::passes::BudgetReskateTextures::new(max as usize)?.with_aux_weight(aux)?,
         ));
     }
     // last, on the prepared geometry, materials and textures: the overlays stacked 4 mm apart, as the writer stacked
     // them, over the meshes this encoding makes
     passes.push(Box::new(
-        primase_reskate::prepare::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,
+        primase_reskate::passes::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,
     ));
     // and the blend chains split into objects of their own, cut on Studio's 200 m cells, as the writer split them
     passes.push(Box::new(
-        primase_reskate::prepare::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
+        primase_reskate::passes::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
     ));
     // and as many chain objects as the cull-ID pool has room for, as the writer chose them
-    passes.push(Box::new(primase_reskate::prepare::PlanReskateBlendBudget::pool()));
+    passes.push(Box::new(primase_reskate::passes::PlanReskateBlendBudget::pool()));
     let mut prepared = RunReport::default();
     PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes }, &mut prepared)?;
     for step in lods.steps.iter().chain(&dropped.steps).chain(&prepared.steps) {

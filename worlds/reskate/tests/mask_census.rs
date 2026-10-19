@@ -3,8 +3,8 @@
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{ColorSpace, Instance, Mesh, Primitive, TexFormat, TexRole, Texture, World};
 use primase_reskate::{
-    dialect::SkateMaterial,
-    prepare::{RaiseOptions, raise_skate},
+    components::SkateMaterial,
+    passes::{RaiseOptions, raise_skate},
 };
 use primase_testdata::real_data;
 use serde::Deserialize;

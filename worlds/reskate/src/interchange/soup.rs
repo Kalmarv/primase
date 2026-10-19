@@ -5,35 +5,9 @@
 //! surface by its name in `core.surfaces`) and, when any triangle is rock, [`SkateRock`]; the writers turn it back,
 //! each core surface onto the first scene surface of its name.
 
-use primase_core::{Collision, Component, Entity, JsonError, Surfaces, World};
-use serde_json::{Value, json};
+use primase_core::{Collision, Entity, Surfaces, World};
 
-use crate::dialect::{STANDARD_SURFACES, SkateScene, SkateSoup};
-
-/// Which triangles of the entity's `core.collision` are natural rock (v1's surface bit 7).
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct SkateRock(pub Vec<bool>);
-
-impl Component for SkateRock {
-    const NAME: &'static str = "skate.rock";
-    fn to_json(&self) -> Result<Option<Value>, JsonError> {
-        Ok(Some(
-            json!({"triangles": self.0.len(), "rock": self.0.iter().filter(|&&r| r).count()}),
-        ))
-    }
-
-    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
-        match w.get::<Collision>(e) {
-            Some(c) if c.triangles.len() == self.0.len() => Ok(()),
-            Some(c) => Err(format!(
-                "{} rock flags for {} triangles",
-                self.0.len(),
-                c.triangles.len()
-            )),
-            None => Err("rock flags without core.collision".into()),
-        }
-    }
-}
+use crate::components::{STANDARD_SURFACES, SkateRock, SkateScene, SkateSoup};
 
 /// The scene's surfaces by index: its `surfaces` list, or the standard ones without one (or with an empty one).
 pub fn scene_surfaces(surfaces: Option<&[String]>) -> Vec<String> {

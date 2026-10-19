@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, Texture, Topology, Transform, World};
 
-use crate::dialect::{SkateBaseFactor, SkateMaterial, SkateTexture};
+use crate::components::{SkateBaseFactor, SkateMaterial, SkateTexture};
 use crate::texture::{TexSource, mean_color};
 
 /// See the module documentation.
