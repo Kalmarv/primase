@@ -763,3 +763,53 @@ fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
         );
     }
 }
+
+/// Changes the deck's recorded stack in the part holding the deck at east 410 m: two parts then disagree on a
+/// prototype they both draw.
+#[derive(Debug)]
+struct TamperDeck;
+impl Pass for TamperDeck {
+    fn name(&self) -> &'static str {
+        "tamper-deck"
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &["skate.overlay_stack"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let holds = w.resource::<primase_core::convert::PartScope>().is_some_and(|s| {
+            s.roots
+                .iter()
+                .any(|&e| w.get::<Transform>(e).is_some_and(|t| t.cols[3][0] == 410.0))
+        });
+        if holds
+            && let Some(st) = w.resource_mut::<SkateOverlayStack>()
+            && let Some(t) = st.meshes.get_mut("proto deck")
+        {
+            t.pieces += 1;
+        }
+        Ok(())
+    }
+}
+
+/// A prototype two parts stack differently is refused, by its name.
+#[test]
+fn a_prototype_stacked_differently_by_two_parts_is_refused() {
+    let e = EncodingOptions::default();
+    let passes: Vec<Box<dyn Pass>> = vec![
+        Box::new(
+            PrepareReskateOverlays::new(0.004)
+                .unwrap()
+                .for_encoding(&e)
+                .unwrap(),
+        ),
+        Box::new(TamperDeck),
+    ];
+    let e = in_parts(&tmp("tampered"), &aligned(), None, passes)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        e.contains("proto deck is stacked differently by two parts"),
+        "{e}"
+    );
+}
