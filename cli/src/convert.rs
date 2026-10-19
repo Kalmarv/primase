@@ -23,7 +23,7 @@ writers:
   reskate  [--name N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N}, lower-layered-reskate{overlays=all},
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
            prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200},
-           plan-reskate-blend-budget{objects=pool}\", and a pause map if wanted:
+           summarize-reskate-map, plan-reskate-blend-budget{objects=pool}\", and a pause map if wanted:
            prepare-reskate-pause-map{from=geometry,height=2160,extent=content}; a spawn from place-spawn at --select)";
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
@@ -199,7 +199,7 @@ mod tests {
                      cap-textures{{max=256,normals=box}}, prepare-reskate-textures, budget-reskate-textures{{max=64}}, snap-reskate-markers, \
                      prepare-reskate-pause-map{{from=geometry,height=2160,extent=content}}, \
                      prepare-reskate-overlays{{step=0.004}}, prepare-reskate-blend-order{{grid=200}}, \
-                     plan-reskate-blend-budget{{objects=pool}}"
+                     summarize-reskate-map, plan-reskate-blend-budget{{objects=pool}}"
                 );
                 pipelines.push(format!("{select}, {passes}"));
                 pipelines.extend([select, passes, reskate]);

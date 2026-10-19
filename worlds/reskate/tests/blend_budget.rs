@@ -14,6 +14,7 @@ use primase_core::{
     Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
+use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers,
@@ -147,7 +148,14 @@ fn world() -> World {
 fn plan_budget(w: &mut World, blend_objects: Option<usize>) {
     match blend_objects {
         Some(n) => PlanReskateBlendBudget::objects(n),
-        None => PlanReskateBlendBudget::pool(),
+        None => {
+            // the pool's room is decided from the map's summary
+            SummarizeReskateMap::for_encoding(&EncodingOptions::default())
+                .unwrap()
+                .run(w, &mut PassLog::default())
+                .unwrap();
+            PlanReskateBlendBudget::pool()
+        }
     }
     .run(w, &mut PassLog::default())
     .unwrap();

@@ -13,7 +13,10 @@ use primase_core::{
     Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
-use primase_reskate::components::{MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateMarker};
+use primase_reskate::components::{
+    MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateLight, SkateMarker,
+};
+use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions,
@@ -193,6 +196,10 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
         .run(&mut w, &mut log)
         .unwrap();
     // and their budget: the cull-ID pool's room
+    SummarizeReskateMap::for_encoding(&EncodingOptions::default())
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     PlanReskateBlendBudget::pool()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -369,10 +376,7 @@ fn a_fixed_budget_is_decided_by_the_pass() {
         let mut log = PassLog::default();
         PlanReskateBlendBudget::objects(n).run(&mut w, &mut log).unwrap();
         let plan = w.resource::<SkateBlendBudget>().unwrap();
-        assert_eq!(
-            (plan.ranked.len(), plan.chosen.as_ref().unwrap().len()),
-            (1, split)
-        );
+        assert_eq!((plan.ranked.len(), plan.chosen.len()), (1, split));
         assert_eq!(
             log.approximations.values().sum::<u64>(),
             1 - split as u64,
@@ -389,52 +393,141 @@ fn a_fixed_budget_is_decided_by_the_pass() {
     }
 }
 
-/// In pool mode the writer gives the chain form while the map's cull IDs have room; with none left it writes the tile
-/// plain and reports it, with the other objects' count and the pool.
-#[test]
-fn a_full_pool_writes_the_tile_plain_and_says_so() {
+/// The chained map's summary and pool budget for an encoding with `cull_ids`.
+fn pool_planned(cull_ids: usize) -> (World, primase_reskate::components::SkateMapSummary, PassLog) {
     let mut w = chained();
-    PlanReskateBlendBudget::pool()
-        .run(&mut w, &mut PassLog::default())
-        .unwrap();
+    SummarizeReskateMap::for_encoding(&EncodingOptions {
+        cull_ids,
+        ..EncodingOptions::default()
+    })
+    .unwrap()
+    .run(&mut w, &mut PassLog::default())
+    .unwrap();
+    let summary = w
+        .resource::<primase_reskate::components::SkateMapSummary>()
+        .unwrap()
+        .clone();
+    let mut log = PassLog::default();
+    PlanReskateBlendBudget::pool().run(&mut w, &mut log).unwrap();
+    (w, summary, log)
+}
+
+/// In pool mode the chain form is decided before writing, from the map's summary: the room is the encoding's cull IDs
+/// less what the rest of the map takes, counted as the writer counts it (its stats name the same number). With room for
+/// the tile's chain objects it takes the chain form; one ID short it is planned plain, reported by the plan. The writer
+/// replays the decision and refuses a map written with another basis.
+#[test]
+fn the_pool_is_decided_before_writing_and_replayed() {
+    let (w, summary, _) = pool_planned(EncodingOptions::default().cull_ids);
     let (r, _) = write(&w, "pool-room", &EncodingOptions::default()).unwrap();
     assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (1, 0));
-    let full = EncodingOptions {
+    // the summary's count is the writer's own
+    assert_eq!(summary.other_cull_ids, r.blend.other_cull_ids);
+    assert!(summary.other_cull_ids > 0);
+    let groups = r.blend.objects;
+    for (cull_ids, split) in [
+        (summary.other_cull_ids + groups, 1),
+        (summary.other_cull_ids + groups - 1, 0),
+    ] {
+        let (w, _, log) = pool_planned(cull_ids);
+        let plan = w.resource::<SkateBlendBudget>().unwrap();
+        assert_eq!(plan.chosen.len(), split, "{cull_ids}");
+        assert_eq!(
+            log.approximations.values().sum::<u64>(),
+            1 - split as u64,
+            "{:?}",
+            log.approximations
+        );
+        let e = EncodingOptions {
+            cull_ids,
+            ..EncodingOptions::default()
+        };
+        let (r, _) = write(&w, &format!("pool-{cull_ids}"), &e).unwrap();
+        assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (split, 1 - split));
+        assert!(
+            r.unsupported.iter().all(|(what, _)| !what.contains("blend")),
+            "{:?}",
+            r.unsupported
+        );
+    }
+    // the rest of the map's content takes IDs: one more light, and the room that held the chain form no longer does
+    let lit = || {
+        let mut w = chained();
+        let light = w.spawn();
+        w.insert(
+            light,
+            SkateLight {
+                spot: false,
+                position: [10.0, 1.0, -10.0],
+                direction: [0.0, -1.0, 0.0],
+                tangent: [0.0; 3],
+                color: [1.0; 3],
+                energy: 1.0,
+                range: 5.0,
+                radius: 0.0,
+                spot_size: 0.0,
+                spot_blend: 0.0,
+                time_of_day: 0x7F,
+                cast_shadow: false,
+                priority: None,
+                group: String::new(),
+                unknown_flags: 0,
+            },
+        );
+        w
+    };
+    let room = EncodingOptions {
+        cull_ids: summary.other_cull_ids + groups,
+        ..EncodingOptions::default()
+    };
+    let mut w2 = lit();
+    SummarizeReskateMap::for_encoding(&room)
+        .unwrap()
+        .run(&mut w2, &mut PassLog::default())
+        .unwrap();
+    let lit_summary = w2
+        .resource::<primase_reskate::components::SkateMapSummary>()
+        .unwrap()
+        .clone();
+    assert_eq!(lit_summary.other_cull_ids, summary.other_cull_ids + 1);
+    PlanReskateBlendBudget::pool()
+        .run(&mut w2, &mut PassLog::default())
+        .unwrap();
+    assert!(w2.resource::<SkateBlendBudget>().unwrap().chosen.is_empty());
+    let (r, _) = write(&w2, "pool-lit", &room).unwrap();
+    assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
+    // decided for one encoding, written with another
+    let other = EncodingOptions {
         cull_ids: 0,
         ..EncodingOptions::default()
     };
-    let (r, _) = write(&w, "pool-full", &full).unwrap();
-    assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
-    let notice = r
-        .unsupported
-        .iter()
-        .find(|(what, _)| what.starts_with("blend chains: tile t_0_0 written plain, cull-ID pool full"))
-        .unwrap_or_else(|| panic!("{:?}", r.unsupported));
-    assert!(notice.0.ends_with("other cull IDs of 0)"), "{}", notice.0);
+    let e = write(&w, "pool-other-basis", &other).unwrap_err();
+    assert!(e.contains("the blend budget was decided for"), "{e}");
 }
 
-/// The writer refuses a plan for other tiles; without a plan it writes every tile's chains plain, reported once.
+/// The writer chooses no form of its own: blend chains with no budget are refused, as is a plan for other tiles;
+/// objects=0 writes every tile plain; the pool without the map's summary is refused by the plan.
 #[test]
-fn a_plan_for_other_tiles_is_refused_and_none_is_reported() {
-    let mut w = chained();
-    PlanReskateBlendBudget::pool()
-        .run(&mut w, &mut PassLog::default())
-        .unwrap();
+fn the_writer_replays_only() {
+    let (mut w, _, _) = pool_planned(EncodingOptions::default().cull_ids);
     w.resource_mut::<SkateBlendBudget>()
         .unwrap()
         .ranked
         .push("t_9_9".into());
     let e = write(&w, "other-plan", &EncodingOptions::default()).unwrap_err();
     assert!(e.contains("ranks other tiles"), "{e}");
-    let (r, _) = write(&chained(), "unplanned", &EncodingOptions::default()).unwrap();
+    let e = write(&chained(), "unplanned", &EncodingOptions::default()).unwrap_err();
+    assert!(e.contains("no budget decides their form"), "{e}");
+    let mut w = chained();
+    PlanReskateBlendBudget::objects(0)
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let (r, _) = write(&w, "objects-zero-plain", &EncodingOptions::default()).unwrap();
     assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (0, 1));
-    assert!(
-        r.unsupported
-            .iter()
-            .any(|(what, n)| what.contains("no blend budget planned") && *n == 1),
-        "{:?}",
-        r.unsupported
-    );
+    let e = PlanReskateBlendBudget::pool()
+        .run(&mut chained(), &mut PassLog::default())
+        .unwrap_err();
+    assert!(e.contains("run summarize-reskate-map first"), "{e}");
 }
 
 /// The budget is required, a count or the pool; it prints back and reads back the same.

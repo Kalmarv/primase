@@ -1,0 +1,84 @@
+//! `summarize-reskate-map{tile,min_instances,min_instance_tris,max_render_edge,limit,offset_x,offset_y,cull_ids}`: the
+//! small record the map's whole-map decisions are made from, `skate.map_summary`: the cull IDs the map's encoding may
+//! take and how many its content takes besides the blend chains (an ID per object per Studio 200 m cell it meets:
+//! tiles, instances, collision, grind prisms, water; and one per light), counted by the writer's own layout of the
+//! prepared world for this encoding, nothing encoded. `plan-reskate-blend-budget{objects=pool}` decides the chain forms
+//! from it before the map is written.
+//!
+//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains), on the whole
+//! map; a part of a map in several is refused until summaries of parts are merged (step 9's bounded write).
+
+use primase_core::World;
+use primase_core::pass::{Options, Pass, PassLog};
+
+use crate::assembly::{EncodingOptions, map_summary};
+use crate::components::SkateMapSummary;
+
+/// See the module documentation. Made by [`SummarizeReskateMap::for_encoding`]; from options by the same call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummarizeReskateMap {
+    encoding: EncodingOptions,
+}
+
+impl SummarizeReskateMap {
+    /// For the map written as `encoding` says (its grouping and its cull IDs); an error for an encoding whose grouping
+    /// is not one (non-finite or non-positive metres, negative counts).
+    pub fn for_encoding(encoding: &EncodingOptions) -> Result<SummarizeReskateMap, String> {
+        super::overlays::check_grouping(encoding)?;
+        Ok(SummarizeReskateMap {
+            encoding: EncodingOptions {
+                cull_ids: encoding.cull_ids,
+                ..super::overlays::grouping_only(encoding)
+            },
+        })
+    }
+
+    /// From its options: the writer's grouping (`tile`, `min_instances`, `min_instance_tris`, `max_render_edge`,
+    /// `limit`, `offset_x`, `offset_y`) and `cull_ids`, each the encoding's default when not given.
+    pub fn from_options(o: &Options) -> Result<SummarizeReskateMap, String> {
+        let mut grouping = o.clone();
+        let cull_ids = match grouping.remove("cull_ids") {
+            Some(v) => v
+                .parse::<usize>()
+                .map_err(|_| format!("cull_ids={v} is not a count"))?,
+            None => EncodingOptions::default().cull_ids,
+        };
+        let e = super::overlays::encoding_of(&grouping)?;
+        SummarizeReskateMap::for_encoding(&EncodingOptions { cull_ids, ..e })
+    }
+}
+
+/// [`SummarizeReskateMap::from_options`] as a pass factory.
+pub fn summarize_reskate_map(o: &Options) -> Result<Box<dyn Pass>, String> {
+    Ok(Box::new(SummarizeReskateMap::from_options(o)?))
+}
+
+impl Pass for SummarizeReskateMap {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-map"
+    }
+    fn options(&self) -> Options {
+        let mut o = super::overlays::encoding_options(&self.encoding);
+        o.insert("cull_ids".into(), self.encoding.cull_ids.to_string());
+        o
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.map_summary"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        super::require_whole_map(w, self.name())?;
+        if w.resource::<SkateMapSummary>().is_some() {
+            return Err("summarize-reskate-map: the map is already summarized (skate.map_summary)".into());
+        }
+        let summary = map_summary(w, &self.encoding).map_err(|e| e.to_string())?;
+        log.count(
+            "cull IDs the map takes besides its blend chains",
+            summary.other_cull_ids as u64,
+        );
+        w.insert_resource(summary);
+        Ok(())
+    }
+}

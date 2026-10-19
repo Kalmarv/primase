@@ -57,7 +57,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
             "lower-layered-reskate{overlays=all}, prepare-reskate-textures, budget-reskate-textures{max=64}, \
              prepare-reskate-grinds, select-reskate-lights{per_cell=8,cell=200}, \
              prepare-reskate-water{extent=content,margin=400}, \
-             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}, plan-reskate-blend-budget{objects=pool}",
+             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}, summarize-reskate-map, plan-reskate-blend-budget{objects=pool}",
         )
         .unwrap();
     let mut report = RunReport::default();

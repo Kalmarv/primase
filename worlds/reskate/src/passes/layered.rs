@@ -416,7 +416,8 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             .map(|(e, _)| e)
         {
             return Err(format!(
-                "{e:?}: per-pixel weight channels or the over composition: skate blends by vertex weights                  (bake-layer-channels first)"
+                "{e:?}: per-pixel weight channels or the over composition: skate blends by vertex weights \
+                 (bake-layer-channels first)"
             ));
         }
         for (e, f) in world.iter::<MeshFile>() {

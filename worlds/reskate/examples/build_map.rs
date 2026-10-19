@@ -181,7 +181,11 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::passes::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
     ));
-    // and as many chain objects as the cull-ID pool has room for, as the writer chose them
+    // and as many chain objects as the cull-ID pool has room for, decided from the map's summary (the writer's own
+    // count of what the rest of the map takes)
+    passes.push(Box::new(
+        primase_reskate::passes::SummarizeReskateMap::for_encoding(&o)?,
+    ));
     passes.push(Box::new(primase_reskate::passes::PlanReskateBlendBudget::pool()));
     let mut prepared = RunReport::default();
     PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes }, &mut prepared)?;

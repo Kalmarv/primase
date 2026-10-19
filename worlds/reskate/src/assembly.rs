@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::map::{Chains, Ctx, MapWriter, MeshSource, Stack, WriterOptions};
+use crate::components::SkatePausePicture;
+use crate::map::{Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
 
@@ -498,4 +499,212 @@ pub fn assembled_materials(
             textures: [m.tex, m.normal, m.mask, m.alpha],
         })
         .collect())
+}
+
+/// The scene reader's warnings as the reference build reports them: unused textures, primitives without normals,
+/// unplaced prototypes and prototypes without geometry, too many travel points.
+pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
+    use crate::components::{SkateMaterial, SkateTexture};
+    // each kind in a stable order (by its text), not the order the world's entities came in
+    let mut out = Vec::new();
+    let mut used: HashSet<primase_core::Entity> = HashSet::new();
+    for (_, m) in world.iter::<SkateMaterial>() {
+        used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
+    }
+    let mut unused: Vec<String> = world
+        .iter::<SkateTexture>()
+        .filter(|(e, _)| !used.contains(e))
+        .map(|(_, t)| format!("texture '{}' is not used", t.key))
+        .collect();
+    unused.sort();
+    out.extend(unused);
+    let mut flat = Vec::new();
+    for p in &s.protos {
+        if let Some(prims) = p.prims() {
+            for (i, prim) in prims.iter().enumerate() {
+                if prim.nrm.is_none() {
+                    flat.push(format!(
+                        "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
+                        p.id
+                    ));
+                }
+            }
+        }
+    }
+    flat.sort();
+    out.extend(flat);
+    let mut placed = vec![false; s.protos.len()];
+    for p in &s.placements {
+        placed[p.proto as usize] = true;
+    }
+    let mut unplaced = Vec::new();
+    for (p, placed) in s.protos.iter().zip(placed) {
+        if !placed {
+            unplaced.push(format!("prototype '{}' is not placed", p.id));
+        } else if p.prims.is_none() {
+            unplaced.push(format!(
+                "prototype '{}' has no geometry; its placements draw nothing",
+                p.id
+            ));
+        }
+    }
+    unplaced.sort();
+    out.extend(unplaced);
+    let travel = s.markers.iter().filter(|m| m.kind == "travel").count();
+    if travel > 25 {
+        out.push(format!("{travel} travel points: Studio takes at most 25"));
+    }
+    Ok(out)
+}
+
+/// What the writer lays out of a prepared world before it emits anything: the scene in its frame, the writer's options,
+/// the placements, the writer with its tiles and prototypes assembled, the collision soups and hulls, the scene's
+/// warnings (when encoding), and the prototypes that failed to build.
+pub(crate) struct Laid {
+    pub scene: Scene,
+    pub opts: WriterOptions,
+    pub placements: Vec<Placement>,
+    pub writer: MapWriter,
+    pub tri_world: SoupWorld,
+    pub water_world: Option<SoupWorld>,
+    pub hulls: Vec<Hull>,
+    pub scene_warnings: Vec<String>,
+    pub failed: i64,
+}
+
+impl Laid {
+    /// What the writer finishes the map with, beside its tiles.
+    pub(crate) fn extras(&mut self) -> (&mut MapWriter, Extras<'_>) {
+        (
+            &mut self.writer,
+            Extras {
+                world: &self.tri_world,
+                water_world: self.water_world.as_ref().map(|w| w as &dyn CollisionWorld),
+                hulls: std::mem::take(&mut self.hulls),
+                water: self.scene.water.clone(),
+                lights: self.scene.lights.clone(),
+                markers: self.scene.markers.clone(),
+                grind: self.scene.curves.clone(),
+            },
+        )
+    }
+}
+
+/// The writer's layout of the prepared world `world` (`dir`: where its scene came from) for the encoding `a`, its
+/// textures encoded or only identified (`encode`): the scene read, the preparation records checked against this
+/// encoding (marker snaps, overlay stack, blend chains), the tiles and prototypes assembled. What [`crate::write_map`]
+/// emits and `summarize-reskate-map` counts.
+pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<Laid> {
+    let mut s = Scene::from_world(world, dir)?;
+    let scene_warnings = match (&a.scene_warnings, encode) {
+        (Some(w), _) => w.clone(),
+        (None, true) => scene_warnings(&s, world)?,
+        (None, false) => Vec::new(),
+    };
+    let mut o = writer_options(&s, a)?;
+    o.apron = apron_of(world, &s)?;
+    // the pause picture is drawn as the map is written; a count draws none (it adds no object)
+    if encode {
+        o.pause = world.resource::<SkatePausePicture>().cloned();
+    }
+    // markers snapped before the writer were snapped against this writer's collision: the same settings
+    if let Some(b) = world.resource::<crate::components::SkateMarkerSnaps>() {
+        let mine = (
+            o.limit,
+            [a.offset[0] as f32, a.offset[1] as f32],
+            o.min_instances,
+            o.min_instance_tris,
+            o.max_render_edge,
+        );
+        let theirs = (
+            b.limit,
+            b.offset,
+            b.min_instances,
+            b.min_instance_tris,
+            b.max_render_edge.unwrap_or(s.max_render_edge),
+        );
+        if mine != theirs {
+            return Err(Error::Scene(format!(
+                "the markers were snapped for the writer settings (limit, offset, min_instances, min_instance_tris, \
+                 max_render_edge) {theirs:?}, but the writer's are {mine:?}: give snap-reskate-markers the writer's"
+            )));
+        }
+    }
+    let cut = s.region;
+    let placements = writer_placements(&s, o.tile);
+    o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
+    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
+    let drop_below = f32::NEG_INFINITY;
+
+    // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
+    let stack = match world.resource::<crate::components::SkateOverlayStack>() {
+        Some(rec) => {
+            let mine = grouping(&s, a);
+            if rec.grouping != Some(mine) {
+                return Err(Error::Scene(format!(
+                    "the overlays were stacked for the writer settings {:?}, but the writer's are {mine:?}: give \
+                     prepare-reskate-overlays the writer's",
+                    rec.grouping
+                )));
+            }
+            Stack::Replay(Box::new(rec.clone()))
+        }
+        None => Stack::Off { unstacked: 0 },
+    };
+    // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
+    let chains = match world.resource::<crate::components::SkateBlendChains>() {
+        Some(rec) => {
+            let mine = grouping(&s, a);
+            if rec.grouping != Some(mine) {
+                return Err(Error::Scene(format!(
+                    "the blend chains were chosen for the writer settings {:?}, but the writer's are {mine:?}: give \
+                     prepare-reskate-blend-order the writer's",
+                    rec.grouping
+                )));
+            }
+            Chains::Replay(Box::new(rec.clone()))
+        }
+        None => Chains::Off { left: 0 },
+    };
+    let budget = world.resource::<crate::components::SkateBlendBudget>().cloned();
+    let mut writer = MapWriter::new(o.clone(), s.surfaces.clone())?
+        .with_stack(stack)
+        .with_chains(chains)
+        .with_budget(budget);
+    if !encode {
+        writer = writer.without_encoding();
+    }
+    let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
+    let water_world = s
+        .soups
+        .iter()
+        .any(|x| x.mode == CollisionMode::Water)
+        .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
+    let hulls = hulls(&mut s, cut, drop_below);
+    let failed = assemble(&s, &placements, &mut writer)?;
+    Ok(Laid {
+        scene: s,
+        opts: o,
+        placements,
+        writer,
+        tri_world,
+        water_world,
+        hulls,
+        scene_warnings,
+        failed,
+    })
+}
+
+/// The summary of the prepared world `world` for the encoding `a` (`summarize-reskate-map`'s): the cull IDs the writer's
+/// own layout of it takes besides the blend chains, counted as [`MapWriter::finish`] counts them, with nothing encoded.
+pub(crate) fn map_summary(world: &World, a: &EncodingOptions) -> Result<crate::components::SkateMapSummary> {
+    let mut laid = lay(world, Path::new(""), a, false)?;
+    let grouping = grouping(&laid.scene, a);
+    let (writer, extras) = laid.extras();
+    let other_cull_ids = writer.non_chain_cull_ids(extras)?;
+    Ok(crate::components::SkateMapSummary {
+        grouping,
+        cull_ids: a.cull_ids,
+        other_cull_ids,
+    })
 }

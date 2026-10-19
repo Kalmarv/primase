@@ -107,6 +107,8 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
+    // the map's summary, for the encoding given (the writer's defaults unless stated)
+    reg.register("summarize-reskate-map", passes::summarize_reskate_map);
     // the budget is the program's: no default
     reg.register_requiring(
         "plan-reskate-blend-budget",

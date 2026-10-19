@@ -5,18 +5,13 @@
     reason = "writer I/O: writes the map folder"
 )]
 
-use crate::passes::pause_map::SkatePausePicture;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
 
-use crate::assembly::{
-    EncodingOptions, SoupWorld, apron_of, assemble, bounds, grouping, hulls, writer_options,
-    writer_placements,
-};
-use crate::collision::CollisionWorld;
-use crate::map::{Chains, Extras, MapWriter, Stack, WriterOptions};
+use crate::assembly::{EncodingOptions, Laid, lay, scene_warnings};
+use crate::map::{Chains, MapWriter, Stack, WriterOptions};
 use crate::model::CollisionMode;
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::Scene;
@@ -46,62 +41,6 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
     /// What the world holds that the writer does not write, by what, with counts.
     pub unsupported: Vec<(String, u64)>,
-}
-
-/// The scene reader's warnings as the reference build reports them: unused textures, primitives without normals,
-/// unplaced prototypes and prototypes without geometry, too many travel points.
-fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
-    use crate::components::{SkateMaterial, SkateTexture};
-    // each kind in a stable order (by its text), not the order the world's entities came in
-    let mut out = Vec::new();
-    let mut used: HashSet<primase_core::Entity> = HashSet::new();
-    for (_, m) in world.iter::<SkateMaterial>() {
-        used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
-    }
-    let mut unused: Vec<String> = world
-        .iter::<SkateTexture>()
-        .filter(|(e, _)| !used.contains(e))
-        .map(|(_, t)| format!("texture '{}' is not used", t.key))
-        .collect();
-    unused.sort();
-    out.extend(unused);
-    let mut flat = Vec::new();
-    for p in &s.protos {
-        if let Some(prims) = p.prims() {
-            for (i, prim) in prims.iter().enumerate() {
-                if prim.nrm.is_none() {
-                    flat.push(format!(
-                        "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
-                        p.id
-                    ));
-                }
-            }
-        }
-    }
-    flat.sort();
-    out.extend(flat);
-    let mut placed = vec![false; s.protos.len()];
-    for p in &s.placements {
-        placed[p.proto as usize] = true;
-    }
-    let mut unplaced = Vec::new();
-    for (p, placed) in s.protos.iter().zip(placed) {
-        if !placed {
-            unplaced.push(format!("prototype '{}' is not placed", p.id));
-        } else if p.prims.is_none() {
-            unplaced.push(format!(
-                "prototype '{}' has no geometry; its placements draw nothing",
-                p.id
-            ));
-        }
-    }
-    unplaced.sort();
-    out.extend(unplaced);
-    let travel = s.markers.iter().filter(|m| m.kind == "travel").count();
-    if travel > 25 {
-        out.push(format!("{travel} travel points: Studio takes at most 25"));
-    }
-    Ok(out)
 }
 
 /// A level of detail as the reference build names it (`--lod`): `default` (the scene's `lod_default`), `highest`
@@ -225,98 +164,20 @@ pub fn target() -> primase_core::pass::Target {
 /// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
 /// as `a` says.
 pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
-    let mut s = Scene::from_world(world, dir)?;
-    let scene_warnings = match &a.scene_warnings {
-        Some(w) => w.clone(),
-        None => scene_warnings(&s, world)?,
-    };
-    let mut o = writer_options(&s, a)?;
-    o.apron = apron_of(world, &s)?;
-    o.pause = world.resource::<SkatePausePicture>().cloned();
-    // markers snapped before the writer were snapped against this writer's collision: the same settings
-    if let Some(b) = world.resource::<crate::components::SkateMarkerSnaps>() {
-        let mine = (
-            o.limit,
-            [a.offset[0] as f32, a.offset[1] as f32],
-            o.min_instances,
-            o.min_instance_tris,
-            o.max_render_edge,
-        );
-        let theirs = (
-            b.limit,
-            b.offset,
-            b.min_instances,
-            b.min_instance_tris,
-            b.max_render_edge.unwrap_or(s.max_render_edge),
-        );
-        if mine != theirs {
-            return Err(Error::Scene(format!(
-                "the markers were snapped for the writer settings (limit, offset, min_instances, min_instance_tris, \
-                 max_render_edge) {theirs:?}, but the writer's are {mine:?}: give snap-reskate-markers the writer's"
-            )));
-        }
-    }
-    let cut = s.region;
-    let placements = writer_placements(&s, o.tile);
-    o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
-    // the floor is prepare-reskate-floor's: the world comes lifted, its parts below the cutoff marked or gone
-    let drop_below = f32::NEG_INFINITY;
-
+    let mut laid = lay(world, dir, a, true)?;
+    let (writer, extras) = laid.extras();
+    writer.finish(extras)?;
+    let Laid {
+        scene: s,
+        opts: o,
+        placements,
+        mut writer,
+        scene_warnings,
+        failed,
+        ..
+    } = laid;
     let out_dir = a.out_root.join(&o.name);
-    // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
-    let stack = match world.resource::<crate::components::SkateOverlayStack>() {
-        Some(rec) => {
-            let mine = grouping(&s, a);
-            if rec.grouping != Some(mine) {
-                return Err(Error::Scene(format!(
-                    "the overlays were stacked for the writer settings {:?}, but the writer's are {mine:?}: give \
-                     prepare-reskate-overlays the writer's",
-                    rec.grouping
-                )));
-            }
-            Stack::Replay(Box::new(rec.clone()))
-        }
-        None => Stack::Off { unstacked: 0 },
-    };
-    // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
-    let chains = match world.resource::<crate::components::SkateBlendChains>() {
-        Some(rec) => {
-            let mine = grouping(&s, a);
-            if rec.grouping != Some(mine) {
-                return Err(Error::Scene(format!(
-                    "the blend chains were chosen for the writer settings {:?}, but the writer's are {mine:?}: give \
-                     prepare-reskate-blend-order the writer's",
-                    rec.grouping
-                )));
-            }
-            Chains::Replay(Box::new(rec.clone()))
-        }
-        None => Chains::Off { left: 0 },
-    };
-    let budget = world.resource::<crate::components::SkateBlendBudget>().cloned();
-    let mut writer = MapWriter::new(o.clone(), s.surfaces.clone())?
-        .with_stack(stack)
-        .with_chains(chains)
-        .with_budget(budget);
-    let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
-    let water_world = s
-        .soups
-        .iter()
-        .any(|x| x.mode == CollisionMode::Water)
-        .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
-    let hulls = hulls(&mut s, cut, drop_below);
-    let failed = assemble(&s, &placements, &mut writer)?;
-    writer.finish(Extras {
-        world: &tri_world,
-        water_world: water_world.as_ref().map(|w| w as &dyn CollisionWorld),
-        hulls,
-        water: s.water.clone(),
-        lights: s.lights.clone(),
-        markers: s.markers.clone(),
-        grind: s.curves.clone(),
-    })?;
     writer.r.warnings.extend(scene_warnings);
-
     // write the folder
     for (dir_name, files) in [("meshes", &writer.mesh_files)] {
         let d = out_dir.join(dir_name);
@@ -432,14 +293,6 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
                 .filter(|(_, n)| *n > 0)
                 .map(|(what, n)| (what.to_owned(), n as u64)),
             )
-            .chain(writer.r.chain_fallbacks.iter().map(|line| (line.clone(), 1)))
-            .chain((writer.r.chains_unbudgeted > 0).then(|| {
-                (
-                    "tiles' blend chains written plain: no blend budget planned (plan-reskate-blend-budget)"
-                        .to_owned(),
-                    writer.r.chains_unbudgeted as u64,
-                )
-            }))
             .chain(match writer.chains() {
                 Chains::Off { left } if *left > 0 => Some((
                     "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \

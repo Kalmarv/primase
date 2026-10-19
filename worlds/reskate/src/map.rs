@@ -94,10 +94,6 @@ pub struct WriteResult {
     pub overlay: OverlayStats,
     /// The blend-chain overlays as objects of their own ([`crate::blend_order`]).
     pub blend: blend_order::Stats,
-    /// The tiles whose chain form the cull-ID pool had no room for, written plain (pool mode), one line each.
-    pub chain_fallbacks: Vec<String>,
-    /// The tiles with chain forms written plain because no blend budget was planned.
-    pub chains_unbudgeted: usize,
     pub prop_col_tris: BTreeMap<String, i64>,
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
@@ -963,40 +959,51 @@ impl MapWriter {
     fn emit_chains(&mut self, other: usize) -> Result<()> {
         let pending = std::mem::take(&mut self.pending_chains);
         let names: Vec<String> = pending.keys().map(|&(ty, tx)| format!("t_{tx}_{ty}")).collect();
-        let pool = self.o.cull_ids.saturating_sub(other);
-        let (take, cap, from_pool) = match &self.budget {
-            None => {
-                self.r.chains_unbudgeted = names.len();
-                (vec![false; names.len()], 0, false)
-            }
-            Some(b) => {
-                if b.ranked != names {
-                    return Err(Error::Scene(
-                        "the blend budget (skate.blend_budget) ranks other tiles than the writer's blend chains: run \
-                         plan-reskate-blend-budget after prepare-reskate-blend-order"
-                            .into(),
-                    ));
+        if names.is_empty() {
+            return Ok(());
+        }
+        // the budget is the preparation's decision (plan-reskate-blend-budget); the writer replays it, never choosing a
+        // form of its own
+        let b = self.budget.as_ref().ok_or_else(|| {
+            Error::Scene(format!(
+                "{} tiles have blend chains (prepare-reskate-blend-order) but no budget decides their form: run \
+                 plan-reskate-blend-budget (objects=0 writes every tile plain)",
+                names.len()
+            ))
+        })?;
+        if b.ranked != names {
+            return Err(Error::Scene(
+                "the blend budget (skate.blend_budget) ranks other tiles than the writer's blend chains: run \
+                 plan-reskate-blend-budget after prepare-reskate-blend-order"
+                    .into(),
+            ));
+        }
+        let (cap, from_pool) = match b.mode {
+            BlendBudgetMode::Objects(n) => (n, false),
+            BlendBudgetMode::Pool => {
+                let basis = b.pool.ok_or_else(|| {
+                    Error::Scene(
+                        "the blend budget for the pool names no cull-ID basis it was decided on".into(),
+                    )
+                })?;
+                let mine = (self.o.cull_ids, other);
+                if (basis.cull_ids, basis.other_cull_ids) != mine {
+                    return Err(Error::Scene(format!(
+                        "the blend budget was decided for {} of {} cull IDs taken besides the chains, but this map \
+                         takes {} of {}: summarize-reskate-map and plan-reskate-blend-budget for the map as written",
+                        basis.other_cull_ids, basis.cull_ids, mine.1, mine.0
+                    )));
                 }
-                match b.mode {
-                    BlendBudgetMode::Objects(n) => {
-                        let chosen = b.chosen.as_ref().ok_or_else(|| {
-                            Error::Scene("the blend budget for a fixed count names no chosen tiles".into())
-                        })?;
-                        (names.iter().map(|t| chosen.contains(t)).collect(), n, false)
-                    }
-                    BlendBudgetMode::Pool => {
-                        let objects: Vec<usize> = pending.values().map(|p| p.groups).collect();
-                        (blend_order::take_chains(&objects, pool, true), pool, true)
-                    }
-                }
+                (self.o.cull_ids.saturating_sub(other), true)
             }
         };
+        let take: Vec<bool> = names.iter().map(|t| b.chosen.contains(t)).collect();
         let st = &mut self.r.blend;
         st.cap = cap;
         st.cap_from_pool = from_pool;
         st.other_cull_ids = other;
         st.grid_m = self.chains.grid();
-        for ((p, chain), name) in pending.into_values().zip(take).zip(names) {
+        for (p, chain) in pending.into_values().zip(take) {
             let st = &mut self.r.blend;
             if chain {
                 st.objects += p.groups;
@@ -1013,12 +1020,6 @@ impl MapWriter {
                 self.objects.extend(p.plain);
                 for f in &p.files {
                     self.discard_file(f);
-                }
-                if from_pool {
-                    self.r.chain_fallbacks.push(format!(
-                        "blend chains: tile {name} written plain, cull-ID pool full ({other} other cull IDs of {})",
-                        self.o.cull_ids
-                    ));
                 }
             }
         }
@@ -1830,6 +1831,20 @@ fn join(parts: &PropParts) -> BTreeMap<(i32, i32), PropSoup> {
 }
 
 /// What `finish` places besides the tiles.
+/// The water surfaces' material name in map.json: Studio's ocean.
+const OCEAN: &str = "ocean_water";
+
+/// What [`MapWriter::lay_out`] gives [`MapWriter::finish`].
+struct LaidOut {
+    o: WriterOptions,
+    off: Vec3,
+    markers: Vec<Marker>,
+    col: collision::CollisionResult,
+    water: Option<MapObject>,
+    kept_lights: Vec<PlacedLight>,
+    other: usize,
+}
+
 #[derive(Debug)]
 pub struct Extras<'a> {
     pub world: &'a dyn CollisionWorld,
@@ -2141,159 +2156,24 @@ impl MapWriter {
     }
 
     /// Collision, water, grind curves, markers, lights, textures_index.json, map.json, trainer.json.
+    /// The cull IDs the map takes besides its blend chains: an ID per entity Studio makes (each object once per 200 m
+    /// cell it meets: tiles, instances, collision, grind prisms, water) and per light. The writer's own count, made as
+    /// [`MapWriter::finish`] makes it, for `summarize-reskate-map`.
+    pub(crate) fn non_chain_cull_ids(&mut self, x: Extras) -> Result<usize> {
+        Ok(self.lay_out(x)?.other)
+    }
+
     pub fn finish(&mut self, x: Extras) -> Result<()> {
-        let o = self.o.clone();
-        let (r, off) = (o.region, self.off);
-        let markers = x.markers.clone();
-        // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
-        // makes none, and map.json cannot be written without one
-        if !markers.iter().any(|m| m.kind == "spawn") {
-            return Err(Error::Scene(
-                "the map has no spawn marker: place one before writing (place-spawn at selection, or a skate.marker \
-                 of kind spawn)"
-                    .into(),
-            ));
-        }
-        // the writer snaps nothing (snap-reskate-markers does): a marker still asking for a snap is taken as one whose
-        // snap found nothing
-        let queries: Vec<Query> = markers
-            .iter()
-            .map(|m| Query {
-                x: m.x,
-                y: m.y,
-                z: m.z,
-                snap: crate::scene::SnapSpec::of(SnapMode::None),
-            })
-            .collect();
-        if let Some(pm) = &mut self.pm {
-            pm.sea_tint = !x.water.is_empty();
-            for (f, b) in pm.save()? {
-                self.files.insert(f, b);
-            }
-        }
-        let surfaces = self.surfaces.clone();
-        let mut collision = Collision::new(&surfaces, off.x, off.y, off.z, o.limit);
-        let mut prop_hulls = std::mem::take(&mut self.prop_hulls);
-        prop_hulls.sort_by(|a, b| a.name.cmp(&b.name));
-        let hulls: Vec<Hull> = x.hulls.into_iter().chain(prop_hulls).collect();
-        let snap_extra: Vec<(Vec<f32>, Vec<u32>, bool)> = hulls
-            .iter()
-            .map(|h| (h.pos.clone(), h.idx.clone(), h.ground))
-            .collect();
-        let mut col_files = collision::Files::new();
-        let props = join(&self.prop_parts);
-        let mut col = collision.build(
-            x.world,
-            r,
-            &mut col_files,
-            &queries,
-            &props,
-            &x.water,
-            &snap_extra,
-        )?;
-        let water_props = join(&self.water_parts);
-        if x.water_world.is_some() || !water_props.is_empty() {
-            let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
-            let wc = collision.build_water(ww, r, &mut col_files, &water_props)?;
-            col.objects.extend(wc.objects);
-            col.pieces += wc.pieces;
-            col.water_triangles += wc.water_triangles + wc.prop_triangles;
-            col.split_cells += wc.split_cells;
-        }
-        for h in &hulls {
-            collision.add_hull(&mut col, &h.name, &h.pos, &h.idx, h.surface, &mut col_files)?;
-        }
-        self.mesh_files.extend(col_files);
-
-        // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is
-        // (its surface, then its geometry), not the order the curves came in; equal prisms write the same either way
-        let mut prisms: Vec<(usize, &crate::scene::GrindPrism)> = x
-            .grind
-            .iter()
-            .filter_map(|g| g.prism.as_ref().map(|p| (g.surface, p)))
-            .collect();
-        prisms.sort_by(|(sa, a), (sb, b)| {
-            let bits = |p: &crate::scene::GrindPrism| {
-                p.positions
-                    .iter()
-                    .flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()])
-                    .collect::<Vec<u32>>()
-            };
-            sa.cmp(sb)
-                .then_with(|| bits(a).cmp(&bits(b)))
-                .then_with(|| a.indices.cmp(&b.indices))
-        });
-        for (i, (surface, p)) in prisms.into_iter().enumerate() {
-            let (gpos, gidx, pieces, length) = (&p.positions, p.indices.clone(), p.pieces, p.length);
-            if gidx.is_empty() {
-                self.r
-                    .warnings
-                    .push(format!("grind curve {i} has no usable points"));
-                continue;
-            }
-            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-            for q in gpos {
-                lo = lo.min(*q);
-                hi = hi.max(*q);
-            }
-            if gidx.len() as f32 / (hi - lo).length().max(1e-6) > 900.0 {
-                self.r.warnings.push(format!(
-                    "grind curve {i} is too detailed for its size to grind; use fewer points"
-                ));
-            }
-            let flat: Vec<f32> = gpos
-                .iter()
-                .flat_map(|q| [q.x + off.x, q.y + off.y, q.z + off.z])
-                .collect();
-            let name = format!("grind_{i:05}");
-            self.mesh_files.insert(
-                format!("{name}.glb"),
-                glb::write(
-                    &name,
-                    &[GlbPrim {
-                        blend: None,
-                        material: None,
-                        pos: flat,
-                        nrm: None,
-                        uv: None,
-                        idx: gidx,
-                    }],
-                )?,
-            );
-            let mut ob = MapObject::new(name.clone(), MapObject::translation(0.0, 0.0, 0.0));
-            ob.collision_mesh = Some(format!("meshes/{name}.glb"));
-            ob.render = false;
-            ob.collision_mode = "triangle_mesh";
-            ob.collision_packed = grind::SURFACES[surface].1;
-            ob.grind_source = Some(name);
-            col.objects.push(ob);
-            self.r.grind_curves += 1;
-            self.r.grind_pieces += i64::from(pieces);
-            self.r.grind_length += length;
-        }
-
-        const OCEAN: &str = "ocean_water";
-        let water = if !x.water.is_empty() {
-            self.water(&x.water, OCEAN)?
-        } else {
-            None
-        };
-
-        // the chain overlays, within what the rest of the level leaves of the cull-ID pool: an ID per entity Studio
-        // makes (each object once per 200 m cell it meets) and per light
-        // every light the world holds (a cap is a pass: select-reskate-lights), in a total order
-        let mut kept_lights = x.lights.clone();
-        kept_lights.sort_by(crate::scene::light_order);
-        let other = self
-            .objects
-            .iter()
-            .chain(&col.objects)
-            .chain(&water)
-            .map(|ob| ob.cells as usize)
-            .sum::<usize>()
-            + kept_lights.len();
+        let LaidOut {
+            o,
+            off,
+            markers,
+            mut col,
+            water,
+            kept_lights,
+            other,
+        } = self.lay_out(x)?;
         self.emit_chains(other)?;
-
         // textures
         self.ctx.tex.finish();
         let used: BTreeSet<i32> = self
@@ -2570,6 +2450,169 @@ impl MapWriter {
         self.r.mesh_bytes = self.mesh_files.values().map(|b| b.len() as u64).sum();
         self.r.collision = Some(col);
         Ok(())
+    }
+
+    /// Everything [`MapWriter::finish`] lays out before it decides the blend chains: the collision, grind prisms and
+    /// water as objects, the lights in their total order, and the cull IDs all of it takes.
+    fn lay_out(&mut self, x: Extras) -> Result<LaidOut> {
+        let o = self.o.clone();
+        let (r, off) = (o.region, self.off);
+        let markers = x.markers.clone();
+        // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
+        // makes none, and map.json cannot be written without one
+        if !markers.iter().any(|m| m.kind == "spawn") {
+            return Err(Error::Scene(
+                "the map has no spawn marker: place one before writing (place-spawn at selection, or a skate.marker \
+                 of kind spawn)"
+                    .into(),
+            ));
+        }
+        // the writer snaps nothing (snap-reskate-markers does): a marker still asking for a snap is taken as one whose
+        // snap found nothing
+        let queries: Vec<Query> = markers
+            .iter()
+            .map(|m| Query {
+                x: m.x,
+                y: m.y,
+                z: m.z,
+                snap: crate::scene::SnapSpec::of(SnapMode::None),
+            })
+            .collect();
+        if let Some(pm) = &mut self.pm {
+            pm.sea_tint = !x.water.is_empty();
+            for (f, b) in pm.save()? {
+                self.files.insert(f, b);
+            }
+        }
+        let surfaces = self.surfaces.clone();
+        let mut collision = Collision::new(&surfaces, off.x, off.y, off.z, o.limit);
+        let mut prop_hulls = std::mem::take(&mut self.prop_hulls);
+        prop_hulls.sort_by(|a, b| a.name.cmp(&b.name));
+        let hulls: Vec<Hull> = x.hulls.into_iter().chain(prop_hulls).collect();
+        let snap_extra: Vec<(Vec<f32>, Vec<u32>, bool)> = hulls
+            .iter()
+            .map(|h| (h.pos.clone(), h.idx.clone(), h.ground))
+            .collect();
+        let mut col_files = collision::Files::new();
+        let props = join(&self.prop_parts);
+        let mut col = collision.build(
+            x.world,
+            r,
+            &mut col_files,
+            &queries,
+            &props,
+            &x.water,
+            &snap_extra,
+        )?;
+        let water_props = join(&self.water_parts);
+        if x.water_world.is_some() || !water_props.is_empty() {
+            let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
+            let wc = collision.build_water(ww, r, &mut col_files, &water_props)?;
+            col.objects.extend(wc.objects);
+            col.pieces += wc.pieces;
+            col.water_triangles += wc.water_triangles + wc.prop_triangles;
+            col.split_cells += wc.split_cells;
+        }
+        for h in &hulls {
+            collision.add_hull(&mut col, &h.name, &h.pos, &h.idx, h.surface, &mut col_files)?;
+        }
+        self.mesh_files.extend(col_files);
+
+        // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is
+        // (its surface, then its geometry), not the order the curves came in; equal prisms write the same either way
+        let mut prisms: Vec<(usize, &crate::scene::GrindPrism)> = x
+            .grind
+            .iter()
+            .filter_map(|g| g.prism.as_ref().map(|p| (g.surface, p)))
+            .collect();
+        prisms.sort_by(|(sa, a), (sb, b)| {
+            let bits = |p: &crate::scene::GrindPrism| {
+                p.positions
+                    .iter()
+                    .flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()])
+                    .collect::<Vec<u32>>()
+            };
+            sa.cmp(sb)
+                .then_with(|| bits(a).cmp(&bits(b)))
+                .then_with(|| a.indices.cmp(&b.indices))
+        });
+        for (i, (surface, p)) in prisms.into_iter().enumerate() {
+            let (gpos, gidx, pieces, length) = (&p.positions, p.indices.clone(), p.pieces, p.length);
+            if gidx.is_empty() {
+                self.r
+                    .warnings
+                    .push(format!("grind curve {i} has no usable points"));
+                continue;
+            }
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for q in gpos {
+                lo = lo.min(*q);
+                hi = hi.max(*q);
+            }
+            if gidx.len() as f32 / (hi - lo).length().max(1e-6) > 900.0 {
+                self.r.warnings.push(format!(
+                    "grind curve {i} is too detailed for its size to grind; use fewer points"
+                ));
+            }
+            let flat: Vec<f32> = gpos
+                .iter()
+                .flat_map(|q| [q.x + off.x, q.y + off.y, q.z + off.z])
+                .collect();
+            let name = format!("grind_{i:05}");
+            self.mesh_files.insert(
+                format!("{name}.glb"),
+                glb::write(
+                    &name,
+                    &[GlbPrim {
+                        blend: None,
+                        material: None,
+                        pos: flat,
+                        nrm: None,
+                        uv: None,
+                        idx: gidx,
+                    }],
+                )?,
+            );
+            let mut ob = MapObject::new(name.clone(), MapObject::translation(0.0, 0.0, 0.0));
+            ob.collision_mesh = Some(format!("meshes/{name}.glb"));
+            ob.render = false;
+            ob.collision_mode = "triangle_mesh";
+            ob.collision_packed = grind::SURFACES[surface].1;
+            ob.grind_source = Some(name);
+            col.objects.push(ob);
+            self.r.grind_curves += 1;
+            self.r.grind_pieces += i64::from(pieces);
+            self.r.grind_length += length;
+        }
+
+        let water = if !x.water.is_empty() {
+            self.water(&x.water, OCEAN)?
+        } else {
+            None
+        };
+
+        // the chain overlays, within what the rest of the level leaves of the cull-ID pool: an ID per entity Studio
+        // makes (each object once per 200 m cell it meets) and per light
+        // every light the world holds (a cap is a pass: select-reskate-lights), in a total order
+        let mut kept_lights = x.lights.clone();
+        kept_lights.sort_by(crate::scene::light_order);
+        let other = self
+            .objects
+            .iter()
+            .chain(&col.objects)
+            .chain(&water)
+            .map(|ob| ob.cells as usize)
+            .sum::<usize>()
+            + kept_lights.len();
+        Ok(LaidOut {
+            o,
+            off,
+            markers,
+            col,
+            water,
+            kept_lights,
+            other,
+        })
     }
 }
 

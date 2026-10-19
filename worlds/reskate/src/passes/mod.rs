@@ -16,6 +16,7 @@ pub mod raise;
 pub mod region;
 pub mod snap;
 pub mod spawn;
+pub mod summarize;
 pub mod textures;
 pub mod tint;
 pub mod vertex_alpha;
@@ -39,6 +40,7 @@ pub use raise::{
 pub use region::{ClipReskateRegion, clip_reskate_region};
 pub use snap::{SnapReskateMarkers, snap_reskate_markers};
 pub use spawn::{PlaceReskateSpawn, ReskateSpawnAt, place_reskate_spawn};
+pub use summarize::{SummarizeReskateMap, summarize_reskate_map};
 pub use textures::{PrepareReskateTextures, tint_pixels};
 pub use water::{OceanMaterials, PrepareReskateWater, WaterExtent, prepare_reskate_water};
 
@@ -53,7 +55,8 @@ use primase_core::convert::PartScope;
 pub fn require_whole_map(w: &World, pass: &str) -> Result<(), String> {
     match w.resource::<PartScope>() {
         Some(s) if !s.whole => Err(format!(
-            "{pass}: a ReSkate map is written whole, and this world is a part its source does not state is the whole              ({} roots, {} entities of other parts as context)",
+            "{pass}: a ReSkate map is written whole, and this world is a part its source does not state is the whole \
+             ({} roots, {} entities of other parts as context)",
             s.roots.len(),
             s.context.len()
         )),

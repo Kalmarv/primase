@@ -2,13 +2,14 @@
 //! chains' record (`prepare-reskate-blend-order`'s), the last pass before the writer.
 //!
 //! Each chain object is a MeshSet of its own and takes a cull ID from ReSkate 2.1.0-pre's pool. The pass ranks the
-//! tiles with a chain form in key order (row, then column) and records `skate.blend_budget`. With a fixed count
-//! (`objects=N`) it decides here which tiles take the chain form ([`crate::blend_order::take_chains`]: each in rank
-//! order if it still fits) and reports those left plain. With the pool (`objects=pool`), what is left of the level's
-//! share of the pool after the map's other objects is the format's capacity, known only when the map is written: the
-//! writer gives the ranked tiles the chain form in that order by the same rule while there is room, and reports each
-//! tile it writes plain. Without this pass the writer writes every tile's chains plain (reported). A map without chain
-//! forms gets an empty plan.
+//! tiles with a chain form in key order (row, then column), decides which take it ([`crate::blend_order::take_chains`]:
+//! each in rank order if it still fits), reports those left plain (drawn in an unstable order), and records
+//! `skate.blend_budget`. With a fixed count (`objects=N`; `objects=0` writes every tile plain) the count is the room.
+//! With the pool (`objects=pool`), the room is what the map's encoding may take of the cull IDs less what its other
+//! content takes, from `skate.map_summary` (`summarize-reskate-map`, run before this pass): one ID is held back for
+//! every tile still to be decided, so the plain forms always fit. The decision is recorded with the basis it was made
+//! on; the writer replays it and refuses a map whose own count differs. A map with blend chains and no budget is
+//! refused by the writer. A map without chain forms gets an empty plan.
 
 use std::collections::BTreeSet;
 
@@ -16,7 +17,7 @@ use primase_core::World;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::blend_order::take_chains;
-use crate::components::{BlendBudgetMode, SkateBlendBudget, SkateBlendChains};
+use crate::components::{BlendBudgetMode, PoolBasis, SkateBlendBudget, SkateBlendChains, SkateMapSummary};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,9 +25,14 @@ pub struct PlanReskateBlendBudget {
     mode: BlendBudgetMode,
 }
 
-/// The plan for the blend chains `chains` (`None`: none recorded) by `mode`: the tiles with a chain form ranked
-/// (row, then column), and for a fixed count the ones that take it.
-pub(crate) fn plan(chains: Option<&SkateBlendChains>, mode: BlendBudgetMode) -> SkateBlendBudget {
+/// The plan for the blend chains `chains` (`None`: none recorded) by `mode`: the tiles with a chain form ranked (row,
+/// then column) and the ones that take it; in pool mode from `summary`, which must have been counted for the chains'
+/// writer settings.
+pub(crate) fn plan(
+    chains: Option<&SkateBlendChains>,
+    mode: BlendBudgetMode,
+    summary: Option<&SkateMapSummary>,
+) -> Result<SkateBlendBudget, String> {
     let mut tiles: Vec<(i32, i32, &str, usize)> = chains
         .into_iter()
         .flat_map(|c| c.tiles.iter())
@@ -35,21 +41,42 @@ pub(crate) fn plan(chains: Option<&SkateBlendChains>, mode: BlendBudgetMode) -> 
         .collect();
     tiles.sort();
     let ranked: Vec<String> = tiles.iter().map(|t| t.2.to_owned()).collect();
-    let chosen = match mode {
-        BlendBudgetMode::Objects(n) => {
-            let objects: Vec<usize> = tiles.iter().map(|t| t.3).collect();
-            Some(
-                take_chains(&objects, n, false)
-                    .into_iter()
-                    .zip(&ranked)
-                    .filter(|(take, _)| *take)
-                    .map(|(_, t)| t.clone())
-                    .collect::<BTreeSet<String>>(),
-            )
+    let objects: Vec<usize> = tiles.iter().map(|t| t.3).collect();
+    let (room, hold_back, pool) = match mode {
+        BlendBudgetMode::Objects(n) => (n, false, None),
+        BlendBudgetMode::Pool => {
+            let s = summary.ok_or(
+                "objects=pool: the cull-ID pool's room is decided from the map's summary (skate.map_summary): run \
+                 summarize-reskate-map first",
+            )?;
+            if let Some(c) = chains
+                && c.grouping != Some(s.grouping)
+            {
+                return Err(format!(
+                    "the map's summary was counted for the writer settings {:?}, but its blend chains were chosen for \
+                     {:?}: give summarize-reskate-map the writer's",
+                    s.grouping, c.grouping
+                ));
+            }
+            let basis = PoolBasis {
+                cull_ids: s.cull_ids,
+                other_cull_ids: s.other_cull_ids,
+            };
+            (s.cull_ids.saturating_sub(s.other_cull_ids), true, Some(basis))
         }
-        BlendBudgetMode::Pool => None,
     };
-    SkateBlendBudget { mode, ranked, chosen }
+    let chosen = take_chains(&objects, room, hold_back)
+        .into_iter()
+        .zip(&ranked)
+        .filter(|(take, _)| *take)
+        .map(|(_, t)| t.clone())
+        .collect::<BTreeSet<String>>();
+    Ok(SkateBlendBudget {
+        mode,
+        ranked,
+        chosen,
+        pool,
+    })
 }
 
 impl PlanReskateBlendBudget {
@@ -119,17 +146,19 @@ impl Pass for PlanReskateBlendBudget {
                 "plan-reskate-blend-budget: the budget is already planned (skate.blend_budget)".into(),
             );
         }
-        let p = plan(w.resource::<SkateBlendChains>(), self.mode);
+        let p = plan(
+            w.resource::<SkateBlendChains>(),
+            self.mode,
+            w.resource::<SkateMapSummary>(),
+        )?;
         log.count("tiles ranked for the chain form", p.ranked.len() as u64);
-        if let Some(chosen) = &p.chosen {
-            log.count("tiles given the chain form", chosen.len() as u64);
-            let plain = (p.ranked.len() - chosen.len()) as u64;
-            if plain > 0 {
-                log.approximate(
-                    "tiles whose blend chains are written plain, past the chain-object budget (drawn in an unstable order)",
-                    plain,
-                );
-            }
+        log.count("tiles given the chain form", p.chosen.len() as u64);
+        let plain = (p.ranked.len() - p.chosen.len()) as u64;
+        if plain > 0 {
+            log.approximate(
+                "tiles whose blend chains are written plain, past the chain-object budget (drawn in an unstable order)",
+                plain,
+            );
         }
         w.insert_resource(p);
         Ok(())

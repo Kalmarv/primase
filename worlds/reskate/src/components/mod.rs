@@ -725,15 +725,46 @@ pub enum BlendBudgetMode {
     Pool,
 }
 
-/// The blend-chain budget `plan-reskate-blend-budget` planned: its mode, the tiles with a chain form in the order they
-/// are given one (row, then column), and for a fixed count the tiles that take it. In pool mode the writer gives the
-/// chain form to the ranked tiles in that order while the pool's room holds and writes the rest plain, each reported.
-/// Not part of scene-interchange v1.
+/// The blend-chain budget `plan-reskate-blend-budget` decided: its mode, the tiles with a chain form in the order they
+/// are given one (row, then column), and the tiles that take it (the others are written plain). In pool mode, the
+/// cull-ID basis it was decided on (from `skate.map_summary`): the writer replays the decision and refuses a map whose
+/// own count differs. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateBlendBudget {
     pub mode: BlendBudgetMode,
     pub ranked: Vec<String>,
-    pub chosen: Option<BTreeSet<String>>,
+    pub chosen: BTreeSet<String>,
+    pub pool: Option<PoolBasis>,
+}
+
+/// What a pool budget was decided on: the cull IDs the map's encoding may take, and how many its content takes besides
+/// the blend chains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PoolBasis {
+    pub cull_ids: usize,
+    pub other_cull_ids: usize,
+}
+
+/// `skate.map_summary`: the small record the map's whole-map decisions are made from (`summarize-reskate-map`'s): the
+/// cull IDs its encoding may take and how many its content takes besides the blend chains (an ID per object per Studio
+/// 200 m cell it meets, and per light), counted by the writer's own layout for the writer settings `grouping`. Not
+/// part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkateMapSummary {
+    pub grouping: OverlayGrouping,
+    pub cull_ids: usize,
+    pub other_cull_ids: usize,
+}
+
+impl Resource for SkateMapSummary {
+    const NAME: &'static str = "skate.map_summary";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "grouping": self.grouping,
+            "cull_ids": self.cull_ids,
+            "other_cull_ids": self.other_cull_ids,
+        })))
+    }
 }
 
 impl Resource for SkateBlendBudget {
@@ -746,6 +777,7 @@ impl Resource for SkateBlendBudget {
             },
             "ranked": self.ranked,
             "chosen": self.chosen,
+            "pool": self.pool,
         })))
     }
 }

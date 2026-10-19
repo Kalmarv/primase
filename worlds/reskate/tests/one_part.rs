@@ -224,7 +224,13 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     let (mut w, _) = unraised();
     let mut registry = PassRegistry::new();
     primase_reskate::register(&mut registry);
-    let program = "raise-skate{name=parts}, lower-layered-reskate{overlays=all}, lower-tint-reskate,                    lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250},                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds,                    place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200},                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content},                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-overlays{step=0.004},                    prepare-reskate-blend-order{grid=200}, plan-reskate-blend-budget{objects=pool}";
+    let program = "raise-skate{name=parts}, lower-layered-reskate{overlays=all}, lower-tint-reskate, \
+                   lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250}, \
+                   clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds, \
+                   place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
+                   prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content}, \
+                   prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-overlays{step=0.004}, \
+                   prepare-reskate-blend-order{grid=200}, summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
     let pipeline = registry.parse(program).unwrap();
     let n = pipeline.passes.len();
     let mut report = RunReport::default();

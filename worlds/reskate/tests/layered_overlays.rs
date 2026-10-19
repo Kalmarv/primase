@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{LayeredMaterial, Mesh, World};
 use primase_reskate::EncodingOptions;
+use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays};
 
@@ -284,6 +285,10 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         PrepareReskateBlendOrder::new(GRID)
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        SummarizeReskateMap::for_encoding(&EncodingOptions::default())
             .unwrap()
             .run(&mut w, &mut PassLog::default())
             .unwrap();

@@ -19,6 +19,7 @@ use primase_core::{
 };
 use primase_reskate::EncodingOptions;
 use primase_reskate::components::SkateGrindCurve;
+use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::{PlanReskateBlendBudget, RaiseOptions};
 
 /// The orders a list of `n` things is made in: as listed, reversed, and rotated by one.
@@ -322,7 +323,14 @@ fn map(order: Order, blend_objects: Option<usize>) -> BTreeMap<String, Vec<u8>> 
     // the budget, planned last
     match blend_objects {
         Some(n) => PlanReskateBlendBudget::objects(n),
-        None => PlanReskateBlendBudget::pool(),
+        None => {
+            // the pool's room is decided from the map's summary
+            SummarizeReskateMap::for_encoding(&EncodingOptions::default())
+                .unwrap()
+                .run(&mut w, &mut primase_core::pass::PassLog::default())
+                .unwrap();
+            PlanReskateBlendBudget::pool()
+        }
     }
     .run(&mut w, &mut primase_core::pass::PassLog::default())
     .unwrap();
