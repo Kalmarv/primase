@@ -860,7 +860,7 @@ fn run(
                     first_made,
                 });
                 let mut r = RunReport::default();
-                let ran = manager.run(&mut part, s.summarize, &mut r);
+                let ran = manager.run_part(&mut part, s.summarize, &mut r);
                 tally(&mut report.counts, &r);
                 report.summarized.push(r);
                 ran?;
@@ -868,6 +868,7 @@ fn run(
                 report.summary_bytes += s.registry.retained(&summaries);
                 kept.push(summaries);
             }
+            skipped_in_every_part(&report.summarized.iter().collect::<Vec<_>>(), s.summarize)?;
             "decide".clone_into(during);
             let mut merged = s.registry.merge_order_free(&kept)?;
             drop(kept);
@@ -924,7 +925,7 @@ fn run(
             area,
             first_made,
         });
-        manager.run(&mut part, passes, &mut part_report.explicit)?;
+        manager.run_part(&mut part, passes, &mut part_report.explicit)?;
         part.remove_resource::<PartScope>();
         // the part's output is the closure of its roots and of what the passes placed for it: content of its own
         // nothing need reference (as a marker; PassLog::place), and content made from an entity the part owns
@@ -1009,10 +1010,41 @@ fn run(
         parts.written(&part)?;
         report.parts += 1;
     }
+    skipped_in_every_part(
+        &report
+            .part_reports
+            .iter()
+            .map(|p| &p.explicit)
+            .collect::<Vec<_>>(),
+        passes,
+    )?;
     "finish".clone_into(during);
     report.reported.extend(writer.notices());
     let finished = writer.finish()?;
     report.reported.extend(finished.notices);
     report.written = finished.report;
+    Ok(())
+}
+
+/// The error a whole run gives for a pass that every part of a conversion skipped ([`PassManager::run_part`]: none of
+/// its required names in any part): a recipe whose stage has nothing to work on anywhere fails as it would on the whole
+/// world. A pass skipped in some parts and run in others is a part with nothing to do. `runs` is each part's run of
+/// `pipeline`, its steps in the pipeline's order; no parts, no error.
+fn skipped_in_every_part(runs: &[&RunReport], pipeline: &Pipeline) -> Result<()> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    for (i, p) in pipeline.passes.iter().enumerate() {
+        let everywhere = runs
+            .iter()
+            .all(|r| r.steps.get(i).is_some_and(|s| !s.skipped.is_empty()));
+        if let (true, Some(name)) = (everywhere, p.requires().first()) {
+            return Err(crate::pass::Error::Missing {
+                pass: crate::pass::pass_text(p.as_ref()),
+                name: (*name).to_owned(),
+            }
+            .into());
+        }
+    }
     Ok(())
 }

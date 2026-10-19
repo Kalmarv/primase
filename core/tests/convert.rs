@@ -1219,3 +1219,144 @@ fn planned_parts_state_their_area_and_load_the_soups_reaching_it() {
     whole.plan(&w, &|_| None).unwrap();
     assert_eq!(whole.next_part().unwrap().unwrap().area, None);
 }
+
+/// Requires the given names (none of which the toy reader or passes make, but `toy.mesh`) and records that it ran;
+/// opts in to being skipped in a part without them when the flag says so.
+struct ToyNeeds(&'static [&'static str], bool);
+impl Pass for ToyNeeds {
+    fn name(&self) -> &'static str {
+        "toy-needs"
+    }
+    fn part_may_lack_inputs(&self) -> bool {
+        self.1
+    }
+    fn requires(&self) -> &[&'static str] {
+        self.0
+    }
+    fn run(&self, _w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        event("needs ran");
+        Ok(())
+    }
+}
+
+/// A cape on the part's entity e1 (the toy reader's first placement): a name one part holds and the other not.
+#[derive(Clone, Debug, PartialEq)]
+struct ToyCape;
+impl primase_core::Component for ToyCape {
+    const NAME: &'static str = "toy.cape";
+}
+struct CapeOnFirst;
+impl Pass for CapeOnFirst {
+    fn name(&self) -> &'static str {
+        "toy-cape-on-first"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["toy.cape"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let first: Vec<Entity> = w
+            .iter::<Instance>()
+            .map(|(e, _)| e)
+            .filter(|e| e.index() == 1)
+            .collect();
+        for e in first {
+            w.insert(e, ToyCape);
+        }
+        log.count("capes", 1);
+        Ok(())
+    }
+}
+
+/// A pass that opts in (part_may_lack_inputs) and finds none of its required names in a part has nothing to do there:
+/// the part run skips it, recorded on its step and counted per pass. A pass that does not opt in fails in the same
+/// part; partial presence fails; an opted-in pass skipped in every part fails the conversion as a whole run would;
+/// the selection (a whole-world run) stays strict.
+#[test]
+fn a_part_with_none_of_a_passs_required_names_skips_it_recorded() {
+    let (m, select, _) = manager("toy-select");
+    let with = |needs: ToyNeeds| Pipeline {
+        passes: vec![Box::new(ToyPass), Box::new(CapeOnFirst), Box::new(needs)],
+    };
+    let failure = |select: &Pipeline, passes: &Pipeline| {
+        let e = convert_parts(
+            &mut reader(2),
+            &mut ToyParts::default(),
+            writer(target()).0,
+            &m,
+            select,
+            passes,
+        )
+        .unwrap_err()
+        .to_string();
+        events();
+        e
+    };
+    // opted in: one part holds toy.cape, the other not, so the pass runs once and is skipped once
+    let (w, written) = writer(target());
+    let report = convert_parts(
+        &mut reader(2),
+        &mut ToyParts::default(),
+        w,
+        &m,
+        &select,
+        &with(ToyNeeds(&["toy.cape"], true)),
+    )
+    .unwrap();
+    assert_eq!(written.borrow().len(), 2);
+    assert_eq!(events().iter().filter(|e| *e == "needs ran").count(), 1);
+    let skipped: Vec<&Vec<String>> = report
+        .part_reports
+        .iter()
+        .map(|p| {
+            &p.explicit
+                .steps
+                .iter()
+                .find(|s| s.pass == "toy-needs")
+                .unwrap()
+                .skipped
+        })
+        .collect();
+    assert_eq!(skipped.iter().filter(|s| s.is_empty()).count(), 1);
+    assert_eq!(skipped.iter().filter(|s| s.as_slice() == ["toy.cape"]).count(), 1);
+    assert_eq!(
+        report.counts[&format!("toy-needs: {}", primase_core::pass::SKIPPED)],
+        1
+    );
+
+    // not opted in, the same parts: the part without toy.cape fails with the requires error
+    let e = failure(&select, &with(ToyNeeds(&["toy.cape"], false)));
+    assert!(
+        e.contains("pass toy-needs requires `toy.cape`, which the world does not have"),
+        "{e}"
+    );
+
+    // opted in but some of its names present and not all: fails
+    let e = failure(&select, &with(ToyNeeds(&["toy.mesh", "toy.mantle"], true)));
+    assert!(
+        e.contains("requires `toy.mantle`, which the world does not have"),
+        "{e}"
+    );
+
+    // opted in and skipped in every part: the conversion fails as a whole run would
+    let passes = Pipeline {
+        passes: vec![Box::new(ToyPass), Box::new(ToyNeeds(&["toy.mantle"], true))],
+    };
+    let e = failure(&select, &passes);
+    assert!(
+        e.contains("pass toy-needs requires `toy.mantle`, which the world does not have"),
+        "{e}"
+    );
+
+    // the selection is a whole-world run: strict even for a pass that opts in
+    let select = Pipeline {
+        passes: vec![Box::new(ToyNeeds(&["toy.cape"], true))],
+    };
+    let passes = Pipeline {
+        passes: vec![Box::new(ToyPass)],
+    };
+    let e = failure(&select, &passes);
+    assert!(
+        e.contains("requires `toy.cape`, which the world does not have"),
+        "{e}"
+    );
+}

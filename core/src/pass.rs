@@ -159,6 +159,13 @@ pub trait Pass: Send + Sync {
     fn options(&self) -> Options {
         Options::new()
     }
+    /// Whether a part run ([`PassManager::run_part`]) may skip it in a part that holds none of its required names: a
+    /// per-part lowering whose input a part may simply not have (a web tile of only a light has no materials) opts in.
+    /// Required names are prerequisites, so this is false unless the pass says otherwise: an absent name may be a
+    /// failed load or a wrong order, and a pass that summarizes, decides or plans never opts in.
+    fn part_may_lack_inputs(&self) -> bool {
+        false
+    }
     /// Names that must be present before it runs.
     fn requires(&self) -> &[&'static str] {
         &[]
@@ -874,7 +881,15 @@ pub struct StepReport {
     /// record keeps what its log had noted until then, so its omissions and approximations still reach the report;
     /// `added` and `removed` are then empty (not checked).
     pub failed: Option<String>,
+    /// In a part run ([`PassManager::run_part`]), for a pass that opts in ([`Pass::part_may_lack_inputs`]), its required
+    /// names when none of them was in the part, so the pass did not run (its log counts it, [`SKIPPED`]); empty when it
+    /// ran.
+    pub skipped: Vec<String>,
 }
+
+/// The count a pass skipped in a part run gets in its log ([`PassManager::run_part`]), so a conversion's totals give the
+/// skips per pass.
+pub const SKIPPED: &str = "parts holding none of its required names, skipped";
 
 /// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1064,9 +1079,46 @@ impl PassManager {
         report: &mut RunReport,
         instrument: &mut dyn Instrument,
     ) -> Result<()> {
+        self.run_with(w, pipeline, report, instrument, false)
+    }
+
+    /// [`PassManager::run`] on one part of a conversion ([`crate::convert`]): a pass that opts in
+    /// ([`Pass::part_may_lack_inputs`]), requires names and finds none of them in the part has nothing to do there and is
+    /// skipped, recorded (its step's [`StepReport::skipped`], a [`SKIPPED`] count in its log). Any other pass whose
+    /// required names are absent fails as in a whole run, as does an opted-in pass whose part holds some of them but not
+    /// all; a pass that requires nothing always runs. Whole-world runs (a selection, a decision) stay strict.
+    pub fn run_part(&self, w: &mut World, pipeline: &Pipeline, report: &mut RunReport) -> Result<()> {
+        self.run_with(w, pipeline, report, &mut NoInstrument, true)
+    }
+
+    fn run_with(
+        &self,
+        w: &mut World,
+        pipeline: &Pipeline,
+        report: &mut RunReport,
+        instrument: &mut dyn Instrument,
+        part: bool,
+    ) -> Result<()> {
         pipeline.check()?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
+            let absent = |r: &&str| !w.has_component_named(r) && !w.resource_names().contains(r);
+            if part && p.part_may_lack_inputs() && !p.requires().is_empty() && p.requires().iter().all(absent)
+            {
+                let mut log = PassLog::default();
+                log.count(SKIPPED, 1);
+                report.steps.push(StepReport {
+                    pass: text,
+                    approximates: p.approximates(),
+                    log,
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                    conservation: Vec::new(),
+                    failed: None,
+                    skipped: p.requires().iter().map(|r| (*r).to_owned()).collect(),
+                });
+                continue;
+            }
             let step = Step {
                 index,
                 name: p.name(),
@@ -1095,6 +1147,7 @@ impl PassManager {
                         removed: Vec::new(),
                         conservation: Vec::new(),
                         failed: Some(e.to_string()),
+                        skipped: Vec::new(),
                     });
                     // the pass's error is the one that matters; a failing hook has nothing to add to it
                     let _ = instrument.pass_failed(&step, w, &e);
@@ -1247,6 +1300,7 @@ impl PassManager {
             removed,
             conservation,
             failed: None,
+            skipped: Vec::new(),
         })
     }
 
