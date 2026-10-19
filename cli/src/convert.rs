@@ -20,7 +20,7 @@ readers:
   skate-scene  --scene <folder> (a skate scene's web tiles: --select \"select-lod{form=finest}, lower-skate-lights\"
                --passes \"lower-skate-pbr, normalize-normals, fill-missing-texcoords,
                prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}\", and for KTX2 tiles
-               prepare-web-textures{color=512,normal=512,mask=256,...} after them)
+               prepare-web-textures{color=512,normal=512,mask=256,memo-mib=512,...} after them)
 writers:
   web      [--tile-m M] [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--camera <eye x,y,z>:<target x,y,z>] [--plain] (--plain: this set

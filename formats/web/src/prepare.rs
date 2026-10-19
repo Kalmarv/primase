@@ -108,10 +108,11 @@ impl RoleCaps {
     }
 }
 
-/// `prepare-web-textures{color=N,normal=N,mask=N[,names=PREFIX:C/N/M;...][,color-bytes=N][,mask-bytes=N]}`: see the
-/// module documentation. The three caps are required (the program's quality choice); `names` gives the caps of
-/// textures whose name starts with a prefix, the first that matches; without a byte budget an image is not encoded
-/// here and never halved.
+/// `prepare-web-textures{color=N,normal=N,mask=N[,names=PREFIX:C/N/M;...][,color-bytes=N][,mask-bytes=N][,memo-mib=N]}`:
+/// see the module documentation. The three caps are required (the program's quality choice); `names` gives the caps
+/// of textures whose name starts with a prefix, the first that matches; without a byte budget an image is not encoded
+/// here and never halved. `memo-mib` keeps the preparations in memory across the pass's runs, at most N MiB (a
+/// conversion runs it once per part, and parts share textures; the same output either way); without it, none kept.
 #[derive(Clone)]
 pub struct PrepareWebTextures {
     pub caps: RoleCaps,
@@ -141,6 +142,11 @@ pub struct Memo {
 }
 
 impl Memo {
+    /// The most bytes of PNGs and encodings it holds.
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
     /// Holding at most `cap` bytes of PNGs and encodings.
     pub fn new(cap: usize) -> Memo {
         Memo {
@@ -218,6 +224,14 @@ impl PrepareWebTextures {
                 "color" | "normal" | "mask" => {}
                 "color-bytes" => pass.color_bytes = Some(ByteBudget::parse(k, v)?),
                 "mask-bytes" => pass.mask_bytes = Some(ByteBudget::parse(k, v)?),
+                "memo-mib" => {
+                    let mib = v
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|m| *m > 0)
+                        .ok_or_else(|| format!("{k}={v} is not a number of MiB above 0"))?;
+                    pass.memo = Some(Arc::new(std::sync::Mutex::new(Memo::new(mib << 20))));
+                }
                 "names" => {
                     for rule in v.split(';').filter(|r| !r.is_empty()) {
                         let (prefix, caps) = rule
@@ -381,6 +395,9 @@ impl Pass for PrepareWebTextures {
         }
         if let Some(b) = self.mask_bytes {
             o.insert("mask-bytes".into(), b.get().to_string());
+        }
+        if let Some(cap) = self.memo.as_ref().and_then(|m| m.lock().ok().map(|m| m.cap())) {
+            o.insert("memo-mib".into(), (cap >> 20).to_string());
         }
         if !self.caps_by_name.is_empty() {
             o.insert(
@@ -779,6 +796,25 @@ mod tests {
         assert_eq!(fresh(&p), without, "first run, memo filling");
         assert_eq!(p.memo.as_ref().unwrap().lock().unwrap().entries.len(), 4);
         assert_eq!(fresh(&p), without, "second run, from the memo");
+        // memo-mib in the options gives the pass a memo of its own, of that size, and prints back
+        let o = Options::from([
+            ("color".to_owned(), "512".to_owned()),
+            ("normal".to_owned(), "512".to_owned()),
+            ("mask".to_owned(), "256".to_owned()),
+            ("memo-mib".to_owned(), "64".to_owned()),
+        ]);
+        let made = PrepareWebTextures::from_options(&o).unwrap();
+        assert_eq!(made.memo.as_ref().unwrap().lock().unwrap().cap(), 64 << 20);
+        assert_eq!(made.options()["memo-mib"], "64");
+        assert!(
+            PrepareWebTextures::from_options(&Options::from([
+                ("color".to_owned(), "512".to_owned()),
+                ("normal".to_owned(), "512".to_owned()),
+                ("mask".to_owned(), "256".to_owned()),
+                ("memo-mib".to_owned(), "0".to_owned()),
+            ]))
+            .is_err()
+        );
         // a memo too small to hold anything: every preparation made again, the drops counted
         p.memo = Some(Arc::new(std::sync::Mutex::new(Memo::new(1))));
         let (mut w, ..) = world();
