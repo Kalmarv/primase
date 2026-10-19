@@ -481,7 +481,11 @@ pub struct World {
 pub(crate) struct Effects {
     /// Resources it replaced or borrowed mutably (an existing one written, or written in place), by name.
     pub(crate) resources_written: BTreeSet<String>,
-    /// Copies it made: (source, target) for each [`World::duplicate`] and [`World::copy_components`].
+    /// Resources it took away ([`World::remove_resource`]), by name: one the world holds again afterwards was
+    /// replaced, a write as much as [`World::insert_resource`] over it.
+    pub(crate) resources_removed: BTreeSet<String>,
+    /// Copies it made: (source, target) for each [`World::duplicate`] and [`World::copy_components`]. An exemption,
+    /// not a check: a name a copy puts on its target is the source's, so it counts as no addition.
     pub(crate) copies: Vec<(Entity, Entity)>,
 }
 
@@ -1084,6 +1088,8 @@ impl World {
     }
 
     /// Attach (or replace) a component. Panics if the entity is not alive: attaching to a dead entity is a bug.
+    /// Replacing a value an entity keeps is an in-place edit to the pass manager, as through [`World::get_mut`]:
+    /// declared in [`crate::pass::Pass::modifies`], not checked.
     pub fn insert<T: Component>(&mut self, e: Entity, value: T) -> Option<T> {
         assert!(self.alive.contains(&e), "insert {} on dead entity {e:?}", T::NAME);
         self.register::<T>().insert(e, value)
@@ -1437,6 +1443,9 @@ impl World {
 
     pub fn remove_resource<T: Resource>(&mut self) -> Option<T> {
         let old = self.resources.remove(&TypeId::of::<T>())?;
+        if let Some(fx) = &mut self.effects {
+            fx.resources_removed.insert(T::NAME.to_owned());
+        }
         let any: Box<dyn Any> = old;
         any.downcast::<T>().ok().map(|b| *b)
     }

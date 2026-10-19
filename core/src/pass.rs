@@ -171,10 +171,10 @@ pub trait Pass: Send + Sync {
     fn removes(&self) -> &[&'static str] {
         &[]
     }
-    /// Names whose values it edits in place, and resources it writes (replaced, or borrowed with
-    /// [`World::resource_mut`]). The pass manager checks the resources; an in-place edit of a component's value on an
-    /// entity that keeps it (`get_mut`) is declared here and not checked: seeing it would take a controlled editing
-    /// interface, later work. Adding a name to an entity, taking one away and despawning are checked entity by entity
+    /// Names whose values it edits in place, and resources it writes (replaced, also by removing and inserting again,
+    /// or borrowed with [`World::resource_mut`]). The pass manager checks the resources; an in-place edit of a
+    /// component's value on an entity that keeps it (`get_mut`, or [`World::insert`] over the value) is declared here
+    /// and not checked: seeing it would take a controlled editing interface, later work. Adding a name to an entity, taking one away and despawning are checked entity by entity
     /// against [`Pass::provides`], [`Pass::removes`] and [`Pass::despawns_entities`].
     fn modifies(&self) -> &[&'static str] {
         &[]
@@ -1329,9 +1329,18 @@ impl PassManager {
                 ),
             });
         }
+        // a resource taken away and held again afterwards was replaced: a write
+        let names = w.resource_names();
+        let replaced = effects
+            .resources_removed
+            .iter()
+            .filter(|r| names.iter().any(|n| n == *r));
         let written: Vec<String> = effects
             .resources_written
             .iter()
+            .chain(replaced)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .filter(|r| !p.modifies().contains(&r.as_str()) && !p.provides().contains(&r.as_str()))
             .cloned()
             .collect();

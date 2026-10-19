@@ -1,6 +1,6 @@
 //! A pass's effects are checked entity by entity against its declarations, not only by the names that appear or
 //! disappear across the world: adding a name to a second entity, taking it from one of several, despawning, and
-//! writing a resource are each refused undeclared and accepted declared; copies carry their source's names; in-place
+//! writing a resource (also by removing and inserting it again) are each refused undeclared and accepted declared; copies carry their source's names; in-place
 //! edits of a value are declared ([`Pass::modifies`]) and not checked.
 
 #![allow(clippy::unwrap_used)]
@@ -35,6 +35,7 @@ enum Act {
     Duplicate,
     CopyOnto,
     WriteResource,
+    ReplaceResource,
     EditInPlace,
 }
 
@@ -62,7 +63,7 @@ impl Pass for Toy {
         }
     }
     fn modifies(&self) -> &[&'static str] {
-        if self.declared && self.act == Act::WriteResource {
+        if self.declared && matches!(self.act, Act::WriteResource | Act::ReplaceResource) {
             &["toy.setting"]
         } else {
             &[]
@@ -95,6 +96,11 @@ impl Pass for Toy {
             }
             Act::WriteResource => {
                 w.resource_mut::<Setting>().ok_or("no setting")?.0 = 2;
+            }
+            // taken away and put back: a write, as much as resource_mut
+            Act::ReplaceResource => {
+                w.remove_resource::<Setting>().ok_or("no setting")?;
+                w.insert_resource(Setting(3));
             }
             Act::EditInPlace => {
                 w.get_mut::<X>(e0).ok_or("e0")?.0 = 5;
@@ -139,6 +145,7 @@ fn effects_on_entities_and_resources_are_checked_against_declarations() {
         (Act::TakeFromOne, "taken from entities"),
         (Act::Despawn, "despawned 1 entities"),
         (Act::WriteResource, "toy.setting"),
+        (Act::ReplaceResource, "toy.setting"),
     ] {
         let err = run(act, false).unwrap_err();
         assert!(err.contains(words), "{act:?}: {err}");
