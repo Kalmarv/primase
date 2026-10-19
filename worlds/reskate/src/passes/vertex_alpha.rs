@@ -7,7 +7,7 @@
 //! marked [`VertexBlend::VertexAlpha`], and each primitive drawing it gets its `COLOR_0` alpha as its opacity
 //! ([`BlendOpacity`]; 1 where a primitive has no `COLOR_0`). The writer emits it with Studio's `vertex_blend`, and
 //! the post-compile stage writes the opacity onto the stock decal row
-//! ([`crate::postcompile::vblend::decal_opacity`], never the all-zero sentinel). Materials already marked (a lowered
+//! ([`crate::decal::decal_opacity`], never the all-zero sentinel). Materials already marked (a lowered
 //! blend's overlays) are left alone, and so are materials whose source does not take `COLOR_0`
 //! (`core.vertex_color` `ignored`), counted.
 

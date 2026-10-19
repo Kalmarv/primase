@@ -11,7 +11,7 @@
 //! - where `s > 1` (possible with `identity`) the weights are scaled to sum to 1 (counted).
 //!
 //! A null slot is a layer of black (core: it contributes black without redistributing its weight). An overlay keeps
-//! only triangles with some corner whose opacity, as written ([`crate::postcompile::vblend::decal_opacity`]),
+//! only triangles with some corner whose opacity, as written ([`crate::decal::decal_opacity`]),
 //! is above zero. The game's decal fades through a mask-shaped dissolve rather than linear alpha, and weights are
 //! evaluated per vertex then interpolated (the core blend interpolates channels, then evaluates): both are named
 //! approximations of the lowering pass, not of this arithmetic.
@@ -34,7 +34,7 @@ use primase_core::{Entity, Mesh, World};
 
 pub use crate::components::layered::{BlendOpacity, VertexBlend};
 
-use crate::postcompile::vblend::decal_opacity;
+use crate::decal::decal_opacity;
 
 /// What an overlay draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

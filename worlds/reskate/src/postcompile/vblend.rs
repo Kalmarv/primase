@@ -52,15 +52,8 @@ pub const DECAL_DONOR: u64 = 0xca7a_fe63_5959_dd1e;
 /// sections, the most common two-set row).
 pub const TWOSET_DONOR: u64 = 0x872d_ecc2_be71_1a7f;
 
-/// `Color0` = (0, 0, 0, 0) draws a decal fully opaque (measured): never written to a decal section.
-pub const NO_VERTEX_COLOUR: [u8; 4] = [0; 4];
-
-/// The `Color0` that gives a decal opacity `w` (0..1, clamped): (w, 0, 0, 1). Alpha is 1 so that `w = 0` is
-/// transparent rather than [`NO_VERTEX_COLOUR`].
-pub fn decal_opacity(w: f32) -> [u8; 4] {
-    let r = (w.clamp(0.0, 1.0) * 255.0).round() as u8;
-    [r, 0, 0, 255]
-}
+/// The decal row's opacity encoding, shared with the passes ([`crate::decal`]).
+pub use crate::decal::{NO_VERTEX_COLOUR, decal_opacity};
 
 /// The stored layout Studio writes for the surfaces a retarget takes (`TexCoord0` as `uv`: [`format::HALF2`], or
 /// [`format::HALF4`] for a `vertex_blend` material), and the stock layout it writes.
@@ -1087,17 +1080,6 @@ fn rewrite_meshset(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn decal_opacity_is_never_the_opaque_sentinel() {
-        // alpha is always 255, so no weight is the all-zero sentinel; an interior weight by hand: 0.5 x 255 = 127.5,
-        // rounded half away from zero to 128
-        assert_eq!(decal_opacity(0.5), [128, 0, 0, 255]);
-        assert_ne!(decal_opacity(0.5), NO_VERTEX_COLOUR);
-        assert_eq!(decal_opacity(0.0), [0, 0, 0, 255]);
-        assert_eq!(decal_opacity(1.0), [255, 0, 0, 255]);
-        assert_eq!(decal_opacity(-3.0), [0, 0, 0, 255]);
-    }
 
     #[test]
     fn an_all_zero_decal_emit_is_refused() {

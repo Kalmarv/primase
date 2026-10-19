@@ -125,11 +125,6 @@ reason = "writer I/O in Other"
 removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"
 
 [[layout]]
-file = "worlds/reskate/src/passes/layered.rs"
-reason = "Passes names the I/O module primase_reskate::postcompile::vblend"
-removed_when = "B2: decal_opacity (the stock decal row's opacity encoding) moves to an I/O-free module shared by passes/layered and postcompile/vblend"
-
-[[layout]]
 file = "worlds/unity/src/components.rs"
 reason = "Components names the I/O module primase_unity::player"
 removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"

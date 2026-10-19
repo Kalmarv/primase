@@ -13,6 +13,7 @@ pub mod build;
 pub mod collision;
 mod collision_pack;
 pub mod components;
+pub mod decal;
 pub mod exact_sum;
 pub mod glb;
 pub mod grind;
