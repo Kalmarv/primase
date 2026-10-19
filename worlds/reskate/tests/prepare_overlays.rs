@@ -12,9 +12,9 @@ use primase_core::{
     DrawLayer, DrawOrder, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform,
     World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
 use primase_reskate::prepare::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
-use primase_reskate::{BuildOptions, EncodingOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -215,7 +215,7 @@ fn decals_are_stacked_before_the_writer() {
         }
     }
     assert_eq!(log.counts["overlay pieces lifted"], 2);
-    let (r, stacked) = write(&w, "stacked", &EncodingOptions::default()).unwrap();
+    let (r, _) = write(&w, "stacked", &EncodingOptions::default()).unwrap();
     let written: Vec<f32> = r
         .lifts
         .values()
@@ -235,21 +235,8 @@ fn decals_are_stacked_before_the_writer() {
         "{:?}",
         r.unsupported
     );
-    // the deprecated helper, given the step, stacks the same way and writes the same files
-    let Fixture { w: plain, .. } = fixture();
-    let out_root = tmp("helper");
-    primase_reskate::build(
-        &plain,
-        Path::new(""),
-        &BuildOptions {
-            out_root: out_root.clone(),
-            name: Some("overlays".into()),
-            ..BuildOptions::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(files(&out_root.join("overlays")), stacked);
     // no pass: nothing lifted, the two decals reported
+    let Fixture { w: plain, .. } = fixture();
     let (r, _) = write(&plain, "plain", &EncodingOptions::default()).unwrap();
     assert!(r.lifts.is_empty(), "{:?}", r.lifts);
     assert!(

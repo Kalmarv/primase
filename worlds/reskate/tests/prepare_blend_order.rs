@@ -12,13 +12,13 @@ use primase_core::{
     Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream, Topology,
     Transform, WeightMapping, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::dialect::{MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateMarker};
 use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::prepare::{
     PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions,
     plan_reskate_blend_budget, prepare_reskate_blend_order,
 };
-use primase_reskate::{BuildOptions, EncodingOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -177,12 +177,12 @@ fn files(root: &Path) -> Files {
 }
 
 /// The chain crossing the border is clipped into both cells, each cell's ranks padded to one box and lifted along the
-/// axis; the writer builds exactly that from the record (its own grouping checked against it), as the deprecated
-/// helper composes it; without the pass it splits nothing and says so once.
+/// axis; the writer builds exactly that from the record (its own grouping checked against it); without the pass it
+/// splits nothing and says so once.
 #[test]
 fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
     let mut w = across_the_border();
-    // prepared as the deprecated helper prepares it: the overlay stack (its relations order the tile), then the chains
+    // prepared as build_map prepares it: the overlay stack (its relations order the tile), then the chains
     PrepareReskateOverlays::new(0.004)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
@@ -192,7 +192,7 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
         .unwrap()
         .run(&mut w, &mut log)
         .unwrap();
-    // the budget the deprecated helper plans by default: the cull-ID pool's room
+    // and their budget: the cull-ID pool's room
     PlanReskateBlendBudget::pool()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -226,19 +226,6 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
         .filter(|n| n.contains("_c0_") || n.contains("_c1_"))
         .collect();
     assert_eq!(names.len(), tile.groups.len(), "{names:?}");
-    // the deprecated helper, at the grid it takes, chooses the same chains and writes the same files
-    let out_root = tmp("helper");
-    primase_reskate::build(
-        &across_the_border(),
-        Path::new(""),
-        &BuildOptions {
-            out_root: out_root.clone(),
-            name: Some("chains".into()),
-            ..BuildOptions::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(files(&out_root.join("chains")), chained);
     // no pass: the chain overlays stay in their tile, reported once
     let (r, _) = write(&across_the_border(), "plain", &EncodingOptions::default()).unwrap();
     assert_eq!(r.blend.objects, 0);

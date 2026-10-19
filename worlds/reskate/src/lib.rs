@@ -31,8 +31,8 @@ pub mod vertex_alpha;
 use std::path::PathBuf;
 
 pub use build::{
-    AssembledMaterial, BuildOptions, BuildReport, EncodingOptions, assembled_materials, build,
-    leave_out_optional, lod_choice, select_lod, write_map,
+    AssembledMaterial, BuildReport, EncodingOptions, assembled_materials, leave_out_optional, lod_choice,
+    select_lod, write_map,
 };
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the

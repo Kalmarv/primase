@@ -65,65 +65,6 @@ impl Default for EncodingOptions {
     }
 }
 
-/// The options of `scene-skate build`, flat: [`EncodingOptions`] and the choices the preparation passes now make (the
-/// overlay step, `prepare-reskate-overlays`'s, 0: no stack; the blend-chain grid, `prepare-reskate-blend-order`'s; the
-/// chain-object budget, `plan-reskate-blend-budget`'s, `None`: the cull-ID pool) in one, for [`build`], the deprecated
-/// composition helper. Removed with it (PRIMASE-PLAN step 10).
-#[derive(Clone, Debug)]
-pub struct BuildOptions {
-    pub out_root: PathBuf,
-    pub name: Option<String>,
-    pub tile: f32,
-    pub min_instances: i64,
-    pub min_instance_tris: i64,
-    pub overlay_step: f32,
-    pub blend_objects: Option<usize>,
-    pub blend_grid: f32,
-    pub limit: f32,
-    pub max_render_edge: Option<f32>,
-    pub offset: [f64; 2],
-    pub scene_warnings: Option<Vec<String>>,
-}
-
-impl Default for BuildOptions {
-    fn default() -> Self {
-        let e = EncodingOptions::default();
-        BuildOptions {
-            out_root: e.out_root,
-            name: e.name,
-            tile: e.tile,
-            min_instances: e.min_instances,
-            min_instance_tris: e.min_instance_tris,
-            overlay_step: 0.004,
-            blend_objects: None,
-            blend_grid: 200.0,
-            limit: e.limit,
-            max_render_edge: e.max_render_edge,
-            offset: e.offset,
-            scene_warnings: e.scene_warnings,
-        }
-    }
-}
-
-impl BuildOptions {
-    /// The writer's encoding.
-    pub fn encoding(&self) -> EncodingOptions {
-        let a = self.clone();
-        EncodingOptions {
-            out_root: a.out_root,
-            name: a.name,
-            tile: a.tile,
-            min_instances: a.min_instances,
-            min_instance_tris: a.min_instance_tris,
-            max_render_edge: a.max_render_edge,
-            limit: a.limit,
-            offset: a.offset,
-            cull_ids: EncodingOptions::default().cull_ids,
-            scene_warnings: a.scene_warnings,
-        }
-    }
-}
-
 /// What the build did (the log line's numbers).
 #[derive(Debug)]
 pub struct BuildReport {
@@ -469,15 +410,15 @@ pub fn lod_choice(s: &str) -> Result<primase_core::LodChoice> {
     })
 }
 
-/// The reference build's `--lod` as a pass, run before [`build`] (which refuses a world with levels of detail):
+/// The reference build's `--lod` as a pass, run before [`write_map`] (which refuses a world with levels of detail):
 /// each prototype keeps the form `lod` takes (`--lod`, default `default`).
 pub fn select_lod(world: &mut World, lod: primase_core::LodChoice) -> Result<primase_core::pass::RunReport> {
     run_passes(world, vec![Box::new(primase_core::SelectLod { choice: lod })])
 }
 
-/// The reference build's `--max-priority N` as a pass, run last before [`build`]: the scene's warnings as the
+/// The reference build's `--max-priority N` as a pass, run last before [`write_map`]: the scene's warnings as the
 /// reference reports them (from the whole scene, before its writer leaves placements out), for
-/// [`BuildOptions::scene_warnings`], then `drop-optional{max=N}` (nothing left out without N). The scene is read
+/// [`EncodingOptions::scene_warnings`], then `drop-optional{max=N}` (nothing left out without N). The scene is read
 /// with its files loaded (`interchange::load`): the warnings look at the meshes, and textures need pixels.
 pub fn leave_out_optional(
     world: &mut World,
@@ -581,43 +522,6 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::Overla
         limit: a.limit,
         offset: a.offset,
     }
-}
-
-/// The deprecated composition helper: [`write_map`] with the flat [`BuildOptions`]. Removed when its last callers
-/// switch (PRIMASE-PLAN step 10).
-pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport> {
-    let e = a.encoding();
-    // the overlay stack the writer used to make, made here as prepare-reskate-overlays makes it
-    let stack = match world.resource::<crate::dialect::SkateOverlayStack>() {
-        None if a.overlay_step > 0.0 => Some(overlay_stack(world, &e, a.overlay_step)?),
-        _ => None,
-    };
-    // and the blend chains, as prepare-reskate-blend-order chooses them
-    let chains = match world.resource::<crate::dialect::SkateBlendChains>() {
-        None => Some(blend_chains(world, &e, a.blend_grid)?),
-        Some(_) => None,
-    };
-    // and their budget, as plan-reskate-blend-budget plans it
-    let budget = match world.resource::<crate::dialect::SkateBlendBudget>() {
-        None => {
-            let mode = a.blend_objects.map_or(
-                crate::dialect::BlendBudgetMode::Pool,
-                crate::dialect::BlendBudgetMode::Objects,
-            );
-            let record = chains
-                .as_ref()
-                .or(world.resource::<crate::dialect::SkateBlendChains>());
-            Some(crate::prepare::blend_budget::plan(record, mode))
-        }
-        Some(_) => None,
-    };
-    write_map_with(world, dir, &e, stack, chains, budget)
-}
-
-/// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
-/// as `a` says.
-pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
-    write_map_with(world, dir, a, None, None, None)
 }
 
 /// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
@@ -729,14 +633,9 @@ pub fn assembled_materials(
         .collect())
 }
 
-fn write_map_with(
-    world: &World,
-    dir: &Path,
-    a: &EncodingOptions,
-    given: Option<crate::dialect::SkateOverlayStack>,
-    given_chains: Option<crate::dialect::SkateBlendChains>,
-    given_budget: Option<crate::dialect::SkateBlendBudget>,
-) -> Result<BuildReport> {
+/// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
+/// as `a` says.
+pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
     let mut s = Scene::from_world(world, dir)?;
     let scene_warnings = match &a.scene_warnings {
         Some(w) => w.clone(),
@@ -776,10 +675,7 @@ fn write_map_with(
 
     let out_dir = a.out_root.join(&o.name);
     // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
-    let stack = match given
-        .as_ref()
-        .or(world.resource::<crate::dialect::SkateOverlayStack>())
-    {
+    let stack = match world.resource::<crate::dialect::SkateOverlayStack>() {
         Some(rec) => {
             let mine = grouping(&s, a);
             if rec.grouping != Some(mine) {
@@ -794,10 +690,7 @@ fn write_map_with(
         None => Stack::Off { unstacked: 0 },
     };
     // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
-    let chains = match given_chains
-        .as_ref()
-        .or(world.resource::<crate::dialect::SkateBlendChains>())
-    {
+    let chains = match world.resource::<crate::dialect::SkateBlendChains>() {
         Some(rec) => {
             let mine = grouping(&s, a);
             if rec.grouping != Some(mine) {
@@ -811,7 +704,7 @@ fn write_map_with(
         }
         None => Chains::Off { left: 0 },
     };
-    let budget = given_budget.or_else(|| world.resource::<crate::dialect::SkateBlendBudget>().cloned());
+    let budget = world.resource::<crate::dialect::SkateBlendBudget>().cloned();
     let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?
         .with_stack(stack)
         .with_chains(chains)
