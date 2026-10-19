@@ -27,8 +27,9 @@ struct Reskate {
     sink: MapSink,
 }
 
-/// `[--name N] [--min-instances N]`
+/// `[--name N] [--min-instances N] [--parts]`
 pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
+    let mut parts = false;
     let mut name = out
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -47,6 +48,7 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
                     .parse()
                     .map_err(|_| "reskate: --min-instances is a number")?
             }
+            "--parts" => parts = true,
             "--blend-objects" => {
                 return Err(
                     "reskate: the chain-object budget is plan-reskate-blend-budget's: --passes \"..., \
@@ -72,9 +74,15 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         return Err(format!("reskate: the map name {name:?} is not [A-Za-z0-9_-]+ (--name)").into());
     }
     encoding.name = Some(name);
-    // one map: the whole selection in one part
+    // one map: the whole selection in one part, or the partition plan's parts (the map sink lays them out as the
+    // whole: their layout, instancing and content summaries merged over every part, --summarize)
+    let source: Box<dyn primase_core::convert::PartSource> = if parts {
+        Box::new(primase_core::convert::PlannedParts::default())
+    } else {
+        Box::new(primase_core::convert::WholeWorld::default())
+    };
     Ok((
-        Box::new(primase_core::convert::WholeWorld::default()),
+        source,
         Box::new(Reskate {
             // the world carries every input in memory: no scene folder to read from
             sink: MapSink::new(&PathBuf::new(), &encoding),
@@ -112,7 +120,26 @@ impl Writer for Reskate {
                 ),
             ),
             ("blend order".into(), format!("{:?}", report.blend)),
+            (
+                "reskate parts".into(),
+                format!(
+                    "parts={} held_peak_cells={} held_peak_bytes={} cells_laid_at_finish={} parts_untold={}",
+                    report.parts,
+                    report.held.peak_cells,
+                    report.held.peak_bytes,
+                    report.held.at_finish,
+                    report.held.parts_untold
+                ),
+            ),
         ];
+        // what the writer decided by a pass's rule, a map in parts: the collision plan, the blend budget and its basis
+        if let Some(p) = &report.collision_plan {
+            let leaves = p.leaves.as_ref().map_or(0, std::collections::BTreeMap::len);
+            lines.push(("reskate collision plan made".into(), format!("{leaves} leaves")));
+        }
+        if let Some(b) = &report.blend_budget {
+            lines.push(("reskate blend budget made".into(), format!("{b:?}")));
+        }
         // the map's warnings (map.json's), each counted below when it is a loss
         for w in report.warnings {
             lines.push(("reskate warning".into(), w));

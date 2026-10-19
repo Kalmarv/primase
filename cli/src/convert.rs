@@ -3,8 +3,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use primase_core::convert::{ConvertReport, PartSize, PartSource, Reader, Writer, convert_parts};
-use primase_core::pass::{PassManager, PassRegistry};
+use primase_core::convert::{
+    ConvertReport, PartSize, PartSource, Reader, Summarized, Writer, convert_parts, convert_parts_summarized,
+};
+use primase_core::pass::{PassManager, PassRegistry, Pipeline};
+use primase_core::summary::SummaryRegistry;
 
 pub type Result<T> = primase_core::convert::Result<T>;
 
@@ -12,6 +15,10 @@ pub const USAGE: &str = "usage: primase convert --from <reader> [reader options]
 <out> [writer options]
 --conservation off|report|enforce: count what each pass leaves out against what it declares (off unless given;
 report: differences as diagnostic notices; enforce: a difference fails the pass).
+--summarize \"<pipeline>\" [--decide \"<pipeline>\"]: go over the parts twice; first each part's summaries are made by
+the summarize passes and merged over every part, the decide passes make the map's decisions from them once, then each
+part goes through --passes with them (a ReSkate map in parts: --summarize \"summarize-reskate-layout{tile=200},
+summarize-reskate-instances, summarize-reskate-content\", and the summaries the --passes take in parts).
 --select and --passes are the conversion's choices, written out (no reader or writer supplies them): for a GTA region
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
@@ -25,12 +32,20 @@ writers:
   web      [--tile-m M] [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
            [--budget-mib N | --no-budget] [--camera <eye x,y,z>:<target x,y,z>] [--plain] (--plain: this set
            uncompressed, not instanced, PNG textures: the plain comparison set is its own conversion)
-  reskate  [--name N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N,light_scale=standard}, lower-layered-reskate{overlays=all},
+  reskate  [--name N] [--parts] (--parts: the parts of the partition plan --select makes, partition-grid{cell=C,
+           tile=200,halo=H}, written as one map; with --summarize) (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N,light_scale=standard}, lower-layered-reskate{overlays=all},
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
            prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004},
            prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},
            summarize-reskate-map, plan-reskate-blend-budget{objects=pool}\", and a pause map if wanted:
            prepare-reskate-pause-map{from=geometry,height=2160,extent=content}; a spawn from place-spawn at --select)";
+
+/// Every summary a world crate merges over a conversion's parts, by name.
+pub fn summaries() -> SummaryRegistry {
+    let mut r = SummaryRegistry::new();
+    primase_reskate::register_summaries(&mut r);
+    r
+}
 
 /// Every pass by name: core's, the toolkit's and each world crate's.
 pub fn registry() -> PassRegistry {
@@ -131,6 +146,8 @@ pub fn run(args: &[String]) -> Result<()> {
     };
     let passes_text = take("--passes")?;
     let select_text = take("--select")?;
+    let summarize_text = take("--summarize")?;
+    let decide_text = take("--decide")?;
     let conservation = match take("--conservation")?.as_deref() {
         None | Some("off") => primase_core::pass::Conservation::Off,
         Some("report") => primase_core::pass::Conservation::Report,
@@ -150,15 +167,43 @@ pub fn run(args: &[String]) -> Result<()> {
     let passes = registry.parse(&passes_text)?;
     println!("select: {select}");
     println!("passes: {passes}");
+    // over the parts twice when the conversion summarizes them
+    let summarize = summarize_text.as_deref().map(|t| registry.parse(t)).transpose()?;
+    let decide = match (&summarize, decide_text) {
+        (_, None) => Pipeline { passes: Vec::new() },
+        (Some(_), Some(t)) => registry.parse(&t)?,
+        (None, Some(_)) => return Err("--decide needs --summarize".into()),
+    };
+    if let Some(s) = &summarize {
+        println!("summarize: {s}");
+        println!("decide: {decide}");
+    }
     let manager = PassManager::new(registry).with_conservation(conservation);
-    let report = match convert_parts(
-        reader.as_mut(),
-        parts.as_mut(),
-        writer,
-        &manager,
-        &select,
-        &passes,
-    ) {
+    let summaries = summaries();
+    let converted = match &summarize {
+        None => convert_parts(
+            reader.as_mut(),
+            parts.as_mut(),
+            writer,
+            &manager,
+            &select,
+            &passes,
+        ),
+        Some(summarize) => convert_parts_summarized(
+            reader.as_mut(),
+            parts.as_mut(),
+            writer,
+            &manager,
+            &select,
+            &Summarized {
+                registry: &summaries,
+                summarize,
+                decide: &decide,
+            },
+            &passes,
+        ),
+    };
+    let report = match converted {
         Ok(report) => report,
         Err(e) => {
             // what was done before the failure, then the failure
