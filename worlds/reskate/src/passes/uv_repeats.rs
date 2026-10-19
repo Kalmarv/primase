@@ -158,13 +158,12 @@ impl Pass for PrepareReskateUvRepeats {
     fn requires(&self) -> &[&'static str] {
         &["skate.scene"]
     }
+    /// A cutout twin's name, where its original has none (it is labelled as the original was).
+    fn provides(&self) -> &[&'static str] {
+        &["core.name"]
+    }
     fn modifies(&self) -> &[&'static str] {
-        &[
-            "core.mesh",
-            "core.material_variants",
-            "skate.material",
-            "core.name",
-        ]
+        &["core.mesh", "core.material_variants", "skate.material"]
     }
     fn approximates(&self) -> &'static str {
         "blended surfaces with a triangle over too many texture repeats drawn alpha tested"
