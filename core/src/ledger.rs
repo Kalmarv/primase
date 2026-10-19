@@ -12,19 +12,21 @@
 //! - **Textures**: entities with a `core.texture` or a `core.texture_file`. Exact, by entity: loading a file into
 //!   pixels keeps the entity and is no drop; a texture despawned or left with neither is one.
 //! - **Primitives**: the primitives of a `core.mesh`. Exact through [`World::rebuild_primitives`]: a source primitive
-//!   none of the rebuilt ones comes from is a drop. A mesh replaced another way (a new [`Mesh`] inserted or assigned,
-//!   moved with [`World::move_components`], despawned with its entity), before, between or after rebuilds, is counted
-//!   net over all such meshes, so a move between entities is no drop; a mesh on an entity the pass made (a
-//!   [`World::duplicate`]) adds to that balance. Meshes are told apart by identity ([`Mesh::new`] makes a new one; a
-//!   clone, an in-place edit and [`World::apply_linear`] keep it), never by their primitive count.
+//!   none of the rebuilt ones comes from is a drop. Meshes are told apart by identity ([`Mesh::new`] makes a new one; a
+//!   clone, an in-place edit and [`World::apply_linear`] keep it), never by their primitive count, and followed by it:
+//!   a mesh gone from its entity that stands on another with its identity (moved with [`World::move_components`], or a
+//!   [`World::duplicate`] or clone standing in for an entity despawned) is compared there as if it had stayed, exactly.
+//!   A copy made beside a mesh that stays is an addition. A mesh replaced by another identity (a new [`Mesh`] inserted
+//!   or assigned, or despawned with its entity and found nowhere), before, between or after rebuilds, is counted net
+//!   over all such meshes; the meshes that appeared (a loaded file, a form's new mesh) add to that balance.
 //! - **Triangles**: inside kept primitives only (a dropped primitive's triangles go with it): per source primitive of a
 //!   rebuild, what its pieces lost; per mesh edited in place ([`Mesh::primitives_mut`]), what each primitive lost. Net
 //!   per primitive. Triangles are those of [`Topology::Triangles`] primitives, core's only triangle topology.
 //!
-//! What it does not see: a replaced mesh's triangle losses (counted net by primitives only), topologies other than
-//! triangle lists, anything outside the four measures (collision soups, lights, markers, source namespaces) and
-//! changes that keep the counts (a moved vertex, a recoloured texture). It is a check of declarations, not proof of
-//! fidelity.
+//! What it does not see: the triangle losses of a mesh replaced by another identity (counted net by primitives only),
+//! topologies other than triangle lists, anything outside the four measures (collision soups, lights, markers, source
+//! namespaces) and changes that keep the counts (a moved vertex, a recoloured texture). It is a check of declarations,
+//! not proof of fidelity.
 //!
 //! Adding is never a drop and needs no declaration.
 
@@ -33,7 +35,7 @@ use std::fmt;
 
 use crate::components::{Instance, Mesh, Texture, TextureFile, Topology};
 use crate::pass::PassLog;
-use crate::world::{Entity, RebuildLog, World};
+use crate::world::{Entity, RebuildLog, Rebuilt, World};
 
 /// What a drop is counted in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -134,6 +136,36 @@ fn triangles(mesh: &Mesh) -> Vec<u64> {
         .collect()
 }
 
+/// What a mesh `before` of identity `id` lost, primitives and triangles, if what now stands in its place is it,
+/// rebuilt (the last rebuild `rebuild` made `now` from it) or edited in place at most; `None` when it is not.
+fn exact(
+    before: &[u64],
+    id: u64,
+    rebuild: Option<&Option<Rebuilt>>,
+    now: Option<&(u64, Vec<u64>)>,
+) -> Option<(u64, u64)> {
+    let (now_id, now) = now?;
+    match rebuild {
+        Some(Some(r)) if r.source == id && r.made == *now_id => {
+            let kept: BTreeSet<usize> = r.from.iter().copied().collect();
+            let mut tris = 0;
+            for &j in &kept {
+                let pieces: u64 = r
+                    .from
+                    .iter()
+                    .zip(now)
+                    .filter(|(i, _)| **i == j)
+                    .map(|(_, t)| t)
+                    .sum();
+                tris += before[j].saturating_sub(pieces);
+            }
+            Some(((r.first - kept.len()) as u64, tris))
+        }
+        None if now_id == &id => Some((0, before.iter().zip(now).map(|(b, a)| b.saturating_sub(*a)).sum())),
+        _ => None,
+    }
+}
+
 /// The world as the diagnostics see it before a pass.
 #[derive(Debug)]
 pub(crate) struct Before {
@@ -166,49 +198,58 @@ impl Before {
             .filter(|&&e| !w.has::<Texture>(e) && !w.has::<TextureFile>(e))
             .count() as u64;
         let (mut primitives, mut tris) = (0u64, 0u64);
-        // meshes changed some other way than a tracked rebuild: their primitives counted net, all together
-        let (mut net_before, mut net_after) = (0u64, 0u64);
         let after: BTreeMap<Entity, (u64, Vec<u64>)> = w
             .iter::<Mesh>()
             .map(|(e, m)| (e, (m.id(), triangles(m))))
             .collect();
+        // each mesh compared where it stood; one that is no longer there (its entity gone, or its mesh replaced) is
+        // left for its identity to find
+        let mut gone: Vec<(u64, &Vec<u64>)> = Vec::new();
+        let mut matched: BTreeSet<Entity> = BTreeSet::new();
         for (e, (id, before)) in &self.meshes {
-            match (rebuilds.get(e), after.get(e)) {
-                // rebuilt from this mesh, and what the last rebuild made is still there
-                (Some(Some(r)), Some((now_id, now))) if r.source == *id && r.made == *now_id => {
-                    let kept: BTreeSet<usize> = r.from.iter().copied().collect();
-                    primitives += (r.first - kept.len()) as u64;
-                    for &j in &kept {
-                        let pieces: u64 = r
-                            .from
-                            .iter()
-                            .zip(now)
-                            .filter(|(i, _)| **i == j)
-                            .map(|(_, t)| t)
-                            .sum();
-                        tris += before[j].saturating_sub(pieces);
-                    }
+            match exact(before, *id, rebuilds.get(e), after.get(e)) {
+                Some((p, t)) => {
+                    primitives += p;
+                    tris += t;
+                    matched.insert(*e);
                 }
-                // the same mesh, edited in place at most
-                (None, Some((now_id, now))) if now_id == id => {
-                    tris += before
-                        .iter()
-                        .zip(now)
-                        .map(|(b, a)| b.saturating_sub(*a))
-                        .sum::<u64>();
-                }
-                (_, now) => {
-                    net_before += before.len() as u64;
-                    net_after += now.map_or(0, |(_, n)| n.len() as u64);
-                }
+                None => gone.push((*id, before)),
             }
         }
-        // meshes that appeared (a form's mesh moved onto its prototype, a loaded file) balance the net count
-        for (e, (_, now)) in &after {
-            if !self.meshes.contains_key(e) {
-                net_after += now.len() as u64;
+        // a mesh that went from where it stood and stands elsewhere with its identity (moved with
+        // World::move_components, or a duplicate or clone standing in for an entity despawned) is compared there
+        // as if it had stayed; the rest are counted net, primitives only, all together
+        let (mut net_before, mut net_after) = (0u64, 0u64);
+        let mut unmatched: Vec<(Entity, &(u64, Vec<u64>))> = after
+            .iter()
+            .filter(|(e, _)| !matched.contains(*e))
+            .map(|(e, a)| (*e, a))
+            .collect();
+        for (id, before) in gone {
+            let found = unmatched.iter().position(|(e, (now_id, _))| {
+                *now_id == id
+                    || rebuilds
+                        .get(e)
+                        .is_some_and(|r| r.as_ref().is_some_and(|r| r.source == id))
+            });
+            match found.and_then(|i| {
+                let (e, now) = unmatched[i];
+                exact(before, id, rebuilds.get(&e), Some(now)).map(|c| (i, c))
+            }) {
+                Some((i, (p, t))) => {
+                    primitives += p;
+                    tris += t;
+                    unmatched.remove(i);
+                }
+                None => net_before += before.len() as u64,
             }
         }
+        // meshes that appeared (a loaded file, a form's new mesh, what a pass made) and replacements balance the net
+        // count
+        net_after += unmatched
+            .iter()
+            .map(|(_, (_, now))| now.len() as u64)
+            .sum::<u64>();
         primitives += net_before.saturating_sub(net_after);
         BTreeMap::from([
             (Measure::Placements, placements),
@@ -564,6 +605,84 @@ mod tests {
         assert!(w.clone().take_rebuild_log().is_empty());
         assert!(w.subset(&w.entities().collect()).take_rebuild_log().is_empty());
         assert_eq!(w.take_rebuild_log().len(), 1);
+    }
+
+    /// A mesh is followed by its identity, not its entity: one moved to another entity, or a duplicate standing in for
+    /// an entity despawned, is compared where it went, as if it had stayed (a rebuild there or an edit in place counted
+    /// exactly); a copy made beside a mesh that stays is an addition, whatever is done to it after.
+    #[test]
+    fn a_mesh_is_followed_by_its_identity_across_entities() {
+        fn stand_in(w: &mut World) -> Entity {
+            let p = Entity::from_index(0);
+            let copy = w.duplicate(p).unwrap();
+            for e in [Entity::from_index(1), Entity::from_index(2)] {
+                w.get_mut::<Instance>(e).unwrap().prototype = copy;
+            }
+            w.despawn(p);
+            copy
+        }
+        fn moved(w: &mut World) -> Entity {
+            let to = w.spawn();
+            w.move_components(Entity::from_index(0), to);
+            for e in [Entity::from_index(1), Entity::from_index(2)] {
+                w.get_mut::<Instance>(e).unwrap().prototype = to;
+            }
+            to
+        }
+        // the stand-in edited in place (primitive 2 from 3 triangles to 1), and rebuilt without primitive 2
+        let stand_in_edited = |w: &mut World| {
+            let copy = stand_in(w);
+            w.get_mut::<Mesh>(copy).unwrap().primitives_mut()[2] = prim(1);
+        };
+        assert_eq!(left_out(stand_in_edited, vec![]), (Measure::Triangles, 2, 0));
+        run(stand_in_edited, vec![(Measure::Triangles, 2)]).unwrap();
+        let stand_in_rebuilt = |w: &mut World| {
+            let copy = stand_in(w);
+            w.rebuild_primitives(copy, |_| Ok((vec![prim(1), prim(2)], vec![0, 1])))
+                .unwrap();
+        };
+        assert_eq!(left_out(stand_in_rebuilt, vec![]), (Measure::Primitives, 1, 0));
+        // moved, then edited in place or split so that a primitive is hidden by a piece
+        let moved_edited = |w: &mut World| {
+            let to = moved(w);
+            w.get_mut::<Mesh>(to).unwrap().primitives_mut()[2] = prim(1);
+        };
+        assert_eq!(left_out(moved_edited, vec![]), (Measure::Triangles, 2, 0));
+        let moved_split = |w: &mut World| {
+            let to = moved(w);
+            w.rebuild_primitives(to, |_| Ok((vec![prim(2), prim(1), prim(2)], vec![1, 2, 2])))
+                .unwrap();
+        };
+        assert_eq!(left_out(moved_split, vec![]), (Measure::Primitives, 1, 0));
+        // a copy beside the mesh, which stays whole: the copy's losses are not the source's
+        let copy_edited = |w: &mut World| {
+            let copy = w.duplicate(Entity::from_index(0)).unwrap();
+            w.get_mut::<Mesh>(copy).unwrap().primitives_mut()[2] = prim(1);
+        };
+        run(copy_edited, vec![]).unwrap();
+        let copy_rebuilt = |w: &mut World| {
+            let to = w.spawn();
+            w.copy_components(Entity::from_index(0), to);
+            w.rebuild_primitives(to, |_| Ok((vec![prim(1)], vec![0])))
+                .unwrap();
+        };
+        run(copy_rebuilt, vec![]).unwrap();
+        let clone_elsewhere = |w: &mut World| {
+            let m = w.get::<Mesh>(Entity::from_index(0)).unwrap().clone();
+            let to = w.spawn();
+            w.insert(to, m);
+            w.get_mut::<Mesh>(to).unwrap().primitives_mut()[0] = prim(0);
+        };
+        run(clone_elsewhere, vec![]).unwrap();
+        // and the source losing a primitive is its loss, a whole copy beside it or not
+        let source_rebuilt = |w: &mut World| {
+            w.duplicate(Entity::from_index(0)).unwrap();
+            w.rebuild_primitives(Entity::from_index(0), |_| {
+                Ok((vec![prim(1), prim(2)], vec![0, 1]))
+            })
+            .unwrap();
+        };
+        assert_eq!(left_out(source_rebuilt, vec![]), (Measure::Primitives, 1, 0));
     }
 
     /// An entity's drop names what it held: a placement and its mesh's primitives; nothing for one gone already.
