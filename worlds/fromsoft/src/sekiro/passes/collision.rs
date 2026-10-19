@@ -28,7 +28,7 @@ pub fn known_surface(class: i32) -> Option<&'static str> {
 
 /// The surface a triangle of HitMtrl ID `material` is lowered with: its class's known surface, else `default`,
 /// counted as approximations in `log`.
-pub(crate) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
+pub(super) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
     if material < 0 {
         log.approximate(
             "triangles whose shape key binds no HitMtrl, given the default surface",
@@ -45,7 +45,7 @@ pub(crate) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
     })
 }
 
-pub(crate) fn push(
+pub(super) fn push(
     soup: &mut Collision,
     vertices: [[f32; 3]; 3],
     surface: u16,
@@ -63,7 +63,7 @@ pub(crate) fn push(
 
 /// A non-empty soup as its own entity, with the group it was lowered into; with `condition`, present only while it
 /// holds (the entity carries it and an identity transform: state sits on placed things).
-pub(crate) fn attach(
+pub(super) fn attach(
     world: &mut World,
     soup: Collision,
     group: &str,
@@ -94,7 +94,7 @@ pub(crate) fn attach(
 
 /// The entities whose input a pass lowers: in a part of a conversion (`core.part_scope`), what the part's roots
 /// reach, as what it only loaded as context is its owner's to lower; without one, everything (`None`).
-pub(crate) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
+pub(super) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
     world
         .resource::<PartScope>()
         .map(|s| world.closure(s.roots.iter().copied()))
@@ -102,7 +102,7 @@ pub(crate) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
 
 /// The read region around which a pass crops at `reach`, if it crops: `None` without a reach or after a read of the
 /// whole area.
-pub(crate) fn crop(
+pub(super) fn crop(
     world: &World,
     reach: Option<Metres>,
 ) -> std::result::Result<Option<([f32; 4], f32)>, String> {
@@ -116,7 +116,7 @@ pub(crate) fn crop(
 }
 
 /// Whether a world-frame triangle's centre lies beyond `reach` metres outside the east/north rectangle `r`.
-pub(crate) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
+pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
     let x = (v[0][0] + v[1][0] + v[2][0]) / 3.;
     let z = -(v[0][2] + v[1][2] + v[2][2]) / 3.;
     x < r[0] - reach || x >= r[2] + reach || z < r[1] - reach || z >= r[3] + reach

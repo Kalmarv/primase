@@ -1,77 +1,19 @@
-//! Object collision as the objects store it, and the pass that places it. The reader keeps each object prototype's
-//! main HKX bodies (`fromsoft.object_collision`): meshes as their posed triangles, convex shapes as their stored core
-//! and radius. How convex shapes become triangles, which motion types and HitMtrl classes become collision, the
-//! surface of convex bodies (which store none) and the crop are `lower-fromsoft-object-collision`'s options.
-use super::passes::collision::{attach, beyond, crop, owned, push, surface_of};
+//! `lower-fromsoft-object-collision`: object prototypes' collision bodies (`fromsoft.object_collision`) as collision.
+//! How convex shapes become triangles, which motion types and HitMtrl classes become collision, the surface of
+//! convex bodies (which store none) and the crop are its options.
+use super::collision::{attach, beyond, crop, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
-use super::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry};
-use crate::collision::{BodyGeometry, pose_columns, posed};
-use crate::{Result, collision, materials::Material, rigid::SourceModel};
+use crate::collision::posed;
+use crate::pose::FRAME;
+use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry};
+use crate::{materials::Material, rigid::SourceModel};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::Condition;
 use primase_core::{
-    Collision, Component, Entity, Instance, Name, Surfaces, Transform, World,
-    frame::{Axis, SourceFrame},
-    world::Resource,
+    Collision, Component, Entity, Instance, Name, Surfaces, Transform, World, world::Resource,
 };
 use primase_meshops::vector::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
-const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
-
-/// What the reader found of the kept object prototypes' collision.
-#[derive(Debug, Default)]
-pub struct Report {
-    /// Object prototypes kept, and those whose binder holds their main HKX.
-    pub models: usize,
-    pub models_with_collision: usize,
-    /// Their bodies by stored motion type, and by shape class.
-    pub bodies_by_motion: BTreeMap<u64, usize>,
-    pub bodies_by_shape: BTreeMap<String, usize>,
-}
-
-/// An object's main HKX `file` (decoded `bytes`) as its prototype's `fromsoft.object_collision`: every body as
-/// stored, in the prototype's space.
-pub fn bodies(file: &str, bytes: &[u8], report: &mut Report) -> Result<ObjectBodies> {
-    let bodies = collision::read_bodies(bytes, None)?
-        .into_iter()
-        .map(|body| {
-            *report.bodies_by_motion.entry(body.motion_type).or_default() += 1;
-            *report.bodies_by_shape.entry(body.shape.clone()).or_default() += 1;
-            let geometry = match body.geometry {
-                BodyGeometry::Mesh(soup) => ObjectGeometry::Mesh {
-                    triangles: soup
-                        .triangles
-                        .into_iter()
-                        .map(|t| t.map(|v| FRAME.point(v)))
-                        .collect(),
-                    materials: soup.materials,
-                },
-                BodyGeometry::Convex {
-                    core,
-                    capsule,
-                    position,
-                    orientation,
-                } => ObjectGeometry::Convex {
-                    core,
-                    capsule,
-                    // the body's pose, then the file frame's reflection into the world frame's axes
-                    to_prototype: pose_columns(position, orientation).map(|c| FRAME.point(c)),
-                },
-            };
-            ObjectBody {
-                name: body.name,
-                motion_type: body.motion_type,
-                shape: body.shape,
-                geometry,
-            }
-        })
-        .collect();
-    report.models_with_collision += 1;
-    Ok(ObjectBodies {
-        file: file.to_owned(),
-        bodies,
-    })
-}
 
 /// The surface of the largest colliding render area of a prototype's model: the first level-0 face set of each mesh
 /// whose material is drawn as opaque or cutout (not a skipped class, not a blocker card), its triangles posed as the
@@ -339,7 +281,7 @@ impl Pass for LowerFromSoftObjectCollision {
     fn provides(&self) -> &[&'static str] {
         &[
             Collision::NAME,
-            super::source::CollisionSource::NAME,
+            crate::sekiro::source::CollisionSource::NAME,
             Name::NAME,
             Condition::NAME,
             Transform::NAME,
@@ -379,7 +321,7 @@ impl Pass for LowerFromSoftObjectCollision {
                 None => &mut soup,
                 Some(c) => {
                     &mut conditioned
-                        .entry(super::passes::condition_key(c))
+                        .entry(super::condition_key(c))
                         .or_insert_with(|| (c.clone(), Collision::default()))
                         .1
                 }

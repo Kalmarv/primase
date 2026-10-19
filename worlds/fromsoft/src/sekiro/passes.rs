@@ -11,6 +11,7 @@ pub mod extras;
 pub mod layers;
 pub mod lights;
 pub mod normals;
+pub mod object_collision;
 pub mod pbr;
 pub(super) mod reflectance;
 pub mod settings;
@@ -1003,7 +1004,7 @@ pub fn register(registry: &mut PassRegistry) {
         "lower-fromsoft-object-collision",
         |o| {
             Ok(Box::new(
-                super::objects::LowerFromSoftObjectCollision::from_options(o)?,
+                object_collision::LowerFromSoftObjectCollision::from_options(o)?,
             ))
         },
         &[("convex", "tessellate")],

@@ -1,5 +1,6 @@
 //! Map collision as the area stores it: the reader keeps, whole, every file of the area's high-resolution collision
 //! binder that MSB collision parts name (`fromsoft.map_collision`); `lower-fromsoft-collision` lowers it.
+use crate::pose::FRAME;
 use crate::sekiro::source::{CollisionPart, MapCollision};
 use crate::{
     Archive, Binder, Result, collision,
@@ -7,13 +8,9 @@ use crate::{
     invalid,
     msb::{MapLayout, PartKind},
 };
-use primase_core::{
-    Name, Transform, World,
-    frame::{Axis, SourceFrame},
-};
+use primase_core::{Name, Transform, World};
 use primase_havok::Compendium;
 use std::collections::BTreeMap;
-const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 
 /// What the reader found of the area's map collision.
 #[derive(Debug, Default)]

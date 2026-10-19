@@ -1,11 +1,10 @@
 use super::Model;
 use crate::{Result, invalid};
-use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Primitive, Semantic, Stream, Topology};
 use primase_meshops::{Mesh, compact_primitive, vector::Vec3};
 use std::collections::BTreeMap;
 
-const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
+use crate::pose::FRAME;
 
 /// Geometry-affecting material decisions of the legacy composition ([`Model::geometry`]).
 #[derive(Clone, Copy, Debug)]

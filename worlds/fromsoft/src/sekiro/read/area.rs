@@ -1,7 +1,7 @@
 //! Reading one Sekiro area ([`read_area`]): its placed models, materials, texture files, layered-shader programs,
 //! collision files and bodies, lights, hang edges and spawn points, selected and in the world frame, as source records.
-use super::{collision, extras, shadows, states, textures};
-use crate::sekiro::{objects, source};
+use super::{collision, extras, objects, shadows, states, textures};
+use crate::sekiro::source;
 use crate::{
     Archive, Binder, Result,
     dcx::Decoder,

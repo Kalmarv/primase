@@ -4,12 +4,9 @@
 //! instead places map-local resources (for example collision); never apply it a
 //! second time to parts. Euler angles are degrees, applied X, then Z, then Y.
 use crate::{Result, bytes::View, invalid};
-use primase_core::{
-    components::Transform,
-    frame::{Axis, SourceFrame},
-};
+use primase_core::components::Transform;
 
-const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
+use crate::pose::FRAME;
 const SECTIONS: [&str; 8] = [
     "MODEL_PARAM_ST",
     "EVENT_PARAM_ST",

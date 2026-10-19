@@ -6,14 +6,15 @@
 //! [`passes`], [`collision`] and [`objects`], which a program chooses and orders. What the read leaves out or cannot
 //! read is in its [`Report::notices`].
 mod components;
-pub mod objects;
 pub mod passes;
 mod read;
 pub use components::source;
 pub use passes::collision;
 pub use passes::extras;
+pub use passes::object_collision as objects;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::area::{Options, Report, StateClasses, read_area, world_bounds};
 pub use read::collision::Report as CollisionReport;
 pub use read::extras::{Report as ExtrasReport, light_record};
+pub use read::objects::Report as ObjectCollisionReport;
 pub use read::{convert, states};
