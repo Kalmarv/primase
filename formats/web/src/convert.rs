@@ -111,6 +111,8 @@ impl PartSource for TileParts {
                 roots: BTreeSet::from([e, proto]),
                 context: BTreeSet::new(),
                 whole: false,
+                // no context loaded: it states no area
+                area: None,
             }));
         }
         let cells = self
@@ -123,6 +125,7 @@ impl PartSource for TileParts {
                     roots: tiles.plans[0].roots(c),
                     context: BTreeSet::new(),
                     whole: false,
+                    area: None,
                 })
             }
             None => None,

@@ -156,6 +156,7 @@ fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<
                     roots: scope.roots.clone(),
                     context: scope.context.clone(),
                     whole: scope.whole,
+                    area: scope.area,
                 });
             }
             (pass.name(), pass.run(&mut w, &mut PassLog::default()))
@@ -199,6 +200,7 @@ fn a_part_not_stated_whole_is_refused_and_the_whole_map_is_taken() {
             roots: all.iter().copied().filter(|&e| e != placed[1]).collect(),
             context: BTreeSet::new(),
             whole: false,
+            area: None,
         },
         false,
     );

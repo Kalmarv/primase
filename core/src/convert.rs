@@ -111,13 +111,18 @@ pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Resul
 /// for it, goes to the writer, so content a part only reads is written by the part that owns it. The passes see which
 /// is which in the part's [`PartScope`]; content they make from a context entity ([`crate::pass::PassLog::place_from`])
 /// is left to the part that owns that entity.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
     /// Whether this part is the whole of what is written: every selected entity, nothing in another part. Stated by
     /// the source (no default): an operation that needs the whole refuses a part that is not.
     pub whole: bool,
+    /// The ground area `[west, south, east, north]` (metres, half-open) its context covers: every placement and world
+    /// collision that reaches it is loaded (roots or context), so an operation reading the world around its own content
+    /// (a marker's search for ground) can tell whether the part holds all of it. `None`: the source states none (the
+    /// whole world, or a source that does not plan by area).
+    pub area: Option<[f64; 4]>,
 }
 
 /// How a conversion divides the selected world into parts.
@@ -160,6 +165,7 @@ impl PartSource for WholeWorld {
             roots: self.planned.clone(),
             context: BTreeSet::new(),
             whole: true,
+            area: None,
         }))
     }
     fn restart(&mut self) -> Result<()> {
@@ -186,19 +192,22 @@ pub struct PartitionGroup {
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
     /// The ground area `[west, south, east, north]` (metres, half-open) whose content the group's operations read:
-    /// what it owns and its halo. [`PlannedParts`] adds to the context every placement whose authored box reaches it.
+    /// what it owns and its halo. [`PlannedParts`] adds to the context every placement whose authored box reaches it,
+    /// and every world collision soup whose points' box does.
     pub area: Option<[f64; 4]>,
 }
 
 /// `core.part_scope`: which entities of a part the conversion writes (its roots, and what they reach) and which it
 /// only loaded as context, for passes that make content per source entity. Put in the part's world before its passes
 /// and taken out before writing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PartScope {
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
     /// The part's [`Part::whole`]: whether it is the whole of what is written.
     pub whole: bool,
+    /// The part's [`Part::area`]: the ground area its context covers, if its source states one.
+    pub area: Option<[f64; 4]>,
 }
 
 impl Resource for PartScope {
@@ -288,10 +297,32 @@ impl PartSource for PlannedParts {
                 Some((e, ground_box(t, boxes(i.prototype)?)))
             })
             .collect();
+        // the world's collision soups (no placed prototype's), by the ground box of their points
+        let prototypes: BTreeSet<Entity> = world
+            .iter::<crate::Instance>()
+            .map(|(_, i)| i.prototype)
+            .collect();
+        let soups: Vec<(Entity, [f64; 4])> = world
+            .iter::<crate::Collision>()
+            .filter(|(e, c)| !prototypes.contains(e) && !c.positions.is_empty())
+            .map(|(e, c)| {
+                let t = world
+                    .get::<crate::Transform>(e)
+                    .copied()
+                    .unwrap_or(crate::Transform::IDENTITY);
+                let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                for p in &c.positions {
+                    let q = t.apply(*p);
+                    let (east, north) = (f64::from(q[0]), -f64::from(q[2]));
+                    b = [b[0].min(east), b[1].min(north), b[2].max(east), b[3].max(north)];
+                }
+                (e, b)
+            })
+            .collect();
         let mut groups = plan.groups.clone();
         for g in &mut groups {
             let Some(a) = g.area else { continue };
-            for &(e, b) in &placed {
+            for &(e, b) in placed.iter().chain(&soups) {
                 if !g.roots.contains(&e) && b[0] < a[2] && b[2] >= a[0] && b[1] < a[3] && b[3] >= a[1] {
                     g.context.insert(e);
                 }
@@ -313,6 +344,7 @@ impl PartSource for PlannedParts {
             whole: single && g.context.is_empty(),
             roots: g.roots,
             context: g.context,
+            area: g.area,
         }))
     }
 }
@@ -797,6 +829,7 @@ fn run(
                 roots,
                 context,
                 whole,
+                area,
             }) = parts.next_part()?
             {
                 let ordinal = kept.len();
@@ -812,6 +845,7 @@ fn run(
                     roots,
                     context,
                     whole,
+                    area,
                 });
                 let mut r = RunReport::default();
                 let ran = manager.run(&mut part, s.summarize, &mut r);
@@ -833,6 +867,7 @@ fn run(
         roots,
         context,
         whole,
+        area,
     }) = parts.next_part()?
     {
         let ordinal = report.part_reports.len();
@@ -868,6 +903,7 @@ fn run(
             roots: roots.clone(),
             context: context.clone(),
             whole,
+            area,
         });
         manager.run(&mut part, passes, &mut part_report.explicit)?;
         part.remove_resource::<PartScope>();

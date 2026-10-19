@@ -207,6 +207,7 @@ impl PartSource for Groups {
             roots: self.groups[g].clone(),
             context: BTreeSet::new(),
             whole: self.parts == 1,
+            area: None,
         }))
     }
     fn restart(&mut self) -> Result<()> {
@@ -409,6 +410,7 @@ fn a_part_takes_only_the_decision_made_for_its_settings() {
         roots,
         context: BTreeSet::new(),
         whole: false,
+        area: None,
     });
     let e = floor().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-floor"), "{e}");
@@ -436,6 +438,7 @@ fn the_light_cap_over_parts_is_the_whole_maps_in_any_order() {
         roots,
         context: BTreeSet::new(),
         whole: false,
+        area: None,
     });
     let e = cap().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-lights"), "{e}");
@@ -658,6 +661,7 @@ fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
         roots,
         context: BTreeSet::new(),
         whole: false,
+        area: None,
     });
     let e = water().run(&mut w, &mut PassLog::default()).unwrap_err();
     assert!(e.contains("summarize-reskate-content"), "{e}");
@@ -732,6 +736,7 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
         roots,
         context: BTreeSet::new(),
         whole: false,
+        area: None,
     });
     let e = PlaceReskateSpawn::centre()
         .run(&mut w, &mut PassLog::default())

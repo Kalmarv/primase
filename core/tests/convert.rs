@@ -136,6 +136,7 @@ impl PartSource for ToyParts {
             roots: BTreeSet::from([e]),
             context: BTreeSet::new(),
             whole: false,
+            area: None,
         }))
     }
 }
@@ -1157,4 +1158,64 @@ fn a_failed_pass_keeps_what_it_noted() {
             );
         }
     }
+}
+
+/// A planned part states its group's area, and loads as context the world collision soups whose points reach it as
+/// well as the placements (a part's operations reading the ground around its own content need both).
+#[test]
+fn planned_parts_state_their_area_and_load_the_soups_reaching_it() {
+    let mut w = World::new();
+    let proto = w.spawn();
+    let placed = w.spawn();
+    w.insert(
+        placed,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    let mut t = primase_core::Transform::IDENTITY;
+    t.cols[3] = [10.0, 0.0, -10.0];
+    w.insert(placed, t);
+    // a world soup from east 200 to 210
+    let soup = w.spawn();
+    w.insert(
+        soup,
+        primase_core::Collision {
+            positions: vec![[200.0, 0.0, -1.0], [210.0, 0.0, -1.0], [205.0, 0.0, -5.0]],
+            triangles: vec![[0, 1, 2]],
+            surfaces: vec![0],
+        },
+    );
+    let (west, east) = ([-5.0, -5.0, 250.0, 105.0], [150.0, -5.0, 300.0, 105.0]);
+    w.insert_resource(PartitionPlan {
+        by: "test".into(),
+        groups: vec![
+            PartitionGroup {
+                key: "west".into(),
+                roots: BTreeSet::from([placed]),
+                context: BTreeSet::new(),
+                area: Some(west),
+            },
+            PartitionGroup {
+                key: "east".into(),
+                roots: BTreeSet::from([soup]),
+                context: BTreeSet::new(),
+                area: Some(east),
+            },
+        ],
+    });
+    let mut parts = PlannedParts::default();
+    parts
+        .plan(&w, &|_| Some([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]]))
+        .unwrap();
+    let a = parts.next_part().unwrap().unwrap();
+    let b = parts.next_part().unwrap().unwrap();
+    // the west area reaches the soup; the east area does not reach the placement
+    assert_eq!((a.area, a.context), (Some(west), BTreeSet::from([soup])));
+    assert_eq!((b.area, b.context), (Some(east), BTreeSet::new()));
+    // the whole world states no area
+    let mut whole = primase_core::convert::WholeWorld::default();
+    whole.plan(&w, &|_| None).unwrap();
+    assert_eq!(whole.next_part().unwrap().unwrap().area, None);
 }

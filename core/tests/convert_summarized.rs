@@ -99,6 +99,7 @@ impl PartSource for OrderedParts {
             roots: BTreeSet::from([self.placements[i]]),
             context: BTreeSet::new(),
             whole: false,
+            area: None,
         }))
     }
     fn restart(&mut self) -> Result<()> {
