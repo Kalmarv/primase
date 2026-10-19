@@ -1618,7 +1618,7 @@ mod tests {
             StateAxis {
                 key: "gta.hour".into(),
                 domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
-                default: 12,
+                default: Some(12),
                 scope: Scope::Global,
                 class: "time".into(),
                 source: "test".into(),

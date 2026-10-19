@@ -2,7 +2,8 @@
 //! object's active flag) and what depends on them, resolved to one concrete world by [`ResolveState`].
 //!
 //! - An **axis** ([`StateAxis`]) is an entity: a stable `key`, a small domain (bool, or up to 64 named values), a
-//!   default, a scope (the whole world, or one entity such as a door) and a class tools act on (`door`, `ipl`, ...).
+//!   default where the source states one (none where a script the reader doesn't read sets it), a scope (the whole
+//!   world, or one entity such as a door) and a class tools act on (`door`, `ipl`, ...).
 //!   Axes are variables, so independent toggles never multiply into enumerated variants.
 //! - A **condition** ([`Condition`]) on a placed entity says when it exists: an OR of clauses, each an AND of literals
 //!   "axis is one of these values" (a value mask). No condition: always present.
@@ -10,7 +11,8 @@
 //!   the states its clause matches. Poses (a door's open animation) stay in the dialect that owns the clip: its own pass
 //!   lowers them into these overrides first.
 //! - Values come from [`ResolveState`]'s `assign` option, else the [`StateAssignment`] resource (a save snapshot), else
-//!   each axis's default.
+//!   each axis's default. An axis with none of them (its default unknown, nothing assigned) stays unresolved, with
+//!   what depends on it: a value the source doesn't state is not chosen for the caller.
 //!
 //! Writers that cannot toggle declare `core.condition` and `core.state_override` illegal, so the planner runs
 //! `resolve-state` before them. A world without state components is never touched.
@@ -87,8 +89,10 @@ pub struct StateAxis {
     /// form name axes by it.
     pub key: String,
     pub domain: Domain,
-    /// The value without an assignment: the game's own start state.
-    pub default: u32,
+    /// The value without an assignment: the game's own start state, where the source states it (an authored flag, a
+    /// stored active state). `None`: unknown (a script decides it, and the reader doesn't read that script);
+    /// [`ResolveState`] leaves the axis unresolved unless it is assigned.
+    pub default: Option<u32>,
     pub scope: Scope,
     /// What kind of state it is (`event`, `door`, `ipl`, `entity_set`, `active`, `time`, ...), so tools can act on a
     /// class ("open every door").
@@ -123,11 +127,10 @@ impl Component for StateAxis {
                 }
             }
         }
-        if self.default as usize >= n {
-            return Err(format!(
-                "{}: default {} outside its {n} values",
-                self.key, self.default
-            ));
+        if let Some(d) = self.default
+            && d as usize >= n
+        {
+            return Err(format!("{}: default {d} outside its {n} values", self.key));
         }
         // a local axis's owner is a reference: the world checks that it is alive
         Ok(())
@@ -284,22 +287,26 @@ impl Resource for StateAssignment {
     }
 }
 
-/// `resolve-state{assign=key:value;key:value}`: one concrete world. Each axis takes its `assign` value, else the
-/// [`StateAssignment`] resource's, else its default (values by name or index). An `assign` key without an axis is an
-/// error (a caller's typo); resource keys without an axis are counted and ignored (a save knows every flag). Placed
-/// entities whose condition does not hold are despawned, then each remaining entity's first matching override applies.
-/// Every axis, condition, override and the assignment resource are removed. A despawned entity that something else
-/// still references (a self-placed mesh used as another instance's prototype) leaves that reference dangling, and the
-/// verifier after the pass fails on it.
+/// `resolve-state{assign=key:value;key:value}`: one concrete world, as far as the values are known. Each axis takes
+/// its `assign` value, else the [`StateAssignment`] resource's, else its default (values by name or index). Keys
+/// without an axis, in `assign`, `keep` or the resource, are counted by key and ignored: a program states its choices
+/// once for every world it converts, and a region, level or save holds axes for some of them only. A value outside an
+/// axis's domain is an error. Placed entities whose condition does not hold are despawned, then each remaining
+/// entity's first matching override applies. Every resolved axis, every condition and override on resolved axes only,
+/// and the assignment resource are removed. A despawned entity that something else still references (a self-placed
+/// mesh used as another instance's prototype) leaves that reference dangling, and the verifier after the pass fails on
+/// it.
 ///
-/// `keep=key;key` leaves those axes unresolved, for a consumer that switches them itself (a time of day): they stay,
-/// and so do the conditions and overrides that depend on them, reduced to their literals on kept axes (every literal
-/// on a resolved axis evaluated: a clause one of them fails is dropped, a clause left with no literal holds in every
+/// `keep=key;key` leaves those axes unresolved, for a consumer that switches them itself (a time of day). An axis
+/// whose default is unknown and that nothing assigns stays unresolved the same way (counted, `axis <key> unresolved`):
+/// choosing a value for it would assert a state the source doesn't state. An unresolved axis stays, and so do the
+/// conditions and overrides that depend on it, reduced to their literals on unresolved axes (every literal on a
+/// resolved axis evaluated: a clause one of them fails is dropped, a clause left with no literal holds in every
 /// state). An entity whose condition keeps no clause is despawned, one with a clause that always holds loses its
 /// condition; an override list keeps its order up to the first clause that always holds, which applies now when it is
-/// the first. The snapshot's ([`StateAssignment`]) values for kept axes stay, as the resource's only entries. A kept
-/// key without an axis, one also assigned, or one scoped to an entity (which a resolved condition may despawn), is
-/// an error.
+/// the first. The snapshot's ([`StateAssignment`]) values for kept axes stay, as the resource's only entries. A key
+/// both kept and assigned is an error, and so is an axis scoped to an entity (which a resolved condition may despawn)
+/// that would stay unresolved: only global axes stay.
 #[derive(Clone, Debug, Default)]
 pub struct ResolveState {
     /// key -> value text, as given.
@@ -379,7 +386,10 @@ impl Pass for ResolveState {
         if by_key.len() != axes.len() {
             return Err("two axes share a key".into());
         }
-        let mut values: BTreeMap<Entity, u32> = axes.iter().map(|(e, a)| (*e, a.default)).collect();
+        let mut values: BTreeMap<Entity, u32> = axes
+            .iter()
+            .filter_map(|(e, a)| a.default.map(|d| (*e, d)))
+            .collect();
         // a save holds every flag the game knows, a world has axes for a few: keys without an axis are counted
         let resource = w.remove_resource::<StateAssignment>().unwrap_or_default();
         for (k, &v) in &resource.0 {
@@ -395,10 +405,12 @@ impl Pass for ResolveState {
             }
             values.insert(e, v);
         }
+        // a program's choices name axes some of its worlds lack: counted by key
         for (k, text) in &self.assign {
-            let &(e, a) = by_key
-                .get(k.as_str())
-                .ok_or_else(|| format!("assign names {k}, which no axis has"))?;
+            let Some(&(e, a)) = by_key.get(k.as_str()) else {
+                log.count(&format!("assigned {k}, which no axis has: ignored"), 1);
+                continue;
+            };
             let v = a
                 .domain
                 .parse(text)
@@ -410,9 +422,10 @@ impl Pass for ResolveState {
         // the snapshot's values for kept axes stay with them, for whoever resolves them later
         let mut kept_assignment = StateAssignment::default();
         for k in &self.keep {
-            let &(e, a) = by_key
-                .get(k.as_str())
-                .ok_or_else(|| format!("keep names {k}, which no axis has"))?;
+            let Some(&(e, a)) = by_key.get(k.as_str()) else {
+                log.count(&format!("kept {k}, which no axis has: ignored"), 1);
+                continue;
+            };
             // a resolved condition may despawn the entity a local axis is scoped to
             if let Scope::Local(_) = a.scope {
                 return Err(format!(
@@ -426,6 +439,26 @@ impl Pass for ResolveState {
             }
             log.count(&format!("axis {k} kept unresolved"), 1);
         }
+        // the axes nothing gave a value (their default unknown) stay as the kept ones do
+        let mut unresolved = BTreeSet::new();
+        for (e, a) in &axes {
+            if values.contains_key(e) || kept.contains(e) {
+                continue;
+            }
+            if let Scope::Local(_) = a.scope {
+                return Err(format!(
+                    "{}: no known default and no value, and scoped to an entity (only global axes stay unresolved): \
+                     assign it",
+                    a.key
+                ));
+            }
+            unresolved.insert(*e);
+            log.count(
+                &format!("axis {} unresolved: no known default, not assigned", a.key),
+                1,
+            );
+        }
+        kept.extend(unresolved.iter().copied());
         if !kept_assignment.0.is_empty() {
             log.count(
                 "snapshot values kept for kept axes",
@@ -461,6 +494,7 @@ impl Pass for ResolveState {
             let a = axis_of[e];
             match values.get(e) {
                 Some(&v) => format!("{}={}", a.key, a.domain.name(v).unwrap_or("?")),
+                None if unresolved.contains(e) => format!("{} (unresolved)", a.key),
                 None => format!("{} (kept)", a.key),
             }
         };
@@ -469,7 +503,7 @@ impl Pass for ResolveState {
         let conditions: Vec<(Entity, Condition)> =
             w.iter::<Condition>().map(|(e, c)| (e, c.clone())).collect();
         for (e, c) in &conditions {
-            // the clauses on kept axes that may still hold; one with no literal left always holds
+            // the clauses on unresolved axes that may still hold; one with no literal left always holds
             let reduced: Vec<Clause> = c.0.iter().filter_map(|cl| cl.reduce(&values)).collect();
             let always = reduced.iter().any(|cl| cl.0.is_empty());
             let present = always || !reduced.is_empty();
@@ -490,7 +524,7 @@ impl Pass for ResolveState {
                 w.remove::<Condition>(*e);
             } else if present {
                 w.insert(*e, Condition(reduced));
-                log.count("conditions kept on kept axes", 1);
+                log.count("conditions kept on unresolved axes", 1);
             } else {
                 w.despawn(*e);
             }
@@ -517,7 +551,7 @@ impl Pass for ResolveState {
                 [(c, ov)] if c.0.is_empty() => ov,
                 _ => {
                     w.insert(e, StateOverride(reduced));
-                    log.count("overrides kept on kept axes", 1);
+                    log.count("overrides kept on unresolved axes", 1);
                     continue;
                 }
             };
@@ -561,7 +595,7 @@ mod tests {
             StateAxis {
                 key: key.into(),
                 domain: Domain::Bool,
-                default: 0,
+                default: Some(0),
                 scope: Scope::Global,
                 class: "event".into(),
                 source: format!("event flag {}", key.rsplit('.').next().unwrap()),
@@ -742,10 +776,24 @@ mod tests {
         assert_eq!(names(&c.w), vec!["m003412_3902"]);
     }
 
+    /// Keeping or assigning an axis the world lacks is counted by key and changes nothing (a program's choices cover
+    /// worlds that hold some of their axes only); keeping one that is also assigned is an error.
     #[test]
-    fn keeping_a_missing_or_assigned_axis_is_an_error() {
+    fn a_missing_axis_is_counted_an_assigned_and_kept_one_is_an_error() {
+        let mut plain = castle();
+        run(&mut plain.w, "");
         let mut c = castle();
-        assert!(run_keep(&mut c.w, "", "fromsoft.flag.9999").is_err());
+        let log = run_keep(&mut c.w, "fromsoft.flag.7777:on", "fromsoft.flag.9999").unwrap();
+        assert_eq!(names(&c.w), names(&plain.w));
+        assert_eq!(
+            log.counts["kept fromsoft.flag.9999, which no axis has: ignored"],
+            1
+        );
+        assert_eq!(
+            log.counts["assigned fromsoft.flag.7777, which no axis has: ignored"],
+            1
+        );
+        assert!(!c.w.has_component_named(StateAxis::NAME));
         let both = Options::from([
             ("keep".to_owned(), "fromsoft.flag.8302".to_owned()),
             ("assign".to_owned(), "fromsoft.flag.8302:on".to_owned()),
@@ -842,13 +890,72 @@ mod tests {
         );
     }
 
+    /// An axis whose default is unknown stays unresolved unless assigned: with 8302's default unknown, the walls on it
+    /// keep their 8302 literals (8306 resolved off), the 8301 piece goes, and 8302 stays an axis (counted); assigned,
+    /// or given by the snapshot, it resolves as a known default would. Scoped to an entity, it must be assigned.
     #[test]
-    fn unknown_keys_and_values_are_errors() {
-        for bad in [
-            "fromsoft.flag.9999:on",
-            "fromsoft.flag.8302:maybe",
-            "fromsoft.flag.8302:2",
-        ] {
+    fn an_unknown_default_stays_unresolved_unless_assigned() {
+        let unknown = |c: &mut Castle| {
+            let (e, _) =
+                c.w.iter::<StateAxis>()
+                    .find(|(_, a)| a.key == "fromsoft.flag.8302")
+                    .unwrap();
+            c.w.get_mut::<StateAxis>(e).unwrap().default = None;
+            e
+        };
+        let mut c = castle();
+        let f8302 = unknown(&mut c);
+        assert_eq!(c.w.verify_components(), vec![]);
+        let log = run(&mut c.w, "");
+        assert_eq!(names(&c.w), ["m003312_3802", "m003412_3902"]);
+        assert_eq!(
+            log.counts["axis fromsoft.flag.8302 unresolved: no known default, not assigned"],
+            1
+        );
+        assert_eq!(log.counts["fromsoft.flag.8302 (unresolved) kept"], 2);
+        assert_eq!(log.counts["conditions kept on unresolved axes"], 2);
+        let axes: Vec<&str> = c.w.iter::<StateAxis>().map(|(_, a)| a.key.as_str()).collect();
+        assert_eq!(axes, ["fromsoft.flag.8302"]);
+        assert_eq!(
+            c.w.get::<Condition>(c.intact),
+            Some(&Condition(vec![Clause(vec![off(f8302)])]))
+        );
+        assert_eq!(c.w.verify_components(), vec![]);
+        // a later resolve-state with a value finishes the job
+        run(&mut c.w, "fromsoft.flag.8302:on");
+        assert_eq!(names(&c.w), ["m003412_3902"]);
+        assert!(!c.w.has_component_named(StateAxis::NAME));
+
+        for given in ["assign", "snapshot"] {
+            let mut c = castle();
+            unknown(&mut c);
+            if given == "snapshot" {
+                c.w.insert_resource(StateAssignment(BTreeMap::from([(
+                    "fromsoft.flag.8302".to_owned(),
+                    0,
+                )])));
+                run(&mut c.w, "");
+            } else {
+                run(&mut c.w, "fromsoft.flag.8302:off");
+            }
+            assert_eq!(names(&c.w), ["m003312_3802"], "{given}");
+            assert!(!c.w.has_component_named(StateAxis::NAME), "{given}");
+        }
+
+        let mut c = castle();
+        let e = unknown(&mut c);
+        let door = c.intact;
+        c.w.get_mut::<StateAxis>(e).unwrap().scope = Scope::Local(door);
+        let err = resolve_state(&Options::new())
+            .unwrap()
+            .run(&mut c.w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(err.contains("assign it"), "{err}");
+    }
+
+    #[test]
+    fn values_outside_the_domain_and_bad_options_are_errors() {
+        for bad in ["fromsoft.flag.8302:maybe", "fromsoft.flag.8302:2"] {
             let mut c = castle();
             let opts = Options::from([("assign".to_owned(), bad.to_owned())]);
             assert!(
@@ -860,7 +967,7 @@ mod tests {
             );
         }
         let mut c = castle();
-        // a resource value outside the axis's domain is an error (only unknown resource keys are tolerated)
+        // a resource value outside the axis's domain is an error (only keys without an axis are tolerated)
         c.w.insert_resource(StateAssignment(BTreeMap::from([(
             "fromsoft.flag.8302".to_owned(),
             2,
@@ -943,7 +1050,7 @@ mod tests {
         let mut good = StateAxis {
             key: "k".into(),
             domain: Domain::Bool,
-            default: 0,
+            default: Some(0),
             scope: Scope::Global,
             class: "event".into(),
             source: String::new(),
@@ -972,7 +1079,7 @@ mod tests {
             let e = with_axis(
                 w,
                 StateAxis {
-                    default: 2,
+                    default: Some(2),
                     ..good.clone()
                 },
             );
@@ -987,7 +1094,7 @@ mod tests {
                 w,
                 StateAxis {
                     domain: Domain::Enum(vec![]),
-                    default: 0,
+                    default: Some(0),
                     ..good.clone()
                 },
             );

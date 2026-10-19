@@ -350,7 +350,7 @@ pub fn read_region(
             StateAxis {
                 key: "gta.map".into(),
                 domain: Domain::Enum(vec!["story".into(), "online".into()]),
-                default: 0,
+                default: Some(0),
                 scope: Scope::Global,
                 class: "map".into(),
                 source: "the packs' GROUP_MAP change sets, run on entering GTA Online".into(),
@@ -503,7 +503,7 @@ pub fn read_region(
                     StateAxis {
                         key: format!("gta.ipl.{name}"),
                         domain: Domain::Bool,
-                        default: u32::from(on),
+                        default: Some(u32::from(on)),
                         scope: Scope::Global,
                         class: "ipl".into(),
                         source: format!(
@@ -542,7 +542,7 @@ pub fn hour_axis(w: &mut World) -> primase_core::Entity {
         StateAxis {
             key: "gta.hour".into(),
             domain: Domain::Enum((0..24).map(|h| h.to_string()).collect()),
-            default: 12,
+            default: Some(12),
             scope: Scope::Global,
             class: "time".into(),
             source: "the game's hours: time archetypes' timeFlags (CTimeArchetypeDef), lights' time_flags"
@@ -585,7 +585,7 @@ mod tests {
                     StateAxis {
                         key: key.into(),
                         domain: Domain::Enum(values),
-                        default: 0,
+                        default: Some(0),
                         scope: Scope::Global,
                         class: "test".into(),
                         source: "test".into(),

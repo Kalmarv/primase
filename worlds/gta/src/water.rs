@@ -178,7 +178,7 @@ pub fn place_water(w: &mut World, files: Vec<(&str, WaterFile)>) -> Vec<(String,
             StateAxis {
                 key: "gta.water".into(),
                 domain: Domain::Enum(files.iter().map(|(v, _)| v.to_string()).collect()),
-                default: 0,
+                default: Some(0),
                 scope: Scope::Global,
                 class: "water".into(),
                 source: "the water file the game holds: the world map's, or Cayo Perico's while a script loads the \
@@ -921,7 +921,7 @@ mod tests {
         let axis = w.iter::<StateAxis>().next().unwrap().1.clone();
         assert_eq!(
             (axis.key.as_str(), axis.domain.len(), axis.default),
-            ("gta.water", 2, 0)
+            ("gta.water", 2, Some(0))
         );
         assert_eq!(w.iter::<Condition>().count(), 4);
         let mut log = PassLog::default();

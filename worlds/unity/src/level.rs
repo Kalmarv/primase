@@ -343,7 +343,7 @@ impl Builder<'_> {
                             StateAxis {
                                 key: format!("unity.{class}.{}.{pid}", scene.file),
                                 domain: Domain::Bool,
-                                default: 0,
+                                default: Some(0),
                                 scope: Scope::Global,
                                 class: class.into(),
                                 source,
@@ -379,7 +379,7 @@ impl Builder<'_> {
                     StateAxis {
                         key: format!("unity.lod.{}.{}{at}", group.file, group.path_id),
                         domain: Domain::Enum((0..levels).map(|i| format!("lod{i}")).collect()),
-                        default: 0,
+                        default: Some(0),
                         scope: Scope::Global,
                         class: "lod".into(),
                         source: format!("LODGroup {}/{}{at}", group.file, group.path_id),

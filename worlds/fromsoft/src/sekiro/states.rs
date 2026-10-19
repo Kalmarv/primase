@@ -160,7 +160,7 @@ impl States {
                 StateAxis {
                     key: format!("fromsoft.flag.{f}"),
                     domain: Domain::Bool,
-                    default: 0,
+                    default: Some(0),
                     scope: Scope::Global,
                     class: "event".into(),
                     source: format!("event flag {f}"),
