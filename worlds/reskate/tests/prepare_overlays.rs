@@ -229,22 +229,22 @@ fn decals_are_stacked_before_the_writer() {
             && written.iter().any(|&l| (l - 0.008).abs() < 1e-6)
     );
     assert!(
-        r.unsupported
+        r.approximated
             .iter()
             .all(|(what, _)| !what.starts_with("overlay pieces")),
         "{:?}",
-        r.unsupported
+        r.approximated
     );
-    // no pass: nothing lifted, the two decals reported
+    // no pass: nothing lifted, the two decals written where authored, reported as approximated
     let Fixture { w: plain, .. } = fixture();
     let (r, _) = write(&plain, "plain", &EncodingOptions::default()).unwrap();
     assert!(r.lifts.is_empty(), "{:?}", r.lifts);
     assert!(
-        r.unsupported
+        r.approximated
             .iter()
             .any(|(what, n)| what.starts_with("overlay pieces") && *n == 2),
         "{:?}",
-        r.unsupported
+        r.approximated
     );
 }
 

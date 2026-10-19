@@ -109,6 +109,10 @@ pub struct WriteResult {
     pub grind_pieces: i64,
     pub grind_length: f32,
     pub trainer_spots: usize,
+    /// Trainer spots left out: without a height, or past the 64 trainer.json takes.
+    pub trainer_left_out: usize,
+    /// Grind curves whose prism has no usable points, left out.
+    pub grind_unusable: usize,
     pub travel_points: usize,
     pub warnings: Vec<String>,
 }
@@ -2445,6 +2449,7 @@ impl MapWriter {
                     "trainer spot '{}' has no height and is left out",
                     m.name.as_deref().unwrap_or("")
                 ));
+                self.r.trainer_left_out += 1;
                 continue;
             }
             let lift = if m.lift.is_nan() {
@@ -2470,6 +2475,7 @@ impl MapWriter {
                 "{} trainer spots: trainer.json takes 64, the rest are left out",
                 trainer.len()
             ));
+            self.r.trainer_left_out += trainer.len() - 64;
             trainer.truncate(64);
         }
         self.r.trainer_spots = trainer.len();
@@ -2572,6 +2578,7 @@ impl MapWriter {
                 self.r
                     .warnings
                     .push(format!("grind curve {i} has no usable points"));
+                self.r.grind_unusable += 1;
                 continue;
             }
             let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));

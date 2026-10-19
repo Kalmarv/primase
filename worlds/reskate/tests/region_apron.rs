@@ -103,9 +103,9 @@ fn write(w: &World, tag: &str, e: EncodingOptions) -> Result<primase_reskate::Bu
     .map_err(|e| e.to_string())
 }
 
-fn notice(r: &primase_reskate::BuildReport, starts: &str) -> Option<u64> {
-    r.unsupported
-        .iter()
+/// The count of the entry of `list` (a report's `omitted` or `approximated`) that starts `starts`.
+fn notice(list: &[(String, u64)], starts: &str) -> Option<u64> {
+    list.iter()
         .find(|(what, _)| what.starts_with(starts))
         .map(|(_, n)| *n)
 }
@@ -129,21 +129,21 @@ fn the_region_clip_trims_and_drops_and_says_so() {
     let r = write(&w, "clipped", EncodingOptions::default()).unwrap();
     assert_eq!(
         notice(
-            &r,
+            &r.omitted,
             "clip-reskate-region: placements outside the region with nothing within its apron"
         ),
         Some(2),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
     assert_eq!(
         notice(
-            &r,
+            &r.approximated,
             "clip-reskate-region: placements outside the region trimmed to its apron"
         ),
         Some(1),
         "{:?}",
-        r.unsupported
+        r.approximated
     );
 }
 
@@ -188,9 +188,9 @@ fn what_lies_past_the_limit_is_left_out_and_reported() {
     };
     let r = write(&w, "limit-merged", merged).unwrap();
     assert!(
-        notice(&r, "triangles past the map's limit, left out").is_some_and(|n| n > 0),
+        notice(&r.omitted, "triangles past the map's limit").is_some_and(|n| n > 0),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
     let instanced = EncodingOptions {
         limit: 55.0,
@@ -200,8 +200,8 @@ fn what_lies_past_the_limit_is_left_out_and_reported() {
     };
     let r = write(&w, "limit-instanced", instanced).unwrap();
     assert!(
-        notice(&r, "instanced placements reaching past the map's limit").is_some_and(|n| n > 0),
+        notice(&r.omitted, "instanced placements reaching past the map's limit").is_some_and(|n| n > 0),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
 }

@@ -97,5 +97,11 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
     .unwrap();
     assert_eq!((r.tiles, r.textures), (0, 0));
     assert!(r.collision_tris > 0);
-    assert!(r.unsupported.is_empty(), "{:?}", r.unsupported);
+    assert!(
+        r.omitted.is_empty() && r.approximated.is_empty() && r.unsupported_names.is_empty(),
+        "{:?} {:?} {:?}",
+        r.omitted,
+        r.approximated,
+        r.unsupported_names
+    );
 }

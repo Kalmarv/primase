@@ -153,8 +153,8 @@ fn grind_objects(map: &serde_json::Value) -> Vec<String> {
 }
 
 /// The writer writes the prisms it is given, numbered by what they are (surface, then geometry: the straight metal rail
-/// 0, the empty one on surface 1 is 1 and warned of, the concrete corner 2), and builds none: the curves of a world not
-/// through the pass are reported unsupported and not written.
+/// 0, the empty one on surface 1 is 1, warned of and counted as left out, the concrete corner 2), and builds none: the
+/// curves of a world not through the pass are reported unsupported and not written.
 #[test]
 fn the_writer_writes_prisms_and_builds_none() {
     let (mut w, _) = world();
@@ -170,20 +170,20 @@ fn the_writer_writes_prisms_and_builds_none() {
         "{:?}",
         r.warnings
     );
-    assert!(
-        r.unsupported.iter().all(|(what, _)| !what.contains("grind")),
-        "{:?}",
-        r.unsupported
+    assert_eq!(
+        r.omitted,
+        [("grind curves with no usable points".to_owned(), 1)],
+        "the empty prism, counted"
     );
     let (w, _) = world();
     let (r, map) = write(&w, "unprepared");
     assert!(grind_objects(&map).is_empty());
     assert!(
-        r.unsupported
+        r.omitted
             .iter()
             .any(|(what, n)| what.starts_with("skate.grind_curve") && *n == 3),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
 }
 
@@ -208,9 +208,9 @@ fn a_world_without_curves_gets_nothing() {
     let (r, map) = write(&w, "no-curves");
     assert!(grind_objects(&map).is_empty());
     assert!(
-        r.unsupported.iter().all(|(what, _)| !what.contains("grind")),
+        r.omitted.iter().all(|(what, _)| !what.contains("grind")),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
 }
 

@@ -408,8 +408,10 @@ pub struct Scene {
     pub labels: HashMap<String, String>,
     pub material_keys_by_entity: HashMap<primase_core::Entity, String>,
     pub report_warnings: Vec<String>,
-    /// What the world holds that the writer does not write, by what, with counts (also among the warnings).
-    pub unsupported: Vec<(String, u64)>,
+    /// What the world holds that the writer leaves out, by what, with counts (also among the warnings).
+    pub omitted: Vec<(String, u64)>,
+    /// What it writes, but not as the world says, by what, with counts (also among the warnings).
+    pub approximated: Vec<(String, u64)>,
 }
 
 fn class(c: MaterialClass) -> VClass {
@@ -609,9 +611,9 @@ impl Scene {
             }
             tinted += usize::from(m.base.is_some() && m.tint.is_some());
         }
-        let mut unsupported = Vec::new();
+        let (mut omitted, mut approximated) = (Vec::new(), Vec::new());
         if tinted > 0 {
-            unsupported.push((
+            omitted.push((
                 "skate.material tint (prepare-reskate-textures multiplies it into a texture copy)".to_owned(),
                 tinted as u64,
             ));
@@ -621,7 +623,7 @@ impl Scene {
             ));
         }
         if let Some(max) = sc.texture_budget.as_ref().and_then(|b| b.max) {
-            unsupported.push((
+            omitted.push((
                 "skate.scene texture_budget (budget-reskate-textures applies a budget)".to_owned(),
                 1,
             ));
@@ -631,7 +633,7 @@ impl Scene {
             ));
         }
         if sc.min_height.is_some() {
-            unsupported.push((
+            omitted.push((
                 "skate.scene min_height (prepare-reskate-floor lifts the map)".to_owned(),
                 1,
             ));
@@ -907,21 +909,26 @@ impl Scene {
             });
         }
         if no_geometry > 0 {
+            omitted.push((
+                "placements of prototypes without geometry".to_owned(),
+                no_geometry as u64,
+            ));
             report_warnings.push(format!(
                 "{no_geometry} placements of prototypes without geometry left out"
             ));
         }
         let unprepared = curves.iter().filter(|c| c.prism.is_none()).count();
         if unprepared > 0 {
-            unsupported.push((
+            omitted.push((
                 "skate.grind_curve (prepare-reskate-grinds makes its prism)".to_owned(),
                 unprepared as u64,
             ));
         }
         let unsnapped = markers.iter().filter(|m| m.snap.mode != SnapMode::None).count();
         if unsnapped > 0 {
-            unsupported.push((
-                "skate.marker snap (snap-reskate-markers resolves it)".to_owned(),
+            approximated.push((
+                "markers whose snap is unresolved, written where they stand (snap-reskate-markers resolves it)"
+                    .to_owned(),
                 unsnapped as u64,
             ));
             report_warnings.push(format!(
@@ -968,7 +975,8 @@ impl Scene {
             labels,
             material_keys_by_entity: mat_keys,
             report_warnings,
-            unsupported,
+            omitted,
+            approximated,
         })
     }
 

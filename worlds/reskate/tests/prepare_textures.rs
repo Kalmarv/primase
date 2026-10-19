@@ -350,11 +350,11 @@ fn the_writer_writes_textures_as_prepared() {
         r.warnings
     );
     assert!(
-        r.unsupported
+        r.omitted
             .iter()
             .any(|(what, n)| what.starts_with("skate.material tint") && *n == 1),
         "{:?}",
-        r.unsupported
+        r.omitted
     );
     let index: serde_json::Value =
         serde_json::from_slice(&std::fs::read(out_root.join("prepared/textures_index.json")).unwrap())

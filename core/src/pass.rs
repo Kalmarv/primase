@@ -627,7 +627,8 @@ impl Target {
                     let uncovered = all.iter().filter(|&&e| !f(w, e)).count();
                     if uncovered > 0 && !self.carry_unknown {
                         let words = self.rule_words(name).unwrap_or_default();
-                        out.unsupported.push((format!("{name} not {words}"), uncovered as u64));
+                        out.unsupported
+                            .push((format!("{name} not {words}"), uncovered as u64));
                     }
                 }
                 Some(Legality::Illegal) | None => out.unsupported.push((name.to_owned(), all.len() as u64)),

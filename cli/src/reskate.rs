@@ -110,13 +110,27 @@ impl Writer for Reskate {
         ));
         self.report
             .push(("blend order".into(), format!("{:?}", report.blend)));
-        for (what, n) in report.unsupported {
+        // what it left out, and what it wrote approximately; the names the target does not take the conversion
+        // reported itself before writing (report.unsupported_names, for direct callers)
+        for (what, n) in report.omitted {
             self.notices.push(primase_core::convert::Notice::new(
                 "reskate",
                 primase_core::convert::NoticeKind::Unsupported,
                 format!("{what}: not written"),
                 n,
             ));
+        }
+        for (what, n) in report.approximated {
+            self.notices.push(primase_core::convert::Notice::new(
+                "reskate",
+                primase_core::convert::NoticeKind::Approximation,
+                what,
+                n,
+            ));
+        }
+        // the map's warnings (map.json's), each counted above when it is a loss
+        for w in report.warnings {
+            self.report.push(("reskate warning".into(), w));
         }
         Ok(())
     }

@@ -39,8 +39,14 @@ pub struct BuildReport {
     pub blend: crate::blend_order::Stats,
     /// What the writer noticed (`map.json`'s warnings, then `stats.json`'s).
     pub warnings: Vec<String>,
-    /// What the world holds that the writer does not write, by what, with counts.
-    pub unsupported: Vec<(String, u64)>,
+    /// What the writer left out of the map, by what, with counts (a conversion reports each as not written).
+    pub omitted: Vec<(String, u64)>,
+    /// What it wrote, but not as the world says, by what, with counts (a conversion reports each as approximated).
+    pub approximated: Vec<(String, u64)>,
+    /// What the world holds that the target does not take ([`target`]'s check of the world written): names with the
+    /// entities holding them, a covered name's uncovered entities as `<name> not <its cover>`, and resources (counted
+    /// once). A conversion checks the target itself before writing, so this is for direct callers of [`write_map`].
+    pub unsupported_names: Vec<(String, u64)>,
 }
 
 /// A level of detail as the reference build names it (`--lod`): `default` (the scene's `lod_default`), `highest`
@@ -93,9 +99,10 @@ fn run_passes(
 
 /// What [`write_map`] writes, as a conversion's target: the skate dialect (the `skate.` and `reskate.` names), the
 /// core names the writer reads (names, placements, meshes and textures loaded, collision, material variants,
-/// priorities, the surface table) and those `raise-skate` raises into the dialect, written in their raised form
-/// (`pbr.material`, `core.material_usage` and `core.draw_order` as `skate.material`, `core.light` as `skate.light`,
-/// `core.marker` as `skate.marker`). A `core.mesh_file` or `core.texture_file` only beside its loaded mesh or texture;
+/// priorities, the surface table) and those `raise-skate` raises into the dialect, covered by their raised form
+/// (`pbr.material`, `core.material_usage` and `core.draw_order` by `skate.material`, `core.light` by `skate.light`,
+/// `core.marker` by `skate.marker`: one without it, as a directional light raise-skate does not raise, is reported as
+/// not written). A `core.mesh_file` or `core.texture_file` only beside its loaded mesh or texture;
 /// a blend (`core.layered`) is lowered first (`lower-layered-reskate`), one form per prototype chosen first
 /// (`select-lod`). Every other name is reported as not written: the map has no place for it.
 pub fn target() -> primase_core::pass::Target {
@@ -124,11 +131,21 @@ pub fn target() -> primase_core::pass::Target {
         .legal(MaterialVariants::NAME)
         .legal(Priority::NAME)
         .legal(Surfaces::NAME)
-        .legal(PbrMaterial::NAME)
-        .legal(MaterialUsage::NAME)
-        .legal(DrawOrder::NAME)
-        .legal(Light::NAME)
-        .legal(Marker::NAME)
+        .covered(PbrMaterial::NAME, "covered by skate.material", |w, e| {
+            w.has::<SkateMaterial>(e)
+        })
+        .covered(MaterialUsage::NAME, "covered by skate.material", |w, e| {
+            w.has::<SkateMaterial>(e)
+        })
+        .covered(DrawOrder::NAME, "covered by skate.material", |w, e| {
+            w.has::<SkateMaterial>(e)
+        })
+        .covered(Light::NAME, "covered by skate.light", |w, e| {
+            w.has::<SkateLight>(e)
+        })
+        .covered(Marker::NAME, "covered by skate.marker", |w, e| {
+            w.has::<SkateMarker>(e)
+        })
         .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
         .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
         .illegal(LayeredMaterial::NAME)
@@ -170,6 +187,17 @@ pub fn target() -> primase_core::pass::Target {
 /// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
 /// as `a` says.
 pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<BuildReport> {
+    let prepared = target().check_prepared(world);
+    let unsupported_names: Vec<(String, u64)> = prepared
+        .unsupported
+        .into_iter()
+        .chain(
+            prepared
+                .unsupported_resources
+                .into_iter()
+                .map(|r| (format!("resource {r}"), 1)),
+        )
+        .collect();
     let mut laid = lay(world, dir, a, true)?;
     let (writer, extras) = laid.extras();
     writer.finish(extras)?;
@@ -252,8 +280,42 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
         lifts: r.lifts.clone(),
         blend: r.blend.clone(),
         warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
-        unsupported: s
-            .unsupported
+        omitted: s
+            .omitted
+            .iter()
+            .cloned()
+            .chain(
+                [
+                    ("water outlines with no area", r.water_without_area as i64),
+                    (
+                        "clip-reskate-region: placements outside the region with nothing within its apron",
+                        r.far_dropped,
+                    ),
+                    (
+                        "instanced placements reaching past the map's limit (Studio's extent)",
+                        r.limit_instances,
+                    ),
+                    ("triangles past the map's limit", r.limit_triangles),
+                    (
+                        "collision triangles past the map's limit less 20 m",
+                        r.collision
+                            .as_ref()
+                            .map_or(0, |c| c.cut_beyond_limit + c.props_beyond_limit),
+                    ),
+                    ("placements with a degenerate matrix", r.degenerate),
+                    (
+                        "trainer spots without a height or past the 64 trainer.json takes",
+                        r.trainer_left_out as i64,
+                    ),
+                    ("grind curves with no usable points", r.grind_unusable as i64),
+                ]
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(what, n)| (what.to_owned(), n as u64)),
+            )
+            .collect(),
+        approximated: s
+            .approximated
             .iter()
             .cloned()
             .chain(match writer.stack() {
@@ -267,32 +329,11 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
                 [
                     (
                         "water outlines cut at the map's extent limit",
-                        r.water_cut_at_limit,
-                    ),
-                    ("water outlines with no area, not drawn", r.water_without_area),
-                ]
-                .into_iter()
-                .filter(|(_, n)| *n > 0)
-                .map(|(what, n)| (what.to_owned(), n as u64)),
-            )
-            .chain(
-                [
-                    (
-                        "clip-reskate-region: placements outside the region with nothing within its apron, left out",
-                        writer.r.far_dropped,
+                        r.water_cut_at_limit as i64,
                     ),
                     (
                         "clip-reskate-region: placements outside the region trimmed to its apron",
-                        writer.r.apron_trimmed,
-                    ),
-                    (
-                        "instanced placements reaching past the map's limit (Studio's extent), left out",
-                        writer.r.limit_instances,
-                    ),
-                    ("triangles past the map's limit, left out", writer.r.limit_triangles),
-                    (
-                        "collision triangles past the map's limit less 20 m, left out",
-                        writer.r.collision.as_ref().map_or(0, |c| c.cut_beyond_limit + c.props_beyond_limit),
+                        r.apron_trimmed,
                     ),
                 ]
                 .into_iter()
@@ -309,6 +350,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
                 _ => None,
             })
             .collect(),
+        unsupported_names,
     })
 }
 

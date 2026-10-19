@@ -233,15 +233,20 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
         .filter(|n| n.contains("_c0_") || n.contains("_c1_"))
         .collect();
     assert_eq!(names.len(), tile.groups.len(), "{names:?}");
-    // no pass: the chain overlays stay in their tile, reported once
+    // no pass: the chain overlays stay in their tile, written, reported once as approximated (not as left out)
     let (r, _) = write(&across_the_border(), "plain", &EncodingOptions::default()).unwrap();
     assert_eq!(r.blend.objects, 0);
     assert!(
-        r.unsupported
+        r.approximated
             .iter()
             .any(|(what, n)| what.contains("prepare-reskate-blend-order") && *n == 1),
         "{:?}",
-        r.unsupported
+        r.approximated
+    );
+    assert!(
+        r.omitted.iter().all(|(what, _)| !what.contains("blend")),
+        "{:?}",
+        r.omitted
     );
 }
 
@@ -386,9 +391,13 @@ fn a_fixed_budget_is_decided_by_the_pass() {
         let (r, _) = write(&w, &format!("objects-{n}"), &EncodingOptions::default()).unwrap();
         assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (split, 1 - split));
         assert!(
-            r.unsupported.iter().all(|(what, _)| !what.contains("blend")),
-            "{:?}",
-            r.unsupported
+            r.omitted
+                .iter()
+                .chain(&r.approximated)
+                .all(|(what, _)| !what.contains("blend")),
+            "{:?} {:?}",
+            r.omitted,
+            r.approximated
         );
     }
 }
@@ -445,9 +454,13 @@ fn the_pool_is_decided_before_writing_and_replayed() {
         let (r, _) = write(&w, &format!("pool-{cull_ids}"), &e).unwrap();
         assert_eq!((r.blend.tiles_split, r.blend.tiles_shared), (split, 1 - split));
         assert!(
-            r.unsupported.iter().all(|(what, _)| !what.contains("blend")),
-            "{:?}",
-            r.unsupported
+            r.omitted
+                .iter()
+                .chain(&r.approximated)
+                .all(|(what, _)| !what.contains("blend")),
+            "{:?} {:?}",
+            r.omitted,
+            r.approximated
         );
     }
     // the rest of the map's content takes IDs: one more light, and the room that held the chain form no longer does

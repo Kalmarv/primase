@@ -145,9 +145,13 @@ fn markers_are_put_on_the_ground_and_the_writer_takes_them() {
     )
     .unwrap();
     assert!(
-        r.unsupported.iter().all(|(what, _)| !what.contains("snap")),
-        "{:?}",
-        r.unsupported
+        r.omitted
+            .iter()
+            .chain(&r.approximated)
+            .all(|(what, _)| !what.contains("snap")),
+        "{:?} {:?}",
+        r.omitted,
+        r.approximated
     );
     let map: serde_json::Value =
         serde_json::from_slice(&std::fs::read(out_root.join("snap/map.json")).unwrap()).unwrap();
