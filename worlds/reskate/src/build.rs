@@ -103,7 +103,7 @@ pub fn target() -> primase_core::pass::Target {
         SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateFloorPlan, SkateForm,
         SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMarker, SkateMarkerSnaps, SkateMaterial,
         SkateOverlayStack, SkateParts, SkatePartsOff, SkatePlacement, SkatePrototype, SkateRegionClip,
-        SkateRock, SkateScene, SkateSoup, SkateTexture, SkateWater,
+        SkateMapSummary, SkateRock, SkateScene, SkateSoup, SkateTexture, SkateWater,
     };
     use crate::passes::layered::{BlendOpacity, VertexBlend};
     use crate::passes::pause_map::{SkatePauseImage, SkatePausePicture};
@@ -154,6 +154,8 @@ pub fn target() -> primase_core::pass::Target {
         .legal(SkateOverlayStack::NAME)
         .legal(SkateBlendChains::NAME)
         .legal(SkateBlendBudget::NAME)
+        // the map's summary is taken in through the budget planned from it (its basis is checked on writing)
+        .legal(SkateMapSummary::NAME)
         .legal(SkateRegionClip::NAME)
         .legal(SkatePauseImage::NAME)
         .legal(SkatePausePicture::NAME)

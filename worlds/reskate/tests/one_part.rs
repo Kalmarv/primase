@@ -235,7 +235,11 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     let n = pipeline.passes.len();
     let mut report = RunReport::default();
     PassManager::new(registry)
+        .with_conservation(primase_core::pass::Conservation::Enforce)
         .run(&mut w, &pipeline, &mut report)
         .unwrap();
     assert_eq!(report.steps.len(), n);
+    // every record the program leaves is one the writer takes
+    let prepared = primase_reskate::target().check_prepared(&w);
+    assert!(prepared.unsupported_resources.is_empty(), "{:?}", prepared.unsupported_resources);
 }
