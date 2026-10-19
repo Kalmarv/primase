@@ -465,7 +465,7 @@ pub fn read_area(
                 *e
             } else {
                 let e = world.spawn();
-                world.insert(e, Name(m.albedo.clone().unwrap_or_else(|| m.mtd.clone())));
+                world.insert(e, Name(m.mtd.clone()));
                 if let Some(layered) = &m.layered {
                     world.insert(e, layered.clone());
                 }

@@ -4,6 +4,7 @@
 //! A metallic value without a traced source constant or map is dielectric 0,
 //! never glTF's fully metallic default of 1, and every such material is counted.
 mod gx;
+use crate::preview::{Preview, is_emissive, preview};
 use crate::{
     Result, invalid,
     materials::{Binding, Material},
@@ -201,8 +202,8 @@ fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
         .find_map(|t| m.bindings.get(&t.kind))
 }
 
-fn normal_binding(m: &Material) -> Option<&Binding> {
-    let name = m.normal.as_ref()?;
+fn normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<&'a Binding> {
+    let name = preview.normal.as_ref()?;
     m.definition
         .as_ref()?
         .textures
@@ -220,8 +221,9 @@ pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
         if m.skip.is_some() || m.layered.is_some() {
             continue;
         }
-        names.extend(m.albedo.iter().cloned());
-        names.extend(m.normal.iter().cloned());
+        let preview = preview(m);
+        names.extend(preview.albedo);
+        names.extend(preview.normal);
         if simple(&m.shader)
             && let Some(b) = binding(m, "MetallicMap")
         {
@@ -421,13 +423,14 @@ fn lower_materials(
                 ),
             }
         }
+        let pv = preview(&m);
         let previewed = unbaked;
         if previewed {
             previews.insert(e);
         }
         let baked = m.layered.is_some() && !previewed;
         let applied = world.get::<super::UvTiling>(e).map_or([1.; 2], |t| t.0);
-        if m.normal.is_some() {
+        if pv.normal.is_some() {
             match super::normals::consumer_basis(&m.shader) {
                 Ok(true) => {}
                 Ok(false) => {
@@ -454,20 +457,20 @@ fn lower_materials(
         }
         if !baked {
             if p.base_color_texture.is_none()
-                && let Some(name) = &m.albedo
+                && let Some(name) = &pv.albedo
             {
                 p.base_color_texture = Some(TextureRef::new(texture(
                     world, payloads, &mut cache, name, false,
                 )?));
-            } else if fresh && m.albedo.is_none() {
+            } else if fresh && pv.albedo.is_none() {
                 p.base_color = fallback_base_color(&m);
                 log.approximate("missing base texture: preview fallback colour", 1);
             }
             if p.normal_texture.is_none()
-                && let Some(name) = &m.normal
+                && let Some(name) = &pv.normal
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
-                if let Some(b) = normal_binding(&m) {
+                if let Some(b) = normal_binding(&m, &pv) {
                     r.transform = Some(transform(applied, b)?);
                 }
                 p.normal_texture = Some(r);
@@ -485,7 +488,7 @@ fn lower_materials(
                 // Existing channels (including this pass's output) are authoritative.
                 // Repacking would apply the already-normalized factors a second time.
                 log.count("existing ORM textures preserved", 1);
-            } else if let Some(name) = &m.normal {
+            } else if let Some(name) = &pv.normal {
                 let normal = read(payloads, name)?;
                 let metal = binding(&m, "MetallicMap");
                 let mut metal_sampler = None;
@@ -498,8 +501,8 @@ fn lower_materials(
                         false,
                     )?);
                 }
-                let normal_binding =
-                    normal_binding(&m).ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
+                let normal_binding = normal_binding(&m, &pv)
+                    .ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
                 let nt = transform(applied, normal_binding)?;
                 let mt = metal.map(|b| transform(applied, b)).transpose()?;
                 if nt.scale.contains(&0.) {
@@ -567,7 +570,7 @@ fn lower_materials(
         }
         if p.emissive_texture.is_some() {
             log.count("existing emission textures preserved", 1);
-        } else if m.is_emissive || m.shader.contains("Emissive") || m.emissive.is_some() {
+        } else if is_emissive(&m, &pv) || m.shader.contains("Emissive") || pv.emissive.is_some() {
             log.approximate("source emission without proven radiance; retained dialect", 1);
         }
         // A static parameter may exist only in a subset of shader permutations;
@@ -578,6 +581,9 @@ fn lower_materials(
                 .any(|v| matches!(&v.value,Value::Float(x) if x.iter().any(|f|!f.is_finite())))
         }) {
             return Err(invalid("Sekiro PBR", 0, "nonfinite source parameter"));
+        }
+        if !baked {
+            world.insert(e, Name(pv.albedo.clone().unwrap_or_else(|| m.mtd.clone())));
         }
         world.insert(e, p);
         log.count("PBR materials", 1);
@@ -648,7 +654,15 @@ mod tests {
             None,
             |_| false,
         );
-        m.albedo = Some("main_a".into());
+        m.bindings.insert(
+            "Texture2D_8_AlbedoMap".into(),
+            crate::materials::Binding {
+                texture: "main_a".into(),
+                scale: [1.; 2],
+                uv_number: 1,
+                available: true,
+            },
+        );
         m.layered = Some(crate::materials::LayeredMaterial {
             mtd: m.mtd.clone(),
             definition: crate::mtd::MaterialDefinition {

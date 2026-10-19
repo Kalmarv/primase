@@ -70,8 +70,6 @@ fn layered(skip: Option<materials::SkipClass>) -> Material {
         None,
         |_| false,
     );
-    m.albedo = None;
-    m.normal = None;
     m.skip = skip;
     m.layered = Some(LayeredMaterial {
         mtd: m.mtd.clone(),
@@ -355,8 +353,10 @@ fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_the
     let mut world = World::new();
     let material = |world: &mut World, name: &str| {
         let m = world.spawn();
+        // named as the reader names it, by its MTD, which the lowering keeps without a preview base map
         let mut source = layered(None);
         source.layered = None;
+        source.mtd = name.into();
         world.insert(m, source);
         world.insert(m, primase_core::Name(name.into()));
         m

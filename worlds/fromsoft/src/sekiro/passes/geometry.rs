@@ -237,7 +237,7 @@ impl LowerFromSoftGeometry {
             return Ok(None);
         };
         if self.uv_tiling == Tiling::Apply {
-            part.apply_uv_scale(material.uv_scale)
+            part.apply_uv_scale(crate::preview::preview(material).uv_scale)
                 .map_err(|e| e.to_string())?;
         }
         if self.winding == Winding::Normals && part.repair_winding().map_err(|e| e.to_string())? {
@@ -445,7 +445,8 @@ impl Pass for LowerFromSoftGeometry {
                 })
                 .collect();
             for e in used {
-                let scale = world.get::<Material>(e).expect("lowered material").uv_scale;
+                let scale =
+                    crate::preview::preview(world.get::<Material>(e).expect("lowered material")).uv_scale;
                 world.insert(e, UvTiling(scale));
             }
         }

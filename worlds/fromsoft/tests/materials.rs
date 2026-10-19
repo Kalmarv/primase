@@ -1,3 +1,4 @@
+use primase_fromsoft::preview::{named_surface, preview};
 use primase_fromsoft::{
     flver, materials,
     mtd::{MaterialDefinition, Parameter, Texture, Value},
@@ -70,9 +71,9 @@ fn overrides_fixed_slots_and_preserves_all_layers() {
         },
     ];
     let m = materials::resolve(&src, Some(&definition()), |_| true);
-    assert_eq!(m.albedo.as_deref(), Some("custom_a"));
-    assert_eq!(m.normal.as_deref(), Some("custom_n"));
-    assert_eq!(m.uv_scale, [2., 3.]);
+    assert_eq!(preview(&m).albedo.as_deref(), Some("custom_a"));
+    assert_eq!(preview(&m).normal.as_deref(), Some("custom_n"));
+    assert_eq!(preview(&m).uv_scale, [2., 3.]);
     assert_eq!(m.layered.as_ref().unwrap().bindings.len(), 3);
     assert_eq!(
         m.layered.unwrap().bindings["Texture2D_5_AlbedoMap"].scale,
@@ -88,7 +89,7 @@ fn missing_albedo_uses_available_layer() {
         scale: [1.; 2],
     });
     let m = materials::resolve(&src, Some(&definition()), |n| n == "available_a");
-    assert_eq!(m.albedo.as_deref(), Some("available_a"));
+    assert_eq!(preview(&m).albedo.as_deref(), Some("available_a"));
     assert!(m.bindings.contains_key("Texture2D_8_AlbedoMap"));
 }
 #[test]
@@ -102,9 +103,9 @@ fn foliage_cutoff_and_missing_albedo() {
     let m = materials::resolve(&source(), Some(&d), |_| false);
     assert_eq!(m.class, "leaves");
     assert_eq!(m.cutoff, 128. / 255.);
-    assert_eq!(m.surface, "default");
+    assert_eq!(named_surface(&m).0, "default");
     // A target's class, domain and fallback colour are gated by its own tests.
-    assert!(m.albedo.is_none());
+    assert!(preview(&m).albedo.is_none());
     assert!(m.layered.is_none());
 }
 
@@ -113,7 +114,7 @@ fn graph_qualified_slot_names_select_the_main_layer() {
     let mut d = definition();
     d.textures[0].kind = "M_Multiple__snp_Texture2D_8_AlbedoMap_0".into();
     let m = materials::resolve(&source(), Some(&d), |_| true);
-    assert_eq!(m.albedo.as_deref(), Some("fixed_wood_a"));
+    assert_eq!(preview(&m).albedo.as_deref(), Some("fixed_wood_a"));
 }
 
 #[test]
@@ -127,6 +128,6 @@ fn numeric_slot_ties_prefer_the_selected_mtd_declaration() {
         scale: [1.; 2],
     });
     let m = materials::resolve(&s, Some(&d), |_| true);
-    assert_eq!(m.albedo.as_deref(), Some("fixed_wood_a"));
+    assert_eq!(preview(&m).albedo.as_deref(), Some("fixed_wood_a"));
     assert_eq!(m.bindings.len(), 2);
 }

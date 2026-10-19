@@ -554,8 +554,17 @@ mod tests {
             serde_json::to_value(&source.layered).unwrap(),
             serde_json::to_value(&other.layered).unwrap()
         );
+        // a base map tiled otherwise
         let mut changed_uv = other.clone();
-        changed_uv.uv_scale = [2., 1.];
+        changed_uv.bindings.insert(
+            "Texture2D_8_AlbedoMap".into(),
+            crate::materials::Binding {
+                texture: "base".into(),
+                scale: [2., 1.],
+                uv_number: 1,
+                available: true,
+            },
+        );
         assert_ne!(
             super::super::layers::bake_identity(&source).unwrap(),
             super::super::layers::bake_identity(&changed_uv).unwrap()

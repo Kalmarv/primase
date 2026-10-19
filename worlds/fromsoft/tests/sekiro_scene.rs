@@ -367,8 +367,9 @@ fn installed_area_against_soulsformats() -> Result<()> {
             .and_then(|m| world.get::<Material>(m))
             .ok_or("part without its source material")?;
         assert_eq!(m.class, class, "{source}/{part} class");
-        assert_eq!(m.albedo.as_deref(), base, "{source}/{part} base");
-        assert_eq!(m.normal.as_deref(), normal, "{source}/{part} normal");
+        let preview = primase_fromsoft::preview::preview(m);
+        assert_eq!(preview.albedo.as_deref(), base, "{source}/{part} base");
+        assert_eq!(preview.normal.as_deref(), normal, "{source}/{part} normal");
     }
     Ok(())
 }

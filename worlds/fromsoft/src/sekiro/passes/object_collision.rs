@@ -49,7 +49,8 @@ fn largest_render_surface(world: &World, prototype: Entity) -> std::result::Resu
             let [a, b, c] = tri.map(|i| Vec3::from(FRAME.point(positions[i as usize])));
             let cross = (b - a).cross(c - a);
             if cross.length_squared() > 1e-14 {
-                *areas.entry(m.surface.clone()).or_default() += f64::from(cross.length()) * 0.5;
+                *areas.entry(crate::preview::named_surface(m).0).or_default() +=
+                    f64::from(cross.length()) * 0.5;
             }
         }
     }

@@ -47,6 +47,7 @@ fn five_permutation_pilot() -> Result<()> {
                         texture: stem(&t.path),
                         scale: [1.; 2],
                         uv_number: t.uv_number,
+                        available: true,
                     },
                 );
             }
@@ -65,6 +66,7 @@ fn five_permutation_pilot() -> Result<()> {
                         t["scale"][1].as_f64().ok_or("scale")? as f32,
                     ],
                     uv_number: 1,
+                    available: true,
                 },
             );
         }

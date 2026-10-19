@@ -46,6 +46,10 @@ fn source(shader: &str) -> materials::Material {
     };
     materials::resolve(&src, Some(&definition), |_| true)
 }
+/// `m` with the texture of binding `kind` missing from the catalog, so no preview draws it.
+fn unavailable(m: &mut materials::Material, kind: &str) {
+    m.bindings.get_mut(kind).expect("a fixture binding").available = false;
+}
 fn payload(rgba: &[u8]) -> Vec<u8> {
     primase_dds::write_dx10(&Texture {
         width: rgba.len() as u32 / 4,
@@ -123,8 +127,8 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         let mut world = World::new();
         let e = world.spawn();
         let mut m = source("MetallicValue");
-        m.albedo = None;
-        m.normal = None;
+        unavailable(&mut m, "Texture2D_0_AlbedoMap");
+        unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&words)];
         world.insert(e, m);
         assert!(
@@ -136,8 +140,8 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         let mut world = World::new();
         let e = world.spawn();
         let mut m = source("MetallicValue");
-        m.albedo = None;
-        m.normal = None;
+        unavailable(&mut m, "Texture2D_0_AlbedoMap");
+        unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&[1, 237, 1, half]); 2];
         world.insert(e, m);
         assert!(pbr::lower(&mut world, &BTreeMap::new(), None).is_err());
@@ -149,8 +153,8 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         let mut world = World::new();
         let e = world.spawn();
         let mut m = source("MetallicValue");
-        m.albedo = None;
-        m.normal = None;
+        unavailable(&mut m, "Texture2D_0_AlbedoMap");
+        unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = records.clone();
         world.insert(e, m);
         let log = pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
@@ -327,9 +331,10 @@ fn selected_normal_identity_controls_both_transforms() {
             texture: "selected".into(),
             scale: [2., 1.],
             uv_number: 1,
+            available: true,
         },
     );
-    m.normal = Some("selected".into());
+    // the preview picks it: no normal of the base map's family, and slot 3 before the others
     world.insert(e, m);
     let bytes = BTreeMap::from([
         ("a".into(), payload(&[80, 90, 100, 255])),
@@ -406,7 +411,7 @@ fn metallic_without_source_evidence_is_counted_dielectric() {
         let mut m = source(shader);
         m.bindings.remove("Texture2D_2_MetallicMap");
         if !normal {
-            m.normal = None;
+            unavailable(&mut m, "Texture2D_1_NormalMap");
         }
         world.insert(e, m);
         let log = pbr::lower(&mut world, &bytes, None).unwrap();

@@ -213,18 +213,26 @@ retains every declared and consumed length without reading outside the file.
 This structure-authoritative rule is not a claim about the game's parser control flow. Shift-JIS strings decode strictly; malformed text is
 an error at its string offset. No replacement characters are introduced.
 
-`materials::resolve` applies an explicit main-layer preview policy. Nonempty
-FLVER slot paths override fixed MTD paths. Among available albedos it chooses
-slot 8, then the lowest slot; normals prefer a matching stem, then slots 3 and
-0, then the lowest slot. When shader-qualified names share a numeric slot,
-bindings declared by the selected MTD take precedence over foreign-family
-bindings; all bindings remain available to the later bake. The caller supplies
-texture availability. Shader names
-and blend/alpha parameters select preview classes; name-based collision surface
-choices are a documented approximation, not a claim about shader semantics.
-The selected albedo's positive FLVER tiling scale is kept for geometry lowering.
+`materials::resolve` records what the source states, and chooses nothing.
+Nonempty FLVER slot paths override fixed MTD paths; each binding says whether
+the area's texture catalog holds its texture (the caller supplies availability).
+Shader names and blend/alpha parameters state the class (water, decal, leaves,
+alpha, cutout) or the skip class, and the alpha reference its cutoff.
+`fromsoft.material` records these and all resolved bindings; the reader names a
+source material by its MTD.
 
-`fromsoft.material` records these choices and all resolved bindings.
+The preview a lowering draws is the passes' (`preview`): among available
+albedos it chooses slot 8, then the lowest slot; normals prefer a matching
+stem, then slots 3 and 0, then the lowest slot; metallic and emissive maps are
+the first of their bindings. When shader-qualified names share a numeric slot,
+bindings declared by the selected MTD take precedence over foreign-family
+bindings; all bindings remain available to the later bake. The chosen albedo's
+positive FLVER tiling scale is what `lower-fromsoft-geometry{uv-tiling=apply}`
+applies. `lower-fromsoft-materials` names each source material it lowers after
+its preview albedo (its MTD without one). Name-based collision surfaces
+(`preview::named_surface`, which object collision uses) are a documented
+approximation, not a claim about shader semantics.
+
 `fromsoft.layered_material` additionally retains the complete MTD parameters,
 texture declarations, selected static switch, UV indices and binding scales
 for the later shader-aware bake. The preview does not execute layered shaders.

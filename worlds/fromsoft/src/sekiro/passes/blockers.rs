@@ -7,7 +7,11 @@ use std::collections::BTreeMap;
 pub const RULE: &str = "non-skipped GXFlver_Col* shader with main albedo m[0-9][0-9]_black_a";
 
 pub fn is_card(material: &Material) -> bool {
-    material.skip.is_none() && matches_binding(&material.shader, material.albedo.as_deref())
+    material.skip.is_none()
+        && matches_binding(
+            &material.shader,
+            crate::preview::preview(material).albedo.as_deref(),
+        )
 }
 fn matches_binding(shader: &str, albedo: Option<&str>) -> bool {
     shader.starts_with("GXFlver_Col")
