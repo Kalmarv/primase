@@ -64,8 +64,10 @@ pub struct PlannedLeaf {
 
 /// `skate.collision_plan`: how the writer writes the map's collision (`prepare-reskate-collision`'s), for the layout
 /// it was made from: the writer lays the collision out into leaves (cells cut until sparse enough), each written as
-/// one piece per surface, and replays the plan's surfaces and weld, refusing a layout or surface table other than the
-/// plan's. Without a plan the writer writes the collision exactly: no surface rewritten, only bit-identical corners
+/// one piece per surface, and replays the plan's surfaces and weld. Its check against the plan is an aggregate one: the
+/// surface table, the leaves by name, each leaf's triangles per surface and the triangles its weld collapses must
+/// match; a change to the geometry that keeps all of these (a triangle moved within its leaf) is not detected. Without
+/// a plan the writer writes the collision exactly: no surface rewritten, only bit-identical corners
 /// merged. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkateCollisionPlan {

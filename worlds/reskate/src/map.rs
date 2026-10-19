@@ -1000,12 +1000,11 @@ impl MapWriter {
         }))
     }
 
-    /// Writes every tile's pending chain overlays in key order (row, then column) in the form the budget gives it
-    /// ([`blend_order::take_chains`]): the tiles `plan-reskate-blend-budget` chose for a fixed count; in pool mode the
-    /// ranked tiles while the map's cull IDs ([`WriterOptions::cull_ids`], by default the level's share of
-    /// [`CULL_ID_POOL`]) less `other`, the
-    /// cull IDs the rest of the map takes, has room (one ID held back for every tile not yet decided, so the plain
-    /// fallbacks always fit), each tile past it reported. Without a planned budget every tile is plain. The form not
+    /// Writes every tile's pending chain overlays in key order (row, then column) in the form the budget planned
+    /// ([`blend_order::take_chains`]): the chain form for the tiles `plan-reskate-blend-budget` chose (for a count, or
+    /// in pool mode from the map's summary, whose basis, the cull IDs and `other` (what the rest of the map takes),
+    /// must be this layout's), the plain form for the rest. The writer chooses nothing: tiles with chains and no
+    /// planned budget, a ranking for other tiles, or a pool basis other than this layout's are an error. The form not
     /// taken is deleted.
     fn emit_chains(&mut self, other: usize) -> Result<()> {
         let pending = std::mem::take(&mut self.pending_chains);

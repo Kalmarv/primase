@@ -12,8 +12,9 @@
 //!   declared as dropped collision triangles (found by running the weld here). `exact`: only bit-identical corners
 //!   merge, every triangle kept.
 //!
-//! The writer replays the plan, refusing one made for another layout (a leaf's triangles per surface, the surface
-//! table); without a plan it writes the collision exactly (as `surfaces=exact,weld=exact`). The writer used to coalesce
+//! The writer replays the plan, refusing one whose aggregate check fails (the surface table, the leaves, each leaf's
+//! triangles per surface, its weld's collapses: not a fingerprint of the geometry, so run this pass after every pass
+//! that changes the collision); without a plan it writes the collision exactly (as `surfaces=exact,weld=exact`). The writer used to coalesce
 //! and weld by itself. It runs on the whole map, after every pass that changes the map's collision or what the writer
 //! groups, and before `summarize-reskate-map` (whose count of the collision's cull IDs is the planned collision's).
 
