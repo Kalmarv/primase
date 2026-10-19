@@ -12,5 +12,7 @@ pub mod shader_class;
 pub mod shader_names;
 pub mod surfaces;
 pub mod terrain;
+pub mod tint;
+pub mod vertex_colours;
 pub mod water;
 pub mod winding;

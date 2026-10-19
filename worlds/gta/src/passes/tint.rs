@@ -12,42 +12,17 @@
 //!
 //! Runs after `lower-gta-pbr` and before `gta-vertex-colours`: it reads the blue channel that pass drops, and that pass
 //! keeps the colour written here (the `gta.tinted` resource lists the materials whose primitives it wrote).
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, Instance, JsonError, Lods, Mesh, Semantic, Stream, Texture, World};
+use primase_core::{Entity, Instance, Lods, Mesh, Semantic, Stream, Texture, World};
 use primase_texcodec::{Decoder, TexDecoder};
-use serde::Serialize;
 
+use crate::components::tint::{GtaTint, GtaTinted};
 use crate::components::{GtaEntity, GtaShader};
 use crate::passes::lower::{classes, texture};
 use crate::passes::shader_class::TintColumn;
-
-/// The tint row a tinted prototype is drawn with.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct GtaTint {
-    pub row: u32,
-}
-
-impl Component for GtaTint {
-    const NAME: &'static str = "gta.tint";
-    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
-
-/// The materials whose primitives `gta-tint` wrote the palette colour into (their COLOR_0 is a tint, not GTA's
-/// ambient occlusion and palette index).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct GtaTinted(pub BTreeSet<Entity>);
-
-impl primase_core::Resource for GtaTinted {
-    const NAME: &'static str = "gta.tinted";
-    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
 
 /// A decoded palette: width, height (both at least 1), RGBA8 rows top first.
 struct Palette {

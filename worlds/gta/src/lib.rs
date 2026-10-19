@@ -11,10 +11,9 @@ pub mod components;
 pub mod passes;
 pub mod rage;
 pub mod read;
-pub mod tint;
 
 // paths consumers use from before the crate was arranged by role
-pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, water, winding};
+pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, tint, water, winding};
 pub use read::convert;
 /// `pipeline::{Map, LeaveOutInteriors}`, as consumers name them: now [`read::source::Map`] and
 /// [`passes::interiors::LeaveOutInteriors`].
@@ -79,11 +78,13 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?))
     });
     reg.register("gta-winding", |o| none(o, passes::winding::GtaWinding));
-    reg.register("gta-tint", |o| none(o, tint::GtaTintVariants));
+    reg.register("gta-tint", |o| none(o, passes::tint::GtaTintVariants));
     reg.register("gta-terrain-layers", |o| {
         none(o, passes::terrain::GtaTerrainLayers)
     });
-    reg.register("gta-vertex-colours", |o| none(o, passes::lower::GtaVertexColours));
+    reg.register("gta-vertex-colours", |o| {
+        none(o, passes::vertex_colours::GtaVertexColours)
+    });
     // the region is the caller's choice: no default
     reg.register_requiring(
         "gta-select-region",

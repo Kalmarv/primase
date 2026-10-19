@@ -11,6 +11,7 @@
 
 pub mod collision;
 pub mod state;
+pub mod tint;
 pub mod water;
 
 use primase_core::frame::SourceFrame;

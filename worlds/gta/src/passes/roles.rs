@@ -1,7 +1,7 @@
 //! `classify-gta-texture-roles`: what GTA's shaders say a texture is, before any pass resizes or recodes it.
 //!
 //! A tinted shader's palette (`TintPaletteTex`) is data (`TexRole::Data`): the `_tnt` vertex shaders read it point
-//! sampled at a texel indexed per vertex ([`crate::tint`]), so any filtering, resizing or lossy coding changes which
+//! sampled at a texel indexed per vertex ([`crate::passes::tint`]), so any filtering, resizing or lossy coding changes which
 //! colour a vertex gets. `lower-gta-pbr` marks it too, but only as it lowers; a program that caps textures before
 //! lowering (`cap-textures`, which keeps data textures whole) runs this first. A texture some shader binds to another
 //! parameter as well is left as it is (counted): its other use decides, as `lower-gta-pbr` decides it.
