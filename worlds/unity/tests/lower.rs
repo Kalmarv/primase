@@ -24,7 +24,7 @@ use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityMaterial;
 use primase_unity::level::read_level;
-use primase_unity::lower::lower_unity_pbr;
+use primase_unity::lower::LowerUnityPbr;
 use primase_unity::player::Player;
 use serde_json::Value as Json;
 
@@ -87,7 +87,7 @@ fn lowering_matches_the_port() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    let log = lower_unity_pbr(&mut w).unwrap();
+    let log = lower(&mut w);
     println!(
         "lowering: {:?}\napproximations: {:#?}",
         log.counts, log.approximations
@@ -318,7 +318,7 @@ fn draw_order_follows_the_render_queue() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower_unity_pbr(&mut w).unwrap();
+    lower(&mut w);
     let water: Vec<_> = w
         .iter::<UnityMaterial>()
         .filter(|(e, m)| {
@@ -353,7 +353,7 @@ fn water_and_trees_state_their_usage() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower_unity_pbr(&mut w).unwrap();
+    lower(&mut w);
     let used: BTreeSet<(String, MaterialUsage)> = w
         .iter::<MaterialUsage>()
         .map(|(e, u)| (w.get::<Name>(e).unwrap().0.clone(), *u))
@@ -388,7 +388,7 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower_unity_pbr(&mut w).unwrap();
+    lower(&mut w);
     let tiling = |m: &UnityMaterial, name: &str| {
         m.textures
             .iter()
@@ -418,6 +418,21 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     }
     println!("URP Lit slots: {slots}, through the base map's tiling; {own_differs} whose own tiling differs");
     assert!(slots > 0);
+}
+
+/// `lower-unity-pbr` through the manager, so its declared effects are checked too; its log.
+fn lower(w: &mut World) -> primase_core::pass::PassLog {
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            w,
+            &primase_core::pass::Pipeline {
+                passes: vec![Box::new(LowerUnityPbr)],
+            },
+            &mut run,
+        )
+        .unwrap();
+    run.steps.pop().unwrap().log
 }
 
 /// The level as stored: `resolve-state` with the defaults, then LOD 0 of every prototype.

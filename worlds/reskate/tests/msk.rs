@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{ColorSpace, Name, TexFormat, TexRole, Texture, World};
 use primase_reskate::components::{MaterialClass, Other, SkateMaterial};
@@ -93,11 +93,18 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
     let b = material(&mut w, "b", Some(msk), None);
     let plain = material(&mut w, "plain", None, Some(0.3));
     let missing = material(&mut w, "missing", Some(unloaded), None);
-    let malformed = w.spawn();
-    w.insert(malformed, rgba8(2, 1, vec![vec![0; 8], vec![0; 3]]));
-    let bad_material = material(&mut w, "short mip", Some(malformed), None);
-    let mut log = PassLog::default();
-    LowerSkatePbr.run(&mut w, &mut log).unwrap();
+    // through the manager, so its declared effects are checked too
+    let mut run = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run(
+            &mut w,
+            &Pipeline {
+                passes: vec![Box::new(LowerSkatePbr)],
+            },
+            &mut run,
+        )
+        .unwrap();
+    let log: PassLog = run.steps.pop().unwrap().log;
     assert_eq!(log.counts.get("MSK masks lowered to ORM textures"), Some(&1));
     let (pa, pb) = (w.get::<PbrMaterial>(a).unwrap(), w.get::<PbrMaterial>(b).unwrap());
     let orm = pa.metallic_roughness_texture.unwrap().texture;
@@ -131,8 +138,50 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
             .get("Studio MSK mask not loaded as RGBA8 left out"),
         Some(&1)
     );
+    // Only material a sets a scalar alongside its MSK.
+    assert_eq!(
+        log.approximations
+            .get("scalar metallic/roughness ignored where an MSK is bound (factors 1)"),
+        Some(&1)
+    );
+}
+
+/// A mask whose mip sizes disagree is left out, counted. The manager's texture check refuses such a world before any
+/// pass sees it (a reader cannot hand one over), so the pass's own guard is run directly here.
+#[test]
+fn a_mask_with_inconsistent_mip_sizes_is_left_out() {
+    let mut w = World::new();
+    let malformed = w.spawn();
+    w.insert(malformed, rgba8(2, 1, vec![vec![0; 8], vec![0; 3]]));
+    let m = w.spawn();
+    w.insert(
+        m,
+        SkateMaterial {
+            key: "short mip".into(),
+            class: MaterialClass::Opaque,
+            base: None,
+            normal: None,
+            mask: Some(malformed),
+            base_color: None,
+            tint: None,
+            alpha: None,
+            cutoff: None,
+            two_sided: None,
+            domain: None,
+            metallic: None,
+            roughness: None,
+            wrap: None,
+            ocean: None,
+            cast_shadows: None,
+            emissive: None,
+            vertex_alpha: None,
+            other: Other::new(),
+        },
+    );
+    let mut log = PassLog::default();
+    LowerSkatePbr.run(&mut w, &mut log).unwrap();
     assert!(
-        w.get::<PbrMaterial>(bad_material)
+        w.get::<PbrMaterial>(m)
             .unwrap()
             .metallic_roughness_texture
             .is_none()
@@ -140,12 +189,6 @@ fn materials_bind_one_shared_orm_with_unit_factors() {
     assert_eq!(
         log.approximations
             .get("Studio MSK mask with inconsistent mip sizes left out"),
-        Some(&1)
-    );
-    // Only material a sets a scalar alongside its MSK.
-    assert_eq!(
-        log.approximations
-            .get("scalar metallic/roughness ignored where an MSK is bound (factors 1)"),
         Some(&1)
     );
 }

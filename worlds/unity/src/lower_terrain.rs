@@ -230,7 +230,13 @@ impl Pass for LowerUnityTerrain {
         &["unity.terrain"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["core.mesh", "core.instance", "core.texture", "pbr.material"]
+        &[
+            "core.mesh",
+            "core.instance",
+            "core.texture",
+            "pbr.material",
+            "core.name",
+        ]
     }
     /// It lowers Unity terrains and keeps them.
     fn legalizes(&self) -> &[&'static str] {

@@ -718,6 +718,8 @@ impl Pass for LowerUnityPbr {
         &[
             "pbr.material",
             "core.texture",
+            // the textures it derives are new entities, named after their source
+            "core.name",
             "core.draw_order",
             "core.material_usage",
             "core.vertex_color",

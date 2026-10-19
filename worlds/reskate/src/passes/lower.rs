@@ -61,7 +61,8 @@ impl Pass for LowerSkatePbr {
         &["skate.material"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["pbr.material"]
+        // an MSK mask's ORM texture is a new entity, named after the mask
+        &["pbr.material", "core.texture", "core.name"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]

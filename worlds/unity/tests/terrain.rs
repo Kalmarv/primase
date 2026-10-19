@@ -148,7 +148,7 @@ fn terrain_geometry_matches_the_port() {
     use primase_core::{Instance, Mesh, Semantic, Stream, Texture, Transform, World};
     use primase_unity::components::UnityTerrain;
     use primase_unity::level::read_level;
-    use primase_unity::lower_terrain::lower_unity_terrain;
+    use primase_unity::lower_terrain::LowerUnityTerrain;
     use std::collections::BTreeSet;
     use std::path::Path;
     let (Some(data), Some(tpk), Some(dir), Some(port)) = (
@@ -167,7 +167,18 @@ fn terrain_geometry_matches_the_port() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    let log = lower_unity_terrain(&mut w).unwrap();
+    // through the manager, so its declared effects are checked too
+    let mut run = primase_core::pass::RunReport::default();
+    primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .run(
+            &mut w,
+            &primase_core::pass::Pipeline {
+                passes: vec![Box::new(LowerUnityTerrain)],
+            },
+            &mut run,
+        )
+        .unwrap();
+    let log = run.steps.pop().unwrap().log;
     println!("terrain lowering: {:?}; {:?}", log.counts, log.approximations);
     let dir = Path::new(&dir);
     let index: Json = serde_json::from_slice(&std::fs::read(dir.join("index.json")).unwrap()).unwrap();
