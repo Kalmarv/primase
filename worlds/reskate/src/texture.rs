@@ -1,6 +1,6 @@
-//! Textures of a map: a source texture file read as the reference writer reads it, and the library that writes the
-//! map's texture files (DXT levels passed through as `.dds`, everything else as `.png`), every file named after its
-//! content.
+//! Textures of a map: a source texture (a texture file's bytes, as the reference writer reads them, or a texture of
+//! the world), and the library that writes the map's texture files (DXT levels passed through as `.dds`, everything
+//! else as `.png`), every file named after its content. Nothing here reads a file: a reader hands in the bytes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -68,14 +68,14 @@ enum Kind {
 /// Where a [`TexSource`]'s stored levels are.
 #[derive(Debug)]
 enum Origin {
-    /// A texture file (its levels from `data_offset` on).
-    File(PathBuf),
+    /// A texture file's bytes (its levels from `data_offset` on), labelled by `name`.
+    File { name: String, bytes: Vec<u8> },
     /// A texture of the world: its levels as stored, labelled by `name`.
     Memory { name: String, levels: Vec<Vec<u8>> },
 }
 
-/// A source texture: a texture file of a scene (a PNG, one level, or a DDS: DXT1/3/5 passed through, BC5 and 32-bit
-/// RGBA/BGRA decoded) or a texture of the world (`core.texture`, [`TexSource::from_texture`]), the chain of smaller
+/// A source texture: a texture file's bytes ([`TexSource::from_file_bytes`]: a PNG, one level, or a DDS: DXT1/3/5
+/// passed through, BC5 and 32-bit RGBA/BGRA decoded) or a texture of the world (`core.texture`, [`TexSource::from_texture`]), the chain of smaller
 /// levels completed with the 2 x 2 box filter where the source does not hold them.
 #[derive(Debug)]
 pub struct TexSource {
@@ -104,22 +104,15 @@ fn level_bytes(w: u32, h: u32, block: u64) -> u64 {
 }
 
 impl TexSource {
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: the writer reads the pause map's image file"
-    )]
-    pub fn open(
-        path: &Path,
+    /// A texture file's `bytes` (a PNG or a DDS), labelled by `name` (its path, in messages).
+    pub fn from_file_bytes(
+        name: &str,
+        bytes: Vec<u8>,
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
     ) -> Result<TexSource> {
-        let bad = |m: String| Error::Texture(format!("{}: {m}", path.display()));
-        let b = std::fs::read(path).map_err(|source| Error::Io {
-            path: path.to_owned(),
-            source,
-        })?;
-        let h = &b[..b.len().min(148)];
+        let bad = |m: String| Error::Texture(format!("{name}: {m}"));
+        let h = &bytes[..bytes.len().min(148)];
         let (width, height, kind, fourcc, file_levels, data_offset);
         let format_name: &str;
         if h.len() >= 8 && h[..4] == [0x89, b'P', b'N', b'G'] {
@@ -213,7 +206,10 @@ impl TexSource {
             }
             let format_name = format_name.to_owned();
             return Ok(Self::finish(
-                Origin::File(path.to_owned()),
+                Origin::File {
+                    name: name.to_owned(),
+                    bytes,
+                },
                 width,
                 height,
                 kind,
@@ -226,7 +222,10 @@ impl TexSource {
             ));
         }
         Ok(Self::finish(
-            Origin::File(path.to_owned()),
+            Origin::File {
+                name: name.to_owned(),
+                bytes,
+            },
             width,
             height,
             kind,
@@ -293,8 +292,7 @@ impl TexSource {
     /// The source's name in messages: its file, or its name in the world.
     pub fn label(&self) -> String {
         match &self.origin {
-            Origin::File(path) => path.display().to_string(),
-            Origin::Memory { name, .. } => name.clone(),
+            Origin::File { name, .. } | Origin::Memory { name, .. } => name.clone(),
         }
     }
 
@@ -344,23 +342,12 @@ impl TexSource {
     }
 
     /// Block data of every level, level 0 first (DXT only).
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: the writer reads the pause map's image file"
-    )]
     pub fn data(&self) -> Result<Option<Vec<u8>>> {
         if self.kind != Kind::Dxt {
             return Ok(None);
         }
         match &self.origin {
-            Origin::File(path) => {
-                let b = std::fs::read(path).map_err(|source| Error::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-                Ok(Some(b[self.data_offset.min(b.len())..].to_vec()))
-            }
+            Origin::File { bytes, .. } => Ok(Some(bytes[self.data_offset.min(bytes.len())..].to_vec())),
             Origin::Memory { levels, .. } => Ok(Some(levels.concat())),
         }
     }
@@ -374,37 +361,25 @@ impl TexSource {
     }
 
     /// Level `mip` (`w` x `h`) as the source stores it (a PNG decoded to RGBA8); `None` when it does not hold it.
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: the writer reads the pause map's image file"
-    )]
     fn stored_level(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
         if mip >= self.file_levels {
             return Ok(None);
         }
         let len = self.level_size(w, h);
-        let path = match &self.origin {
+        let (name, b) = match &self.origin {
             Origin::Memory { levels, .. } => {
                 return Ok(levels
                     .get(mip as usize)
                     .filter(|l| l.len() as u64 >= len)
                     .map(|l| l[..len as usize].to_vec()));
             }
-            Origin::File(path) => path,
+            Origin::File { name, bytes } => (name, bytes),
         };
-        let b = std::fs::read(path).map_err(|source| Error::Io {
-            path: path.clone(),
-            source,
-        })?;
         if self.kind == Kind::Png {
-            let png = primase_image::read_png(&b)
-                .map_err(|e| Error::Texture(format!("{}: {e}", path.display())))?;
+            let png = primase_image::read_png(b).map_err(|e| Error::Texture(format!("{name}: {e}")))?;
             return match png.image.samples {
                 primase_image::Samples::U8(v) => Ok(Some(v)),
-                primase_image::Samples::U16(_) => {
-                    Err(Error::Texture(format!("{}: 16-bit PNG", path.display())))
-                }
+                primase_image::Samples::U16(_) => Err(Error::Texture(format!("{name}: 16-bit PNG"))),
             };
         }
         let mut off = self.data_offset as u64;

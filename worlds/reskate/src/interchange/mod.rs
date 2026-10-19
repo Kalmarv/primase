@@ -37,6 +37,11 @@ pub struct LoadReport {
 /// readers), paths relative to the scene folder `dir`, and the scene's pause-map picture (`pause_map`, decoded to
 /// RGBA8) as [`crate::prepare::SkatePauseImage`] for `prepare-reskate-pause-map`. The file references stay, as the
 /// payloads' origin.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "reader I/O: reads the scene's pause-map picture"
+)]
 pub fn load(dir: &Path, world: &mut primase_core::World) -> Result<LoadReport> {
     let mut report = LoadReport {
         meshes: primase_gltf::load_mesh_files(world, dir)?,
@@ -48,7 +53,11 @@ pub fn load(dir: &Path, world: &mut primase_core::World) -> Result<LoadReport> {
         .and_then(|s| s.pause_map.as_ref())
         .map(|p| p.image_file.clone());
     if let Some(file) = image_file {
-        let src = crate::texture::TexSource::open(&file, None, None)?;
+        let bytes = std::fs::read(&file).map_err(|source| crate::Error::Io {
+            path: file.clone(),
+            source,
+        })?;
+        let src = crate::texture::TexSource::from_file_bytes(&file.display().to_string(), bytes, None, None)?;
         let rgba = src
             .decode(0, src.width, src.height)?
             .ok_or_else(|| crate::Error::Scene("pause_map: the image cannot be decoded".into()))?;

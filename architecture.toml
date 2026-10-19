@@ -134,12 +134,6 @@ reason = "prepare_assets writes assets and repoints the world before the writer 
 removed_when = "write serializes in-memory meshes and textures itself"
 
 [[io]]
-file = "worlds/reskate/src/texture.rs"
-role = "exception"
-reason = "the ReSkate writer reads the pause map's image file (its textures arrive as core.texture)"
-removed_when = "the pause map's image reaches the writer in memory"
-
-[[io]]
 file = "worlds/reskate/src/postcompile/vblend.rs"
 role = "exception"
 reason = "the post-compile step reads the compiled Patch and the installed game's stock material rows"
