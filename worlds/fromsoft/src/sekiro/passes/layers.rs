@@ -1,7 +1,7 @@
 //! Area-weighted static layer grouping over an area whose geometry `lower-fromsoft-geometry` lowered: each layered
 //! part keeps its raw per-vertex shader inputs (`fromsoft.layer_inputs`); grouping and baking are the bake pass's.
-use super::source::{LayerInputs, PrototypeSource, ShaderPrograms, TexturePayloads};
 use crate::layer_bake::grouping::{self, Features};
+use crate::sekiro::source::{LayerInputs, PrototypeSource, ShaderPrograms, TexturePayloads};
 use crate::{Result, invalid, materials::Material};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
 use primase_meshops::vector::Vec3;

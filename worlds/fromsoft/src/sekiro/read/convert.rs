@@ -1,7 +1,7 @@
 //! A Sekiro area through the convert loop ([`primase_core::convert`]): [`AreaReader`] reads an area of an install
-//! with [`super::read_area`] and gives each part the closure of its roots in that world.
+//! with [`super::area::read_area`] and gives each part the closure of its roots in that world.
 //!
-//! [`super::read_area`] decodes every model, texture and collision file it keeps while it reads (the archive's files
+//! [`super::area::read_area`] decodes every model, texture and collision file it keeps while it reads (the archive's files
 //! are compressed whole), so the read world already holds the payloads: a part's load is its roots' closure, nothing
 //! read again. A prototype's box before any pass is its stored model's posed box in the world frame, the extent the
 //! read's region rule uses.
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use primase_core::convert::{Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use super::{Options, read_area};
+use super::area::{Options, read_area};
 use crate::dcx::Decoder;
 use crate::rigid::SourceModel;
 
@@ -88,7 +88,7 @@ impl Reader for AreaReader<'_> {
     }
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         let model = &world.get::<SourceModel>(prototype)?.0;
-        super::world_bounds(model)
+        super::area::world_bounds(model)
             .ok()
             .flatten()
             .map(|b| b.map(|c| c.map(f64::from)))

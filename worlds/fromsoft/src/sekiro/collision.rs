@@ -219,7 +219,7 @@ pub fn read(
                 triangles: raw
                     .triangles
                     .into_iter()
-                    .map(|t| t.map(|v| super::point(&transform, FRAME.point(v))))
+                    .map(|t| t.map(|v| crate::pose::point(&transform, FRAME.point(v))))
                     .collect(),
                 materials: raw.materials,
                 invalid_material_keys: raw.invalid_material_keys,
@@ -450,7 +450,7 @@ impl Pass for LowerFromSoftCollision {
                 None => (&mut solid, &mut water),
                 Some(c) => {
                     let entry = conditioned
-                        .entry(super::states::condition_key(&c))
+                        .entry(super::passes::condition_key(&c))
                         .or_insert_with(|| (c, Collision::default(), Collision::default()));
                     (&mut entry.1, &mut entry.2)
                 }

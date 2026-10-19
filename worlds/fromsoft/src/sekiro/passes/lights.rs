@@ -2,7 +2,7 @@
 //! function, the unit of its powers and its cone's falloff have not been established against the game's lighting
 //! shader, so each interpretation is a named, counted assumption and the power's calibration is the program's.
 use super::settings::{Factor, Fraction, Metres};
-use super::source::{LightKind, LightSource};
+use crate::sekiro::source::{LightKind, LightSource};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Light, Transform, World};
 

@@ -4,12 +4,19 @@
 //! default; a choice with no faithful reading (which model to lower, a calibration, a quality cap) is required.
 //! Each pass is made by a constructor taking its required choices and setters for the rest, from its options
 //! through the same calls.
-use super::blockers::{self, BlockerCards};
-use super::settings::{PixelCap, Seconds};
+pub(super) mod bake_assembly;
+pub mod blockers;
+pub mod layers;
+pub mod lights;
+pub mod normals;
+pub mod pbr;
+pub(super) mod reflectance;
+pub mod settings;
 use super::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSource};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, LayeredMaterial, Material};
 use crate::rigid::{ApplyRigidSkinning, RigidModel, SourceModel};
+use blockers::BlockerCards;
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::world::Resource;
@@ -17,6 +24,7 @@ use primase_core::{
     Component, DrawOrder, Entity, Instance, LodForm, Lods, MaterialUsage, Mesh, Primitive, Semantic, Source,
     Stream, Topology, Transform, World,
 };
+use settings::{PixelCap, Seconds};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A two-way choice of `lower-fromsoft-geometry` with its option words.
@@ -700,7 +708,7 @@ impl Pass for BakeFromSoftLayers {
         let none = BTreeMap::new();
         let result = world.resource_scope::<ShaderPrograms, _>(|world, shaders| {
             world.resource_scope::<TexturePayloads, _>(|world, payloads| {
-                let bake = super::layers::AreaBake::with_sources(
+                let bake = layers::AreaBake::with_sources(
                     world,
                     shaders.map_or(&none, |s| &s.0),
                     payloads.map_or(&none, |p| &p.0),
@@ -709,7 +717,7 @@ impl Pass for BakeFromSoftLayers {
                     .iter::<PrototypeSource>()
                     .map(|(e, s)| (s.id.clone(), e))
                     .collect();
-                super::bake_assembly::assemble(
+                bake_assembly::assemble(
                     &bake,
                     &prototypes,
                     self.max_size.get(),
@@ -751,10 +759,10 @@ impl Pass for BakeFromSoftLayers {
 /// source normal convention (`normalize-normals` converts), gloss to roughness, traced metallic constants and maps
 /// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted),
 /// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings. What a
-/// lowered material's source class states about its surfaces is set with it ([`super::pbr::class_usage`]): water
+/// lowered material's source class states about its surfaces is set with it ([`pbr::class_usage`]): water
 /// and leaves as their `core.material_usage`, decals as their `core.draw_order`. A material is two-sided exactly where
 /// the face sets drawing it do not cull back faces (`fromsoft.face_cull`), split when they differ
-/// ([`super::pbr::apply_face_cull`]).
+/// ([`pbr::apply_face_cull`]).
 ///
 /// A layered material no pass baked needs the program's choice: `layers=preserve` leaves it as source data
 /// (unlowered, its layer inputs kept, counted); `layers=preview` lowers it from its main-layer preview, a counted
@@ -762,15 +770,15 @@ impl Pass for BakeFromSoftLayers {
 /// is an error. Materials of a skipped source class, and source materials no primitive draws, are not lowered, counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LowerFromSoftMaterials {
-    layers: Option<super::pbr::Layers>,
+    layers: Option<pbr::Layers>,
 }
 
 impl LowerFromSoftMaterials {
     /// `layers`: what becomes of a layered material no pass baked; `None`: such a material is an error.
-    pub fn new(layers: Option<super::pbr::Layers>) -> Self {
+    pub fn new(layers: Option<pbr::Layers>) -> Self {
         LowerFromSoftMaterials { layers }
     }
-    pub fn layers(&self) -> Option<super::pbr::Layers> {
+    pub fn layers(&self) -> Option<pbr::Layers> {
         self.layers
     }
 
@@ -779,8 +787,8 @@ impl LowerFromSoftMaterials {
         let mut layers = None;
         for (k, v) in o {
             layers = match (k.as_str(), v.as_str()) {
-                ("layers", "preserve") => Some(super::pbr::Layers::Preserve),
-                ("layers", "preview") => Some(super::pbr::Layers::Preview),
+                ("layers", "preserve") => Some(pbr::Layers::Preserve),
+                ("layers", "preview") => Some(pbr::Layers::Preview),
                 ("layers", v) => return Err(format!("layers={v} is not preserve or preview")),
                 _ => return Err(format!("unknown option {k}")),
             };
@@ -799,8 +807,8 @@ impl Pass for LowerFromSoftMaterials {
             Some(l) => Options::from([(
                 "layers".to_owned(),
                 match l {
-                    super::pbr::Layers::Preserve => "preserve",
-                    super::pbr::Layers::Preview => "preview",
+                    pbr::Layers::Preserve => "preserve",
+                    pbr::Layers::Preview => "preview",
                 }
                 .to_owned(),
             )]),
@@ -835,7 +843,7 @@ impl Pass for LowerFromSoftMaterials {
         use super::source::TexturePayloads;
         // lent read-only (a world without the reader's payloads has no texture file to decode): borrowed, not written
         let lowered = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
-            super::pbr::lower_drawn(world, payloads.map_or(&BTreeMap::new(), |p| &p.0), self.layers)
+            pbr::lower_drawn(world, payloads.map_or(&BTreeMap::new(), |p| &p.0), self.layers)
         });
         let (lowered, previewed) = lowered.map_err(|e| e.to_string())?;
         // the inputs of the layers a preview stands for: not vertex colours, so they go with the layers; the inputs of
@@ -850,7 +858,7 @@ impl Pass for LowerFromSoftMaterials {
             );
         }
         log.absorb(lowered);
-        super::pbr::apply_face_cull(world, log).map_err(|e| e.to_string())
+        pbr::apply_face_cull(world, log).map_err(|e| e.to_string())
     }
 }
 
@@ -925,6 +933,19 @@ impl Pass for DropFromSoftTextureTransforms {
     }
 }
 
+/// A condition's stable text, for grouping soups by condition.
+pub(crate) fn condition_key(c: &primase_core::state::Condition) -> String {
+    c.0.iter()
+        .map(|cl| {
+            cl.0.iter()
+                .map(|l| format!("{:?}:{:x}", l.axis, l.values))
+                .collect::<Vec<_>>()
+                .join("&")
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 /// `pass`, which takes no options: an option is refused.
 fn without_options(options: &Options, pass: impl Pass + 'static) -> Result<Box<dyn Pass>, String> {
     if let Some(k) = options.keys().next() {
@@ -978,7 +999,7 @@ pub fn register(registry: &mut PassRegistry) {
     });
     registry.register_requiring(
         "lower-fromsoft-lights",
-        |o| Ok(Box::new(super::lights::LowerFromSoftLights::from_options(o)?)),
+        |o| Ok(Box::new(lights::LowerFromSoftLights::from_options(o)?)),
         &[("candela-per-power", "1"), ("spot-blend", "0.15")],
     );
 }
@@ -1224,7 +1245,7 @@ mod tests {
             },
         );
         let mut log = PassLog::default();
-        LowerFromSoftMaterials::new(Some(super::super::pbr::Layers::Preview))
+        LowerFromSoftMaterials::new(Some(super::pbr::Layers::Preview))
             .run(&mut world, &mut log)
             .unwrap();
         assert_eq!(
@@ -1308,7 +1329,7 @@ mod tests {
             world.get::<DrawOrder>(decal),
             Some(&DrawOrder::conventional(
                 DrawLayer::Decal,
-                super::super::pbr::DECAL_QUEUE
+                super::pbr::DECAL_QUEUE
             ))
         );
         assert!(!world.get::<DrawOrder>(decal).unwrap().depth_write);

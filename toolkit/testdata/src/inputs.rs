@@ -435,7 +435,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_FROMSOFT_REFLECTANCE_ORACLE",
         kind: Kind::Input,
         gate: true,
-        about: r#"a JSON file naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), whose traced reflectance the static bake must reproduce at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/bake_assembly.rs`"#,
+        about: r#"a JSON file naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), whose traced reflectance the static bake must reproduce at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/passes/bake_assembly.rs`"#,
         status: Status::Live,
         source: r#"the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them"#,
     },

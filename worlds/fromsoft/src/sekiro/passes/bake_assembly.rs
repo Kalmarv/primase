@@ -199,7 +199,7 @@ pub(super) fn assemble(
                 .ok_or_else(|| invalid("area bake", source.part, "missing source provenance"))?
                 .identity()?;
             let cull = *world
-                .get::<super::source::FaceCull>(entity)
+                .get::<crate::sekiro::source::FaceCull>(entity)
                 .and_then(|c| c.primitives.get(source.part))
                 .ok_or_else(|| {
                     invalid(
@@ -209,9 +209,7 @@ pub(super) fn assemble(
                     )
                 })?;
             // the tiling the geometry pass multiplied into these coordinates, if it did
-            let scale = world
-                .get::<super::passes::UvTiling>(original)
-                .map_or([1.; 2], |t| t.0);
+            let scale = world.get::<super::UvTiling>(original).map_or([1.; 2], |t| t.0);
             replaced_materials.insert(original);
             // Only instantiate levels used by this source part. Equal bake inputs
             // share textures, never the full source material/GX identity: a variant is one source material's (its

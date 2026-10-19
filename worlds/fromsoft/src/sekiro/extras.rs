@@ -37,7 +37,7 @@ fn compose(parent: &Transform, child: &Transform) -> Transform {
             direction(child.cols[0]),
             direction(child.cols[1]),
             direction(child.cols[2]),
-            super::point(parent, child.cols[3]),
+            crate::pose::point(parent, child.cols[3]),
         ],
     }
 }
@@ -147,8 +147,8 @@ pub fn assemble(
                         hang_segments.push(HangSegment {
                             file: name.clone(),
                             points: [
-                                super::point(&map, reflect(edge.points[0])),
-                                super::point(&map, reflect(edge.points[1])),
+                                crate::pose::point(&map, reflect(edge.points[0])),
+                                crate::pose::point(&map, reflect(edge.points[1])),
                             ],
                         });
                     }

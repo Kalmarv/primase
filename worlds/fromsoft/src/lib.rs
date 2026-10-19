@@ -1,22 +1,23 @@
 //! Read-only Sekiro BHD5/BDT archives, DCX envelopes and BND4 binders.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-pub mod archive;
 pub mod bhd;
-pub mod binder;
 mod bytes;
 pub mod collision;
-pub mod dcx;
 pub mod emevd;
 pub mod flver;
 mod keys;
-pub mod layer_bake;
 pub mod materials;
 pub mod msb;
 pub mod mtd;
+mod passes;
+mod pose;
+mod read;
 pub mod sekiro;
 pub use archive::{Archive, NameDictionary};
 pub use binder::{Binder, BinderFile};
+pub use passes::layer_bake;
+pub use read::{archive, binder, dcx};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{format} at {offset:#x}: {detail}")]

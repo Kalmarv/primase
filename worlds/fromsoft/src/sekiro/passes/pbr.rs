@@ -56,7 +56,7 @@ pub fn class_usage(class: &str) -> (Option<MaterialUsage>, Option<DrawOrder>) {
 /// the primitives that do not cull draw a copy named `<name>_two_sided`, two-sided, counted. A mesh drawing a lowered
 /// material without `fromsoft.face_cull` is an error: sidedness is the source's, never a default.
 pub fn apply_face_cull(world: &mut World, log: &mut PassLog) -> Result<()> {
-    use super::source::FaceCull;
+    use crate::sekiro::source::FaceCull;
     // per lowered material, the (mesh, primitive) drawing it, by whether it culls
     let mut uses = BTreeMap::<Entity, [Vec<(Entity, usize)>; 2]>::new();
     for (e, mesh) in world.iter::<primase_core::Mesh>() {
@@ -426,7 +426,7 @@ fn lower_materials(
             previews.insert(e);
         }
         let baked = m.layered.is_some() && !previewed;
-        let applied = world.get::<super::passes::UvTiling>(e).map_or([1.; 2], |t| t.0);
+        let applied = world.get::<super::UvTiling>(e).map_or([1.; 2], |t| t.0);
         if m.normal.is_some() {
             match super::normals::consumer_basis(&m.shader) {
                 Ok(true) => {}

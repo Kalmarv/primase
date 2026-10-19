@@ -213,16 +213,3 @@ impl States {
         Some(Condition(out))
     }
 }
-
-/// A condition's stable text, for grouping soups by condition.
-pub(crate) fn condition_key(c: &Condition) -> String {
-    c.0.iter()
-        .map(|cl| {
-            cl.0.iter()
-                .map(|l| format!("{:?}:{:x}", l.axis, l.values))
-                .collect::<Vec<_>>()
-                .join("&")
-        })
-        .collect::<Vec<_>>()
-        .join("|")
-}
