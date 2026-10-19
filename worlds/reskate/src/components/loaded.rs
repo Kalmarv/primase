@@ -19,9 +19,10 @@ pub struct LoadedFile {
 
 impl Component for LoadedFile {
     const NAME: &'static str = "skate.loaded_file";
-    /// The size, not the bytes.
+    /// None: the loader's copy of a file's bytes is bulk data kept for writing the file through, not content, so it
+    /// has no view (a writer that shows components, as glTF extras, leaves it out).
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
-        Ok(Some(serde_json::json!({ "bytes": self.bytes.len() })))
+        Ok(None)
     }
 }
 
