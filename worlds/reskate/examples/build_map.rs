@@ -1,8 +1,9 @@
 //! A skate-scene folder -> a ReSkate Studio normalized map folder: read, its meshes and textures loaded, the chosen
 //! level of detail and placements, the scene's region clipped and its floor lifted when it states them
-//! (`clip-reskate-region`, `prepare-reskate-floor`), a spawn when the scene has none, the textures capped
-//! (`cap-textures`, box-filtered as the map writer used to), tints multiplied in (`prepare-reskate-textures`), the
-//! scene's texture budget when it states one (`budget-reskate-textures`), then the writer.
+//! (`clip-reskate-region`, `prepare-reskate-floor`), a spawn when the scene has none, the markers snapped
+//! (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
+//! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
+//! (`budget-reskate-textures`), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
 //! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--piece-log] [--name N] [--lod default|highest|N]
@@ -96,6 +97,8 @@ fn main() -> Result<(), BoxError> {
     // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
     // scene's region (else of its placements), where the writer used to place it
     passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));
+    // the markers snapped against the map's collision, for the writer's settings (this example's are its defaults)
+    passes.push(Box::new(primase_reskate::prepare::SnapReskateMarkers::new()));
     // the writer's old cap: stored levels, else the 2 x 2 box down to the cap, normal maps alike
     let mut cap = primase_image::CapTextures::new(tex_cap)?.with_mode(primase_image::CapMode {
         normals: primase_image::NormalDownscale::Box,

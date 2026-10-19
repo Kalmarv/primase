@@ -170,6 +170,63 @@ const PLACE_STEP: f32 = 4.0;
 const PLACE_CELLS: i32 = 30;
 const PLACE_REACH: f32 = PLACE_STEP * PLACE_CELLS as f32;
 
+/// Hull soups as the snap's extra triangles: surface 0, all ground or none.
+fn hull_tiles(hulls: &[(Vec<f32>, Vec<u32>, bool)]) -> Vec<TileData> {
+    hulls
+        .iter()
+        .map(|(pos, idx, ground)| TileData {
+            v: pos.clone(),
+            t: idx.clone(),
+            s: vec![0; idx.len() / 3],
+            rock: vec![false; idx.len() / 3],
+            ground: Some(if *ground { idx.len() / 3 } else { 0 }),
+            mask: None,
+        })
+        .collect()
+}
+
+/// The marker snaps of the map writer, without writing anything: each query's placed position and ground height
+/// (both as the query's when its snap finds nothing). The collision is what the writer files: `world` the world
+/// soups' triangles per 256 m cell, `props` the placed props' per cell, `hulls` the hull soups, `water` the water
+/// surfaces; only the cells a query reaches are assembled, cleaned and merged as the writer does it, with the
+/// map's `limit` and `offset` (writer frame).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn snap_queries(
+    surf: &SurfaceTable,
+    limit: f32,
+    offset: [f32; 2],
+    world: &dyn CollisionWorld,
+    props: &BTreeMap<(i32, i32), PropSoup>,
+    hulls: &[(Vec<f32>, Vec<u32>, bool)],
+    water: &[WaterQuad],
+    queries: &[Query],
+) -> (Vec<(f32, f32)>, Vec<f32>) {
+    let mut c = Collision::new(surf, offset[0], offset[1], 0.0, limit);
+    let mut res = CollisionResult::default();
+    let mut wanted: BTreeSet<(i32, i32)> = BTreeSet::new();
+    for q in queries.iter().filter(|q| q.snap.mode != SnapMode::None) {
+        let (ax0, ay0, ax1, ay1) = place_tiles(q.x, q.y);
+        for ay in ay0..=ay1 {
+            for ax in ax0..=ax1 {
+                wanted.insert((ax, ay));
+            }
+        }
+    }
+    for (tx, ty) in wanted {
+        let mut td = c.clean(world.cell(tx, ty), &mut res);
+        let n_static = td.ground.unwrap_or(td.s.len());
+        c.merge_props(&mut td, props.get(&(tx, ty)), &mut res);
+        if !td.t.is_empty() {
+            c.kept.insert((tx, ty), (td, n_static));
+        }
+    }
+    c.extra = hull_tiles(hulls);
+    let mut placed: Vec<(f32, f32)> = queries.iter().map(|q| (q.x, q.y)).collect();
+    let mut ground = vec![f32::NAN; queries.len()];
+    c.snap(queries, water, &mut placed, &mut ground);
+    (placed, ground)
+}
+
 fn place_tiles(qx: f32, qy: f32) -> (i32, i32, i32, i32) {
     let span = PLACE_REACH + SRC_TILE;
     (
@@ -214,17 +271,15 @@ impl<'a> Collision<'a> {
         snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
     ) -> Result<CollisionResult> {
         let mut res = self.cells(source, region, files, queries, props, "c", false)?;
-        self.extra = snap_extra
-            .iter()
-            .map(|(pos, idx, ground)| TileData {
-                v: pos.clone(),
-                t: idx.clone(),
-                s: vec![0; idx.len() / 3],
-                rock: vec![false; idx.len() / 3],
-                ground: Some(if *ground { idx.len() / 3 } else { 0 }),
-                mask: None,
-            })
-            .collect();
+        self.extra = hull_tiles(snap_extra);
+        self.snap(queries, water, &mut res.placed, &mut res.ground);
+        self.kept.clear();
+        Ok(res)
+    }
+
+    /// Each query's snap against the kept cells and the extra (hull) triangles: its placed position and ground
+    /// height, both left as they are when the snap finds nothing.
+    fn snap(&self, queries: &[Query], water: &[WaterQuad], placed: &mut [(f32, f32)], ground: &mut [f32]) {
         let kinds = self.street_kinds();
         for (qi, q) in queries.iter().enumerate() {
             if q.snap.mode == SnapMode::None {
@@ -234,8 +289,8 @@ impl<'a> Collision<'a> {
             match q.snap.mode {
                 SnapMode::Street => {
                     if let Some((px, py, pz)) = place(&near, n_static, water, &kinds, q.x, q.y) {
-                        res.ground[qi] = pz;
-                        res.placed[qi] = (px, py);
+                        ground[qi] = pz;
+                        placed[qi] = (px, py);
                     }
                 }
                 SnapMode::Ground => {
@@ -261,20 +316,18 @@ impl<'a> Collision<'a> {
                         },
                     );
                     if !gz.is_nan() {
-                        res.ground[qi] = gz;
+                        ground[qi] = gz;
                     }
                 }
                 SnapMode::Open => {
                     if let Some((ox, oy, oz)) = open(&near, n_static, q) {
-                        res.ground[qi] = oz;
-                        res.placed[qi] = (ox, oy);
+                        ground[qi] = oz;
+                        placed[qi] = (ox, oy);
                     }
                 }
                 SnapMode::None => {}
             }
         }
-        self.kept.clear();
-        Ok(res)
     }
 
     /// Water-mode collision: cells like `build`, pieces in collision mode water.
@@ -377,7 +430,6 @@ impl<'a> Collision<'a> {
             ..CollisionResult::default()
         };
         self.kept.clear();
-        let (limit, off_x, off_y) = (self.limit, self.off_x, self.off_y);
         let tx0 = (region[0] / f64::from(SRC_TILE)).floor() as i32;
         let tx1 = ((region[2] - 1e-6) / f64::from(SRC_TILE)).floor() as i32;
         let ty0 = (region[1] / f64::from(SRC_TILE)).floor() as i32;
@@ -395,7 +447,7 @@ impl<'a> Collision<'a> {
             jobs.insert((ty, tx));
         }
         let mut wanted: BTreeSet<(i32, i32)> = BTreeSet::new();
-        for q in queries {
+        for q in queries.iter().filter(|q| q.snap.mode != SnapMode::None) {
             let (ax0, ay0, ax1, ay1) = place_tiles(q.x, q.y);
             for ay in ay0..=ay1 {
                 for ax in ax0..=ax1 {
@@ -409,54 +461,7 @@ impl<'a> Collision<'a> {
                 res.water_triangles += (td.t.len() / 3) as i64;
             }
             let n_static = td.ground.unwrap_or(td.s.len());
-            if let Some(soup) = props.get(&(tx, ty))
-                && !soup.surf.is_empty()
-            {
-                let n_all = soup.surf.len();
-                let mut kept_tris = Vec::with_capacity(n_all);
-                for i in 0..n_all {
-                    let p = i * 9;
-                    let cx = (soup.pos[p] + soup.pos[p + 3] + soup.pos[p + 6]) / 3.0;
-                    let cy = (soup.pos[p + 1] + soup.pos[p + 4] + soup.pos[p + 7]) / 3.0;
-                    if (cx + off_x).abs() > limit - 20.0 || (cy + off_y).abs() > limit - 20.0 {
-                        continue;
-                    }
-                    kept_tris.push(i);
-                }
-                let nt = kept_tris.len();
-                if nt > 0 {
-                    let v0 = (td.v.len() / 3) as u32;
-                    let n0 = td.s.len();
-                    let ground0 = td.ground.unwrap_or(n0);
-                    let mut mask = None;
-                    let mut rock = td.rock.clone();
-                    if soup.ground.is_some() {
-                        let mut m = vec![false; n0 + nt];
-                        let mut r = vec![false; n0 + nt];
-                        for k in 0..n0 {
-                            m[k] = k < ground0;
-                            r[k] = k < td.rock.len() && td.rock[k];
-                        }
-                        mask = Some(m);
-                        rock = r;
-                    }
-                    for (k, &ti) in kept_tris.iter().enumerate() {
-                        td.v.extend_from_slice(&soup.pos[ti * 9..ti * 9 + 9]);
-                        let b = v0 + (k * 3) as u32;
-                        td.t.extend_from_slice(&[b, b + 1, b + 2]);
-                        let raw = soup.surf[ti];
-                        td.s.push(raw & 0x7F);
-                        if let Some(m) = &mut mask {
-                            m[n0 + k] = soup.ground.as_ref().expect("ground")[ti];
-                            rock[n0 + k] = raw & 0x80 != 0;
-                        }
-                    }
-                    td.rock = rock;
-                    td.mask = mask;
-                    td.ground = Some(ground0);
-                    res.prop_triangles += nt as i64;
-                }
-            }
+            self.merge_props(&mut td, props.get(&(tx, ty)), &mut res);
             if td.t.is_empty() {
                 continue;
             }
@@ -477,6 +482,60 @@ impl<'a> Collision<'a> {
             }
         }
         Ok(res)
+    }
+
+    /// The placed props' triangles of a cell appended to its cleaned world triangles `td` (those past the map limit
+    /// left out); a prop triangle is ground when its prototype's collision is.
+    fn merge_props(&self, td: &mut TileData, soup: Option<&PropSoup>, res: &mut CollisionResult) {
+        let (limit, off_x, off_y) = (self.limit, self.off_x, self.off_y);
+        if let Some(soup) = soup
+            && !soup.surf.is_empty()
+        {
+            let n_all = soup.surf.len();
+            let mut kept_tris = Vec::with_capacity(n_all);
+            for i in 0..n_all {
+                let p = i * 9;
+                let cx = (soup.pos[p] + soup.pos[p + 3] + soup.pos[p + 6]) / 3.0;
+                let cy = (soup.pos[p + 1] + soup.pos[p + 4] + soup.pos[p + 7]) / 3.0;
+                if (cx + off_x).abs() > limit - 20.0 || (cy + off_y).abs() > limit - 20.0 {
+                    continue;
+                }
+                kept_tris.push(i);
+            }
+            let nt = kept_tris.len();
+            if nt > 0 {
+                let v0 = (td.v.len() / 3) as u32;
+                let n0 = td.s.len();
+                let ground0 = td.ground.unwrap_or(n0);
+                let mut mask = None;
+                let mut rock = td.rock.clone();
+                if soup.ground.is_some() {
+                    let mut m = vec![false; n0 + nt];
+                    let mut r = vec![false; n0 + nt];
+                    for k in 0..n0 {
+                        m[k] = k < ground0;
+                        r[k] = k < td.rock.len() && td.rock[k];
+                    }
+                    mask = Some(m);
+                    rock = r;
+                }
+                for (k, &ti) in kept_tris.iter().enumerate() {
+                    td.v.extend_from_slice(&soup.pos[ti * 9..ti * 9 + 9]);
+                    let b = v0 + (k * 3) as u32;
+                    td.t.extend_from_slice(&[b, b + 1, b + 2]);
+                    let raw = soup.surf[ti];
+                    td.s.push(raw & 0x7F);
+                    if let Some(m) = &mut mask {
+                        m[n0 + k] = soup.ground.as_ref().expect("ground")[ti];
+                        rock[n0 + k] = raw & 0x80 != 0;
+                    }
+                }
+                td.rock = rock;
+                td.mask = mask;
+                td.ground = Some(ground0);
+                res.prop_triangles += nt as i64;
+            }
+        }
     }
 
     /// The world triangles of a cell without degenerate ones and those beyond the map edge, with facing counts.
@@ -1157,5 +1216,183 @@ mod tests {
         // the same surface and both static: the smaller by corner coordinates (b, whose corners start at -12)
         let (_, _, tri) = grid(&tile([2, 2], 2), 2, 0.0, 0.0);
         assert_eq!(tri[centre], 3);
+    }
+
+    #[derive(Debug)]
+    struct Cells(BTreeMap<(i32, i32), TileData>);
+    impl CollisionWorld for Cells {
+        fn cells(&self) -> Vec<(i32, i32)> {
+            self.0.keys().copied().collect()
+        }
+        fn cell(&self, tx: i32, ty: i32) -> Option<TileData> {
+            self.0.get(&(tx, ty)).cloned()
+        }
+    }
+
+    /// A rolling 16 m grid over a 3 x 2 block of cells, a 0.4 m kerb, mixed surfaces and a roof above the
+    /// ground (not ground) in every cell; one triangle past the limit.
+    fn terrain() -> Cells {
+        let h = |x: f32, y: f32| {
+            5.0 * (x / 40.0).sin()
+                + 3.0 * (y / 30.0).cos()
+                + if (100.0..140.0).contains(&x) { 0.4 } else { 0.0 }
+        };
+        let mut cells = BTreeMap::new();
+        for ty in -1..1 {
+            for tx in -1..2 {
+                let (x0, y0) = (tx as f32 * SRC_TILE, ty as f32 * SRC_TILE);
+                let mut td = TileData::default();
+                for j in 0..=16 {
+                    for i in 0..=16 {
+                        let (x, y) = (x0 + i as f32 * 16.0, y0 + j as f32 * 16.0);
+                        td.v.extend_from_slice(&[x, y, h(x, y)]);
+                    }
+                }
+                for j in 0..16u32 {
+                    for i in 0..16u32 {
+                        let a = j * 17 + i;
+                        td.t.extend_from_slice(&[a, a + 1, a + 18, a, a + 18, a + 17]);
+                        let s = ((i + j) % 3) as u8;
+                        td.s.extend_from_slice(&[s, s]);
+                        td.rock.extend_from_slice(&[i == 3, false]);
+                    }
+                }
+                let n = td.s.len();
+                // a roof over part of the cell
+                let b = (td.v.len() / 3) as u32;
+                td.v.extend_from_slice(&[
+                    x0 + 40.0,
+                    y0 + 40.0,
+                    12.0,
+                    x0 + 90.0,
+                    y0 + 40.0,
+                    12.0,
+                    x0 + 40.0,
+                    y0 + 90.0,
+                    12.0,
+                ]);
+                td.t.extend_from_slice(&[b, b + 1, b + 2]);
+                td.s.push(1);
+                td.ground = Some(n);
+                cells.insert((tx, ty), td);
+            }
+        }
+        Cells(cells)
+    }
+
+    /// The pass's snapping (`snap_queries`: only the cells the markers reach) gives every street, ground and open
+    /// marker the writer's own answer (`Collision::build`: every cell), bit for bit, with props, hulls and water.
+    #[test]
+    fn the_snap_without_the_writer_is_the_writers() {
+        let surf = SurfaceTable::default();
+        let world = terrain();
+        let (mut props, mut order) = (BTreeMap::new(), Vec::new());
+        // a 2 m box prop (ground) in cell (0, -1) and a sloped plate (not ground) in cell (-1, 0)
+        let boxv = [0.0, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0, 6.0, 0.0, 6.0, 6.0, 0.0];
+        let (one, x, y, z) = (
+            vec![0u32, 1, 2, 1, 3, 2],
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        add_prop(
+            &mut props,
+            &mut order,
+            &boxv,
+            &one,
+            &[0, 0],
+            true,
+            Vec3::new(30.0, -60.0, 9.0),
+            x,
+            y,
+            z,
+            None,
+        );
+        add_prop(
+            &mut props,
+            &mut order,
+            &boxv,
+            &one,
+            &[2, 2],
+            false,
+            Vec3::new(-80.0, 20.0, 4.0),
+            x,
+            Vec3::new(0.0, 1.0, 0.3),
+            z,
+            None,
+        );
+        let hull = (
+            vec![150.0, 10.0, 6.0, 170.0, 10.0, 6.0, 150.0, 30.0, 8.0],
+            vec![0u32, 1, 2],
+            true,
+        );
+        let water = vec![WaterQuad {
+            x0: -200.0,
+            y0: -200.0,
+            x1: -150.0,
+            y1: -150.0,
+            z: 20.0,
+            corners: vec![
+                (-200.0, -200.0),
+                (-150.0, -200.0),
+                (-150.0, -150.0),
+                (-200.0, -150.0),
+            ],
+        }];
+        let mut queries = Vec::new();
+        for (k, mode) in [SnapMode::Street, SnapMode::Ground, SnapMode::Open, SnapMode::None]
+            .into_iter()
+            .enumerate()
+        {
+            for i in 0..12 {
+                let (qx, qy) = (
+                    -240.0 + 41.3 * i as f32 + k as f32 * 3.1,
+                    -230.0 + 37.7 * ((i * 5 + k) % 12) as f32,
+                );
+                let mut snap = SnapSpec::of(mode);
+                snap.from_all = i % 4 == 1;
+                queries.push(Query {
+                    x: qx,
+                    y: qy,
+                    z: if i % 3 == 0 { f32::NAN } else { 2.0 },
+                    snap,
+                });
+            }
+        }
+        let (limit, offset) = (500.0, [7.0, -3.0]);
+        let mut writer = Collision::new(&surf, offset[0], offset[1], 0.0, limit);
+        let res = writer
+            .build(
+                &world,
+                [-256.0, -256.0, 512.0, 256.0],
+                &mut Files::new(),
+                &queries,
+                &props,
+                &water,
+                std::slice::from_ref(&hull),
+            )
+            .unwrap();
+        let (placed, ground) = snap_queries(
+            &surf,
+            limit,
+            offset,
+            &world,
+            &props,
+            std::slice::from_ref(&hull),
+            &water,
+            &queries,
+        );
+        let bits = |p: &[(f32, f32)], g: &[f32]| -> Vec<(u32, u32, u32)> {
+            p.iter()
+                .zip(g)
+                .map(|(p, g)| (p.0.to_bits(), p.1.to_bits(), g.to_bits()))
+                .collect()
+        };
+        assert_eq!(bits(&placed, &ground), bits(&res.placed, &res.ground));
+        // the test means something: most markers that ask found ground, some moved
+        let found = ground.iter().filter(|g| !g.is_nan()).count();
+        assert!(found >= 30, "{found} of 36 found ground");
+        assert!(placed.iter().zip(&queries).any(|(p, q)| (p.0, p.1) != (q.x, q.y)));
+        assert!(ground[36..].iter().all(|g| g.is_nan()), "snap none: untouched");
     }
 }

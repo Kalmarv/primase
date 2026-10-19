@@ -545,6 +545,25 @@ impl Resource for SkateFloorPlan {
     }
 }
 
+/// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
+/// refuses a map whose own differ. Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateMarkerSnaps {
+    pub limit: f32,
+    pub offset: [f32; 2],
+    pub min_instances: i64,
+    pub min_instance_tris: i64,
+    /// `None`: the scene's.
+    pub max_render_edge: Option<f32>,
+}
+
+impl Resource for SkateMarkerSnaps {
+    const NAME: &'static str = "skate.marker_snaps";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 shown!(
     SkatePartsOff = "skate.parts_off",
     SkateBaseFactor = "skate.base_factor",

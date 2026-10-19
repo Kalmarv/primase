@@ -100,7 +100,7 @@ pub struct BuildReport {
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
-fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
+pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
     s.placements
         .iter()
         .enumerate()
@@ -151,7 +151,7 @@ fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
 }
 
 /// The ground-frame box of the placements and soups.
-fn bounds(s: &Scene, ps: &[Placement]) -> [f64; 4] {
+pub(crate) fn bounds(s: &Scene, ps: &[Placement]) -> [f64; 4] {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     let mut add = |x: f32, y: f32| {
         x0 = x0.min(f64::from(x));
@@ -189,7 +189,7 @@ fn bounds(s: &Scene, ps: &[Placement]) -> [f64; 4] {
 
 /// World soups of one mode filed by triangle centre into 256 m cells (ground soups first in each cell).
 #[derive(Debug)]
-struct SoupWorld {
+pub(crate) struct SoupWorld {
     cells: BTreeMap<(i32, i32), SoupCell>,
 }
 
@@ -203,7 +203,12 @@ struct SoupCell {
 }
 
 impl SoupWorld {
-    fn new(s: &mut Scene, mode: CollisionMode, region: Option<[f64; 4]>, drop_below: f32) -> SoupWorld {
+    pub(crate) fn new(
+        s: &mut Scene,
+        mode: CollisionMode,
+        region: Option<[f64; 4]>,
+        drop_below: f32,
+    ) -> SoupWorld {
         let mut cells: BTreeMap<(i32, i32), SoupCell> = BTreeMap::new();
         for pass in [true, false] {
             for sd in s.soups.iter_mut().filter(|x| x.mode == mode && x.ground == pass) {
@@ -264,7 +269,7 @@ impl CollisionWorld for SoupWorld {
 }
 
 /// The hull soups, each whole.
-fn hulls(s: &mut Scene, region: Option<[f64; 4]>, drop_below: f32) -> Vec<Hull> {
+pub(crate) fn hulls(s: &mut Scene, region: Option<[f64; 4]>, drop_below: f32) -> Vec<Hull> {
     let mut res = Vec::new();
     let mut n = 0;
     for sd in s.soups.iter_mut().filter(|x| x.mode == CollisionMode::Hull) {
@@ -477,6 +482,29 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         warnings: s.warnings.clone(),
         pause_picture: None,
     };
+    // markers snapped before the writer were snapped against this writer's collision: the same settings
+    if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
+        let mine = (
+            o.limit,
+            [a.offset[0] as f32, a.offset[1] as f32],
+            o.min_instances,
+            o.min_instance_tris,
+            o.max_render_edge,
+        );
+        let theirs = (
+            b.limit,
+            b.offset,
+            b.min_instances,
+            b.min_instance_tris,
+            b.max_render_edge.unwrap_or(s.max_render_edge),
+        );
+        if mine != theirs {
+            return Err(Error::Scene(format!(
+                "the markers were snapped for the writer settings (limit, offset, min_instances, min_instance_tris, \
+                 max_render_edge) {theirs:?}, but the writer's are {mine:?}: give snap-reskate-markers the writer's"
+            )));
+        }
+    }
     let sc = world
         .resource::<crate::dialect::SkateScene>()
         .expect("checked by Scene::from_world");

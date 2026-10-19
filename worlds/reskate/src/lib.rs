@@ -39,6 +39,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring("raise-skate", prepare::raise_skate_pass, &[("name", "n")]);
     dialect::lower::register(reg);
     reg.register("place-reskate-spawn", prepare::place_reskate_spawn);
+    reg.register("snap-reskate-markers", prepare::snap_reskate_markers);
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",

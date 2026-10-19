@@ -199,6 +199,130 @@ struct Shape {
     longest: f32,
 }
 
+/// What the writer does with one placement (see [`placement_fate`]).
+pub(crate) enum Fate {
+    /// Its prototype draws nothing and does not collide.
+    EmptyMesh,
+    /// Its basis is degenerate.
+    Degenerate,
+    /// Outside the region and no part reaches into it.
+    FarDropped,
+    /// It collides without drawing: its collision (clipped to the region's apron when outside), or none.
+    CollisionOnly { collision: Option<Option<[f32; 4]>> },
+    /// Drawn: instanced or merged, an outside placement's parts kept within the apron, left out entirely past the
+    /// map's limit when instanced (`clipped`), and its collision (clipped to the apron when its parts are), or none.
+    Drawn {
+        inst: bool,
+        kept_parts: Option<Vec<Option<Vec<u32>>>>,
+        clipped: bool,
+        collision: Option<Option<[f32; 4]>>,
+    },
+}
+
+/// The writer's rules for one placement of mesh `m` (`None`: none built): what it draws and what of its collision
+/// goes into the map. `count` gives a prototype's number of placements (instancing), `edge` is the region with its
+/// apron, `off` the map offset. The writer and `snap-reskate-markers` both take a placement's collision from here.
+pub(crate) fn placement_fate(
+    m: Option<&SrcMesh>,
+    s: &Placement,
+    count: impl Fn(u32) -> i64,
+    o: &PlacementRules,
+    edge: [f32; 4],
+    off: Vec3,
+) -> Fate {
+    // a mesh without triangles draws nothing; one with collision still collides (its collision clipped to the
+    // region's edge when the placement is outside it)
+    let Some(m) = m.filter(|m| m.tris != 0 || m.col_pos.is_some()) else {
+        return Fate::EmptyMesh;
+    };
+    let sh = shape_of(s);
+    if sh.degenerate {
+        return Fate::Degenerate;
+    }
+    if m.tris == 0 {
+        return Fate::CollisionOnly {
+            collision: (!s.no_collision).then_some(s.outside.then_some(edge)),
+        };
+    }
+    let mut inst = count(m.hash) >= o.min_instances && m.tris >= o.min_instance_tris;
+    if inst && (s.no_instance || s.part_off.is_some() || (o.max_render_edge > 0.0 && sh.longest > 1.0001)) {
+        inst = false;
+    }
+    let mut kept_parts: Option<Vec<Option<Vec<u32>>>> = None;
+    if s.outside {
+        let mut reaches = false;
+        let k: Vec<Option<Vec<u32>>> = m
+            .parts
+            .iter()
+            .map(|p| kept(p, s, edge, o.region, &mut reaches))
+            .collect();
+        if !reaches {
+            return Fate::FarDropped;
+        }
+        let half = (m.max - m.min) * 0.5;
+        if inst && half.x.max(half.y.max(half.z)) > 32.0 {
+            inst = false;
+        }
+        if !inst {
+            kept_parts = Some(k);
+        }
+    }
+    let clipped = ((s.pos.x + off.x).abs() + s.radius > o.limit
+        || (s.pos.y + off.y).abs() + s.radius > o.limit)
+        && inst;
+    let collision = (!clipped && !s.no_collision).then(|| kept_parts.as_ref().map(|_| edge));
+    Fate::Drawn {
+        inst,
+        kept_parts,
+        clipped,
+        collision,
+    }
+}
+
+/// Points (writer frame, x y z after each other) placed by `s`, as the writer places a prototype's collision.
+pub(crate) fn placed_points(cp: &[f32], s: &Placement) -> Vec<f32> {
+    let mut w = vec![0f32; cp.len()];
+    for v in (0..w.len().saturating_sub(2)).step_by(3) {
+        let (x, y, z) = (cp[v], cp[v + 1], cp[v + 2]);
+        w[v] = s.pos.x + s.ex.x * x + s.ey.x * y + s.ez.x * z;
+        w[v + 1] = s.pos.y + s.ex.y * x + s.ey.y * y + s.ez.y * z;
+        w[v + 2] = s.pos.z + s.ex.z * x + s.ey.z * y + s.ez.z * z;
+    }
+    w
+}
+
+/// The writer's options [`placement_fate`] reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlacementRules {
+    pub min_instances: i64,
+    pub min_instance_tris: i64,
+    pub max_render_edge: f32,
+    pub limit: f32,
+    pub region: [f64; 4],
+}
+
+impl PlacementRules {
+    pub(crate) fn of(o: &WriterOptions) -> PlacementRules {
+        PlacementRules {
+            min_instances: o.min_instances,
+            min_instance_tris: o.min_instance_tris,
+            max_render_edge: o.max_render_edge,
+            limit: o.limit,
+            region: o.region,
+        }
+    }
+}
+
+/// The region `r` with the writer's apron around it.
+pub(crate) fn apron(r: [f64; 4]) -> [f32; 4] {
+    [
+        r[0] as f32 - APRON,
+        r[1] as f32 - APRON,
+        r[2] as f32 + APRON,
+        r[3] as f32 + APRON,
+    ]
+}
+
 fn shape_of(s: &Placement) -> Shape {
     let (lx, ly, lz) = (s.ex.length(), s.ey.length(), s.ez.length());
     let det = s.ex.cross(s.ey).dot(s.ez);
@@ -933,16 +1057,9 @@ impl MapWriter {
         if m.col_mode == CollisionMode::Hull {
             let name = format!("h_{tx}_{ty}_{hull_no}_{}", m.name);
             *hull_no += 1;
-            let mut w = vec![0f32; cp.len()];
-            for v in (0..w.len().saturating_sub(2)).step_by(3) {
-                let (x, y, z) = (cp[v], cp[v + 1], cp[v + 2]);
-                w[v] = s.pos.x + s.ex.x * x + s.ey.x * y + s.ez.x * z;
-                w[v + 1] = s.pos.y + s.ex.y * x + s.ey.y * y + s.ez.y * z;
-                w[v + 2] = s.pos.z + s.ex.z * x + s.ey.z * y + s.ez.z * z;
-            }
             self.prop_hulls.push(Hull {
                 name,
-                pos: w,
+                pos: placed_points(cp, s),
                 idx: ci.clone(),
                 surface: m.col_surf.first().map_or(0, |b| (b & 0x7F) as usize),
                 ground: m.col_ground,
@@ -1097,12 +1214,8 @@ impl MapWriter {
         let mut meshes: HashMap<u32, SrcMesh> = HashMap::new();
         let mut protos: HashMap<[u8; 16], Proto> = HashMap::new();
         let mut tiles: Vec<TileOut> = Vec::new();
-        let edge = [
-            r[0] as f32 - APRON,
-            r[1] as f32 - APRON,
-            r[2] as f32 + APRON,
-            r[3] as f32 + APRON,
-        ];
+        let edge = apron(r);
+        let rules = PlacementRules::of(&o);
         let mut colours: HashMap<usize, u32> = HashMap::new();
         for (band, band_sels) in per_band.iter().enumerate() {
             if band_sels.is_empty() {
@@ -1158,74 +1271,52 @@ impl MapWriter {
                         .then_with(|| a.part_off.cmp(&b.part_off))
                 });
                 for s in g {
-                    // a mesh without triangles draws nothing; one with collision still collides (its collision
-                    // clipped to the region's edge when the placement is outside it)
-                    let Some(m) = meshes
-                        .get(&s.proto)
-                        .filter(|m| m.tris != 0 || m.col_pos.is_some())
-                    else {
-                        self.r.empty_mesh += 1;
-                        continue;
-                    };
-                    let sh = shape_of(s);
-                    if sh.degenerate {
-                        self.r.degenerate += 1;
-                        continue;
-                    }
-                    if m.tris == 0 {
-                        self.r.collision_only += 1;
-                        if !s.no_collision {
-                            self.add_collision(
-                                m,
-                                s,
-                                (tx, ty),
-                                &mut hull_no,
-                                &mut soups,
-                                &mut water_soups,
-                                &mut soup_order,
-                                s.outside.then_some(edge),
-                            );
+                    let fate = placement_fate(meshes.get(&s.proto), s, |h| arch_count[&h], &rules, edge, off);
+                    let (m, inst, kept_parts, collision) = match fate {
+                        Fate::EmptyMesh => {
+                            self.r.empty_mesh += 1;
+                            continue;
                         }
-                        continue;
-                    }
-                    let mut inst = arch_count[&m.hash] >= o.min_instances && m.tris >= o.min_instance_tris;
-                    if inst
-                        && (s.no_instance
-                            || s.part_off.is_some()
-                            || (o.max_render_edge > 0.0 && sh.longest > 1.0001))
-                    {
-                        inst = false;
-                    }
-                    let mut kept_parts: Option<Vec<Option<Vec<u32>>>> = None;
-                    if s.outside {
-                        let mut reaches = false;
-                        let k: Vec<Option<Vec<u32>>> = m
-                            .parts
-                            .iter()
-                            .map(|p| kept(p, s, edge, r, &mut reaches))
-                            .collect();
-                        if !reaches {
+                        Fate::Degenerate => {
+                            self.r.degenerate += 1;
+                            continue;
+                        }
+                        Fate::FarDropped => {
                             self.r.far_dropped += 1;
                             continue;
                         }
-                        let half = (m.max - m.min) * 0.5;
-                        if inst && half.x.max(half.y.max(half.z)) > 32.0 {
-                            inst = false;
+                        Fate::CollisionOnly { collision } => {
+                            self.r.collision_only += 1;
+                            if let (Some(clip), Some(m)) = (collision, meshes.get(&s.proto)) {
+                                self.add_collision(
+                                    m,
+                                    s,
+                                    (tx, ty),
+                                    &mut hull_no,
+                                    &mut soups,
+                                    &mut water_soups,
+                                    &mut soup_order,
+                                    clip,
+                                );
+                            }
+                            continue;
                         }
-                        if !inst {
-                            kept_parts = Some(k);
+                        Fate::Drawn {
+                            inst,
+                            kept_parts,
+                            clipped,
+                            collision,
+                        } => {
+                            to.entities += 1;
+                            if clipped {
+                                self.r.clipped += 1;
+                                continue;
+                            }
+                            (meshes.get(&s.proto).expect("drawn"), inst, kept_parts, collision)
                         }
-                    }
-                    to.entities += 1;
+                    };
                     let row = if m.has_variants { s.variant } else { 0 };
-                    if ((s.pos.x + off.x).abs() + s.radius > o.limit
-                        || (s.pos.y + off.y).abs() + s.radius > o.limit)
-                        && inst
-                    {
-                        self.r.clipped += 1;
-                        continue;
-                    }
-                    if !s.no_collision {
+                    if let Some(clip) = collision {
                         self.add_collision(
                             m,
                             s,
@@ -1234,7 +1325,7 @@ impl MapWriter {
                             &mut soups,
                             &mut water_soups,
                             &mut soup_order,
-                            kept_parts.as_ref().map(|_| edge),
+                            clip,
                         );
                     }
                     let m = m.clone();
@@ -1977,13 +2068,15 @@ impl MapWriter {
                     .into(),
             ));
         }
+        // the writer snaps nothing (snap-reskate-markers does): a marker still asking for a snap is taken as one whose
+        // snap found nothing
         let queries: Vec<Query> = markers
             .iter()
             .map(|m| Query {
                 x: m.x,
                 y: m.y,
                 z: m.z,
-                snap: m.snap.clone(),
+                snap: crate::scene::SnapSpec::of(SnapMode::None),
             })
             .collect();
         self.pm.sea_tint = !x.water.is_empty();

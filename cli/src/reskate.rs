@@ -4,8 +4,8 @@
 //! (the skate dialect; a spawn comes from `place-spawn` at selection), `lower-layered-reskate` (blends as decal
 //! overlays; the target refuses an unlowered blend), then the texture choices: `cap-textures{max=N}` (the writer
 //! writes textures at the size they come; the old writer's own cap was `cap-textures{max=256,normals=box}`) and
-//! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), and a
-//! budget if wanted (`budget-reskate-textures{max=N}`).
+//! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), a budget
+//! if wanted (`budget-reskate-textures{max=N}`), and `snap-reskate-markers` (the writer snaps no marker).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;

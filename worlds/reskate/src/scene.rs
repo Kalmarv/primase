@@ -835,6 +835,16 @@ impl Scene {
                 "{no_geometry} placements of prototypes without geometry left out"
             ));
         }
+        let unsnapped = markers.iter().filter(|m| m.snap.mode != SnapMode::None).count();
+        if unsnapped > 0 {
+            unsupported.push((
+                "skate.marker snap (snap-reskate-markers resolves it)".to_owned(),
+                unsnapped as u64,
+            ));
+            report_warnings.push(format!(
+                "{unsnapped} markers' snaps not resolved: the writer snaps nothing (snap-reskate-markers)"
+            ));
+        }
         Ok(Scene {
             dir: dir.to_owned(),
             name: sc.name.clone(),
@@ -1160,7 +1170,8 @@ fn scene_label(scene: &Scene, key: &str) -> Option<String> {
     scene.labels.get(key).cloned()
 }
 
-/// Builds a prototype from its GLB (the reference's Meshes.Build).
+/// Builds a prototype from its geometry (the reference's Meshes.Build): [`build_geometry`], then each part's
+/// material.
 pub fn build_mesh(
     scene: &Scene,
     p: &ProtoDef,
@@ -1169,6 +1180,28 @@ pub fn build_mesh(
     tex: &mut TexLib,
     counters: &mut MeshCounters,
 ) -> Result<Option<SrcMesh>> {
+    let Some(mut mesh) = build_geometry(scene, p, counters)? else {
+        return Ok(None);
+    };
+    for (i, part) in mesh.parts.iter_mut().enumerate() {
+        let d = &p.parts[i];
+        if d.variants.is_none() {
+            let mk = d
+                .material
+                .as_deref()
+                .ok_or_else(|| Error::Scene(format!("prototype '{}' part {i}: no material", p.id)))?;
+            let cut = part.cutout && Materializer::cuts(scene, mk).1;
+            part.material = Some(mat.id(scene, mats, tex, mk, cut)?);
+        }
+    }
+    mesh.content = crate::model::content_key(&mesh.parts);
+    Ok(Some(mesh))
+}
+
+/// A prototype's geometry as the writer builds it, without its materials: parts in the writer's frame (decal
+/// triangles over too many UV repeats left out, flat normals made where none are given), triangle count, box and
+/// collision. `snap-reskate-markers` takes it to place collision as the writer does.
+pub fn build_geometry(scene: &Scene, p: &ProtoDef, counters: &mut MeshCounters) -> Result<Option<SrcMesh>> {
     // a prototype that collides without drawing is a mesh without parts
     let prims = match p.prims() {
         Some(prims) => prims,
@@ -1259,20 +1292,11 @@ pub fn build_mesh(
             counters.repeat_masked += 1;
         }
         part.cutout = cutout;
-        if d.variants.is_none() {
-            let mk = d
-                .material
-                .as_deref()
-                .ok_or_else(|| Error::Scene(format!("prototype '{}' part {i}: no material", p.id)))?;
-            let cut = cutout && Materializer::cuts(scene, mk).1;
-            part.material = Some(mat.id(scene, mats, tex, mk, cut)?);
-        }
         mesh.tris += (part.idx.len() / 3) as i64;
         mesh.verts += verts as i64;
         mesh.bytes += (part.pos.len() * 4 * 2 + part.uv.len() * 4 + part.idx.len() * 4) as i64;
         mesh.parts.push(part);
     }
-    mesh.content = crate::model::content_key(&mesh.parts);
     if mesh.tris == 0 {
         mn = Vec3::ZERO;
         mx = Vec3::ZERO;
