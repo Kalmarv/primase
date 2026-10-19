@@ -457,6 +457,9 @@ pub struct SceneNotes {
     pub unprepared_curves: usize,
     /// Markers whose snap is unresolved (written where they stand).
     pub unsnapped: usize,
+    /// Prototypes nothing places whose own collision is left out (in their own frame, not the world's), by entity
+    /// (each in one part).
+    pub unplaced_collision: BTreeSet<primase_core::Entity>,
 }
 
 impl SceneNotes {
@@ -469,6 +472,8 @@ impl SceneNotes {
         self.no_geometry += o.no_geometry;
         self.unprepared_curves += o.unprepared_curves;
         self.unsnapped += o.unsnapped;
+        self.unplaced_collision
+            .extend(o.unplaced_collision.iter().copied());
     }
 
     /// The warnings, the omitted and the approximated, by what, with counts.
@@ -513,6 +518,12 @@ impl SceneNotes {
             ));
             warnings.push(format!(
                 "{no_geometry} placements of prototypes without geometry left out"
+            ));
+        }
+        if !self.unplaced_collision.is_empty() {
+            omitted.push((
+                "collision of a prototype nothing places".to_owned(),
+                self.unplaced_collision.len() as u64,
             ));
         }
         if self.unprepared_curves > 0 {
@@ -906,11 +917,17 @@ impl Scene {
         }
         // collision placed by an entity of its own (a reader's world collision, not raised into a soup): a world
         // soup in scene space through its transform, as the scene writer files it
-        // (a prototype's own collision is placed by its instances, not filed here)
+        // (a prototype's own collision is placed by its instances, not filed here; a prototype nothing places, an entity
+        // with a mesh no instance places, collides nowhere: its collision is in its own frame, not the world's, and is
+        // left out, counted)
         let prototypes: std::collections::BTreeSet<primase_core::Entity> =
             world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         for (e, _) in world.iter::<primase_core::Collision>() {
             if world.has::<SkateCollision>(e) || world.has::<SkatePrototype>(e) || prototypes.contains(&e) {
+                continue;
+            }
+            if world.has::<Mesh>(e) {
+                notes.unplaced_collision.insert(e);
                 continue;
             }
             let mut s = crate::interchange::soup::soup(world, e, Some(sc))
