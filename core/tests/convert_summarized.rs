@@ -12,7 +12,7 @@ use primase_core::convert::{
 };
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Target};
 use primase_core::summary::{Summary, SummaryRegistry};
-use primase_core::{Entity, Instance, Name, Resource, World};
+use primase_core::{Entity, Instance, Name, Resource, Transform, World};
 
 /// The placements a part owns: summed over the parts.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +63,7 @@ impl Reader for ToyReader {
                     variant: 0,
                 },
             );
+            w.insert(p, Transform::IDENTITY);
         }
         Ok((w, Vec::new()))
     }
