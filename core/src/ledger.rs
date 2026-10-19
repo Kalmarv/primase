@@ -28,6 +28,10 @@
 //! namespaces) and changes that keep the counts (a moved vertex, a recoloured texture). It is a check of declarations,
 //! not proof of fidelity.
 //!
+//! - **Collision triangles** ([`Measure::CollisionTriangles`]) are declared and reported, never measured: collision
+//!   soups are outside what it counts, so a declared collision drop is reported as a notice like any other and left
+//!   out of the comparison.
+//!
 //! Adding is never a drop and needs no declaration.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,15 +48,23 @@ pub enum Measure {
     Primitives,
     Triangles,
     Textures,
+    /// Triangles of collision soups (`core.collision`): declared and reported, not measured (see the module).
+    CollisionTriangles,
 }
 
 impl Measure {
-    pub const ALL: [Measure; 4] = [
+    pub const ALL: [Measure; 5] = [
         Measure::Placements,
         Measure::Primitives,
         Measure::Triangles,
         Measure::Textures,
+        Measure::CollisionTriangles,
     ];
+
+    /// Whether the diagnostics count it before and after a pass (every measure but collision triangles).
+    pub const fn measured(self) -> bool {
+        !matches!(self, Measure::CollisionTriangles)
+    }
 }
 
 impl fmt::Display for Measure {
@@ -62,6 +74,7 @@ impl fmt::Display for Measure {
             Measure::Primitives => "primitives",
             Measure::Triangles => "triangles",
             Measure::Textures => "textures",
+            Measure::CollisionTriangles => "collision triangles",
         })
     }
 }
@@ -259,10 +272,12 @@ impl Before {
         ])
     }
 
-    /// Each measure whose count differs from what `log` declared.
+    /// Each measure whose count differs from what `log` declared. Collision triangles are left out: collision soups are
+    /// outside what the diagnostics count, so a declared collision drop can only be reported, not measured.
     pub(crate) fn gaps(&self, w: &World, rebuilds: &RebuildLog, log: &PassLog) -> Vec<Gap> {
         self.dropped(w, rebuilds)
             .into_iter()
+            .filter(|(measure, _)| measure.measured())
             .map(|(measure, dropped)| Gap {
                 measure,
                 dropped,
@@ -414,6 +429,15 @@ mod tests {
             "{r}"
         );
         assert_eq!(left_out(despawn, vec![]), (Measure::Placements, 1, 0));
+    }
+
+    /// A declared collision drop is reported, never compared: the soups are outside what the check counts.
+    #[test]
+    fn collision_drops_are_reported_not_measured() {
+        let nothing = |_: &mut World| {};
+        let r = run(nothing, vec![(Measure::CollisionTriangles, 3)]).unwrap();
+        assert!(r.steps[0].conservation.is_empty());
+        assert_eq!(r.steps[0].log.declared(Measure::CollisionTriangles), 3);
     }
 
     #[test]
