@@ -4,6 +4,7 @@
 pub mod blend_budget;
 pub mod blend_order;
 pub mod budget;
+pub mod collision;
 pub mod floor;
 pub mod grinds;
 pub mod layered;
@@ -26,6 +27,7 @@ pub mod water;
 pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
+pub use collision::{PrepareReskateCollision, prepare_reskate_collision};
 pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use layered_lower::LowerLayeredPbr;

@@ -10,6 +10,7 @@
 //! (`prepare-reskate-pause-map{from=geometry,height=2160,extent=content}`, what the old writer always drew; without it
 //! the map has none) and, last, `prepare-reskate-overlays{step=0.004}` (the writer stacks no decal of its own) and
 //! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own), then
+//! `prepare-reskate-collision{surfaces=coalesce,weld=mm}` (how the collision is written; without it, exactly), then
 //! `summarize-reskate-map` and `plan-reskate-blend-budget{objects=pool}` (how many chain objects, decided before
 //! writing; a map with blend chains and no budget is refused).
 use std::path::{Path, PathBuf};

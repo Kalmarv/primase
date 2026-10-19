@@ -230,7 +230,7 @@ fn the_preparation_passes_run_under_the_pass_manager() {
                    place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content}, \
                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004}, \
-                   prepare-reskate-blend-order{grid=200}, summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
+                   prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},                    summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
     let pipeline = registry.parse(program).unwrap();
     let n = pipeline.passes.len();
     let mut report = RunReport::default();
@@ -241,5 +241,9 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     assert_eq!(report.steps.len(), n);
     // every record the program leaves is one the writer takes
     let prepared = primase_reskate::target().check_prepared(&w);
-    assert!(prepared.unsupported_resources.is_empty(), "{:?}", prepared.unsupported_resources);
+    assert!(
+        prepared.unsupported_resources.is_empty(),
+        "{:?}",
+        prepared.unsupported_resources
+    );
 }

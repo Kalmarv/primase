@@ -100,10 +100,11 @@ fn run_passes(
 /// (`select-lod`). Every other name is reported as not written: the map has no place for it.
 pub fn target() -> primase_core::pass::Target {
     use crate::components::{
-        SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateFloorPlan, SkateForm,
-        SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMarker, SkateMarkerSnaps, SkateMaterial,
-        SkateOverlayStack, SkateParts, SkatePartsOff, SkatePlacement, SkatePrototype, SkateRegionClip,
-        SkateMapSummary, SkateRock, SkateScene, SkateSoup, SkateTexture, SkateWater,
+        SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateCollisionPlan,
+        SkateFloorPlan, SkateForm, SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMapSummary,
+        SkateMarker, SkateMarkerSnaps, SkateMaterial, SkateOverlayStack, SkateParts, SkatePartsOff,
+        SkatePlacement, SkatePrototype, SkateRegionClip, SkateRock, SkateScene, SkateSoup, SkateTexture,
+        SkateWater,
     };
     use crate::passes::layered::{BlendOpacity, VertexBlend};
     use crate::passes::pause_map::{SkatePauseImage, SkatePausePicture};
@@ -156,6 +157,7 @@ pub fn target() -> primase_core::pass::Target {
         .legal(SkateBlendBudget::NAME)
         // the map's summary is taken in through the budget planned from it (its basis is checked on writing)
         .legal(SkateMapSummary::NAME)
+        .legal(SkateCollisionPlan::NAME)
         .legal(SkateRegionClip::NAME)
         .legal(SkatePauseImage::NAME)
         .legal(SkatePausePicture::NAME)

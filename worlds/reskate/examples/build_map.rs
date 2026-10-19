@@ -3,9 +3,10 @@
 //! (`clip-reskate-region`, `prepare-reskate-floor`), the grind curves' prisms (`prepare-reskate-grinds`), a spawn
 //! when the scene has none, the markers snapped (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
-//! (`budget-reskate-textures`), the overlays stacked (`prepare-reskate-overlays`, 4 mm), the blend chains split
-//! (`prepare-reskate-blend-order`, 200 m) and their budget (`plan-reskate-blend-budget`, the cull-ID pool), then the
-//! writer.
+//! (`budget-reskate-textures`), the triangles over too many texture repeats (`prepare-reskate-uv-repeats`), the
+//! overlays stacked (`prepare-reskate-overlays`, 4 mm), the blend chains split (`prepare-reskate-blend-order`, 200 m),
+//! the collision planned (`prepare-reskate-collision`, minor surfaces coalesced, 1 mm weld) and the chains' budget
+//! (`plan-reskate-blend-budget`, the cull-ID pool), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
 //! [--tex-caps FILE] [--water-ocean] [--no-water] [--map-height N] [--lights-max-per-cell N] [--name N] [--lod default|highest|N]
@@ -172,14 +173,13 @@ fn main() -> Result<(), BoxError> {
             primase_reskate::passes::BudgetReskateTextures::new(max as usize)?.with_aux_weight(aux)?,
         ));
     }
-    // last, on the prepared geometry, materials and textures: the overlays stacked 4 mm apart, as the writer stacked
-    // triangles over more texture repeats than Studio draws: decals' left out, blended surfaces drawn alpha tested, as
-    // the writer did them
+    // last, on the prepared geometry, materials and textures: triangles over more texture repeats than Studio draws,
+    // decals' left out and blended surfaces drawn alpha tested, as the writer did them
     passes.push(Box::new(primase_reskate::passes::PrepareReskateUvRepeats::new(
         primase_reskate::passes::RepeatDecals::Omit,
         primase_reskate::passes::RepeatBlended::Cutout,
     )));
-    // them, over the meshes this encoding makes
+    // the overlays stacked 4 mm apart, as the writer stacked them, over the meshes this encoding makes
     passes.push(Box::new(
         primase_reskate::passes::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,
     ));
@@ -187,8 +187,15 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::passes::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
     ));
+    // the collision as the writer wrote it: a leaf's minor surfaces written as its most common one, its pieces welded
+    // at a millimetre
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateCollision::new(
+        primase_reskate::components::CollisionSurfaces::Coalesce,
+        primase_reskate::components::CollisionWeld::Millimetre,
+        &o,
+    )?));
     // and as many chain objects as the cull-ID pool has room for, decided from the map's summary (the writer's own
-    // count of what the rest of the map takes)
+    // count of what the rest of the map takes, the planned collision's included)
     passes.push(Box::new(
         primase_reskate::passes::SummarizeReskateMap::for_encoding(&o)?,
     ));

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::blend_order::{self, Geometry};
-use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
+use crate::collision::{Collision, CollisionResult, CollisionWorld, LeafVisit, NoWorld, PropSoup, Query};
 use crate::components::{
     BlendBudgetMode, ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendBudget, SkateBlendChains,
     SkateOverlayStack, StackedPiece,
@@ -95,7 +95,7 @@ pub struct WriteResult {
     /// The blend-chain overlays as objects of their own ([`crate::blend_order`]).
     pub blend: blend_order::Stats,
     pub prop_col_tris: BTreeMap<String, i64>,
-    pub collision: Option<collision::CollisionResult>,
+    pub collision: Option<CollisionResult>,
     pub lights_written: usize,
     /// Water outlines the map's extent limit cut, and those left with no area (not drawn).
     pub water_cut_at_limit: usize,
@@ -608,6 +608,8 @@ pub struct MapWriter {
     chains: Chains,
     /// The chain-object budget `plan-reskate-blend-budget` planned (`None`: none planned, every tile plain).
     budget: Option<SkateBlendBudget>,
+    /// How the collision is written, as `prepare-reskate-collision` planned it (`None`: exactly).
+    collision_plan: Option<crate::components::SkateCollisionPlan>,
     /// Mesh files (meshes/<name>), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
@@ -731,6 +733,7 @@ impl MapWriter {
             prop_parts: BTreeMap::new(),
             water_parts: BTreeMap::new(),
             prop_hulls: Vec::new(),
+            collision_plan: None,
             pending_chains: BTreeMap::new(),
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
@@ -769,6 +772,50 @@ impl MapWriter {
     pub(crate) fn with_budget(mut self, budget: Option<SkateBlendBudget>) -> MapWriter {
         self.budget = budget;
         self
+    }
+
+    /// The collision as `prepare-reskate-collision` planned it (`None`: exactly).
+    pub(crate) fn with_collision_plan(
+        mut self,
+        plan: Option<crate::components::SkateCollisionPlan>,
+    ) -> MapWriter {
+        self.collision_plan = plan;
+        self
+    }
+
+    /// The surfaces the map's collision indexes.
+    pub(crate) fn surfaces(&self) -> &SurfaceTable {
+        &self.surfaces
+    }
+
+    /// The collision's leaves as [`MapWriter::finish`] lays them out, each given to `visit`, nothing written.
+    pub(crate) fn collision_leaves(&self, x: &Extras, visit: &mut LeafVisit<'_>) -> Result<()> {
+        self.collision_layout(x, &[], &[], visit).map(|_| ())
+    }
+
+    /// The collision laid out: the world's triangle mesh with the placed props' (the markers in `queries` snapped
+    /// against it and `snap_extra`), then the water when there is any, each leaf given to `visit`; the layout's counts.
+    fn collision_layout(
+        &self,
+        x: &Extras,
+        queries: &[Query],
+        snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
+        visit: &mut LeafVisit<'_>,
+    ) -> Result<CollisionResult> {
+        let (r, off) = (self.o.region, self.off);
+        let mut collision = Collision::new(&self.surfaces, off.x, off.y, off.z, self.o.limit);
+        let props = join(&self.prop_parts);
+        let mut col = collision.build(x.world, r, queries, &props, &x.water, snap_extra, visit)?;
+        let water_props = join(&self.water_parts);
+        if x.water_world.is_some() || !water_props.is_empty() {
+            let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
+            let wc = collision.build_water(ww, r, &water_props, visit)?;
+            col.objects.extend(wc.objects);
+            col.pieces += wc.pieces;
+            col.water_triangles += wc.water_triangles + wc.prop_triangles;
+            col.split_cells += wc.split_cells;
+        }
+        Ok(col)
     }
 
     /// The blend chains as `chains` says.
@@ -1258,7 +1305,7 @@ impl MapWriter {
         } else {
             soups
         };
-        let n = collision::add_prop(
+        let n = crate::collision::add_prop(
             target,
             soup_order,
             cp,
@@ -1839,7 +1886,7 @@ struct LaidOut {
     o: WriterOptions,
     off: Vec3,
     markers: Vec<Marker>,
-    col: collision::CollisionResult,
+    col: CollisionResult,
     water: Option<MapObject>,
     kept_lights: Vec<PlacedLight>,
     other: usize,
@@ -2032,12 +2079,7 @@ impl MapWriter {
         }))
     }
 
-    fn effects_json(
-        &mut self,
-        markers: &[Marker],
-        kind: &str,
-        col: &collision::CollisionResult,
-    ) -> Vec<EffectJson> {
+    fn effects_json(&mut self, markers: &[Marker], kind: &str, col: &CollisionResult) -> Vec<EffectJson> {
         let mut fx: Vec<(String, String, [f32; 12])> = Vec::new();
         for (i, m) in markers.iter().enumerate() {
             if m.kind != kind {
@@ -2454,9 +2496,9 @@ impl MapWriter {
 
     /// Everything [`MapWriter::finish`] lays out before it decides the blend chains: the collision, grind prisms and
     /// water as objects, the lights in their total order, and the cull IDs all of it takes.
-    fn lay_out(&mut self, x: Extras) -> Result<LaidOut> {
+    fn lay_out(&mut self, mut x: Extras) -> Result<LaidOut> {
         let o = self.o.clone();
-        let (r, off) = (o.region, self.off);
+        let off = self.off;
         let markers = x.markers.clone();
         // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
         // makes none, and map.json cannot be written without one
@@ -2485,37 +2527,25 @@ impl MapWriter {
             }
         }
         let surfaces = self.surfaces.clone();
-        let mut collision = Collision::new(&surfaces, off.x, off.y, off.z, o.limit);
         let mut prop_hulls = std::mem::take(&mut self.prop_hulls);
         prop_hulls.sort_by(|a, b| a.name.cmp(&b.name));
-        let hulls: Vec<Hull> = x.hulls.into_iter().chain(prop_hulls).collect();
+        let hulls: Vec<Hull> = std::mem::take(&mut x.hulls)
+            .into_iter()
+            .chain(prop_hulls)
+            .collect();
         let snap_extra: Vec<(Vec<f32>, Vec<u32>, bool)> = hulls
             .iter()
             .map(|h| (h.pos.clone(), h.idx.clone(), h.ground))
             .collect();
-        let mut col_files = collision::Files::new();
-        let props = join(&self.prop_parts);
-        let mut col = collision.build(
-            x.world,
-            r,
-            &mut col_files,
-            &queries,
-            &props,
-            &x.water,
-            &snap_extra,
-        )?;
-        let water_props = join(&self.water_parts);
-        if x.water_world.is_some() || !water_props.is_empty() {
-            let ww: &dyn CollisionWorld = x.water_world.unwrap_or(&NoWorld);
-            let wc = collision.build_water(ww, r, &mut col_files, &water_props)?;
-            col.objects.extend(wc.objects);
-            col.pieces += wc.pieces;
-            col.water_triangles += wc.water_triangles + wc.prop_triangles;
-            col.split_cells += wc.split_cells;
-        }
+        let mut col_files = crate::collision_pack::Files::new();
+        let plan = self.collision_plan.take();
+        let mut pack = crate::collision_pack::Pack::new(&surfaces, off, plan.as_ref(), &mut col_files)?;
+        let mut col =
+            self.collision_layout(&x, &queries, &snap_extra, &mut |leaf, res| pack.leaf(leaf, res))?;
         for h in &hulls {
-            collision.add_hull(&mut col, &h.name, &h.pos, &h.idx, h.surface, &mut col_files)?;
+            pack.hull(&mut col, &h.name, &h.pos, &h.idx, h.surface)?;
         }
+        pack.finish()?;
         self.mesh_files.extend(col_files);
 
         // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is

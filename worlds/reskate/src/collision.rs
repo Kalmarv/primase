@@ -1,12 +1,13 @@
-//! Collision for ReSkate Studio: the world's triangles per 256 m cell plus the placed props' own collision, each
-//! cell cut until its pieces are sparse enough for skate.'s grind-edge analysis, one piece per surface; and the
-//! marker snaps that search that collision (street, ground, open).
+//! Collision for ReSkate Studio, laid out without writing anything: the world's triangles per 256 m cell plus the
+//! placed props' own collision, each cell cut into leaves until they are sparse enough for skate.'s grind-edge analysis
+//! ([`Leaf`]), each leaf written as one piece per surface ([`Leaf::pieces`]; the writer packs them,
+//! [`crate::collision_pack`]); and the marker snaps that search that collision (street, ground, open).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::Result;
-use crate::glb::{self, GlbPrim};
-use crate::model::{MapObject, cells_met};
+use crate::components::{CollisionSurfaces, CollisionWeld};
+use crate::model::MapObject;
 use crate::scene::{SnapMode, SnapSpec, SurfaceTable, WaterQuad};
 use primase_meshops::vector::Vec3;
 
@@ -149,8 +150,123 @@ pub struct Query {
     pub snap: SnapSpec,
 }
 
-/// Files written by the collision build, by relative name.
-pub type Files = BTreeMap<String, Vec<u8>>;
+/// One leaf of the collision layout: of a cell's triangles `td`, those in `tris`, in the square centred on `origin`
+/// (z 0), named after its cell and the quadrants it was cut into (`c_3_4_0_2`); a water leaf's triangles are all water.
+#[derive(Debug)]
+pub(crate) struct Leaf<'a> {
+    pub name: &'a str,
+    pub td: &'a TileData,
+    pub tris: &'a [usize],
+    pub origin: Vec3,
+    pub water: bool,
+}
+
+/// One piece of a leaf: the triangles written as surface `surface`, relative to the leaf's origin and welded, and how
+/// many of them the weld collapsed.
+#[derive(Debug)]
+pub(crate) struct Piece {
+    pub surface: usize,
+    pub pos: Vec<f32>,
+    pub idx: Vec<u32>,
+    pub collapsed: usize,
+}
+
+impl Leaf<'_> {
+    /// Its triangles per surface of a table of `ns` (a water leaf's all under the first).
+    pub(crate) fn counts(&self, ns: usize) -> Vec<usize> {
+        let mut count = vec![0usize; ns];
+        if self.water {
+            count[0] = self.tris.len();
+        } else {
+            for &t in self.tris {
+                count[self.td.s[t] as usize] += 1;
+            }
+        }
+        count
+    }
+
+    /// The pieces it is written as, given the surface each of its triangles' surfaces is written as (`into[s]`, one
+    /// piece per surface written as itself that has triangles, ascending) and the weld: each piece's triangles in
+    /// triangle order, relative to its origin, welded.
+    pub(crate) fn pieces(&self, into: &[usize], weld: CollisionWeld) -> Result<Vec<Piece>> {
+        let count = self.counts(into.len());
+        let mut out = Vec::new();
+        for s in 0..into.len() {
+            if count[s] == 0 || into[s] != s {
+                continue;
+            }
+            let corners: Vec<[f32; 3]> = self
+                .tris
+                .iter()
+                .filter(|&&t| self.water || into[self.td.s[t] as usize] == s)
+                .flat_map(|&t| {
+                    (0..3).map(move |k| {
+                        let vi = self.td.t[t * 3 + k] as usize * 3;
+                        [
+                            self.td.v[vi] - self.origin.x,
+                            self.td.v[vi + 1] - self.origin.y,
+                            self.td.v[vi + 2],
+                        ]
+                    })
+                })
+                .collect();
+            let welded = match weld {
+                CollisionWeld::Millimetre => primase_meshops::weld_quantized(&corners, 1000.0),
+                CollisionWeld::Exact => primase_meshops::weld_exact(&corners),
+            }
+            .map_err(|e| crate::Error::Scene(format!("collision {}: {e}", self.name)))?;
+            let collapsed = corners.len() / 3 - welded.indices.len() / 3;
+            out.push(Piece {
+                surface: s,
+                pos: welded.positions.iter().flatten().copied().collect(),
+                idx: welded.indices,
+                collapsed,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// The surface each surface of a leaf's triangles is written as (`into[s]`), given its triangles per surface `count`
+/// over a table `surf`: `Exact`, each its own; `Coalesce`, a standard surface with fewer than max(8, 1/20 of the
+/// leaf's) triangles is written as the leaf's most common standard surface of its kind (soft or hard; its own when the
+/// leaf has none), the rest their own.
+pub(crate) fn surfaces_of(surf: &SurfaceTable, count: &[usize], choice: CollisionSurfaces) -> Vec<usize> {
+    let ns = count.len();
+    if choice == CollisionSurfaces::Exact {
+        return (0..ns).collect();
+    }
+    let n: usize = count.iter().sum();
+    let (mut hard, mut soft): (Option<usize>, Option<usize>) = (None, None);
+    let standard = crate::scene::STANDARD_SURFACES.len();
+    for s in 0..ns.min(standard) {
+        if count[s] == 0 {
+            continue;
+        }
+        if surf.soft(s) {
+            if soft.is_none_or(|h| count[s] > count[h]) {
+                soft = Some(s);
+            }
+        } else if hard.is_none_or(|h| count[s] > count[h]) {
+            hard = Some(s);
+        }
+    }
+    let minor = 8.max(n / 20);
+    (0..ns)
+        .map(|s| {
+            if count[s] >= minor || s >= standard {
+                s
+            } else if surf.soft(s) {
+                soft.unwrap_or(s)
+            } else {
+                hard.unwrap_or(s)
+            }
+        })
+        .collect()
+}
+
+/// What the layout does with each leaf, the layout's counts beside it: the writer packs it, a plan plans it.
+pub(crate) type LeafVisit<'v> = dyn FnMut(Leaf<'_>, &mut CollisionResult) -> Result<()> + 'v;
 
 #[derive(Debug)]
 pub struct Collision<'a> {
@@ -255,27 +371,19 @@ impl<'a> Collision<'a> {
         }
     }
 
-    fn at(&self, o: Vec3) -> [f32; 12] {
-        MapObject::translation(
-            o.x + self.off_x,
-            o.y + self.off_y,
-            if self.off_z != 0.0 { o.z + self.off_z } else { o.z },
-        )
-    }
-
-    /// Triangle-mesh collision of the world and the props, then the markers on the ground.
+    /// Triangle-mesh collision of the world and the props, each leaf given to `visit`, then the markers on the ground.
     #[allow(clippy::too_many_arguments)]
-    pub fn build(
+    pub(crate) fn build(
         &mut self,
         source: &dyn CollisionWorld,
         region: [f64; 4],
-        files: &mut Files,
         queries: &[Query],
         props: &BTreeMap<(i32, i32), PropSoup>,
         water: &[WaterQuad],
         snap_extra: &[(Vec<f32>, Vec<u32>, bool)],
+        visit: &mut LeafVisit<'_>,
     ) -> Result<CollisionResult> {
-        let mut res = self.cells(source, region, files, queries, props, "c", false)?;
+        let mut res = self.cells(source, region, queries, props, "c", false, visit)?;
         self.extra = hull_tiles(snap_extra);
         self.snap(queries, water, &mut res.placed, &mut res.ground);
         self.kept.clear();
@@ -336,71 +444,14 @@ impl<'a> Collision<'a> {
     }
 
     /// Water-mode collision: cells like `build`, pieces in collision mode water.
-    pub fn build_water(
+    pub(crate) fn build_water(
         &mut self,
         source: &dyn CollisionWorld,
         region: [f64; 4],
-        files: &mut Files,
         props: &BTreeMap<(i32, i32), PropSoup>,
+        visit: &mut LeafVisit<'_>,
     ) -> Result<CollisionResult> {
-        self.cells(source, region, files, &[], props, "w", true)
-    }
-
-    /// One convex hull, written whole.
-    pub fn add_hull(
-        &self,
-        res: &mut CollisionResult,
-        name: &str,
-        pos: &[f32],
-        idx: &[u32],
-        surface: usize,
-        files: &mut Files,
-    ) -> Result<()> {
-        if idx.is_empty() {
-            return Ok(());
-        }
-        let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-        for v in (0..pos.len().saturating_sub(2)).step_by(3) {
-            let p = Vec3::new(pos[v], pos[v + 1], pos[v + 2]);
-            mn = mn.min(p);
-            mx = mx.max(p);
-        }
-        let origin = (mn + mx) * 0.5;
-        let mut local = vec![0f32; pos.len()];
-        for v in (0..pos.len().saturating_sub(2)).step_by(3) {
-            local[v] = pos[v] - origin.x;
-            local[v + 1] = pos[v + 1] - origin.y;
-            local[v + 2] = pos[v + 2] - origin.z;
-        }
-        let cells = cells_met(
-            &local,
-            Vec3::new(origin.x + self.off_x, origin.y + self.off_y, 0.0),
-        );
-        let file = format!("{name}.glb");
-        files.insert(
-            file.clone(),
-            glb::write(
-                name,
-                &[GlbPrim {
-                    blend: None,
-                    material: None,
-                    pos: local,
-                    nrm: None,
-                    uv: None,
-                    idx: idx.to_vec(),
-                }],
-            )?,
-        );
-        let mut ob = MapObject::new(name.to_owned(), self.at(origin));
-        ob.cells = cells;
-        ob.collision_mesh = Some(format!("meshes/{file}"));
-        ob.render = false;
-        ob.collision_mode = "hull";
-        ob.collision_packed = self.surf.list[surface].1;
-        res.objects.push(ob);
-        res.hulls += 1;
-        res.triangles += (idx.len() / 3) as i64;
-        Ok(())
+        self.cells(source, region, &[], props, "w", true, visit)
     }
 
     fn street_kinds(&self) -> [u8; 256] {
@@ -419,15 +470,16 @@ impl<'a> Collision<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn cells(
         &mut self,
         source: &dyn CollisionWorld,
         region: [f64; 4],
-        files: &mut Files,
         queries: &[Query],
         props: &BTreeMap<(i32, i32), PropSoup>,
         prefix: &str,
         water: bool,
+        visit: &mut LeafVisit<'_>,
     ) -> Result<CollisionResult> {
         let mut res = CollisionResult {
             placed: queries.iter().map(|q| (q.x, q.y)).collect(),
@@ -478,9 +530,9 @@ impl<'a> Collision<'a> {
                 ty as f32 * SRC_TILE,
                 SRC_TILE,
                 &format!("{prefix}_{tx}_{ty}"),
-                files,
                 &mut res,
                 water,
+                visit,
             )?;
             if wanted.contains(&(tx, ty)) {
                 self.kept.insert((tx, ty), (td, n_static));
@@ -597,6 +649,8 @@ impl<'a> Collision<'a> {
         }
     }
 
+    /// The leaves of a cell's triangles `tris` (of `td`) in the square at `x0, y0` of side `size`: cut into quadrants
+    /// while too dense and wider than [`MIN_CELL`], each leaf given to `visit`.
     #[allow(clippy::too_many_arguments)]
     fn split(
         &self,
@@ -606,9 +660,9 @@ impl<'a> Collision<'a> {
         y0: f32,
         size: f32,
         name: &str,
-        files: &mut Files,
         res: &mut CollisionResult,
         water: bool,
+        visit: &mut LeafVisit<'_>,
     ) -> Result<()> {
         if tris.is_empty() {
             return Ok(());
@@ -646,9 +700,9 @@ impl<'a> Collision<'a> {
                     y0 + (i >> 1) as f32 * h,
                     h,
                     &format!("{name}_{i}"),
-                    files,
                     res,
                     water,
+                    visit,
                 )?;
             }
             return Ok(());
@@ -656,130 +710,16 @@ impl<'a> Collision<'a> {
         if dense {
             res.dense_leaves += 1;
         }
-        let ns = self.surf.list.len();
-        let mut count = vec![0usize; ns];
-        if water {
-            count[0] = tris.len();
-        } else {
-            for &t in tris {
-                count[td.s[t] as usize] += 1;
-            }
-        }
-        let (mut hard, mut soft): (Option<usize>, Option<usize>) = (None, None);
-        let standard = crate::scene::STANDARD_SURFACES.len();
-        for s in 0..ns.min(standard) {
-            if count[s] == 0 {
-                continue;
-            }
-            if self.surf.soft(s) {
-                if soft.is_none_or(|h| count[s] > count[h]) {
-                    soft = Some(s);
-                }
-            } else if hard.is_none_or(|h| count[s] > count[h]) {
-                hard = Some(s);
-            }
-        }
-        let minor = 8.max(tris.len() / 20);
-        let mut into: Vec<Option<usize>> = (0..ns)
-            .map(|s| {
-                if count[s] >= minor || s >= standard {
-                    Some(s)
-                } else if self.surf.soft(s) {
-                    soft
-                } else {
-                    hard
-                }
-            })
-            .collect();
-        for (s, i) in into.iter_mut().enumerate().take(standard.min(ns)) {
-            if i.is_none() {
-                *i = Some(s);
-            }
-        }
-        let origin = Vec3::new(x0 + size / 2.0, y0 + size / 2.0, 0.0);
-        for s in 0..ns {
-            if count[s] == 0 || into[s] != Some(s) {
-                continue;
-            }
-            // weld by position (1 mm), in triangle order, collapsed triangles dropped
-            let corners: Vec<[f32; 3]> = tris
-                .iter()
-                .filter(|&&t| water || into[td.s[t] as usize] == Some(s))
-                .flat_map(|&t| {
-                    (0..3).map(move |k| {
-                        let vi = td.t[t * 3 + k] as usize * 3;
-                        [td.v[vi] - origin.x, td.v[vi + 1] - origin.y, td.v[vi + 2]]
-                    })
-                })
-                .collect();
-            let welded = primase_meshops::weld_quantized(&corners, 1000.0)
-                .map_err(|e| crate::Error::Scene(format!("collision {name}: {e}")))?;
-            if welded.indices.is_empty() {
-                continue;
-            }
-            let pos: Vec<f32> = welded.positions.iter().flatten().copied().collect();
-            let idx = welded.indices;
-            let stem = if water {
-                format!("{name}_water")
-            } else {
-                format!("{name}_{}", self.surf.list[s].0)
-            };
-            let chunks: Vec<(Vec<f32>, Vec<u32>)> = if pos.len() / 3 <= MAX_PIECE_VERTS {
-                vec![(pos, idx)]
-            } else {
-                primase_vertex::split_by_vertex_budget(&idx, pos.len() / 3, MAX_PIECE_VERTS)
-                    .expect("valid indices")
-                    .into_iter()
-                    .map(|c| {
-                        let p: Vec<f32> = c
-                            .vertices
-                            .iter()
-                            .flat_map(|&v| pos[v as usize * 3..v as usize * 3 + 3].to_vec())
-                            .collect();
-                        (p, c.indices)
-                    })
-                    .collect()
-            };
-            let n = chunks.len();
-            for (c, (p, i)) in chunks.into_iter().enumerate() {
-                let stem_c = if n == 1 {
-                    stem.clone()
-                } else {
-                    format!("{stem}_{c}")
-                };
-                let file = format!("{stem_c}.glb");
-                let tris = (i.len() / 3) as i64;
-                let cells = cells_met(&p, Vec3::new(origin.x + self.off_x, origin.y + self.off_y, 0.0));
-                files.insert(
-                    file.clone(),
-                    glb::write(
-                        &stem_c,
-                        &[GlbPrim {
-                            blend: None,
-                            material: None,
-                            pos: p,
-                            nrm: None,
-                            uv: None,
-                            idx: i,
-                        }],
-                    )?,
-                );
-                let mut ob = MapObject::new(stem_c, self.at(origin));
-                ob.cells = cells;
-                ob.collision_mesh = Some(format!("meshes/{file}"));
-                ob.render = false;
-                ob.collision_mode = if water { "water" } else { "triangle_mesh" };
-                ob.collision_packed = if water {
-                    MapObject::WATER_PACKED
-                } else {
-                    self.surf.list[s].1
-                };
-                res.objects.push(ob);
-                res.triangles += tris;
-                res.pieces += 1;
-            }
-        }
-        Ok(())
+        visit(
+            Leaf {
+                name,
+                td,
+                tris,
+                origin: Vec3::new(x0 + size / 2.0, y0 + size / 2.0, 0.0),
+                water,
+            },
+            res,
+        )
     }
 }
 
@@ -1371,11 +1311,11 @@ mod tests {
             .build(
                 &world,
                 [-256.0, -256.0, 512.0, 256.0],
-                &mut Files::new(),
                 &queries,
                 &props,
                 &water,
                 std::slice::from_ref(&hull),
+                &mut |_, _| Ok(()),
             )
             .unwrap();
         let (placed, ground) = snap_queries(

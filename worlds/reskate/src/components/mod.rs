@@ -34,7 +34,7 @@ pub mod layered;
 pub mod loaded;
 pub mod pause_map;
 
-pub use collision::SkateRock;
+pub use collision::{CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkateRock};
 pub use layered::{BlendOpacity, VertexBlend};
 pub use loaded::LoadedFile;
 pub use pause_map::{SkatePauseImage, SkatePausePicture};

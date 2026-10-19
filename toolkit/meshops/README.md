@@ -52,6 +52,7 @@ scalar counts. No private source code or external assets are included.
 
 `weld_quantized` accepts loose triangle corners and a positive grid scale;
 `weld_millimetres` is the indexed, XY-origin variant with scale 1000.
+`weld_exact` merges only bit-identical corners and keeps every face.
 
 `vectors.bin` is an independent SharpDX vector-arithmetic fixture: u32 count,
 then 19 u32 float bit patterns per record (a[3], b[3], t, followed by length,

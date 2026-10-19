@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 
 use primase_core::World;
 
-use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::components::SkatePausePicture;
+use crate::collision::{CollisionWorld, SRC_TILE, TileData, surfaces_of};
+use crate::components::{
+    CollisionSurfaces, CollisionWeld, PlannedLeaf, SkateCollisionPlan, SkatePausePicture,
+};
 use crate::map::{Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
@@ -660,10 +662,12 @@ pub(crate) fn lay(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) 
         None => Chains::Off { left: 0 },
     };
     let budget = world.resource::<crate::components::SkateBlendBudget>().cloned();
+    let collision_plan = world.resource::<crate::components::SkateCollisionPlan>().cloned();
     let mut writer = MapWriter::new(o.clone(), s.surfaces.clone())?
         .with_stack(stack)
         .with_chains(chains)
-        .with_budget(budget);
+        .with_budget(budget)
+        .with_collision_plan(collision_plan);
     if !encode {
         writer = writer.without_encoding();
     }
@@ -700,4 +704,58 @@ pub(crate) fn map_summary(world: &World, a: &EncodingOptions) -> Result<crate::c
         cull_ids: a.cull_ids,
         other_cull_ids,
     })
+}
+
+/// Collision triangles written as another surface, by (their surface, the surface written as).
+pub(crate) type Rewritten = BTreeMap<(String, String), usize>;
+
+/// The collision plan of the prepared world `world` for the encoding `a` (`prepare-reskate-collision`'s): the writer's
+/// own layout of its collision, nothing encoded, each leaf's minor surfaces rewritten as `surfaces` says and its
+/// pieces welded as `weld` says; with the triangles rewritten, by (surface, the surface written as).
+pub(crate) fn collision_plan(
+    world: &World,
+    a: &EncodingOptions,
+    surfaces: CollisionSurfaces,
+    weld: CollisionWeld,
+) -> Result<(SkateCollisionPlan, Rewritten)> {
+    let mut laid = lay(world, Path::new(""), a, false)?;
+    let (writer, extras) = laid.extras();
+    let surf = writer.surfaces().clone();
+    let mut leaves: BTreeMap<String, PlannedLeaf> = BTreeMap::new();
+    let mut rewritten = Rewritten::new();
+    writer.collision_leaves(&extras, &mut |leaf, _| {
+        let count = leaf.counts(surf.list.len());
+        let into = surfaces_of(&surf, &count, surfaces);
+        let collapsed = leaf.pieces(&into, weld)?.iter().map(|p| p.collapsed).sum();
+        let mut planned = PlannedLeaf {
+            counts: BTreeMap::new(),
+            into: BTreeMap::new(),
+            collapsed,
+        };
+        for (s, &n) in count.iter().enumerate().filter(|&(_, &n)| n > 0) {
+            planned.counts.insert(s, n);
+            if into[s] != s {
+                planned.into.insert(s, into[s]);
+                *rewritten
+                    .entry((surf.list[s].0.clone(), surf.list[into[s]].0.clone()))
+                    .or_default() += n;
+            }
+        }
+        if leaves.insert(leaf.name.to_owned(), planned).is_some() {
+            return Err(Error::Scene(format!(
+                "two collision leaves are named {}",
+                leaf.name
+            )));
+        }
+        Ok(())
+    })?;
+    Ok((
+        SkateCollisionPlan {
+            surfaces,
+            weld,
+            table: surf.list.iter().map(|(n, _)| n.clone()).collect(),
+            leaves,
+        },
+        rewritten,
+    ))
 }

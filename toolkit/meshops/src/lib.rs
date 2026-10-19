@@ -143,6 +143,28 @@ pub fn weld_quantized(corners: &[[f32; 3]], scale: f32) -> Result<Mesh> {
     };
     weld_grid(&mesh, [0., 0.], scale)
 }
+/// Weld loose triangle corners whose positions are bit-identical, keeping the first
+/// representative; every face survives, in order, a face with coincident corners
+/// included. Non-finite positions are errors.
+pub fn weld_exact(corners: &[[f32; 3]]) -> Result<Mesh> {
+    if corners.len() > u32::MAX as usize {
+        return Err(Error("too many corners".into()));
+    }
+    if !corners.len().is_multiple_of(3) {
+        return Err(Error("corners are not whole triangles".into()));
+    }
+    let mut out = Mesh::default();
+    let mut map = BTreeMap::<[u32; 3], u32>::new();
+    for p in corners {
+        finite(p)?;
+        let n = *map.entry(p.map(f32::to_bits)).or_insert_with(|| {
+            out.positions.push(*p);
+            (out.positions.len() - 1) as u32
+        });
+        out.indices.push(n);
+    }
+    Ok(out)
+}
 fn weld_grid(mesh: &Mesh, origin_xy: [f32; 2], scale: f32) -> Result<Mesh> {
     if !scale.is_finite() || scale <= 0. {
         return Err(Error("invalid weld grid scale".into()));

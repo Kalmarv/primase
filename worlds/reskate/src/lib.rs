@@ -10,6 +10,7 @@ pub mod assembly;
 pub mod blend_order;
 pub mod build;
 pub mod collision;
+mod collision_pack;
 pub mod components;
 pub mod glb;
 pub mod grind;
@@ -112,6 +113,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "prepare-reskate-uv-repeats",
         passes::prepare_reskate_uv_repeats,
         &[("decals", "omit"), ("blended", "cutout")],
+    );
+    // how the collision is written is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-collision",
+        passes::prepare_reskate_collision,
+        &[("surfaces", "coalesce"), ("weld", "mm")],
     );
     // the map's summary, for the encoding given (the writer's defaults unless stated)
     reg.register("summarize-reskate-map", passes::summarize_reskate_map);
