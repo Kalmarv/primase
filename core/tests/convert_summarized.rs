@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use primase_core::convert::{
     Finished, Part, PartScope, PartSource, Reader, Report, Result, Summarized, Writer,
@@ -25,6 +26,9 @@ impl Summary for Owned {
         self.0 += other.0;
         Ok(())
     }
+    fn retained_bytes(&self) -> usize {
+        8
+    }
 }
 
 /// The parts' first placements in the order they were merged: depends on the arrival order.
@@ -38,6 +42,9 @@ impl Summary for Firsts {
         self.0.extend(other.0);
         Ok(())
     }
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Entity>() * self.0.len()
+    }
 }
 
 /// The decision: how many placements the whole holds.
@@ -48,7 +55,8 @@ impl Resource for Total {
 }
 
 /// `n` placements of their own prototypes.
-struct ToyReader(usize);
+/// `n` placements of their own prototypes; `malformed`: a load drops the placements' transforms (a reader at fault).
+struct ToyReader(usize, bool);
 impl Reader for ToyReader {
     fn read(&mut self) -> Result<(World, Report)> {
         let mut w = World::new();
@@ -68,7 +76,14 @@ impl Reader for ToyReader {
         Ok((w, Vec::new()))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
-        Ok((world.subset(&world.closure(roots.iter().copied())), Vec::new()))
+        let mut w = world.subset(&world.closure(roots.iter().copied()));
+        if self.1 {
+            let placed: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+            for e in placed {
+                w.remove::<Transform>(e);
+            }
+        }
+        Ok((w, Vec::new()))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "toy"]
@@ -196,7 +211,7 @@ fn run(order: &[usize], restartable: bool, firsts: bool) -> Result<Saw> {
     };
     let none = Pipeline { passes: Vec::new() };
     let report = convert_parts_summarized(
-        &mut ToyReader(3),
+        &mut ToyReader(3, false),
         &mut OrderedParts {
             order: order.to_vec(),
             placements: Vec::new(),
@@ -218,6 +233,13 @@ fn run(order: &[usize], restartable: bool, firsts: bool) -> Result<Saw> {
         (order.len(), order.len())
     );
     assert_eq!(report.decided.steps.len(), 1);
+    // each part's summary (8 bytes) kept until the merge, and the merged one, counted
+    if !firsts {
+        assert_eq!(
+            (report.summary_bytes, report.merged_summary_bytes),
+            (8 * order.len(), 8)
+        );
+    }
     Ok(seen.take())
 }
 
@@ -235,4 +257,123 @@ fn an_order_bound_summary_and_a_one_pass_source_are_refused() {
     assert!(e.contains("toy.firsts: its merge depends on the order"), "{e}");
     let e = run(&[0, 1, 2], false, false).unwrap_err().to_string();
     assert!(e.contains("these parts come once"), "{e}");
+}
+
+/// Counts the times a sentinel pass ran.
+static RAN: AtomicUsize = AtomicUsize::new(0);
+
+/// A pass that only notes that it ran.
+struct Sentinel(&'static str);
+impl Pass for Sentinel {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    fn run(&self, _w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        RAN.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A sum whose own check refuses more than 2: each part's is valid, their merge is not.
+#[derive(Clone, Debug, PartialEq)]
+struct Capped(u32);
+impl Resource for Capped {
+    const NAME: &'static str = "toy.capped";
+    fn verify(&self, _w: &World) -> std::result::Result<(), String> {
+        if self.0 > 2 {
+            Err(format!("{} past 2", self.0))
+        } else {
+            Ok(())
+        }
+    }
+}
+impl Summary for Capped {
+    fn merge(&mut self, other: Self) -> std::result::Result<(), String> {
+        self.0 += other.0;
+        Ok(())
+    }
+    fn retained_bytes(&self) -> usize {
+        4
+    }
+}
+
+/// Puts Capped(1) into each part.
+struct One;
+impl Pass for One {
+    fn name(&self) -> &'static str {
+        "toy-one"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["toy.capped"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        w.insert_resource(Capped(1));
+        Ok(())
+    }
+}
+
+/// The toy map converted with `summarize` and `decide`, the loads `malformed` or not; the error, if it failed.
+fn summarize_with(
+    malformed: bool,
+    summarize: Vec<Box<dyn Pass>>,
+    decide: Vec<Box<dyn Pass>>,
+) -> Option<String> {
+    let mut registry = SummaryRegistry::new();
+    registry.summary::<Capped>();
+    let none = Pipeline { passes: Vec::new() };
+    convert_parts_summarized(
+        &mut ToyReader(3, malformed),
+        &mut OrderedParts {
+            order: vec![0, 1, 2],
+            placements: Vec::new(),
+            next: 0,
+            restartable: true,
+        },
+        Box::new(Seen(Rc::new(RefCell::new(Vec::new())))),
+        &PassManager::new(PassRegistry::new()),
+        &none,
+        &Summarized {
+            registry: &registry,
+            summarize: &Pipeline { passes: summarize },
+            decide: &Pipeline { passes: decide },
+        },
+        &none,
+    )
+    .err()
+    .map(|e| e.to_string())
+}
+
+/// What a reader loads is checked before any summary pass reads it, an empty summary pipeline too; and the merged
+/// summaries are checked before the first decision pass reads them (a merge makes input as a pass does).
+#[test]
+fn loads_and_merged_summaries_are_checked_before_they_are_read() {
+    RAN.store(0, Ordering::SeqCst);
+    let e = summarize_with(true, vec![Box::new(Sentinel("sentinel"))], Vec::new()).unwrap();
+    assert!(
+        e.contains("summary 0: load") && e.contains("core.transform"),
+        "{e}"
+    );
+    assert_eq!(
+        RAN.load(Ordering::SeqCst),
+        0,
+        "the summary pass did not run on the malformed load"
+    );
+    let e = summarize_with(true, Vec::new(), Vec::new()).unwrap();
+    assert!(e.contains("summary 0: load"), "{e}");
+    // three valid parts' Capped(1) merge into Capped(3), which its own check refuses: before any decision pass
+    let e = summarize_with(
+        false,
+        vec![Box::new(One)],
+        vec![Box::new(Sentinel("decide-sentinel"))],
+    )
+    .unwrap();
+    assert!(
+        e.contains("the merged summaries") && e.contains("3 past 2"),
+        "{e}"
+    );
+    assert_eq!(
+        RAN.load(Ordering::SeqCst),
+        0,
+        "the decision pass did not run on the invalid merge"
+    );
 }

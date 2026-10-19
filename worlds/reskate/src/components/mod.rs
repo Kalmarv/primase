@@ -597,6 +597,9 @@ impl primase_core::summary::Summary for SkateFloorSummary {
         }
         Ok(())
     }
+    fn retained_bytes(&self) -> usize {
+        4 * (self.lows.len() + self.soup_lows.len())
+    }
 }
 
 /// `skate.floor_decision`: the floor `decide-reskate-floor` decided over every part, for the settings it was decided
@@ -736,6 +739,13 @@ impl primase_core::summary::Summary for SkateLightsSummary {
         self.cap();
         Ok(())
     }
+    fn retained_bytes(&self) -> usize {
+        self.cells
+            .values()
+            .flatten()
+            .map(|l| std::mem::size_of::<RankedLight>() + l.group.len() + l.source.len())
+            .sum()
+    }
 }
 
 /// `skate.texture_weights`: the weight of each texture the placements a part owns draw, by texture key
@@ -772,6 +782,9 @@ impl primase_core::summary::Summary for SkateTextureWeights {
             self.weights.entry(k).or_default().merge(&s);
         }
         Ok(())
+    }
+    fn retained_bytes(&self) -> usize {
+        self.weights.iter().map(|(k, s)| k.len() + s.bytes()).sum()
     }
 }
 
@@ -833,6 +846,9 @@ impl primase_core::summary::Summary for SkateContentBounds {
         }
         Ok(())
     }
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
 }
 
 /// `skate.spawn_summary`: what one part holds of the map's spawn (`summarize-reskate-spawn`): the spawns it owns, the
@@ -864,6 +880,9 @@ impl primase_core::summary::Summary for SkateSpawnSummary {
             (a, b) => a.or(b),
         };
         Ok(())
+    }
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
     }
 }
 
@@ -1087,6 +1106,9 @@ impl primase_core::summary::Summary for SkateMapSummary {
         }
         self.other_cull_ids += other.other_cull_ids;
         Ok(())
+    }
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
     }
 }
 

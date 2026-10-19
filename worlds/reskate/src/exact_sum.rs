@@ -39,6 +39,11 @@ impl ExactSum {
         }
     }
 
+    /// The bytes it holds.
+    pub fn bytes(&self) -> usize {
+        8 * self.partials.len()
+    }
+
     /// The exact sum rounded to the nearest `f64`, ties to even.
     pub fn value(&self) -> f64 {
         let p = &self.partials;

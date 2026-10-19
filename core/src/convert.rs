@@ -488,6 +488,10 @@ pub struct ConvertReport {
     pub summary_loads: Report,
     pub summarized: Vec<RunReport>,
     pub decided: RunReport,
+    /// The bytes of every part's summaries kept until the merge (the most the first traversal holds of them), and of
+    /// the merged summaries handed to every part, as the summaries state them ([`crate::summary::Summary::retained_bytes`]).
+    pub summary_bytes: usize,
+    pub merged_summary_bytes: usize,
     pub parts: usize,
     /// The bulk payload of every part, in the order written.
     pub part_sizes: Vec<PartSize>,
@@ -732,7 +736,7 @@ pub struct Summarized<'a> {
 }
 
 /// [`convert_parts`] over the parts twice: first each part is loaded and its `summarized.summarize` passes make its
-/// summaries, which are merged over every part (refused when a summary's merge depends on the arrival order); the
+/// summaries, which are merged over every part (refused when the merge in arrival order and in reverse differ); the
 /// `summarized.decide` passes make the decisions from them, once; then each part is loaded again, given the merged
 /// summaries and the decisions, and goes through `passes` and the writer as in [`convert_parts`]. The part source must
 /// give the same parts again ([`PartSource::restart`]).
@@ -819,7 +823,7 @@ fn run(
     let target = writer.target();
     "plan".clone_into(during);
     parts.plan(&world, &|p| reader.prototype_box(&world, p))?;
-    // the first traversal: each part's summaries, kept (small by contract) and merged order-free; the decisions made
+    // the first traversal: each part's summaries, kept (their bytes counted) and merged; the decisions made
     // once from them
     let decided = match summarized {
         None => None,
@@ -840,6 +844,8 @@ fn run(
                 let (mut part, loaded) = loaded?;
                 report.summary_loads.extend(loaded);
                 check_load_emits(&world, &part, reader.emits())?;
+                // what was loaded is checked before any summary pass reads it, as the second traversal does
+                manager.verify(&part, &format!("summary {ordinal}: load"))?;
                 *during = format!("summary {ordinal}: passes");
                 part.insert_resource(PartScope {
                     roots,
@@ -852,11 +858,16 @@ fn run(
                 tally(&mut report.counts, &r);
                 report.summarized.push(r);
                 ran?;
-                kept.push(s.registry.take_summaries(&part));
+                let summaries = s.registry.take_summaries(&part);
+                report.summary_bytes += s.registry.retained(&summaries);
+                kept.push(summaries);
             }
             "decide".clone_into(during);
             let mut merged = s.registry.merge_order_free(&kept)?;
             drop(kept);
+            report.merged_summary_bytes = s.registry.retained(&merged);
+            // a merge makes the decisions' input: checked before the first decision pass reads it
+            manager.verify(&merged, "the merged summaries")?;
             manager.run(&mut merged, s.decide, &mut report.decided)?;
             tally(&mut report.counts, &report.decided.clone());
             parts.restart()?;

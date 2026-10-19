@@ -9,10 +9,14 @@
 //! making it from what one part holds.
 //!
 //! A summary's merge is a property of the data, not of the pass that made it, and it must not depend on the order the
-//! parts arrive in: merging A into B gives what merging B into A gives. The conversion keeps every part's summaries
-//! (small by contract), merges them in arrival order and in the reverse order, and refuses a summary whose two merges
-//! differ, so every registered summary is checked on every conversion. The crate that defines a summary or a decision
-//! registers it ([`SummaryRegistry`]), as it registers its passes.
+//! parts arrive in or how they are grouped: the merge is commutative and associative, a contract its crate states and
+//! tests (shuffled orders, groupings, overlapping inputs). The conversion keeps every part's summaries until it merges
+//! them (metadata, each summary stating the bytes it holds, [`Summary::retained_bytes`]; the conversion reports their
+//! total, [`crate::convert::ConvertReport::summary_bytes`]), merges them in arrival order and in the
+//! reverse order, and refuses a summary whose two merges differ: a forward/reverse consistency check on every
+//! conversion, which catches many order dependencies but proves none absent (a merge that keeps only its first two
+//! arrivals can agree on A, B, A forward and backward and still differ on A, A, B). The crate that defines a summary
+//! or a decision registers it ([`SummaryRegistry`]), as it registers its passes.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +29,8 @@ pub trait Summary: Resource + PartialEq {
     /// Fold `other`, another part's, into this one; an error for summaries that cannot be merged (made for other
     /// settings).
     fn merge(&mut self, other: Self) -> Result<(), String>;
+    /// The bytes it holds (its heap and inline data, near enough to bound what a conversion keeps of it).
+    fn retained_bytes(&self) -> usize;
 }
 
 /// What the registry does with one kind of record, by type, through plain functions.
@@ -36,6 +42,8 @@ struct Kind {
     equal: fn(a: &World, b: &World) -> bool,
     /// Copy `from`'s record (if any) into `to`.
     copy: fn(from: &World, to: &mut World),
+    /// The bytes `w`'s record holds (0 without one; decisions are not counted).
+    bytes: fn(w: &World) -> usize,
     /// A summary (merged over parts), or a decision (made once, handed on).
     summary: bool,
 }
@@ -57,6 +65,14 @@ fn merge_typed<S: Summary>(into: &mut World, from: &World) -> Result<(), String>
             Ok(())
         }
     }
+}
+
+fn bytes_typed<S: Summary>(w: &World) -> usize {
+    w.resource::<S>().map_or(0, Summary::retained_bytes)
+}
+
+fn no_bytes(_: &World) -> usize {
+    0
 }
 
 fn equal_typed<S: Summary>(a: &World, b: &World) -> bool {
@@ -97,6 +113,7 @@ impl SummaryRegistry {
                 merge: merge_typed::<S>,
                 equal: equal_typed::<S>,
                 copy: copy_typed::<S>,
+                bytes: bytes_typed::<S>,
                 summary: true,
             },
         );
@@ -110,6 +127,7 @@ impl SummaryRegistry {
                 merge: never_merged::<D>,
                 equal: never_compared,
                 copy: copy_typed::<D>,
+                bytes: no_bytes,
                 summary: false,
             },
         );
@@ -125,6 +143,11 @@ impl SummaryRegistry {
         self.kinds.iter().filter(|(_, k)| !k.summary).map(|(n, _)| *n)
     }
 
+    /// The bytes `w`'s summaries hold, as they state them.
+    pub fn retained(&self, w: &World) -> usize {
+        self.kinds.values().map(|k| (k.bytes)(w)).sum()
+    }
+
     /// A world holding only `part`'s summaries (a copy of each), to keep and merge.
     pub fn take_summaries(&self, part: &World) -> World {
         let mut out = World::new();
@@ -136,7 +159,7 @@ impl SummaryRegistry {
 
     /// The parts' summaries (each world as [`SummaryRegistry::take_summaries`] made it) merged in the order given, and
     /// in the reverse order: an error naming a summary whose two merges differ (its merge depends on the order the
-    /// parts arrive in) or that cannot be merged.
+    /// parts arrive in) or that cannot be merged. A consistency check, not a proof of order-freedom (see the module).
     pub fn merge_order_free(&self, parts: &[World]) -> Result<World, String> {
         let merged = |order: &mut dyn Iterator<Item = &World>| -> Result<World, String> {
             let mut out = World::new();
@@ -185,6 +208,9 @@ mod tests {
             self.0 = self.0.min(other.0);
             Ok(())
         }
+        fn retained_bytes(&self) -> usize {
+            8
+        }
     }
 
     /// The values in the order they were merged: not order-free.
@@ -197,6 +223,9 @@ mod tests {
         fn merge(&mut self, other: Self) -> Result<(), String> {
             self.0.extend(other.0);
             Ok(())
+        }
+        fn retained_bytes(&self) -> usize {
+            4 * self.0.len()
         }
     }
 
