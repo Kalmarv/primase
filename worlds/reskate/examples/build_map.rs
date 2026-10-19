@@ -63,10 +63,11 @@ fn main() -> Result<(), BoxError> {
     let mut w = World::new();
     primase_reskate::interchange::read(&scene, &mut w)?;
     let lods = primase_reskate::select_lod(&mut w, lod)?;
+    // the meshes and textures the passes and the writer take (the writer reads no texture file); the scene's
+    // warnings are read from them too
+    primase_reskate::interchange::load(&scene, &mut w)?;
     let (warnings, dropped) = primase_reskate::leave_out_optional(&mut w, &scene, max_priority)?;
     o.scene_warnings = Some(warnings);
-    // the meshes and textures the passes and the writer take (the writer reads no texture file)
-    primase_reskate::interchange::load(&scene, &mut w)?;
     let mut passes: Vec<Box<dyn Pass>> = Vec::new();
     // a scene that states its region is clipped to it (the writer clips nothing of its own)
     if let Some(region) = w

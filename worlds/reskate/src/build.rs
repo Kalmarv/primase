@@ -412,7 +412,8 @@ pub fn select_lod(world: &mut World, lod: primase_core::LodChoice) -> Result<pri
 
 /// The reference build's `--max-priority N` as a pass, run last before [`build`]: the scene's warnings as the
 /// reference reports them (from the whole scene, before its writer leaves placements out), for
-/// [`BuildOptions::scene_warnings`], then `drop-optional{max=N}` (nothing left out without N).
+/// [`BuildOptions::scene_warnings`], then `drop-optional{max=N}` (nothing left out without N). The scene is read
+/// with its files loaded (`interchange::load`): the warnings look at the meshes, and textures need pixels.
 pub fn leave_out_optional(
     world: &mut World,
     dir: &Path,
