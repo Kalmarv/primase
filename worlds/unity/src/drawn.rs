@@ -130,9 +130,7 @@ impl Pass for UnityDrawn {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = unity_drawn(w);
-        for (k, n) in r.counts {
-            log.count(&k, n);
-        }
+        log.absorb(r);
         Ok(())
     }
 }

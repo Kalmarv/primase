@@ -746,12 +746,7 @@ impl Pass for LowerFromSoftMaterials {
                 dropped,
             );
         }
-        for (k, v) in lowered.counts {
-            log.count(&k, v);
-        }
-        for (k, v) in lowered.approximations {
-            log.approximate(&k, v);
-        }
+        log.absorb(lowered);
         Ok(())
     }
 }

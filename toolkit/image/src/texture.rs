@@ -333,12 +333,7 @@ impl Pass for BakeNormalScale {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = bake_normal_scale(world).map_err(|e| e.to_string())?;
-        for (k, n) in r.counts {
-            log.count(&k, n);
-        }
-        for (k, n) in r.approximations {
-            log.approximate(&k, n);
-        }
+        log.absorb(r);
         Ok(())
     }
 }
@@ -365,12 +360,7 @@ impl Pass for NormalizeNormals {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = normalize_normals(world).map_err(|e| e.to_string())?;
-        for (k, n) in r.counts {
-            log.count(&k, n);
-        }
-        for (k, n) in r.approximations {
-            log.approximate(&k, n);
-        }
+        log.absorb(r);
         Ok(())
     }
 }

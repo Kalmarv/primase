@@ -98,6 +98,32 @@ impl PassLog {
         self.placed.insert(e);
         self.placed_from.insert(e, source);
     }
+
+    /// Take in the log of work done on the pass's behalf (a function returning its own [`PassLog`]): every count,
+    /// approximation and omission added to this log's, its recorded removals and its placed entities (with their
+    /// sources), so nothing it reported is lost on the way to the pass's report.
+    pub fn absorb(&mut self, other: PassLog) {
+        let PassLog {
+            counts,
+            approximations,
+            omitted,
+            removed,
+            placed,
+            placed_from,
+        } = other;
+        for (k, n) in counts {
+            self.count(&k, n);
+        }
+        for (k, n) in approximations {
+            self.approximate(&k, n);
+        }
+        for (k, n) in omitted {
+            self.omit(&k, n);
+        }
+        self.removed.extend(removed);
+        self.placed.extend(placed);
+        self.placed_from.extend(placed_from);
+    }
 }
 
 /// A transformation of the world. Declarations are component names (`core.mesh`, `skate.material`).
@@ -1823,6 +1849,35 @@ mod tests {
             .legal("toy.pbr")
             .illegal("toy.file")
             .illegal("toy.layered")
+    }
+
+    /// A pass taking in a function's log keeps everything it reported: counts, approximations and omissions add up,
+    /// removals, placed entities and their sources join.
+    #[test]
+    fn absorb_keeps_every_part_of_the_log() {
+        let mut w = World::new();
+        let (a, b, source) = (w.spawn(), w.spawn(), w.spawn());
+        let mut log = PassLog::default();
+        log.count("kept", 1);
+        log.approximate("rounded", 2);
+        log.place(a);
+        let mut other = PassLog::default();
+        other.count("kept", 3);
+        other.count("made", 1);
+        other.approximate("rounded", 1);
+        other.omit("no form", 4);
+        other.record_removed("toy.hat");
+        other.place_from(b, source);
+        log.absorb(other);
+        assert_eq!(
+            log.counts,
+            BTreeMap::from([("kept".to_owned(), 4), ("made".to_owned(), 1)])
+        );
+        assert_eq!(log.approximations, BTreeMap::from([("rounded".to_owned(), 3)]));
+        assert_eq!(log.omitted, BTreeMap::from([("no form".to_owned(), 4)]));
+        assert_eq!(log.removed, BTreeSet::from(["toy.hat".to_owned()]));
+        assert_eq!(log.placed, BTreeSet::from([a, b]));
+        assert_eq!(log.placed_from, BTreeMap::from([(b, source)]));
     }
 
     #[test]

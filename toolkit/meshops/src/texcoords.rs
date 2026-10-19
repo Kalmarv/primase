@@ -211,9 +211,7 @@ impl Pass for BakeTextureTransforms {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let r = bake_texture_transforms(world);
-        for (k, n) in r.counts {
-            log.count(&k, n);
-        }
+        log.absorb(r);
         log.approximate(
             "coordinate sets transformed in f32",
             log.counts.get("coordinate sets baked").copied().unwrap_or(0),

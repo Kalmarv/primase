@@ -902,10 +902,7 @@ impl primase_core::pass::Pass for RaiseSkate {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let l = raise_skate(w, &self.options).map_err(|e| e.to_string())?;
-        log.counts.extend(l.counts);
-        log.approximations.extend(l.approximations);
-        log.omitted.extend(l.omitted);
-        log.placed.extend(l.placed);
+        log.absorb(l);
         Ok(())
     }
 }

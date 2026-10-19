@@ -67,11 +67,7 @@ impl Pass for BakeNonrigid {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let done = bake_nonrigid(w, self);
-        for (k, n) in done.counts {
-            log.count(&k, n);
-        }
-        log.removed.extend(done.removed);
+        log.absorb(bake_nonrigid(w, self));
         Ok(())
     }
 }
@@ -161,10 +157,7 @@ fn mapped_copy(
             w.despawn(e);
         }
     } else {
-        for (k, n) in dropped.counts {
-            log.count(&k, n);
-        }
-        log.removed.extend(dropped.removed);
+        log.absorb(dropped);
     }
     result
 }

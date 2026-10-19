@@ -343,12 +343,7 @@ impl Pass for LowerUnityCollision {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let r = lower_unity_collision(w).map_err(|e| e.to_string())?;
-        for (k, n) in r.counts {
-            log.count(&k, n);
-        }
-        for (k, n) in r.approximations {
-            log.approximate(&k, n);
-        }
+        log.absorb(r);
         Ok(())
     }
 }
