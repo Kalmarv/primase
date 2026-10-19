@@ -7,17 +7,21 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Collision, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
     Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
+use primase_reskate::components::{
+    BlendBudgetMode, CellCount, CellsCounted, SkateBlendBudget, SkateCellCounts, SkateMapSummary,
+};
 use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
-    PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers,
+    FinalizeReskateBlendBudget, PlanReskateBlendBudget, PrepareReskateBlendOrder, RaiseOptions,
+    SnapReskateMarkers,
 };
 
 fn tmp(name: &str) -> PathBuf {
@@ -235,4 +239,252 @@ fn chain_objects_fill_the_budget_in_key_order_and_the_rest_are_plain() {
     assert!(other > 0, "{stats}");
     assert_eq!(stats["cap"].as_u64().unwrap(), 209_715 - other);
     assert_eq!(stats["tiles_shared"], serde_json::json!(0));
+}
+
+/// The world with its map summarized for `cull_ids` (its collision cells counted, as a whole map's are).
+fn summarized(cull_ids: usize) -> World {
+    let mut w = world();
+    SummarizeReskateMap::for_encoding(&EncodingOptions {
+        cull_ids,
+        ..EncodingOptions::default()
+    })
+    .unwrap()
+    .run(&mut w, &mut PassLog::default())
+    .unwrap();
+    w
+}
+
+/// The budget `pass` planned on `w` as a program runs it (the pass manager checks what it requires), and what it
+/// logged.
+fn planned(pass: impl Pass + 'static, mut w: World) -> Result<(SkateBlendBudget, PassLog), String> {
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run(
+            &mut w,
+            &Pipeline {
+                passes: vec![Box::new(pass)],
+            },
+            &mut report,
+        )
+        .map_err(|e| e.to_string())?;
+    let log = report.steps.pop().unwrap().log;
+    Ok((w.resource::<SkateBlendBudget>().unwrap().clone(), log))
+}
+
+/// The whole map's pool budget on `w`.
+fn pool_plan(w: World) -> Result<(SkateBlendBudget, PassLog), String> {
+    planned(PlanReskateBlendBudget::pool(), w)
+}
+
+/// The pool budget of a map in parts, from its finalize stage's `w`.
+fn pool_finalize(w: World) -> Result<(SkateBlendBudget, PassLog), String> {
+    planned(FinalizeReskateBlendBudget::pool(), w)
+}
+
+/// What a map in parts' finalize stage holds for the map `whole` summarizes: its summary with `cells` cull IDs of it
+/// counted apart, and the collision cells' counts holding them (split over two cells).
+fn finalize_world(whole: &SkateMapSummary, cells: usize) -> World {
+    let mut w = World::new();
+    w.insert_resource(SkateMapSummary {
+        other_cull_ids: whole.other_cull_ids - cells,
+        cells: CellsCounted::Apart,
+        ..whole.clone()
+    });
+    w.insert_resource(SkateCellCounts {
+        cells: BTreeMap::from([
+            (
+                (false, 0, 0),
+                CellCount {
+                    pieces: 1,
+                    cull_ids: cells / 2,
+                },
+            ),
+            (
+                (true, 1, 0),
+                CellCount {
+                    pieces: 1,
+                    cull_ids: cells - cells / 2,
+                },
+            ),
+        ]),
+    });
+    w
+}
+
+/// A map in parts decides its budget, in the finalize stage, as the whole map does: from its summary (the parts'
+/// content, their tiles with a chain form) and its cells' counts, the same decision with the same basis, and the same
+/// approximation logged, with room for every tile's chain objects, one ID short of it, and with none.
+#[test]
+fn the_finalize_stage_decides_as_the_whole_map() {
+    let whole = summarized(1_000_000);
+    let summary = whole.resource::<SkateMapSummary>().unwrap().clone();
+    assert_eq!(summary.cells, CellsCounted::Included);
+    assert_eq!(
+        summary.chains.keys().collect::<Vec<_>>(),
+        ["t_0_0", "t_1_0"],
+        "the summary carries the chain tiles: {summary:?}"
+    );
+    let other = summary.other_cull_ids;
+    assert!(other > 2, "{summary:?}");
+    // the boundary: the fewest cull IDs with which both tiles take the chain form
+    let chosen = |cull_ids: usize| {
+        pool_plan(summarized(cull_ids))
+            .unwrap()
+            .0
+            .decision
+            .unwrap()
+            .chosen
+            .len()
+    };
+    let mut boundary = other;
+    while chosen(boundary) < 2 {
+        boundary += 1;
+    }
+    let mut saturated = boundary;
+    while chosen(saturated) > 0 {
+        saturated -= 1;
+    }
+    for (cull_ids, takes) in [(boundary, 2), (boundary - 1, 1), (saturated, 0)] {
+        let w = summarized(cull_ids);
+        let s = w.resource::<SkateMapSummary>().unwrap().clone();
+        let (expected, expected_log) = pool_plan(w).unwrap();
+        let d = expected.decision.as_ref().unwrap();
+        assert_eq!((d.ranked.len(), d.chosen.len()), (2, takes), "{cull_ids}: {d:?}");
+        assert_eq!(
+            expected_log.approximations.values().sum::<u64>(),
+            2 - takes as u64,
+            "{cull_ids}: {expected_log:?}"
+        );
+        let (made, log) = pool_finalize(finalize_world(&s, 2)).unwrap();
+        assert_eq!(made, expected, "{cull_ids}");
+        assert_eq!(log.approximations, expected_log.approximations, "{cull_ids}");
+        assert_eq!(log.counts, expected_log.counts, "{cull_ids}");
+    }
+    // a fixed count over parts: the same tiles, no basis
+    let (made, log) = planned(
+        FinalizeReskateBlendBudget::objects(1),
+        finalize_world(&summary, 2),
+    )
+    .unwrap();
+    let (expected, expected_log) = planned(PlanReskateBlendBudget::objects(1), world()).unwrap();
+    assert_eq!(made, expected);
+    assert_eq!(log.approximations, expected_log.approximations);
+    assert_eq!(made.decision.unwrap().chosen.len(), 1);
+}
+
+/// The budget is decided over the whole map only: a part is refused by both passes, the finalize pass refuses
+/// summaries without the cells' counts and a whole map's summary, and the whole map's pass a part's summary.
+#[test]
+fn the_budget_refuses_a_part_and_summaries_without_cell_counts() {
+    let scope = primase_core::convert::PartScope {
+        roots: Default::default(),
+        context: Default::default(),
+        whole: false,
+        area: None,
+        first_made: None,
+        placed: BTreeMap::new(),
+    };
+    let mut part = summarized(1_000_000);
+    part.insert_resource(scope.clone());
+    let e = pool_plan(part).unwrap_err();
+    assert!(
+        e.contains("decided once over the whole map, by finalize-reskate-blend-budget"),
+        "{e}"
+    );
+    let summary = summarized(1_000_000)
+        .resource::<SkateMapSummary>()
+        .unwrap()
+        .clone();
+    let mut part = finalize_world(&summary, 2);
+    part.insert_resource(scope);
+    let e = pool_finalize(part).unwrap_err();
+    assert!(
+        e.contains("decided once over the whole map, by finalize-reskate-blend-budget"),
+        "{e}"
+    );
+    let mut no_cells = finalize_world(&summary, 2);
+    no_cells.remove_resource::<SkateCellCounts>();
+    let e = pool_finalize(no_cells).unwrap_err();
+    assert!(e.contains("requires `skate.cell_counts`"), "{e}");
+    let mut whole_summary = finalize_world(&summary, 2);
+    whole_summary.insert_resource(summary.clone());
+    let e = pool_finalize(whole_summary).unwrap_err();
+    assert!(
+        e.contains("it is a whole map's, budgeted by plan-reskate-blend-budget"),
+        "{e}"
+    );
+    let mut apart = summarized(1_000_000);
+    apart.insert_resource(SkateMapSummary {
+        cells: CellsCounted::Apart,
+        ..summary
+    });
+    let e = pool_plan(apart).unwrap_err();
+    assert!(e.contains("budgeted by finalize-reskate-blend-budget"), "{e}");
+    let e = pool_plan(World::new()).unwrap_err();
+    assert!(e.contains("requires `skate.scene`"), "{e}");
+}
+
+/// The writer replays a decided budget and decides none: a budget with its mode and no decision is refused.
+#[test]
+fn a_writer_given_an_undecided_budget_refuses() {
+    let mut w = world();
+    w.insert_resource(SkateBlendBudget {
+        mode: BlendBudgetMode::Pool,
+        decision: None,
+    });
+    let e = primase_reskate::write_map(
+        &w,
+        &PathBuf::new(),
+        &EncodingOptions {
+            out_root: tmp("undecided"),
+            name: Some("budget".into()),
+            ..EncodingOptions::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("states its mode and no decision"), "{e}");
+}
+
+/// A map's cull IDs are counted without its spawn (a part of a map in several may hold none, and a marker takes no cull
+/// ID), and the writer still refuses a map without one.
+#[test]
+fn the_summary_counts_without_a_spawn_and_the_writer_refuses_none() {
+    let mut w = world();
+    let spawns: Vec<_> = w
+        .iter::<primase_reskate::components::SkateMarker>()
+        .filter(|(_, m)| m.kind == primase_reskate::components::MarkerKind::Spawn)
+        .map(|(e, _)| e)
+        .collect();
+    assert!(!spawns.is_empty());
+    let counted = summarized(1_000_000)
+        .resource::<SkateMapSummary>()
+        .unwrap()
+        .clone();
+    for e in spawns {
+        w.despawn(e);
+    }
+    SummarizeReskateMap::for_encoding(&EncodingOptions {
+        cull_ids: 1_000_000,
+        ..EncodingOptions::default()
+    })
+    .unwrap()
+    .run(&mut w, &mut PassLog::default())
+    .unwrap();
+    assert_eq!(w.resource::<SkateMapSummary>(), Some(&counted));
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let e = primase_reskate::write_map(
+        &w,
+        &PathBuf::new(),
+        &EncodingOptions {
+            out_root: tmp("no-spawn"),
+            name: Some("budget".into()),
+            ..EncodingOptions::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("the map has no spawn marker"), "{e}");
 }

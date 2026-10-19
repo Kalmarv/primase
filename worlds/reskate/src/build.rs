@@ -17,8 +17,7 @@ use crate::assembly::{
 use crate::collision::{Collision, CollisionResult};
 use crate::collision_pack::{Files, Pack, check_packed};
 use crate::components::{
-    OverlayPiece, OverlayTotals, SkateBlendChains, SkateCellLayout, SkateCollisionPlan, SkateLayoutSummary,
-    StackedPiece,
+    OverlayPiece, OverlayTotals, SkateCellLayout, SkateCollisionPlan, SkateLayoutSummary, StackedPiece,
 };
 use crate::map::{CellKey, Chains, Extras, MapWriter, Stack, WriterOptions, lay_cell, sum_totals};
 use crate::model::CollisionMode;
@@ -38,9 +37,6 @@ pub struct BuildReport {
     /// laid them out already), are these, cell by cell.
     pub cells: usize,
     pub cell_triangles: usize,
-    /// The blend budget the writer decided over the whole map by `plan-reskate-blend-budget`'s rule, with its basis (a
-    /// map in parts, whose record holds the mode only); `None` otherwise.
-    pub blend_budget: Option<crate::components::SkateBlendBudget>,
     pub tiles: usize,
     pub merged_entities: i64,
     pub merged_tris: i64,
@@ -73,9 +69,9 @@ pub struct BuildReport {
 
 impl BuildReport {
     /// What a conversion reports of the map: its log lines (the map's numbers, the blend order, how the parts came, the
-    /// collision plan and blend budget the writer made, the warnings), what it left out as unsupported notices and
-    /// what it wrote approximately as approximation notices. The names the target does not take the conversion
-    /// reported itself before writing (`unsupported_names` is for direct callers of [`write_map`]).
+    /// warnings), what it left out as unsupported notices and what it wrote approximately as approximation notices.
+    /// The names the target does not take the conversion reported itself before writing (`unsupported_names` is for
+    /// direct callers of [`write_map`]). The blend budget's approximation is the pass's that decided it, reported once.
     pub fn finished(self) -> primase_core::convert::Finished {
         use primase_core::convert::{Finished, Notice, NoticeKind};
         let mut report: primase_core::convert::Report = vec![
@@ -103,9 +99,6 @@ impl BuildReport {
                 ),
             ),
         ];
-        if let Some(b) = &self.blend_budget {
-            report.push(("reskate blend budget made".into(), format!("{b:?}")));
-        }
         // the map's warnings (map.json's), each counted below when it is a loss
         for w in self.warnings {
             report.push(("reskate warning".into(), w));
@@ -457,8 +450,8 @@ struct Taken {
     /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
     stack_meshes: BTreeMap<String, OverlayTotals>,
     proto_pieces: BTreeMap<OverlayPiece, StackedPiece>,
-    /// The whole map's blend chains, over every part.
-    chains: Option<SkateBlendChains>,
+    /// The tiles whose blend chains a part recorded, over every part (each tile's chains are one part's).
+    chain_tiles: BTreeSet<String>,
 }
 
 /// The folder `d` made afresh (empty).
@@ -579,7 +572,7 @@ impl MapSink {
                 mesh_sizes: BTreeMap::new(),
                 stack_meshes: BTreeMap::new(),
                 proto_pieces: BTreeMap::new(),
-                chains: None,
+                chain_tiles: BTreeSet::new(),
                 written: BTreeSet::new(),
             });
         }
@@ -646,13 +639,8 @@ impl MapSink {
             t.writer.set_stack(Stack::Replay(Box::new(st)));
         }
         if let Some(ch) = records.chains {
-            let all = t.chains.get_or_insert_with(|| SkateBlendChains {
-                grid: ch.grid,
-                grouping: ch.grouping,
-                tiles: BTreeMap::new(),
-            });
-            for (name, tile) in &ch.tiles {
-                if all.tiles.insert(name.clone(), tile.clone()).is_some() {
+            for name in ch.tiles.keys() {
+                if !t.chain_tiles.insert(name.clone()) {
                     return Err(Error::Scene(format!(
                         "{name}'s blend chains are recorded by two parts of the map (skate.blend_chains)"
                     )));
@@ -873,7 +861,6 @@ impl MapSink {
             mut mesh_sizes,
             records,
             stack_meshes,
-            chains,
             ..
         }) = self.taken
         else {
@@ -907,12 +894,10 @@ impl MapSink {
             .count();
         s.notes.unprepared_curves = grind.iter().filter(|g| g.prism.is_none()).count();
         let (notes, omitted, approximated) = s.notes.render();
-        // the overlay totals over every stacked mesh, a prototype once; the whole map's chains for a budget left to the
-        // writer
+        // the overlay totals over every stacked mesh, a prototype once
         if records.stack.is_some() {
             writer.set_overlay_totals(&sum_totals(stack_meshes.values()));
         }
-        writer.set_budget_chains(chains);
         // the gathered cells laid out already: their objects and counts among the map's
         let GatheredCells {
             keys: cells,
@@ -1005,7 +990,6 @@ impl MapSink {
             parts,
             cells: cells.len(),
             cell_triangles: cell_triangles.values().sum(),
-            blend_budget: writer.budget_made().cloned(),
             tiles: r.tiles.len(),
             merged_entities: r.merged_entities,
             merged_tris: r.merged_tris,

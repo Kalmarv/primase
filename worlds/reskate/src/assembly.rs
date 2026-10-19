@@ -966,17 +966,32 @@ impl Records {
 }
 
 /// The summary of the prepared world `world` for the encoding `a` (`summarize-reskate-map`'s): the cull IDs the writer's
-/// own layout of it takes besides the blend chains, counted as [`MapWriter::finish`] counts them, with nothing encoded.
-pub(crate) fn map_summary(world: &World, a: &EncodingOptions) -> Result<crate::components::SkateMapSummary> {
+/// own layout of it takes besides the blend chains, counted as [`MapWriter::finish`] counts them, with nothing encoded,
+/// its collision cells as `cells` says (apart: left unlaid, so uncounted); and its tiles with a chain form.
+pub(crate) fn map_summary(
+    world: &World,
+    a: &EncodingOptions,
+    cells: crate::components::CellsCounted,
+) -> Result<crate::components::SkateMapSummary> {
     // everything the map's objects take, nothing encoded
     let mut laid = lay(world, a, Layout::Count)?;
     let grouping = grouping(&laid.scene, a);
+    let chains = world
+        .resource::<crate::components::SkateBlendChains>()
+        .map(crate::passes::blend_budget::candidates)
+        .unwrap_or_default();
     let (writer, extras) = laid.extras();
+    if cells == crate::components::CellsCounted::Apart {
+        // its collision cells are their groups': taken out unlaid
+        writer.take_cells();
+    }
     let other_cull_ids = writer.non_chain_cull_ids(extras)?;
     Ok(crate::components::SkateMapSummary {
         grouping,
         cull_ids: a.cull_ids,
         other_cull_ids,
+        cells,
+        chains,
     })
 }
 

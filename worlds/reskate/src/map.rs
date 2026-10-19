@@ -616,12 +616,8 @@ pub struct MapWriter {
     stack: Stack,
     /// The blend chains: none, chosen here for `prepare-reskate-blend-order`, or the ones it chose, built again.
     chains: Chains,
-    /// The chain-object budget `plan-reskate-blend-budget` planned (`None`: none planned, every tile plain).
+    /// The chain-object budget `plan-reskate-blend-budget` decided (`None`: none planned; tiles with chains refused).
     budget: Option<SkateBlendBudget>,
-    /// The whole map's blend chains, for a budget left to the writer (a map in parts).
-    budget_chains: Option<SkateBlendChains>,
-    /// The budget it decided itself (a map in parts), by the pass's rule.
-    budget_made: Option<SkateBlendBudget>,
     /// How the collision is written, as `prepare-reskate-collision` planned it (`None`: exactly).
     collision_plan: Option<crate::components::SkateCollisionPlan>,
     /// The prototypes made, by key: each made and written once, by the first part of the map that draws one.
@@ -815,8 +811,6 @@ impl MapWriter {
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
             budget: None,
-            budget_chains: None,
-            budget_made: None,
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
@@ -868,22 +862,12 @@ impl MapWriter {
         self.chains = chains;
     }
 
-    /// The whole map's blend chains, from which a budget left to the writer is decided.
-    pub(crate) fn set_budget_chains(&mut self, chains: Option<SkateBlendChains>) {
-        self.budget_chains = chains;
-    }
-
-    /// The budget it decided itself (a map in parts), with its basis.
-    pub(crate) fn budget_made(&self) -> Option<&SkateBlendBudget> {
-        self.budget_made.as_ref()
-    }
-
     /// The overlay totals as the map's: given (the sum of every stacked mesh, a map in parts).
     pub(crate) fn set_overlay_totals(&mut self, t: &OverlayTotals) {
         self.r.overlay = stats_of(t);
     }
 
-    /// The chain-object budget `plan-reskate-blend-budget` planned.
+    /// The chain-object budget `plan-reskate-blend-budget` decided.
     pub(crate) fn with_budget(mut self, budget: Option<SkateBlendBudget>) -> MapWriter {
         self.budget = budget;
         self
@@ -1215,7 +1199,7 @@ impl MapWriter {
     /// ([`blend_order::take_chains`]): the chain form for the tiles `plan-reskate-blend-budget` chose (for a count, or
     /// in pool mode from the map's summary, whose basis, the cull IDs and `other` (what the rest of the map takes),
     /// must be this layout's), the plain form for the rest. The writer chooses nothing: tiles with chains and no
-    /// planned budget, a ranking for other tiles, or a pool basis other than this layout's are an error. The form not
+    /// decided budget, a ranking for other tiles, or a pool basis other than this layout's are an error. The form not
     /// taken is deleted.
     fn emit_chains(&mut self, other: usize) -> Result<()> {
         let pending = std::mem::take(&mut self.pending_chains);
@@ -1232,26 +1216,14 @@ impl MapWriter {
                 names.len()
             ))
         })?;
-        let d = match b.decision {
-            Some(d) => d,
-            // left to the writer (a map in parts): the pass's own rule, on the whole map's chains and this layout's
-            // count
-            None => {
-                let chains = self.budget_chains.as_ref();
-                let summary = crate::components::SkateMapSummary {
-                    grouping: chains
-                        .and_then(|c| c.grouping)
-                        .ok_or_else(|| Error::Scene("the blend chains state no writer settings".into()))?,
-                    cull_ids: self.o.cull_ids,
-                    other_cull_ids: other,
-                };
-                let made = crate::passes::blend_budget::plan(chains, b.mode, Some(&summary))
-                    .map_err(Error::Scene)?;
-                let d = made.decision.clone().expect("plan decides");
-                self.budget_made = Some(made);
-                d
-            }
-        };
+        let d = b.decision.ok_or_else(|| {
+            Error::Scene(
+                "the blend budget (skate.blend_budget) states its mode and no decision: it is decided before the map \
+                 is written (plan-reskate-blend-budget; a map in parts: finalize-reskate-blend-budget, in the \
+                 conversion's finalize stage)"
+                    .into(),
+            )
+        })?;
         if d.ranked != names {
             return Err(Error::Scene(
                 "the blend budget (skate.blend_budget) ranks other tiles than the writer's blend chains: run \
@@ -2490,7 +2462,6 @@ impl MapWriter {
         Ok(())
     }
 
-    /// Collision, water, grind curves, markers, lights, textures_index.json, map.json, trainer.json.
     /// The cull IDs the map takes besides its blend chains: an ID per entity Studio makes (each object once per 200 m
     /// cell it meets: tiles, instances, collision, grind prisms, water) and per light. The writer's own count, made as
     /// [`MapWriter::finish`] makes it, for `summarize-reskate-map`.
@@ -2498,7 +2469,17 @@ impl MapWriter {
         Ok(self.lay_out(x)?.other)
     }
 
+    /// Collision, water, grind curves, markers, lights, textures_index.json, map.json, trainer.json.
     pub fn finish(&mut self, x: Extras) -> Result<()> {
+        // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
+        // makes none, and map.json cannot be written without one (a part's count, which takes no marker, needs none)
+        if !x.markers.iter().any(|m| m.kind == "spawn") {
+            return Err(Error::Scene(
+                "the map has no spawn marker: place one before writing (place-spawn at selection, or a skate.marker \
+                 of kind spawn)"
+                    .into(),
+            ));
+        }
         let LaidOut {
             o,
             off,
@@ -2787,15 +2768,6 @@ impl MapWriter {
         let o = self.o.clone();
         let off = self.off;
         let markers = x.markers.clone();
-        // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
-        // makes none, and map.json cannot be written without one
-        if !markers.iter().any(|m| m.kind == "spawn") {
-            return Err(Error::Scene(
-                "the map has no spawn marker: place one before writing (place-spawn at selection, or a skate.marker \
-                 of kind spawn)"
-                    .into(),
-            ));
-        }
         if self.r.degenerate > 0 {
             self.r.warnings.push(format!(
                 "{} placements with a degenerate matrix were left out",

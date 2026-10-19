@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use primase_core::convert::{
     ConvertReport, Finished, Gathered, NoticeKind, PartitionPlan, PlannedParts, Reader, Report, Result,
@@ -33,9 +34,10 @@ use primase_reskate::components::{
 use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateWater};
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
-    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCellCollision, PrepareReskateCollision,
-    PrepareReskateOverlays, RaiseOptions, ShareReskateCollision, SummarizeReskateContent,
-    SummarizeReskateInstances, SummarizeReskateLayout, SummarizeReskateMap,
+    FinalizeReskateBlendBudget, PlanReskateBlendBudget, PrepareReskateBlendOrder,
+    PrepareReskateCellCollision, PrepareReskateCollision, PrepareReskateOverlays, RaiseOptions,
+    ShareReskateCollision, SummarizeReskateContent, SummarizeReskateInstances, SummarizeReskateLayout,
+    SummarizeReskateMap,
 };
 use primase_reskate::spool::{CellSpool, SpoolReport};
 use primase_reskate::{BuildReport, EncodingOptions, MapSink};
@@ -907,9 +909,9 @@ fn the_spools_memory_does_not_grow_with_the_map() {
     assert!(written[0] < written[1] && written[1] < written[2], "{written:?}");
 }
 
-/// The routes' preparation, for a map encoded with `cull_ids`: the overlays stacked, the blend chains split, the
-/// collision planned, the map summarized, the chain objects budgeted from the cull-ID pool.
-fn prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
+/// The routes' preparation of each part, for a map encoded with `cull_ids`: the overlays stacked, the blend chains
+/// split.
+fn part_prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
     let e = EncodingOptions {
         cull_ids,
         ..EncodingOptions::default()
@@ -927,10 +929,21 @@ fn prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
                 .for_encoding(&e)
                 .unwrap(),
         ),
-        Box::new(plan()),
-        Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()),
-        Box::new(PlanReskateBlendBudget::pool()),
     ]
+}
+
+/// The routes' preparation of the whole map, for a map encoded with `cull_ids`: each part's, the collision planned, the
+/// map summarized, the chain objects budgeted from the cull-ID pool.
+fn prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
+    let e = EncodingOptions {
+        cull_ids,
+        ..EncodingOptions::default()
+    };
+    let mut passes = part_prepared(cull_ids);
+    passes.push(Box::new(plan()));
+    passes.push(Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()));
+    passes.push(Box::new(PlanReskateBlendBudget::pool()));
+    passes
 }
 
 /// The whole map's recorded budget for `cull_ids`: how many tiles it ranks and gives the chain form.
@@ -942,10 +955,50 @@ fn budget_for(cull_ids: usize) -> SkateBlendBudget {
     w.resource::<SkateBlendBudget>().unwrap().clone()
 }
 
+/// Keeps the blend budget of the world it runs on (the last it saw).
+#[derive(Default)]
+struct KeepBudget(Arc<Mutex<Option<SkateBlendBudget>>>);
+impl Pass for KeepBudget {
+    fn name(&self) -> &'static str {
+        "keep-budget"
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        *self.0.lock().unwrap() = w.resource::<SkateBlendBudget>().cloned();
+        Ok(())
+    }
+}
+
+/// The notices a conversion reports of the blend budget: kind, reason and count (which pass decided it, the whole
+/// map's or the finalize stage's, apart).
+fn budget_notices(r: &ConvertReport) -> Vec<(NoticeKind, String, u64)> {
+    r.notices()
+        .into_iter()
+        .filter(|n| n.stage.contains("reskate-blend-budget"))
+        .map(|n| (n.kind, n.reason, n.count))
+        .collect()
+}
+
+/// The map converted whole as `e` says, after `passes`: the sink's report and the conversion's.
+fn converted_whole(e: &EncodingOptions, passes: Vec<Box<dyn Pass>>) -> (BuildReport, ConvertReport) {
+    let report = Rc::new(RefCell::new(None));
+    let converted = primase_core::convert::convert(
+        &mut Planned(map()),
+        Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
+        &PassManager::new(PassRegistry::new()),
+        &Pipeline { passes: Vec::new() },
+        &Pipeline { passes },
+    )
+    .unwrap();
+    (report.take().unwrap(), converted)
+}
+
 /// The overlays, blend chains, collision plan and pool budget over parts: each part stacks its own meshes (the deck,
-/// drawn by several parts, stacked alike by each) and chains its own tiles, the writer decides the pool budget over the
-/// whole map by the pass's rule on its own count: the decision, with its basis, is the whole map's, at the pool's
-/// boundary (room for every tile's chain objects) and one ID short of it, and the maps are the same byte for byte.
+/// drawn by several parts, stacked alike by each) and chains its own tiles; the gather traversal summarizes each part's
+/// content with its collision cells apart, the cells' groups count theirs, and the finalize stage decides the pool
+/// budget once from the two (`finalize-reskate-blend-budget`) by the whole map's rule. The decision with its basis is
+/// the whole map's, as are the writer's blend record, the budget's structured approximation notice (the tiles left
+/// plain, reported once) and the maps byte for byte: at the pool's boundary (room for every tile's chain objects), one
+/// ID short of it, and saturated (no tile's chains fit).
 #[test]
 fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
     // the boundary: the fewest cull IDs with which every ranked tile takes the chain form
@@ -960,52 +1013,106 @@ fn the_preparation_and_the_pool_budget_over_parts_are_the_whole_maps() {
         boundary += 1;
     }
     assert!(chosen(&budget_for(boundary - 1)) < BLENDS.len());
-    for cull_ids in [boundary, boundary - 1] {
+    // saturated: the most cull IDs with which no tile takes it
+    let mut saturated = boundary;
+    while chosen(&budget_for(saturated)) > 0 {
+        saturated -= 1;
+    }
+    let reason = "tiles whose blend chains are written plain, past the chain-object budget (drawn in an unstable order)";
+    for cull_ids in [boundary, boundary - 1, saturated] {
         let reference = tmp(&format!("whole-pool-{cull_ids}"));
-        let (r, w) = whole_with(&encoding_with(&reference, cull_ids), prepared(cull_ids));
-        let recorded = w.resource::<SkateBlendBudget>().unwrap().clone();
-        // the deck (drawn by several parts) and tiles were stacked
-        let stack = w.resource::<SkateOverlayStack>().unwrap();
-        assert!(
-            stack.meshes.contains_key("proto deck"),
-            "{:?}",
-            stack.meshes.keys()
-        );
-        assert!(
-            stack.meshes.keys().any(|m| m.starts_with("t_")),
-            "{:?}",
-            stack.meshes.keys()
-        );
-        assert!(
-            r.blend_budget.is_none(),
-            "a whole map's budget is the pass's record"
-        );
-        assert!(
-            r.blend.tiles_split + r.blend.tiles_shared == BLENDS.len(),
+        let kept = KeepBudget::default();
+        let recorded = kept.0.clone();
+        let mut passes = prepared(cull_ids);
+        passes.push(Box::new(kept));
+        let (r, whole) = converted_whole(&encoding_with(&reference, cull_ids), passes);
+        let recorded = recorded.lock().unwrap().clone().unwrap();
+        let plain = ranked(&recorded) - chosen(&recorded);
+        assert_eq!(
+            r.blend.tiles_split + r.blend.tiles_shared,
+            BLENDS.len(),
             "{:?}",
             r.blend
         );
+        assert_eq!(r.blend.tiles_shared, plain, "{:?}", r.blend);
+        let expected_notices = budget_notices(&whole);
+        if plain > 0 {
+            assert_eq!(
+                expected_notices,
+                [(NoticeKind::Approximation, reason.to_owned(), plain as u64)],
+                "{cull_ids}"
+            );
+        } else {
+            assert!(expected_notices.is_empty(), "{expected_notices:?}");
+        }
+        // in parts: each part's content summarized with its cells apart in the gather traversal, the collision planned
+        // and counted cell by cell, the budget decided once in the finalize stage and handed to every part
         let out = tmp(&format!("parts-pool-{cull_ids}"));
-        // in parts: the collision planned cell by cell, the rest of the preparation in each part
+        let kept = KeepBudget::default();
+        let made = kept.0.clone();
+        let e = encoding_with(&out, cull_ids);
+        let mut passes = part_prepared(cull_ids);
+        passes.push(Box::new(kept));
+        let mut gather = part_prepared(cull_ids);
+        gather.push(Box::new(SummarizeReskateMap::for_encoding(&e).unwrap()));
         let stages = Stages {
-            passes: prepared(cull_ids)
-                .into_iter()
-                .filter(|p| p.name() != "prepare-reskate-collision")
-                .collect(),
+            passes,
+            gather,
+            finalize: vec![Box::new(FinalizeReskateBlendBudget::pool())],
             ..Stages::default()
         }
         .planned();
-        let r = in_parts_staged(&encoding_with(&out, cull_ids), &aligned(), None, stages, 200.0).unwrap();
-        assert!(r.parts >= 3);
-        let made = r.built.blend_budget.unwrap();
-        assert_eq!(made.mode, BlendBudgetMode::Pool);
-        assert_eq!(made.decision, recorded.decision, "{cull_ids}");
+        let p = in_parts_staged(&e, &aligned(), None, stages, 200.0).unwrap();
+        assert!(p.parts >= 3);
+        let made = made.lock().unwrap().clone().unwrap();
+        assert_eq!(made, recorded, "{cull_ids}: the decision and its basis");
+        assert_eq!(p.built.blend, r.blend, "{cull_ids}");
+        assert_eq!(budget_notices(&p.converted), expected_notices, "{cull_ids}");
         same_maps(
             &reference.join("parts"),
             &out.join("parts"),
             &format!("pool {cull_ids}"),
         );
     }
+    // the saturated map leaves every tile plain
+    assert_eq!(chosen(&budget_for(saturated)), 0);
+}
+
+/// Puts in a blend budget with its mode and no decision.
+struct Undecided;
+impl Pass for Undecided {
+    fn name(&self) -> &'static str {
+        "undecided"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.blend_budget"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        w.insert_resource(SkateBlendBudget {
+            mode: BlendBudgetMode::Pool,
+            decision: None,
+        });
+        Ok(())
+    }
+}
+
+/// The writer of a map in parts replays a decided budget and decides none: parts whose budget states its mode and no
+/// decision are refused.
+#[test]
+fn a_map_in_parts_with_an_undecided_budget_is_refused() {
+    let out = tmp("parts-undecided");
+    let mut passes = part_prepared(EncodingOptions::default().cull_ids);
+    passes.push(Box::new(Undecided));
+    let stages = Stages {
+        passes,
+        ..Stages::default()
+    }
+    .planned();
+    let e = in_parts_staged(&encoding(&out), &aligned(), None, stages, 200.0)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(e.contains("states its mode and no decision"), "{e}");
 }
 
 /// Changes the deck's recorded stack in the part holding the deck at east 410 m: two parts then disagree on a

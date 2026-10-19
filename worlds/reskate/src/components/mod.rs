@@ -1243,21 +1243,20 @@ impl Resource for SkateBlendChains {
 }
 
 /// How many chain objects a map takes: a fixed count, or what the cull-ID pool has left after the map's other objects
-/// (known when the map is written).
+/// (from the map's summary, `skate.map_summary`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlendBudgetMode {
     Objects(usize),
     Pool,
 }
 
-/// The blend-chain budget `plan-reskate-blend-budget` planned: its mode and its decision. Not part of scene-interchange
-/// v1.
+/// The blend-chain budget `plan-reskate-blend-budget` planned: its mode and its decision, made before writing over the
+/// whole map (a map in parts: once, from the merged summaries, and handed to every part). Not part of
+/// scene-interchange v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateBlendBudget {
     pub mode: BlendBudgetMode,
-    /// What it decided; `None`: left to the writer, which decides by the same rule
-    /// ([`crate::passes::blend_budget::plan`]) once it has laid the map out: a part of a map in several, whose tiles to
-    /// rank, and in pool mode whose other objects, are the whole map's.
+    /// What it decided; `None`: undecided, which the writer refuses (it replays a decision and makes none).
     pub decision: Option<BudgetDecision>,
 }
 
@@ -1279,15 +1278,37 @@ pub struct PoolBasis {
     pub other_cull_ids: usize,
 }
 
+/// Whether a map summary's `other_cull_ids` counts the collision cells' objects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum CellsCounted {
+    /// Counted: the summary of a whole map, whose collision cells it lays out itself.
+    Included,
+    /// Not counted: the summary of a part of a map in several, whose collision cells are laid out from every part's
+    /// triangles; their cull IDs are the cells' own record's (`skate.cell_counts`).
+    Apart,
+}
+
+/// A tile with a chain form, as a blend budget ranks it: its row and column (the rank is row, then column) and the
+/// chain objects it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ChainCandidate {
+    pub row: i32,
+    pub column: i32,
+    pub objects: usize,
+}
+
 /// `skate.map_summary`: the small record the map's whole-map decisions are made from (`summarize-reskate-map`'s): the
-/// cull IDs its encoding may take and how many its content takes besides the blend chains (an ID per object per Studio
-/// 200 m cell it meets, and per light), counted by the writer's own layout for the writer settings `grouping`. Not
-/// part of scene-interchange v1.
+/// cull IDs its encoding may take, how many its content takes besides the blend chains (an ID per object per Studio
+/// 200 m cell it meets, and per light; the collision cells' objects as `cells` says), counted by the writer's own
+/// layout for the writer settings `grouping`, and the tiles with a chain form, by name. Not part of scene-interchange
+/// v1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateMapSummary {
     pub grouping: OverlayGrouping,
     pub cull_ids: usize,
     pub other_cull_ids: usize,
+    pub cells: CellsCounted,
+    pub chains: BTreeMap<String, ChainCandidate>,
 }
 
 impl Resource for SkateMapSummary {
@@ -1297,24 +1318,48 @@ impl Resource for SkateMapSummary {
             "grouping": self.grouping,
             "cull_ids": self.cull_ids,
             "other_cull_ids": self.other_cull_ids,
+            "cells": self.cells,
+            "chains": self.chains,
         })))
     }
 }
 
 impl primase_core::summary::Summary for SkateMapSummary {
-    /// A map's cull IDs over its parts: each part's own objects' IDs summed, for one grouping and one pool.
+    /// A map's cull IDs over its parts: each part's own objects' IDs summed and its chain tiles joined, for one
+    /// grouping and one pool, the collision cells apart in each. A whole map's summary (its cells counted) is not
+    /// merged: it is already the map's; nor is a tile two parts state.
     fn merge(&mut self, other: Self) -> Result<(), String> {
-        if (&self.grouping, self.cull_ids) != (&other.grouping, other.cull_ids) {
+        if (&self.grouping, self.cull_ids, self.cells) != (&other.grouping, other.cull_ids, other.cells) {
             return Err(format!(
-                "parts summarized for the writer settings {:?} with {} cull IDs and {:?} with {}",
-                self.grouping, self.cull_ids, other.grouping, other.cull_ids
+                "parts summarized for the writer settings {:?} with {} cull IDs, cells {:?}, and {:?} with {}, cells \
+                 {:?}",
+                self.grouping, self.cull_ids, self.cells, other.grouping, other.cull_ids, other.cells
             ));
+        }
+        if self.cells == CellsCounted::Included {
+            return Err(
+                "two map summaries count their collision cells: each is a whole map's, and a map's parts are \
+                 summarized with their cells apart"
+                    .into(),
+            );
+        }
+        for (name, c) in other.chains {
+            if self.chains.insert(name.clone(), c).is_some() {
+                return Err(format!(
+                    "{name}'s blend chains are summarized by two parts of the map"
+                ));
+            }
         }
         self.other_cull_ids += other.other_cull_ids;
         Ok(())
     }
     fn retained_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
+            + self
+                .chains
+                .keys()
+                .map(|k| k.len() + std::mem::size_of::<(String, ChainCandidate)>())
+                .sum::<usize>()
     }
 }
 

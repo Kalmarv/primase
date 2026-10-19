@@ -25,7 +25,10 @@ pub mod uv_repeats;
 pub mod vertex_alpha;
 pub mod water;
 
-pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
+pub use blend_budget::{
+    FinalizeReskateBlendBudget, PlanReskateBlendBudget, finalize_reskate_blend_budget,
+    plan_reskate_blend_budget,
+};
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{
     BudgetReskateTextures, SummarizeReskateTextures, budget_reskate_textures, summarize_reskate_textures,
@@ -134,9 +137,10 @@ impl Owned {
 /// light cap, the texture budget, water's content extent, the spawn, the pause map's content extent and the marker
 /// snaps' instancing and water take their decisions from summaries merged over every part
 /// ([`primase_core::convert::convert_parts_summarized`]), and refuse a part without them through this. The overlays and
-/// blend chains are each part's own; the collision plan, the map's summary and the blend budget are left to the writer,
-/// which decides them over the whole map by the passes' own rules (the map sink); the region clip and water's other
-/// extents are local. A world outside the part protocol (no `core.part_scope`: a program composing passes and the writer
+/// blend chains are each part's own; the map's summary is each part's, counted with its collision cells apart, and the
+/// blend budget is decided once from the merged summaries (`finalize-reskate-blend-budget`), in the finalize stage of
+/// [`primase_core::convert::convert_parts_gathered`]; the collision plan is left to the writer, which decides it over
+/// the whole map by the pass's own rule (the map sink); the region clip and water's other extents are local. A world outside the part protocol (no `core.part_scope`: a program composing passes and the writer
 /// directly) is the whole map.
 pub fn require_whole_map(w: &World, pass: &str) -> Result<(), String> {
     match w.resource::<PartScope>() {

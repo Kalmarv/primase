@@ -73,6 +73,7 @@ pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateLayoutSummary>();
     reg.summary::<components::SkateCellCounts>();
     reg.decision::<components::SkateFloorDecision>();
+    reg.decision::<components::SkateBlendBudget>();
 }
 
 /// `lower-layered-reskate` and its components by their former path.
@@ -165,6 +166,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "plan-reskate-blend-budget",
         passes::plan_reskate_blend_budget,
+        &[("objects", "pool")],
+    );
+    reg.register_requiring(
+        "finalize-reskate-blend-budget",
+        passes::finalize_reskate_blend_budget,
         &[("objects", "pool")],
     );
     // the grid is the program's: no default

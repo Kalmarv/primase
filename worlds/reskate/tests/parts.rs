@@ -490,11 +490,11 @@ fn the_texture_budget_over_parts_is_the_whole_maps_in_any_order() {
     assert!(e.contains("the textures were weighed for a budget of 3"), "{e}");
 }
 
-/// The map's summary merges over its parts: each part's own cull IDs summed, for one grouping and one pool; parts
-/// summarized for other settings are refused. (Counting a part's own objects waits for the writer to lay out parts.)
+/// The map's summary merges over its parts: each part's own cull IDs (its collision cells apart) summed, for one
+/// grouping and one pool; parts summarized for other settings are refused.
 #[test]
 fn the_map_summary_sums_over_parts() {
-    use primase_reskate::components::{OverlayGrouping, SkateMapSummary};
+    use primase_reskate::components::{CellsCounted, OverlayGrouping, SkateMapSummary};
     let grouping = OverlayGrouping {
         tile: 200.0,
         min_instances: 4,
@@ -511,6 +511,8 @@ fn the_map_summary_sums_over_parts() {
             grouping,
             cull_ids,
             other_cull_ids,
+            cells: CellsCounted::Apart,
+            chains: BTreeMap::new(),
         });
         registry.take_summaries(&w)
     };

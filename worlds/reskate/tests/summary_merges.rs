@@ -9,8 +9,8 @@ use std::fmt::Debug;
 
 use primase_core::summary::Summary;
 use primase_reskate::components::{
-    OverlayGrouping, RankedLight, SkateContentBounds, SkateFloorSummary, SkateLightsSummary, SkateMapSummary,
-    SkateSpawnSummary, SkateTextureWeights,
+    CellsCounted, ChainCandidate, OverlayGrouping, RankedLight, SkateContentBounds, SkateFloorSummary,
+    SkateLightsSummary, SkateMapSummary, SkateSpawnSummary, SkateTextureWeights,
 };
 use primase_reskate::exact_sum::ExactSum;
 
@@ -165,10 +165,48 @@ fn the_map_summary() {
         limit: 4000.0,
         offset: [0.0, 0.0],
     };
-    let s = |n: usize| SkateMapSummary {
+    // each part's content counted with its collision cells apart, and its own tiles with a chain form
+    let s = |n: usize, tiles: &[(&str, i32, i32, usize)]| SkateMapSummary {
         grouping: g,
         cull_ids: 4096,
         other_cull_ids: n,
+        cells: CellsCounted::Apart,
+        chains: tiles
+            .iter()
+            .map(|&(name, row, column, objects)| (name.to_owned(), ChainCandidate { row, column, objects }))
+            .collect(),
     };
-    merges_alike([s(3), s(0), s(10), s(3)]);
+    merges_alike([
+        s(3, &[("t_0_0", 0, 0, 2)]),
+        s(0, &[]),
+        s(10, &[("t_1_0", 0, 1, 1), ("t_0_1", 1, 0, 3)]),
+        s(3, &[("t_2_0", 0, 2, 1)]),
+    ]);
+    let mut m = s(3, &[("t_0_0", 0, 0, 2)]);
+    m.merge(s(10, &[("t_1_0", 0, 1, 1)])).unwrap();
+    assert_eq!(m.other_cull_ids, 13);
+    assert_eq!(m.chains.len(), 2);
+
+    // refused: other writer settings, another pool, cells counted otherwise, a tile two parts state, two whole maps
+    let refused = |a: SkateMapSummary, b: SkateMapSummary, why: &str| {
+        let mut a = a;
+        let e = a.merge(b).unwrap_err();
+        assert!(e.contains(why), "{e}");
+    };
+    let mut other_grouping = s(1, &[]);
+    other_grouping.grouping.tile = 100.0;
+    refused(s(1, &[]), other_grouping, "writer settings");
+    let mut other_pool = s(1, &[]);
+    other_pool.cull_ids = 2048;
+    refused(s(1, &[]), other_pool, "cull IDs");
+    let mut included = s(1, &[]);
+    included.cells = CellsCounted::Included;
+    refused(s(1, &[]), included.clone(), "cells");
+    refused(included.clone(), s(1, &[]), "cells");
+    refused(included.clone(), included, "count their collision cells");
+    refused(
+        s(1, &[("t_0_0", 0, 0, 2)]),
+        s(2, &[("t_0_0", 0, 0, 2)]),
+        "t_0_0's blend chains are summarized by two parts",
+    );
 }

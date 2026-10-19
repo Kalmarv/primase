@@ -1,21 +1,24 @@
 //! `summarize-reskate-map{tile,min_instances,min_instance_tris,max_render_edge,limit,offset_x,offset_y,cull_ids}`: the
 //! small record the map's whole-map decisions are made from, `skate.map_summary`: the cull IDs the map's encoding may
-//! take and how many its content takes besides the blend chains (an ID per object per Studio 200 m cell it meets:
-//! tiles, instances, collision, grind prisms, water; and one per light), counted by the writer's own layout of the
-//! prepared world for this encoding, nothing encoded. `plan-reskate-blend-budget{objects=pool}` decides the chain forms
-//! from it before the map is written.
+//! take, how many its content takes besides the blend chains (an ID per object per Studio 200 m cell it meets: tiles,
+//! instances, hulls, collision, grind prisms, water; and one per light), counted by the writer's own layout of the
+//! prepared world for this encoding, nothing encoded, and the tiles with a chain form.
+//! `plan-reskate-blend-budget` decides the chain forms from it before the map is written.
 //!
-//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains). A part of a map
-//! in several cannot count: its collision cells are laid out from every part's triangles. It records nothing, and the
-//! writer counts the whole map as it lays it out, for the budget it decides (`plan-reskate-blend-budget` leaves a part's
-//! budget to the writer).
+//! It runs after the passes that change what the writer lays out (the overlay stack, the blend chains, the collision
+//! plan). A whole map counts its collision cells ([`CellsCounted::Included`]). A part of a map in several counts its
+//! own content with the collision cells apart ([`CellsCounted::Apart`]): a cell is laid out from every part's
+//! triangles, and counted by its group (`skate.cell_counts`). It runs in the conversion's gather pipeline
+//! ([`primase_core::convert::convert_parts_gathered`]), handed the decisions that change the part's layout
+//! (instancing, the region, the floor); the parts' summaries merge into the map's, which the finalize stage's
+//! `finalize-reskate-blend-budget` decides from.
 
 use primase_core::World;
 use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 
 use crate::assembly::{EncodingOptions, map_summary};
-use crate::components::SkateMapSummary;
+use crate::components::{CellsCounted, SkateMapSummary};
 
 /// See the module documentation. Made by [`SummarizeReskateMap::for_encoding`]; from options by the same call.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,21 +75,28 @@ impl Pass for SummarizeReskateMap {
         &["skate.map_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        if w.resource::<PartScope>().is_some_and(|s| !s.whole) {
-            log.count(
-                "map summaries left to the writer, which counts the whole map (a part of a map in several)",
-                1,
-            );
-            return Ok(());
-        }
         if w.resource::<SkateMapSummary>().is_some() {
             return Err("summarize-reskate-map: the map is already summarized (skate.map_summary)".into());
         }
-        let summary = map_summary(w, &self.encoding).map_err(|e| e.to_string())?;
+        // a part counts what it writes: its output, as conversion keeps it (its roots and what the passes placed for
+        // it), not the context it loaded
+        let summary = match w.resource::<PartScope>() {
+            Some(scope) if !scope.whole => {
+                let keep = scope.output(w).keep;
+                map_summary(&w.subset(&keep), &self.encoding, CellsCounted::Apart)
+            }
+            _ => map_summary(w, &self.encoding, CellsCounted::Included),
+        }
+        .map_err(|e| e.to_string())?;
+        let cells = summary.cells;
         log.count(
-            "cull IDs the map takes besides its blend chains",
+            match cells {
+                CellsCounted::Included => "cull IDs the map takes besides its blend chains",
+                CellsCounted::Apart => "cull IDs the part takes besides its blend chains and collision cells",
+            },
             summary.other_cull_ids as u64,
         );
+        log.count("tiles with a chain form", summary.chains.len() as u64);
         w.insert_resource(summary);
         Ok(())
     }
