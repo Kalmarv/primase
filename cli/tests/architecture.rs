@@ -574,6 +574,17 @@ fn place(src_path: &str, stages: &[String]) -> Place {
     Place::Other
 }
 
+/// Whether a file is the root of a role tree, which may re-export its read and pass API for consumers: the crate's
+/// `lib.rs`, or a game folder's `mod.rs` (one declaring role modules: `sekiro/mod.rs` with `mod read;`, CONTRIBUTING's
+/// `<game>/read`, `<game>/passes`, `<game>/components`).
+fn role_root(src_path: &str, tokens: &[Tok]) -> bool {
+    src_path == "lib.rs"
+        || (src_path.ends_with("/mod.rs")
+            && tokens.windows(2).any(|w| {
+                ident(&w[0], "mod") && matches!(&w[1], Tok::Ident(n) if matches!(n.as_str(), "read" | "write" | "passes" | "components"))
+            }))
+}
+
 /// A file's module path in its crate (`["a", "b"]` for `src/a/b.rs` or `src/a/b/mod.rs`; empty for `lib.rs`).
 fn module_of(src_path: &str) -> Vec<String> {
     let p = src_path.trim_end_matches(".rs");
@@ -820,7 +831,7 @@ fn layout_violations(f: &LayoutFile, stages: &[String], io: &IoIndex) -> Vec<Str
             out.push(format!("{file}: an inline role module (give it its own file)"));
         }
     }
-    if matches!(at, Place::Passes | Place::Components | Place::Other) && src_path != "lib.rs" {
+    if matches!(at, Place::Passes | Place::Components | Place::Other) && !role_root(src_path, f.tokens) {
         let (uses, paths) = named(f.tokens);
         let all = uses
             .iter()
@@ -1072,6 +1083,24 @@ fn f() {}"
     // I/O modules may name each other; the crate root re-exports for consumers
     assert!(check("write/map.rs", "use crate::read::scene;").is_empty());
     assert!(check("lib.rs", "pub use read::scene::read_scene;").is_empty());
+    // a game folder's root (it declares role modules) re-exports too; another folder's mod.rs does not
+    assert!(
+        check(
+            "sekiro/mod.rs",
+            "mod read;
+pub use crate::read::scene::read_scene;"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        check(
+            "misc/mod.rs",
+            "mod tables;
+pub use crate::read::scene::read_scene;"
+        )
+        .len(),
+        1
+    );
 }
 
 #[test]
@@ -1644,7 +1673,6 @@ fn real_data_variables_are_declared() {
 /// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
-    "layout: file=worlds/fromsoft/src/sekiro/mod.rs",
     "layout: file=worlds/gta/src/archive_set.rs",
     "layout: file=worlds/gta/src/assets.rs",
     "layout: file=worlds/gta/src/collision.rs",
