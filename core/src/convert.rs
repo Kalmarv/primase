@@ -1173,7 +1173,7 @@ fn run(
             }
             skipped_in_every_part(&report.summarized.iter().collect::<Vec<_>>(), s.summarize)?;
             "decide".clone_into(during);
-            let mut merged = s.registry.merge_order_free(&kept)?;
+            let mut merged = merge(s.registry, manager, &kept)?;
             drop(kept);
             report.merged_summary_bytes = s.registry.retained(&merged);
             // a merge makes the decisions' input: checked before the first decision pass reads it
@@ -1402,7 +1402,7 @@ fn gather(
         written?;
     }
     "finalize".clone_into(during);
-    let mut merged = registry.merge_order_free(&kept)?;
+    let mut merged = merge(registry, manager, &kept)?;
     drop(kept);
     registry.carry_decisions(decided, &mut merged);
     report.merged_summary_bytes = registry.retained(&merged);
@@ -1410,6 +1410,16 @@ fn gather(
     manager.run(&mut merged, g.finalize, &mut report.finalized)?;
     tally(&mut report.counts, &report.finalized.clone());
     Ok(merged)
+}
+
+/// Kept summaries merged: in either order with the order checked when the manager runs its self-checks
+/// ([`PassManager::pass_checks`]), once otherwise.
+fn merge(registry: &SummaryRegistry, manager: &PassManager, kept: &[World]) -> Result<World> {
+    Ok(if manager.pass_checks() {
+        registry.merge_order_free(kept)?
+    } else {
+        registry.merge(kept)?
+    })
 }
 
 /// The error a whole run gives for a pass that every part of a conversion skipped ([`PassManager::run_part`]: none of

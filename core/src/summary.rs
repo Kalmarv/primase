@@ -163,17 +163,8 @@ impl SummaryRegistry {
     /// in the reverse order: an error naming a summary whose two merges differ (its merge depends on the order the
     /// parts arrive in) or that cannot be merged. A consistency check, not a proof of order-freedom (see the module).
     pub fn merge_order_free(&self, parts: &[World]) -> Result<World, String> {
-        let merged = |order: &mut dyn Iterator<Item = &World>| -> Result<World, String> {
-            let mut out = World::new();
-            for p in order {
-                for (name, k) in self.kinds.iter().filter(|(_, k)| k.summary) {
-                    (k.merge)(&mut out, p).map_err(|e| format!("{name}: {e}"))?;
-                }
-            }
-            Ok(out)
-        };
-        let forward = merged(&mut parts.iter())?;
-        let backward = merged(&mut parts.iter().rev())?;
+        let forward = self.merge_in(&mut parts.iter())?;
+        let backward = self.merge_in(&mut parts.iter().rev())?;
         for (name, k) in self.kinds.iter().filter(|(_, k)| k.summary) {
             if !(k.equal)(&forward, &backward) {
                 return Err(format!(
@@ -184,6 +175,22 @@ impl SummaryRegistry {
             }
         }
         Ok(forward)
+    }
+
+    /// The parts' summaries merged once, in the order given: [`SummaryRegistry::merge_order_free`] without its check
+    /// of the reverse order, for a conversion that doesn't run its self-checks (`PassManager::pass_checks`).
+    pub fn merge(&self, parts: &[World]) -> Result<World, String> {
+        self.merge_in(&mut parts.iter())
+    }
+
+    fn merge_in(&self, order: &mut dyn Iterator<Item = &World>) -> Result<World, String> {
+        let mut out = World::new();
+        for p in order {
+            for (name, k) in self.kinds.iter().filter(|(_, k)| k.summary) {
+                (k.merge)(&mut out, p).map_err(|e| format!("{name}: {e}"))?;
+            }
+        }
+        Ok(out)
     }
 
     /// Copy `from`'s summaries and decisions into `to` (a part about to run its passes). They stay in the part: the
