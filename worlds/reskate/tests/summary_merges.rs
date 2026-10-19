@@ -139,13 +139,20 @@ fn the_content_bounds_and_the_spawn_summary() {
         b([-5.0, 2.0], [0.0, 3.0]),
         b([0.0, 0.0], [1.0, 1.0]),
     ]);
-    let s = |spawns: &[u64], first: Option<u32>| SkateSpawnSummary {
+    // each part by its smallest root, with its area (or none); a part listed in two summaries alike
+    let s = |spawns: &[u64], parts: &[(u32, Option<[f64; 4]>)]| SkateSpawnSummary {
         spawns: spawns.iter().copied().collect(),
         lo: [0.0; 2],
         hi: [1.0; 2],
-        first,
+        parts: parts.iter().copied().collect(),
     };
-    merges_alike([s(&[7], Some(3)), s(&[7], Some(1)), s(&[], None), s(&[8], Some(9))]);
+    let area = Some([0.0, 0.0, 400.0, 400.0]);
+    merges_alike([
+        s(&[7], &[(3, area)]),
+        s(&[7], &[(1, None), (3, area)]),
+        s(&[], &[]),
+        s(&[8], &[(9, Some([400.0, 0.0, 800.0, 400.0]))]),
+    ]);
 }
 
 #[test]

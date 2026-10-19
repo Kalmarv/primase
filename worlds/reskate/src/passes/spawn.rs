@@ -9,9 +9,11 @@
 //!
 //! A map converted in parts places its spawn once: `summarize-reskate-spawn` records what each part holds of it (its
 //! spawns, its placements' box, its smallest root), the summaries merge into the whole map's, and this pass places the
-//! spawn, at the centre the merged box gives, only in the part whose roots hold the map's smallest id; none when any
-//! part had a spawn. A part that is not the whole and has no summary is refused. The whole map goes through the same
-//! summary.
+//! spawn, at the centre the merged box gives, only in one part: the part (the smallest by its smallest root) whose
+//! area holds all the ground the spawn's street snap reads (`snap-reskate-markers` snaps it there, with that ground
+//! loaded), refused when the parts state areas and none holds it; when no part states an area, the part holding the
+//! map's smallest root. None when any part had a spawn. A part that is not the whole and has no summary is refused. The
+//! whole map goes through the same summary.
 
 use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -36,16 +38,39 @@ fn summarize(w: &World) -> SkateSpawnSummary {
             hi = [hi[0].max(g[0]), hi[1].max(g[1])];
         }
     }
-    let first = match w.resource::<PartScope>().filter(|s| !s.whole) {
-        Some(s) => s.roots.first().map(|e| e.index()),
-        None => w.entities().next().map(|e| e.index()),
+    let mut parts = std::collections::BTreeMap::new();
+    let part = match w.resource::<PartScope>().filter(|s| !s.whole) {
+        Some(s) => s.roots.first().map(|e| (e.index(), s.area)),
+        None => w.entities().next().map(|e| (e.index(), None)),
     };
+    parts.extend(part);
     SkateSpawnSummary {
         spawns,
         lo,
         hi,
-        first,
+        parts,
     }
+}
+
+/// The part that places the spawn at (`east`, `north`), by its smallest root: the smallest of those whose area holds
+/// all the ground the spawn's snap reads ([`crate::collision::search_square`]); when no part states an area, the
+/// smallest. An error when parts state areas and none holds it.
+fn elect(s: &SkateSpawnSummary, east: f32, north: f32) -> Result<Option<u32>, String> {
+    let sq = crate::collision::search_square(east, north);
+    let stated: Vec<(u32, [f64; 4])> = s.parts.iter().filter_map(|(k, a)| a.map(|a| (*k, a))).collect();
+    if stated.is_empty() {
+        return Ok(s.parts.keys().next().copied());
+    }
+    stated
+        .into_iter()
+        .find(|(_, a)| a[0] <= sq[0] && a[1] <= sq[1] && sq[2] <= a[2] && sq[3] <= a[3])
+        .map(|(k, _)| Some(k))
+        .ok_or_else(|| {
+            format!(
+                "place-reskate-spawn: no part's area holds the ground the spawn's snap reads at ({east}, {north}), \
+                 {sq:?}: plan parts whose context reaches 632 m past what they own"
+            )
+        })
 }
 
 /// Where [`PlaceReskateSpawn`] puts the spawn.
@@ -154,16 +179,6 @@ impl Pass for PlaceReskateSpawn {
             log.count("scenes with a spawn of their own: none placed", 1);
             return Ok(());
         }
-        // the part that places it: the one holding the map's smallest root (the whole map holds all)
-        let mine = match w.resource::<PartScope>().filter(|s| !s.whole) {
-            Some(s) => summary
-                .first
-                .is_some_and(|f| s.roots.iter().any(|e| e.index() == f)),
-            None => true,
-        };
-        if !mine {
-            return Ok(());
-        }
         let [east, north] = match self.at {
             ReskateSpawnAt::Ground(g) => g,
             ReskateSpawnAt::Centre => {
@@ -177,6 +192,13 @@ impl Pass for PlaceReskateSpawn {
             return Err(
                 "place-reskate-spawn: the scene has no region and no placement to centre a spawn on".into(),
             );
+        }
+        // the part that places it: the one holding the ground its snap reads (the whole map holds all)
+        if let Some(s) = w.resource::<PartScope>().filter(|s| !s.whole) {
+            let me = s.roots.first().map(|e| e.index());
+            if elect(&summary, east, north)? != me {
+                return Ok(());
+            }
         }
         let spawn = w.spawn();
         w.insert(

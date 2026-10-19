@@ -910,15 +910,18 @@ impl primase_core::summary::Summary for SkateContentBounds {
 
 /// `skate.spawn_summary`: what one part holds of the map's spawn (`summarize-reskate-spawn`): the spawns it owns, the
 /// ground box of its own placements' positions (the spawn's centre without a region: `lo` past `hi` when it has
-/// none), and the smallest planning id among its roots (the part holding the map's smallest places the spawn). Merged
-/// over the parts (summed, the box of both, the smaller id), order-free. Not part of scene-interchange v1.
+/// none), and the part itself, by its smallest root's planning id, with the ground area its context covers (the part
+/// that places the spawn holds the ground the spawn's snap reads). Merged over the parts (summed, the box of both, the
+/// parts listed), order-free. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SkateSpawnSummary {
     /// The owned keys of its spawns (a spawn two parts both own once).
     pub spawns: BTreeSet<u64>,
     pub lo: [f32; 2],
     pub hi: [f32; 2],
-    pub first: Option<u32>,
+    /// Each part, by its smallest root's planning id: the ground area `[west, south, east, north]` its context covers
+    /// (`None`: its source states none).
+    pub parts: BTreeMap<u32, Option<[f64; 4]>>,
 }
 
 impl Resource for SkateSpawnSummary {
@@ -933,14 +936,23 @@ impl primase_core::summary::Summary for SkateSpawnSummary {
         self.spawns.extend(other.spawns);
         self.lo = [self.lo[0].min(other.lo[0]), self.lo[1].min(other.lo[1])];
         self.hi = [self.hi[0].max(other.hi[0]), self.hi[1].max(other.hi[1])];
-        self.first = match (self.first, other.first) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        for (k, area) in other.parts {
+            match self.parts.get(&k) {
+                Some(mine) if *mine != area => {
+                    return Err(format!(
+                        "part {k} summarized with two areas, {mine:?} and {area:?}"
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    self.parts.insert(k, area);
+                }
+            }
+        }
         Ok(())
     }
     fn retained_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
+        std::mem::size_of::<Self>() + 8 * self.spawns.len() + 40 * self.parts.len()
     }
 }
 
