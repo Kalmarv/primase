@@ -4,6 +4,7 @@
 pub mod budget;
 pub mod floor;
 pub mod grinds;
+pub mod overlays;
 pub mod raise;
 pub mod region;
 pub mod snap;
@@ -13,6 +14,7 @@ pub mod textures;
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
 pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
+pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
 pub use raise::{
     RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate, raise_skate_pass, studio_watts,
 };

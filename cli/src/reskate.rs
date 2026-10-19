@@ -6,7 +6,8 @@
 //! writes textures at the size they come; the old writer's own cap was `cap-textures{max=256,normals=box}`) and
 //! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), a budget
 //! if wanted (`budget-reskate-textures{max=N}`), `prepare-reskate-grinds` for grind curves (the writer builds no
-//! prism) and `snap-reskate-markers` (the writer snaps no marker).
+//! prism), `snap-reskate-markers` (the writer snaps no marker) and, last, `prepare-reskate-overlays{step=0.004}` (the
+//! writer stacks no decal of its own).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;

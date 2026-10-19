@@ -44,6 +44,8 @@ pub enum CollisionMode {
 /// A prototype: its parts in local space, in draw order.
 #[derive(Clone, Debug, Default)]
 pub struct SrcMesh {
+    /// The prototype's entity in the world.
+    pub entity: Option<primase_core::Entity>,
     /// The scene's prototype key: identity within one scene (one part) only.
     pub hash: u32,
     /// What the prototype's parts hold ([`content_key`]): its identity across parts, with the materials a variant row
@@ -68,6 +70,8 @@ pub struct SrcMesh {
 /// One placement, in the writer's frame.
 #[derive(Clone, Debug, Default)]
 pub struct Placement {
+    /// The placement's entity in the world.
+    pub entity: Option<primase_core::Entity>,
     pub proto: u32,
     pub variant: u32,
     pub pos: Vec3,

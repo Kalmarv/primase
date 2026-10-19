@@ -113,6 +113,8 @@ pub struct PartDef {
 #[derive(Debug)]
 pub struct ProtoDef {
     pub index: usize,
+    /// Its entity in the world.
+    pub entity: primase_core::Entity,
     pub id: String,
     /// The prototype's `core.mesh` primitives, the writer's input (a prototype's GLB is loaded before:
     /// `interchange::load`); `None`: no geometry.
@@ -419,6 +421,8 @@ fn snap_of(s: &Option<Snap>, no_height: bool) -> SnapSpec {
 /// A placement record of the scene.
 #[derive(Clone, Debug)]
 pub struct ScenePlacement {
+    /// Its entity in the world.
+    pub entity: primase_core::Entity,
     pub proto: u32,
     pub variant: u32,
     pub m: [f32; 12],
@@ -629,6 +633,7 @@ impl Scene {
             };
             protos.push(ProtoDef {
                 index: i,
+                entity: e,
                 id: p.id.clone(),
                 prims: mesh.map(|m| {
                     let opacity = world.get::<BlendOpacity>(e);
@@ -679,6 +684,7 @@ impl Scene {
                 .ok_or_else(|| Error::Scene(format!("placement {e:?} has no prototype")))?
                 as u32;
             placements.push(ScenePlacement {
+                entity: e,
                 proto,
                 variant: inst.variant,
                 m,
@@ -1226,6 +1232,7 @@ pub fn build_geometry(scene: &Scene, p: &ProtoDef, counters: &mut MeshCounters) 
     let has_variants = p.parts.iter().any(|x| x.variants.is_some());
     let mut mesh = SrcMesh {
         hash: p.key,
+        entity: Some(p.entity),
         name: p.name.clone(),
         is_tree: p.foliage,
         has_variants,

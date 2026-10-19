@@ -3,7 +3,7 @@
 //! (`clip-reskate-region`, `prepare-reskate-floor`), the grind curves' prisms (`prepare-reskate-grinds`), a spawn
 //! when the scene has none, the markers snapped (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
-//! (`budget-reskate-textures`), then the writer.
+//! (`budget-reskate-textures`), the overlays stacked (`prepare-reskate-overlays`, 4 mm), then the writer.
 //!
 //! `cargo run --release -p primase-reskate --example build_map -- <scene folder> --out <root> [--tex-cap N]
 //! [--tex-caps FILE] [--water-ocean] [--lights-max-per-cell N] [--piece-log] [--name N] [--lod default|highest|N]
@@ -124,6 +124,11 @@ fn main() -> Result<(), BoxError> {
             primase_reskate::prepare::BudgetReskateTextures::new(max as usize)?.with_aux_weight(aux)?,
         ));
     }
+    // last, on the prepared geometry, materials and textures: the overlays stacked 4 mm apart, as the writer stacked
+    // them, over the meshes this encoding makes
+    passes.push(Box::new(
+        primase_reskate::prepare::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,
+    ));
     let mut prepared = RunReport::default();
     PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes }, &mut prepared)?;
     for step in lods.steps.iter().chain(&dropped.steps).chain(&prepared.steps) {

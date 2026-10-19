@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::map::{Ctx, Extras, MapWriter, MeshSource, WriterOptions};
+use crate::map::{Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
@@ -64,10 +64,9 @@ impl Default for EncodingOptions {
 }
 
 /// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
-/// overlays and blend chains, water, lights and the pause map's height. Delete a field when its pass lands.
+/// blend chains, water, lights and the pause map's height. Delete a field when its pass lands.
 #[derive(Clone, Debug)]
 pub struct WriterChoices {
-    pub overlay_step: f32,
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
     /// and takes a cull ID). `None`: the level's share of ReSkate 2.1.0-pre's cull-ID pool less what the rest of the
     /// map takes ([`crate::map::CULL_ID_POOL`]).
@@ -84,7 +83,6 @@ pub struct WriterChoices {
 impl Default for WriterChoices {
     fn default() -> Self {
         WriterChoices {
-            overlay_step: 0.004,
             blend_objects: None,
             blend_grid: 200.0,
             map_height: 2160,
@@ -95,8 +93,9 @@ impl Default for WriterChoices {
     }
 }
 
-/// The options of `scene-skate build`, flat: [`EncodingOptions`] and [`WriterChoices`] in one, for [`build`], the
-/// deprecated composition helper. Removed with it (PRIMASE-PLAN step 10).
+/// The options of `scene-skate build`, flat: [`EncodingOptions`], [`WriterChoices`] and the overlay step
+/// (`prepare-reskate-overlays`'s; 0: no stack) in one, for [`build`], the deprecated composition helper. Removed with
+/// it (PRIMASE-PLAN step 10).
 #[derive(Clone, Debug)]
 pub struct BuildOptions {
     pub out_root: PathBuf,
@@ -127,7 +126,7 @@ impl Default for BuildOptions {
             tile: e.tile,
             min_instances: e.min_instances,
             min_instance_tris: e.min_instance_tris,
-            overlay_step: c.overlay_step,
+            overlay_step: 0.004,
             blend_objects: c.blend_objects,
             blend_grid: c.blend_grid,
             piece_log: e.piece_log,
@@ -161,7 +160,6 @@ impl BuildOptions {
                 scene_warnings: a.scene_warnings,
             },
             WriterChoices {
-                overlay_step: a.overlay_step,
                 blend_objects: a.blend_objects,
                 blend_grid: a.blend_grid,
                 map_height: a.map_height,
@@ -207,6 +205,7 @@ pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
             let m = &p.m;
             let proto = &s.protos[p.proto as usize];
             let mut pl = Placement {
+                entity: Some(p.entity),
                 proto: proto.key,
                 variant: p.variant,
                 ex: w_at(m, 0),
@@ -542,25 +541,13 @@ fn run_passes(
     Ok(report)
 }
 
-/// The deprecated composition helper: [`write_map`] with the flat [`BuildOptions`]. Removed when its last callers
-/// switch (PRIMASE-PLAN step 10).
-pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport> {
-    let (e, c) = a.split();
-    write_map(world, dir, &e, &c)
-}
-
-/// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
-/// as `a` says, with the content choices `c` the writer still makes.
-pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoices) -> Result<BuildReport> {
-    let mut s = Scene::from_world(world, dir)?;
-    let scene_warnings = match &a.scene_warnings {
-        Some(w) => w.clone(),
-        None => scene_warnings(&s, world)?,
-    };
+/// The writer's options for the scene `s`: its encoding `a` and the choices `c` it still makes; the region and the
+/// pause picture are the caller's to set. Refuses placements split by tile.
+fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<WriterOptions> {
     if s.placements.iter().any(|p| p.split) {
         return Err(Error::Unsupported("placements split by tile (flag 32)".into()));
     }
-    let mut o = WriterOptions {
+    Ok(WriterOptions {
         name: a.name.clone().unwrap_or_else(|| s.name.clone()),
         display_name: s.display_name.clone(),
         generator: format!(
@@ -572,7 +559,6 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
         band_rows: 8,
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
-        overlay_step: c.overlay_step,
         blend_objects: c.blend_objects,
         blend_grid: c.blend_grid,
         piece_log: a.piece_log,
@@ -588,7 +574,133 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
         trainer_note: s.trainer_note.clone(),
         warnings: s.warnings.clone(),
         pause_picture: None,
+    })
+}
+
+/// The writer's tiles and prototypes of `placements` (the scene's, [`writer_placements`]), assembled by `writer` from
+/// the scene's prototypes: what `write_map` writes and `prepare-reskate-overlays` stacks. The prototypes that failed
+/// to build, counted.
+pub(crate) fn assemble(s: &Scene, placements: &[Placement], writer: &mut MapWriter) -> Result<i64> {
+    let mut meshes = Meshes {
+        scene: s,
+        by_key: s.protos.iter().enumerate().map(|(i, p)| (p.key, i)).collect(),
+        tried: HashSet::new(),
+        mat: Materializer::new(),
+        counters: MeshCounters::default(),
     };
+    writer.tiles(placements, &mut meshes)?;
+    Ok(meshes.counters.failed)
+}
+
+/// The writer settings an overlay stack depends on, for the scene `s` written as `a` says.
+pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::dialect::OverlayGrouping {
+    crate::dialect::OverlayGrouping {
+        tile: a.tile,
+        min_instances: a.min_instances,
+        min_instance_tris: a.min_instance_tris,
+        max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),
+        limit: a.limit,
+        offset: a.offset,
+    }
+}
+
+/// The deprecated composition helper: [`write_map`] with the flat [`BuildOptions`]. Removed when its last callers
+/// switch (PRIMASE-PLAN step 10).
+pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport> {
+    let (e, c) = a.split();
+    // the overlay stack the writer used to make, made here as prepare-reskate-overlays makes it
+    let stack = match world.resource::<crate::dialect::SkateOverlayStack>() {
+        None if a.overlay_step > 0.0 => Some(overlay_stack(world, &e, a.overlay_step)?),
+        _ => None,
+    };
+    write_map_with(world, dir, &e, &c, stack)
+}
+
+/// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
+/// as `a` says, with the content choices `c` the writer still makes.
+pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoices) -> Result<BuildReport> {
+    write_map_with(world, dir, a, c, None)
+}
+
+/// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
+/// written), with the overlay stack `stack` and textures encoded or only identified (`encode`).
+fn assembly(world: &World, a: &EncodingOptions, stack: Stack, encode: bool) -> Result<MapWriter> {
+    let s = Scene::from_world(world, Path::new(""))?;
+    let mut o = writer_options(&s, a, &WriterChoices::default())?;
+    o.piece_log = false;
+    let placements = writer_placements(&s, o.tile);
+    o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
+    let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?.with_stack(stack);
+    if !encode {
+        writer = writer.without_encoding();
+    }
+    assemble(&s, &placements, &mut writer)?;
+    Ok(writer)
+}
+
+/// The overlay stack of the prepared world `world` (`prepare-reskate-overlays`'s): the writer's own assembly of its
+/// meshes for the encoding `a`, textures identified but not encoded, each mesh's overlays stacked by `step` and
+/// recorded by piece.
+pub(crate) fn overlay_stack(
+    world: &World,
+    a: &EncodingOptions,
+    step: f32,
+) -> Result<crate::dialect::SkateOverlayStack> {
+    let s = Scene::from_world(world, Path::new(""))?;
+    let rec = crate::dialect::SkateOverlayStack {
+        step,
+        grouping: Some(grouping(&s, a)),
+        ..Default::default()
+    };
+    match assembly(world, a, Stack::Compute(Box::new(rec)), false)?.take_stack() {
+        Stack::Compute(rec) => Ok(*rec),
+        _ => unreachable!("the stack it was given"),
+    }
+}
+
+/// One material of the writer's assembly: its id, name and texture ids (base, normal, mask, alpha; -1: none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssembledMaterial {
+    pub id: usize,
+    pub name: String,
+    pub textures: [i32; 4],
+}
+
+/// The materials the writer's assembly of the prepared world `world` makes for the encoding `a`, in id order, with
+/// its textures encoded (`encode`: as `write_map` makes them) or only identified (as `prepare-reskate-overlays` makes
+/// them): the two must agree, or the overlay stack would be made for other meshes than the writer's.
+pub fn assembled_materials(
+    world: &World,
+    a: &EncodingOptions,
+    encode: bool,
+) -> Result<Vec<AssembledMaterial>> {
+    let writer = assembly(world, a, Stack::Off { unstacked: 0 }, encode)?;
+    Ok(writer
+        .ctx
+        .mats
+        .list
+        .iter()
+        .map(|m| AssembledMaterial {
+            id: m.id,
+            name: m.name.clone(),
+            textures: [m.tex, m.normal, m.mask, m.alpha],
+        })
+        .collect())
+}
+
+fn write_map_with(
+    world: &World,
+    dir: &Path,
+    a: &EncodingOptions,
+    c: &WriterChoices,
+    given: Option<crate::dialect::SkateOverlayStack>,
+) -> Result<BuildReport> {
+    let mut s = Scene::from_world(world, dir)?;
+    let scene_warnings = match &a.scene_warnings {
+        Some(w) => w.clone(),
+        None => scene_warnings(&s, world)?,
+    };
+    let mut o = writer_options(&s, a, c)?;
     // markers snapped before the writer were snapped against this writer's collision: the same settings
     if let Some(b) = world.resource::<crate::dialect::SkateMarkerSnaps>() {
         let mine = (
@@ -634,7 +746,26 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
     let drop_below = f32::NEG_INFINITY;
 
     let out_dir = a.out_root.join(&o.name);
-    let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?;
+    // the overlay stack prepare-reskate-overlays made, for this grouping only; without one, none
+    let stack = match given
+        .as_ref()
+        .or(world.resource::<crate::dialect::SkateOverlayStack>())
+    {
+        Some(rec) => {
+            let mine = grouping(&s, a);
+            if rec.grouping != Some(mine) {
+                return Err(Error::Scene(format!(
+                    "the overlays were stacked for the writer settings {:?}, but the writer's are {mine:?}: give \
+                     prepare-reskate-overlays the writer's",
+                    rec.grouping
+                )));
+            }
+            Stack::Replay(Box::new(rec.clone()))
+        }
+        None => Stack::Off { unstacked: 0 },
+    };
+    let mut writer =
+        MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?.with_stack(stack);
     let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
     let water_world = s
         .soups
@@ -642,14 +773,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
         .any(|x| x.mode == CollisionMode::Water)
         .then(|| SoupWorld::new(&mut s, CollisionMode::Water, cut, drop_below));
     let hulls = hulls(&mut s, cut, drop_below);
-    let mut meshes = Meshes {
-        scene: &s,
-        by_key: s.protos.iter().enumerate().map(|(i, p)| (p.key, i)).collect(),
-        tried: HashSet::new(),
-        mat: Materializer::new(),
-        counters: MeshCounters::default(),
-    };
-    writer.tiles(&placements, &mut meshes)?;
+    let failed = assemble(&s, &placements, &mut writer)?;
     writer.finish(Extras {
         world: &tri_world,
         water_world: water_world.as_ref().map(|w| w as &dyn CollisionWorld),
@@ -659,7 +783,6 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
         markers: s.markers.clone(),
         grind: s.curves.clone(),
     })?;
-    let failed = meshes.counters.failed;
     writer.r.warnings.extend(scene_warnings);
 
     // write the folder
@@ -723,7 +846,18 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoic
         lifts: r.lifts.clone(),
         blend: r.blend.clone(),
         warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
-        unsupported: s.unsupported.clone(),
+        unsupported: s
+            .unsupported
+            .iter()
+            .cloned()
+            .chain(match writer.stack() {
+                Stack::Off { unstacked } if *unstacked > 0 => Some((
+                    "overlay pieces drawn where authored (prepare-reskate-overlays stacks them)".to_owned(),
+                    *unstacked,
+                )),
+                _ => None,
+            })
+            .collect(),
     })
 }
 
@@ -811,7 +945,7 @@ fn stats_json(
             beyond_map_edge: col.cut_beyond_limit,
         },
         overlay_stack: OverlayStack {
-            step_m: o.overlay_step,
+            step_m: writer.stack().step(),
             overlay_pieces: ov.pieces,
             shifted: ov.shifted,
             water_shifted: ov.water_shifted,

@@ -545,6 +545,8 @@ pub struct OutTexture {
 #[derive(Debug)]
 pub struct TexLib {
     out_dir: PathBuf,
+    /// Encode the files (`false`: ids only, by the same content keys: what a pass needs of the writer's materials).
+    encode: bool,
     by_key: HashMap<(u64, bool), usize>,
     by_content: HashMap<u64, usize>,
     out: Vec<OutTexture>,
@@ -638,9 +640,17 @@ pub struct Pixels {
 }
 
 impl TexLib {
+    /// Ids only: every texture identified by the same content keys as when encoding, its file not encoded (nothing to
+    /// save).
+    pub fn without_encoding(mut self) -> TexLib {
+        self.encode = false;
+        self
+    }
+
     pub fn new(out_dir: &Path) -> TexLib {
         TexLib {
             out_dir: out_dir.to_owned(),
+            encode: true,
             by_key: HashMap::new(),
             by_content: HashMap::new(),
             out: Vec::new(),
@@ -742,7 +752,11 @@ impl TexLib {
         hh.uint(tag).int(w as i32).int(h as i32).bytes(rgba);
         // a Studio MSK keeps its alpha (opacity) when it has any
         let alpha = tag == MASK_TAG && rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255);
-        let data = png_bytes(w, h, rgba, alpha);
+        let data = if self.encode {
+            png_bytes(w, h, rgba, alpha)
+        } else {
+            Vec::new()
+        };
         self.add(
             name,
             w,
@@ -863,23 +877,31 @@ impl TexLib {
                 let mut hh = Hash64::new();
                 hh.int(w as i32).int(h as i32).string(four).int(i32::from(alpha));
                 hh.bytes(&data[off as usize..(off + len) as usize]);
-                let small = self.decode_within(tex, 32u32.max(w.max(h) >> (levels - 1)))?;
-                let mean0 = small.map_or(0x808080, |p| mean_color(&p.rgba));
+                let mean0 = if self.encode {
+                    let small = self.decode_within(tex, 32u32.max(w.max(h) >> (levels - 1)))?;
+                    small.map_or(0x808080, |p| mean_color(&p.rgba))
+                } else {
+                    0x808080
+                };
                 let format = match four {
                     "DXT1" => TexFormat::Bc1,
                     "DXT3" => TexFormat::Bc2,
                     _ => TexFormat::Bc3,
                 };
-                let dds = primase_dds::write_legacy(&Texture {
-                    width: w,
-                    height: h,
-                    format,
-                    levels: level_data,
-                    color_space: ColorSpace::Srgb,
-                    role: TexRole::Color,
-                    normal: None,
-                })
-                .map_err(|e| Error::Texture(format!("{}: {e}", tex.label())))?;
+                let dds = if self.encode {
+                    primase_dds::write_legacy(&Texture {
+                        width: w,
+                        height: h,
+                        format,
+                        levels: level_data,
+                        color_space: ColorSpace::Srgb,
+                        role: TexRole::Color,
+                        normal: None,
+                    })
+                    .map_err(|e| Error::Texture(format!("{}: {e}", tex.label())))?
+                } else {
+                    Vec::new()
+                };
                 return Ok(self.add(
                     &r.name,
                     w,
@@ -907,7 +929,11 @@ impl TexLib {
                 ch.uint(u32::from(px[0]) | u32::from(px[1]) << 8 | u32::from(px[2]) << 16);
             }
         }
-        let data = png_bytes(p.w, p.h, &rgba, alpha);
+        let data = if self.encode {
+            png_bytes(p.w, p.h, &rgba, alpha)
+        } else {
+            Vec::new()
+        };
         let mean = mean_color(&rgba);
         Ok(self.add(
             &r.name,
@@ -954,6 +980,11 @@ impl TexLib {
         reason = "writer I/O: writes the map's texture files"
     )]
     pub fn save(&self) -> Result<()> {
+        if !self.encode {
+            return Err(Error::Texture(
+                "a texture library that encodes nothing has nothing to save".into(),
+            ));
+        }
         std::fs::create_dir_all(&self.out_dir).map_err(|source| Error::Io {
             path: self.out_dir.clone(),
             source,

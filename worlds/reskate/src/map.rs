@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::blend_order::{self, Geometry};
 use crate::collision::{self, Collision, CollisionWorld, NoWorld, PropSoup, Query};
+use crate::dialect::{OverlayPiece, OverlayTotals, SkateOverlayStack};
 use crate::glb::{self, GlbPrim};
 use crate::grind;
 use crate::material::{MatLib, Material, VClass};
@@ -34,7 +35,6 @@ pub struct WriterOptions {
     pub band_rows: i32,
     pub min_instances: i64,
     pub min_instance_tris: i64,
-    pub overlay_step: f32,
     /// The most objects the writer adds to draw blend-chain overlays in chain order (one per tile, dominant axis and
     /// chain rank: [`crate::blend_order`]); past it a tile's chain overlays stay in its mesh, in an unstable order.
     /// 0: none added. `None`: the level's share of the cull-ID pool less the rest of the map ([`CULL_ID_POOL`]).
@@ -152,6 +152,7 @@ struct Acc {
 /// One append to a merged part: its triangles and vertices, draw order and entity.
 #[derive(Clone, Copy, Debug)]
 struct AccPiece {
+    id: OverlayPiece,
     t0: usize,
     t1: usize,
     v0: usize,
@@ -626,10 +627,60 @@ pub struct MapWriter {
     /// Tiles' chain overlays waiting for finish, by (row, column).
     pending_chains: BTreeMap<(i32, i32), PendingChain>,
     piece_log: Option<Vec<PieceRec>>,
+    /// The overlay stack: none, made here for `prepare-reskate-overlays`, or the one it made, replayed.
+    stack: Stack,
     /// Mesh files (meshes/<name>), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
     pub files: BTreeMap<String, Vec<u8>>,
+}
+
+/// How the writer treats the overlay pieces of its meshes.
+#[derive(Debug)]
+pub(crate) enum Stack {
+    /// Not stacked: decals drawn where they were authored (counted).
+    Off { unstacked: u64 },
+    /// Stacked by the step here, and recorded: what `prepare-reskate-overlays` runs the writer's assembly for.
+    Compute(Box<SkateOverlayStack>),
+    /// The stack `prepare-reskate-overlays` recorded, put on the same pieces again.
+    Replay(Box<SkateOverlayStack>),
+}
+
+impl Stack {
+    pub(crate) fn step(&self) -> f32 {
+        match self {
+            Stack::Off { .. } => 0.0,
+            Stack::Compute(r) | Stack::Replay(r) => r.step,
+        }
+    }
+}
+
+fn totals_of(s: &OverlayStats) -> OverlayTotals {
+    OverlayTotals {
+        pieces: s.pieces,
+        shifted: s.shifted,
+        water_shifted: s.water_shifted,
+        relations: s.relations,
+        cycles: s.cycles,
+        conflicts: s.conflicts,
+        conflicts_left: s.conflicts_left,
+        max_shift: s.max_shift,
+        shift_steps: s.shift_steps,
+    }
+}
+
+fn stats_of(t: &OverlayTotals) -> OverlayStats {
+    OverlayStats {
+        pieces: t.pieces,
+        shifted: t.shifted,
+        water_shifted: t.water_shifted,
+        relations: t.relations,
+        cycles: t.cycles,
+        conflicts: t.conflicts,
+        conflicts_left: t.conflicts_left,
+        max_shift: t.max_shift,
+        shift_steps: t.shift_steps,
+    }
 }
 
 /// A proto made once per (key, variant row).
@@ -669,9 +720,35 @@ impl MapWriter {
             water_parts: BTreeMap::new(),
             prop_hulls: Vec::new(),
             pending_chains: BTreeMap::new(),
+            stack: Stack::Off { unstacked: 0 },
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
+    }
+
+    /// The overlay stack as `stack` says; a replayed stack's totals are the map's.
+    pub(crate) fn with_stack(mut self, stack: Stack) -> MapWriter {
+        if let Stack::Replay(rec) = &stack {
+            self.r.overlay = stats_of(&rec.totals);
+        }
+        self.stack = stack;
+        self
+    }
+
+    /// Texture ids only, no file encoded: the writer's assembly for a pass, nothing to save.
+    pub(crate) fn without_encoding(mut self) -> MapWriter {
+        let tex = std::mem::replace(&mut self.ctx.tex, TexLib::new(std::path::Path::new("")));
+        self.ctx.tex = tex.without_encoding();
+        self
+    }
+
+    /// The overlay stack as it ended: the recorded one, or how many overlay pieces were left unstacked.
+    pub(crate) fn stack(&self) -> &Stack {
+        &self.stack
+    }
+
+    pub(crate) fn take_stack(&mut self) -> Stack {
+        std::mem::replace(&mut self.stack, Stack::Off { unstacked: 0 })
     }
 
     /// Take a tile's blend-chain overlays out of its parts and write both forms finish may choose between
@@ -882,20 +959,17 @@ impl MapWriter {
             .collect())
     }
 
-    /// OverlayStack over a set of merged parts; logs the overlay pieces with --piece-log.
-    /// Stack the mesh's overlay pieces; returns which material lies under which, `(below, above)`.
+    /// Stack the mesh's overlay pieces as the stack mode says (not at all; stacked here and recorded; the recorded
+    /// stack replayed), logging them with --piece-log; returns which material lies under which, `(below, above)`.
     fn stack_overlays(
         &mut self,
         parts: &mut BTreeMap<usize, Acc>,
         origin: Vec3,
         mesh: &str,
-    ) -> Vec<(usize, usize)> {
-        let step = self.o.overlay_step;
-        if step <= 0.0 && self.piece_log.is_none() {
-            return Vec::new();
-        }
+    ) -> Result<Vec<(usize, usize)>> {
         let mut pieces: Vec<Piece> = Vec::new();
         let mut src: Vec<(usize, usize)> = Vec::new();
+        let mut ids: Vec<OverlayPiece> = Vec::new();
         // the parts in first use (seq), not by material id: ids follow the order materials were first made anywhere in
         // the map, which a map written in parts does not share
         let mut keys: Vec<usize> = parts.keys().copied().collect();
@@ -920,10 +994,14 @@ impl MapWriter {
                     shift: 0.0,
                 });
                 src.push((*mat, i));
+                ids.push(pc.id);
             }
         }
-        let mut under: Vec<(usize, usize)> = Vec::new();
-        if step > 0.0 {
+        let step = self.stack.step();
+        let stacking = step > 0.0 && pieces.iter().any(|p| p.overlay);
+        // which piece lies under which, by piece
+        let mut below: Vec<(usize, usize)> = Vec::new();
+        {
             let mut accs: Vec<&mut Acc> = parts.values_mut().collect();
             accs.sort_by_key(|a| a.seq);
             let idx: Vec<Vec<u32>> = accs.iter().map(|a| a.idx.clone()).collect();
@@ -931,17 +1009,57 @@ impl MapWriter {
                 pos: accs.iter_mut().map(|a| &mut a.pos).collect(),
                 idx: idx.iter().collect(),
             };
-            let stacked = overlay::apply(step, &mut view, &mut pieces);
-            self.r.overlay.add(&stacked.stats);
-            under = stacked
-                .under
-                .iter()
-                .map(|&(lo, hi)| (src[lo].0, src[hi].0))
-                .filter(|(lo, hi)| lo != hi)
-                .collect();
-            under.sort_unstable();
-            under.dedup();
+            match &mut self.stack {
+                Stack::Off { unstacked } => {
+                    *unstacked += pieces.iter().filter(|p| p.overlay && !p.fixed).count() as u64;
+                }
+                Stack::Compute(rec) if stacking => {
+                    let stacked = overlay::apply(step, &mut view, &mut pieces);
+                    self.r.overlay.add(&stacked.stats);
+                    let mut totals = stats_of(&rec.totals);
+                    totals.add(&stacked.stats);
+                    rec.totals = totals_of(&totals);
+                    for (k, p) in pieces.iter().enumerate() {
+                        rec.materials
+                            .insert(ids[k], self.ctx.mats.by_id(src[k].0).name.clone());
+                        if p.shift > 0.0 {
+                            rec.shifts.insert(ids[k], p.shift);
+                        }
+                    }
+                    rec.under
+                        .extend(stacked.under.iter().map(|&(lo, hi)| (ids[lo], ids[hi])));
+                    below = stacked.under;
+                }
+                Stack::Replay(rec) if stacking => {
+                    for (k, p) in pieces.iter_mut().enumerate() {
+                        if rec.materials.get(&ids[k]) != Some(&self.ctx.mats.by_id(src[k].0).name) {
+                            return Err(Error::Scene(format!(
+                                "{mesh}: the overlay stack (skate.overlay_stack) was made for other pieces or \
+                                 materials than the writer draws: run prepare-reskate-overlays after the passes that \
+                                 change geometry, materials or textures"
+                            )));
+                        }
+                        p.shift = rec.shifts.get(&ids[k]).copied().unwrap_or(0.0);
+                    }
+                    overlay::replay(&mut view, &pieces);
+                    let at: HashMap<OverlayPiece, usize> =
+                        ids.iter().enumerate().map(|(k, &id)| (id, k)).collect();
+                    below = rec
+                        .under
+                        .iter()
+                        .filter_map(|(lo, hi)| Some((*at.get(lo)?, *at.get(hi)?)))
+                        .collect();
+                }
+                Stack::Compute(_) | Stack::Replay(_) => {}
+            }
         }
+        let mut under: Vec<(usize, usize)> = below
+            .iter()
+            .map(|&(lo, hi)| (src[lo].0, src[hi].0))
+            .filter(|(lo, hi)| lo != hi)
+            .collect();
+        under.sort_unstable();
+        under.dedup();
         for (k, p) in pieces.iter().enumerate() {
             if p.shift > 0.0 {
                 let a = parts.get_mut(&src[k].0).expect("a piece's part");
@@ -952,7 +1070,7 @@ impl MapWriter {
             }
         }
         let Some(log) = &mut self.piece_log else {
-            return under;
+            return Ok(under);
         };
         for (k, p) in pieces.iter().enumerate() {
             if !p.overlay {
@@ -990,12 +1108,13 @@ impl MapWriter {
                 entity_no: p.entity,
             });
         }
-        under
+        Ok(under)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn append(
         a: &mut Acc,
+        id: OverlayPiece,
         p: &SrcPart,
         s: Option<&Placement>,
         origin: Vec3,
@@ -1008,6 +1127,7 @@ impl MapWriter {
         append_core(a, p, s, origin, only);
         if a.idx.len() / 3 > t0 {
             a.pieces.push(AccPiece {
+                id,
                 t0,
                 t1: a.idx.len() / 3,
                 v0,
@@ -1115,10 +1235,16 @@ impl MapWriter {
         source: &mut dyn MeshSource,
     ) -> Result<Proto> {
         let mut parts: BTreeMap<usize, Acc> = BTreeMap::new();
+        let prototype = m.entity.expect("a scene prototype has its entity");
         for (order, p) in m.parts.iter().enumerate() {
             let mat = source.material_of(p, row, &mut self.ctx)?;
             Self::append(
                 part(&mut parts, mat),
+                OverlayPiece::Proto {
+                    prototype,
+                    row,
+                    part: order as u32,
+                },
                 p,
                 None,
                 Vec3::ZERO,
@@ -1128,7 +1254,7 @@ impl MapWriter {
                 0,
             );
         }
-        let under = self.stack_overlays(&mut parts, Vec3::ZERO, &format!("proto {}", m.name));
+        let under = self.stack_overlays(&mut parts, Vec3::ZERO, &format!("proto {}", m.name))?;
         if self.o.max_render_edge > 0.0 {
             for a in parts.values_mut() {
                 split_long(a, self.o.max_render_edge);
@@ -1397,6 +1523,10 @@ impl MapWriter {
                         let only = only.flatten();
                         Self::append(
                             part(&mut parts, mat),
+                            OverlayPiece::Placed {
+                                placement: s.entity.expect("a scene placement has its entity"),
+                                part: pi as u32,
+                            },
                             p,
                             Some(s),
                             origin,
@@ -1408,7 +1538,7 @@ impl MapWriter {
                         piece_order += 1;
                     }
                 }
-                let under = self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"));
+                let under = self.stack_overlays(&mut parts, origin, &format!("t_{tx}_{ty}"))?;
                 if !parts.is_empty() {
                     to.mesh = Some(format!("t_{tx}_{ty}.glb"));
                     if o.pause_picture.is_none() {
@@ -2482,7 +2612,7 @@ impl MapWriter {
         });
         let r2 = |v: Vec3| [v.x, v.y, v.z];
         let pieces = PiecesJson {
-            overlay_step_m: self.o.overlay_step,
+            overlay_step_m: self.stack.step(),
             pieces: recs
                 .into_iter()
                 .map(|p| PieceJson {

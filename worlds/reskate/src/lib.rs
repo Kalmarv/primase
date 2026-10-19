@@ -31,8 +31,8 @@ pub mod vertex_alpha;
 use std::path::PathBuf;
 
 pub use build::{
-    BuildOptions, BuildReport, EncodingOptions, WriterChoices, build, leave_out_optional, lod_choice,
-    select_lod, write_map,
+    AssembledMaterial, BuildOptions, BuildReport, EncodingOptions, WriterChoices, assembled_materials, build,
+    leave_out_optional, lod_choice, select_lod, write_map,
 };
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
@@ -44,6 +44,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("place-reskate-spawn", prepare::place_reskate_spawn);
     reg.register("snap-reskate-markers", prepare::snap_reskate_markers);
     reg.register("prepare-reskate-grinds", prepare::prepare_reskate_grinds);
+    // the step is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-overlays",
+        prepare::prepare_reskate_overlays,
+        &[("step", "0")],
+    );
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",
