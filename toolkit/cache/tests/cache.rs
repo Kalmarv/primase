@@ -133,12 +133,21 @@ fn processes_share_a_directory() {
             std::process::Command::new(&exe)
                 .args(["--ignored", "--exact", "cache_child", "--test-threads=1"])
                 .env("PRIMASE_CACHE_CHILD_DIR", &dir)
+                // the children's own test output must not reach this binary's (a runner counts result lines)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
                 .unwrap()
         })
         .collect();
-    for mut c in children {
-        assert!(c.wait().unwrap().success());
+    for c in children {
+        let out = c.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     assert_eq!(entries(&dir).len(), 16);
     fs::remove_dir_all(&dir).unwrap();

@@ -784,7 +784,8 @@ despawned 0
         let exe = std::env::current_exe().unwrap();
         let texts = ["a", "b"].map(|run| {
             let path = std::env::temp_dir().join(format!("primase-print-{run}-{}.txt", std::process::id()));
-            let status = std::process::Command::new(&exe)
+            // output(), not status(): the child's own test output must not reach this binary's
+            let child = std::process::Command::new(&exe)
                 .args([
                     "--ignored",
                     "--exact",
@@ -792,9 +793,14 @@ despawned 0
                     "--test-threads=1",
                 ])
                 .env("PRIMASE_PRINT_CHILD_FILE", &path)
-                .status()
+                .output()
                 .unwrap();
-            assert!(status.success());
+            assert!(
+                child.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
             let text = std::fs::read_to_string(&path).unwrap();
             std::fs::remove_file(&path).unwrap();
             text
