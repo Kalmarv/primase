@@ -671,34 +671,28 @@ impl Pass for BakeFromSoftLayers {
         if unplaced > 0 {
             log.count("unplaced meshes whose layer inputs stay", unplaced);
         }
-        // held apart while the world changes, and put back whatever happens; nothing is put back that was not there
-        let shaders = world.remove_resource::<ShaderPrograms>();
-        let payloads = world.remove_resource::<TexturePayloads>();
+        // lent read-only while the world changes, then put back as they were: borrowed, not written
         let none = BTreeMap::new();
-        let result = (|| {
-            let bake = super::layers::AreaBake::with_sources(
-                world,
-                shaders.as_ref().map_or(&none, |s| &s.0),
-                payloads.as_ref().map_or(&none, |p| &p.0),
-            )?;
-            let prototypes: BTreeMap<String, Entity> = world
-                .iter::<PrototypeSource>()
-                .map(|(e, s)| (s.id.clone(), e))
-                .collect();
-            super::bake_assembly::assemble(
-                &bake,
-                &prototypes,
-                self.max_size.get(),
-                self.sample_time.get(),
-                world,
-            )
-        })();
-        if let Some(shaders) = shaders {
-            world.insert_resource(shaders);
-        }
-        if let Some(payloads) = payloads {
-            world.insert_resource(payloads);
-        }
+        let result = world.resource_scope::<ShaderPrograms, _>(|world, shaders| {
+            world.resource_scope::<TexturePayloads, _>(|world, payloads| {
+                let bake = super::layers::AreaBake::with_sources(
+                    world,
+                    shaders.map_or(&none, |s| &s.0),
+                    payloads.map_or(&none, |p| &p.0),
+                )?;
+                let prototypes: BTreeMap<String, Entity> = world
+                    .iter::<PrototypeSource>()
+                    .map(|(e, s)| (s.id.clone(), e))
+                    .collect();
+                super::bake_assembly::assemble(
+                    &bake,
+                    &prototypes,
+                    self.max_size.get(),
+                    self.sample_time.get(),
+                    world,
+                )
+            })
+        });
         let (report, baked) = result.map_err(|e| e.to_string())?;
         // counted after the split: a part baked at k levels gives k primitives' streams
         log.count(
@@ -808,16 +802,10 @@ impl Pass for LowerFromSoftMaterials {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use super::source::TexturePayloads;
-        // a world without the reader's payloads has no texture file to decode; nothing is put back that was not there
-        let payloads = world.remove_resource::<TexturePayloads>();
-        let lowered = super::pbr::lower_drawn(
-            world,
-            payloads.as_ref().map_or(&BTreeMap::new(), |p| &p.0),
-            self.layers,
-        );
-        if let Some(payloads) = payloads {
-            world.insert_resource(payloads);
-        }
+        // lent read-only (a world without the reader's payloads has no texture file to decode): borrowed, not written
+        let lowered = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
+            super::pbr::lower_drawn(world, payloads.map_or(&BTreeMap::new(), |p| &p.0), self.layers)
+        });
         let (lowered, previewed) = lowered.map_err(|e| e.to_string())?;
         // the inputs of the layers a preview stands for: not vertex colours, so they go with the layers; the inputs of
         // materials left as source data stay

@@ -36,6 +36,7 @@ enum Act {
     CopyOnto,
     WriteResource,
     ReplaceResource,
+    LendResource,
     EditInPlace,
 }
 
@@ -102,6 +103,13 @@ impl Pass for Toy {
                 w.remove_resource::<Setting>().ok_or("no setting")?;
                 w.insert_resource(Setting(3));
             }
+            // lent read-only while the world changes, then put back: a borrow
+            Act::LendResource => {
+                let seen = w.resource_scope::<Setting, _>(|_, s| s.map(|s| s.0));
+                if seen != Some(1) {
+                    return Err(format!("lent {seen:?}"));
+                }
+            }
             Act::EditInPlace => {
                 w.get_mut::<X>(e0).ok_or("e0")?.0 = 5;
             }
@@ -154,6 +162,8 @@ fn effects_on_entities_and_resources_are_checked_against_declarations() {
     // copies carry their source's names: nothing to declare
     run(Act::Duplicate, false).unwrap();
     run(Act::CopyOnto, false).unwrap();
+    // a resource lent with resource_scope is borrowed, not written: what the lender does is checked as usual
+    run(Act::LendResource, false).unwrap();
     // an in-place edit of a value is not seen (declared in modifies, not checked: documented)
     run(Act::EditInPlace, false).unwrap();
 }

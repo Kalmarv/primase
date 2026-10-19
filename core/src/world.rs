@@ -1441,6 +1441,23 @@ impl World {
             .and_then(|r| r.as_any_mut().downcast_mut())
     }
 
+    /// Lend resource `T` read-only to `f` while `f` changes the rest of the world, then put it back as it was: a
+    /// borrow, not a write, so the pass manager records none. `f` gets `None` when the world holds no `T`. Panics if
+    /// `f` puts a `T` of its own into the world while one is lent: the one lent is the one that goes back.
+    pub fn resource_scope<T: Resource, R>(&mut self, f: impl FnOnce(&mut World, Option<&T>) -> R) -> R {
+        let held = self.resources.remove(&TypeId::of::<T>());
+        let out = f(self, held.as_ref().and_then(|b| b.as_any().downcast_ref::<T>()));
+        if let Some(b) = held {
+            let replaced = self.resources.insert(TypeId::of::<T>(), b);
+            assert!(
+                replaced.is_none(),
+                "{} was inserted while lent by resource_scope",
+                T::NAME
+            );
+        }
+        out
+    }
+
     pub fn remove_resource<T: Resource>(&mut self) -> Option<T> {
         let old = self.resources.remove(&TypeId::of::<T>())?;
         if let Some(fx) = &mut self.effects {
