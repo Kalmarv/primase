@@ -97,6 +97,55 @@ fn placements_are_marked_and_world_collision_is_cut() {
     assert_eq!(log.counts["world collision triangles outside the region, cut"], 2);
 }
 
+/// A hull soup is kept or cut whole, by the mean of its vertices, though a triangle of it lies outside.
+#[test]
+fn a_hull_is_kept_or_cut_whole() {
+    use primase_reskate::dialect::{CollisionMode, SkateCollision, SoupRef, TableRef};
+    let hull = |w: &mut World, dx: f32| {
+        let e = w.spawn();
+        // vertices' mean east 5 + dx; the last triangle's centroid at east 9 + dx
+        w.insert(
+            e,
+            Collision {
+                positions: vec![
+                    [2.0 + dx, 0.0, -5.0],
+                    [4.0 + dx, 0.0, -5.0],
+                    [3.0 + dx, 0.0, -6.0],
+                    [9.0 + dx, 0.0, -5.0],
+                ],
+                triangles: vec![[0, 1, 2], [1, 3, 2]],
+                surfaces: vec![0, 0],
+            },
+        );
+        w.insert(
+            e,
+            SkateCollision(SoupRef {
+                table: TableRef::single("collision/hull.bin"),
+                mode: Some(CollisionMode::Hull),
+                ground: None,
+                region_cut: None,
+                other: Default::default(),
+            }),
+        );
+        e
+    };
+    let mut w = World::new();
+    w.insert_resource(SkateScene {
+        name: "hulls".into(),
+        ..Default::default()
+    });
+    // region east [0, 8): the first hull's mean (4.5) inside though its second triangle's centroid (5.33) is too;
+    // shifted 4 m, the mean (8.5) is outside
+    let (kept, cut) = (hull(&mut w, 0.0), hull(&mut w, 4.0));
+    ClipReskateRegion::new([0.0, 0.0, 8.0, 10.0])
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    assert_eq!(w.get::<Collision>(kept).unwrap().triangles.len(), 2);
+    assert!(!w.has::<Collision>(cut));
+    assert_eq!(w.get::<SkateCollision>(kept).unwrap().0.region_cut, Some(true));
+}
+
 /// The region is the program's: all four bounds, finite, not empty.
 #[test]
 fn the_region_is_required_and_checked() {

@@ -4,7 +4,8 @@
 //! scene's (`skate.scene` `region`: the map's extent), marks each placement whose position lies outside it as clipped
 //! (`skate.placement` `clip`: the writer leaves a clipped placement out), and cuts the world's collision soups (the
 //! `core.collision` no placed prototype owns) at it: a triangle whose centroid lies outside is left out, with its rock
-//! flag, and a soup left with none is removed; a `skate.collision` entry is marked cut (`region_cut`), so a scene
+//! flag (a hull soup is kept or left out whole, by the mean of its vertices, as Studio takes a hull whole), and a soup
+//! left with none is removed; a `skate.collision` entry is marked cut (`region_cut`), so a scene
 //! written from the world says so. A placement that already states its clip, or a soup entry that states
 //! `region_cut = false`, keeps it. Every placement clipped and every triangle cut is counted. The writer obeys the
 //! flags and decides nothing from the region itself; without this pass nothing is clipped.
@@ -14,7 +15,7 @@ use std::collections::BTreeSet;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Transform, World};
 
-use crate::dialect::{SkateCollision, SkatePlacement, SkatePrototype, SkateRock, SkateScene};
+use crate::dialect::{CollisionMode, SkateCollision, SkatePlacement, SkatePrototype, SkateRock, SkateScene};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,19 +147,33 @@ impl Pass for ClipReskateRegion {
             } else {
                 w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY)
             };
-            let keep: Vec<bool> = c
-                .triangles
-                .iter()
-                .map(|tri| {
-                    let [a, b, d] = tri.map(|i| t.apply(c.positions[i as usize]));
-                    let (cx, cz) = ((a[0] + b[0] + d[0]) / 3.0, (a[2] + b[2] + d[2]) / 3.0);
-                    let (east, north) = (f64::from(cx), -f64::from(cz));
-                    east >= f64::from(r[0])
-                        && east < f64::from(r[2])
-                        && north >= f64::from(r[1])
-                        && north < f64::from(r[3])
-                })
-                .collect();
+            let inside = |east: f64, north: f64| {
+                east >= f64::from(r[0])
+                    && east < f64::from(r[2])
+                    && north >= f64::from(r[1])
+                    && north < f64::from(r[3])
+            };
+            // a hull is kept or cut whole, by the mean of its vertices
+            let hull = w
+                .get::<SkateCollision>(e)
+                .is_some_and(|sc| sc.0.mode == Some(CollisionMode::Hull));
+            let keep: Vec<bool> = if hull {
+                let n = c.positions.len().max(1) as f64;
+                let (east, north) = c.positions.iter().fold((0f64, 0f64), |(x, y), p| {
+                    let p = t.apply(*p);
+                    (x + f64::from(p[0]), y + f64::from(-p[2]))
+                });
+                vec![inside(east / n, north / n); c.triangles.len()]
+            } else {
+                c.triangles
+                    .iter()
+                    .map(|tri| {
+                        let [a, b, d] = tri.map(|i| t.apply(c.positions[i as usize]));
+                        let (cx, cz) = ((a[0] + b[0] + d[0]) / 3.0, (a[2] + b[2] + d[2]) / 3.0);
+                        inside(f64::from(cx), -f64::from(cz))
+                    })
+                    .collect()
+            };
             let cut = keep.iter().filter(|k| !**k).count();
             if let Some(sc) = w.get_mut::<SkateCollision>(e) {
                 sc.0.region_cut = Some(true);
