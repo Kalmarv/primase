@@ -561,6 +561,17 @@ pub struct PartReport {
     pub kept: BTreeMap<String, u64>,
 }
 
+/// One group of a conversion with groups ([`Gathered`]): its passes' report, what the writer's target doesn't write of
+/// it, and its bulk payload as written.
+#[derive(Clone, Debug, Default)]
+pub struct GroupReport {
+    pub ordinal: usize,
+    pub run: RunReport,
+    pub unsupported: Vec<(String, u64)>,
+    pub unsupported_resources: Vec<String>,
+    pub written: BTreeMap<String, u64>,
+}
+
 /// What a conversion did.
 #[derive(Debug, Default)]
 pub struct ConvertReport {
@@ -575,6 +586,14 @@ pub struct ConvertReport {
     pub summary_loads: Report,
     pub summarized: Vec<RunReport>,
     pub decided: RunReport,
+    /// In a conversion with groups ([`convert_parts_gathered`]): each group's report, in the order written, and the
+    /// finalizing decision passes' report.
+    pub groups: Vec<GroupReport>,
+    pub finalized: RunReport,
+    /// In a conversion with groups: the reader's reports on loading each part for the gather traversal, and the gather
+    /// passes' report per part.
+    pub gather_loads: Report,
+    pub gather_runs: Vec<RunReport>,
     /// The bytes of every part's summaries kept until the merge (the most the first traversal holds of them), and of
     /// the merged summaries handed to every part, as the summaries state them ([`crate::summary::Summary::retained_bytes`]):
     /// logical-data accounting, not a measured or bounded memory peak.
@@ -598,7 +617,10 @@ impl ConvertReport {
     /// Every approximation, as `<pass>: <what>`, over the selection and every part, from the reports kept.
     pub fn approximations(&self) -> BTreeMap<String, u64> {
         let mut out = BTreeMap::new();
-        let runs = std::iter::once(&self.select).chain(self.part_reports.iter().map(|p| &p.explicit));
+        let runs = [&self.select, &self.decided, &self.finalized]
+            .into_iter()
+            .chain(self.groups.iter().map(|g| &g.run))
+            .chain(self.part_reports.iter().map(|p| &p.explicit));
         for run in runs {
             for step in &run.steps {
                 for (k, v) in &step.log.approximations {
@@ -615,44 +637,32 @@ impl ConvertReport {
     pub fn notices(&self) -> Vec<Notice> {
         let mut out = self.reported.clone();
         let mut derived: BTreeMap<(String, NoticeKind, String), (u64, Vec<String>)> = BTreeMap::new();
-        let mut add = |stage: &str, kind: NoticeKind, reason: &str, n: u64, part: Option<usize>| {
+        let mut add = |stage: &str, kind: NoticeKind, reason: &str, n: u64, part: Option<String>| {
             let (count, examples) = derived
                 .entry((stage.to_owned(), kind, reason.to_owned()))
                 .or_default();
             *count += n;
-            if let Some(i) = part
+            if let Some(at) = part
                 && examples.len() < NOTICE_EXAMPLES
             {
-                examples.push(format!("part {i}"));
+                examples.push(at);
             }
         };
-        for step in &self.select.steps {
-            for (k, v) in &step.log.approximations {
-                add(&step.pass, NoticeKind::Approximation, k, *v, None);
-            }
-            for (k, v) in &step.log.omitted {
-                add(&step.pass, NoticeKind::Unsupported, k, *v, None);
-            }
-            for ((m, why), v) in &step.log.drops {
-                add(
-                    &step.pass,
-                    NoticeKind::Selection,
-                    &format!("{m}: {why}"),
-                    *v,
-                    None,
-                );
-            }
-            for g in &step.conservation {
-                add(&step.pass, NoticeKind::Diagnostic, &g.to_string(), 1, None);
-            }
-        }
-        for p in &self.part_reports {
-            for step in &p.explicit.steps {
+        let whole = [&self.select, &self.decided, &self.finalized]
+            .into_iter()
+            .map(|r| (r, None))
+            .chain(
+                self.groups
+                    .iter()
+                    .map(|g| (&g.run, Some(format!("group {}", g.ordinal)))),
+            );
+        for (run, at) in whole {
+            for step in &run.steps {
                 for (k, v) in &step.log.approximations {
-                    add(&step.pass, NoticeKind::Approximation, k, *v, Some(p.ordinal));
+                    add(&step.pass, NoticeKind::Approximation, k, *v, at.clone());
                 }
                 for (k, v) in &step.log.omitted {
-                    add(&step.pass, NoticeKind::Unsupported, k, *v, Some(p.ordinal));
+                    add(&step.pass, NoticeKind::Unsupported, k, *v, at.clone());
                 }
                 for ((m, why), v) in &step.log.drops {
                     add(
@@ -660,7 +670,61 @@ impl ConvertReport {
                         NoticeKind::Selection,
                         &format!("{m}: {why}"),
                         *v,
-                        Some(p.ordinal),
+                        at.clone(),
+                    );
+                }
+                for g in &step.conservation {
+                    add(&step.pass, NoticeKind::Diagnostic, &g.to_string(), 1, at.clone());
+                }
+            }
+        }
+        for g in &self.groups {
+            for (name, n) in &g.unsupported {
+                add(
+                    "convert",
+                    NoticeKind::Unsupported,
+                    &format!("{name}: the writer doesn't write it"),
+                    *n,
+                    Some(format!("group {}", g.ordinal)),
+                );
+            }
+            for name in &g.unsupported_resources {
+                add(
+                    "convert",
+                    NoticeKind::Unsupported,
+                    &format!("resource {name}: the writer doesn't write it"),
+                    1,
+                    Some(format!("group {}", g.ordinal)),
+                );
+            }
+        }
+        for p in &self.part_reports {
+            for step in &p.explicit.steps {
+                for (k, v) in &step.log.approximations {
+                    add(
+                        &step.pass,
+                        NoticeKind::Approximation,
+                        k,
+                        *v,
+                        Some(format!("part {}", p.ordinal)),
+                    );
+                }
+                for (k, v) in &step.log.omitted {
+                    add(
+                        &step.pass,
+                        NoticeKind::Unsupported,
+                        k,
+                        *v,
+                        Some(format!("part {}", p.ordinal)),
+                    );
+                }
+                for ((m, why), v) in &step.log.drops {
+                    add(
+                        &step.pass,
+                        NoticeKind::Selection,
+                        &format!("{m}: {why}"),
+                        *v,
+                        Some(format!("part {}", p.ordinal)),
                     );
                 }
                 for g in &step.conservation {
@@ -669,13 +733,19 @@ impl ConvertReport {
                         NoticeKind::Diagnostic,
                         &g.to_string(),
                         1,
-                        Some(p.ordinal),
+                        Some(format!("part {}", p.ordinal)),
                     );
                 }
             }
             for (k, v) in &p.kept {
                 if k.starts_with("made entities nothing keeps") {
-                    add("convert", NoticeKind::Selection, k, *v, Some(p.ordinal));
+                    add(
+                        "convert",
+                        NoticeKind::Selection,
+                        k,
+                        *v,
+                        Some(format!("part {}", p.ordinal)),
+                    );
                 }
             }
             for (name, n) in &p.unsupported {
@@ -684,7 +754,7 @@ impl ConvertReport {
                     NoticeKind::Unsupported,
                     &format!("{name}: the writer doesn't write it"),
                     *n,
-                    Some(p.ordinal),
+                    Some(format!("part {}", p.ordinal)),
                 );
             }
             for name in &p.unsupported_resources {
@@ -693,7 +763,7 @@ impl ConvertReport {
                     NoticeKind::Unsupported,
                     &format!("resource {name}: the writer doesn't write it"),
                     1,
-                    Some(p.ordinal),
+                    Some(format!("part {}", p.ordinal)),
                 );
             }
         }
@@ -846,7 +916,7 @@ pub fn convert_parts_summarized(
         writer,
         manager,
         select,
-        Some(summarized),
+        Some((summarized, None)),
         passes,
         &mut report,
         &mut during,
@@ -866,6 +936,116 @@ pub fn convert_parts_summarized(
             }))
         }
     }
+}
+
+/// Content the first traversal of a conversion in parts sets aside to be prepared and written by groups of its own
+/// rather than by the parts it came from: what one part cannot finish alone (a grid cell several parts reach), held on
+/// disk or elsewhere outside the parts, so what the conversion keeps in memory is one part or one group at a time.
+pub trait Spool {
+    /// Take a part's contributions out of `part` (after its summary passes ran) and keep them. What it takes are
+    /// entities the summary passes declared as the part's output; what stays is the part's summary input.
+    fn take(&mut self, part: &mut World) -> Result<()>;
+    /// The next group, as a world of its own, in an order that does not depend on the order the parts came in; `None`
+    /// once every group was given.
+    fn next(&mut self) -> Result<Option<World>>;
+}
+
+/// The groups of a conversion in parts ([`convert_parts_gathered`]): after the decisions, each part again through the
+/// `gather` passes (given every summary and decision; nothing written), its contributions taken by `spool`; each group
+/// the spool gives prepared by the `group` passes and written on its own; the `finalize` passes, run once on every
+/// summary (the parts', the gather traversal's and the groups'), for the decisions that need the groups.
+pub struct Gathered<'a> {
+    pub spool: &'a mut dyn Spool,
+    pub gather: &'a Pipeline,
+    pub group: &'a Pipeline,
+    pub finalize: &'a Pipeline,
+}
+
+impl std::fmt::Debug for Gathered<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gathered")
+            .field("gather", self.gather)
+            .field("group", self.group)
+            .field("finalize", self.finalize)
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`convert_parts_summarized`] with groups ([`Gathered`]). After `summarized.decide`, a gather traversal: each part is
+/// loaded again, handed the merged summaries and the decisions, run through `gathered.gather`, and the spool takes its
+/// contributions (nothing is written). Then each group the spool gives is handed them too, prepared by
+/// `gathered.group` (a whole run: the group is a whole of its own), checked against the writer's target and written.
+/// The summaries the gather traversal and the groups made are merged with the parts' (in either order, as the parts'
+/// are), the decisions kept, and `gathered.finalize` makes the decisions that need them, once. The write traversal
+/// then runs as in [`convert_parts_summarized`], each part given every summary and decision. The part source gives the
+/// same parts three times.
+#[allow(clippy::too_many_arguments)]
+pub fn convert_parts_gathered(
+    reader: &mut dyn Reader,
+    parts: &mut dyn PartSource,
+    writer: Box<dyn Writer>,
+    manager: &PassManager,
+    select: &Pipeline,
+    summarized: &Summarized,
+    gathered: Gathered,
+    passes: &Pipeline,
+) -> Result<ConvertReport> {
+    let mut report = ConvertReport::default();
+    let mut during = String::new();
+    let mut gathered = gathered;
+    match run(
+        reader,
+        parts,
+        writer,
+        manager,
+        select,
+        Some((summarized, Some(&mut gathered))),
+        passes,
+        &mut report,
+        &mut during,
+    ) {
+        Ok(()) => Ok(report),
+        Err(error) => {
+            report.reported.push(Notice::new(
+                "convert",
+                NoticeKind::FailureContext,
+                format!("failed during {during}: {error}"),
+                1,
+            ));
+            Err(Box::new(ConvertError {
+                error,
+                during,
+                partial: Box::new(report),
+            }))
+        }
+    }
+}
+
+/// A part's or a group's check against the writer's target: what the target doesn't write (reported), or an error
+/// naming the first value its rules refuse.
+/// What a target doesn't write of a part or group: the names (with how many held them), the resources.
+type NotWritten = (Vec<(String, u64)>, Vec<String>);
+
+fn check_target(target: &Target, w: &World) -> Result<NotWritten> {
+    let checked = target.check_prepared(w);
+    if let Some((name, words, bad)) = checked.invalid.first() {
+        return Err(format!(
+            "{}: {} of {name} the writer can't write ({words}), the first {:?}",
+            target.name,
+            bad.len(),
+            bad[0]
+        )
+        .into());
+    }
+    if let Some(name) = checked.invalid_resources.first() {
+        return Err(format!(
+            "{}: resource {name} refused ({})",
+            target.name,
+            target.rule_words(name).unwrap_or_default()
+        )
+        .into());
+    }
+    Ok((checked.unsupported, checked.unsupported_resources))
 }
 
 /// [`convert_parts`] in one part: every entity of the selected world ([`WholeWorld`]).
@@ -893,7 +1073,7 @@ fn run(
     mut writer: Box<dyn Writer>,
     manager: &PassManager,
     select: &Pipeline,
-    summarized: Option<&Summarized>,
+    summarized: Option<(&Summarized, Option<&mut Gathered>)>,
     passes: &Pipeline,
     report: &mut ConvertReport,
     during: &mut String,
@@ -915,7 +1095,7 @@ fn run(
     // once from them
     let decided = match summarized {
         None => None,
-        Some(s) => {
+        Some((s, gathered)) => {
             let mut kept = Vec::new();
             while let Some(Part {
                 roots,
@@ -962,6 +1142,22 @@ fn run(
             manager.verify(&merged, "the merged summaries")?;
             manager.run(&mut merged, s.decide, &mut report.decided)?;
             tally(&mut report.counts, &report.decided.clone());
+            if let Some(g) = gathered {
+                parts.restart()?;
+                merged = gather(
+                    g,
+                    s.registry,
+                    &merged,
+                    reader,
+                    parts,
+                    &world,
+                    manager,
+                    &target,
+                    &mut writer,
+                    report,
+                    during,
+                )?;
+            }
             parts.restart()?;
             Some((s.registry, merged))
         }
@@ -1055,26 +1251,7 @@ fn run(
         part.retain(&keep);
         *during = format!("part {ordinal}: target check");
         manager.verify(&part, "the passes")?;
-        let checked = target.check_prepared(&part);
-        part_report.unsupported = checked.unsupported;
-        part_report.unsupported_resources = checked.unsupported_resources;
-        if let Some((name, words, bad)) = checked.invalid.first() {
-            return Err(format!(
-                "{}: {} of {name} the writer can't write ({words}), the first {:?}",
-                target.name,
-                bad.len(),
-                bad[0]
-            )
-            .into());
-        }
-        if let Some(name) = checked.invalid_resources.first() {
-            return Err(format!(
-                "{}: resource {name} refused ({})",
-                target.name,
-                target.rule_words(name).unwrap_or_default()
-            )
-            .into());
-        }
+        (part_report.unsupported, part_report.unsupported_resources) = check_target(&target, &part)?;
         let explicit = part_report.explicit.clone();
         tally(&mut report.counts, &explicit);
         size.written = sizes(&part);
@@ -1100,6 +1277,101 @@ fn run(
     report.reported.extend(finished.notices);
     report.written = finished.report;
     Ok(())
+}
+
+/// The gather traversal and the groups of a conversion ([`Gathered`]), after the decisions (`decided`): see
+/// [`convert_parts_gathered`]. What the write traversal gets: every summary merged, the decisions, the finalizing ones.
+#[allow(clippy::too_many_arguments)]
+fn gather(
+    g: &mut Gathered,
+    registry: &SummaryRegistry,
+    decided: &World,
+    reader: &mut dyn Reader,
+    parts: &mut dyn PartSource,
+    world: &World,
+    manager: &PassManager,
+    target: &Target,
+    writer: &mut Box<dyn Writer>,
+    report: &mut ConvertReport,
+    during: &mut String,
+) -> Result<World> {
+    let mut kept = vec![registry.take_summaries(decided)];
+    let mut handed = World::new();
+    registry.hand_on(decided, &mut handed);
+    // the gather traversal: each part again, given every summary and decision, prepared as far as its contributions
+    // need, which the spool takes; nothing is written
+    while let Some(Part {
+        roots,
+        context,
+        whole,
+        area,
+    }) = parts.next_part()?
+    {
+        let ordinal = report.gather_runs.len();
+        *during = format!("gather {ordinal}: load");
+        let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+        let loaded = reader.load(world, &asked);
+        report.reported.extend(reader.notices());
+        let (mut part, loaded) = loaded?;
+        report.gather_loads.extend(loaded);
+        check_load_emits(world, &part, reader.emits())?;
+        manager.verify(&part, &format!("gather {ordinal}: load"))?;
+        registry.hand_on(decided, &mut part);
+        let first_made = Some(part.next_index());
+        part.insert_resource(PartScope {
+            roots,
+            context,
+            whole,
+            area,
+            first_made,
+            placed: BTreeMap::new(),
+        });
+        *during = format!("gather {ordinal}: passes");
+        let mut r = RunReport::default();
+        let ran = manager.run_part(&mut part, g.gather, &mut r);
+        tally(&mut report.counts, &r);
+        report.gather_runs.push(r);
+        ran?;
+        *during = format!("gather {ordinal}: spool");
+        g.spool.take(&mut part)?;
+        kept.push(registry.take_summaries_made(&part, &handed));
+    }
+    skipped_in_every_part(&report.gather_runs.iter().collect::<Vec<_>>(), g.gather)?;
+    while let Some(mut group) = g.spool.next()? {
+        let ordinal = report.groups.len();
+        *during = format!("group {ordinal}: load");
+        manager.verify(&group, &format!("group {ordinal}"))?;
+        registry.hand_on(decided, &mut group);
+        *during = format!("group {ordinal}: passes");
+        report.groups.push(GroupReport {
+            ordinal,
+            ..GroupReport::default()
+        });
+        let group_report = report.groups.last_mut().expect("pushed");
+        manager.run(&mut group, g.group, &mut group_report.run)?;
+        tally(&mut report.counts, &report.groups[ordinal].run.clone());
+        kept.push(registry.take_summaries_made(&group, &handed));
+        *during = format!("group {ordinal}: target check");
+        manager.verify(&group, "the group's passes")?;
+        let (unsupported, unsupported_resources) = check_target(target, &group)?;
+        let group_report = &mut report.groups[ordinal];
+        group_report.unsupported = unsupported;
+        group_report.unsupported_resources = unsupported_resources;
+        group_report.written = sizes(&group);
+        *during = format!("group {ordinal}: write");
+        let written = writer.write(&group);
+        report.reported.extend(writer.notices());
+        written?;
+    }
+    "finalize".clone_into(during);
+    let mut merged = registry.merge_order_free(&kept)?;
+    drop(kept);
+    registry.carry_decisions(decided, &mut merged);
+    report.merged_summary_bytes = registry.retained(&merged);
+    manager.verify(&merged, "the merged summaries and groups")?;
+    manager.run(&mut merged, g.finalize, &mut report.finalized)?;
+    tally(&mut report.counts, &report.finalized.clone());
+    Ok(merged)
 }
 
 /// The error a whole run gives for a pass that every part of a conversion skipped ([`PassManager::run_part`]: none of

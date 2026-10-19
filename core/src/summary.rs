@@ -193,6 +193,26 @@ impl SummaryRegistry {
             (k.copy)(from, to);
         }
     }
+
+    /// A world holding the summaries `w` made itself: those it holds that `handed` (what it was handed, as
+    /// [`SummaryRegistry::hand_on`] gave them) does not, so merging them counts nothing twice.
+    pub fn take_summaries_made(&self, w: &World, handed: &World) -> World {
+        let given: std::collections::BTreeSet<&str> = handed.resource_names().into_iter().collect();
+        let mut out = World::new();
+        for (name, k) in self.kinds.iter().filter(|(_, k)| k.summary) {
+            if !given.contains(name) {
+                (k.copy)(w, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Copy `from`'s decisions (not its summaries) into `to`.
+    pub fn carry_decisions(&self, from: &World, to: &mut World) {
+        for k in self.kinds.values().filter(|k| !k.summary) {
+            (k.copy)(from, to);
+        }
+    }
 }
 
 #[cfg(test)]
