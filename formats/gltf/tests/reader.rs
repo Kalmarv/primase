@@ -234,3 +234,28 @@ fn rejects_bad_indices_and_non_finite_values() {
         .to_string();
     assert!(e.contains("not finite"), "{e}");
 }
+
+/// The buffer's byteLength is the file's word: one near the largest size, which padding to 4 bytes would overflow,
+/// and lengths that disagree with the BIN chunk are errors, never a panic; an exact or padded length reads.
+#[test]
+fn buffer_length_is_checked() {
+    let parse = |len: u64, bin: &[u8]| {
+        let mut d = doc();
+        d["buffers"][0]["byteLength"] = json!(len);
+        Gltf::from_glb(&glb_of(&d, bin)).map(|_| ())
+    };
+    let b = bin();
+    assert!(parse(52, &b).is_ok());
+    assert!(parse(49, &b).is_ok(), "49 bytes pad to the 52-byte chunk");
+    for len in [u64::MAX, u64::MAX - 1, u64::MAX - 2, u64::MAX - 3, 53, 48, 0] {
+        let err = parse(len, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("byteLength") || err.contains("too large"),
+            "{len}: {err}"
+        );
+    }
+    // an empty BIN chunk with a huge declared length
+    assert!(parse(u64::MAX, &[]).is_err());
+    // an empty buffer: whatever the accessors make of it, the length check doesn't panic
+    let _ = parse(0, &[]);
+}

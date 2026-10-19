@@ -88,14 +88,18 @@ impl Gltf {
                 let len = b.usize("byteLength")?;
                 let bin =
                     bin.ok_or_else(|| invalid("buffers[0]", "no BIN chunk (external buffers are not read)"))?;
-                // The BIN chunk is the buffer padded to 4 bytes, nothing more.
-                if bin.len() != len.next_multiple_of(4) {
-                    return Err(invalid(
+                // The BIN chunk is the buffer padded to 4 bytes, nothing more. The length is the file's word:
+                // padding it may overflow, and slicing by it is checked.
+                let mismatch = || {
+                    invalid(
                         "buffers[0]",
                         &format!("byteLength {len} does not match the {}-byte BIN chunk", bin.len()),
-                    ));
+                    )
+                };
+                if len.checked_next_multiple_of(4) != Some(bin.len()) {
+                    return Err(mismatch());
                 }
-                bin[..len].to_vec()
+                bin.get(..len).ok_or_else(mismatch)?.to_vec()
             }
             _ => return Err(invalid("buffers", "more than one buffer")),
         };
