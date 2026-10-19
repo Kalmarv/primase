@@ -832,6 +832,10 @@ pub struct StepReport {
     /// With conservation diagnostics reporting ([`Conservation::Report`]): each measure whose losses differ from what
     /// the pass declared. Empty otherwise.
     pub conservation: Vec<Gap>,
+    /// `Some(why)` when the pass failed (its run, its declarations, conservation or the verifier refused it): the
+    /// record keeps what its log had noted until then, so its omissions and approximations still reach the report;
+    /// `added` and `removed` are then empty (not checked).
+    pub failed: Option<String>,
 }
 
 /// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
@@ -1037,12 +1041,23 @@ impl PassManager {
                 })
             };
             hook(instrument.before_pass(&step, w))?;
-            match self.run_pass(w, p.as_ref(), &text) {
+            let mut log = PassLog::default();
+            match self.run_pass(w, p.as_ref(), &text, &mut log) {
                 Ok(done) => {
                     hook(instrument.after_pass(&step, w, &done))?;
                     report.steps.push(done);
                 }
                 Err(e) => {
+                    // the failed step's record keeps what its log noted, marked failed
+                    report.steps.push(StepReport {
+                        pass: text.clone(),
+                        approximates: p.approximates(),
+                        log,
+                        added: Vec::new(),
+                        removed: Vec::new(),
+                        conservation: Vec::new(),
+                        failed: Some(e.to_string()),
+                    });
                     // the pass's error is the one that matters; a failing hook has nothing to add to it
                     let _ = instrument.pass_failed(&step, w, &e);
                     return Err(e);
@@ -1052,8 +1067,9 @@ impl PassManager {
         Ok(())
     }
 
-    /// One pass: its requirements, the run, its declarations, the verifier.
-    fn run_pass(&self, w: &mut World, p: &dyn Pass, text: &str) -> Result<StepReport> {
+    /// One pass: its requirements, the run, its declarations, the verifier. `log` is the caller's, so what the pass
+    /// noted survives a failure.
+    fn run_pass(&self, w: &mut World, p: &dyn Pass, text: &str, log: &mut PassLog) -> Result<StepReport> {
         for &r in p.requires() {
             if !w.has_component_named(r) && !w.resource_names().contains(&r) {
                 return Err(Error::Missing {
@@ -1074,19 +1090,18 @@ impl PassManager {
         } else {
             BTreeMap::new()
         };
-        let mut log = PassLog::default();
         let first_made = w.next_index();
         let ledger = (self.conservation != Conservation::Off).then(|| {
             w.start_rebuild_log();
             crate::ledger::Before::take(w)
         });
-        let ran = p.run(w, &mut log);
+        let ran = p.run(w, log);
         let rebuilds = w.take_rebuild_log();
         ran.map_err(|message| Error::Pass {
             pass: text.to_owned(),
             message,
         })?;
-        let conservation = ledger.map_or_else(Vec::new, |b| b.gaps(w, &rebuilds, &log));
+        let conservation = ledger.map_or_else(Vec::new, |b| b.gaps(w, &rebuilds, log));
         if self.conservation == Conservation::Enforce
             && let Some(g) = conservation.first()
         {
@@ -1180,10 +1195,11 @@ impl PassManager {
         Ok(StepReport {
             pass: text.to_owned(),
             approximates: p.approximates(),
-            log,
+            log: std::mem::take(log),
             added,
             removed,
             conservation,
+            failed: None,
         })
     }
 

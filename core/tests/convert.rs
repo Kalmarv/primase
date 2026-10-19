@@ -650,6 +650,37 @@ impl Pass for ToyFail {
     }
 }
 
+/// Notes an approximation and an omission, then fails.
+struct ToyNoteThenFail;
+impl Pass for ToyNoteThenFail {
+    fn name(&self) -> &'static str {
+        "toy-note-then-fail"
+    }
+    fn run(&self, _w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        log.approximate("corners rounded", 2);
+        log.omit("toy lights left out", 1);
+        Err("the toy pass gave up".into())
+    }
+}
+
+/// Notes an approximation, then takes a placement's transform away (the verifier refuses the result).
+struct ToyUnplace;
+impl Pass for ToyUnplace {
+    fn name(&self) -> &'static str {
+        "toy-unplace"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        log.approximate("placements unplaced", 1);
+        let e = w
+            .iter::<Instance>()
+            .map(|(e, _)| e)
+            .next()
+            .ok_or("no placement")?;
+        w.remove::<primase_core::Transform>(e);
+        Ok(())
+    }
+}
+
 /// A resource of a source, which the toy writer does not write unless its target lists it.
 #[derive(Clone, Debug, PartialEq)]
 struct ToyRes;
@@ -677,6 +708,8 @@ fn manager_with(select: &str, passes: &str) -> (PassManager, Pipeline, Pipeline)
     r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
     r.register("toy-per-placement", |_| Ok(Box::new(ToyPerPlacement)));
     r.register("toy-fail", |_| Ok(Box::new(ToyFail)));
+    r.register("toy-note-then-fail", |_| Ok(Box::new(ToyNoteThenFail)));
+    r.register("toy-unplace", |_| Ok(Box::new(ToyUnplace)));
     r.register("toy-add-res", |_| Ok(Box::new(ToyAddRes)));
     r.register("two-cells", |_| Ok(Box::new(TwoCells)));
     let (select, passes) = (r.parse(select).unwrap(), r.parse(passes).unwrap());
@@ -746,7 +779,8 @@ fn content_made_from_context_is_written_by_its_owner() {
     assert_eq!(parted, whole);
 }
 
-/// A failure keeps the failing part's report as far as it got: the passes that ran before a failing pass; the whole
+/// A failure keeps the failing part's report as far as it got: the passes that ran before a failing pass and its own
+/// record, marked failed; the whole
 /// pipeline when the target check refuses the part; and the notices a writer gave on the call that failed.
 #[test]
 fn a_failing_part_keeps_what_its_passes_and_writer_reported() {
@@ -757,7 +791,13 @@ fn a_failing_part_keeps_what_its_passes_and_writer_reported() {
     let e = e.downcast::<ConvertError>().unwrap();
     assert_eq!(e.during, "part 0: passes");
     let part = &e.partial.part_reports[0];
-    assert_eq!(part.explicit.steps.len(), 1);
+    // the pass that ran, then the failing one's record, marked failed
+    assert_eq!(part.explicit.steps.len(), 2);
+    assert!(part.explicit.steps[0].failed.is_none());
+    assert_eq!(
+        part.explicit.steps[1].failed.as_deref(),
+        Some("pass toy-fail failed: the toy pass failed")
+    );
     assert_eq!(
         part.explicit.steps[0]
             .log
@@ -1068,4 +1108,52 @@ fn read_and_loaded_data_are_checked_before_any_pass_runs() {
     }
     let (r, _) = run(Fault::Empty);
     r.unwrap();
+}
+
+/// A pass that fails, by its own error or by what the checks after it refuse, keeps its step: the record is marked
+/// failed and holds what the pass had noted, so the conversion's partial report still names its omissions and
+/// approximations, each once.
+#[test]
+fn a_failed_pass_keeps_what_it_noted() {
+    for (passes, why, notes) in [
+        (
+            "toy-note-then-fail",
+            "the toy pass gave up",
+            vec![
+                ("corners rounded", NoticeKind::Approximation, 2),
+                ("toy lights left out", NoticeKind::Unsupported, 1),
+            ],
+        ),
+        (
+            "toy-unplace",
+            "core.transform",
+            vec![("placements unplaced", NoticeKind::Approximation, 1)],
+        ),
+    ] {
+        // two placements in one part, so taking one's transform leaves the name in the world (the verifier's case)
+        let (m, select, passes_p) = manager_with("toy-select", passes);
+        let (w, _) = writer(target());
+        let mut whole = primase_core::convert::WholeWorld::default();
+        let e = convert_parts(&mut reader(2), &mut whole, w, &m, &select, &passes_p).unwrap_err();
+        events();
+        let e = e.downcast::<ConvertError>().unwrap();
+        assert_eq!(e.during, "part 0: passes", "{passes}");
+        let step = e.partial.part_reports[0].explicit.steps.last().unwrap();
+        assert_eq!(step.pass, passes);
+        assert!(
+            step.failed.as_deref().is_some_and(|f| f.contains(why)),
+            "{passes}: {:?}",
+            step.failed
+        );
+        let notices = e.partial.notices();
+        for (reason, kind, count) in notes {
+            let found: Vec<_> = notices.iter().filter(|n| n.reason == reason).collect();
+            assert_eq!(found.len(), 1, "{passes}: {reason}: {found:?}");
+            assert_eq!(
+                (found[0].kind, found[0].count),
+                (kind, count),
+                "{passes}: {reason}"
+            );
+        }
+    }
 }

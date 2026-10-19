@@ -1,10 +1,10 @@
 //! The GTA reader of [`primase_core::convert`]: a region of an install, read once to plan from and loaded part by
 //! part ([`crate::pipeline::GtaSource`]). Which selection and passes a conversion runs is its caller's choice: the
 //! reader reads every entity of both maps within reach, with their state as conditions, and chooses none of it.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use primase_core::convert::{Reader, Report, Result};
+use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, World};
 
 use crate::pipeline::{GtaSource, Map, prototype_box};
@@ -28,6 +28,52 @@ pub struct GtaReader {
     source: GtaSource,
     region: [f32; 4],
     reach: f32,
+    /// What the last read or load couldn't find, until [`Reader::notices`] takes it.
+    pending: Vec<Notice>,
+}
+
+/// The stage the reader's notices name.
+const STAGE: &str = "gta reader";
+
+/// What reading couldn't find: placements whose archetype has no definition in the archives (left out).
+fn read_notices(missing_archetypes: usize) -> Vec<Notice> {
+    let mut out = Vec::new();
+    if missing_archetypes > 0 {
+        out.push(Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "placements whose archetype has no definition in the archives, left out",
+            missing_archetypes as u64,
+        ));
+    }
+    out
+}
+
+/// What loading couldn't find: prototypes without a live drawable file (left without geometry), and textures the
+/// archives don't hold (each named, as the example, with how many bindings asked for it).
+fn load_notices(missing_assets: usize, textures_not_found: &BTreeMap<String, usize>) -> Vec<Notice> {
+    let mut out = Vec::new();
+    if missing_assets > 0 {
+        out.push(Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "prototypes without a live drawable file, left without geometry",
+            missing_assets as u64,
+        ));
+    }
+    if !textures_not_found.is_empty() {
+        let mut n = Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "textures not found in the archives, their bindings left unbound",
+            textures_not_found.len() as u64,
+        );
+        for (name, uses) in textures_not_found {
+            n = n.example(format!("{name} ({uses} bindings)"));
+        }
+        out.push(n);
+    }
+    out
 }
 
 impl std::fmt::Debug for GtaReader {
@@ -46,6 +92,7 @@ impl GtaReader {
             source: GtaSource::open(&o.install, &o.keys, o.map)?,
             region: o.region,
             reach: o.reach,
+            pending: Vec::new(),
         })
     }
 }
@@ -53,6 +100,7 @@ impl GtaReader {
 impl Reader for GtaReader {
     fn read(&mut self) -> Result<(World, Report)> {
         let (w, r) = self.source.read(self.region, self.reach)?;
+        self.pending.extend(read_notices(r.region.missing_archetypes));
         Ok((
             w,
             vec![
@@ -68,6 +116,8 @@ impl Reader for GtaReader {
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
         let (w, r) = self.source.load(world, roots)?;
+        self.pending
+            .extend(load_notices(r.asset_missing, &r.textures_not_found));
         let mut report = Report::new();
         if !r.textures_not_found.is_empty() || r.asset_missing > 0 {
             report.push((
@@ -86,6 +136,10 @@ impl Reader for GtaReader {
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         prototype_box(world, prototype)
     }
+    /// What the last read or load couldn't find (each taken once).
+    fn notices(&mut self) -> Vec<Notice> {
+        std::mem::take(&mut self.pending)
+    }
 }
 
 /// The map a `--map` value names.
@@ -94,5 +148,26 @@ pub fn map_named(name: &str) -> Option<Map> {
         "online" => Some(Map::Online),
         "story" => Some(Map::Story),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Missing source inputs become notices with their counts and the names the source has; nothing missing, none.
+    #[test]
+    fn missing_inputs_are_notices() {
+        assert!(read_notices(0).is_empty());
+        assert!(load_notices(0, &BTreeMap::new()).is_empty());
+        let r = read_notices(15);
+        assert_eq!((r.len(), r[0].count, r[0].kind), (1, 15, NoticeKind::Unsupported));
+        let textures = BTreeMap::from([("road_01".to_owned(), 3), ("sign_02".to_owned(), 1)]);
+        let l = load_notices(2, &textures);
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0].count, 2);
+        assert!(l[0].reason.contains("drawable"));
+        assert_eq!(l[1].count, 2);
+        assert_eq!(l[1].examples, ["road_01 (3 bindings)", "sign_02 (1 bindings)"]);
     }
 }
