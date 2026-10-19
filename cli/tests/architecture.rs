@@ -1645,8 +1645,6 @@ fn real_data_variables_are_declared() {
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
     "layout: file=worlds/fromsoft/src/sekiro/mod.rs",
-    "layout: file=worlds/frostbite/src/ebx/mod.rs",
-    "layout: file=worlds/frostbite/src/folder.rs",
     "layout: file=worlds/gta/src/archive_set.rs",
     "layout: file=worlds/gta/src/assets.rs",
     "layout: file=worlds/gta/src/collision.rs",

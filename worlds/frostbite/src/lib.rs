@@ -13,9 +13,11 @@ pub mod bundle;
 pub mod db;
 pub mod depot;
 pub mod ebx;
-pub mod folder;
 pub mod lookup;
+mod read;
 pub mod toc;
+
+pub use read::folder;
 
 /// Resource type of a MeshSet.
 pub const MESHSET: u32 = 0x49B1_56D4;

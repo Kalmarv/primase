@@ -1,9 +1,9 @@
-//! Writing an EBX document (ReSkate `ebx_writer.cpp`): instances laid out again from their values
+//! Encoding an EBX document to bytes (ReSkate `ebx_writer.cpp`): instances laid out again from their values
 //! (padding and unread bytes from each instance's image as read), then arrays, boxed values (carried as bytes, with
 //! the arrays and strings they point at), strings (deduplicated, in first-use order) and the fixup tables.
 use std::collections::BTreeMap;
 
-use super::read::align_up;
+use super::decode::align_up;
 use super::{
     ArrayRecord, BoxedRef, BoxedValueRecord, Document, FieldDescriptor, FieldType, Object, Pointer, Value,
 };

@@ -17,11 +17,11 @@
 //! writer's layout (a document the writer produced, or one laid out the same way).
 
 pub mod carry;
-mod read;
-mod write;
+mod decode;
+mod encode;
 
-pub use read::{read, read_file_guid};
-pub use write::write;
+pub use decode::{read, read_file_guid};
+pub use encode::write;
 
 /// `FieldType`: bits 4..9 of an encoded type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

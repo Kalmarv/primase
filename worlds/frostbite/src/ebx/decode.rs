@@ -1,4 +1,4 @@
-//! Reading an EBX document (ReSkate `ebx_document.cpp`, `read_document`).
+//! Decoding an EBX document from its bytes (ReSkate `ebx_document.cpp`, `read_document`).
 use std::collections::BTreeMap;
 
 use super::{
