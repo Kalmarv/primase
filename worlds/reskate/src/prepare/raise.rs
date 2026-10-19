@@ -53,7 +53,7 @@
 //! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`); so is
 //! one with collision shapes (`core.collider`): they become triangles first (`tessellate-colliders`).
 //!
-//! Then [`crate::interchange::prepare_assets`] writes the GLBs and PNGs and [`crate::interchange::write`] the scene.
+//! Then [`crate::interchange::write`] writes the scene, its meshes and textures encoded as GLBs and PNGs.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -96,7 +96,6 @@ fn scene(name: &str) -> PathBuf {
         &primase_reskate::prepare::RaiseOptions::new("lights").unwrap(),
     )
     .unwrap();
-    primase_reskate::interchange::prepare_assets(&mut w, &tmp(&format!("{name}_assets"))).unwrap();
     let dir = tmp(name);
     primase_reskate::interchange::write(&w, &dir).unwrap();
     dir

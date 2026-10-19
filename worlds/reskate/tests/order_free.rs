@@ -187,8 +187,6 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
         },
     );
     primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("benches").unwrap()).unwrap();
-    let assets = tmp("assets");
-    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();

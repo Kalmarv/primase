@@ -53,12 +53,6 @@ removed_when = "the synthetic world comes from a library fixture function"
 
 # ---- writers take the world read-only ----
 
-[[writer]]
-file = "worlds/reskate/src/interchange/assets.rs"
-what = "prepare_assets takes &mut World"
-reason = "writes prototype GLBs and texture PNGs, then points the world at them, before write"
-removed_when = "write serializes in-memory meshes and textures itself"
-
 # ---- file, environment and process access (clippy.toml), by module role ----
 
 [[io]]
@@ -66,12 +60,6 @@ file = "formats/gltf/src/write.rs"
 role = "exception"
 reason = "the glTF writer embeds referenced PNG files as stored"
 removed_when = "textures reach the writer loaded"
-
-[[io]]
-file = "worlds/reskate/src/interchange/assets.rs"
-role = "exception"
-reason = "prepare_assets writes assets and repoints the world before the writer runs"
-removed_when = "write serializes in-memory meshes and textures itself"
 
 [[io]]
 file = "worlds/reskate/src/postcompile/vblend.rs"

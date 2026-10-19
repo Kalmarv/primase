@@ -161,8 +161,6 @@ fn a_loaded_scene_writes_what_its_world_writes() {
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    let assets = tmp("assets");
-    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     // read but not loaded: the writer reads no GLB
@@ -241,8 +239,6 @@ fn a_spawn_over_no_ground_is_refused() {
             },
         );
         primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("spawned").unwrap()).unwrap();
-        let assets = tmp(&format!("{tag}-assets"));
-        primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
         let scene = tmp(&format!("{tag}-scene"));
         primase_reskate::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
@@ -302,8 +298,6 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     t.cols[3] = [10.0, 0.0, 10.0];
     w.insert(at, t);
     primase_reskate::prepare::raise_skate(&mut w, &RaiseOptions::new("collides").unwrap()).unwrap();
-    let assets = tmp("collides-assets");
-    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("collides-scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
@@ -374,7 +368,6 @@ fn the_write_needs_no_scene_file_after_the_load() {
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    primase_reskate::interchange::prepare_assets(&mut w, &tmp("once-assets")).unwrap();
     let scene = tmp("once-scene");
     primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut read = World::new();

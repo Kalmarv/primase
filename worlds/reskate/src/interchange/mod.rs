@@ -5,11 +5,10 @@
 //! collision soups) and the files they reference (prototype GLBs, textures). [`read`] attaches a folder to a
 //! [`primase_core::World`] (see [`crate::dialect`] for the mapping): the manifest and tables, with the GLBs and
 //! textures as file references (`core.mesh_file`, `core.texture_file`); [`load`] then reads those files into
-//! `core.mesh` and `core.texture`. [`prepare_assets`] writes a world's in-memory meshes and textures as the files a
-//! scene references, and [`write`] writes the world as a folder. An unchanged world writes the same tables byte for
-//! byte, the same manifest as parsed values, and the referenced files copied.
+//! `core.mesh` and `core.texture`. [`write`] writes the world as a folder: the files it names copied, the meshes and
+//! textures it holds only in memory encoded. An unchanged world writes the same tables byte for byte, the same
+//! manifest as parsed values, and the referenced files copied.
 
-mod assets;
 pub(crate) mod layered;
 mod read;
 pub mod tables;
@@ -17,7 +16,6 @@ mod write;
 
 use std::path::Path;
 
-pub use assets::prepare_assets;
 pub use read::{ReadReport, read};
 pub use write::{WriteReport, write};
 

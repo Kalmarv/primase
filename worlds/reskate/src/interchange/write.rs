@@ -1,5 +1,7 @@
-//! Writing a world back as a scene folder: `scene.json`, the binary tables, and the referenced files copied byte
-//! for byte (textures, prototype GLBs whose geometry is unchanged, the pause map).
+//! Writing a world back as a scene folder: `scene.json`, the binary tables, and the referenced files: those the world
+//! names a source file for (`core.texture_file`, `core.mesh_file`, the pause map's) copied byte for byte, those it
+//! holds only in memory encoded here (a prototype's `core.mesh` as its GLB, geometry only, the manifest linking the
+//! materials, by the glTF writer; a texture's `core.texture` level 0 as its PNG, by the image toolkit).
 //!
 //! The manifest keeps the top-level key order the reader saw (and writes lists that were present but are empty);
 //! inside an item keys come in the specification's order, then the item's other keys in theirs. Floats are written
@@ -80,6 +82,7 @@ impl Plan {
                 Ok(())
             }
             Some((_, Out::Copy(a))) if matches!(&out, Out::Copy(b) if b == a) => Ok(()),
+            Some((_, Out::Bytes(a))) if matches!(&out, Out::Bytes(b) if b == a) => Ok(()),
             Some(_) => Err(bad(format!("two different files would be written to '{rel}'"))),
         }
     }
@@ -217,6 +220,22 @@ impl StrTable {
 }
 
 impl Writer<'_> {
+    /// `bytes` written to `f`'s path; its digest when the reference has one.
+    fn encoded(&mut self, f: &FileRef, bytes: Vec<u8>) -> Result<FileRef> {
+        use sha2::{Digest, Sha256};
+        let sha256 = f.sha256.as_ref().map(|_| {
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        });
+        self.plan.add(&f.path, Out::Bytes(bytes))?;
+        Ok(FileRef {
+            path: f.path.clone(),
+            sha256,
+        })
+    }
+
     fn copy(&mut self, f: &FileRef, src: &Path) -> Result<FileRef> {
         self.plan.add(&f.path, Out::Copy(src.to_owned()))?;
         Ok(FileRef {
@@ -439,9 +458,13 @@ impl Writer<'_> {
         let mut tex_key: BTreeMap<Entity, String> = BTreeMap::new();
         let mut textures = ObjB::default();
         for (e, t) in w.iter::<SkateTexture>() {
-            let src = w
-                .get::<TextureFile>(e)
-                .ok_or_else(|| bad(format!("texture '{}' has no core.texture_file", t.key)))?;
+            let src = w.get::<TextureFile>(e);
+            if src.is_none() && !w.has::<Texture>(e) {
+                return Err(bad(format!(
+                    "texture '{}' has neither pixels (core.texture) nor a file (core.texture_file)",
+                    t.key
+                )));
+            }
             // v1 cannot express a different X channel or tangent-plane basis.
             if w.get::<Texture>(e).and_then(|x| x.normal).is_some_and(|n| {
                 n.x != NormalX::Red || n.basis != primase_core::NormalBasis::TangentBitangent
@@ -451,7 +474,15 @@ impl Writer<'_> {
                     t.key
                 )));
             }
-            let file = self.copy(&t.file, &src.path)?;
+            let file = match src {
+                Some(src) => self.copy(&t.file, &src.path)?,
+                None => {
+                    let texture = w.get::<Texture>(e).expect("checked above");
+                    let bytes = primase_image::texture_level_png(texture, 0)
+                        .map_err(|err| bad(format!("texture '{}': {err}", t.key)))?;
+                    self.encoded(&t.file, bytes)?
+                }
+            };
             let mut o = ObjB::default();
             o.put("file", text(&file.path));
             o.opt("sha256", file.sha256, Value::String);
@@ -631,10 +662,36 @@ impl Writer<'_> {
                     }
                     mf.materials.clone()
                 }
-                (Some(_), None) if w.has::<Mesh>(e) => {
-                    return Err(bad(format!(
-                        "{what}: its mesh changed (no core.mesh_file); writing meshes needs the glTF writer"
-                    )));
+                (Some(g), None) if w.has::<Mesh>(e) => {
+                    // held only in memory: its GLB, geometry only (the manifest links the materials)
+                    let mesh = w.get::<Mesh>(e).expect("checked").clone();
+                    let materials: Vec<Option<Entity>> =
+                        mesh.primitives().iter().map(|p| p.material).collect();
+                    let mut local = mesh;
+                    for prim in local.primitives_mut() {
+                        prim.material = None;
+                    }
+                    let mut glb = World::default();
+                    let proto = glb.spawn();
+                    glb.insert(proto, local);
+                    glb.insert(proto, Name(p.id.clone()));
+                    let (bytes, _) = primase_gltf::write(
+                        &glb,
+                        &primase_gltf::WriteOptions {
+                            include_unplaced: true,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| bad(format!("{what}: {err}")))?;
+                    let g = self.encoded(g, bytes)?;
+                    o.put(
+                        "glb",
+                        match &g.sha256 {
+                            None => text(&g.path),
+                            Some(h) => file_object(&g.path, h),
+                        },
+                    );
+                    materials
                 }
                 (Some(_), None) => return Err(bad(format!("{what}: a glb but no core.mesh_file"))),
             };

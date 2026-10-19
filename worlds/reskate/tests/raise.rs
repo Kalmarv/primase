@@ -233,8 +233,6 @@ fn a_core_world_becomes_a_scene() {
     // 10 cd through raise-skate's calibration
     assert!((l[0].energy - prepare::studio_watts((10.0 * prepare::SKATE_LIGHT_SCALE) as f32)).abs() < 1e-6);
     // assets, the scene, and back
-    let assets = tmp("assets");
-    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("scene");
     interchange::write(&w, &out).unwrap();
     let mut back = World::new();
@@ -537,8 +535,6 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
         !log.approximations
             .contains_key("PBR mask factors quantized to UNORM8")
     );
-    let assets = tmp("mask-assets");
-    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("mask-scene");
     interchange::write(&w, &out).unwrap();
     let mut read = World::new();
@@ -1025,8 +1021,6 @@ fn a_prototype_that_collides_without_drawing() {
     // through the scene file (which takes placements of skate prototypes only): no GLB, the soup kept on its
     // asphalt surface
     w.despawn(nothing_at);
-    let assets = tmp("collision_only_assets");
-    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("collision_only_scene");
     interchange::write(&w, &out).unwrap();
     let mut back = World::new();
