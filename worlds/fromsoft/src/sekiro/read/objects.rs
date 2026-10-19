@@ -1,7 +1,8 @@
 //! Object collision as the objects store it: each object prototype's main HKX bodies (`fromsoft.object_collision`),
 //! meshes as their posed triangles, convex shapes as their stored core and radius.
-use crate::collision::{BodyGeometry, pose_columns};
+use crate::collision::BodyGeometry;
 use crate::pose::FRAME;
+use crate::pose::pose_columns;
 use crate::sekiro::source::{ObjectBodies, ObjectBody, ObjectGeometry};
 use crate::{Result, collision};
 use std::collections::BTreeMap;

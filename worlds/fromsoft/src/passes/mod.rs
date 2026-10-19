@@ -2,3 +2,4 @@
 //! layered-shader bake ([`layer_bake`]).
 pub mod geometry;
 pub mod layer_bake;
+pub mod rigid;

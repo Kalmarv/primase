@@ -1,8 +1,8 @@
 //! `lower-fromsoft-geometry`: the prototypes' models as core meshes, with the choices it takes as typed options.
 use super::blockers::BlockerCards;
+use crate::components::models::{RigidModel, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
-use crate::rigid::{RigidModel, SourceModel};
 use crate::sekiro::components::lowered::UvTiling;
 use crate::sekiro::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSource};
 use primase_core::pass::{Options, Pass, PassLog};

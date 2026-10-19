@@ -1,5 +1,6 @@
 //! Sekiro collision metadata. The tagfile and mesh mechanism live in the toolkit;
 //! fsnp material tables and source-frame conventions belong here.
+use crate::pose::{pose, pose_columns, posed};
 use crate::{Result, invalid};
 use primase_havok::{Compendium, ConvexCore, Tagfile, Value};
 use std::collections::BTreeMap;
@@ -252,33 +253,4 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
         }
     }
     Ok(result)
-}
-
-/// A body pose as the columns of its affine map (rotation by the unit quaternion `q`, then translation by `p`).
-pub fn pose_columns(p: [f32; 3], q: [f32; 4]) -> [[f32; 3]; 4] {
-    let [x, y, z, w] = q;
-    let xx = x * x;
-    let yy = y * y;
-    let zz = z * z;
-    let xy = x * y;
-    let xz = x * z;
-    let yz = y * z;
-    let xw = x * w;
-    let yw = y * w;
-    let zw = z * w;
-    [
-        [1. - 2. * (yy + zz), 2. * (xy + zw), 2. * (xz - yw)],
-        [2. * (xy - zw), 1. - 2. * (zz + xx), 2. * (yz + xw)],
-        [2. * (xz + yw), 2. * (yz - xw), 1. - 2. * (yy + xx)],
-        p,
-    ]
-}
-
-/// `v` through the affine map with columns `c`.
-pub fn posed(c: &[[f32; 3]; 4], v: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| v[0] * c[0][i] + v[1] * c[1][i] + v[2] * c[2][i] + c[3][i])
-}
-
-fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
-    posed(&pose_columns([p[0], p[1], p[2]], q), v)
 }

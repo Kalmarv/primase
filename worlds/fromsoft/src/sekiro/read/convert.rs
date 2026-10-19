@@ -12,8 +12,8 @@ use primase_core::convert::{Reader, Report, Result};
 use primase_core::{Entity, World};
 
 use super::area::{Options, read_area};
+use crate::components::models::SourceModel;
 use crate::dcx::Decoder;
-use crate::rigid::SourceModel;
 
 /// See the module documentation.
 #[derive(Debug)]

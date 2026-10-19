@@ -294,7 +294,7 @@ fn select_placements(
 /// region rule uses and [`convert::AreaReader`] gives as a prototype's box. `None` for a model whose face sets use no
 /// vertex.
 pub fn world_bounds(model: &Model) -> std::result::Result<Option<[[f32; 3]; 2]>, String> {
-    Ok(crate::rigid::posed_bounds(model)?
+    Ok(crate::pose::posed_bounds(model)?
         .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]))
 }
 
@@ -479,7 +479,7 @@ pub fn read_area(
         let far = key.starts_with(&format!("{area}/m9"));
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
-        world.insert(e, crate::rigid::SourceModel(proto.model));
+        world.insert(e, crate::components::models::SourceModel(proto.model));
         world.insert(e, source::MaterialSlots(slots));
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
         if key.starts_with("obj/") {

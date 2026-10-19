@@ -16,7 +16,8 @@ mod read;
 pub mod sekiro;
 pub use archive::{Archive, NameDictionary};
 pub use binder::{Binder, BinderFile};
-pub use passes::{geometry, layer_bake};
+mod components;
+pub use passes::{geometry, layer_bake, rigid};
 pub use read::{archive, binder, dcx};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -45,5 +46,4 @@ pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString
 }
 pub mod btl;
 pub mod edge;
-pub mod rigid;
 pub mod tpf;

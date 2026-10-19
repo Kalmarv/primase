@@ -3,10 +3,10 @@
 //! convex bodies (which store none) and the crop are its options.
 use super::collision::{attach, beyond, crop, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
-use crate::collision::posed;
 use crate::pose::FRAME;
+use crate::pose::posed;
 use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry};
-use crate::{materials::Material, rigid::SourceModel};
+use crate::{components::models::SourceModel, materials::Material};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::Condition;
 use primase_core::{
@@ -28,7 +28,7 @@ fn largest_render_surface(world: &World, prototype: Entity) -> std::result::Resu
             "{prototype:?}: convex-surface=render needs the prototype's fromsoft.flver and fromsoft.material_slots"
         ));
     };
-    let posed = crate::rigid::posed_positions(model).map_err(|e| format!("{prototype:?}: {e}"))?;
+    let posed = crate::pose::posed_positions(model).map_err(|e| format!("{prototype:?}: {e}"))?;
     let mut areas = BTreeMap::<String, f64>::new();
     for (mesh, positions) in model.meshes.iter().zip(&posed) {
         let Some(m) = slots.get(mesh.material).and_then(|e| world.get::<Material>(*e)) else {
