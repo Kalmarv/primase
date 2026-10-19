@@ -429,30 +429,24 @@ pub fn drop_hidden_models(w: &mut World, log: &mut PassLog) -> Result<(), String
         if keep.iter().all(|k| *k) {
             continue;
         }
-        let Some(mut mesh) = w.remove::<Mesh>(h) else {
-            continue;
-        };
-        let n = mesh.primitives().len();
-        if n != keep.len() {
-            w.insert(h, mesh);
-            return Err(format!("{h:?}: {n} primitives, {} sources", keep.len()));
-        }
-        let mut k = keep.iter();
-        let from = retain_primitives(&mut mesh, |_| {
-            let kept = k.next().copied().unwrap_or(true);
-            if !kept {
-                log.dropped(
-                    primase_core::ledger::Measure::Primitives,
-                    "model not drawn in the visible pass (render mask)",
-                    1,
-                );
+        w.edit_mesh(h, |mesh| {
+            let n = mesh.primitives().len();
+            if n != keep.len() {
+                return Err(format!("{h:?}: {n} primitives, {} sources", keep.len()));
             }
-            kept
-        });
-        w.insert(h, mesh);
-        if let Some(from) = from {
-            w.remap_primitives(h, &from)?;
-        }
+            let mut k = keep.iter();
+            Ok(retain_primitives(mesh, |_| {
+                let kept = k.next().copied().unwrap_or(true);
+                if !kept {
+                    log.dropped(
+                        primase_core::ledger::Measure::Primitives,
+                        "model not drawn in the visible pass (render mask)",
+                        1,
+                    );
+                }
+                kept
+            }))
+        })?;
     }
     Ok(())
 }
@@ -471,14 +465,7 @@ pub fn for_each_mesh(
                 "{e:?}: a mesh still at its stored pose: gta-pose-fragments runs first"
             ));
         }
-        let Some(mut mesh) = w.remove::<Mesh>(e) else {
-            continue;
-        };
-        let from = f(&mut mesh)?;
-        w.insert(e, mesh);
-        if let Some(from) = from {
-            w.remap_primitives(e, &from)?;
-        }
+        w.edit_mesh(e, &mut f)?;
     }
     Ok(())
 }

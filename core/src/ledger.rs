@@ -474,6 +474,55 @@ mod tests {
         run(before, vec![(Measure::Primitives, 1)]).unwrap();
     }
 
+    /// A mesh edited through [`World::edit_mesh`] counts as exactly as a rebuild: a split that adds a primitive cannot
+    /// hide one dropped (a net count over a hand-made replacement would see none), and an edit that keeps the list is
+    /// compared primitive by primitive. A failing edit puts the mesh back.
+    #[test]
+    fn an_edited_mesh_is_counted_exactly() {
+        let split_and_drop = |w: &mut World| {
+            w.edit_mesh(Entity::from_index(0), |m| {
+                let p = m.primitives().to_vec();
+                *m = Mesh::new(vec![p[1].clone(), prim(1), prim(2)]);
+                Ok(Some(vec![1, 2, 2]))
+            })
+            .unwrap();
+        };
+        assert_eq!(left_out(split_and_drop, vec![]), (Measure::Primitives, 1, 0));
+        run(split_and_drop, vec![(Measure::Primitives, 1)]).unwrap();
+        let in_place = |w: &mut World| {
+            w.edit_mesh(Entity::from_index(0), |m| {
+                m.primitives_mut()[0] = prim(0);
+                Ok(None)
+            })
+            .unwrap();
+        };
+        assert_eq!(left_out(in_place, vec![]), (Measure::Triangles, 1, 0));
+        // an edit that rebuilds the mesh object but keeps its primitives in order (None) stays the same mesh, so a
+        // later rebuild in the pass composes with it: a split there cannot hide a drop either
+        let renewed_then_split = |w: &mut World| {
+            let e = Entity::from_index(0);
+            w.edit_mesh(e, |m| {
+                *m = Mesh::new(m.primitives().to_vec());
+                Ok(None)
+            })
+            .unwrap();
+            w.edit_mesh(e, |m| {
+                let p = m.primitives().to_vec();
+                *m = Mesh::new(vec![p[1].clone(), prim(1), prim(2)]);
+                Ok(Some(vec![1, 2, 2]))
+            })
+            .unwrap();
+        };
+        assert_eq!(left_out(renewed_then_split, vec![]), (Measure::Primitives, 1, 0));
+        let mut w = world();
+        let e = Entity::from_index(0);
+        assert!(w.edit_mesh(e, |_| Err("no".into())).is_err());
+        assert_eq!(w.get::<Mesh>(e).map(|m| m.primitives().len()), Some(3));
+        assert!(w.edit_mesh(e, |_| Ok(Some(vec![5]))).is_err());
+        assert_eq!(w.get::<Mesh>(e).map(|m| m.primitives().len()), Some(3));
+        assert_eq!(w.edit_mesh(Entity::from_index(1), |_| Ok(None)), Ok(false));
+    }
+
     /// The World APIs as the diagnostics see them: a clone keeps its mesh's identity (put back after an edit, it is
     /// compared primitive by primitive), a mesh moved between entities is no drop (the one it replaced is), a duplicate
     /// standing in for its original is no drop, a linear map keeps the mesh (no triangle lost), and a world clone or

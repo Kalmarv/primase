@@ -449,6 +449,10 @@ impl Mesh {
     pub(crate) fn id(&self) -> u64 {
         self.id
     }
+    /// Give this mesh `id` (a mesh rebuilt in place stays the mesh it was: [`crate::World::edit_mesh`]).
+    pub(crate) fn keep_id(&mut self, id: u64) {
+        self.id = id;
+    }
     pub fn primitives(&self) -> &[Primitive] {
         &self.primitives
     }

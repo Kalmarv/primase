@@ -728,6 +728,63 @@ impl World {
         }
         self.remap_primitives(e, &from)?;
         let made = crate::Mesh::new(primitives);
+        self.record_rebuild(e, source, old, from, made.id());
+        self.insert(e, made);
+        Ok(())
+    }
+
+    /// Edit `e`'s mesh with `f`, which may also rebuild its primitive list: `f` returns `None` when the list keeps its
+    /// primitives in order (edited in place at most: the mesh stays the same mesh, whatever `f` built to hold them),
+    /// else, for each primitive now, the one it comes from, as
+    /// [`World::rebuild_primitives`] (per-primitive components follow, and the conservation diagnostics count the
+    /// rebuild exactly). The mesh is taken out while `f` runs (no copy) and put back, also when `f` fails. False when
+    /// `e` has no mesh.
+    pub fn edit_mesh(
+        &mut self,
+        e: Entity,
+        f: impl FnOnce(&mut crate::Mesh) -> Result<Option<Vec<usize>>, String>,
+    ) -> Result<bool, String> {
+        let Some(mut mesh) = self.remove::<crate::Mesh>(e) else {
+            return Ok(false);
+        };
+        let (old, source) = (mesh.primitives().len(), mesh.id());
+        let edited = f(&mut mesh);
+        let from = match edited {
+            Ok(from) => from,
+            Err(m) => {
+                self.insert(e, mesh);
+                return Err(m);
+            }
+        };
+        let Some(from) = from else {
+            let n = mesh.primitives().len();
+            // its primitives kept in order: the same mesh, even when `f` built a new one to hold them
+            mesh.keep_id(source);
+            self.insert(e, mesh);
+            return if n == old {
+                Ok(true)
+            } else {
+                Err(format!("{e:?}: {n} primitives from {old} without their sources"))
+            };
+        };
+        if mesh.primitives().len() != from.len() || from.iter().any(|&i| i >= old) {
+            let n = mesh.primitives().len();
+            self.insert(e, mesh);
+            return Err(format!(
+                "{e:?}: {n} primitives with {} sources of {old}",
+                from.len()
+            ));
+        }
+        self.remap_primitives(e, &from)?;
+        let made = crate::Mesh::new(mesh.into_primitives());
+        self.record_rebuild(e, source, old, from, made.id());
+        self.insert(e, made);
+        Ok(true)
+    }
+
+    /// Record a rebuild of `e`'s mesh `source` (`old` primitives) into `made` for the conservation diagnostics, when
+    /// they run.
+    fn record_rebuild(&mut self, e: Entity, source: u64, old: usize, from: Vec<usize>, made: u64) {
         if let Some(log) = &mut self.rebuilds {
             match log.entry(e) {
                 std::collections::btree_map::Entry::Vacant(v) => {
@@ -735,22 +792,20 @@ impl World {
                         source,
                         first: old,
                         from,
-                        made: made.id(),
+                        made,
                     }));
                 }
                 // compose with the earlier rebuild, unless this one starts from another mesh (replaced in between)
                 std::collections::btree_map::Entry::Occupied(mut o) => {
                     let composed = o.get_mut().take().filter(|r| r.made == source).map(|r| Rebuilt {
                         from: from.iter().map(|&i| r.from[i]).collect(),
-                        made: made.id(),
+                        made,
                         ..r
                     });
                     *o.get_mut() = composed;
                 }
             }
         }
-        self.insert(e, made);
-        Ok(())
     }
 
     /// Start recording primitive rebuilds (the pass manager, around a pass with conservation diagnostics on).
