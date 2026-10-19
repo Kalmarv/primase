@@ -159,7 +159,7 @@ fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
 }
 
 /// [`lower_unity_lights`] as a pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct LowerUnityLights;
 
 impl Pass for LowerUnityLights {

@@ -20,6 +20,7 @@
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 //! - [`lower_lights`]: lights lowered to `core.light`.
+//! - [`register`]: the passes by name.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
@@ -48,6 +49,28 @@ pub use tpk::TypeTreePackage;
 pub use typetree::TypeTree;
 pub use value::Value;
 pub use version::UnityVersion;
+
+/// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
+/// `lower-unity-collision` and `lower-unity-lights`. None takes an option: each lowers by Unity's own rules (its
+/// module says which), not by a choice a program makes; an option is refused.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    use primase_core::pass::{Options, Pass};
+    fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
+        match o.keys().next() {
+            Some(k) => Err(format!("unknown option {k}")),
+            None => Ok(Box::new(pass)),
+        }
+    }
+    reg.register("unity-drawn", |o| none(o, drawn::UnityDrawn));
+    reg.register("lower-unity-pbr", |o| none(o, lower::LowerUnityPbr));
+    reg.register("lower-unity-terrain", |o| {
+        none(o, lower_terrain::LowerUnityTerrain)
+    });
+    reg.register("lower-unity-collision", |o| {
+        none(o, lower_collision::LowerUnityCollision)
+    });
+    reg.register("lower-unity-lights", |o| none(o, lower_lights::LowerUnityLights));
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

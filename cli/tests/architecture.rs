@@ -1077,11 +1077,6 @@ const KNOWN_BREAKS: &[&str] = &[
     "io: file=worlds/reskate/src/postcompile/vbrecord.rs role=exception",
     "name: crate=toolkit/hash word=forza",
     "name: crate=toolkit/hash word=fromsoft",
-    "pass: file=worlds/unity/src/drawn.rs what=pass unity-drawn is not registered",
-    "pass: file=worlds/unity/src/lower.rs what=pass lower-unity-pbr is not registered",
-    "pass: file=worlds/unity/src/lower_collision.rs what=pass lower-unity-collision is not registered",
-    "pass: file=worlds/unity/src/lower_lights.rs what=pass lower-unity-lights is not registered",
-    "pass: file=worlds/unity/src/lower_terrain.rs what=pass lower-unity-terrain is not registered",
     "writer: file=worlds/reskate/src/interchange/assets.rs what=prepare_assets takes &mut World",
 ];
 

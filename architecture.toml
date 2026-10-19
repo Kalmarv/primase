@@ -63,36 +63,6 @@ removed_when = "the synthetic world comes from a library fixture function"
 
 # ---- passes registered, lowerings run as passes ----
 
-[[pass]]
-file = "worlds/unity/src/drawn.rs"
-what = "pass unity-drawn is not registered"
-reason = "worlds/unity has no register() yet"
-removed_when = "worlds/unity exports register()"
-
-[[pass]]
-file = "worlds/unity/src/lower.rs"
-what = "pass lower-unity-pbr is not registered"
-reason = "worlds/unity has no register() yet"
-removed_when = "worlds/unity exports register()"
-
-[[pass]]
-file = "worlds/unity/src/lower_collision.rs"
-what = "pass lower-unity-collision is not registered"
-reason = "worlds/unity has no register() yet"
-removed_when = "worlds/unity exports register()"
-
-[[pass]]
-file = "worlds/unity/src/lower_lights.rs"
-what = "pass lower-unity-lights is not registered"
-reason = "worlds/unity has no register() yet"
-removed_when = "worlds/unity exports register()"
-
-[[pass]]
-file = "worlds/unity/src/lower_terrain.rs"
-what = "pass lower-unity-terrain is not registered"
-reason = "worlds/unity has no register() yet"
-removed_when = "worlds/unity exports register()"
-
 # ---- writers take the world read-only ----
 
 [[writer]]

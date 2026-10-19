@@ -219,7 +219,7 @@ pub fn lower_unity_terrain(w: &mut World) -> Result<PassLog> {
 }
 
 /// [`lower_unity_terrain`] as a pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct LowerUnityTerrain;
 
 impl Pass for LowerUnityTerrain {

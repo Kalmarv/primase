@@ -310,7 +310,7 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
 }
 
 /// [`lower_unity_collision`] as a pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct LowerUnityCollision;
 
 impl Pass for LowerUnityCollision {

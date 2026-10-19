@@ -800,6 +800,7 @@ dependencies = [
  "primase-meshops",
  "primase-reskate",
  "primase-testdata",
+ "primase-unity",
  "primase-web",
  "serde_json",
  "sha2",

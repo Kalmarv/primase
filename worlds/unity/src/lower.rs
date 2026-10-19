@@ -695,7 +695,7 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
 }
 
 /// [`lower_unity_pbr`] as a pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct LowerUnityPbr;
 
 impl Pass for LowerUnityPbr {

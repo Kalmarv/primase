@@ -20,6 +20,7 @@ primase-gta.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
 primase-reskate.workspace = true
+primase-unity.workspace = true
 primase-web.workspace = true
 
 [dev-dependencies]

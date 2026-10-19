@@ -114,7 +114,7 @@ pub fn unity_drawn(w: &mut World) -> PassLog {
 }
 
 /// [`unity_drawn`] as a pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct UnityDrawn;
 
 impl Pass for UnityDrawn {
