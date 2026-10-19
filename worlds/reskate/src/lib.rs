@@ -1,6 +1,7 @@
 //! ReSkate (skate.): the target's own crate. It owns the `skate.*` dialect ([`dialect`]), the preparation passes a
 //! program selects to raise core data into it ([`prepare`], `raise-skate`, and the target's lowerings), the frozen
-//! skate-scene interchange v1 ([`interchange`]: read, load, write), and the writer of ReSkate Studio normalized map
+//! skate-scene interchange v1 ([`interchange`], the format; read and loaded by [`read::interchange`], written by
+//! [`write::interchange`]), and the writer of ReSkate Studio normalized map
 //! folders (`map.json`, `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`,
 //! `textures_index.json`), gated against the reference C# writer by what Studio reads: meshes, tables and texture
 //! payloads exactly, JSON as parsed values, PNGs by pixels.
@@ -24,11 +25,11 @@ pub mod overlay;
 pub mod passes;
 pub mod pausemap;
 pub mod postcompile;
-mod read;
+pub mod read;
 pub mod records;
 pub mod scene;
 pub mod texture;
-mod write;
+pub mod write;
 
 /// The `skate.*` dialect by its former path: the components programs name, and the dialect's lowerings back to core.
 pub mod dialect {

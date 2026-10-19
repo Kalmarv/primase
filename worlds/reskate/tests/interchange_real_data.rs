@@ -22,7 +22,7 @@ use std::process::Command;
 
 use primase_core::World;
 use primase_core::gate::{GateReport, Tolerance, compare_json};
-use primase_reskate::interchange;
+use primase_reskate::{read, write};
 use primase_testdata::real_data;
 use serde_json::Value;
 
@@ -267,7 +267,7 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
     let item = dir.display().to_string();
     let reference = validator.map(|v| validate(v, dir));
     let mut w = World::new();
-    let ours = interchange::read(dir, &mut w);
+    let ours = read::interchange::read(dir, &mut w);
     match (&ours, &reference) {
         (Ok(_), Some(Err(msg))) => {
             g.agree
@@ -297,14 +297,14 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
     let rep = ours.expect("accepted");
     g.tolerated = rep.tolerated.clone();
     // the writer reads no file: what it writes is what the scene loads into the world
-    if let Err(e) = interchange::load(dir, &mut w) {
+    if let Err(e) = read::interchange::load(dir, &mut w) {
         g.manifests.fail(&item, format!("load failed: {e}"));
         return (g, false);
     }
     if out.exists() {
         std::fs::remove_dir_all(out).expect("clear the output");
     }
-    if let Err(e) = interchange::write(&w, out) {
+    if let Err(e) = write::interchange::write(&w, out) {
         g.manifests.fail(&item, format!("write failed: {e}"));
         return (g, false);
     }

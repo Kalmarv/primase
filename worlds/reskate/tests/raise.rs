@@ -13,8 +13,8 @@ use primase_core::{
 use primase_reskate::components::{
     self, AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkatePrototype, SkateTexture,
 };
-use primase_reskate::interchange;
 use primase_reskate::passes::{self, RaiseOptions};
+use primase_reskate::{read, write};
 
 fn tmp(name: &str) -> PathBuf {
     let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -234,9 +234,9 @@ fn a_core_world_becomes_a_scene() {
     assert!((l[0].energy - passes::studio_watts((10.0 * passes::SKATE_LIGHT_SCALE) as f32)).abs() < 1e-6);
     // assets, the scene, and back
     let out = tmp("scene");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let mut back = World::new();
-    interchange::read(&out, &mut back).unwrap();
+    read::interchange::read(&out, &mut back).unwrap();
     let protos: Vec<(primase_core::Entity, &SkatePrototype)> = back.iter::<SkatePrototype>().collect();
     assert_eq!(
         (
@@ -540,9 +540,9 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
             .contains_key("PBR mask factors quantized to UNORM8")
     );
     let out = tmp("mask-scene");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let mut read = World::new();
-    interchange::read(&out, &mut read).unwrap();
+    read::interchange::read(&out, &mut read).unwrap();
     let material = read
         .iter::<SkateMaterial>()
         .find(|(_, x)| x.key == "rock")
@@ -1037,9 +1037,9 @@ fn a_prototype_that_collides_without_drawing() {
     // asphalt surface
     w.despawn(nothing_at);
     let out = tmp("collision_only_scene");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let mut back = World::new();
-    interchange::read(&out, &mut back).unwrap();
+    read::interchange::read(&out, &mut back).unwrap();
     let (e, p) = back
         .iter::<SkatePrototype>()
         .find(|(_, p)| p.id == "fence")

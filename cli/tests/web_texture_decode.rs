@@ -10,7 +10,7 @@ fn direct_decoding_is_the_png_round_trip() -> Result<(), Box<dyn std::error::Err
         return Ok(());
     };
     let mut world = World::new();
-    primase_reskate::interchange::read(&folder, &mut world)?;
+    primase_reskate::read::interchange::read(&folder, &mut world)?;
     primase_image::load_textures(&mut world, &folder)?;
     let (mut textures, mut pixels) = (0, 0u64);
     for (e, t) in world.iter::<Texture>() {

@@ -12,9 +12,10 @@ use primase_core::{
     ColorSpace, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,
     Transform, World,
 };
+use primase_reskate::EncodingOptions;
 use primase_reskate::components::{MarkerKind, Other, SkateMarker};
 use primase_reskate::passes::{LightCalibration, RaiseOptions};
-use primase_reskate::{EncodingOptions, interchange};
+use primase_reskate::{read, write};
 
 /// A raised map: two slabs, each drawn with a texture named "diffuse", their pixels different; and a spawn.
 fn map() -> World {
@@ -129,7 +130,7 @@ fn texture_files(w: &World, tag: &str) -> BTreeSet<String> {
 fn same_named_images_are_written_under_names_of_their_own_and_read_back() {
     let w = map();
     let out = tmp("scene");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     // the scene's texture names are one per image; the source name is the stem of both
     let scene: serde_json::Value =
         serde_json::from_slice(&std::fs::read(out.join("scene.json")).unwrap()).unwrap();
@@ -146,8 +147,8 @@ fn same_named_images_are_written_under_names_of_their_own_and_read_back() {
     );
     // it reads back, loaded, and draws the same texture files as the world it came from
     let mut back = World::new();
-    interchange::read(&out, &mut back).unwrap();
-    interchange::load(&out, &mut back).unwrap();
+    read::interchange::read(&out, &mut back).unwrap();
+    read::interchange::load(&out, &mut back).unwrap();
     assert_eq!(texture_files(&back, "back"), texture_files(&w, "direct"));
     std::fs::remove_dir_all(out.parent().unwrap()).ok();
 }

@@ -5,7 +5,7 @@
 //! [pipeline]`
 //!
 //! Each prototype's finest level of detail is selected (`select-lod{form=finest}`), then the reader's load step reads
-//! the prototypes' GLBs and the texture files of what is left (`interchange::load`). The default pipeline then lowers
+//! the prototypes' GLBs and the texture files of what is left (`read::interchange::load`). The default pipeline then lowers
 //! `skate.material` to `pbr.material` (keeping the skate material, which goes to extras) and converts normal maps to
 //! glTF's convention: `lower-skate-pbr, normalize-normals, ...`. The world is verified after the reader and after
 //! every pass; the run report lists what each pass did and approximated.
@@ -54,7 +54,7 @@ fn main() -> Result<(), BoxError> {
     };
     let t0 = std::time::Instant::now();
     let mut world = World::new();
-    let read = primase_reskate::interchange::read(&folder, &mut world)?;
+    let read = primase_reskate::read::interchange::read(&folder, &mut world)?;
     let scene = world.resource::<SkateScene>().ok_or("no scene")?;
     let scene_name = scene.display_name.clone().unwrap_or_else(|| scene.name.clone());
 
@@ -67,7 +67,7 @@ fn main() -> Result<(), BoxError> {
         ..RunReport::default()
     };
     manager.run(&mut world, &select, &mut report)?;
-    primase_reskate::interchange::load(&folder, &mut world)?;
+    primase_reskate::read::interchange::load(&folder, &mut world)?;
     manager.verify(&world, "the reader's load step")?;
     let pipeline = manager
         .registry

@@ -11,10 +11,10 @@ use primase_core::{
     Texture, Transform, World,
 };
 use primase_reskate::components::{self, SkateLight, SkatePrototype, SkateScene};
-use primase_reskate::interchange;
 use primase_reskate::interchange::tables::{
     self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags,
 };
+use primase_reskate::{read, write};
 use serde_json::{Value, json};
 
 /// A fresh folder under the target directory's tmp.
@@ -291,23 +291,23 @@ fn fixture_with(name: &str, manifest: &str, edit: impl FnOnce(&Path)) -> PathBuf
     d
 }
 
-fn read(dir: &Path) -> (World, interchange::ReadReport) {
+fn read(dir: &Path) -> (World, read::interchange::ReadReport) {
     let mut w = World::new();
-    let rep = interchange::read(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    let rep = read::interchange::read(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     (w, rep)
 }
 
 /// [`read`], then every file the scene references loaded: what a world must hold to be written (the writer reads no
 /// file).
-fn read_loaded(dir: &Path) -> (World, interchange::ReadReport) {
+fn read_loaded(dir: &Path) -> (World, read::interchange::ReadReport) {
     let (mut w, rep) = read(dir);
-    interchange::load(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    read::interchange::load(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     (w, rep)
 }
 
 fn read_err(dir: &Path) -> String {
     let mut w = World::new();
-    match interchange::read(dir, &mut w) {
+    match read::interchange::read(dir, &mut w) {
         Ok(_) => panic!("{} read without error", dir.display()),
         Err(e) => e.to_string(),
     }
@@ -330,14 +330,14 @@ fn layered_materials_round_trip_and_follow_edits() {
     assert_eq!(material.layers.len(), 4);
     assert!(material.layers[1].is_none());
     let out = tmp("layered_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     assert_eq!(manifest(&out)["materials"], input["materials"]);
     w.get_mut::<primase_core::LayeredMaterial>(entity).unwrap().layers[0]
         .as_mut()
         .unwrap()
         .texcoord = Some(2);
     let out = tmp("layered_edited");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     assert_eq!(manifest(&out)["materials"]["ground"]["layers"][0]["uv"], 2);
     for (name, replacement) in [
         ("unknown", json!({"material":"absent"})),
@@ -467,7 +467,7 @@ fn round_trip_is_exact() {
     );
     let out = tmp("rt_out");
     std::fs::remove_dir(&out).unwrap();
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     same_tree(&src, &out, ALL_FILES);
     let c = compare_json(&manifest(&src), &manifest(&out), 0);
     assert!(c.differences.is_empty(), "{:?}", c.differences);
@@ -475,12 +475,12 @@ fn round_trip_is_exact() {
     assert_eq!(c.f32_equal, 1);
     // writing again gives the same bytes, also the manifest
     let out2 = tmp("rt_out2");
-    interchange::write(&w, &out2).unwrap();
+    write::interchange::write(&w, &out2).unwrap();
     same_tree(&out, &out2, &[&["scene.json"], ALL_FILES].concat());
     // and reading the output gives a world that writes the same again
     let (w3, _) = read_loaded(&out);
     let out3 = tmp("rt_out3");
-    interchange::write(&w3, &out3).unwrap();
+    write::interchange::write(&w3, &out3).unwrap();
     same_tree(&out, &out3, &[&["scene.json"], ALL_FILES].concat());
 }
 
@@ -631,7 +631,7 @@ fn edits_are_written() {
     w.get_mut::<SkateLight>(le).unwrap().group = "street".into();
     w.insert(le, Source("new_light".into()));
     let out = tmp("edit_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let (w2, _) = read(&out);
     let (pe2, _) = w2.iter::<Instance>().next().unwrap();
     assert_eq!(w2.get::<Transform>(pe2).unwrap().cols[3], [1., 2., 3.]);
@@ -669,7 +669,7 @@ fn mirrored_and_sheared_placements_round_trip() {
     w.insert(placements[0], mirrored);
     w.insert(placements[1], sheared);
     let out = tmp("nonrigid_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let (w2, _) = read(&out);
     let got: Vec<Transform> = w2
         .iter::<Instance>()
@@ -701,11 +701,11 @@ fn placement_priority_round_trips_and_rejects_overflow() {
     let priorities: Vec<_> = w.iter::<primase_core::Priority>().map(|(_, p)| p.0).collect();
     assert_eq!(priorities, [0, 1, 3, 15]);
     let out = tmp("priority_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     assert_eq!(std::fs::read(out.join("tables/placements.bin")).unwrap(), bytes);
     let placed = w.iter::<Instance>().next().unwrap().0;
     w.insert(placed, primase_core::Priority(16));
-    let error = interchange::write(&w, &tmp("priority_overflow"))
+    let error = write::interchange::write(&w, &tmp("priority_overflow"))
         .unwrap_err()
         .to_string();
     assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
@@ -713,7 +713,7 @@ fn placement_priority_round_trips_and_rejects_overflow() {
     w.get_mut::<components::SkatePlacement>(placed)
         .unwrap()
         .unknown_flags |= 1 << 8;
-    let error = interchange::write(&w, &tmp("priority_conflict"))
+    let error = write::interchange::write(&w, &tmp("priority_conflict"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -746,7 +746,7 @@ fn normal_maps_with_x_in_alpha_are_refused() {
             }),
         },
     );
-    let e = interchange::write(&w, &tmp("alpha_x_out"))
+    let e = write::interchange::write(&w, &tmp("alpha_x_out"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -757,7 +757,7 @@ fn normal_maps_with_x_in_alpha_are_refused() {
         basis: primase_core::NormalBasis::BitangentTangent,
         ..NormalConvention::GLTF
     });
-    let e = interchange::write(&w, &tmp("bitangent_first_out"))
+    let e = write::interchange::write(&w, &tmp("bitangent_first_out"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -795,7 +795,7 @@ fn chunked_tables_keep_their_chunks() {
     assert_eq!(w.iter::<Instance>().count(), 3);
     assert_eq!(rep.tolerated.len(), 1, "{:?}", rep.tolerated); // the list item {"file"} without sha256
     let out = tmp("chunks_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     same_tree(
         &src,
         &out,
@@ -829,7 +829,7 @@ fn sha256_is_checked_and_rewritten() {
     let src = fixture_with("sha_src", &m, |_| {});
     let (w, _) = read_loaded(&src);
     let out = tmp("sha_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let got = manifest(&out);
     assert_eq!(
         got.get("textures").unwrap().get("wall_n").unwrap().get("sha256"),
@@ -1223,7 +1223,7 @@ fn the_reference_validator_accepts_the_fixture_and_our_output() {
     reference(&v, &src).unwrap();
     let (w, _) = read_loaded(&src);
     let out = tmp("oracle_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     reference(&v, &out).unwrap();
 }
 
@@ -1233,7 +1233,7 @@ fn writer_refuses_unsafe_outputs() {
     let out = tmp("refuse_out");
     put(&out, "stale.txt", b"x");
     assert!(
-        interchange::write(&w, &out)
+        write::interchange::write(&w, &out)
             .unwrap_err()
             .to_string()
             .contains("is not empty")
@@ -1241,7 +1241,7 @@ fn writer_refuses_unsafe_outputs() {
     let mut w2 = World::new();
     w2.spawn();
     assert!(
-        interchange::write(&w2, &tmp("refuse_out2"))
+        write::interchange::write(&w2, &tmp("refuse_out2"))
             .unwrap_err()
             .to_string()
             .contains("no skate.scene")
@@ -1385,7 +1385,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     t.cols[3] = [10.0, 2.0, -3.0];
     w.insert(e, t);
     let out = tmp("collision_self_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let m = manifest(&out);
     let soups = m["collision"].as_array().unwrap();
     assert_eq!(soups.len(), before + 1);
@@ -1402,7 +1402,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     // a surface the scene has no entry for is refused
     let lava = w.resource_mut::<Surfaces>().unwrap().index("lava").unwrap();
     w.get_mut::<Collision>(e).unwrap().surfaces[0] = lava;
-    let err = interchange::write(&w, &tmp("collision_self_bad"))
+    let err = write::interchange::write(&w, &tmp("collision_self_bad"))
         .unwrap_err()
         .to_string();
     assert!(err.contains("'lava' is not one of the scene's surfaces"), "{err}");
@@ -1428,7 +1428,7 @@ fn mirrored_collision_keeps_its_fronts() {
     t.cols[0] = [-1.0, 0.0, 0.0];
     w.insert(e, t);
     let out = tmp("collision_mirror_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let m = manifest(&out);
     let entry = &m["collision"][before];
     let file = entry.as_str().or(entry["file"].as_str()).unwrap();
@@ -1508,14 +1508,14 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
     assert_eq!(w.verify_components(), vec![]);
     let out = tmp("lods_out");
     std::fs::remove_dir(&out).unwrap();
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     same_tree(&src, &out, ALL_FILES);
     let c = compare_json(&input, &manifest(&out), 0);
     assert!(c.differences.is_empty(), "{:?}", c.differences);
     // a world whose levels of detail have no default form is refused: the format always names one
     let mut none = w.clone();
     none.get_mut::<Lods>(protos[0]).unwrap().default = None;
-    let err = interchange::write(&none, &tmp("lods_no_default"))
+    let err = write::interchange::write(&none, &tmp("lods_no_default"))
         .unwrap_err()
         .to_string();
     assert!(err.contains("without a default form"), "{err}");
@@ -1535,7 +1535,7 @@ fn a_selected_form_is_written_as_the_prototype() {
     assert_eq!(log.counts["prototypes drawn with their own form"], 1);
     assert_eq!(log.counts["forms left out"], 1);
     let out = tmp("lods_select_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let p = &manifest(&out)["prototypes"];
     let want = lods_manifest()["prototypes"][0]["lods"][0]["parts"].clone();
     assert_eq!((&p[0]["mesh"], &p[0]["parts"]), (&json!(1), &want));
@@ -1549,7 +1549,7 @@ fn a_selected_form_is_written_as_the_prototype() {
     .run(&mut w, &mut PassLog::default())
     .unwrap();
     let out = tmp("lods_finest_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let want = serde_json::from_str::<Value>(MANIFEST).unwrap()["prototypes"].clone();
     assert_eq!(manifest(&out)["prototypes"], want);
 }
@@ -1641,7 +1641,7 @@ fn levels_of_detail_defaults_are_tolerated_and_written_in_full() {
         assert_eq!(rep.tolerated.get(t), Some(&1), "{t}: {:?}", rep.tolerated);
     }
     let out = tmp("lods_tolerated_out");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let p = &manifest(&out)["prototypes"];
     assert!(p[0].get("detail").is_none() && p[1].get("lods").is_none());
     assert_eq!(p[0]["lods"][1], json!({"detail": 0, "mesh": null, "parts": []}));
@@ -1673,11 +1673,11 @@ fn loaded_payloads_are_the_authority() {
     let (mut w, _) = read_loaded(&src);
     std::fs::remove_dir_all(&src).unwrap();
     // read but not loaded: refused, whatever the folder holds
-    let e = interchange::write(&unloaded, &tmp("authority_unloaded")).unwrap_err();
+    let e = write::interchange::write(&unloaded, &tmp("authority_unloaded")).unwrap_err();
     assert!(e.to_string().contains("load the scene before writing it"), "{e}");
     // unchanged, the source gone: every file as it was read
     let out = tmp("authority_same");
-    let report = interchange::write(&w, &out).unwrap();
+    let report = write::interchange::write(&w, &out).unwrap();
     for (f, bytes) in &original {
         assert_eq!(&std::fs::read(out.join(f)).unwrap(), bytes, "{f}");
     }
@@ -1707,9 +1707,9 @@ fn loaded_payloads_are_the_authority() {
     }
     w.resource_mut::<components::SkatePauseImage>().unwrap().rgba[0] = 99;
     let out = tmp("authority_edit");
-    interchange::write(&w, &out).unwrap();
+    write::interchange::write(&w, &out).unwrap();
     let (mut back, _) = read(&out);
-    interchange::load(&out, &mut back).unwrap();
+    read::interchange::load(&out, &mut back).unwrap();
     let texture = back
         .iter::<primase_core::TextureFile>()
         .find(|(_, f)| f.path.ends_with("wall_d.png"))

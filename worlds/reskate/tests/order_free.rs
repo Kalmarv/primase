@@ -192,10 +192,10 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     )
     .unwrap();
     let scene = tmp("scene");
-    primase_reskate::interchange::write(&w, &scene).unwrap();
+    primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
-    primase_reskate::interchange::read(&scene, &mut w).unwrap();
-    primase_reskate::interchange::load(&scene, &mut w).unwrap();
+    primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
+    primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())

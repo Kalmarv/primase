@@ -1,4 +1,4 @@
-//! The writer takes geometry as `core.mesh`: a scene read from its folder and loaded (`interchange::load`) writes the
+//! The writer takes geometry as `core.mesh`: a scene read from its folder and loaded (`read::interchange::load`) writes the
 //! same files as the world it was written from, and one read but not loaded is refused with its reason; a prototype
 //! without geometry that collides is written as collision; the load reads each file once and the write needs none.
 //! A synthetic scene, made here.
@@ -166,10 +166,10 @@ fn a_loaded_scene_writes_what_its_world_writes() {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let scene = tmp("scene");
-    primase_reskate::interchange::write(&w, &scene).unwrap();
+    primase_reskate::write::interchange::write(&w, &scene).unwrap();
     // read but not loaded: the writer reads no GLB
     let mut unloaded = World::new();
-    primase_reskate::interchange::read(&scene, &mut unloaded).unwrap();
+    primase_reskate::read::interchange::read(&scene, &mut unloaded).unwrap();
     let e = primase_reskate::write_map(
         &unloaded,
         &scene,
@@ -187,8 +187,8 @@ fn a_loaded_scene_writes_what_its_world_writes() {
         let w = match source {
             Some(w) => w,
             None => {
-                primase_reskate::interchange::read(&scene, &mut read).unwrap();
-                let r = primase_reskate::interchange::load(&scene, &mut read).unwrap();
+                primase_reskate::read::interchange::read(&scene, &mut read).unwrap();
+                let r = primase_reskate::read::interchange::load(&scene, &mut read).unwrap();
                 assert_eq!(r.meshes.meshes, 1);
                 &read
             }
@@ -248,10 +248,10 @@ fn a_spawn_over_no_ground_is_refused() {
         )
         .unwrap();
         let scene = tmp(&format!("{tag}-scene"));
-        primase_reskate::interchange::write(&w, &scene).unwrap();
+        primase_reskate::write::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
-        primase_reskate::interchange::read(&scene, &mut w).unwrap();
-        primase_reskate::interchange::load(&scene, &mut w).unwrap();
+        primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
+        primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
         // the markers snapped before the writer, which snaps nothing
         SnapReskateMarkers::for_default_encoding()
             .run(&mut w, &mut PassLog::default())
@@ -311,10 +311,10 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     )
     .unwrap();
     let scene = tmp("collides-scene");
-    primase_reskate::interchange::write(&w, &scene).unwrap();
+    primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
-    primase_reskate::interchange::read(&scene, &mut w).unwrap();
-    primase_reskate::interchange::load(&scene, &mut w).unwrap();
+    primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
+    primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing
     SnapReskateMarkers::for_default_encoding()
         .run(&mut w, &mut PassLog::default())
@@ -350,7 +350,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     );
 }
 
-/// The prepared-map boundary: `interchange::load` reads each file the scene names once, however many entities name
+/// The prepared-map boundary: `read::interchange::load` reads each file the scene names once, however many entities name
 /// it, and the write takes only the loaded world: with the scene folder gone after the load, the map is the same.
 #[test]
 fn the_write_needs_no_scene_file_after_the_load() {
@@ -385,14 +385,14 @@ fn the_write_needs_no_scene_file_after_the_load() {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let scene = tmp("once-scene");
-    primase_reskate::interchange::write(&w, &scene).unwrap();
+    primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut read = World::new();
-    primase_reskate::interchange::read(&scene, &mut read).unwrap();
+    primase_reskate::read::interchange::read(&scene, &mut read).unwrap();
     let distinct =
         |paths: Vec<PathBuf>| paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() as u64;
     let glbs = distinct(read.iter::<MeshFile>().map(|(_, f)| f.path.clone()).collect());
     let images = distinct(read.iter::<TextureFile>().map(|(_, f)| f.path.clone()).collect());
-    let loaded = primase_reskate::interchange::load(&scene, &mut read).unwrap();
+    let loaded = primase_reskate::read::interchange::load(&scene, &mut read).unwrap();
     // the prototype placed twice is one file, the texture two materials draw with is one file
     assert_eq!((glbs, loaded.meshes.files), (1, 1));
     assert!(images >= 1);

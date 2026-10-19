@@ -1,4 +1,4 @@
-//! A core world raised into the `skate.*` dialect (pass `raise-skate`), so [`crate::interchange::write`] can write it: what any
+//! A core world raised into the `skate.*` dialect (pass `raise-skate`), so [`crate::write::interchange::write`] can write it: what any
 //! reader's world (core geometry, `pbr.material`, `core.collision`, `core.light`) needs to become a skate scene.
 //!
 //! - every texture a raised material uses: a `skate.texture` (`textures/<key>.png`; normal maps must already be in
@@ -54,7 +54,7 @@
 //! A world with levels of detail (`core.lods`) is refused: one form per prototype is chosen first (`select-lod`); so is
 //! one with collision shapes (`core.collider`): they become triangles first (`tessellate-colliders`).
 //!
-//! Then [`crate::interchange::write`] writes the scene, its meshes and textures encoded as GLBs and PNGs.
+//! Then [`crate::write::interchange::write`] writes the scene, its meshes and textures encoded as GLBs and PNGs.
 
 use std::collections::{BTreeMap, BTreeSet};
 

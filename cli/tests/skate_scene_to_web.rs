@@ -98,7 +98,7 @@ fn scene(name: &str) -> PathBuf {
     )
     .unwrap();
     let dir = tmp(name);
-    primase_reskate::interchange::write(&w, &dir).unwrap();
+    primase_reskate::write::interchange::write(&w, &dir).unwrap();
     dir
 }
 

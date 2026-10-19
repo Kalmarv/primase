@@ -53,7 +53,7 @@ fn installed_layered_scene() {
     let (mut scenes, mut layered_total, mut triangles_total) = (0usize, 0usize, 0usize);
     for folder in &folders {
         let mut world = World::default();
-        primase_reskate::interchange::read(folder, &mut world).unwrap();
+        primase_reskate::read::interchange::read(folder, &mut world).unwrap();
         let layered = world.iter::<LayeredMaterial>().count();
         if layered == 0 {
             continue;

@@ -125,11 +125,6 @@ reason = "writer I/O in Other"
 removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"
 
 [[layout]]
-file = "worlds/reskate/src/interchange/mod.rs"
-reason = "Other names the I/O module primase_reskate::read::interchange; Other names the I/O module primase_reskate::write::interchange"
-removed_when = "B5: interchange/ keeps the format (schema, tables, soups, layered syntax); read, load and write are reached from read/ and write/"
-
-[[layout]]
 file = "worlds/reskate/src/passes/layered.rs"
 reason = "Passes names the I/O module primase_reskate::postcompile::vblend"
 removed_when = "B2: decal_opacity (the stock decal row's opacity encoding) moves to an I/O-free module shared by passes/layered and postcompile/vblend"
