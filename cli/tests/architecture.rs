@@ -1645,8 +1645,6 @@ fn real_data_variables_are_declared() {
 /// shrinks: when a break goes, delete its identity here too.
 const KNOWN_BREAKS: &[&str] = &[
     "dependency: from=worlds/reskate section=dependencies to=formats/gltf",
-    "entry_point: file=cli/examples/scene_to_tiles.rs what=queries or edits world components",
-    "entry_point: file=cli/examples/scene_to_tiles.rs what=runs a pass outside the pass manager",
     "entry_point: file=formats/web/examples/ktx2_audit.rs what=reads a format itself",
     "entry_point: file=formats/web/examples/ktx2_compare.rs what=reads a format itself",
     "entry_point: file=formats/web/examples/synthetic_tiles.rs what=queries or edits world components",

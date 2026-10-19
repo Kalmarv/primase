@@ -87,6 +87,8 @@ use std::path::PathBuf;
 
 pub use assembly::{AssembledMaterial, EncodingOptions, assembled_materials};
 pub use build::{BuildReport, MapSink, leave_out_optional, lod_choice, select_lod, target, write_map};
+/// A skate-scene folder as the convert loop's reader.
+pub use read::scene::SceneReader;
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.

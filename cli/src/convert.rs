@@ -16,10 +16,15 @@ report: differences as diagnostic notices; enforce: a difference fails the pass)
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
 readers:
-  gta   --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--reach M]
+  gta          --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--reach M]
+  skate-scene  --scene <folder> (a skate scene's web tiles: --select \"select-lod{form=finest}, lower-skate-lights\"
+               --passes \"lower-skate-pbr, normalize-normals, fill-missing-texcoords,
+               prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}\", and for KTX2 tiles
+               prepare-web-textures{color=512,normal=512,mask=256,...} after them)
 writers:
-  web      [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
-           [--budget-mib N | --no-budget] [--plain]
+  web      [--tile-m M] [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
+           [--budget-mib N | --no-budget] [--camera <eye x,y,z>:<target x,y,z>] [--plain] (--plain: this set
+           uncompressed, not instanced, PNG textures: the plain comparison set is its own conversion)
   reskate  [--name N] (after --passes \"<the part passes>, bake-normal-scale, raise-skate{name=N,light_scale=standard}, lower-layered-reskate{overlays=all},
            cap-textures{max=256,normals=box}, prepare-reskate-textures, snap-reskate-markers,
            prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004},
@@ -54,7 +59,8 @@ pub type Destination = (Box<dyn PartSource>, Box<dyn Writer>);
 type WriterFactory = fn(&Path, &[String]) -> Result<Destination>;
 
 /// The readers, by `--from` name.
-pub const READERS: &[(&str, ReaderFactory)] = &[("gta", crate::gta::reader)];
+pub const READERS: &[(&str, ReaderFactory)] =
+    &[("gta", crate::gta::reader), ("skate-scene", crate::scene::reader)];
 /// The writers, by `--to` name.
 pub const WRITERS: &[(&str, WriterFactory)] =
     &[("web", crate::web::writer), ("reskate", crate::reskate::writer)];

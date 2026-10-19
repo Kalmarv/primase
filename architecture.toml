@@ -209,18 +209,6 @@ removed_when = "worlds/unity is arranged by role before the final review: a stru
 # ---- composition without data logic (examples, bins, cli) ----
 
 [[entry_point]]
-file = "cli/examples/scene_to_tiles.rs"
-what = "queries or edits world components"
-reason = "turns skate.* markers and grind curves into viewer items, and measures placements for the spanning rule"
-removed_when = "primase convert replaces the example (the rule moves into primase-web, the lowering into a pass)"
-
-[[entry_point]]
-file = "cli/examples/scene_to_tiles.rs"
-what = "runs a pass outside the pass manager"
-reason = "runs lower-skate-pbr and lower-skate-lights directly"
-removed_when = "primase convert replaces the example"
-
-[[entry_point]]
 file = "formats/web/examples/ktx2_audit.rs"
 what = "reads a format itself"
 reason = "an audit tool decoding written KTX2 files to measure them"

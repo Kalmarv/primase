@@ -35,14 +35,14 @@ placements whose pivot does not locate their geometry, to be filed by triangle
 centre.
 
 `Options::tile_byte_budget` (`None` by default: the program states its budget;
-`scene_to_tiles` and the CLI use 96 MiB) caps each file a
+the CLI's web writer uses 96 MiB) caps each file a
 tile carries, its GLB and its collision sidecar: a cell with a larger one is split
 into quadtree subcells, by the cell rules, until each fits (FORMAT.md, "Byte
 budget and subcells"). Cells that fit keep the bytes and names they would have
 without a budget. A tile still over it, because one placement or viewer record
 makes it so or at the level limit, is written and listed in
 `TilePlan::over_budget` (`TileSet::over_budget`); each split cell is in
-`TilePlan::splits` and a selection notice of the writer. `scene_to_tiles` takes
+`TilePlan::splits` and a selection notice of the writer. The CLI's web writer takes
 `--budget-mib N` or `--no-budget`. The tile size is the program's too:
 `Options::new(TileSize)` (`TileSize`: finite, above 0). The writer
 never loads or lowers: what it needs missing is an error. A tile holds its
@@ -145,16 +145,17 @@ may be cached immutably.
 The example omits collision soups with no triangles; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
-`cargo run --release -p primase-cli --example scene_to_tiles -- <scene> <output>` (`--features ktx2` for KTX2)
-loads a skate-scene folder and writes compressed tiles, a `plain/` comparison
-set, and `proof.json` with artifact and decoded-stream SHA256 hashes, preparing
-one cell at a time for both sets, so memory holds one cell's closure. It files a
-placement by triangle centre (`split_by_tile`) when its pivot does not locate its
-geometry: its world-space box, from its prototype GLB's POSITION bounds, is wider
-than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with
-a model placed at the origin with world-space vertices. A small prop across a cell
-edge keeps pivot filing and instancing. It prints the counts. This is an
-example composition; the library does not depend on a source dialect.
+A skate-scene folder's tiles are a conversion like any other (`primase convert --from skate-scene --scene <folder>
+--select "select-lod{form=finest}, lower-skate-lights" --passes "lower-skate-pbr, normalize-normals,
+fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}" --to web
+<output>`; `--features ktx2` and `--ktx2` with `prepare-web-textures{...}` after those passes for KTX2 tiles; the
+plain comparison set is a second conversion with `--plain` and without `prepare-web-textures`), one cell at a time,
+so memory holds one cell's closure. The tile parts file a placement by triangle centre (`split_by_tile`) when its
+pivot does not locate its geometry: its world-space box, from its prototype GLB's POSITION bounds (the reader's
+prototype box), is wider than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with a model
+placed at the origin with world-space vertices. A small prop across a cell edge keeps pivot filing and instancing.
+`cargo run -p primase-web --example tile_proof -- <tile folder>` writes `proof.json` beside a written set: each
+tile's SHA256 and its decoded meshopt streams' hashes, for gates.
 
 To look at the output, use [primase-viewer](https://github.com/kalmarv/primase-viewer), an example
 consumer of this format (a three.js viewer, not part of the library). Its `audit.mjs` loads every tile with
@@ -188,9 +189,8 @@ its cap (at least four pixels; small axes replicated); with a budget the pass
 encodes the image as the writer does, halves it until the encoding fits, and
 keeps the chosen encoding in `web.prepared_images`, which the writer writes as
 it is. A texture bound in several roles gets a copy per further role. Each snap
-and halving is a counted approximation. `scene_to_tiles` states its own choices:
-512/512/256 pixels, 360,448 (colour) and 98,304 (mask) bytes, and
-`--texture-cap <prefix>=<colour>,<normal>,<mask>` as name caps. Source/output
+and halving is a counted approximation. A program states its own choices in the pass, e.g.
+`prepare-web-textures{color=512,normal=512,mask=256,color-bytes=360448,mask-bytes=98304,names=bake_:256/256/128}`. Source/output
 dimensions, role, cap and actual bytes are recorded in image extras. These
 limits describe the web target, not the source format.
 

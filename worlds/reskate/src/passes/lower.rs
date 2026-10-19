@@ -57,6 +57,10 @@ impl Pass for LowerSkatePbr {
     fn name(&self) -> &'static str {
         "lower-skate-pbr"
     }
+    /// A part without skate materials (a tile of only a light) has nothing to lower.
+    fn part_may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
         &["skate.material"]
     }
@@ -161,13 +165,18 @@ impl Pass for LowerSkatePbr {
 /// `position` whose local -Z is `direction` and whose +Y is as near world +Y as possible (+Z when the light points
 /// straight up or down): a point light and a round spot cone look the same under any roll, so `tangent` is not
 /// used. Time-of-day mask, radius, shadows, priority and group stay in the dialect. Lights that already have a
-/// `core.light` are left as they are.
+/// `core.light` are left as they are; one it cannot lower (a non-finite or zero direction) gets none, counted as
+/// omitted (a conversion's unsupported notice).
 #[derive(Debug, Default)]
 pub struct LowerSkateLights;
 
 impl Pass for LowerSkateLights {
     fn name(&self) -> &'static str {
         "lower-skate-lights"
+    }
+    /// A part without skate lights has nothing to lower.
+    fn part_may_lack_inputs(&self) -> bool {
+        true
     }
     fn requires(&self) -> &[&'static str] {
         &["skate.light"]
@@ -189,10 +198,15 @@ impl Pass for LowerSkateLights {
             .map(|(e, l)| (e, l.clone()))
             .collect();
         for (e, l) in lights {
-            let (light, transform) = lower_light(&l)?;
-            w.insert(e, light);
-            w.insert(e, transform);
-            log.count("lights", 1);
+            // a light it cannot lower (a non-finite or zero direction) is left out of core, as unsupported
+            match lower_light(&l) {
+                Ok((light, transform)) => {
+                    w.insert(e, light);
+                    w.insert(e, transform);
+                    log.count("lights", 1);
+                }
+                Err(why) => log.omit(&format!("lights not lowered: {why}"), 1),
+            }
         }
         Ok(())
     }

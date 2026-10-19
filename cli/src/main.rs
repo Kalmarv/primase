@@ -8,6 +8,7 @@
 mod convert;
 mod gta;
 mod reskate;
+mod scene;
 mod web;
 
 fn main() {

@@ -563,7 +563,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_CACHE",
         kind: Kind::Runtime,
         gate: false,
-        about: r#"optional: the disk cache folder of KTX2 encodings that `scene_to_tiles` (and a command with the same `--cache` option) uses when no `--cache` is given; read by commands, not tests"#,
+        about: r#"optional: the disk cache folder of KTX2 encodings that `primase convert --to web --ktx2` (and any command with the same `--cache` option) uses when no `--cache` is given; read by commands, not tests"#,
         status: Status::Live,
         source: "",
     },

@@ -1,5 +1,6 @@
-//! `--to web`: web tiles ([`primase_web::convert::tiles`]: the tiles plan their own parts). Writes `<out>` (compressed,
-//! instanced) and, with `--plain`, `<out>/plain` (the plain comparison set, for gates).
+//! `--to web`: web tiles ([`primase_web::convert::tiles`]: the tiles plan their own parts), written to `<out>`:
+//! compressed and instanced, or with `--plain` the plain comparison set (uncompressed, not instanced, PNG textures).
+//! The plain set is a conversion of its own, as its passes differ (no `prepare-web-textures`).
 use std::path::Path;
 
 use primase_web::Options;
@@ -7,7 +8,7 @@ use primase_web::Options;
 use crate::convert::Result;
 
 /// `[--tile-m N] [--ktx2 [--cache <folder> [--cache-max-gib N] [--cache-verify]] [--encoding-memory-mib N]]
-/// [--budget-mib N | --no-budget] [--plain]`. This command's choices unless told otherwise: 200 m cells, files of at
+/// [--budget-mib N | --no-budget] [--camera <eye x,y,z>:<target x,y,z>] [--plain]`. This command's choices unless told otherwise: 200 m cells, files of at
 /// most 96 MiB. KTX2 encodings are kept in the cache folder across runs, else in `PRIMASE_CACHE` when set; in memory,
 /// at most `--encoding-memory-mib` (512 by default) between tiles. The writer writes textures at the sizes it is
 /// given: `prepare-web-textures{...}` in `--passes` chooses them.
@@ -55,6 +56,8 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
                 options.tile_byte_budget = Some(mib * 1024 * 1024);
             }
             "--no-budget" => options.tile_byte_budget = None,
+            // the index's starting view, world frame metres
+            "--camera" => options.camera = Some(camera(value()?)?),
             "--plain" => plain = true,
             _ => return Err(format!("web: unknown option {a}").into()),
         }
@@ -74,17 +77,34 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
     } else if cache_dir.is_some() || cache_max_gib.is_some() || options.cache_verify {
         return Err("web: --cache, --cache-max-gib and --cache-verify go with --ktx2".into());
     }
-    let mut sets = vec![(options.clone(), out.to_path_buf())];
     if plain {
-        let plain = Options {
-            compress: false,
-            gpu_instancing: false,
-            #[cfg(feature = "ktx2")]
-            ktx2: false,
-            ..options
-        };
-        sets.push((plain, out.join("plain")));
+        #[cfg(feature = "ktx2")]
+        if options.ktx2 {
+            return Err("web: --plain writes PNG textures; leave out --ktx2".into());
+        }
+        options.compress = false;
+        options.gpu_instancing = false;
     }
-    let (parts, writer) = primase_web::convert::tiles(sets);
+    let (parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]);
     Ok((Box::new(parts), Box::new(writer)))
+}
+
+/// `x,y,z:x,y,z`: the eye, then the point it looks at.
+fn camera(arg: &str) -> Result<primase_web::Camera> {
+    let point = |p: &str| -> Result<[f64; 3]> {
+        let v: Vec<f64> = p
+            .split(',')
+            .map(str::parse)
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|_| format!("web: --camera {arg}: a point is three numbers"))?;
+        v.try_into()
+            .map_err(|_| format!("web: --camera {arg}: a point is three numbers").into())
+    };
+    let (eye, target) = arg
+        .split_once(':')
+        .ok_or_else(|| format!("web: --camera {arg}: <eye x,y,z>:<target x,y,z>"))?;
+    Ok(primase_web::Camera {
+        eye: point(eye)?,
+        target: point(target)?,
+    })
 }
