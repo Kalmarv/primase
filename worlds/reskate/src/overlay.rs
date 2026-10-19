@@ -426,6 +426,14 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
     Stacked { stats: st, under }
 }
 
+/// The stack `apply` made, put on unshifted parts again: each piece moved once by its recorded `shift`, as `apply`
+/// moved it (a piece's vertices are its own, so the order does not matter). The same positions, bit for bit.
+pub fn replay(parts: &mut Parts, pieces: &[Piece]) {
+    for p in pieces.iter().filter(|p| p.shift > 0.0) {
+        shift(parts, p, p.shift);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,5 +510,75 @@ mod tests {
         );
         assert_eq!((st.stats.pieces, st.stats.shifted), (3, 1));
         drop((i0, i1, i2));
+    }
+
+    /// Replaying the shifts `apply` recorded on the unshifted parts gives its positions exactly: three decals stacked
+    /// over a tilted, uneven base (normals that are not axes, so a shift moves every coordinate).
+    #[test]
+    fn a_replayed_stack_is_the_stack() {
+        let tilt = |pos: &mut Vec<f32>, idx: &mut Vec<u32>, lift: f32| {
+            let (v0, t0) = (pos.len() / 3, idx.len() / 3);
+            pos.extend([
+                0.1,
+                0.3 + lift,
+                0.0,
+                1.3,
+                0.5 + lift,
+                0.2,
+                1.1,
+                0.9 + lift,
+                1.4,
+                0.0,
+                0.6 + lift,
+                1.1,
+            ]);
+            let b = v0 as u32;
+            idx.extend([b, b + 2, b + 1, b, b + 3, b + 2]);
+            (t0, idx.len() / 3, v0, pos.len() / 3)
+        };
+        let (mut base, mut bi, mut decals, mut di) = (vec![], vec![], vec![], vec![]);
+        let b = tilt(&mut base, &mut bi, 0.0);
+        let spans: Vec<_> = (0..3)
+            .map(|k| tilt(&mut decals, &mut di, k as f32 * 1e-3))
+            .collect();
+        let fresh = || {
+            let mut pieces = vec![piece(0, b, false, false, 0)];
+            for (k, &sp) in spans.iter().enumerate() {
+                pieces.push(piece(1, sp, true, false, k as i32 + 1));
+            }
+            pieces
+        };
+        let (bi2, di2) = (bi.clone(), di.clone());
+        let (mut base_a, mut decals_a) = (base.clone(), decals.clone());
+        let mut stacked = fresh();
+        apply(
+            0.004,
+            &mut Parts {
+                pos: vec![&mut base_a, &mut decals_a],
+                idx: vec![&bi2, &di2],
+            },
+            &mut stacked,
+        );
+        assert!(
+            stacked.iter().filter(|p| p.shift > 0.0).count() >= 2,
+            "{stacked:?}"
+        );
+        let (mut base_r, mut decals_r) = (base.clone(), decals.clone());
+        let mut replayed = fresh();
+        for (r, a) in replayed.iter_mut().zip(&stacked) {
+            r.shift = a.shift;
+        }
+        replay(
+            &mut Parts {
+                pos: vec![&mut base_r, &mut decals_r],
+                idx: vec![&bi2, &di2],
+            },
+            &replayed,
+        );
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&decals_r), bits(&decals_a));
+        assert_eq!(bits(&base_r), bits(&base_a));
+        assert_ne!(bits(&decals_r), bits(&decals));
+        drop((bi, di));
     }
 }
