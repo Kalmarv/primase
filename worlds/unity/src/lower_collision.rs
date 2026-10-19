@@ -329,6 +329,10 @@ impl Pass for LowerUnityCollision {
             "core.collision",
             "unity.collider_of",
             "core.surfaces",
+            // a shape lowered apart is an entity of its own, named and conditioned as its collider, placed
+            "core.name",
+            "core.condition",
+            "core.transform",
         ]
     }
     /// It lowers Unity colliders and keeps them, marked `lowered`.
@@ -510,6 +514,38 @@ mod tests {
                 radius: 2.0
             }
         );
+    }
+
+    /// A shape lowered apart is a new entity named after its collider and placed: through the manager, so what it
+    /// adds is checked against the declarations.
+    #[test]
+    fn a_shape_apart_is_a_named_placed_entity_through_the_manager() {
+        use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Name("ball".into()));
+        w.insert(e, transform(I, [10.0, 0.0, 0.0]));
+        w.insert(
+            e,
+            collider(UnityColliderShape::Sphere {
+                center: [0.0; 3],
+                radius: 0.5,
+            }),
+        );
+        let mut run = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut w,
+                &Pipeline {
+                    passes: vec![Box::new(LowerUnityCollision)],
+                },
+                &mut run,
+            )
+            .unwrap();
+        let (apart, _) = w.iter::<UnityColliderOf>().find(|(_, of)| of.0 == e).unwrap();
+        assert_eq!(w.get::<Name>(apart).unwrap().0, "ball");
+        assert_eq!(w.get::<Transform>(apart).unwrap().cols[3], [10.0, 0.0, 0.0]);
+        assert!(w.has::<Collider>(apart));
     }
 
     #[test]
