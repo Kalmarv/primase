@@ -62,7 +62,6 @@ pub struct Options {
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed triangle centre, rather than pivot.
     pub split_by_tile: BTreeSet<Entity>,
-    pub base_dir: PathBuf,
     /// The largest file a tile may carry, its GLB and its collision sidecar alike: a cell with a larger one is split
     /// into quadtree [`Subcell`]s, recursively, until each file fits, each split reported. `None` (by default) keeps
     /// every cell whole: the budget is the program's choice.
@@ -114,7 +113,6 @@ impl Options {
             encoding_memory: ktx2::DEFAULT_ENCODING_MEMORY,
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
-            base_dir: PathBuf::new(),
             tile_byte_budget: None,
             camera: None,
         }
@@ -1174,7 +1172,6 @@ impl TilePlan {
                     w,
                     &primase_gltf::WriteOptions {
                         group_by: primase_gltf::GroupBy::None,
-                        base_dir: self.options.base_dir.clone(),
                         selection: Some(selection),
                         ..Default::default()
                     },

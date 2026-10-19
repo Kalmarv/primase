@@ -29,10 +29,10 @@
 //!   set and transform. The host material is a verbatim copy of the first non-null layer's material (name and extras
 //!   aside), so a reader that ignores the extension shows one plausible layer. The extension is only in
 //!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted.
-//! - **Textures**: a `core.texture_file` PNG is embedded as-is (bytes checked to be PNG, identical files embedded
-//!   once). In-memory textures take priority and embed their largest level as deterministic RGBA8 PNG.
-//!   Normal maps must already be green-up with stored Z; use the explicit normalization pass first.
-//!   Unloaded DDS files are skipped and counted; load them with the texture-loading pass.
+//! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
+//!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
+//!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
+//!   `primase_image::load_textures`, makes its pixels).
 //! - **Extras**: every component with a JSON form (`core.source`, dialect and opaque JSON components) that the glTF
 //!   itself does not express goes into the extras of the object made from its entity, as
 //!   `extras.primase["<component name>"] = {"version": n, "value": ...}`: placement -> node, prototype -> mesh,
@@ -50,7 +50,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
@@ -83,8 +83,6 @@ pub enum GroupBy {
 #[derive(Clone, Debug, Default)]
 pub struct WriteOptions {
     pub group_by: GroupBy,
-    /// Relative `core.texture_file` paths are taken from here.
-    pub base_dir: PathBuf,
     /// Also write prototypes that nothing places, at the origin (not with a [`Selection`]).
     pub include_unplaced: bool,
     /// The glTF scene's name.
@@ -1254,12 +1252,7 @@ impl Writer<'_> {
         Ok(Some(i))
     }
 
-    /// The image of a texture entity: canonical PNG for loaded pixels, otherwise a PNG file as-is.
-    #[allow(
-        clippy::disallowed_methods,
-        clippy::disallowed_types,
-        reason = "exception: embeds referenced PNG files as stored; textures should arrive loaded"
-    )]
+    /// The image of a texture entity: its loaded pixels as canonical PNG.
     fn image(&mut self, e: Entity) -> Result<Option<usize>> {
         if let Some(&i) = self.image_of_entity.get(&e) {
             return Ok(i);
@@ -1285,38 +1278,14 @@ impl Writer<'_> {
                 detail: error.to_string(),
             })?;
             (bytes, self.name_of(e, "image"))
+        } else if self.world.has::<TextureFile>(e) {
+            // a reader's load step makes the pixels (primase_image::load_textures); the writer reads no file
+            return skip(self, "texture files not loaded");
         } else {
-            let file = self.world.get::<TextureFile>(e).ok_or_else(|| Error::World {
+            return Err(Error::World {
                 entity: e,
                 detail: "texture entity with neither core.texture_file nor core.texture".into(),
-            })?;
-            let ext = file
-                .path
-                .extension()
-                .and_then(|x| x.to_str())
-                .map(str::to_ascii_lowercase);
-            match ext.as_deref() {
-                Some("png") => {}
-                Some("dds") => return skip(self, "dds"),
-                _ => return skip(self, "other file format"),
-            }
-            let path = self.options.base_dir.join(&file.path);
-            let bytes = std::fs::read(&path).map_err(|source| Error::Io {
-                path: path.clone(),
-                source,
-            })?;
-            check_png(&bytes).map_err(|detail| Error::World {
-                entity: e,
-                detail: format!("{}: {detail}", path.display()),
-            })?;
-            (
-                bytes,
-                file.path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("image")
-                    .to_owned(),
-            )
+            });
         };
         let hash: [u8; 32] = Sha256::digest(&bytes).into();
         let index = match self.image_by_hash.get(&hash) {
@@ -1413,24 +1382,6 @@ fn wrap_code(w: Wrap) -> u32 {
         Wrap::Clamp => 33071,
         Wrap::Mirror => 33648,
     }
-}
-
-/// The PNG signature and a well-formed IHDR chunk first (PNG §5.2-5.3, §11.2.2): enough to refuse a file that is
-/// not a PNG, without decoding it.
-fn check_png(b: &[u8]) -> std::result::Result<(), String> {
-    const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    if b.len() < 33 || b[..8] != SIG {
-        return Err("not a PNG (signature)".into());
-    }
-    if b[8..16] != [0, 0, 0, 13, b'I', b'H', b'D', b'R'] {
-        return Err("PNG does not start with a 13-byte IHDR".into());
-    }
-    let w = u32::from_be_bytes([b[16], b[17], b[18], b[19]]);
-    let h = u32::from_be_bytes([b[20], b[21], b[22], b[23]]);
-    if w == 0 || h == 0 {
-        return Err(format!("PNG of {w}x{h}"));
-    }
-    Ok(())
 }
 
 /// A light's `KHR_lights_punctual` object without its name (defaults left out: white, intensity 1, no range; a

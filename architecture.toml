@@ -225,12 +225,6 @@ removed_when = "the synthetic world comes from a library fixture function"
 
 # ---- file, environment and process access (clippy.toml), by module role ----
 
-[[io]]
-file = "formats/gltf/src/write.rs"
-role = "exception"
-reason = "the glTF writer embeds referenced PNG files as stored"
-removed_when = "textures reach the writer loaded"
-
 # ---- parse modules: decoding bytes, unchecked arithmetic and indexing denied ----
 
 [[parse_crate]]

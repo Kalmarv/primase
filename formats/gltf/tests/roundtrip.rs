@@ -15,16 +15,15 @@ use primase_glb::{Gltf, load_mesh_files};
 use primase_gltf::{GroupBy, WriteOptions, WriteReport, write};
 use serde_json::{Value, json};
 
-fn options(b: &Built) -> WriteOptions {
+fn options() -> WriteOptions {
     WriteOptions {
-        base_dir: b.dir.clone(),
         scene_name: Some("test".into()),
         ..WriteOptions::default()
     }
 }
 
 fn written(b: &Built) -> (Gltf, WriteReport, Vec<u8>) {
-    let (bytes, report) = write(&b.world, &options(b)).unwrap();
+    let (bytes, report) = write(&b.world, &options()).unwrap();
     (Gltf::from_glb(&bytes).unwrap(), report, bytes)
 }
 
@@ -223,7 +222,7 @@ fn a_sheared_placement_is_refused() {
     let b = build(&scratch("nonrigid"));
     let mut w = b.world.clone();
     w.insert(b.sheared, b.authored[&b.sheared]);
-    let err = write(&w, &options(&b)).unwrap_err().to_string();
+    let err = write(&w, &options()).unwrap_err().to_string();
     assert_eq!(
         err,
         format!(
@@ -334,6 +333,10 @@ fn round_trip_materials_textures_and_extras() {
     let doc = gltf.json();
     let mats = arr(doc, "materials");
     let by_name = |n: &str| mats.iter().find(|m| m["name"] == n).unwrap();
+    let pixels = |png: &[u8]| match primase_image::read_png(png).unwrap().image.samples {
+        primase_image::Samples::U8(p) => p,
+        primase_image::Samples::U16(_) => panic!("16-bit"),
+    };
     let image_bytes = |tex: &Value| -> Vec<u8> {
         let t = &arr(doc, "textures")[tex["index"].as_u64().unwrap() as usize];
         let img = &arr(doc, "images")[t["source"].as_u64().unwrap() as usize];
@@ -351,8 +354,8 @@ fn round_trip_materials_textures_and_extras() {
         [0.0, 0.6]
     );
     assert_eq!(
-        image_bytes(&pmr["baseColorTexture"]),
-        std::fs::read(b.dir.join("textures/base.png")).unwrap()
+        pixels(&image_bytes(&pmr["baseColorTexture"])),
+        pixels(&std::fs::read(b.dir.join("textures/base.png")).unwrap())
     );
     let normal = &stone["normalTexture"];
     assert_eq!(
@@ -390,8 +393,8 @@ fn round_trip_materials_textures_and_extras() {
     assert_eq!(report.lights, 2);
     assert!(pmr["baseColorTexture"].get("extensions").is_none());
     assert_eq!(
-        image_bytes(normal),
-        std::fs::read(b.dir.join("textures/normal.png")).unwrap()
+        pixels(&image_bytes(normal)),
+        pixels(&std::fs::read(b.dir.join("textures/normal.png")).unwrap())
     );
     let nt = &arr(doc, "textures")[normal["index"].as_u64().unwrap() as usize];
     let sampler = &arr(doc, "samplers")[nt["sampler"].as_u64().unwrap() as usize];
@@ -442,7 +445,10 @@ fn round_trip_materials_textures_and_extras() {
         report.materials_without_pbr, 0,
         "the fixture's pipeline gave every material PBR factors"
     );
-    assert_eq!(report.textures_skipped, BTreeMap::from([("dds".to_owned(), 1)]));
+    assert_eq!(
+        report.textures_skipped,
+        BTreeMap::from([("texture files not loaded".to_owned(), 1)])
+    );
     assert_eq!(report.texture_slots_dropped, 1);
     assert_eq!(
         report.extras_unencoded,
@@ -502,7 +508,7 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
     assert_eq!(rich_children, ["plac:0", "plac:1", "plac:5"]);
     assert_eq!(report.group_nodes, 6);
 
-    let mut o = options(&b);
+    let mut o = options();
     o.group_by = GroupBy::Tile;
     let (bytes, _) = write(&b.world, &o).unwrap();
     let doc = Gltf::from_glb(&bytes).unwrap().json().clone();
@@ -533,14 +539,14 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
 #[test]
 fn output_is_deterministic() {
     let a = build(&scratch("det-a"));
-    let (one, _) = write(&a.world, &options(&a)).unwrap();
-    let (two, _) = write(&a.world, &options(&a)).unwrap();
+    let (one, _) = write(&a.world, &options()).unwrap();
+    let (two, _) = write(&a.world, &options()).unwrap();
     assert_eq!(one, two);
     let b = build(&scratch("det-b"));
-    let (three, _) = write(&b.world, &options(&b)).unwrap();
+    let (three, _) = write(&b.world, &options()).unwrap();
     assert_eq!(one, three);
     let cloned = a.world.clone();
-    let (four, _) = write(&cloned, &options(&a)).unwrap();
+    let (four, _) = write(&cloned, &options()).unwrap();
     assert_eq!(one, four);
 }
 
@@ -553,7 +559,7 @@ fn bad_worlds_are_errors() {
         .primitive_mut(0)
         .expect("a listed primitive")
         .indices_mut() = Some(vec![0, 1, 9]);
-    let err = write(&w, &options(&b)).unwrap_err().to_string();
+    let err = write(&w, &options()).unwrap_err().to_string();
     assert!(err.contains("index 9 of 4 vertices"), "{err}");
 
     let mut w = b.world.clone();
@@ -564,7 +570,7 @@ fn bad_worlds_are_errors() {
         .streams_mut()
         .insert(Semantic::Normal, Stream::F32x3(vec![[0.0; 3]; 3]));
     assert!(
-        write(&w, &options(&b))
+        write(&w, &options())
             .unwrap_err()
             .to_string()
             .contains("Normal has 3 values")
@@ -578,7 +584,7 @@ fn bad_worlds_are_errors() {
         .streams_mut()
         .insert(Semantic::Position, Stream::F32x3(vec![[f32::NAN; 3]; 4]));
     assert!(
-        write(&w, &options(&b))
+        write(&w, &options())
             .unwrap_err()
             .to_string()
             .contains("non-finite")
@@ -587,19 +593,16 @@ fn bad_worlds_are_errors() {
     let mut w = b.world.clone();
     w.remove::<primase_core::Transform>(b.regular);
     assert!(
-        write(&w, &options(&b))
+        write(&w, &options())
             .unwrap_err()
             .to_string()
             .contains("without core.transform")
     );
 
+    // the writer reads no file: the loaded world writes the same with its source file gone bad
+    let before = write(&b.world, &options()).unwrap().0;
     std::fs::write(b.dir.join("textures/normal.png"), b"not a png").unwrap();
-    assert!(
-        write(&b.world, &options(&b))
-            .unwrap_err()
-            .to_string()
-            .contains("not a PNG")
-    );
+    assert_eq!(write(&b.world, &options()).unwrap().0, before);
 }
 
 /// The load pass: prototypes pointing into a GLB (two meshes of one file) get their meshes back bit-exact, with
@@ -686,7 +689,7 @@ fn khronos_validator_accepts_output() {
     };
     let dir = scratch("validator");
     let b = build(&dir);
-    let (bytes, _) = write(&b.world, &options(&b)).unwrap();
+    let (bytes, _) = write(&b.world, &options()).unwrap();
     let path = dir.join("world.glb");
     std::fs::write(&path, bytes).unwrap();
     let out = std::process::Command::new(validator)
@@ -752,7 +755,7 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         ..NormalConvention::GLTF
     });
     assert!(
-        write(&b.world, &options(&b))
+        write(&b.world, &options())
             .unwrap_err()
             .to_string()
             .contains("tangent/bitangent basis")
@@ -766,7 +769,7 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         basis: primase_core::NormalBasis::TangentBitangent,
     });
     assert!(
-        write(&b.world, &options(&b))
+        write(&b.world, &options())
             .unwrap_err()
             .to_string()
             .contains("normalize-normals")
@@ -789,7 +792,7 @@ fn extras_never_lose_a_value() {
     }
     let mut b = build(&scratch("nan_extras"));
     b.world.insert(b.regular, Sample(f32::NAN));
-    let err = write(&b.world, &options(&b)).unwrap_err().to_string();
+    let err = write(&b.world, &options()).unwrap_err().to_string();
     assert!(err.contains("test.sample") && err.contains("NaN"), "{err}");
 }
 

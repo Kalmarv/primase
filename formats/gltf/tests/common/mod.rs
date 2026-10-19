@@ -200,6 +200,8 @@ pub fn build(dir: &Path) -> Built {
     let tex_base = tex(&mut w, "base", "textures/base.png");
     let tex_normal = tex(&mut w, "normal", "textures/normal.png");
     let tex_copy = tex(&mut w, "base_copy", "textures/base_copy.png");
+    // a reader's load step makes the pixels; the DDS (not a real one) is left a file the writer skips
+    primase_image::load_textures(&mut w, dir).unwrap();
     let tex_dds = tex(&mut w, "dds", "textures/skipped.dds");
 
     let mat_pbr = w.spawn();

@@ -77,7 +77,6 @@ fn main() -> Result<(), BoxError> {
 
     let options = WriteOptions {
         group_by,
-        base_dir: folder.clone(),
         include_unplaced: false,
         scene_name: Some(scene_name),
         selection: None,
