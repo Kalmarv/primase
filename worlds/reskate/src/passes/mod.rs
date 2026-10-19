@@ -26,7 +26,9 @@ pub mod water;
 
 pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
-pub use budget::{BudgetReskateTextures, budget_reskate_textures};
+pub use budget::{
+    BudgetReskateTextures, SummarizeReskateTextures, budget_reskate_textures, summarize_reskate_textures,
+};
 pub use collision::{PrepareReskateCollision, prepare_reskate_collision};
 pub use floor::{
     DecideReskateFloor, PrepareReskateFloor, SummarizeReskateFloor, decide_reskate_floor,

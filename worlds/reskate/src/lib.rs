@@ -12,6 +12,7 @@ pub mod build;
 pub mod collision;
 mod collision_pack;
 pub mod components;
+pub mod exact_sum;
 pub mod glb;
 pub mod grind;
 pub mod hash;
@@ -60,6 +61,7 @@ pub mod prepare {
 pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateFloorSummary>();
     reg.summary::<components::SkateLightsSummary>();
+    reg.summary::<components::SkateTextureWeights>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -156,6 +158,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "prepare-reskate-floor",
         passes::prepare_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
+    );
+    // a map in parts: its textures weighed over every part (with budget-reskate-textures's budget)
+    reg.register_requiring(
+        "summarize-reskate-textures",
+        passes::summarize_reskate_textures,
+        &[("max", "1")],
     );
     // a map in parts: its lights capped over every part (with select-reskate-lights's cap)
     reg.register_requiring(

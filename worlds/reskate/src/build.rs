@@ -172,6 +172,7 @@ pub fn target() -> primase_core::pass::Target {
         .legal(crate::components::SkateFloorSummary::NAME)
         .legal(crate::components::SkateFloorDecision::NAME)
         .legal(crate::components::SkateLightsSummary::NAME)
+        .legal(crate::components::SkateTextureWeights::NAME)
         .legal(SkateMarkerSnaps::NAME)
         .legal(SkateOverlayStack::NAME)
         .legal(SkateBlendChains::NAME)

@@ -738,6 +738,43 @@ impl primase_core::summary::Summary for SkateLightsSummary {
     }
 }
 
+/// `skate.texture_weights`: the weight of each texture the placements a part owns draw, by texture key
+/// (`summarize-reskate-textures`, with the budget it is for): exact sums, so merged over the parts (summed per key) they
+/// are the whole map's weights whatever order the parts arrive in. `budget-reskate-textures` keeps the heaviest. Not
+/// part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkateTextureWeights {
+    pub max: usize,
+    pub aux_weight: f64,
+    pub weights: BTreeMap<String, crate::exact_sum::ExactSum>,
+}
+
+impl Resource for SkateTextureWeights {
+    const NAME: &'static str = "skate.texture_weights";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "max": self.max,
+            "aux_weight": self.aux_weight,
+            "textures": self.weights.len(),
+        })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateTextureWeights {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        if (self.max, self.aux_weight.to_bits()) != (other.max, other.aux_weight.to_bits()) {
+            return Err(format!(
+                "parts weighed for a budget of {} (aux_weight {}) and of {} (aux_weight {})",
+                self.max, self.aux_weight, other.max, other.aux_weight
+            ));
+        }
+        for (k, s) in other.weights {
+            self.weights.entry(k).or_default().merge(&s);
+        }
+        Ok(())
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]

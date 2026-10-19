@@ -1,7 +1,8 @@
 //! A ReSkate map converted in parts (`convert_parts_summarized`): what the whole-map passes decide over every part is
 //! what they decide on the whole map, whatever order the parts arrive in. The floor: measured on each part's own
 //! placements, merged, decided once, applied to each part. The light cap: each part's lights capped per cell, merged
-//! into the cap over every light, kept by each part.
+//! into the cap over every light, kept by each part. The texture budget: each part's textures weighed (exact sums),
+//! merged into the whole map's weights, the heaviest kept in each part.
 
 #![allow(clippy::unwrap_used)]
 
@@ -13,14 +14,16 @@ use primase_core::convert::{
     Finished, Part, PartSource, Reader, Report, Result, Summarized, Writer, convert_parts_summarized,
 };
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Target};
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::summary::SummaryRegistry;
+use primase_core::{ColorSpace, Light, LightKind, TexFormat, TexRole, Texture};
 use primase_core::{Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World};
-use primase_core::{Light, LightKind};
-use primase_reskate::components::{SkateFloorPlan, SkateLight, SkatePartsOff};
+use primase_reskate::components::{
+    SkateBaseFactor, SkateFloorPlan, SkateLight, SkateMaterial, SkatePartsOff,
+};
 use primase_reskate::passes::{
-    DecideReskateFloor, LightCalibration, PrepareReskateFloor, RaiseOptions, SelectReskateLights,
-    SummarizeReskateFloor, SummarizeReskateLights,
+    BudgetReskateTextures, DecideReskateFloor, LightCalibration, PrepareReskateFloor, RaiseOptions,
+    SelectReskateLights, SummarizeReskateFloor, SummarizeReskateLights, SummarizeReskateTextures,
 };
 
 /// A raised map of 150 placements of a one-metre-high slab, at heights from -20 m to 54.5 m in a scattered order, and
@@ -28,29 +31,56 @@ use primase_reskate::passes::{
 /// energies repeating (so a cap meets ties of priority).
 fn map() -> World {
     let mut w = World::new();
-    let material = w.spawn();
-    w.insert(material, Name("stone".into()));
-    w.insert(material, PbrMaterial::default());
-    let proto = w.spawn();
-    w.insert(proto, Name("slab".into()));
-    w.insert(
-        proto,
-        Mesh::new(vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(
-                Semantic::Position,
-                Stream::F32x3(vec![[0.0, 0.0, 0.0], [2.0, 1.0, 0.0], [0.0, 0.0, -2.0]]),
-            )]),
-            indices: None,
-            material: Some(material),
-        }]),
-    );
+    // six slabs, each its own material and texture, the k-th k + 1 times as wide (as high: the floor sees them alike)
+    let protos: Vec<Entity> = (0..6u8)
+        .map(|k| {
+            let tex = w.spawn();
+            w.insert(tex, Name(format!("stone_{k}")));
+            w.insert(
+                tex,
+                Texture {
+                    width: 2,
+                    height: 2,
+                    format: TexFormat::Rgba8Unorm,
+                    levels: vec![[40 * k, 200, 100, 255].repeat(4)],
+                    color_space: ColorSpace::Srgb,
+                    role: TexRole::Color,
+                    normal: None,
+                },
+            );
+            let material = w.spawn();
+            w.insert(material, Name(format!("stone_{k}")));
+            w.insert(
+                material,
+                PbrMaterial {
+                    base_color_texture: Some(TextureRef::new(tex)),
+                    ..PbrMaterial::default()
+                },
+            );
+            let width = 2.0 * f32::from(k + 1);
+            let proto = w.spawn();
+            w.insert(proto, Name(format!("slab_{k}")));
+            w.insert(
+                proto,
+                Mesh::new(vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams: BTreeMap::from([(
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.0, 0.0, 0.0], [width, 1.0, 0.0], [0.0, 0.0, -2.0]]),
+                    )]),
+                    indices: None,
+                    material: Some(material),
+                }]),
+            );
+            proto
+        })
+        .collect();
     for i in 0..150u32 {
         let p = w.spawn();
         w.insert(
             p,
             Instance {
-                prototype: proto,
+                prototype: protos[(i * 7 % 6) as usize],
                 variant: 0,
             },
         );
@@ -174,8 +204,22 @@ fn lights(w: &World) -> BTreeSet<Entity> {
 /// A floor plan's floor, lift and cutoff, as bits.
 type Plan = (Option<u32>, u32, Option<u32>);
 
-/// Every placement written, every part's floor plan, every light written.
-type Captured = (Placements, BTreeSet<Option<Plan>>, BTreeSet<Entity>);
+/// Each material written: its base texture and its base colour factor, as bits.
+type Materials = BTreeMap<Entity, (Option<Entity>, Option<[u32; 4]>)>;
+
+fn materials(w: &World) -> Materials {
+    w.iter::<SkateMaterial>()
+        .map(|(e, m)| {
+            (
+                e,
+                (m.base, w.get::<SkateBaseFactor>(e).map(|f| f.0.map(f32::to_bits))),
+            )
+        })
+        .collect()
+}
+
+/// Every placement written, every part's floor plan, every light and material written.
+type Captured = (Placements, BTreeSet<Option<Plan>>, BTreeSet<Entity>, Materials);
 
 struct Capture(Rc<RefCell<Captured>>);
 impl Writer for Capture {
@@ -187,6 +231,12 @@ impl Writer for Capture {
         c.0.extend(placements(part));
         c.1.insert(plan_of(part));
         c.2.extend(lights(part));
+        // a material several parts draw is written the same by each
+        for (m, state) in materials(part) {
+            if let Some(before) = c.3.insert(m, state) {
+                assert_eq!(before, state, "material {m:?} written differently by two parts");
+            }
+        }
         Ok(())
     }
     fn finish(self: Box<Self>) -> Result<Finished> {
@@ -223,6 +273,19 @@ fn lights_program(apply: SelectReskateLights) -> Program {
     ]
 }
 
+fn budget() -> BudgetReskateTextures {
+    BudgetReskateTextures::new(3).unwrap()
+}
+
+/// The texture budget's program, `apply` the budget of the second traversal.
+fn budget_program(apply: BudgetReskateTextures) -> Program {
+    [
+        vec![Box::new(SummarizeReskateTextures::new(budget()))],
+        Vec::new(),
+        vec![Box::new(apply)],
+    ]
+}
+
 /// The map converted in `parts` parts arriving in `order`, with `program`.
 fn in_parts(parts: usize, order: &[usize], program: Program) -> Result<Captured> {
     let mut registry = SummaryRegistry::new();
@@ -231,6 +294,7 @@ fn in_parts(parts: usize, order: &[usize], program: Program) -> Result<Captured>
         Placements::new(),
         BTreeSet::new(),
         BTreeSet::new(),
+        Materials::new(),
     )));
     let [summarize, decide, passes] = program;
     convert_parts_summarized(
@@ -262,6 +326,7 @@ fn the_floor_over_parts_is_the_whole_maps_in_any_order() {
         placements(&whole),
         BTreeSet::from([plan_of(&whole)]),
         lights(&whole),
+        materials(&whole),
     );
     // the floor is the second lowest of 150 slab bottoms (the 1st percentile, -19.5 m): the map moves up by 19.5 m and
     // the sunk slab, wholly below the cutoff 5 m under the floor, goes
@@ -341,4 +406,34 @@ fn the_light_cap_over_parts_is_the_whole_maps_in_any_order() {
         e.contains("the lights were summarized for 4 per 200 m cell"),
         "{e}"
     );
+}
+
+#[test]
+fn the_texture_budget_over_parts_is_the_whole_maps_in_any_order() {
+    let mut whole = map();
+    budget().run(&mut whole, &mut PassLog::default()).unwrap();
+    let expected = materials(&whole);
+    // six textures, a budget of three: the two heaviest (the widest slabs) kept, four drawn as their mean colour
+    let replaced = expected
+        .values()
+        .filter(|(base, f)| base.is_none() && f.is_some())
+        .count();
+    assert_eq!((expected.len(), replaced), (6, 4));
+    for order in [vec![0, 1, 2], vec![2, 0, 1], vec![1, 2, 0]] {
+        assert_eq!(
+            in_parts(3, &order, budget_program(budget())).unwrap().3,
+            expected,
+            "{order:?}"
+        );
+    }
+    assert_eq!(in_parts(1, &[0], budget_program(budget())).unwrap().3, expected);
+    // weights for another budget are refused
+    let e = in_parts(
+        3,
+        &[0, 1, 2],
+        budget_program(BudgetReskateTextures::new(2).unwrap()),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("the textures were weighed for a budget of 3"), "{e}");
 }
