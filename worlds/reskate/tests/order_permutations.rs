@@ -295,7 +295,8 @@ fn world(order: Order) -> World {
 const RECIPE: &str = "lower-layered-reskate, prepare-reskate-textures, prepare-reskate-grinds, snap-reskate-markers, \
                       prepare-reskate-water{extent=content,margin=400}, \
                       prepare-reskate-pause-map{from=geometry,height=256,extent=content}, \
-                      select-reskate-lights{per_cell=2,cell=200}, prepare-reskate-overlays{step=0.004}";
+                      select-reskate-lights{per_cell=2,cell=200}, prepare-reskate-overlays{step=0.004}, \
+                      prepare-reskate-blend-order{grid=200}";
 
 /// Every file of a folder, by its path below it.
 fn files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -338,10 +339,7 @@ fn map(order: Order, blend_objects: Option<usize>) -> BTreeMap<String, Vec<u8>> 
             name: Some("orders".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices {
-            blend_objects,
-            ..WriterChoices::default()
-        },
+        &WriterChoices { blend_objects },
     )
     .unwrap();
     let f = files(&out_root.join("orders"));

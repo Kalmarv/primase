@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use primase_core::World;
 
 use crate::collision::{CollisionWorld, SRC_TILE, TileData};
-use crate::map::{Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
+use crate::map::{Chains, Ctx, Extras, MapWriter, MeshSource, Stack, WriterOptions};
 use crate::model::{CollisionMode, Hull, Placement, SrcMesh, SrcPart};
 use crate::records::{CollisionDropped, OverlayStack, SoupStats, StatsJson, Totals};
 use crate::scene::{self, Materializer, MeshCounters, Scene, w_at};
@@ -21,7 +21,7 @@ use crate::{Error, Result};
 
 /// How the writer encodes a prepared world ([`write_map`]): where the map folder goes and the format's packing. None
 /// of it chooses content.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EncodingOptions {
     /// The map folder is `out_root/name`.
     pub out_root: PathBuf,
@@ -60,30 +60,18 @@ impl Default for EncodingOptions {
     }
 }
 
-/// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
-/// blend chains. Delete a field when its pass lands.
-#[derive(Clone, Debug)]
+/// The content choices the writer still makes, each until a preparation pass takes it over: the blend-chain
+/// object budget (PRIMASE-PLAN step 9's global preparation). Delete a field when its pass lands.
+#[derive(Clone, Debug, Default)]
 pub struct WriterChoices {
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
     /// and takes a cull ID). `None`: the level's share of ReSkate 2.1.0-pre's cull-ID pool less what the rest of the
     /// map takes ([`crate::map::CULL_ID_POOL`]).
     pub blend_objects: Option<usize>,
-    /// The grid the blend-chain objects are cut on ([`crate::map::WriterOptions::blend_grid`]): Studio's 200 m
-    /// WorldPartition cell by default.
-    pub blend_grid: f32,
 }
 
-impl Default for WriterChoices {
-    fn default() -> Self {
-        WriterChoices {
-            blend_objects: None,
-            blend_grid: 200.0,
-        }
-    }
-}
-
-/// The options of `scene-skate build`, flat: [`EncodingOptions`], [`WriterChoices`] and the overlay step
-/// (`prepare-reskate-overlays`'s; 0: no stack) in one, for [`build`], the deprecated composition helper. Removed with
+/// The options of `scene-skate build`, flat: [`EncodingOptions`], [`WriterChoices`], the overlay step
+/// (`prepare-reskate-overlays`'s; 0: no stack) and the blend-chain grid (`prepare-reskate-blend-order`'s) in one, for [`build`], the deprecated composition helper. Removed with
 /// it (PRIMASE-PLAN step 10).
 #[derive(Clone, Debug)]
 pub struct BuildOptions {
@@ -112,7 +100,7 @@ impl Default for BuildOptions {
             min_instance_tris: e.min_instance_tris,
             overlay_step: 0.004,
             blend_objects: c.blend_objects,
-            blend_grid: c.blend_grid,
+            blend_grid: 200.0,
             limit: e.limit,
             max_render_edge: e.max_render_edge,
             offset: e.offset,
@@ -139,7 +127,6 @@ impl BuildOptions {
             },
             WriterChoices {
                 blend_objects: a.blend_objects,
-                blend_grid: a.blend_grid,
             },
         )
     }
@@ -543,7 +530,6 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         min_instances: a.min_instances,
         min_instance_tris: a.min_instance_tris,
         blend_objects: c.blend_objects,
-        blend_grid: c.blend_grid,
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
@@ -591,23 +577,36 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         None if a.overlay_step > 0.0 => Some(overlay_stack(world, &e, a.overlay_step)?),
         _ => None,
     };
-    write_map_with(world, dir, &e, &c, stack)
+    // and the blend chains, as prepare-reskate-blend-order chooses them
+    let chains = match world.resource::<crate::dialect::SkateBlendChains>() {
+        None => Some(blend_chains(world, &e, a.blend_grid)?),
+        Some(_) => None,
+    };
+    write_map_with(world, dir, &e, &c, stack, chains)
 }
 
 /// The map folder of the prepared world `world` (`dir`: where its scene came from, recorded in the stats), encoded
 /// as `a` says, with the content choices `c` the writer still makes.
 pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions, c: &WriterChoices) -> Result<BuildReport> {
-    write_map_with(world, dir, a, c, None)
+    write_map_with(world, dir, a, c, None, None)
 }
 
 /// The writer's assembly of the prepared world `world` for the encoding `a` (its tiles and prototypes, nothing
 /// written), with the overlay stack `stack` and textures encoded or only identified (`encode`).
-fn assembly(world: &World, a: &EncodingOptions, stack: Stack, encode: bool) -> Result<MapWriter> {
+fn assembly(
+    world: &World,
+    a: &EncodingOptions,
+    stack: Stack,
+    chains: Chains,
+    encode: bool,
+) -> Result<MapWriter> {
     let s = Scene::from_world(world, Path::new(""))?;
     let mut o = writer_options(&s, a, &WriterChoices::default())?;
     let placements = writer_placements(&s, o.tile);
     o.region = s.region.unwrap_or_else(|| bounds(&s, &placements));
-    let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?.with_stack(stack);
+    let mut writer = MapWriter::new(o, s.surfaces.clone(), Path::new(""))?
+        .with_stack(stack)
+        .with_chains(chains);
     if !encode {
         writer = writer.without_encoding();
     }
@@ -629,9 +628,38 @@ pub(crate) fn overlay_stack(
         grouping: Some(grouping(&s, a)),
         ..Default::default()
     };
-    match assembly(world, a, Stack::Compute(Box::new(rec)), false)?.take_stack() {
+    match assembly(
+        world,
+        a,
+        Stack::Compute(Box::new(rec)),
+        Chains::Off { left: 0 },
+        false,
+    )?
+    .take_stack()
+    {
         Stack::Compute(rec) => Ok(*rec),
         _ => unreachable!("the stack it was given"),
+    }
+}
+
+/// The blend chains of the prepared world `world` (`prepare-reskate-blend-order`'s): the writer's own assembly of its
+/// tiles for the encoding `a`, textures identified but not encoded, each tile's chain overlays cut on a `grid`-metre
+/// grid and lifted by rank, recorded by tile.
+pub(crate) fn blend_chains(
+    world: &World,
+    a: &EncodingOptions,
+    grid: f32,
+) -> Result<crate::dialect::SkateBlendChains> {
+    let s = Scene::from_world(world, Path::new(""))?;
+    let rec = crate::dialect::SkateBlendChains {
+        grid,
+        grouping: Some(grouping(&s, a)),
+        ..Default::default()
+    };
+    let chains = Chains::Record(Box::new(rec));
+    match assembly(world, a, Stack::Off { unstacked: 0 }, chains, false)?.take_chains() {
+        Chains::Record(rec) => Ok(*rec),
+        _ => unreachable!("the chains it was given"),
     }
 }
 
@@ -651,7 +679,13 @@ pub fn assembled_materials(
     a: &EncodingOptions,
     encode: bool,
 ) -> Result<Vec<AssembledMaterial>> {
-    let writer = assembly(world, a, Stack::Off { unstacked: 0 }, encode)?;
+    let writer = assembly(
+        world,
+        a,
+        Stack::Off { unstacked: 0 },
+        Chains::Off { left: 0 },
+        encode,
+    )?;
     Ok(writer
         .ctx
         .mats
@@ -671,6 +705,7 @@ fn write_map_with(
     a: &EncodingOptions,
     c: &WriterChoices,
     given: Option<crate::dialect::SkateOverlayStack>,
+    given_chains: Option<crate::dialect::SkateBlendChains>,
 ) -> Result<BuildReport> {
     let mut s = Scene::from_world(world, dir)?;
     let scene_warnings = match &a.scene_warnings {
@@ -727,8 +762,27 @@ fn write_map_with(
         }
         None => Stack::Off { unstacked: 0 },
     };
-    let mut writer =
-        MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?.with_stack(stack);
+    // the blend chains prepare-reskate-blend-order chose, for this grouping only; without them, none
+    let chains = match given_chains
+        .as_ref()
+        .or(world.resource::<crate::dialect::SkateBlendChains>())
+    {
+        Some(rec) => {
+            let mine = grouping(&s, a);
+            if rec.grouping != Some(mine) {
+                return Err(Error::Scene(format!(
+                    "the blend chains were chosen for the writer settings {:?}, but the writer's are {mine:?}: give \
+                     prepare-reskate-blend-order the writer's",
+                    rec.grouping
+                )));
+            }
+            Chains::Replay(Box::new(rec.clone()))
+        }
+        None => Chains::Off { left: 0 },
+    };
+    let mut writer = MapWriter::new(o.clone(), s.surfaces.clone(), &out_dir.join("textures"))?
+        .with_stack(stack)
+        .with_chains(chains);
     let tri_world = SoupWorld::new(&mut s, CollisionMode::TriangleMesh, cut, drop_below);
     let water_world = s
         .soups
@@ -832,6 +886,15 @@ fn write_map_with(
                 .filter(|(_, n)| *n > 0)
                 .map(|(what, n)| (what.to_owned(), n as u64)),
             )
+            .chain(match writer.chains() {
+                Chains::Off { left } if *left > 0 => Some((
+                    "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \
+                     (prepare-reskate-blend-order splits them)"
+                        .to_owned(),
+                    *left,
+                )),
+                _ => None,
+            })
             .collect(),
     })
 }

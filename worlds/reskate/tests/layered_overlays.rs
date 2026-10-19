@@ -15,7 +15,11 @@ use std::path::{Path, PathBuf};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{LayeredMaterial, Mesh, World};
 use primase_reskate::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
+use primase_reskate::prepare::{PrepareReskateBlendOrder, PrepareReskateOverlays};
 use primase_reskate::{EncodingOptions, WriterChoices};
+
+/// The grid the blend chains are cut on: Studio's WorldPartition cell.
+const GRID: f32 = 200.0;
 use serde_json::Value;
 
 fn scenes(root: &Path) -> Vec<PathBuf> {
@@ -274,6 +278,15 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
                 .unwrap()
                 .0,
         );
+        // the writer's former stack and chains, made by their passes (4 mm, Studio's 200 m cells)
+        PrepareReskateOverlays::new(0.004)
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        PrepareReskateBlendOrder::new(GRID)
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
         let report = primase_reskate::write_map(&w, &scene, &o, &WriterChoices::default()).unwrap();
         let out = report.out_dir;
         let map: Value = serde_json::from_slice(&std::fs::read(out.join("map.json")).unwrap()).unwrap();
@@ -347,13 +360,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
             l.sort();
         }
         assert_eq!(record, record_want, "vertex_blend.json vs map.json objects");
-        check_chain_objects(
-            &map,
-            &out,
-            &by_mesh,
-            &report.blend,
-            WriterChoices::default().blend_grid,
-        );
+        check_chain_objects(&map, &out, &by_mesh, &report.blend, GRID);
         println!(
             "{}: {} vertex_blend materials, {} blended object primitives, {} other",
             scene.display(),

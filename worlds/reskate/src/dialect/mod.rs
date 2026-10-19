@@ -636,6 +636,82 @@ pub struct StackedPiece {
     pub centre: [f32; 3],
 }
 
+/// The blend chains `prepare-reskate-blend-order` chose for the writer's render tiles: per tile (`t_<column>_<row>`)
+/// that has vertex-blend chain overlays, what the chain form draws ([`ChainTile`]), with the grid it cut on (metres,
+/// 0: not cut) and the grouping the tiles depend on. The writer builds the chain form from it and refuses tiles that
+/// differ; which tiles take the chain form within the object budget stays the writer's (PRIMASE-PLAN step 9). Not part
+/// of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SkateBlendChains {
+    pub grid: f32,
+    pub grouping: Option<OverlayGrouping>,
+    pub tiles: BTreeMap<String, ChainTile>,
+}
+
+/// One tile's chain overlays: the pieces they are made of, the lift step taken per axis (`None`: no step stays distinct
+/// as an f32 at the tile, so the chain overlays stay in the tile's mesh), the triangles cut at the grid's borders, and
+/// per object (cell, axis, rank) what it holds.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ChainTile {
+    pub pieces: BTreeSet<OverlayPiece>,
+    pub clipped: u32,
+    pub steps: Option<BTreeMap<u8, f32>>,
+    pub groups: BTreeMap<crate::blend_order::ChainKey, ChainGroup>,
+}
+
+/// One chain object: the materials (by name) it draws, the cut triangles that left a piece in it (a triangle cut across
+/// a border is in each object it reaches), and the box
+/// every rank of its cell and axis is padded to (writer frame, the tile's translation off).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ChainGroup {
+    pub members: BTreeSet<String>,
+    pub clipped: u32,
+    pub pad: Option<([f32; 3], [f32; 3])>,
+}
+
+impl Resource for SkateBlendChains {
+    const NAME: &'static str = "skate.blend_chains";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "grid": self.grid,
+            "grouping": self.grouping,
+            "tiles": self
+                .tiles
+                .iter()
+                .map(|(name, t)| {
+                    serde_json::json!({
+                        "tile": name,
+                        "pieces": t.pieces.len(),
+                        "clipped": t.clipped,
+                        "steps": t.steps,
+                        "objects": t
+                            .groups
+                            .iter()
+                            .map(|((cell, axis, rank), g)| serde_json::json!({
+                                "cell": cell, "axis": axis, "rank": rank,
+                                "materials": g.members, "clipped": g.clipped, "pad": g.pad,
+                            }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        })))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        let all: BTreeSet<Entity> = self
+            .tiles
+            .values()
+            .flat_map(|t| t.pieces.iter().map(OverlayPiece::entity))
+            .collect();
+        out.extend(all);
+    }
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        for t in self.tiles.values_mut() {
+            t.pieces.retain(|p| keep(p.entity()));
+        }
+    }
+}
+
 /// The overlay stack's totals over every mesh.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize)]
 pub struct OverlayTotals {

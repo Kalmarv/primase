@@ -21,12 +21,108 @@ use crate::dialect::SkateOverlayStack;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrepareReskateOverlays {
     step: f32,
-    tile: f32,
-    min_instances: i64,
-    min_instance_tris: i64,
-    max_render_edge: Option<f32>,
-    limit: f32,
-    offset: [f64; 2],
+    encoding: EncodingOptions,
+}
+
+/// The writer settings a pass that assembles the writer's meshes groups them by (render tile, instancing, longest render
+/// edge, limit, offset), checked: a render tile and limit above 0, counts of 0 or more, finite metres.
+pub(crate) fn check_grouping(e: &EncodingOptions) -> Result<(), String> {
+    if !(e.tile.is_finite() && e.tile > 0.0) || !(e.limit.is_finite() && e.limit > 0.0) {
+        return Err(format!("tile={}, limit={}: metres above 0", e.tile, e.limit));
+    }
+    if e.min_instances < 0 || e.min_instance_tris < 0 {
+        return Err("instancing thresholds are counts of 0 or more".into());
+    }
+    if e.max_render_edge.is_some_and(|m| !(m.is_finite() && m >= 0.0)) {
+        return Err(format!(
+            "max_render_edge={:?}: finite metres of 0 or more",
+            e.max_render_edge
+        ));
+    }
+    if !e.offset.iter().all(|v| v.is_finite()) {
+        return Err(format!("offset {:?} is not finite metres", e.offset));
+    }
+    Ok(())
+}
+
+/// Those settings from a pass's options (`tile`, `min_instances`, `min_instance_tris`, `max_render_edge`, `limit`,
+/// `offset_x`, `offset_y`; each optional, the writer's default otherwise); any other key is refused.
+pub(crate) fn encoding_of(o: &Options) -> Result<EncodingOptions, String> {
+    let known = [
+        "tile",
+        "min_instances",
+        "min_instance_tris",
+        "max_render_edge",
+        "limit",
+        "offset_x",
+        "offset_y",
+    ];
+    if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
+        return Err(format!("unknown option {k}"));
+    }
+    let number = |k: &str| -> Result<Option<f64>, String> {
+        o.get(k)
+            .map(|v| v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number")))
+            .transpose()
+    };
+    let count = |k: &str| -> Result<Option<i64>, String> {
+        o.get(k)
+            .map(|v| v.parse::<i64>().map_err(|_| format!("{k}={v} is not a count")))
+            .transpose()
+    };
+    let mut e = EncodingOptions::default();
+    if let Some(v) = number("tile")? {
+        e.tile = v as f32;
+    }
+    if let Some(v) = count("min_instances")? {
+        e.min_instances = v;
+    }
+    if let Some(v) = count("min_instance_tris")? {
+        e.min_instance_tris = v;
+    }
+    if let Some(v) = number("max_render_edge")? {
+        e.max_render_edge = Some(v as f32);
+    }
+    if let Some(v) = number("limit")? {
+        e.limit = v as f32;
+    }
+    if let Some(v) = number("offset_x")? {
+        e.offset[0] = v;
+    }
+    if let Some(v) = number("offset_y")? {
+        e.offset[1] = v;
+    }
+    check_grouping(&e)?;
+    Ok(e)
+}
+
+/// Those settings as options, every one ([`encoding_of`] reads them back).
+pub(crate) fn encoding_options(e: &EncodingOptions) -> Options {
+    let mut o = Options::from([
+        ("tile".to_owned(), e.tile.to_string()),
+        ("min_instances".to_owned(), e.min_instances.to_string()),
+        ("min_instance_tris".to_owned(), e.min_instance_tris.to_string()),
+        ("limit".to_owned(), e.limit.to_string()),
+        ("offset_x".to_owned(), e.offset[0].to_string()),
+        ("offset_y".to_owned(), e.offset[1].to_string()),
+    ]);
+    if let Some(m) = e.max_render_edge {
+        o.insert("max_render_edge".into(), m.to_string());
+    }
+    o
+}
+
+/// Only the grouping settings of `e`: what the pass's result depends on.
+pub(crate) fn grouping_only(e: &EncodingOptions) -> EncodingOptions {
+    EncodingOptions {
+        tile: e.tile,
+        min_instances: e.min_instances,
+        min_instance_tris: e.min_instance_tris,
+        max_render_edge: e.max_render_edge,
+        limit: e.limit,
+        offset: e.offset,
+        ..EncodingOptions::default()
+    }
 }
 
 impl PrepareReskateOverlays {
@@ -36,42 +132,17 @@ impl PrepareReskateOverlays {
         if !(step.is_finite() && step >= 0.0) {
             return Err(format!("step={step}: finite metres of 0 or more"));
         }
-        let e = EncodingOptions::default();
         Ok(PrepareReskateOverlays {
             step,
-            tile: e.tile,
-            min_instances: e.min_instances,
-            min_instance_tris: e.min_instance_tris,
-            max_render_edge: e.max_render_edge,
-            limit: e.limit,
-            offset: e.offset,
+            encoding: EncodingOptions::default(),
         })
     }
 
-    /// For the encoding the map will be written with (its render tile, instancing, limit and offset): a render tile
-    /// and limit above 0, counts of 0 or more, finite metres.
+    /// For the encoding the map will be written with (its render tile, instancing, limit and offset), checked
+    /// ([`check_grouping`]).
     pub fn for_encoding(mut self, e: &EncodingOptions) -> Result<PrepareReskateOverlays, String> {
-        if !(e.tile.is_finite() && e.tile > 0.0) || !(e.limit.is_finite() && e.limit > 0.0) {
-            return Err(format!("tile={}, limit={}: metres above 0", e.tile, e.limit));
-        }
-        if e.min_instances < 0 || e.min_instance_tris < 0 {
-            return Err("instancing thresholds are counts of 0 or more".into());
-        }
-        if e.max_render_edge.is_some_and(|m| !(m.is_finite() && m >= 0.0)) {
-            return Err(format!(
-                "max_render_edge={:?}: finite metres of 0 or more",
-                e.max_render_edge
-            ));
-        }
-        if !e.offset.iter().all(|v| v.is_finite()) {
-            return Err(format!("offset {:?} is not finite metres", e.offset));
-        }
-        self.tile = e.tile;
-        self.min_instances = e.min_instances;
-        self.min_instance_tris = e.min_instance_tris;
-        self.max_render_edge = e.max_render_edge;
-        self.limit = e.limit;
-        self.offset = e.offset;
+        check_grouping(e)?;
+        self.encoding = grouping_only(e);
         Ok(self)
     }
 
@@ -79,69 +150,16 @@ impl PrepareReskateOverlays {
         self.step
     }
 
-    fn encoding(&self) -> EncodingOptions {
-        EncodingOptions {
-            tile: self.tile,
-            min_instances: self.min_instances,
-            min_instance_tris: self.min_instance_tris,
-            max_render_edge: self.max_render_edge,
-            limit: self.limit,
-            offset: self.offset,
-            ..EncodingOptions::default()
-        }
-    }
-
-    /// From its options: `step` required; the encoding's (`tile`, `min_instances`, `min_instance_tris`,
-    /// `max_render_edge`, `limit`, `offset_x`, `offset_y`) optional, the writer's defaults otherwise; through
+    /// From its options: `step` required; the encoding's ([`encoding_of`]) optional; through
     /// [`PrepareReskateOverlays::new`] and [`PrepareReskateOverlays::for_encoding`].
     pub fn from_options(o: &Options) -> Result<PrepareReskateOverlays, String> {
-        let known = [
-            "step",
-            "tile",
-            "min_instances",
-            "min_instance_tris",
-            "max_render_edge",
-            "limit",
-            "offset_x",
-            "offset_y",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let number = |k: &str| -> Result<Option<f64>, String> {
-            o.get(k)
-                .map(|v| v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number")))
-                .transpose()
-        };
-        let count = |k: &str| -> Result<Option<i64>, String> {
-            o.get(k)
-                .map(|v| v.parse::<i64>().map_err(|_| format!("{k}={v} is not a count")))
-                .transpose()
-        };
-        let step = number("step")?.ok_or("step is required (metres between stacked overlays; 0: none)")?;
-        let mut e = EncodingOptions::default();
-        if let Some(v) = number("tile")? {
-            e.tile = v as f32;
-        }
-        if let Some(v) = count("min_instances")? {
-            e.min_instances = v;
-        }
-        if let Some(v) = count("min_instance_tris")? {
-            e.min_instance_tris = v;
-        }
-        if let Some(v) = number("max_render_edge")? {
-            e.max_render_edge = Some(v as f32);
-        }
-        if let Some(v) = number("limit")? {
-            e.limit = v as f32;
-        }
-        if let Some(v) = number("offset_x")? {
-            e.offset[0] = v;
-        }
-        if let Some(v) = number("offset_y")? {
-            e.offset[1] = v;
-        }
-        PrepareReskateOverlays::new(step as f32)?.for_encoding(&e)
+        let mut rest = o.clone();
+        let step = rest
+            .remove("step")
+            .ok_or("step is required (metres between stacked overlays; 0: none)")?;
+        let step: f32 = step.parse().map_err(|_| format!("step={step} is not a number"))?;
+        let e = encoding_of(&rest)?;
+        PrepareReskateOverlays::new(step)?.for_encoding(&e)
     }
 }
 
@@ -155,18 +173,8 @@ impl Pass for PrepareReskateOverlays {
         "prepare-reskate-overlays"
     }
     fn options(&self) -> Options {
-        let mut o = Options::from([
-            ("step".to_owned(), self.step.to_string()),
-            ("tile".to_owned(), self.tile.to_string()),
-            ("min_instances".to_owned(), self.min_instances.to_string()),
-            ("min_instance_tris".to_owned(), self.min_instance_tris.to_string()),
-            ("limit".to_owned(), self.limit.to_string()),
-            ("offset_x".to_owned(), self.offset[0].to_string()),
-            ("offset_y".to_owned(), self.offset[1].to_string()),
-        ]);
-        if let Some(m) = self.max_render_edge {
-            o.insert("max_render_edge".into(), m.to_string());
-        }
+        let mut o = encoding_options(&self.encoding);
+        o.insert("step".into(), self.step.to_string());
         o
     }
     fn requires(&self) -> &[&'static str] {
@@ -182,7 +190,7 @@ impl Pass for PrepareReskateOverlays {
                 "prepare-reskate-overlays: the overlays are already stacked (skate.overlay_stack)".into(),
             );
         }
-        let rec = overlay_stack(w, &self.encoding(), self.step).map_err(|e| e.to_string())?;
+        let rec = overlay_stack(w, &self.encoding, self.step).map_err(|e| e.to_string())?;
         log.count("overlay pieces stacked", rec.totals.pieces.max(0) as u64);
         log.count(
             "overlay pieces lifted",

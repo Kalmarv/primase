@@ -68,6 +68,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         prepare::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
+    // the grid is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-blend-order",
+        prepare::prepare_reskate_blend_order,
+        &[("grid", "0")],
+    );
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",

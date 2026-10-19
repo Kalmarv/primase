@@ -14,7 +14,7 @@ use primase_core::{
     Surfaces, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::layered::LowerLayeredReskate;
-use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
+use primase_reskate::prepare::{PrepareReskateBlendOrder, RaiseOptions, SnapReskateMarkers};
 use primase_reskate::{EncodingOptions, WriterChoices};
 
 fn tmp(name: &str) -> PathBuf {
@@ -140,6 +140,11 @@ fn world() -> World {
     SnapReskateMarkers::new()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
+    // the chains split before the writer, which splits nothing: Studio's 200 m cells
+    PrepareReskateBlendOrder::new(200.0)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
     w
 }
 
@@ -154,10 +159,7 @@ fn build(blend_objects: Option<usize>, tag: &str) -> (Vec<String>, serde_json::V
             name: Some("budget".into()),
             ..EncodingOptions::default()
         },
-        &WriterChoices {
-            blend_objects,
-            ..WriterChoices::default()
-        },
+        &WriterChoices { blend_objects },
     )
     .unwrap();
     let read = |f: &str| -> serde_json::Value {

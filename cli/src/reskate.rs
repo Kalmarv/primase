@@ -8,7 +8,8 @@
 //! if wanted (`budget-reskate-textures{max=N}`), `prepare-reskate-grinds` for grind curves (the writer builds no
 //! prism), `snap-reskate-markers` (the writer snaps no marker), the pause map if wanted
 //! (`prepare-reskate-pause-map{from=geometry,height=2160,extent=content}`, what the old writer always drew; without it
-//! the map has none) and, last, `prepare-reskate-overlays{step=0.004}` (the writer stacks no decal of its own).
+//! the map has none) and, last, `prepare-reskate-overlays{step=0.004}` (the writer stacks no decal of its own) and
+//! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own).
 use std::path::{Path, PathBuf};
 
 use primase_core::World;
@@ -55,11 +56,11 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
                 )
             }
             "--blend-grid" => {
-                choices.blend_grid = value()?
-                    .parse()
-                    .ok()
-                    .filter(|g: &f32| g.is_finite() && *g >= 0.0)
-                    .ok_or("reskate: --blend-grid is a size in metres (0: not cut)")?
+                return Err(
+                    "reskate: the blend grid is prepare-reskate-blend-order's: --passes \"..., \
+                            prepare-reskate-blend-order{grid=M}\""
+                        .into(),
+                );
             }
             _ => return Err(format!("reskate: unknown option {a}").into()),
         }

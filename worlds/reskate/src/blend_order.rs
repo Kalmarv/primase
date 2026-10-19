@@ -17,7 +17,7 @@
 //! Known risk: the tie order is measured, not explained by any code read. A runtime that changes it reorders the
 //! chain again (the mix stays smooth, as with shared MeshSets).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_meshops::vector::Vec3;
 
@@ -178,7 +178,17 @@ fn clip_edge(poly: &[ClipVertex], along_y: bool, k: f32, keep_above: bool) -> Ve
 /// it, and those crossing a border clipped to it, every vertex at least [`CELL_INSET`] inside; a clipped vertex's
 /// normal, UV and blend weight are interpolated from its triangle's. The count is of the triangles that were clipped.
 pub fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i32), Geometry>, usize) {
+    let (cells, clipped) = split_by_cell_counted(g, origin, cell);
+    (cells.into_iter().map(|(k, (h, _))| (k, h)).collect(), clipped)
+}
+
+/// Per cell (column, row): its triangles, and how many clipped triangles left a piece in it.
+type CountedCells = BTreeMap<(i32, i32), (Geometry, usize)>;
+
+/// [`split_by_cell`], each cell with the clipped triangles that left a piece in it.
+fn split_by_cell_counted(g: &Geometry, origin: Vec3, cell: f32) -> (CountedCells, usize) {
     let mut out: BTreeMap<(i32, i32), (Geometry, BTreeMap<u32, u32>)> = BTreeMap::new();
+    let mut into: BTreeMap<(i32, i32), usize> = BTreeMap::new();
     let mut clipped = 0;
     let world = |i: u32| {
         let p = g.vertex(i);
@@ -243,6 +253,7 @@ pub fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i
                     continue;
                 }
                 let (h, _) = out.entry((kx, ky)).or_default();
+                *into.entry((kx, ky)).or_default() += 1;
                 let base = (h.pos.len() / 3) as u32;
                 for v in &poly {
                     let mix = |s: &[f32], n: usize, i: usize| -> f32 {
@@ -264,7 +275,84 @@ pub fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i
             }
         }
     }
-    (out.into_iter().map(|(k, (h, _))| (k, h)).collect(), clipped)
+    (
+        out.into_iter()
+            .map(|(k, (h, _))| (k, (h, into.get(&k).copied().unwrap_or(0))))
+            .collect(),
+        clipped,
+    )
+}
+
+/// A chain object's place: its grid cell (column, row), axis and chain rank.
+pub type ChainKey = ((i32, i32), u8, u8);
+
+/// A tile's chain overlays as the chain form draws them: per (cell, axis, rank) each material's part of it, the
+/// triangles clipped into it, the box every rank of a cell and axis is padded to ([`ChainPlan::pad`]), the lift step
+/// per axis (`None`: some axis has none, the tile is unliftable), the triangles and those clipped, and each material's
+/// first use in the tile.
+#[derive(Clone, Debug, Default)]
+pub struct ChainPlan {
+    pub groups: BTreeMap<ChainKey, BTreeMap<usize, Geometry>>,
+    pub first_use: BTreeMap<usize, usize>,
+    pub clipped: BTreeMap<ChainKey, usize>,
+    pub boxes: BTreeMap<((i32, i32), u8), (Vec3, Vec3)>,
+    pub steps: Option<BTreeMap<u8, f32>>,
+    pub tris: usize,
+    pub clipped_total: usize,
+}
+
+/// The chain form of a tile translated to `at` whose chain parts are `parts` (material, chain rank, first use in the
+/// tile, geometry): each part split by dominant axis, cut on a `grid`-metre grid (0: not cut), each (cell, axis)'s
+/// box, the lift step of each axis. One function for `prepare-reskate-blend-order`, which records it, and the writer,
+/// which checks its record against it.
+pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32) -> ChainPlan {
+    let mut p = ChainPlan::default();
+    for (k, rank, _, g) in parts {
+        p.tris += g.idx.len() / 3;
+        for (axis, h) in split_by_axis(g) {
+            if grid > 0.0 {
+                let (cells, n) = split_by_cell_counted(&h, at, grid);
+                p.clipped_total += n;
+                for (cell, (hc, into)) in cells {
+                    p.groups.entry((cell, axis, *rank)).or_default().insert(*k, hc);
+                    *p.clipped.entry((cell, axis, *rank)).or_default() += into;
+                }
+            } else {
+                p.groups.entry(((0, 0), axis, *rank)).or_default().insert(*k, h);
+                p.clipped.entry(((0, 0), axis, *rank)).or_default();
+            }
+        }
+    }
+    let axes: BTreeSet<u8> = p.groups.keys().map(|&(_, axis, _)| axis).collect();
+    p.steps = axes
+        .iter()
+        .map(|&axis| lift_step(at, axis).map(|s| (axis, s)))
+        .collect::<Option<BTreeMap<u8, f32>>>();
+    p.first_use = parts.iter().map(|&(k, _, s, _)| (k, s)).collect();
+    let cells: BTreeSet<((i32, i32), u8)> = p.groups.keys().map(|&(cell, axis, _)| (cell, axis)).collect();
+    for (cell, axis) in cells {
+        let span = (cell, axis, 0)..=(cell, axis, u8::MAX);
+        if let Some(b) = bounds(p.groups.range(span).flat_map(|(_, g)| g.values())) {
+            p.boxes.insert((cell, axis), b);
+        }
+    }
+    p
+}
+
+impl ChainPlan {
+    /// Every rank of a (cell, axis) padded to its box, into the rank's part drawn first (first use): the chain form's
+    /// objects then all have the box as their bounds.
+    pub fn pad(&mut self) {
+        for (&(cell, axis), &(lo, hi)) in &self.boxes {
+            for (_, g) in self.groups.range_mut((cell, axis, 0)..=(cell, axis, u8::MAX)) {
+                let first = *g
+                    .keys()
+                    .min_by_key(|&k| self.first_use[k])
+                    .expect("a group has a part");
+                pad(g.get_mut(&first).expect("its part"), lo, hi, axis);
+            }
+        }
+    }
 }
 
 /// The box around every vertex of `gs` (`None`: no vertex).

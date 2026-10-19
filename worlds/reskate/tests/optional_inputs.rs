@@ -64,7 +64,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
             "lower-layered-reskate, prepare-reskate-textures, budget-reskate-textures{max=64}, \
              prepare-reskate-grinds, select-reskate-lights{per_cell=8,cell=200}, \
              prepare-reskate-water{extent=content,margin=400}, \
-             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}",
+             prepare-reskate-pause-map{from=geometry,height=720,extent=content}, prepare-reskate-overlays{step=0.004}, prepare-reskate-blend-order{grid=200}",
         )
         .unwrap();
     let mut report = RunReport::default();
@@ -82,6 +82,7 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
         count("prepare-reskate-grinds", "grind curves made prisms"),
         Some(0)
     );
+    assert_eq!(count("prepare-reskate-blend-order", "chain objects"), Some(0));
     assert_eq!(
         count("prepare-reskate-overlays", "overlay pieces lifted"),
         Some(0)
