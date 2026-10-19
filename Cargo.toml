@@ -15,7 +15,6 @@ members = [
     "toolkit/dxbc",
     "toolkit/shader",
     "toolkit/dxil",
-    "toolkit/frostbite",
     "toolkit/cache",
     "formats/gltf",
     "formats/web",
@@ -23,6 +22,7 @@ members = [
     "worlds/fromsoft",
     "worlds/reskate",
     "worlds/unity",
+    "worlds/frostbite",
     "worlds/gta",
 ]
 
@@ -64,7 +64,7 @@ primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-shader = { path = "toolkit/shader" }
 primase-dxil = { path = "toolkit/dxil" }
-primase-frostbite = { path = "toolkit/frostbite" }
+primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }

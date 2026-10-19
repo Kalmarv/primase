@@ -48,14 +48,6 @@ pub fn joaat_exact(bytes: &[u8]) -> u32 {
     h ^= h >> 11;
     h.wrapping_add(h << 15)
 }
-/// Frostbite TOC FNV-1: multiply by 0x01000193, xor sign-extended i8,
-/// wrapping u32; reduce modulo 0x01000193 once at the end. Default seed 0x811C9DC5.
-pub fn frostbite_toc(bytes: &[u8], seed: u32) -> u32 {
-    bytes
-        .iter()
-        .fold(seed, |h, &b| h.wrapping_mul(0x01000193) ^ (b as i8 as i32 as u32))
-        % 0x01000193
-}
 /// FNV-1a u32 over UTF-16LE bytes, seed 0x811C9DC5,
 /// multiplier 0x01000193; scene prototype key, without a terminator.
 pub fn fnv1a32_utf16le(s: &str) -> u32 {
@@ -133,8 +125,6 @@ mod tests {
         assert_eq!(crc32(b""), 0);
         assert_eq!(fromsoft_path("map\\MapStudio\\m11_01_00_00.msb"), 0xfbbb5962);
         assert_eq!(fromsoft_path("/map/mapstudio/m11_01_00_00.msb"), 0xfbbb5962);
-        assert_eq!(frostbite_toc(&[0, 127, 128, 255], 0x811c9dc5), 0x529916);
-        assert_eq!(frostbite_toc(b"levels/test", 0x811c9dc5), 0xb97702);
         assert_eq!(forza_string("NormalTiling"), 0xd7f0e387);
         assert_eq!(forza_string("A😀é"), 0x6f4eaf8e);
         assert_eq!(

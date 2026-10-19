@@ -3,7 +3,7 @@
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "toolkit I/O: opens the container files of a data folder the caller names"
+    reason = "reader I/O: opens the container files of a data folder the caller names"
 )]
 
 use std::collections::BTreeMap;

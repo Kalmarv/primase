@@ -2,8 +2,6 @@
 //! and the chunk table, each found through a perfect hash over its keys (lowercase bundle names, chunk GUIDs).
 //! Base-game TOCs store names Huffman-coded (flag 4); Patch TOCs as plain strings, which is what [`write`] writes.
 
-use primase_hash::frostbite_toc;
-
 use crate::{Rd, Result, align, bad, latin1};
 
 pub const ENVELOPE: usize = 0x22C;
@@ -190,8 +188,12 @@ pub fn read(data: &[u8]) -> Result<Toc> {
     Ok(toc)
 }
 
+/// The TOC's FNV-1: multiply by 0x01000193, xor the sign-extended byte, wrapping; reduced modulo 0x01000193 once at
+/// the end. The tables' default seed is 0x811C9DC5.
 fn hash_with(key: &[u8], seed: u32) -> u32 {
-    frostbite_toc(key, seed)
+    key.iter()
+        .fold(seed, |h, &b| h.wrapping_mul(0x01000193) ^ (b as i8 as i32 as u32))
+        % 0x01000193
 }
 
 /// The perfect hash the TOC stores over `keys`: (hash map, key index per slot). Mirrors the game tools: buckets by
@@ -394,4 +396,14 @@ pub fn write(bundles: &[(String, Vec<u8>)], chunks: &[TocChunk], flags: u32) -> 
     }
     put(d, nameso, &names);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Reference values of the TOC hash (independent Python TOC hashing).
+    #[test]
+    fn toc_hash_reference_values() {
+        assert_eq!(super::hash_with(&[0, 127, 128, 255], 0x811c9dc5), 0x529916);
+        assert_eq!(super::hash_with(b"levels/test", 0x811c9dc5), 0xb97702);
+    }
 }

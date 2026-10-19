@@ -10,7 +10,6 @@ publish.workspace = true
 
 [dependencies]
 primase-bytes.workspace = true
-primase-hash.workspace = true
 primase-compress.workspace = true
 thiserror.workspace = true
 
@@ -19,3 +18,7 @@ primase-testdata.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.primase]
+kind = "engine"
+names = ["frostbite"]

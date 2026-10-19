@@ -1,6 +1,6 @@
 //! Gates of the post-compile Frostbite readers and writers (`primase_reskate::postcompile`).
 //!
-//! The containers' synthetic gates are in `toolkit/frostbite/tests/containers.rs`.
+//! The containers' synthetic gates are in `worlds/frostbite/tests/containers.rs`.
 //! - `patch_round_trip` (`PRIMASE_RESKATE_PATCH`, a Patch folder written by ReSkate Studio's compile, plus
 //!   `PRIMASE_SKATE_DATA`, the game's `Data` folder, and `PRIMASE_OODLE9`, the game's Oodle DLL, for the bundles a
 //!   Patch places in the base game): every TOC, bundle region, bundle manifest, shader block depot, shader lookup

@@ -25,12 +25,6 @@ removed_when = "meshes reach the writer as core.mesh through the reader's load s
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
 [[name]]
-crate = "toolkit/frostbite"
-word = "frostbite"
-reason = "the engine's containers"
-removed_when = "toolkit/frostbite moves to worlds/frostbite, the engine-family crate"
-
-[[name]]
 crate = "toolkit/hash"
 word = "fromsoft"
 reason = "fromsoft_path, one game's path hash framing"
@@ -41,12 +35,6 @@ crate = "toolkit/hash"
 word = "forza"
 reason = "forza_string, a hash with no user yet"
 removed_when = "it moves into the Forza reader when one exists, or is deleted"
-
-[[name]]
-crate = "toolkit/hash"
-word = "frostbite"
-reason = "frostbite_toc, the engine's TOC hash"
-removed_when = "it moves into the frostbite crate's TOC code, its only user"
 
 [[name]]
 crate = "worlds/fromsoft"
