@@ -16,7 +16,7 @@ mod read;
 pub mod sekiro;
 pub use archive::{Archive, NameDictionary};
 pub use binder::{Binder, BinderFile};
-pub use passes::layer_bake;
+pub use passes::{geometry, layer_bake};
 pub use read::{archive, binder, dcx};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

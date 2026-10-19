@@ -23,7 +23,8 @@
 
 use std::collections::BTreeMap;
 
-use primase_fromsoft::flver::{MaterialGeometry, Model};
+use primase_fromsoft::flver::Model;
+use primase_fromsoft::geometry::MaterialGeometry;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
 use primase_testdata::real_data;
 use serde_json::Value as Json;

@@ -1,2 +1,4 @@
-//! The engine-wide passes' machinery: the static layered-shader bake ([`layer_bake`]).
+//! The engine-wide passes' machinery: the repairs a geometry lowering may choose ([`geometry`]) and the static
+//! layered-shader bake ([`layer_bake`]).
+pub mod geometry;
 pub mod layer_bake;
