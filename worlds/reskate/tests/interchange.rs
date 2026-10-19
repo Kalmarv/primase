@@ -297,6 +297,14 @@ fn read(dir: &Path) -> (World, interchange::ReadReport) {
     (w, rep)
 }
 
+/// [`read`], then every file the scene references loaded: what a world must hold to be written (the writer reads no
+/// file).
+fn read_loaded(dir: &Path) -> (World, interchange::ReadReport) {
+    let (mut w, rep) = read(dir);
+    interchange::load(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    (w, rep)
+}
+
 fn read_err(dir: &Path) -> String {
     let mut w = World::new();
     match interchange::read(dir, &mut w) {
@@ -317,7 +325,7 @@ fn layered_materials_round_trip_and_follow_edits() {
         null, {"material":"trim_red","uv":0}, {"material":"glass"}],
         "weights":{"attribute":"COLOR_1","mapping":"rgb_product_4","extra":7}});
     let dir = fixture_with("layered", &input.to_string(), |_| {});
-    let (mut w, _) = read(&dir);
+    let (mut w, _) = read_loaded(&dir);
     let (entity, material) = w.iter::<primase_core::LayeredMaterial>().next().unwrap();
     assert_eq!(material.layers.len(), 4);
     assert!(material.layers[1].is_none());
@@ -451,7 +459,7 @@ const ALL_FILES: &[&str] = &[
 #[test]
 fn round_trip_is_exact() {
     let src = fixture("rt_src");
-    let (w, rep) = read(&src);
+    let (w, rep) = read_loaded(&src);
     assert_eq!(rep.tolerated.len(), 0, "{:?}", rep.tolerated);
     assert_eq!(
         rep.warnings,
@@ -470,7 +478,7 @@ fn round_trip_is_exact() {
     interchange::write(&w, &out2).unwrap();
     same_tree(&out, &out2, &[&["scene.json"], ALL_FILES].concat());
     // and reading the output gives a world that writes the same again
-    let (w3, _) = read(&out);
+    let (w3, _) = read_loaded(&out);
     let out3 = tmp("rt_out3");
     interchange::write(&w3, &out3).unwrap();
     same_tree(&out, &out3, &[&["scene.json"], ALL_FILES].concat());
@@ -615,7 +623,7 @@ fn parts_follow_a_pass_that_rebuilds_the_primitives() {
 
 #[test]
 fn edits_are_written() {
-    let (mut w, _) = read(&fixture("edit_src"));
+    let (mut w, _) = read_loaded(&fixture("edit_src"));
     // move a placement, give a light a new group and source, drop a prototype's placements' sources
     let (pe, _) = w.iter::<Instance>().next().unwrap();
     w.get_mut::<Transform>(pe).unwrap().cols[3] = [1., 2., 3.];
@@ -639,7 +647,7 @@ fn edits_are_written() {
 /// carries them; a target that needs rigid ones declares it and is given bake-nonrigid).
 #[test]
 fn mirrored_and_sheared_placements_round_trip() {
-    let (mut w, _) = read(&fixture("nonrigid_src"));
+    let (mut w, _) = read_loaded(&fixture("nonrigid_src"));
     let placements: Vec<_> = w.iter::<Instance>().map(|(e, _)| e).take(2).collect();
     assert_eq!(placements.len(), 2, "the fixture has two placements");
     let mirrored = Transform {
@@ -689,7 +697,7 @@ fn placement_priority_round_trips_and_rejects_overflow() {
         bytes[at..at + 4].copy_from_slice(&((old & !0xF00) | unknown | (priority << 8)).to_le_bytes());
     }
     std::fs::write(&path, &bytes).unwrap();
-    let (mut w, _) = read(&src);
+    let (mut w, _) = read_loaded(&src);
     let priorities: Vec<_> = w.iter::<primase_core::Priority>().map(|(_, p)| p.0).collect();
     assert_eq!(priorities, [0, 1, 3, 15]);
     let out = tmp("priority_out");
@@ -783,7 +791,7 @@ fn chunked_tables_keep_their_chunks() {
         put(d, "collision/c0.bin", &tables::write_soup(&soup()));
         put(d, "collision/c1.bin", &tables::write_soup(&soup()));
     });
-    let (w, rep) = read(&src);
+    let (w, rep) = read_loaded(&src);
     assert_eq!(w.iter::<Instance>().count(), 3);
     assert_eq!(rep.tolerated.len(), 1, "{:?}", rep.tolerated); // the list item {"file"} without sha256
     let out = tmp("chunks_out");
@@ -819,7 +827,7 @@ fn sha256_is_checked_and_rewritten() {
         ),
     );
     let src = fixture_with("sha_src", &m, |_| {});
-    let (w, _) = read(&src);
+    let (w, _) = read_loaded(&src);
     let out = tmp("sha_out");
     interchange::write(&w, &out).unwrap();
     let got = manifest(&out);
@@ -1361,7 +1369,7 @@ fn soups_become_core_collision() {
 #[test]
 fn collision_placed_by_an_entity_is_a_world_soup() {
     use primase_core::{Collision, Surfaces};
-    let (mut w, _) = read(&fixture("collision_self"));
+    let (mut w, _) = read_loaded(&fixture("collision_self"));
     let before = w.iter::<components::SkateCollision>().count();
     let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt").unwrap();
     let e = w.spawn();
@@ -1403,7 +1411,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
 #[test]
 fn mirrored_collision_keeps_its_fronts() {
     use primase_core::{Collision, Surfaces};
-    let (mut w, _) = read(&fixture("collision_mirror"));
+    let (mut w, _) = read_loaded(&fixture("collision_mirror"));
     let before = w.iter::<components::SkateCollision>().count();
     let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
     // a triangle facing up (+y), placed through a mirror in x
@@ -1455,7 +1463,7 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
     use primase_core::{LodForm, Lods, MaterialVariants, MeshFile};
     let input = lods_manifest();
     let src = fixture_with("lods_src", &input.to_string(), |_| {});
-    let (w, rep) = read(&src);
+    let (w, rep) = read_loaded(&src);
     assert_eq!(rep.tolerated.len(), 0, "{:?}", rep.tolerated);
     // the forms come after every other entity: the rest keep the ids of the scene without them
     let (plain, _) = read(&fixture("lods_plain"));
@@ -1520,7 +1528,7 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
 fn a_selected_form_is_written_as_the_prototype() {
     use primase_core::pass::{Pass, PassLog};
     let src = fixture_with("lods_select", &lods_manifest().to_string(), |_| {});
-    let (mut w, _) = read(&src);
+    let (mut w, _) = read_loaded(&src);
     let mut log = PassLog::default();
     primase_core::SelectLod::default().run(&mut w, &mut log).unwrap();
     assert_eq!(log.counts["prototypes drawn with another form"], 1);
@@ -1534,7 +1542,7 @@ fn a_selected_form_is_written_as_the_prototype() {
     assert!(p[0].get("lods").is_none() && p[0].get("lod_default").is_none());
     assert!(p[1].get("detail").is_none());
     // the finest instead: the prototypes as they are without levels of detail
-    let (mut w, _) = read(&src);
+    let (mut w, _) = read_loaded(&src);
     primase_core::SelectLod {
         choice: primase_core::LodChoice::Finest,
     }
@@ -1623,7 +1631,7 @@ fn levels_of_detail_defaults_are_tolerated_and_written_in_full() {
     m["prototypes"][0]["lods"][1] = json!({"parts": []});
     m["prototypes"][1]["lods"] = json!([]);
     let dir = fixture_with("lods_tolerated", &m.to_string(), |_| {});
-    let (w, rep) = read(&dir);
+    let (w, rep) = read_loaded(&dir);
     for t in [
         "explicit \"detail\": 0 (written absent)",
         "lod without \"detail\" (written 0)",
@@ -1637,4 +1645,121 @@ fn levels_of_detail_defaults_are_tolerated_and_written_in_full() {
     let p = &manifest(&out)["prototypes"];
     assert!(p[0].get("detail").is_none() && p[1].get("lods").is_none());
     assert_eq!(p[0]["lods"][1], json!({"detail": 0, "mesh": null, "parts": []}));
+}
+
+/// The fixture with a pause-map picture (`ui/pause.png`, 2 x 2).
+fn fixture_with_pause(name: &str) -> PathBuf {
+    let manifest = MANIFEST.replace(
+        r#""max_render_edge": 48,"#,
+        r#""max_render_edge": 48, "pause_map": {"image": "ui/pause.png", "bounds": [-10, -10, 10, 10]},"#,
+    );
+    fixture_with(name, &manifest, |d| {
+        put(d, "ui/pause.png", &png(2, 2, [10, 20, 30, 255]))
+    })
+}
+
+/// The writer reads no file and the loaded payloads are the authority: with the source folder gone, an unchanged
+/// world writes every file as it was read, byte for byte; an edited texture, mesh and pause picture are written as
+/// edited, though their file references still name the originals; a scene read but not loaded is refused.
+#[test]
+fn loaded_payloads_are_the_authority() {
+    let src = fixture_with_pause("authority_src");
+    let files: Vec<&str> = [&["ui/pause.png"], ALL_FILES].concat();
+    let original: std::collections::BTreeMap<&str, Vec<u8>> = files
+        .iter()
+        .map(|f| (*f, std::fs::read(src.join(f)).unwrap()))
+        .collect();
+    let (unloaded, _) = read(&src);
+    let (mut w, _) = read_loaded(&src);
+    std::fs::remove_dir_all(&src).unwrap();
+    // read but not loaded: refused, whatever the folder holds
+    let e = interchange::write(&unloaded, &tmp("authority_unloaded")).unwrap_err();
+    assert!(e.to_string().contains("load the scene before writing it"), "{e}");
+    // unchanged, the source gone: every file as it was read
+    let out = tmp("authority_same");
+    let report = interchange::write(&w, &out).unwrap();
+    for (f, bytes) in &original {
+        assert_eq!(&std::fs::read(out.join(f)).unwrap(), bytes, "{f}");
+    }
+    assert!(
+        report.copied.iter().any(|f| f == "ui/pause.png"),
+        "{:?}",
+        report.copied
+    );
+    // edited: a texture's pixel, a mesh's vertex, the picture's pixel
+    let (te, _) = w
+        .iter::<primase_core::TextureFile>()
+        .find(|(_, f)| f.path.ends_with("wall_d.png"))
+        .unwrap();
+    w.get_mut::<primase_core::Texture>(te).unwrap().levels[0][0] = 7;
+    let (me, _) = w
+        .iter::<primase_core::MeshFile>()
+        .find(|(_, f)| f.mesh == 1)
+        .unwrap();
+    {
+        let mesh = w.get_mut::<primase_core::Mesh>(me).unwrap();
+        let mut first = mesh.primitive_mut(0).unwrap();
+        if let Some(primase_core::Stream::F32x3(p)) =
+            first.streams_mut().get_mut(&primase_core::Semantic::Position)
+        {
+            p[0][0] += 1.0;
+        }
+    }
+    w.resource_mut::<components::SkatePauseImage>().unwrap().rgba[0] = 99;
+    let out = tmp("authority_edit");
+    interchange::write(&w, &out).unwrap();
+    let (mut back, _) = read(&out);
+    interchange::load(&out, &mut back).unwrap();
+    let texture = back
+        .iter::<primase_core::TextureFile>()
+        .find(|(_, f)| f.path.ends_with("wall_d.png"))
+        .map(|(e, _)| back.get::<primase_core::Texture>(e).unwrap())
+        .unwrap();
+    assert_eq!(texture.levels[0][0], 7);
+    assert_ne!(
+        std::fs::read(out.join("textures/wall_d.png")).unwrap(),
+        original["textures/wall_d.png"]
+    );
+    assert_eq!(
+        back.resource::<components::SkatePauseImage>().unwrap().rgba[0],
+        99
+    );
+    // the edited mesh drew from a GLB another prototype shares: it gets a file of its own beside it (its mesh 0), and
+    // the shared file passes through for the other prototype
+    let m = manifest(&out);
+    let proto = |id: &str| {
+        m["prototypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let shared = proto("shared");
+    assert_eq!(shared["glb"], json!("prototypes/wall.shared.glb"), "{shared}");
+    assert!(shared.get("mesh").is_none(), "{shared}");
+    assert_eq!(proto("wall_01")["glb"], json!("prototypes/wall.glb"));
+    assert_eq!(
+        std::fs::read(out.join("prototypes/wall.glb")).unwrap(),
+        original["prototypes/wall.glb"]
+    );
+    let (shared_e, _) = back
+        .iter::<primase_core::MeshFile>()
+        .find(|(_, f)| f.path.ends_with("wall.shared.glb"))
+        .unwrap();
+    let pos = &back.get::<primase_core::Mesh>(shared_e).unwrap().primitives()[0].streams
+        [&primase_core::Semantic::Position];
+    let primase_core::Stream::F32x3(pos) = pos else {
+        panic!("{pos:?}")
+    };
+    assert_eq!(
+        Some(pos[0]),
+        match &w.get::<primase_core::Mesh>(me).unwrap().primitives()[0].streams
+            [&primase_core::Semantic::Position]
+        {
+            primase_core::Stream::F32x3(p) => p.first().copied(),
+            _ => None,
+        }
+    );
 }

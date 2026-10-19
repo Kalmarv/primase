@@ -1765,40 +1765,137 @@ pub struct LoadReport {
     pub pause_image: bool,
 }
 
-/// Read every file a scene read by [`read`] references into the world: each `core.mesh_file` as `core.mesh` (the glTF
-/// crate's GLB reader), each `core.texture_file` without pixels as `core.texture` (the image toolkit's PNG and DDS
-/// readers), paths relative to the scene folder `dir`, and the scene's pause-map picture (`pause_map`, decoded to
-/// RGBA8) as [`crate::passes::SkatePauseImage`] for `prepare-reskate-pause-map`. The file references stay, as the
-/// payloads' origin.
+/// Read every file a scene read by [`read`] references into the world, each file once: each `core.mesh_file` as
+/// `core.mesh` (the glTF crate's GLB reader; the mesh's materials from the file reference), each `core.texture_file`
+/// without pixels as `core.texture` (the image toolkit's PNG and DDS decoding), paths relative to the scene folder
+/// `dir`, and the scene's pause-map picture (`pause_map`, decoded to RGBA8) as [`crate::components::SkatePauseImage`]
+/// for `prepare-reskate-pause-map`. Each payload keeps the bytes it was read from and their fingerprint
+/// ([`crate::components::LoadedFile`]), so a writer passes an unchanged payload through without reopening the file;
+/// the file references stay, as the payloads' origin. Everything is read and checked before the world changes.
 #[allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "reader I/O: reads the scene's pause-map picture"
+    reason = "reader I/O: reads the scene's GLBs, textures and pause-map picture"
 )]
 pub fn load(dir: &Path, world: &mut primase_core::World) -> Result<LoadReport> {
-    let mut report = LoadReport {
-        meshes: primase_gltf::load_mesh_files(world, dir)?,
-        textures: primase_image::load_textures(world, dir)?,
-        pause_image: false,
+    use crate::components::LoadedFile;
+    use crate::components::loaded::{image_fingerprint, mesh_fingerprint, texture_fingerprint};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let read_bytes = |path: &Path| -> Result<Arc<[u8]>> {
+        std::fs::read(path)
+            .map(Arc::from)
+            .map_err(|source| crate::Error::Io {
+                path: path.to_owned(),
+                source,
+            })
     };
+    let mut report = LoadReport::default();
+    // textures without pixels
+    let jobs: Vec<(primase_core::Entity, std::path::PathBuf)> = world
+        .iter::<TextureFile>()
+        .filter(|(e, _)| !world.has::<primase_core::Texture>(*e))
+        .map(|(e, f)| (e, dir.join(&f.path)))
+        .collect();
+    let mut textures: BTreeMap<std::path::PathBuf, (primase_core::Texture, LoadedFile)> = BTreeMap::new();
+    let mut loaded_textures = Vec::new();
+    for (e, path) in jobs {
+        if !textures.contains_key(&path) {
+            let bytes = read_bytes(&path)?;
+            let t = primase_image::decode_texture_file(
+                &bytes,
+                &path.display().to_string(),
+                &mut report.textures,
+            )?;
+            let file = LoadedFile {
+                decoded: texture_fingerprint(&t),
+                bytes,
+            };
+            textures.insert(path.clone(), (t, file));
+            report.textures.files += 1;
+        }
+        loaded_textures.push((e, textures[&path].clone()));
+        report.textures.textures += 1;
+    }
+    // every mesh file, each GLB parsed once
+    let jobs: Vec<(primase_core::Entity, MeshFile)> =
+        world.iter::<MeshFile>().map(|(e, f)| (e, f.clone())).collect();
+    let mut glbs: BTreeMap<std::path::PathBuf, (primase_gltf::Gltf, Arc<[u8]>)> = BTreeMap::new();
+    let mut loaded_meshes = Vec::new();
+    for (e, mf) in jobs {
+        let path = dir.join(&mf.path);
+        if !glbs.contains_key(&path) {
+            let bytes = read_bytes(&path)?;
+            let gltf = primase_gltf::Gltf::from_glb(&bytes)
+                .map_err(|err| crate::Error::Scene(format!("{}: {err}", path.display())))?;
+            glbs.insert(path.clone(), (gltf, bytes));
+            report.meshes.files += 1;
+        }
+        let (gltf, bytes) = &glbs[&path];
+        let read = gltf
+            .read_mesh(mf.mesh as usize)
+            .map_err(|err| crate::Error::Scene(format!("{}: {err}", path.display())))?;
+        if read.primitives.len() != mf.materials.len() {
+            return Err(crate::Error::Scene(format!(
+                "{e:?}: {} mesh {} has {} primitives, core.mesh_file lists {} materials",
+                path.display(),
+                mf.mesh,
+                read.primitives.len(),
+                mf.materials.len()
+            )));
+        }
+        let mut mesh = read.to_mesh();
+        for (mut p, m) in mesh.primitives_mut().zip(&mf.materials) {
+            *p.material_mut() = *m;
+        }
+        report.meshes.primitives += mesh.primitives().len() as u64;
+        report.meshes.meshes += 1;
+        let file = LoadedFile {
+            bytes: bytes.clone(),
+            decoded: mesh_fingerprint(&mesh),
+        };
+        loaded_meshes.push((e, mesh, file));
+    }
+    // the scene's own pause-map picture
     let image_file = world
         .resource::<crate::components::SkateScene>()
         .and_then(|s| s.pause_map.as_ref())
         .map(|p| p.image_file.clone());
-    if let Some(file) = image_file {
-        let bytes = std::fs::read(&file).map_err(|source| crate::Error::Io {
-            path: file.clone(),
-            source,
-        })?;
-        let src = crate::texture::TexSource::from_file_bytes(&file.display().to_string(), bytes, None, None)?;
-        let rgba = src
-            .decode(0, src.width, src.height)?
-            .ok_or_else(|| crate::Error::Scene("pause_map: the image cannot be decoded".into()))?;
-        world.insert_resource(crate::passes::SkatePauseImage {
-            width: src.width,
-            height: src.height,
-            rgba,
-        });
+    let pause = match image_file {
+        Some(file) => {
+            let bytes = read_bytes(&file)?;
+            let src = crate::texture::TexSource::from_file_bytes(
+                &file.display().to_string(),
+                bytes.to_vec(),
+                None,
+                None,
+            )?;
+            let rgba = src
+                .decode(0, src.width, src.height)?
+                .ok_or_else(|| crate::Error::Scene("pause_map: the image cannot be decoded".into()))?;
+            Some(crate::components::SkatePauseImage {
+                width: src.width,
+                height: src.height,
+                file: Some(LoadedFile {
+                    decoded: image_fingerprint(src.width, src.height, &rgba),
+                    bytes,
+                }),
+                rgba,
+            })
+        }
+        None => None,
+    };
+    for (e, (t, file)) in loaded_textures {
+        world.insert(e, t);
+        world.insert(e, file);
+    }
+    for (e, mesh, file) in loaded_meshes {
+        world.insert(e, mesh);
+        world.insert(e, file);
+    }
+    if let Some(p) = pause {
+        world.insert_resource(p);
         report.pause_image = true;
     }
     Ok(report)

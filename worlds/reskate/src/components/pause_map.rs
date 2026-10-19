@@ -3,12 +3,15 @@
 
 use primase_core::Resource;
 
-/// The scene's own pause-map picture, decoded (RGBA8, row 0 north), as the reader's loader puts it in the world.
+/// The scene's own pause-map picture, decoded (RGBA8, row 0 north), as the reader's loader puts it in the world, with
+/// the file it was read from when it was ([`crate::components::loaded`]: its bytes, written back while the picture is
+/// unchanged).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkatePauseImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub file: Option<crate::components::LoadedFile>,
 }
 
 impl Resource for SkatePauseImage {

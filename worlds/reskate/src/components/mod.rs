@@ -31,10 +31,12 @@ use serde_json::{Map, Value};
 
 pub mod collision;
 pub mod layered;
+pub mod loaded;
 pub mod pause_map;
 
 pub use collision::SkateRock;
 pub use layered::{BlendOpacity, VertexBlend};
+pub use loaded::LoadedFile;
 pub use pause_map::{SkatePauseImage, SkatePausePicture};
 
 /// Keys of a manifest object this crate does not model, carried untouched (`extras`, `extensions`, unknown keys).

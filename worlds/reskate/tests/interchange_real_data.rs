@@ -296,6 +296,11 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
     }
     let rep = ours.expect("accepted");
     g.tolerated = rep.tolerated.clone();
+    // the writer reads no file: what it writes is what the scene loads into the world
+    if let Err(e) = interchange::load(dir, &mut w) {
+        g.manifests.fail(&item, format!("load failed: {e}"));
+        return (g, false);
+    }
     if out.exists() {
         std::fs::remove_dir_all(out).expect("clear the output");
     }

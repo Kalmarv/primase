@@ -297,6 +297,7 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![1, 2, 3, 255],
+            file: None,
         });
         image.run(&mut w, &mut PassLog::default()).unwrap();
         assert_eq!(

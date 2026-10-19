@@ -48,38 +48,7 @@ pub fn load_textures(world: &mut World, base_dir: &Path) -> Result<TextureLoadRe
                 path: path.clone(),
                 source,
             })?;
-            let texture = if bytes.starts_with(b"DDS ") {
-                primase_dds::read(&bytes)?
-            } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                let png = read_png(&bytes)?;
-                for kind in png.ignored_ancillary {
-                    *report
-                        .ignored_ancillary
-                        .entry(String::from_utf8_lossy(&kind).into_owned())
-                        .or_default() += 1;
-                }
-                let (format, level) = match png.image.samples {
-                    Samples::U8(v) => (TexFormat::Rgba8Unorm, v),
-                    Samples::U16(v) => (
-                        TexFormat::Rgba16Unorm,
-                        v.into_iter().flat_map(|v| v.to_le_bytes()).collect(),
-                    ),
-                };
-                Texture {
-                    width: png.image.width,
-                    height: png.image.height,
-                    format,
-                    levels: vec![level],
-                    color_space: ColorSpace::Srgb,
-                    role: TexRole::Other,
-                    normal: None,
-                }
-            } else {
-                return Err(Error::Invalid(format!(
-                    "{}: unsupported texture signature",
-                    path.display()
-                )));
-            };
+            let texture = decode_texture_file(&bytes, &path.display().to_string(), &mut report)?;
             files.insert(path.clone(), texture);
             report.files += 1;
         }
@@ -91,6 +60,41 @@ pub fn load_textures(world: &mut World, base_dir: &Path) -> Result<TextureLoadRe
     }
     Ok(report)
 }
+/// One texture file's bytes (PNG or DDS, told by their signature) decoded as [`load_textures`] decodes them: DDS keeps
+/// its stored levels and colour-space tags; PNG its 8- or 16-bit samples, sRGB, no transfer. `what` names the file in
+/// errors; PNG ancillary chunks it skips are counted in `report`.
+pub fn decode_texture_file(bytes: &[u8], what: &str, report: &mut TextureLoadReport) -> Result<Texture> {
+    Ok(if bytes.starts_with(b"DDS ") {
+        primase_dds::read(bytes)?
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let png = read_png(bytes)?;
+        for kind in png.ignored_ancillary {
+            *report
+                .ignored_ancillary
+                .entry(String::from_utf8_lossy(&kind).into_owned())
+                .or_default() += 1;
+        }
+        let (format, level) = match png.image.samples {
+            Samples::U8(v) => (TexFormat::Rgba8Unorm, v),
+            Samples::U16(v) => (
+                TexFormat::Rgba16Unorm,
+                v.into_iter().flat_map(|v| v.to_le_bytes()).collect(),
+            ),
+        };
+        Texture {
+            width: png.image.width,
+            height: png.image.height,
+            format,
+            levels: vec![level],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Other,
+            normal: None,
+        }
+    } else {
+        return Err(Error::Invalid(format!("{what}: unsupported texture signature")));
+    })
+}
+
 pub(crate) fn level_dimensions(t: &Texture, level: usize) -> Result<(u32, u32)> {
     if t.width == 0
         || t.height == 0

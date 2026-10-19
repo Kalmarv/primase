@@ -157,6 +157,8 @@ pub fn target() -> primase_core::pass::Target {
         .legal(SkateRegionClip::NAME)
         .legal(SkatePauseImage::NAME)
         .legal(SkatePausePicture::NAME)
+        // what the scene loader kept of the files it read: the payloads beside it are what is written
+        .legal(crate::components::LoadedFile::NAME)
         .legal(VertexBlend::NAME)
         .legal(BlendOpacity::NAME)
 }

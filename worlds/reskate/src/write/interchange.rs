@@ -1,7 +1,10 @@
-//! Writing a world back as a scene folder: `scene.json`, the binary tables, and the referenced files: those the world
-//! names a source file for (`core.texture_file`, `core.mesh_file`, the pause map's) copied byte for byte, those it
-//! holds only in memory encoded here (a prototype's `core.mesh` as its GLB, geometry only, the manifest linking the
-//! materials, by the glTF writer; a texture's `core.texture` level 0 as its PNG, by the image toolkit).
+//! Writing a world back as a scene folder: `scene.json`, the binary tables, and the files they reference, from the
+//! payloads the world holds: a texture's `core.texture`, a prototype's `core.mesh`, the scene's pause-map picture
+//! (`skate.pause_image`). The payload is the authority: one still as the scene loader read it (its fingerprint the
+//! one its [`crate::components::LoadedFile`] records) is written as the bytes it was read from, byte for byte; one
+//! that changed, or that was made in memory, is encoded here (a mesh as its GLB, geometry only, the manifest linking
+//! the materials, by the glTF writer; a texture's level 0 and the picture as PNG, by the image toolkit). The writer
+//! reads no file: a scene read but not loaded is refused.
 //!
 //! The manifest keeps the top-level key order the reader saw (and writes lists that were present but are empty);
 //! inside an item keys come in the specification's order, then the item's other keys in theirs. Floats are written
@@ -11,20 +14,21 @@
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "writer I/O: writes the scene folder and copies the files it references"
+    reason = "writer I/O: writes the scene folder"
 )]
 
 use std::collections::BTreeMap;
-use std::path::{Component as PathComponent, Path, PathBuf};
+use std::path::{Component as PathComponent, Path};
+use std::sync::Arc;
 
 use primase_core::{
     Collision, Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalX, NormalZ,
-    Priority, Source, Texture, TextureFile, Tile, Transform, World,
+    Priority, Source, Texture, Tile, Transform, World,
 };
 
+use crate::components::loaded::{image_fingerprint, mesh_fingerprint, texture_fingerprint};
 use crate::components::*;
 use crate::interchange::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
-use crate::read::interchange::sha256_file;
 use crate::{Error, Result};
 use primase_core::json::{f32_value, f32s_value, f64_value};
 use serde_json::{Map, Value};
@@ -34,7 +38,7 @@ use serde_json::{Map, Value};
 pub struct WriteReport {
     /// Table files written (relative paths).
     pub tables: Vec<String>,
-    /// Files copied (relative paths), and their bytes.
+    /// Files written as the bytes the loader read them from (relative paths), and their bytes.
     pub copied: Vec<String>,
     pub copied_bytes: u64,
 }
@@ -43,10 +47,42 @@ fn bad(msg: impl Into<String>) -> Error {
     Error::Write(msg.into())
 }
 
+/// The file of its own an edited mesh of a shared GLB `path` gets: beside it, named after its prototype `id`
+/// (`prototypes/wall.glb`, `shared` -> `prototypes/wall.shared.glb`).
+fn own_glb_path(path: &str, id: &str) -> String {
+    let (dir, file) = path.rsplit_once('/').map_or(("", path), |(d, f)| (d, f));
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    let safe: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if dir.is_empty() {
+        format!("{stem}.{safe}.glb")
+    } else {
+        format!("{dir}/{stem}.{safe}.glb")
+    }
+}
+
 /// What goes at one output path.
 enum Out {
     Bytes(Vec<u8>),
-    Copy(PathBuf),
+    /// A loaded file's own bytes, its payload unchanged.
+    Original(Arc<[u8]>),
+}
+
+impl Out {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Out::Bytes(b) => b,
+            Out::Original(b) => b,
+        }
+    }
 }
 
 /// A relative path as path parts under the output folder; refuses paths that leave it.
@@ -81,8 +117,7 @@ impl Plan {
                 self.files.insert(key, (rel.to_owned(), out));
                 Ok(())
             }
-            Some((_, Out::Copy(a))) if matches!(&out, Out::Copy(b) if b == a) => Ok(()),
-            Some((_, Out::Bytes(a))) if matches!(&out, Out::Bytes(b) if b == a) => Ok(()),
+            Some((_, a)) if a.bytes() == out.bytes() => Ok(()),
             Some(_) => Err(bad(format!("two different files would be written to '{rel}'"))),
         }
     }
@@ -129,13 +164,13 @@ pub fn write(w: &World, out: &Path) -> Result<WriteReport> {
                 })?;
                 report.tables.push(rel.clone());
             }
-            Out::Copy(src) => {
-                let n = std::fs::copy(src, &path).map_err(|source| Error::Io {
-                    path: src.clone(),
+            Out::Original(b) => {
+                std::fs::write(&path, b).map_err(|source| Error::Io {
+                    path: path.clone(),
                     source,
                 })?;
                 report.copied.push(rel.clone());
-                report.copied_bytes += n;
+                report.copied_bytes += b.len() as u64;
             }
         }
     }
@@ -236,14 +271,19 @@ impl Writer<'_> {
         })
     }
 
-    fn copy(&mut self, f: &FileRef, src: &Path) -> Result<FileRef> {
-        self.plan.add(&f.path, Out::Copy(src.to_owned()))?;
+    /// A loaded file's own `bytes` (its payload unchanged) written to `f`'s path; its digest when the reference has one.
+    fn original(&mut self, f: &FileRef, bytes: &Arc<[u8]>) -> Result<FileRef> {
+        use sha2::{Digest, Sha256};
+        let sha256 = f.sha256.as_ref().map(|_| {
+            Sha256::digest(&bytes[..])
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        });
+        self.plan.add(&f.path, Out::Original(bytes.clone()))?;
         Ok(FileRef {
             path: f.path.clone(),
-            sha256: match &f.sha256 {
-                Some(_) => Some(sha256_file(src)?),
-                None => None,
-            },
+            sha256,
         })
     }
 
@@ -427,7 +467,31 @@ impl Writer<'_> {
         let pause = match &scene.pause_map {
             None => None,
             Some(pm) => {
-                let image = self.copy(&pm.image, &pm.image_file)?;
+                let img = self.w.resource::<SkatePauseImage>().ok_or_else(|| {
+                    bad("the scene names a pause-map picture that is not loaded (skate.pause_image): load the scene \
+                         before writing it (interchange::load); the writer reads no file")
+                })?;
+                let unchanged = img
+                    .file
+                    .as_ref()
+                    .and_then(|f| f.unchanged(image_fingerprint(img.width, img.height, &img.rgba)));
+                let image = match unchanged {
+                    Some(bytes) => self.original(&pm.image, bytes)?,
+                    None => {
+                        let picture = Texture {
+                            width: img.width,
+                            height: img.height,
+                            format: primase_core::TexFormat::Rgba8Unorm,
+                            levels: vec![img.rgba.clone()],
+                            color_space: primase_core::ColorSpace::Srgb,
+                            role: primase_core::TexRole::Color,
+                            normal: None,
+                        };
+                        let bytes = primase_image::texture_level_png(&picture, 0)
+                            .map_err(|err| bad(format!("pause_map: {err}")))?;
+                        self.encoded(&pm.image, bytes)?
+                    }
+                };
                 let mut o = ObjB::default();
                 o.put(
                     "image",
@@ -458,13 +522,13 @@ impl Writer<'_> {
         let mut tex_key: BTreeMap<Entity, String> = BTreeMap::new();
         let mut textures = ObjB::default();
         for (e, t) in w.iter::<SkateTexture>() {
-            let src = w.get::<TextureFile>(e);
-            if src.is_none() && !w.has::<Texture>(e) {
-                return Err(bad(format!(
-                    "texture '{}' has neither pixels (core.texture) nor a file (core.texture_file)",
+            let texture = w.get::<Texture>(e).ok_or_else(|| {
+                bad(format!(
+                    "texture '{}' has no pixels (core.texture): load the scene before writing it \
+                     (interchange::load); the writer reads no file",
                     t.key
-                )));
-            }
+                ))
+            })?;
             // v1 cannot express a different X channel or tangent-plane basis.
             if w.get::<Texture>(e).and_then(|x| x.normal).is_some_and(|n| {
                 n.x != NormalX::Red || n.basis != primase_core::NormalBasis::TangentBitangent
@@ -474,10 +538,12 @@ impl Writer<'_> {
                     t.key
                 )));
             }
-            let file = match src {
-                Some(src) => self.copy(&t.file, &src.path)?,
+            let unchanged = w
+                .get::<LoadedFile>(e)
+                .and_then(|f| f.unchanged(texture_fingerprint(texture)));
+            let file = match unchanged {
+                Some(bytes) => self.original(&t.file, bytes)?,
                 None => {
-                    let texture = w.get::<Texture>(e).expect("checked above");
                     let bytes = primase_image::texture_level_png(texture, 0)
                         .map_err(|err| bad(format!("texture '{}': {err}", t.key)))?;
                     self.encoded(&t.file, bytes)?
@@ -632,6 +698,14 @@ impl Writer<'_> {
             }
             Ok(Value::Array(out))
         };
+        // how many prototypes name each GLB (case-insensitive, as the plan keys paths): an edited mesh of a shared
+        // file gets a file of its own
+        let mut glb_users: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, p) in &proto_list {
+            if let Some(g) = &p.glb {
+                *glb_users.entry(g.path.to_lowercase()).or_default() += 1;
+            }
+        }
         for (i, (e, p)) in proto_list.into_iter().enumerate() {
             let what = format!("prototype '{}'", p.id);
             proto_index.insert(e, i as u32);
@@ -648,42 +722,55 @@ impl Writer<'_> {
                     }
                     Vec::new()
                 }
-                (Some(g), Some(mf)) => {
-                    let g = self.copy(g, &mf.path)?;
-                    o.put(
-                        "glb",
-                        match &g.sha256 {
-                            None => text(&g.path),
-                            Some(h) => file_object(&g.path, h),
-                        },
-                    );
-                    if mf.mesh != 0 {
-                        o.put("mesh", Value::from(u64::from(mf.mesh)));
-                    }
-                    mf.materials.clone()
-                }
-                (Some(g), None) if w.has::<Mesh>(e) => {
-                    // held only in memory: its GLB, geometry only (the manifest links the materials)
-                    let mesh = w.get::<Mesh>(e).expect("checked").clone();
+                (Some(g), mesh_file) => {
+                    let mesh = w.get::<Mesh>(e).ok_or_else(|| {
+                        bad(format!(
+                            "{what}: its geometry is not loaded (core.mesh): load the scene before writing it \
+                             (interchange::load); the writer reads no file"
+                        ))
+                    })?;
+                    // the manifest links the materials the mesh draws with now
                     let materials: Vec<Option<Entity>> =
                         mesh.primitives().iter().map(|p| p.material).collect();
-                    let mut local = mesh;
-                    for mut prim in local.primitives_mut() {
-                        *prim.material_mut() = None;
-                    }
-                    let mut glb = World::default();
-                    let proto = glb.spawn();
-                    glb.insert(proto, local);
-                    glb.insert(proto, Name(p.id.clone()));
-                    let (bytes, _) = primase_gltf::write(
-                        &glb,
-                        &primase_gltf::WriteOptions {
-                            include_unplaced: true,
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|err| bad(format!("{what}: {err}")))?;
-                    let g = self.encoded(g, bytes)?;
+                    // the GLB it was loaded from, while its geometry is unchanged (the mesh of that file it is)
+                    let unchanged = w
+                        .get::<LoadedFile>(e)
+                        .and_then(|f| f.unchanged(mesh_fingerprint(mesh)))
+                        .zip(mesh_file.map(|mf| mf.mesh));
+                    let (g, index) = match unchanged {
+                        Some((bytes, index)) => (self.original(g, bytes)?, index),
+                        None => {
+                            // its own GLB, geometry only: at the path its prototype names, or beside it under the
+                            // prototype's id when other prototypes draw from that file
+                            let shared = glb_users.get(&g.path.to_lowercase()).is_some_and(|&n| n > 1);
+                            let own = FileRef {
+                                path: if shared {
+                                    own_glb_path(&g.path, &p.id)
+                                } else {
+                                    g.path.clone()
+                                },
+                                sha256: g.sha256.clone(),
+                            };
+                            let g = &own;
+                            let mut local = mesh.clone();
+                            for mut prim in local.primitives_mut() {
+                                *prim.material_mut() = None;
+                            }
+                            let mut glb = World::default();
+                            let proto = glb.spawn();
+                            glb.insert(proto, local);
+                            glb.insert(proto, Name(p.id.clone()));
+                            let (bytes, _) = primase_gltf::write(
+                                &glb,
+                                &primase_gltf::WriteOptions {
+                                    include_unplaced: true,
+                                    ..Default::default()
+                                },
+                            )
+                            .map_err(|err| bad(format!("{what}: {err}")))?;
+                            (self.encoded(g, bytes)?, 0)
+                        }
+                    };
                     o.put(
                         "glb",
                         match &g.sha256 {
@@ -691,9 +778,11 @@ impl Writer<'_> {
                             Some(h) => file_object(&g.path, h),
                         },
                     );
+                    if index != 0 {
+                        o.put("mesh", Value::from(u64::from(index)));
+                    }
                     materials
                 }
-                (Some(_), None) => return Err(bad(format!("{what}: a glb but no core.mesh_file"))),
             };
             let parts = parts_json(e, &mats, &what)?;
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
