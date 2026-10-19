@@ -304,7 +304,6 @@ pub struct Totals {
     pub grind_length_m: f32,
     pub travel_points: usize,
     pub trainer_spots: usize,
-    pub peak_mesh_bytes: i64,
     pub seconds: f64,
 }
 

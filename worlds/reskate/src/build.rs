@@ -33,6 +33,9 @@ pub struct BuildReport {
     pub collision_tris: i64,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
+    /// The most source-mesh bytes the run held at once (loaded band by band): a measure of the run, not of the map,
+    /// so the run's report and not `stats.json`.
+    pub peak_mesh_bytes: i64,
     /// The overlay stack's lift record (see `WriteResult::lifts`).
     pub lifts: BTreeMap<String, Vec<Vec<f32>>>,
     /// The blend-chain overlays as objects of their own.
@@ -397,6 +400,7 @@ impl MapSink {
             textures: writer.ctx.tex.all().iter().filter(|t| !t.removed).count(),
             collision_tris: r.collision.as_ref().map_or(0, |c| c.triangles),
             lights_without_tangent: r.lights_without_tangent,
+            peak_mesh_bytes: r.peak_mesh_bytes,
             lifts: r.lifts.clone(),
             blend: r.blend.clone(),
             warnings: o.warnings.iter().chain(&r.warnings).cloned().collect(),
@@ -535,7 +539,6 @@ fn stats_json(
             grind_length_m: r.grind_length,
             travel_points: r.travel_points,
             trainer_spots: r.trainer_spots,
-            peak_mesh_bytes: r.peak_mesh_bytes,
             seconds: 0.0,
         },
         soups: s

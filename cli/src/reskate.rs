@@ -98,7 +98,8 @@ impl Writer for Reskate {
             (
                 "reskate".into(),
                 format!(
-                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={}",
+                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={} \
+                     peak_mesh_bytes={}",
                     report.out_dir.display(),
                     report.tiles,
                     report.merged_tris,
@@ -106,7 +107,8 @@ impl Writer for Reskate {
                     report.prototypes,
                     report.materials,
                     report.textures,
-                    report.collision_tris
+                    report.collision_tris,
+                    report.peak_mesh_bytes
                 ),
             ),
             ("blend order".into(), format!("{:?}", report.blend)),
