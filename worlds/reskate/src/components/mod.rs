@@ -944,6 +944,58 @@ impl primase_core::summary::Summary for SkateSpawnSummary {
     }
 }
 
+/// `skate.instance_counts`: the placements a part owns of each prototype, by the prototype's planning id, each placement
+/// by its owned key (`summarize-reskate-instances`). Merged over the parts (a placement two parts own once), its counts
+/// are the whole map's: which prototypes are instanced (placed `min_instances` times or more), as the writer and the
+/// marker snaps decide it. Not part of scene-interchange v1.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkateInstanceCounts {
+    pub by_prototype: BTreeMap<u64, BTreeSet<u64>>,
+}
+
+impl Resource for SkateInstanceCounts {
+    const NAME: &'static str = "skate.instance_counts";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({ "prototypes": self.by_prototype.len() })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateInstanceCounts {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        for (p, placed) in other.by_prototype {
+            self.by_prototype.entry(p).or_default().extend(placed);
+        }
+        Ok(())
+    }
+    fn retained_bytes(&self) -> usize {
+        self.by_prototype.values().map(|s| 8 + 8 * s.len()).sum()
+    }
+}
+
+/// `skate.water_surfaces`: the water surfaces a part owns, by owned key: each outline's corners and height
+/// (`summarize-reskate-water`). Merged over the parts, they are the whole map's, in its order: what a street snap keeps
+/// off. Not part of scene-interchange v1.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkateWaterSurfaces {
+    pub surfaces: BTreeMap<u64, (Vec<[f32; 2]>, f64)>,
+}
+
+impl Resource for SkateWaterSurfaces {
+    const NAME: &'static str = "skate.water_surfaces";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({ "surfaces": self.surfaces.len() })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateWaterSurfaces {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        merge_keyed(&mut self.surfaces, other.surfaces)
+    }
+    fn retained_bytes(&self) -> usize {
+        self.surfaces.values().map(|(c, _)| 16 + 8 * c.len()).sum()
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]

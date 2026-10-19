@@ -348,6 +348,18 @@ pub(crate) fn snap_queries(
     (placed, ground)
 }
 
+/// The ground square `[west, south, east, north]` a snap at (`qx`, `qy`) reads: the 256 m cells its search reaches.
+pub(crate) fn search_square(qx: f32, qy: f32) -> [f64; 4] {
+    let (x0, y0, x1, y1) = place_tiles(qx, qy);
+    let t = f64::from(SRC_TILE);
+    [
+        f64::from(x0) * t,
+        f64::from(y0) * t,
+        f64::from(x1 + 1) * t,
+        f64::from(y1 + 1) * t,
+    ]
+}
+
 fn place_tiles(qx: f32, qy: f32) -> (i32, i32, i32, i32) {
     let span = PLACE_REACH + SRC_TILE;
     (

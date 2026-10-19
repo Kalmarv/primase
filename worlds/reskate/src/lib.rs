@@ -65,6 +65,8 @@ pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateMapSummary>();
     reg.summary::<components::SkateContentBounds>();
     reg.summary::<components::SkateSpawnSummary>();
+    reg.summary::<components::SkateInstanceCounts>();
+    reg.summary::<components::SkateWaterSurfaces>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -164,6 +166,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
     );
+    // a map in parts: the marker snaps' inputs over every part (which prototypes are instanced, the water)
+    reg.register("summarize-reskate-instances", passes::summarize_reskate_instances);
+    reg.register("summarize-reskate-water", passes::summarize_reskate_water);
     // a map in parts: its spawn placed once, from what every part holds
     reg.register("summarize-reskate-spawn", passes::summarize_reskate_spawn);
     // a map in parts: its content's extent measured over every part

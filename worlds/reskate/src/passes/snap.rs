@@ -15,20 +15,32 @@
 //!
 //! A street snap keeps off the water surfaces as they are when it runs: run it before a pass that cuts them
 //! (`prepare-reskate-water`) to snap against the uncut water, as the writer did.
+//!
+//! A map converted in parts snaps each part's markers against what it loaded, with the map's own inputs merged over
+//! every part: which prototypes are instanced (`summarize-reskate-instances`), the water surfaces
+//! (`summarize-reskate-water`) and, without a stated region, the map's content extent (`summarize-reskate-content`).
+//! The part must hold all the ground its own markers' searches read: its source states the area its context covers
+//! (`core.part_scope`'s area), and a marker whose search square reaches beyond it is refused, as is a part stating no
+//! area or missing a merged input.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use primase_core::World;
+use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_meshops::vector::Vec3;
 
+use super::Owned;
 use crate::assembly::{EncodingOptions, SoupWorld, bounds, hulls, writer_placements};
-use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
-use crate::components::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
+use crate::collision::{PropSoup, Query, Snapped, add_prop, search_square, snap_queries};
+use crate::components::{
+    MarkerKind, SkateContentBounds, SkateInstanceCounts, SkateMarker, SkateMarkerSnaps, SkateWater,
+    SkateWaterSurfaces, Snap, SnapMode as DialectSnap,
+};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
 use crate::model::CollisionMode;
-use crate::scene::{Scene, SnapMode, build_geometry};
+use crate::scene::{Scene, SnapMode, WaterQuad, build_geometry};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -177,7 +189,6 @@ impl Pass for SnapReskateMarkers {
         &["skate.marker"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateMarkerSnaps>().is_some() {
             return Err("snap-reskate-markers: the markers are already snapped (skate.marker_snaps)".into());
         }
@@ -194,9 +205,23 @@ impl Pass for SnapReskateMarkers {
             .collect();
         let b = &self.basis;
         if queries.iter().any(|q| q.snap.mode != SnapMode::None) {
-            let apron_width = crate::assembly::apron_of(w, &s).map_err(|e| e.to_string())?;
-            let (placed, ground) = self.snap(&mut s, &queries, apron_width)?;
             let entities: Vec<primase_core::Entity> = w.iter::<SkateMarker>().map(|(e, _)| e).collect();
+            if let Some(scope) = w.resource::<PartScope>().filter(|s| !s.whole) {
+                Self::check_part(w, scope, &s, &queries, &entities)?;
+            }
+            // the map's own inputs, merged over every part when they are
+            if let Some(ws) = w.resource::<SkateWaterSurfaces>() {
+                s.water = ws
+                    .surfaces
+                    .values()
+                    .map(|(c, h)| WaterQuad::of(c.iter().map(|c| (c[0], c[1])).collect(), *h as f32))
+                    .collect();
+            }
+            let counts = w.resource::<SkateInstanceCounts>().cloned();
+            let content = w.resource::<SkateContentBounds>().copied();
+            let apron_width = crate::assembly::apron_of(w, &s).map_err(|e| e.to_string())?;
+            let (placed, ground) =
+                self.snap(&mut s, &queries, apron_width, counts.as_ref(), content.as_ref())?;
             for (i, e) in entities.into_iter().enumerate() {
                 if queries[i].snap.mode == SnapMode::None {
                     continue;
@@ -237,12 +262,69 @@ impl Pass for SnapReskateMarkers {
 }
 
 impl SnapReskateMarkers {
-    /// Each query's placed position and ground (NaN: nothing found), as the writer's collision answers it.
-    fn snap(&self, s: &mut Scene, queries: &[Query], apron_width: f32) -> Result<Snapped, String> {
+    /// A part of a map in several snaps its own markers only with the map's merged inputs and the ground they read.
+    fn check_part(
+        w: &World,
+        scope: &PartScope,
+        s: &Scene,
+        queries: &[Query],
+        entities: &[primase_core::Entity],
+    ) -> Result<(), String> {
+        let missing = |what: &str, pass: &str| {
+            let why = format!("a map in parts snaps its markers with {what} over every part ({pass})");
+            match super::require_whole_map(w, "snap-reskate-markers") {
+                Err(e) => format!("{e}: {why}"),
+                Ok(()) => why,
+            }
+        };
+        if w.resource::<SkateInstanceCounts>().is_none() {
+            return Err(missing("the placements counted", "summarize-reskate-instances"));
+        }
+        if w.resource::<SkateWaterSurfaces>().is_none() {
+            return Err(missing("the water surfaces", "summarize-reskate-water"));
+        }
+        if s.region.is_none() && w.resource::<SkateContentBounds>().is_none() {
+            return Err(missing(
+                "the content's extent (no region is stated)",
+                "summarize-reskate-content",
+            ));
+        }
+        let area = scope.area.ok_or(
+            "snap-reskate-markers: this part states no area its context covers, and a snap reads the ground around \
+             its marker (a part source that plans by area, as a partition plan's)",
+        )?;
+        let owned = Owned::of(w);
+        for (q, &e) in queries.iter().zip(entities) {
+            if q.snap.mode == SnapMode::None || !owned.contains(e) {
+                continue;
+            }
+            let sq = search_square(q.x, q.y);
+            if sq[0] < area[0] || sq[1] < area[1] || sq[2] > area[2] || sq[3] > area[3] {
+                return Err(format!(
+                    "snap-reskate-markers: marker {e:?}'s search reads the ground over {sq:?}, beyond the part's area \
+                     {area:?}: plan parts whose context reaches 376 m past what they own"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Each query's placed position and ground (NaN: nothing found), as the writer's collision answers it; with the
+    /// map's instance counts and content extent merged over every part when given.
+    fn snap(
+        &self,
+        s: &mut Scene,
+        queries: &[Query],
+        apron_width: f32,
+        counts: Option<&SkateInstanceCounts>,
+        content: Option<&SkateContentBounds>,
+    ) -> Result<Snapped, String> {
         let b = &self.basis;
         // the placements as the writer takes them, its region and the region's apron
         let placements = writer_placements(s, 200.0);
-        let region = s.region.unwrap_or_else(|| bounds(s, &placements));
+        let region = s
+            .region
+            .unwrap_or_else(|| content.map_or_else(|| bounds(s, &placements), SkateContentBounds::extent));
         let edge = apron(region, apron_width);
         let rules = PlacementRules {
             min_instances: b.min_instances,
@@ -263,8 +345,22 @@ impl SnapReskateMarkers {
             }
         }
         let mut count: HashMap<u32, i64> = HashMap::new();
-        for p in &placements {
-            *count.entry(p.proto).or_default() += 1;
+        match counts {
+            // the map's, by each prototype's planning id
+            Some(c) => {
+                for p in &s.protos {
+                    let n = c
+                        .by_prototype
+                        .get(&u64::from(p.entity.index()))
+                        .map_or(0, BTreeSet::len);
+                    *count.entry(p.key).or_default() += n as i64;
+                }
+            }
+            None => {
+                for p in &placements {
+                    *count.entry(p.proto).or_default() += 1;
+                }
+            }
         }
         // each placement's collision by the writer's rules: props per 256 m cell, hulls whole
         let (mut props, mut order) = (BTreeMap::<(i32, i32), PropSoup>::new(), Vec::new());
@@ -321,5 +417,84 @@ impl SnapReskateMarkers {
             &s.water,
             queries,
         ))
+    }
+}
+
+/// `summarize-reskate-instances`: the placements this part owns of each prototype (`skate.instance_counts`); merged
+/// over the parts, the map's counts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeReskateInstances;
+
+/// [`SummarizeReskateInstances`] as a pass factory: it takes no options.
+pub fn summarize_reskate_instances(o: &Options) -> Result<Box<dyn Pass>, String> {
+    match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(SummarizeReskateInstances)),
+    }
+}
+
+impl Pass for SummarizeReskateInstances {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-instances"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.instance_counts"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
+        let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
+        let owned = Owned::of(w);
+        let mut c = SkateInstanceCounts::default();
+        for sp in &s.placements {
+            if let Some(k) = owned.key(sp.entity) {
+                let proto = &s.protos[sp.proto as usize];
+                c.by_prototype
+                    .entry(u64::from(proto.entity.index()))
+                    .or_default()
+                    .insert(k);
+            }
+        }
+        w.insert_resource(c);
+        Ok(())
+    }
+}
+
+/// `summarize-reskate-water`: the water surfaces this part owns (`skate.water_surfaces`); merged over the parts, the
+/// map's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeReskateWater;
+
+/// [`SummarizeReskateWater`] as a pass factory: it takes no options.
+pub fn summarize_reskate_water(o: &Options) -> Result<Box<dyn Pass>, String> {
+    match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(SummarizeReskateWater)),
+    }
+}
+
+impl Pass for SummarizeReskateWater {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-water"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.water_surfaces"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
+        let owned = Owned::of(w);
+        let surfaces = w
+            .iter::<SkateWater>()
+            .filter_map(|(e, s)| {
+                owned
+                    .key(e)
+                    .map(|k| (k, (s.corners.clone(), s.height.unwrap_or(0.0))))
+            })
+            .collect();
+        w.insert_resource(SkateWaterSurfaces { surfaces });
+        Ok(())
     }
 }
