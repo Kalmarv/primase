@@ -39,8 +39,9 @@ impl Component for MaterialSlots {
     }
 }
 
-/// Which source collision group a `core.collision` soup holds: `game`, `water`, `objects`, or a state-specific
-/// group (`game_state0`, ...), and whether the group is water rather than solid ground.
+/// Which group `lower-fromsoft-collision` or `lower-fromsoft-object-collision` lowered a `core.collision` soup into:
+/// `game`, `water`, `objects`, or a state-specific group (`game_state0`, ...), and whether the group is water rather
+/// than solid ground.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CollisionSource {
     pub group: String,
@@ -51,6 +52,154 @@ impl Component for CollisionSource {
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
+
+/// One MSB collision part as stored: its name, its hit filter and, with states read, its clause (`None`: no rule
+/// decides it, or states were not read).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CollisionPart {
+    pub name: String,
+    pub hit_filter: u8,
+    pub condition: Option<primase_core::state::Clause>,
+}
+
+/// A file of the area's high-resolution map collision binder that MSB collision parts name (`fromsoft.map_collision`,
+/// on an entity of its own), whole: every triangle of its compressed-mesh bodies posed by its body, through the map
+/// offset into the world frame (metres), each vertex where the source puts it and in its stored order (the frame is a
+/// reflection of the source's, so a stored triangle faces away from its stored winding), and per triangle its
+/// HitMtrlParam ID as the shape key binds it (-1: the key binds none). The parts name it in MSB order, of every hit
+/// filter. Selecting parts, mapping HitMtrl IDs to surfaces and cropping are `lower-fromsoft-collision`'s.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MapCollision {
+    /// The member's file name (`h11_01_00_00_009500.hkx`).
+    pub file: String,
+    pub parts: Vec<CollisionPart>,
+    pub triangles: Vec<[[f32; 3]; 3]>,
+    pub materials: Vec<i32>,
+    /// Shape-key rows the file marks invalid (all ones): they identify no primitive.
+    pub invalid_material_keys: usize,
+    /// Compressed-mesh primitives the file marks dead.
+    pub dead_primitives: usize,
+    /// The shape classes of the file's bodies the reader has no decoder for, one per body: not in `triangles`.
+    pub unread_bodies: Vec<String>,
+}
+impl Component for MapCollision {
+    const NAME: &'static str = "fromsoft.map_collision";
+    /// World-frame triangles on an entity that is not placed.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        for part in &self.parts {
+            if let Some(c) = &part.condition {
+                out.extend(c.0.iter().map(|l| l.axis));
+            }
+        }
+    }
+    /// 36 bytes per triangle and 4 per material.
+    fn payload_bytes(&self) -> u64 {
+        self.triangles.len() as u64 * 36 + self.materials.len() as u64 * 4
+    }
+    fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
+        if self.materials.len() != self.triangles.len() {
+            return Err(format!(
+                "{}: {} materials for {} triangles",
+                self.file,
+                self.materials.len(),
+                self.triangles.len()
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One rigid body of an object's collision file as stored: its name, its stored motion type (what each value means
+/// is a pass's interpretation), its shape class, its triangles posed by the body in the prototype's space (the
+/// world frame's axes, as the prototype's model; stored vertex order, as [`MapCollision`]), and per triangle its
+/// HitMtrlParam ID (-1: none bound; shapes that store no materials, the convex box, polytope and capsule, are all
+/// -1). Convex shapes are their offset-plane tessellation and capsules boxes around their core
+/// ([`crate::collision::read_bodies`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ObjectBody {
+    pub name: String,
+    pub motion_type: u64,
+    pub shape: String,
+    pub triangles: Vec<[[f32; 3]; 3]>,
+    pub materials: Vec<i32>,
+}
+impl ObjectBody {
+    /// Whether the shape is a convex one, which stores no material.
+    pub fn convex(&self) -> bool {
+        matches!(
+            self.shape.as_str(),
+            "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape"
+        )
+    }
+}
+
+/// An object prototype's collision file as stored (`fromsoft.object_collision`): every body of its main HKX, for
+/// `lower-fromsoft-object-collision` to place with each placement. A prototype whose binder has no such file has none.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ObjectBodies {
+    /// The binder member's file name (`o000100.hkx`).
+    pub file: String,
+    pub bodies: Vec<ObjectBody>,
+}
+impl Component for ObjectBodies {
+    const NAME: &'static str = "fromsoft.object_collision";
+    /// Prototype-space triangles: mapped as the prototype's mesh, a reflection reversing their order.
+    fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        let mut out = self.clone();
+        for body in &mut out.bodies {
+            for t in &mut body.triangles {
+                *t = t.map(|p| l.point(p));
+                if l.mirrors() {
+                    t.swap(1, 2);
+                }
+            }
+        }
+        primase_core::world::Linearity::Applied(out)
+    }
+    /// 36 bytes per triangle and 4 per material.
+    fn payload_bytes(&self) -> u64 {
+        self.bodies
+            .iter()
+            .map(|b| b.triangles.len() as u64 * 36 + b.materials.len() as u64 * 4)
+            .sum()
+    }
+    fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
+        match self
+            .bodies
+            .iter()
+            .find(|b| b.materials.len() != b.triangles.len())
+        {
+            Some(b) => Err(format!(
+                "{} body {}: {} materials for {} triangles",
+                self.file,
+                b.name,
+                b.materials.len(),
+                b.triangles.len()
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+/// What a read covered (`fromsoft.read_scope`): the area, the region it was bounded to (east/north rectangle in the
+/// world frame) and its placement margin, and whether event-flag world states were read. Passes that crop to the
+/// read region read it here, so a program need not restate it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ReadScope {
+    pub area: String,
+    pub region: Option<[f32; 4]>,
+    pub region_margin: f32,
+    pub states: bool,
+}
+impl Resource for ReadScope {
+    const NAME: &'static str = "fromsoft.read_scope";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }
@@ -160,28 +309,41 @@ impl Component for LayerInputs {
     }
 }
 impl LayerInputs {
-    /// Remove every prototype's layer inputs, the component and the `Color(n)` streams it lists, from every
-    /// primitive of its mesh (a pass may have split them). They are shader inputs, not vertex colours: a pass that
-    /// consumed them, or lowered their materials without them, takes them out. Returns the streams removed.
-    pub fn remove_all(world: &mut primase_core::World) -> u64 {
+    /// Take out the layer inputs of the primitives `consumed` selects (by owner, primitive index and primitive): the
+    /// `Color(n)` streams their entry lists and the entry itself; the component goes once no entry lists a member.
+    /// They are shader inputs, not vertex colours: a pass that consumed them, or lowered their material without them,
+    /// takes them out, and only those. Returns the streams removed.
+    pub fn consume(
+        world: &mut primase_core::World,
+        mut consumed: impl FnMut(Entity, usize, &primase_core::Primitive) -> bool,
+    ) -> u64 {
         let owners: Vec<_> = world.iter::<LayerInputs>().map(|(e, _)| e).collect();
         let mut removed = 0;
         for e in owners {
-            let Some(inputs) = world.remove::<LayerInputs>(e) else {
+            let mut inputs = world.get::<LayerInputs>(e).expect("listed owner").clone();
+            let Some(mesh) = world.get_mut::<primase_core::Mesh>(e) else {
                 continue;
             };
-            let members: std::collections::BTreeSet<u8> = inputs.primitives.into_iter().flatten().collect();
-            if let Some(mesh) = world.get_mut::<primase_core::Mesh>(e) {
-                for primitive in mesh.primitives_mut() {
-                    for &n in &members {
-                        removed += u64::from(
-                            primitive
-                                .streams
-                                .remove(&primase_core::Semantic::Color(n))
-                                .is_some(),
-                        );
-                    }
+            for (index, primitive) in mesh.primitives_mut().iter_mut().enumerate() {
+                let Some(members) = inputs.primitives.get_mut(index) else {
+                    continue;
+                };
+                if members.is_empty() || !consumed(e, index, primitive) {
+                    continue;
                 }
+                for n in std::mem::take(members) {
+                    removed += u64::from(
+                        primitive
+                            .streams
+                            .remove(&primase_core::Semantic::Color(n))
+                            .is_some(),
+                    );
+                }
+            }
+            if inputs.primitives.iter().all(Vec::is_empty) {
+                world.remove::<LayerInputs>(e);
+            } else {
+                world.insert(e, inputs);
             }
         }
         removed

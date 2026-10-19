@@ -109,7 +109,7 @@ fn run(scope: &str) -> Result<()> {
                             return Err(format!("{}: ambiguous material join", group.material.mtd).into());
                         }
                         let key = candidates[0]["key"].as_str().expect("valid area oracle schema");
-                        let prepared = area.prepare(index)?;
+                        let prepared = area.prepare(index, 0.)?;
                         for center in &group.centers {
                             let matched: Vec<_> = records
                                 .iter()

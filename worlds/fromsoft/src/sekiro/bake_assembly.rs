@@ -119,20 +119,22 @@ fn source_variant(
     Ok(entity)
 }
 
-/// Bake every group at its reference size capped at `max_size`, and replace the grouped parts by their levels'
-/// parts ([`World::rebuild_primitives`], every per-primitive component following).
+/// Bake every group at its reference size capped at `max_size`, its programs sampled at `sample_time` seconds, and
+/// replace the grouped parts by their levels' parts ([`World::rebuild_primitives`], every per-primitive component
+/// following). Returns the report and the primitives (prototype, index after the rebuild) the baked parts became.
 pub(super) fn assemble(
     bake: &AreaBake,
     prototypes: &BTreeMap<String, Entity>,
     max_size: u32,
+    sample_time: f32,
     world: &mut World,
-) -> Result<BakeReport> {
+) -> Result<(BakeReport, BTreeSet<(Entity, usize)>)> {
     let mut report = BakeReport::default();
     let mut replacements = BTreeMap::<(Entity, usize), Vec<Primitive>>::new();
     let mut replaced_materials = BTreeSet::new();
     let mut variants = BTreeMap::new();
     for (group_index, group) in bake.groups.iter().enumerate() {
-        let prepared = bake.prepare(group_index)?;
+        let prepared = bake.prepare(group_index, sample_time)?;
         let size = prepared.bake_size(max_size)?;
         let mut templates = Vec::new();
         for (level, center) in group.centers.iter().enumerate() {
@@ -229,6 +231,7 @@ pub(super) fn assemble(
     }
     report.source_materials = replaced_materials.len();
     let candidates = world.closure(replaced_materials);
+    let mut baked = BTreeSet::new();
     for &entity in prototypes.values() {
         // the baked parts replace their source part; every per-primitive component follows
         world
@@ -237,9 +240,12 @@ pub(super) fn assemble(
                 let mut from = Vec::new();
                 for (index, primitive) in original.primitives().iter().enumerate() {
                     match replacements.remove(&(entity, index)) {
-                        Some(baked) => {
-                            from.extend(std::iter::repeat_n(index, baked.len()));
-                            primitives.extend(baked);
+                        Some(parts) => {
+                            baked.extend(
+                                (primitives.len()..primitives.len() + parts.len()).map(|i| (entity, i)),
+                            );
+                            from.extend(std::iter::repeat_n(index, parts.len()));
+                            primitives.extend(parts);
                         }
                         None => {
                             from.push(index);
@@ -255,7 +261,7 @@ pub(super) fn assemble(
     for entity in candidates.difference(&retained) {
         world.despawn(*entity);
     }
-    Ok(report)
+    Ok((report, baked))
 }
 
 fn split(
@@ -410,7 +416,7 @@ mod tests {
             )?;
             images.insert(name.clone(), (texture.width, texture.height, rgba));
         }
-        let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), |name, srgb| {
+        let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), 0., |name, srgb| {
             let (w, h, rgba) = images.get(name).expect("complete jar source texture closure");
             Ok(Some(Arc::new(BaseMipBilinearWrap::new(*w, *h, rgba, srgb)?)))
         })?;

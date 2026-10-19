@@ -77,6 +77,7 @@ fn five_permutation_pilot() -> Result<()> {
             let prepared = Prepared::new(
                 &std::fs::read(root.join(format!("{id}.ppo")))?,
                 &material,
+                0.,
                 |name, srgb| {
                     let Some(m) = metadata["images"].get(name) else {
                         return Ok(None);

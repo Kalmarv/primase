@@ -7,16 +7,34 @@ use crate::{
 use primase_core::world::Component;
 use std::collections::BTreeMap;
 
-/// The source material classes [`resolve`] names in [`Material::skip`] (materials the game draws as sky or cloud
-/// cards, additive light volumes and shadow-only proxies), by the word a pass option uses for each.
-pub const SKIP_CLASSES: [(&str, &str); 3] = [
-    ("sky", "sky / cloud / fog card"),
-    ("light-volume", "additive light volume"),
-    ("shadow", "shadow proxy"),
-];
-/// The option word of a [`Material::skip`] class.
-pub fn skip_class(skip: &str) -> Option<&'static str> {
-    SKIP_CLASSES.iter().find(|(_, s)| *s == skip).map(|(w, _)| *w)
+/// A source material class [`resolve`] names in [`Material::skip`]: one the game draws as something other than a
+/// surface. Serialized as its description.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub enum SkipClass {
+    /// Sky, cloud and fog cards.
+    #[serde(rename = "sky / cloud / fog card")]
+    Sky,
+    /// Additive light volumes.
+    #[serde(rename = "additive light volume")]
+    LightVolume,
+    /// Shadow-only proxies.
+    #[serde(rename = "shadow proxy")]
+    Shadow,
+}
+impl SkipClass {
+    pub const ALL: [SkipClass; 3] = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow];
+    /// The word a pass option names it by (`sky`, `light-volume`, `shadow`).
+    pub fn word(self) -> &'static str {
+        match self {
+            SkipClass::Sky => "sky",
+            SkipClass::LightVolume => "light-volume",
+            SkipClass::Shadow => "shadow",
+        }
+    }
+    /// The class an option word names.
+    pub fn from_word(word: &str) -> Option<SkipClass> {
+        SkipClass::ALL.into_iter().find(|c| c.word() == word)
+    }
 }
 
 pub fn stem(path: &str) -> String {
@@ -73,9 +91,9 @@ pub struct Material {
     pub gx: Vec<flver::GxItem>,
     pub shader: String,
     pub class: String,
-    /// The source class of a material the game draws as something other than a surface ([`SKIP_CLASSES`]); a
+    /// The source class of a material the game draws as something other than a surface ([`SkipClass`]); a
     /// program chooses whether to leave such meshes out.
-    pub skip: Option<String>,
+    pub skip: Option<SkipClass>,
     pub albedo: Option<String>,
     pub normal: Option<String>,
     pub metallic: Option<String>,
@@ -225,11 +243,11 @@ pub fn resolve(
     }
     let sh = &m.shader;
     if sh.starts_with("M[Sky]") || sh.contains("CloudFog") || sh.contains("GroundFog") {
-        m.skip = Some(SKIP_CLASSES[0].1.into());
+        m.skip = Some(SkipClass::Sky);
     } else if sh.starts_with("VolumeTest") || blend == 4 {
-        m.skip = Some(SKIP_CLASSES[1].1.into());
+        m.skip = Some(SkipClass::LightVolume);
     } else if sh.starts_with("GXFlver_Shadow") || m.mtd.starts_with("M[Shadow]") {
-        m.skip = Some(SKIP_CLASSES[2].1.into());
+        m.skip = Some(SkipClass::Shadow);
     } else if sh.contains("Tessellation_Water") {
         m.class = "water".into();
     } else if sh.contains("MeshDecal") || m.mtd.ends_with("_md") {

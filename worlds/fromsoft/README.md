@@ -255,7 +255,8 @@ gate of archive texture discovery, which belongs to area assembly. Both require
 
 `sekiro::read_area` reads a selected map into an empty `World`. It takes an
 install root, a trusted decoder and options; it never guesses paths, and a failed
-read leaves the destination unchanged. Reading lowers nothing:
+read leaves the destination unchanged. The read selects source records and
+converts frames; it does not lower:
 
 - each placed model is a prototype holding its FLVER as stored (`fromsoft.flver`:
   skeleton, every mesh with all its face sets, original material indices and every
@@ -267,18 +268,27 @@ read leaves the destination unchanged. Reading lowers nothing:
 - every texture a kept material binds is kept as stored
   (`fromsoft.texture_payloads`), and the G-buffer programs of its layered
   materials (`fromsoft.shader_programs`);
-- map and object collision are `core.collision` soups with `fromsoft.collision`
-  (source group, water); lights are `fromsoft.light` records where they stand
-  (stored colours, powers, cone, radius and tangent); hang-edge segments and
-  spawn points are the `fromsoft.area_extras` resource.
+- each high-resolution map collision file that MSB collision parts name, of every
+  hit filter, is a `fromsoft.map_collision` entity: the naming parts (name, hit
+  filter, clause with states read), every triangle in the world frame and its
+  HitMtrl ID as the shape key binds it (-1: none);
+- each object prototype whose binder holds its main HKX carries every body as
+  stored (`fromsoft.object_collision`: name, stored motion type, shape class,
+  triangles in the prototype's space, HitMtrl IDs; convex shapes store none);
+- lights are `fromsoft.light` records where they stand (stored colours, powers,
+  cone, radius and tangent); hang-edge segments and spawn points are the
+  `fromsoft.area_extras` resource; what the read covered (area, region, margin,
+  states) is `fromsoft.read_scope`.
 
-A region (source east/north rectangle) is an explicit partial read: a placement
+A region (world east/north rectangle) is an explicit partial read: a placement
 is kept when its model's extent (every vertex a face set uses, static vertices
-posed by their bones) reaches the region within `region_margin`; collision
-triangles whose centre lies more than 50 m outside it, and lights and spawn points
-outside it, are not read. `Report::notices` returns what the read left out or could
-not find. Object collision takes a convex body's material from the model's largest
-colliding render surface, measured on the stored level-0 face sets.
+posed by their bones) reaches the region within `region_margin`; lights and spawn
+points outside it are not read. Collision files are read whole whatever the
+region. `Report::notices` returns what the read left out or could not find:
+missing models (distinct models) and their placements, placements of models with
+no used vertex, missing and unnamed collision files, EDGE kinds other than hang
+edges, region exclusions, event states not requested, parts left at their
+default presence, and the shadow controls' interpretation.
 
 Passes (`sekiro::passes::register`), each choosing explicitly:
 
@@ -298,26 +308,46 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   records: colour bytes read as sRGB, intensity by the program's calibration (no
   default), range the stored radius (at least `min-range`), a spot's cone from the
   stored angle with an inner cone at `1 - spot-blend` (0.15). The records stay.
+- `lower-fromsoft-collision{hit-filters=...}` lowers the map collision files that
+  parts of the chosen hit filters name (required) into `core.collision` soups
+  (`game`, `water`, `game_state<n>` with the file's condition), each triangle with
+  its HitMtrl class's surface (`default` without one, counted); `water=` and
+  `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
+  around the read region. The records it lowered are consumed; files only other
+  filters' parts name stay as source.
+- `lower-fromsoft-object-collision` places every placed object prototype's bodies
+  with each placement into an `objects` soup (`objects_state<n>` for conditioned
+  placements), at their stored pose whatever their motion type (counted);
+  `leave-out=`, `leave-out-motion=` (stored motion types), `reach=N` and
+  `convex-surface=default|render` (render: the surface of the prototype's largest
+  colliding render area, measured on its stored level-0 face sets) are the
+  program's choices.
 - `lower-fromsoft-extras` makes each hang segment a two-point `core.curve` of kind
   `ledge` and each spawn point a `core.marker` of kind `travel`, in source order,
   named as stored. Joining ledges (`primase_meshops::chain`), the surface under
   them (`primase_meshops::SurfaceIndex`), choosing a spawn and naming markers are
   a program's.
 
-The geometry the earlier reader produced by itself is this explicit composition:
-`drop-fromsoft-far, fromsoft-apply-rigid-skinning,
+The collision and geometry the earlier reader produced by itself are this explicit
+composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
+lower-fromsoft-object-collision{leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
+drop-fromsoft-far, fromsoft-apply-rigid-skinning,
 lower-fromsoft-geometry{uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
 (streams, indices, material identities), collision, lights, joined ledges and
 travel markers exactly.
 
-`tests/sekiro_scene.rs` reads slice A with that composition and checks it against
-a SoulsFormats dump of the area (`PRIMASE_FROMSOFT_RIGID_ORACLE`): every placement
-is an MSB part with its model, translation exact and basis within 1e-5; every
+`tests/sekiro_scene.rs` checks reads against a SoulsFormats dump of the area
+(`PRIMASE_FROMSOFT_RIGID_ORACLE`). The whole-area read, before any pass, places
+every dumped map piece and object part except those of the models the dump could
+not read either (missing from the read), and nothing else. Slice A's read accounts
+for every part (kept, outside, missing, empty); every placement is an MSB part
+with its model, translation exact and basis within 1e-5; after the geometry
+composition every
 lowered vertex is a vertex of its FLVER in model space within 0.2 mm; four
 material fixtures worked out by hand from the dump keep their class, base and
-normal texture. `cli/tests/fromsoft_collision_scene.rs` compares the read collision
-with the scene our earlier C# exporter wrote (`PRIMASE_FROMSOFT_SCENE`, a regression
+normal texture. `cli/tests/fromsoft_collision_scene.rs` compares the map collision,
+lowered with the composition's options, with the scene our earlier C# exporter wrote (`PRIMASE_FROMSOFT_SCENE`, a regression
 baseline, read through the ReSkate interchange tables): all non-roof triangles and
 the water table agree exactly. The light, ledge and marker passes are checked by
 hand-worked cases (`tests/extras_policy.rs`, primase-meshops' curve tests); the
@@ -381,12 +411,16 @@ meshes. The FromSoft layer maps left-aligned shape keys through fsnp material
 records. All-ones invalid keys are counted; missing materials remain -1 and are
 counted separately. Contradictory bindings for a valid key fail.
 
-Area assembly selects high-resolution map collision placed with hit filters 8
-(world) and 27 (water). This is a named rideable-map lowering policy. HitMtrl
-IDs map by their base value modulo 100 to the standard skate surfaces. Blockers
-and clouds are excluded; water gets a separate water-mode soup. Selection uses
-triangle centroids within the requested region plus 50 metres. Map offsets
-apply once, and the core source frame reflects Z and reverses winding.
+Map collision decodes compressed-mesh bodies; a body of another shape class (m11_02
+holds `hknpConvexShape` point hulls in files of other hit filters) is listed on
+its file and reported, not read, and `lower-fromsoft-collision` refuses a chosen
+file that has one. The area read keeps every named file whole; map offsets apply once, and the core
+frame reflects the source's Z, so a stored triangle's order faces away (lowering
+reverses it). Which hit filters are ground (the earlier exporter's: 8, world, and
+27), which HitMtrl classes are water (22, 36) or left out (29, invisible
+blockers; 40) and the crop are `lower-fromsoft-collision`'s options. HitMtrl IDs
+map by their base value modulo 100 to core surface names where the class's surface
+is known.
 
 The reader preserves raw authored roof collision. Roof smoothing, generated
 opened-up surfaces, and object collision are not included in this step.
@@ -521,25 +555,32 @@ programs of its layered materials (`fromsoft.shader_programs`);
 `Color(n)` UNORM8 streams listed by `fromsoft.layer_inputs`. Two passes in
 `sekiro::passes` lower them:
 
-- `bake-fromsoft-layers{max-size=N}` (`BakeFromSoftLayers`) bakes static layered
-  materials with base-mip bilinear-wrap sampling at each material's reference
-  size, capped at `max-size` (required: the program's choice; also the size of a
-  group without a colour image). It groups per-triangle inputs into the gated
+- `bake-fromsoft-layers{max-size=N,sample-time=S}` (`BakeFromSoftLayers`) bakes
+  the static layered materials of placed prototypes with base-mip bilinear-wrap
+  sampling at each material's reference size, capped at `max-size` (required: the
+  program's choice; also the size of a group without a colour image). Five of the
+  22 layered G-buffer programs of the inspected corpus read the global time
+  (`FC_GlobalTime`, a texture-coordinate scroll of some layers): they are sampled
+  at `sample-time` seconds (required), counted; the time of day stays zero. It groups per-triangle inputs into the gated
   weight levels and splits indexed parts by level through
   `World::rebuild_primitives`, preserving the other vertex streams and source
   material definitions and dividing main-layer UVs by the tiling the geometry
   pass applied (`fromsoft.uv_tiling`) and the bake period. A single weight level
   preserves the source vertex order. The source resources are put back also when
-  it fails, and the layer inputs are consumed only after it succeeded.
+  it fails. Only the layer inputs of the primitives it baked are consumed, after
+  it succeeded; an unplaced prototype's stay, and a level-of-detail form carrying
+  inputs is refused before anything changes (`select-lod` first).
 - `lower-fromsoft-materials{layers=preserve|preview}` (`LowerFromSoftMaterials`)
   lowers every source material to core PBR, texture transforms relative to the
   applied tiling. A layered material no pass baked needs the program's choice:
   `preserve` keeps it as source data (layer inputs included), counted; `preview`
-  lowers it from its main-layer preview, counted, and drops the layer inputs
-  (shader inputs, not vertex colours); no choice is an error. Normal maps of
+  lowers it from its main-layer preview, counted, and drops the layer inputs of
+  the primitives drawing a material it previewed (shader inputs, not vertex
+  colours); a material it did not lower (a skipped class) keeps its inputs; no
+  choice is an error. Normal maps of
   shaders whose basis is assumed or unclassified are counted.
 
-The earlier skate route's materials are `bake-fromsoft-layers{max-size=512}` then
+The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sample-time=0}` then
 `lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.
 
 Generated texture names begin with `bake_`, including colour, normal, ORM and

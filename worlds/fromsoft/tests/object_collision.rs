@@ -100,7 +100,7 @@ fn castle_object_bodies() -> Result<()> {
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "hkx"))
     {
-        let bodies = collision::read_bodies(&fs::read(&path)?, None, -1)
+        let bodies = collision::read_bodies(&fs::read(&path)?, None)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let mut c = Cursor::new(fs::read(path.with_extension("bodies"))?);
         assert_eq!(bodies.len(), u32le(&mut c)? as usize);

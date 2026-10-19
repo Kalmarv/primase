@@ -66,6 +66,100 @@ fn near(points: &HashMap<[i64; 3], Vec<[f32; 3]>>, p: [f32; 3], tolerance: f32) 
     false
 }
 
+/// The dump's MSB map piece and object parts, by our placement source label.
+fn dump_parts(dump: &Path) -> Result<BTreeMap<String, Value>> {
+    jsonl(&dump.join("parts.jsonl"))?
+        .into_iter()
+        .map(|p| Ok((format!("m11_01_00_00:{}", p["name"].as_str().ok_or("name")?), p)))
+        .collect()
+}
+
+/// A dumped part's model as our prototype key.
+fn model_key(part: &Value) -> Result<String> {
+    let model = part["model"].as_str().ok_or("model")?;
+    Ok(if part["kind"] == "object" {
+        format!("obj/{model}")
+    } else {
+        format!("m11_01_00_00/{model}")
+    })
+}
+
+#[test]
+fn whole_area_placements_in_both_directions() -> Result<()> {
+    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+        return Ok(());
+    };
+    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+        return Ok(());
+    };
+    let Some(dump) = real_data("PRIMASE_FROMSOFT_RIGID_ORACLE") else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1024 * 1024 * 1024,
+    };
+    let mut world = World::default();
+    let report = sekiro::read_area(root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
+    let parts = dump_parts(&dump)?;
+    // the models the dump could not read as rigid geometry are the ones the read did not find
+    let undumped: std::collections::BTreeSet<String> = jsonl(&dump.join("missing-rigid.jsonl"))?
+        .iter()
+        .map(|r| Ok(r["key"].as_str().ok_or("key")?.to_owned()))
+        .collect::<Result<_>>()?;
+    assert_eq!(
+        report
+            .missing_models
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        undumped
+    );
+    let ours: BTreeMap<String, String> = world
+        .iter::<Instance>()
+        .map(|(e, i)| {
+            Ok((
+                world
+                    .get::<Source>(e)
+                    .ok_or("placement without source")?
+                    .0
+                    .clone(),
+                world
+                    .get::<PrototypeSource>(i.prototype)
+                    .ok_or("prototype without source")?
+                    .id
+                    .clone(),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    assert_eq!(ours.len(), report.placements, "placement labels are unique");
+    // every placement a dumped part of its model; every dumped part a placement unless its model is missing or empty
+    let mut missing = 0;
+    let mut absent = Vec::new();
+    for (source, part) in &parts {
+        let key = model_key(part)?;
+        match ours.get(source) {
+            Some(id) => assert_eq!(*id, key, "{source}"),
+            None if report.missing_models.contains(&key) => missing += 1,
+            None => absent.push(source.clone()),
+        }
+    }
+    assert!(
+        ours.keys().all(|s| parts.contains_key(s)),
+        "a placement that is no dumped part"
+    );
+    assert_eq!((report.skipped_outside, report.skipped_missing), (0, missing));
+    assert_eq!(absent.len(), report.skipped_empty, "parts not placed: {absent:?}");
+    println!(
+        "whole area: {} parts, {} placements, {missing} of missing models, {} of empty models {absent:?}",
+        parts.len(),
+        ours.len(),
+        report.skipped_empty
+    );
+    Ok(())
+}
+
 #[test]
 fn installed_area_against_soulsformats() -> Result<()> {
     let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
@@ -103,19 +197,14 @@ fn installed_area_against_soulsformats() -> Result<()> {
         report.textures,
         report.shader_programs
     );
-    let lowered = common::run(&mut world, common::LEGACY_GEOMETRY)?;
-    for step in &lowered.steps {
-        println!(
-            "{}: {:?} {:?}",
-            step.pass, step.log.counts, step.log.approximations
-        );
-    }
-
-    // Placements: every one an MSB part, with its prototype and its matrix.
-    let parts: BTreeMap<String, Value> = jsonl(&dump.join("parts.jsonl"))?
-        .into_iter()
-        .map(|p| Ok((format!("m11_01_00_00:{}", p["name"].as_str().ok_or("name")?), p)))
-        .collect::<Result<_>>()?;
+    // Placements, as read (before any pass drops some): every one an MSB part, with its prototype and its matrix,
+    // and every part accounted for: kept, outside the region, or of a model missing or empty.
+    let parts = dump_parts(&dump)?;
+    assert_eq!(
+        report.placements + report.skipped_outside + report.skipped_missing + report.skipped_empty,
+        parts.len(),
+        "parts accounted for"
+    );
     let mut largest = 0f32;
     let mut placements = 0;
     for (e, instance) in world.iter::<Instance>() {
@@ -123,16 +212,10 @@ fn installed_area_against_soulsformats() -> Result<()> {
         let part = parts
             .get(source)
             .ok_or_else(|| format!("{source}: not an MSB part"))?;
-        let model = part["model"].as_str().ok_or("model")?;
-        let key = if part["kind"] == "object" {
-            format!("obj/{model}")
-        } else {
-            format!("m11_01_00_00/{model}")
-        };
         let proto = world
             .get::<PrototypeSource>(instance.prototype)
             .ok_or("prototype without source")?;
-        assert_eq!(proto.id, key, "{source} prototype");
+        assert_eq!(proto.id, model_key(part)?, "{source} prototype");
         let rows: [[f32; 3]; 4] = serde_json::from_value(part["matrix"].clone())?;
         let want = FRAME.transform(&Transform { cols: rows });
         let got = world.get::<Transform>(e).ok_or("placement without transform")?;
@@ -152,6 +235,14 @@ fn installed_area_against_soulsformats() -> Result<()> {
     println!(
         "placements {placements}: every one an MSB part with its model, translation exact, basis within {largest:e}"
     );
+
+    let lowered = common::run(&mut world, common::LEGACY_GEOMETRY)?;
+    for step in &lowered.steps {
+        println!(
+            "{}: {:?} {:?}",
+            step.pass, step.log.counts, step.log.approximations
+        );
+    }
 
     // Geometry: every lowered vertex is a vertex of the dumped model, in model space, within 0.2 mm.
     let models: BTreeMap<String, String> = jsonl(&dump.join("models.jsonl"))?

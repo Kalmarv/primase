@@ -395,7 +395,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_FROMSOFT_RIGID_ORACLE",
         kind: Kind::Input,
         gate: true,
-        about: r#"a SoulsFormats dump of an area: parts.jsonl (every MSB part with its model and matrix), models.jsonl and per placed model a binary of mesh/vertex counts followed by position and normal f32 triples in model space; worlds/fromsoft/tests/rigid_census.rs, sekiro_scene.rs"#,
+        about: r#"a SoulsFormats dump of an area: parts.jsonl (every MSB map piece and object part with its model and matrix), models.jsonl, missing-rigid.jsonl (placed models it could not dump, with why) and per placed model a binary of mesh/vertex counts followed by position and normal f32 triples in model space; worlds/fromsoft/tests/rigid_census.rs, sekiro_scene.rs"#,
         status: Status::Live,
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
     },

@@ -1,8 +1,14 @@
-//! The FromSoft reader's raw collision against the scene our earlier C# exporter wrote for the same region
-//! (`PRIMASE_FROMSOFT_SCENE`, a regression baseline), by triangle values, not index encoding. Roof smoothing and
-//! opened-up collision are later passes; all remaining non-roof triangles and the water table must agree exactly.
+//! The FromSoft reader's map collision, lowered by the earlier exporter's choices made explicit (parts of hit filters
+//! 8 and 27, classes 22 and 36 as water, 29 and 40 left out, 50 m around the region), against the scene our earlier
+//! C# exporter wrote for the same region (`PRIMASE_FROMSOFT_SCENE`, a regression baseline), by triangle values, not
+//! index encoding. Roof smoothing and opened-up collision are later passes; all remaining non-roof triangles and the
+//! water table must agree exactly.
 use primase_core::{Collision, World};
-use primase_fromsoft::{dcx::Decoder, sekiro, sekiro::source::CollisionSource};
+use primase_fromsoft::{
+    dcx::Decoder,
+    sekiro,
+    sekiro::source::{CollisionSource, MapCollision, ObjectBodies},
+};
 use primase_reskate::interchange::tables::{SoupTable, read_soup};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
@@ -64,6 +70,46 @@ fn reader_collision_values() -> Result<()> {
         &mut world,
     )?;
     println!("collision {:?}", report.collision);
+    // the read keeps what the lowering may leave out: parts of other hit filters, motion-type-2 object bodies
+    let other_filters = |world: &World| {
+        world
+            .iter::<MapCollision>()
+            .filter(|(_, m)| m.parts.iter().all(|p| ![8, 27].contains(&p.hit_filter)))
+            .count()
+    };
+    let kept = other_filters(&world);
+    assert!(
+        kept > 0,
+        "no collision file of other hit filters read: {:?}",
+        report.collision
+    );
+    let keyframed = world
+        .iter::<ObjectBodies>()
+        .flat_map(|(_, b)| &b.bodies)
+        .filter(|b| b.motion_type == 2)
+        .count();
+    assert!(
+        keyframed > 0,
+        "no motion-type-2 body read: {:?}",
+        report.object_collision
+    );
+    let mut registry = primase_core::pass::PassRegistry::new();
+    sekiro::passes::register(&mut registry);
+    let manager = primase_core::pass::PassManager::new(registry);
+    let mut run = primase_core::pass::RunReport::default();
+    manager.run(
+        &mut world,
+        &manager
+            .registry
+            .parse("lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50}")?,
+        &mut run,
+    )?;
+    println!("lowered {:?}", run.steps[0].log.counts);
+    assert_eq!(other_filters(&world), kept, "other filters' files stay as source");
+    assert_eq!(
+        run.steps[0].log.counts["collision files only other hit filters' parts name, left as source"],
+        kept as u64
+    );
     let collisions = want["collision"].as_array().ok_or("collision list")?;
     let game = collisions
         .iter()

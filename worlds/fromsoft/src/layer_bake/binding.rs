@@ -138,9 +138,13 @@ impl Prepared {
     /// Frozen-frame preview binding: caller supplies decoded views by texture
     /// name and sRGB flag. Missing slots use explicitly counted preview defaults;
     /// no missing resource is silently supplied by the generic interpreter.
+    /// A program that reads the global time (`FC_GlobalTime`, which scrolls
+    /// some layers' texture coordinates) is sampled at `sample_time` seconds,
+    /// counted; the time of day stays at frozen zero, counted where reflected.
     pub fn new(
         bytes: &[u8],
         material: &LayeredMaterial,
+        sample_time: f32,
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
         let program = Program::parse(bytes).map_err(dxbc)?;
@@ -312,6 +316,16 @@ impl Prepared {
             &[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
         );
         set("SC_RenderCameraPos", 0, &[0., 1000., 0., 1.]);
+        if !sample_time.is_finite() {
+            return Err(invalid("layer binding", 0, "nonfinite sample time"));
+        }
+        set("FC_GlobalTime", 0, &[sample_time]);
+        if offsets.contains_key("FC_GlobalTime") {
+            policies.insert("global time at the program's sample time".into(), 1);
+        }
+        if offsets.contains_key("FC_TimeOfDay") {
+            policies.insert("time of day left at frozen zero".into(), 1);
+        }
         // Material radiance is baked at unit exposure, not a runtime camera's
         // pre-exposure. Otherwise zero-initialized constants suppress emission.
         set("SC_PreExposure", 0, &[1.]);

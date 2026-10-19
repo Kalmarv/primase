@@ -13,6 +13,8 @@ pub struct Soup {
     pub unmapped: usize,
     pub dead_primitives: usize,
     pub invalid_material_keys: usize,
+    /// The shape classes of bodies [`read_map`] has no decoder for, one per body: listed, not read.
+    pub unread_bodies: Vec<String>,
 }
 
 fn material_keys(shape: Value<'_, '_>) -> Result<(BTreeMap<u32, i32>, usize)> {
@@ -59,8 +61,8 @@ fn material_keys(shape: Value<'_, '_>) -> Result<(BTreeMap<u32, i32>, usize)> {
     Ok((result, invalid_keys))
 }
 
-/// Decode map compressed meshes. Other shape classes fail explicitly until a
-/// shape decoder is supplied; they are never reported as empty successful soups.
+/// Decode map compressed meshes. A body of another shape class is not read: its
+/// class is listed in [`Soup::unread_bodies`], never taken for an empty body.
 pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     let tag = Tagfile::read(bytes, compendium)?;
     let variants = tag.root()?.field("namedVariants")?.array()?;
@@ -83,11 +85,8 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                 }
                 let shape = body.field("shape")?.dereference()?;
                 if shape.type_name() != "fsnpCustomParamCompressedMeshShape" {
-                    return Err(invalid(
-                        "collision",
-                        shape.offset,
-                        format!("unsupported shape {}", shape.type_name()),
-                    ));
+                    soup.unread_bodies.push(shape.type_name().to_owned());
+                    continue;
                 }
                 let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
                 let (keys, invalid_keys) = material_keys(shape)?;
@@ -123,8 +122,10 @@ pub struct Body {
 
 /// Object bodies in their file frame. Convex shapes use an explicitly named
 /// offset-plane tessellation policy; capsules become boxes around their core.
-/// Unsupported geometry is an error, never an empty successful body.
-pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>, convex_material: i32) -> Result<Vec<Body>> {
+/// Convex shapes store no material: their triangles' materials are -1, as an
+/// unbound shape key's. Unsupported geometry is an error, never an empty
+/// successful body.
+pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<Body>> {
     let tag = Tagfile::read(bytes, compendium)?;
     let variants = tag.root()?.field("namedVariants")?.array()?;
     let mut result = Vec::new();
@@ -165,7 +166,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>, convex_materia
                     }
                     "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" => {
                         soup.triangles = primase_havok::ConvexCore::read(shape)?.expanded_triangles()?;
-                        soup.materials.resize(soup.triangles.len(), convex_material);
+                        soup.materials.resize(soup.triangles.len(), -1);
                     }
                     other => {
                         return Err(invalid(

@@ -1,6 +1,7 @@
 //! `lower-fromsoft-lights`: BTL light records (`fromsoft.light`) as core point and spot lights. BTL's colour transfer
 //! function, the unit of its powers and its cone's falloff have not been established against the game's lighting
 //! shader, so each interpretation is a named, counted assumption and the power's calibration is the program's.
+use super::settings::{Factor, Fraction, Metres};
 use super::source::{LightKind, LightSource};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Light, Transform, World};
@@ -15,40 +16,38 @@ use primase_core::{Component, Light, Transform, World};
 /// values and tangent). Directional lights are left unlowered, counted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LowerFromSoftLights {
-    pub candela_per_power: f64,
-    pub min_range: f32,
-    pub spot_blend: f32,
+    /// Candela per unit of the stored diffuse power.
+    pub candela_per_power: Factor,
+    /// The least range a light gets.
+    pub min_range: Metres,
+    /// The inner cone as `1 - blend` of the outer.
+    pub spot_blend: Fraction,
 }
 
 impl LowerFromSoftLights {
+    /// The lights at the program's calibration, ranges as stored (`min-range` 0), the inner cone at 0.85 of the outer
+    /// (`spot-blend` 0.15).
+    pub fn new(candela_per_power: Factor) -> Self {
+        LowerFromSoftLights {
+            candela_per_power,
+            min_range: Metres::new(0.).expect("zero"),
+            spot_blend: Fraction::new(0.15).expect("a fraction"),
+        }
+    }
+
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut candela = None;
-        let mut pass = LowerFromSoftLights {
-            candela_per_power: 0.,
-            min_range: 0.,
-            spot_blend: 0.15,
-        };
+        let candela = o
+            .get("candela-per-power")
+            .ok_or("candela-per-power is required: the program calibrates BTL power")?;
+        let mut pass = Self::new(Factor::parse("candela-per-power", candela)?);
         for (k, v) in o {
-            let number = || {
-                v.parse::<f64>()
-                    .ok()
-                    .filter(|x| x.is_finite() && *x >= 0.)
-                    .ok_or_else(|| format!("{k}={v} is not a finite number at least 0"))
-            };
             match k.as_str() {
-                "candela-per-power" => candela = Some(number()?),
-                "min-range" => pass.min_range = number()? as f32,
-                "spot-blend" => {
-                    pass.spot_blend = number()? as f32;
-                    if pass.spot_blend > 1. {
-                        return Err(format!("spot-blend={v} is more than 1"));
-                    }
-                }
+                "candela-per-power" => {}
+                "min-range" => pass.min_range = Metres::parse(k, v)?,
+                "spot-blend" => pass.spot_blend = Fraction::parse(k, v)?,
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        pass.candela_per_power =
-            candela.ok_or("candela-per-power is required: the program calibrates BTL power")?;
         Ok(pass)
     }
 }
@@ -96,16 +95,16 @@ impl Pass for LowerFromSoftLights {
                     let outer = full.clamp(1., 179.).to_radians() / 2.;
                     log.approximate("spot inner cone from the fixed blend", 1);
                     primase_core::LightKind::Spot {
-                        inner_cone: outer * (1. - self.spot_blend),
+                        inner_cone: outer * (1. - self.spot_blend.get()),
                         outer_cone: outer,
                     }
                 }
             };
-            let intensity = f64::from(source.diffuse_power) * self.candela_per_power;
+            let intensity = f64::from(source.diffuse_power) * self.candela_per_power.get();
             if !intensity.is_finite() || intensity < 0. || !source.radius.is_finite() {
                 return Err(format!("{e:?}: invalid light power or radius"));
             }
-            if source.radius < self.min_range {
+            if source.radius < self.min_range.get() {
                 log.count("ranges raised to the minimum", 1);
             }
             log.approximate("colour bytes read as sRGB", 1);
@@ -119,7 +118,7 @@ impl Pass for LowerFromSoftLights {
                         .diffuse
                         .map(|c| primase_image::srgb_to_linear(f64::from(c) / 255.) as f32),
                     intensity: intensity as f32,
-                    range: Some(source.radius.max(self.min_range)),
+                    range: Some(source.radius.max(self.min_range.get())),
                     cast_shadows: Some(source.cast_shadows),
                 },
             ));

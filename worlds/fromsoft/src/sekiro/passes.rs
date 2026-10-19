@@ -2,6 +2,7 @@
 //! part of it, states what it approximates and logs its counts. Choices that change what is produced (which face
 //! sets, which material classes, repairs) are options with the faithful reading as the default.
 use super::blockers::{self, BlockerCards};
+use super::settings::{PixelCap, Seconds};
 use super::source::{LayerInputs, MaterialSlots, PrototypeSource};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
@@ -14,14 +15,82 @@ use primase_core::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Which model `lower-fromsoft-geometry` lowers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Pose {
-    /// `fromsoft.rigid_model`: static meshes posed by their bones (`fromsoft-apply-rigid-skinning` first).
-    #[default]
-    Rigid,
-    /// `fromsoft.flver` as stored: static vertices left in their bones' spaces.
-    Stored,
+/// A two-way choice of `lower-fromsoft-geometry` with its option words; the first is the default.
+macro_rules! choice {
+    ($(#[$doc:meta])* $name:ident { $(#[$da:meta])* $a:ident = $wa:literal, $(#[$db:meta])* $b:ident = $wb:literal $(,)? }) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+        pub enum $name {
+            $(#[$da])*
+            #[default]
+            $a,
+            $(#[$db])*
+            $b,
+        }
+        impl $name {
+            /// Its option word.
+            pub fn word(self) -> &'static str {
+                match self {
+                    Self::$a => $wa,
+                    Self::$b => $wb,
+                }
+            }
+            fn parse(key: &str, value: &str) -> Result<Self, String> {
+                match value {
+                    $wa => Ok(Self::$a),
+                    $wb => Ok(Self::$b),
+                    _ => Err(format!("{key}={value} is not {} or {}", $wa, $wb)),
+                }
+            }
+        }
+    };
+}
+
+choice! {
+    /// Which model `lower-fromsoft-geometry` lowers (`pose=`).
+    Pose {
+        /// `fromsoft.rigid_model`: static meshes posed by their bones (`fromsoft-apply-rigid-skinning` first).
+        Rigid = "rigid",
+        /// `fromsoft.flver` as stored: static vertices left in their bones' spaces.
+        Stored = "stored",
+    }
+}
+choice! {
+    /// What `lower-fromsoft-geometry` does with a material's UV tiling (`uv-tiling=`).
+    Tiling {
+        /// UV0 as stored.
+        Keep = "keep",
+        /// UV0 multiplied by the material's tiling, recorded as `fromsoft.uv_tiling`.
+        Apply = "apply",
+    }
+}
+choice! {
+    /// The winding `lower-fromsoft-geometry` gives a part (`winding=`).
+    Winding {
+        /// As stored.
+        Stored = "stored",
+        /// Reversed where the part's stored normals oppose its winding on balance.
+        Normals = "normals",
+    }
+}
+choice! {
+    /// What `lower-fromsoft-geometry` does with degenerate triangles, of doubled area squared at most 1e-14
+    /// (`degenerates=`).
+    Degenerates {
+        /// Kept.
+        Keep = "keep",
+        /// Dropped, counted.
+        Drop = "drop",
+    }
+}
+choice! {
+    /// What `lower-fromsoft-geometry` does with interior blocker cards (`blocker-cards=`).
+    Cards {
+        /// Drawn as any mesh.
+        Draw = "draw",
+        /// Their level-0 parts recorded in `fromsoft.blocker_cards` with every placement of their prototype.
+        Record = "record",
+    }
 }
 
 /// A material's UV tiling applied to a mesh's UV0 by `lower-fromsoft-geometry{uv-tiling=apply}`
@@ -55,20 +124,12 @@ impl Component for UvTiling {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LowerFromSoftGeometry {
     pub pose: Pose,
-    pub apply_uv_tiling: bool,
-    pub repair_winding: bool,
-    pub drop_degenerates: bool,
-    /// Material skip classes left out, by their [`materials::skip_class`] word.
-    pub leave_out: BTreeSet<String>,
-    pub record_blocker_cards: bool,
-}
-
-fn choice(key: &str, value: &str, options: [&str; 2]) -> Result<bool, String> {
-    match value {
-        v if v == options[0] => Ok(false),
-        v if v == options[1] => Ok(true),
-        _ => Err(format!("{key}={value} is not {} or {}", options[0], options[1])),
-    }
+    pub uv_tiling: Tiling,
+    pub winding: Winding,
+    pub degenerates: Degenerates,
+    /// Material skip classes whose meshes are not lowered.
+    pub leave_out: BTreeSet<materials::SkipClass>,
+    pub blocker_cards: Cards,
 }
 
 impl LowerFromSoftGeometry {
@@ -76,25 +137,17 @@ impl LowerFromSoftGeometry {
         let mut pass = Self::default();
         for (k, v) in o {
             match k.as_str() {
-                "pose" => {
-                    pass.pose = if choice(k, v, ["rigid", "stored"])? {
-                        Pose::Stored
-                    } else {
-                        Pose::Rigid
-                    }
-                }
-                "uv-tiling" => pass.apply_uv_tiling = choice(k, v, ["keep", "apply"])?,
-                "winding" => pass.repair_winding = choice(k, v, ["stored", "normals"])?,
-                "degenerates" => pass.drop_degenerates = choice(k, v, ["keep", "drop"])?,
-                "blocker-cards" => pass.record_blocker_cards = choice(k, v, ["draw", "record"])?,
+                "pose" => pass.pose = Pose::parse(k, v)?,
+                "uv-tiling" => pass.uv_tiling = Tiling::parse(k, v)?,
+                "winding" => pass.winding = Winding::parse(k, v)?,
+                "degenerates" => pass.degenerates = Degenerates::parse(k, v)?,
+                "blocker-cards" => pass.blocker_cards = Cards::parse(k, v)?,
                 "leave-out" => {
                     for class in v.split('+').filter(|c| !c.is_empty()) {
-                        if !materials::SKIP_CLASSES.iter().any(|(word, _)| *word == class) {
-                            return Err(format!(
-                                "leave-out class {class} is not sky, light-volume or shadow"
-                            ));
-                        }
-                        pass.leave_out.insert(class.to_owned());
+                        pass.leave_out
+                            .insert(materials::SkipClass::from_word(class).ok_or_else(|| {
+                                format!("leave-out class {class} is not sky, light-volume or shadow")
+                            })?);
                     }
                 }
                 _ => return Err(format!("unknown option {k}")),
@@ -130,14 +183,14 @@ impl LowerFromSoftGeometry {
         let Some(mut part) = model.decode(mesh, face_set).map_err(|e| e.to_string())? else {
             return Ok(None);
         };
-        if self.apply_uv_tiling {
+        if self.uv_tiling == Tiling::Apply {
             part.apply_uv_scale(material.uv_scale)
                 .map_err(|e| e.to_string())?;
         }
-        if self.repair_winding && part.repair_winding().map_err(|e| e.to_string())? {
+        if self.winding == Winding::Normals && part.repair_winding().map_err(|e| e.to_string())? {
             log.approximate("parts reversed to agree with their stored normals", 1);
         }
-        if self.drop_degenerates {
+        if self.degenerates == Degenerates::Drop {
             log.count(
                 "degenerate triangles dropped",
                 part.drop_degenerates().map_err(|e| e.to_string())? as u64,
@@ -170,13 +223,13 @@ impl LowerFromSoftGeometry {
             let material = world
                 .get::<Material>(entity)
                 .ok_or_else(|| format!("{prototype:?}: slot {} has no fromsoft.material", mesh.material))?;
-            if let Some(class) = material.skip.as_deref().and_then(materials::skip_class)
-                && self.leave_out.contains(class)
+            if let Some(class) = material.skip
+                && self.leave_out.contains(&class)
             {
-                log.count(&format!("meshes left out: {class}"), 1);
+                log.count(&format!("meshes left out: {}", class.word()), 1);
                 continue;
             }
-            if self.record_blocker_cards && blockers::is_card(material) {
+            if self.blocker_cards == Cards::Record && blockers::is_card(material) {
                 if let Some(face_set) = mesh.faces.iter().position(|f| f.is_lod0())
                     && let Some(part) = self.part(model, index, face_set, material, log)?
                 {
@@ -262,20 +315,34 @@ impl Pass for LowerFromSoftGeometry {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        let mut set = |k: &str, on: bool, v: &str| {
-            if on {
-                o.insert(k.to_owned(), v.to_owned());
+        // the settings that differ from the defaults
+        for (k, word, default) in [
+            ("pose", self.pose.word(), Pose::default().word()),
+            ("uv-tiling", self.uv_tiling.word(), Tiling::default().word()),
+            ("winding", self.winding.word(), Winding::default().word()),
+            (
+                "degenerates",
+                self.degenerates.word(),
+                Degenerates::default().word(),
+            ),
+            (
+                "blocker-cards",
+                self.blocker_cards.word(),
+                Cards::default().word(),
+            ),
+        ] {
+            if word != default {
+                o.insert(k.to_owned(), word.to_owned());
             }
-        };
-        set("pose", self.pose == Pose::Stored, "stored");
-        set("uv-tiling", self.apply_uv_tiling, "apply");
-        set("winding", self.repair_winding, "normals");
-        set("degenerates", self.drop_degenerates, "drop");
-        set("blocker-cards", self.record_blocker_cards, "record");
+        }
         if !self.leave_out.is_empty() {
             o.insert(
                 "leave-out".into(),
-                self.leave_out.iter().cloned().collect::<Vec<_>>().join("+"),
+                self.leave_out
+                    .iter()
+                    .map(|c| c.word())
+                    .collect::<Vec<_>>()
+                    .join("+"),
             );
         }
         o
@@ -325,7 +392,7 @@ impl Pass for LowerFromSoftGeometry {
             }
             lowered.push(self.lower(world, prototype, log)?);
         }
-        if self.apply_uv_tiling {
+        if self.uv_tiling == Tiling::Apply {
             let used: BTreeSet<Entity> = lowered
                 .iter()
                 .flat_map(|l| {
@@ -453,39 +520,44 @@ impl Pass for DropFromSoftFar {
     }
 }
 
-/// `bake-fromsoft-layers{max-size=N}`: bake the static layered materials of the lowered prototypes (a
-/// `fromsoft.material` with a layered definition, drawn by primitives carrying `fromsoft.layer_inputs`) into core
-/// PBR from the source programs and texture files the reader kept. Each material group's triangles are reduced to
-/// their mean inputs, clustered into at most three constant levels, and each level's shader evaluated into albedo,
-/// normal, gloss (ORM) and HDR emission images at the group's reference size capped at `max-size` (required: the
-/// program's quality choice; the cap is also the size of a group without a colour image), sampled from base mips
-/// with bilinear wrapping in a static frame (unit pre-exposure, fixed camera); parts are split by level through
-/// `World::rebuild_primitives`. Consumes the layer inputs of what it baked. The source resources are kept, also when
-/// it fails. Only prototypes' own meshes are baked: choose a level of detail first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `bake-fromsoft-layers{max-size=N,sample-time=S}`: bake the static layered materials of the placed lowered
+/// prototypes (a `fromsoft.material` with a layered definition, drawn by primitives carrying `fromsoft.layer_inputs`)
+/// into core PBR from the source programs and texture files the reader kept. Each material group's triangles are
+/// reduced to their mean inputs, clustered into at most three constant levels, and each level's shader evaluated
+/// into albedo, normal, gloss (ORM) and HDR emission images at the group's reference size capped at `max-size`, sampled
+/// from base mips with bilinear wrapping in a static frame (unit pre-exposure, fixed camera, the global time at
+/// `sample-time` seconds, which scrolls some layers); parts are split by level through `World::rebuild_primitives`.
+/// Both options are required: the cap is the program's quality choice (also the size of a group without a colour
+/// image), the time its choice of the animated layers' frame.
+///
+/// The layer inputs of the primitives it baked are consumed (their `Color(n)` streams and entries); unplaced
+/// prototypes' stay. A level-of-detail form or a placed mesh without a source prototype that carries layer inputs is
+/// refused before anything changes: choose a level of detail first (`select-lod`). The source resources are kept,
+/// also when it fails.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BakeFromSoftLayers {
-    pub max_size: u32,
+    /// The baked images' largest edge.
+    pub max_size: PixelCap,
+    /// The seconds of global time the programs that read it are sampled at.
+    pub sample_time: Seconds,
 }
 
 impl BakeFromSoftLayers {
     pub fn from_options(o: &Options) -> Result<Self, String> {
         let mut max_size = None;
+        let mut sample_time = None;
         for (k, v) in o {
             match k.as_str() {
-                "max-size" => {
-                    max_size = Some(
-                        v.parse::<u32>()
-                            .ok()
-                            .filter(|n| (1..=4096).contains(n))
-                            .ok_or_else(|| format!("max-size={v} is not a size of 1 to 4096 pixels"))?,
-                    )
-                }
+                "max-size" => max_size = Some(PixelCap::parse(k, v)?),
+                "sample-time" => sample_time = Some(Seconds::parse(k, v)?),
                 _ => return Err(format!("unknown option {k}")),
             }
         }
         Ok(BakeFromSoftLayers {
             max_size: max_size
                 .ok_or("max-size is required: the baked images' largest edge is the program's choice")?,
+            sample_time: sample_time
+                .ok_or("sample-time is required: the frame of the animated layers is the program's choice")?,
         })
     }
 }
@@ -495,7 +567,10 @@ impl Pass for BakeFromSoftLayers {
         "bake-fromsoft-layers"
     }
     fn options(&self) -> Options {
-        Options::from([("max-size".to_owned(), self.max_size.to_string())])
+        Options::from([
+            ("max-size".to_owned(), self.max_size.to_string()),
+            ("sample-time".to_owned(), self.sample_time.to_string()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &[Material::NAME, LayerInputs::NAME]
@@ -519,10 +594,32 @@ impl Pass for BakeFromSoftLayers {
         true
     }
     fn approximates(&self) -> &'static str {
-        "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame"
+        "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame at the sample time"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use super::source::{ShaderPrograms, TexturePayloads};
+        // the meshes it bakes: placed source prototypes'; inputs elsewhere are refused (a form) or left (unplaced)
+        let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        let forms: BTreeSet<Entity> = world
+            .iter::<Lods>()
+            .flat_map(|(_, l)| l.forms.iter().map(|f| f.form))
+            .collect();
+        let mut unplaced = 0;
+        for (e, _) in world.iter::<LayerInputs>() {
+            if placed.contains(&e) && world.has::<PrototypeSource>(e) {
+                continue;
+            }
+            if forms.contains(&e) || placed.contains(&e) {
+                return Err(format!(
+                    "{e:?} carries layer inputs this bake does not bake (a level-of-detail form, or a placed mesh \
+                     without fromsoft.prototype): choose a level of detail first (select-lod)"
+                ));
+            }
+            unplaced += 1;
+        }
+        if unplaced > 0 {
+            log.count("unplaced meshes whose layer inputs stay", unplaced);
+        }
         // held apart while the world changes, and put back whatever happens
         let shaders = world.remove_resource::<ShaderPrograms>().unwrap_or_default();
         let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
@@ -532,13 +629,22 @@ impl Pass for BakeFromSoftLayers {
                 .iter::<PrototypeSource>()
                 .map(|(e, s)| (s.id.clone(), e))
                 .collect();
-            super::bake_assembly::assemble(&bake, &prototypes, self.max_size, world)
+            super::bake_assembly::assemble(
+                &bake,
+                &prototypes,
+                self.max_size.get(),
+                self.sample_time.get(),
+                world,
+            )
         })();
         world.insert_resource(shaders);
         world.insert_resource(payloads);
-        let report = result.map_err(|e| e.to_string())?;
+        let (report, baked) = result.map_err(|e| e.to_string())?;
         // counted after the split: a part baked at k levels gives k primitives' streams
-        log.count("layer input streams consumed", LayerInputs::remove_all(world));
+        log.count(
+            "layer input streams consumed",
+            LayerInputs::consume(world, |e, i, _| baked.contains(&(e, i))),
+        );
         for (k, v) in [
             ("source materials baked", report.source_materials),
             ("bake groups", report.materials),
@@ -628,16 +734,17 @@ impl Pass for LowerFromSoftMaterials {
         let payloads = world.remove_resource::<TexturePayloads>().unwrap_or_default();
         let lowered = super::pbr::lower_drawn(world, &payloads.0, self.layers);
         world.insert_resource(payloads);
-        let lowered = lowered.map_err(|e| e.to_string())?;
-        if self.layers == Some(super::pbr::Layers::Preview) {
-            // inputs still here drive layers no pass evaluated: not vertex colours, so they go
-            let dropped = LayerInputs::remove_all(world);
-            if dropped > 0 {
-                log.approximate(
-                    "layer input streams dropped with layered materials lowered from previews",
-                    dropped,
-                );
-            }
+        let (lowered, previewed) = lowered.map_err(|e| e.to_string())?;
+        // the inputs of the layers a preview stands for: not vertex colours, so they go with the layers; the inputs of
+        // materials left as source data stay
+        let dropped = LayerInputs::consume(world, |_, _, p| {
+            p.material.is_some_and(|m| previewed.contains(&m))
+        });
+        if dropped > 0 {
+            log.approximate(
+                "layer input streams dropped with layered materials lowered from previews",
+                dropped,
+            );
         }
         for (k, v) in lowered.counts {
             log.count(&k, v);
@@ -671,10 +778,24 @@ pub fn register(registry: &mut PassRegistry) {
     registry.register_requiring(
         "bake-fromsoft-layers",
         |o| Ok(Box::new(BakeFromSoftLayers::from_options(o)?)),
-        &[("max-size", "512")],
+        &[("max-size", "512"), ("sample-time", "0")],
     );
     registry.register("lower-fromsoft-materials", |o| {
         Ok(Box::new(LowerFromSoftMaterials::from_options(o)?))
+    });
+    registry.register_requiring(
+        "lower-fromsoft-collision",
+        |o| {
+            Ok(Box::new(super::collision::LowerFromSoftCollision::from_options(
+                o,
+            )?))
+        },
+        &[("hit-filters", "8+27")],
+    );
+    registry.register("lower-fromsoft-object-collision", |o| {
+        Ok(Box::new(
+            super::objects::LowerFromSoftObjectCollision::from_options(o)?,
+        ))
     });
     registry.register(
         "lower-fromsoft-extras",
@@ -685,4 +806,171 @@ pub fn register(registry: &mut PassRegistry) {
         |o| Ok(Box::new(super::lights::LowerFromSoftLights::from_options(o)?)),
         &[("candela-per-power", "1")],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materials::LayeredMaterial;
+
+    /// A layered source material (no texture bound), `skip` its skip class.
+    fn layered(skip: Option<materials::SkipClass>) -> Material {
+        let mut m = materials::resolve(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                gx: vec![],
+                textures: vec![],
+            },
+            None,
+            |_| false,
+        );
+        m.albedo = None;
+        m.normal = None;
+        m.skip = skip;
+        m.layered = Some(LayeredMaterial {
+            mtd: m.mtd.clone(),
+            definition: crate::mtd::MaterialDefinition {
+                shader: "M[Multiple].spx".into(),
+                description: String::new(),
+                parameters: vec![],
+                textures: vec![],
+                block_lengths: vec![],
+            },
+            bindings: BTreeMap::new(),
+        });
+        m
+    }
+
+    /// A triangle drawn with `material`, carrying layer input member 1.
+    fn primitive(material: Entity) -> Primitive {
+        Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+                ),
+                (Semantic::Color(1), Stream::U8x4(vec![[255, 0, 0, 0]; 3])),
+            ]),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(material),
+        }
+    }
+
+    fn mesh_with_inputs(world: &mut World, material: Entity) -> Entity {
+        let e = world.spawn();
+        world.insert(e, Mesh::new(vec![primitive(material)]));
+        world.insert(
+            e,
+            LayerInputs {
+                primitives: vec![vec![1]],
+            },
+        );
+        e
+    }
+
+    #[test]
+    fn the_bake_refuses_level_of_detail_forms_before_changing_anything_and_leaves_unplaced_inputs() {
+        let mut world = World::new();
+        let m = world.spawn();
+        world.insert(m, layered(None));
+        let prototype = mesh_with_inputs(&mut world, m);
+        world.insert(
+            prototype,
+            PrototypeSource {
+                id: "obj/o000001".into(),
+                far: false,
+            },
+        );
+        let form = mesh_with_inputs(&mut world, m);
+        world.insert(
+            prototype,
+            Lods {
+                detail: 0,
+                forms: vec![LodForm { detail: 1, form }],
+                default: None,
+            },
+        );
+        let placement = world.spawn();
+        world.insert(
+            placement,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        world.insert(placement, Transform::IDENTITY);
+        let before = world.clone();
+        let bake = BakeFromSoftLayers {
+            max_size: PixelCap::new(64).unwrap(),
+            sample_time: Seconds::new(0.).unwrap(),
+        };
+        let err = bake.run(&mut world, &mut PassLog::default()).unwrap_err();
+        assert!(err.contains("select-lod"), "{err}");
+        assert_eq!(
+            world.iter::<LayerInputs>().count(),
+            before.iter::<LayerInputs>().count()
+        );
+        assert!(
+            world.get::<Mesh>(form).unwrap().primitives()[0]
+                .streams
+                .contains_key(&Semantic::Color(1))
+        );
+
+        // an unplaced prototype's inputs are not the bake's: they stay, streams and all
+        let mut world = World::new();
+        let m = world.spawn();
+        world.insert(m, layered(None));
+        let unplaced = mesh_with_inputs(&mut world, m);
+        world.insert(
+            unplaced,
+            PrototypeSource {
+                id: "obj/o000002".into(),
+                far: false,
+            },
+        );
+        let mut log = PassLog::default();
+        bake.run(&mut world, &mut log).unwrap();
+        assert_eq!(log.counts["unplaced meshes whose layer inputs stay"], 1);
+        assert_eq!(log.counts["layer input streams consumed"], 0);
+        assert!(world.has::<LayerInputs>(unplaced));
+        assert!(
+            world.get::<Mesh>(unplaced).unwrap().primitives()[0]
+                .streams
+                .contains_key(&Semantic::Color(1))
+        );
+    }
+
+    #[test]
+    fn a_preview_drops_only_the_inputs_of_the_materials_it_previewed() {
+        let mut world = World::new();
+        let previewed = world.spawn();
+        world.insert(previewed, layered(None));
+        let skipped = world.spawn();
+        world.insert(skipped, layered(Some(materials::SkipClass::Sky)));
+        let e = world.spawn();
+        world.insert(e, Mesh::new(vec![primitive(previewed), primitive(skipped)]));
+        world.insert(
+            e,
+            LayerInputs {
+                primitives: vec![vec![1], vec![1]],
+            },
+        );
+        let mut log = PassLog::default();
+        LowerFromSoftMaterials {
+            layers: Some(super::super::pbr::Layers::Preview),
+        }
+        .run(&mut world, &mut log)
+        .unwrap();
+        assert_eq!(
+            log.approximations["layer input streams dropped with layered materials lowered from previews"],
+            1
+        );
+        let mesh = world.get::<Mesh>(e).unwrap();
+        assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::Color(1)));
+        // the skipped class was not lowered: its inputs are still the source's
+        assert!(mesh.primitives()[1].streams.contains_key(&Semantic::Color(1)));
+        assert_eq!(world.get::<LayerInputs>(e).unwrap().primitives, [vec![], vec![1]]);
+    }
 }

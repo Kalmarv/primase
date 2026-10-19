@@ -17,6 +17,11 @@ pub struct Report {
     pub hang_segments: usize,
     pub lights: usize,
     pub travel_points: usize,
+    /// Bank-zero lights and spawn points outside the read region: not read.
+    pub lights_outside_region: usize,
+    pub spawn_points_outside_region: usize,
+    /// EDGE records of kinds other than hang edges, by kind (`grapple`, `hug`): not read.
+    pub other_edges: std::collections::BTreeMap<String, usize>,
     pub missing_light_bank: bool,
     pub missing_edge_binder: bool,
 }
@@ -67,7 +72,8 @@ pub fn light_record(light: &crate::btl::Light, map: &Transform) -> Result<(Trans
     Ok((transform, record))
 }
 /// Bank zero's lights inside the region (by position), every hang segment in edge-file and edge order, and the spawn
-/// points inside the region in MSB order.
+/// points inside the region in MSB order; the lights and spawn points outside it, and the EDGE records of other kinds,
+/// counted.
 pub fn assemble(
     archive: &Archive,
     decoder: &Decoder<'_>,
@@ -99,6 +105,7 @@ pub fn assemble(
             for light in LightBank::read(&bytes)?.lights {
                 let (transform, record) = light_record(&light, &map)?;
                 if !inside(transform.cols[3]) {
+                    report.lights_outside_region += 1;
                     continue;
                 }
                 let e = world.spawn();
@@ -129,7 +136,14 @@ pub fn assemble(
                 };
                 let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned();
                 for edge in Edges::read(&decoder.decode_if_dcx(&file.bytes)?)?.edges {
-                    if edge.kind == EdgeKind::Hang {
+                    let other = match edge.kind {
+                        EdgeKind::Hang => None,
+                        EdgeKind::Grapple => Some("grapple"),
+                        EdgeKind::Hug => Some("hug"),
+                    };
+                    if let Some(kind) = other {
+                        *report.other_edges.entry(kind.to_owned()).or_default() += 1;
+                    } else {
                         hang_segments.push(HangSegment {
                             file: name.clone(),
                             points: [
@@ -147,6 +161,7 @@ pub fn assemble(
     for point in layout.spawn_points()? {
         let position = reflect(point.position);
         if !inside(position) {
+            report.spawn_points_outside_region += 1;
             continue;
         }
         spawn_points.push(SpawnPoint {

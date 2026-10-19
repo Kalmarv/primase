@@ -1,7 +1,10 @@
 //! Sekiro area reading: each placed model as its FLVER as stored, its materials as resolved source records, the
-//! texture files and layered-shader programs they bind, raw collision, lights, hang edges and spawn points, with
-//! typed source identities ([`source`]). Reading lowers nothing: geometry, materials, lights and extras become core
-//! data through the passes in [`passes`], which a program chooses and orders.
+//! texture files and layered-shader programs they bind, the placed map collision files and object collision bodies as
+//! stored, lights, hang edges and spawn points, with typed source identities ([`source`]). The read selects source
+//! records (the region's placements, lights and spawn points; the parts' collision files) and converts frames; it
+//! does not lower: geometry, materials, collision, lights and extras become core data through the passes in
+//! [`passes`], [`collision`] and [`objects`], which a program chooses and orders. What the read leaves out or cannot
+//! read is in its [`Report::notices`].
 mod bake_assembly;
 pub mod blockers;
 pub mod collision;
@@ -13,6 +16,7 @@ pub mod objects;
 pub mod passes;
 pub mod pbr;
 mod reflectance;
+pub mod settings;
 mod shadows;
 pub mod source;
 pub mod states;
@@ -33,9 +37,9 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// East/north rectangle in the source map frame that the read keeps: placements whose model's extent reaches it
-    /// within `region_margin`, collision triangles whose centre is within 50 m of it, lights and spawn points inside
-    /// it. None reads the whole area.
+    /// East/north rectangle in the world frame that the read keeps: placements whose model's extent reaches it within
+    /// `region_margin`, lights and spawn points inside it. Collision files are read whole whatever the region (their
+    /// crop is `reach` on the collision passes). None reads the whole area.
     pub region: Option<[f32; 4]>,
     /// Metres around the region within which a placement's extent must reach (the caller's choice; 30 m by default).
     pub region_margin: f32,
@@ -70,7 +74,9 @@ pub struct Report {
     /// and names the renderer-specific controls kept only as `fromsoft.shadow_flags`.
     pub shadows: primase_core::pass::PassLog,
     pub extras: extras::Report,
+    /// The placed map collision files read.
     pub collision: collision::Report,
+    /// The kept object prototypes' collision files read.
     pub object_collision: objects::Report,
     pub prototypes: usize,
     /// Prototypes of the distant-backdrop series (`fromsoft.prototype` `far`), and their placements.
@@ -82,10 +88,13 @@ pub struct Report {
     pub textures: usize,
     /// Layered-shader programs kept.
     pub shader_programs: usize,
+    /// Distinct placed models (`obj/<model>`, `<area>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
-    /// Placements of models whose face sets use no vertex.
+    /// Placements of the models in `missing_models`.
+    pub skipped_missing: usize,
+    /// Placements of read models whose face sets use no vertex.
     pub skipped_empty: usize,
     /// Placements outside the region and its margin.
     pub skipped_outside: usize,
@@ -98,83 +107,121 @@ impl Report {
         use primase_core::convert::{Notice, NoticeKind};
         let stage = "fromsoft reader";
         let mut out = Vec::new();
+        let listed = |reason: &str, items: &[String]| {
+            items.iter().fold(
+                Notice::new(stage, NoticeKind::Unsupported, reason, items.len() as u64),
+                |n, i| n.example(i.clone()),
+            )
+        };
         if !self.missing_models.is_empty() {
-            let mut n = Notice::new(
-                stage,
-                NoticeKind::Unsupported,
+            out.push(listed(
                 "placed models not found in the archive",
-                self.missing_models.len() as u64,
-            );
-            for m in &self.missing_models {
-                n = n.example(m.clone());
-            }
-            out.push(n);
+                &self.missing_models,
+            ));
         }
-        for (count, reason) in [
-            (
-                self.skipped_outside,
-                "placements outside the region and its margin",
-            ),
-            (
-                self.collision.outside_region_triangles,
-                "map collision triangles more than 50 m outside the region",
-            ),
-            (
-                self.object_collision.outside_region_triangles,
-                "object collision triangles more than 50 m outside the region",
-            ),
-        ] {
-            if count > 0 {
-                out.push(Notice::new(stage, NoticeKind::Selection, reason, count as u64));
-            }
+        if !self.collision.missing_files.is_empty() {
+            out.push(listed(
+                "collision files named by the MSB but not in the area's binder",
+                &self.collision.missing_files,
+            ));
         }
-        for (count, reason) in [
+        if !self.collision.unread_bodies.is_empty() {
+            out.push(self.collision.unread_bodies.iter().fold(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "map collision bodies of shapes without a decoder, not read",
+                    self.collision.unread_bodies.values().sum::<usize>() as u64,
+                ),
+                |n, (shape, count)| n.example(format!("{count} {shape}")),
+            ));
+        }
+        if !self.extras.other_edges.is_empty() {
+            out.push(self.extras.other_edges.iter().fold(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "EDGE records of other kinds than hang edges not read",
+                    self.extras.other_edges.values().sum::<usize>() as u64,
+                ),
+                |n, (kind, count)| n.example(format!("{count} {kind}")),
+            ));
+        }
+        let undecided = self
+            .states
+            .as_ref()
+            .map_or(0, |s| s.undecided_parts.values().sum::<usize>());
+        for (count, kind, reason) in [
+            (
+                self.skipped_missing,
+                NoticeKind::Unsupported,
+                "placements of models not found in the archive",
+            ),
             (
                 self.skipped_empty,
+                NoticeKind::Unsupported,
                 "placements of models whose face sets use no vertex",
             ),
             (
-                self.collision.excluded_material_triangles,
-                "map collision triangles of blocker, cloud or water-surface materials not kept as ground",
+                usize::from(self.extras.missing_light_bank),
+                NoticeKind::Unsupported,
+                "no light bank 0",
             ),
             (
-                self.object_collision.excluded_material_triangles,
-                "object collision triangles of blocker, cloud or water-surface materials not kept",
+                usize::from(self.extras.missing_edge_binder),
+                NoticeKind::Unsupported,
+                "no hang-edge binder",
             ),
             (
-                self.object_collision.keyframed_left_out.len(),
-                "keyframed object bodies (motion type 2) not kept",
+                self.skipped_outside,
+                NoticeKind::Selection,
+                "placements outside the region and its margin",
             ),
             (
-                self.collision.omitted_filters.values().sum::<usize>(),
-                "collision parts of other hit filters than 8 and 27 not kept",
+                self.extras.lights_outside_region,
+                NoticeKind::Selection,
+                "lights outside the region",
+            ),
+            (
+                self.extras.spawn_points_outside_region,
+                NoticeKind::Selection,
+                "spawn points outside the region",
+            ),
+            (
+                self.collision.unnamed_files,
+                NoticeKind::Selection,
+                "collision files of the area's binder no MSB part names, not read",
+            ),
+            (
+                usize::from(self.states.is_none()),
+                NoticeKind::Selection,
+                "event-flag world states not read (states=event reads them): every part present",
+            ),
+            (
+                undecided,
+                NoticeKind::Approximation,
+                "parts an uninterpreted script instruction names, kept at their default presence",
             ),
         ] {
             if count > 0 {
-                out.push(Notice::new(stage, NoticeKind::Unsupported, reason, count as u64));
+                out.push(Notice::new(stage, kind, reason, count as u64));
             }
         }
-        if !self.collision.missing_files.is_empty() {
-            let mut n = Notice::new(
-                stage,
-                NoticeKind::Unsupported,
-                "collision files named by the MSB but not in the area's binder",
-                self.collision.missing_files.len() as u64,
-            );
-            for f in &self.collision.missing_files {
-                n = n.example(f.clone());
-            }
-            out.push(n);
-        }
-        if self.extras.missing_light_bank {
-            out.push(Notice::new(stage, NoticeKind::Unsupported, "no light bank 0", 1));
-        }
-        if self.extras.missing_edge_binder {
+        // the shadow controls' interpretation, as the read counted it
+        for (reason, &count) in &self.shadows.approximations {
             out.push(Notice::new(
                 stage,
-                NoticeKind::Unsupported,
-                "no hang-edge binder",
-                1,
+                NoticeKind::Approximation,
+                reason.clone(),
+                count,
+            ));
+        }
+        if let Some(&count) = self.shadows.counts.get("contradictory source cast/only controls") {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Approximation,
+                "placements with contradictory source cast/only shadow controls, casting left unknown",
+                count,
             ));
         }
         out
@@ -223,11 +270,34 @@ fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
         && min[2] < r[3] + o.region_margin
 }
 
-/// A read model: the FLVER as stored, its resolved materials, and its posed extent in the world frame.
+/// A read model: the FLVER as stored, its resolved materials, its posed extent in the world frame, and for an object
+/// its main HKX's name and decoded bytes, if its binder holds one.
 struct Prototype {
     model: Model,
     materials: Vec<materials::Material>,
     bounds: Option<[[f32; 3]; 2]>,
+    collision: Option<(String, Vec<u8>)>,
+}
+
+/// Which placements (model key, transform) the read keeps, in order, by index; counted into `report` by why the
+/// others are not: a model the archive does not hold, a model whose face sets use no vertex (`bounds` holds `None`),
+/// an extent outside the region.
+fn select_placements(
+    placements: &[(String, Transform)],
+    bounds: &BTreeMap<String, Option<[[f32; 3]; 2]>>,
+    options: &Options,
+    report: &mut Report,
+) -> Vec<usize> {
+    let mut kept = Vec::new();
+    for (i, (key, transform)) in placements.iter().enumerate() {
+        match bounds.get(key) {
+            None => report.skipped_missing += 1,
+            Some(None) => report.skipped_empty += 1,
+            Some(Some(b)) if !inside(b, transform, options) => report.skipped_outside += 1,
+            Some(Some(_)) => kept.push(i),
+        }
+    }
+    kept
 }
 
 /// Read an area directly from installed archives into an empty world. The caller supplies its trusted
@@ -236,11 +306,12 @@ struct Prototype {
 ///
 /// Each prototype holds its model as stored (`fromsoft.flver`), its source identity (`fromsoft.prototype`, with the
 /// distant-backdrop class) and the material entity of each of its FLVER materials (`fromsoft.material_slots`, each
-/// holding `fromsoft.material`). Placements are `core.instance` with their MSB transform, source label, shadow
-/// controls and, with states read, conditions. Every texture a kept material binds is kept as stored
-/// (`fromsoft.texture_payloads`), and the G-buffer programs of its layered materials (`fromsoft.shader_programs`).
-/// Collision soups carry `fromsoft.collision`; lights are `fromsoft.light` records where they stand; hang edges and
-/// spawn points are `fromsoft.area_extras`.
+/// holding `fromsoft.material`); an object prototype also its collision bodies (`fromsoft.object_collision`).
+/// Placements are `core.instance` with their MSB transform, source label, shadow controls and, with states read,
+/// conditions. Every texture a kept material binds is kept as stored (`fromsoft.texture_payloads`), and the G-buffer
+/// programs of its layered materials (`fromsoft.shader_programs`). Each map collision file the MSB's collision parts
+/// name is a `fromsoft.map_collision` entity; lights are `fromsoft.light` records where they stand; hang edges and
+/// spawn points are `fromsoft.area_extras`; what the read covered is `fromsoft.read_scope`.
 pub fn read_area(
     install: impl AsRef<Path>,
     area: &str,
@@ -312,13 +383,29 @@ pub fn read_area(
                 }
             }
         }
-        let Some(f) = binder
-            .files
-            .iter()
-            .find(|f| f.name.as_deref().unwrap_or("").rsplit(['/', '\\']).next() == Some(leaf.as_str()))
-        else {
+        // a member by file name; `dcx`: also its compressed form
+        let member = |leaf: &str, dcx: bool| {
+            binder.files.iter().find(|f| {
+                f.name
+                    .as_deref()
+                    .unwrap_or("")
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .is_some_and(|s| s == leaf || dcx && s.strip_suffix(".dcx") == Some(leaf))
+            })
+        };
+        let Some(f) = member(&leaf, false) else {
             report.missing_models.push(key);
             continue;
+        };
+        let collision = if kind == "obj" {
+            let file = format!("{model}.hkx");
+            member(&file, true)
+                .map(|f| decoder.decode_if_dcx(&f.bytes))
+                .transpose()?
+                .map(|bytes| (file, bytes))
+        } else {
+            None
         };
         let model = Model::read(&f.bytes)?;
         let materials = model
@@ -339,24 +426,20 @@ pub fn read_area(
                 model,
                 materials,
                 bounds,
+                collision,
             },
         );
     }
-    let mut selected = Vec::new();
-    let mut used = BTreeSet::new();
-    for (key, p) in placements {
-        let Some(bounds) = prototypes.get(&key).and_then(|p| p.bounds.as_ref()) else {
-            report.skipped_empty += 1;
-            continue;
-        };
-        let transform = p.transform()?;
-        if !inside(bounds, &transform, options) {
-            report.skipped_outside += 1;
-            continue;
-        }
-        used.insert(key.clone());
-        selected.push((key, p.index, transform));
-    }
+    let placed = placements
+        .iter()
+        .map(|(key, p)| Ok((key.clone(), p.transform()?)))
+        .collect::<Result<Vec<_>>>()?;
+    let bounds = prototypes.iter().map(|(k, p)| (k.clone(), p.bounds)).collect();
+    let selected: Vec<(String, usize, Transform)> = select_placements(&placed, &bounds, options, &mut report)
+        .into_iter()
+        .map(|i| (placed[i].0.clone(), placements[i].1.index, placed[i].1))
+        .collect();
+    let used: BTreeSet<&String> = selected.iter().map(|(key, _, _)| key).collect();
     prototypes.retain(|key, _| used.contains(key));
 
     let mut wanted = BTreeSet::new();
@@ -417,6 +500,14 @@ pub fn read_area(
         world.insert(e, crate::rigid::SourceModel(proto.model));
         world.insert(e, source::MaterialSlots(slots));
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
+        if key.starts_with("obj/") {
+            report.object_collision.models += 1;
+        }
+        if let Some((file, bytes)) = proto.collision {
+            let bodies = objects::bodies(&file, &bytes, &mut report.object_collision)
+                .map_err(|e| invalid("Sekiro object collision", 0, format!("{key}: {e}")))?;
+            world.insert(e, bodies);
+        }
         proto_entities.insert(key, (e, far));
         report.prototypes += 1;
         report.far_prototypes += usize::from(far);
@@ -445,17 +536,14 @@ pub fn read_area(
         report.placements += 1;
         report.far_placements += usize::from(far);
     }
-    report.collision = collision::assemble(
-        &archive,
-        decoder,
-        &area,
-        &layout,
-        options.region,
-        states.as_mut(),
-        &mut world,
-    )?;
+    report.collision = collision::read(&archive, decoder, &area, &layout, states.as_mut(), &mut world)?;
     report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
-    report.object_collision = objects::assemble(&archive, decoder, &area, options.region, &mut world)?;
+    world.insert_resource(source::ReadScope {
+        area: area.clone(),
+        region: options.region,
+        region_margin: options.region_margin,
+        states: states.is_some(),
+    });
     report.states = states.map(|s| s.report);
     report.area = area;
     *destination = world;
@@ -505,31 +593,88 @@ fn shader_programs<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::Report;
+    use super::{Options, Report, select_placements};
+    use primase_core::Transform;
     use primase_core::convert::NoticeKind;
+    use std::collections::BTreeMap;
 
     #[test]
     fn notices_name_what_the_read_left_out_by_kind() {
         let mut report = Report {
             missing_models: vec!["obj/o000001".into()],
+            skipped_missing: 3,
             skipped_outside: 7,
+            states: Some(Default::default()),
             ..Report::default()
         };
         report.collision.missing_files = vec!["h11_00_00_00_009500.hkx".into()];
+        report.collision.unnamed_files = 2;
         report.extras.missing_light_bank = true;
+        report.extras.lights_outside_region = 4;
+        report.extras.spawn_points_outside_region = 5;
+        report.extras.other_edges = BTreeMap::from([("grapple".into(), 6)]);
         let notices = report.notices();
         let find = |reason: &str| notices.iter().find(|n| n.reason.starts_with(reason)).unwrap();
+        // distinct models, and their placements apart
         let models = find("placed models not found");
         assert_eq!((models.kind, models.count), (NoticeKind::Unsupported, 1));
         assert_eq!(models.examples, ["obj/o000001"]);
-        let outside = find("placements outside the region");
-        assert_eq!((outside.kind, outside.count), (NoticeKind::Selection, 7));
+        assert_eq!(find("placements of models not found").count, 3);
+        for (reason, count) in [
+            ("placements outside the region", 7),
+            ("lights outside the region", 4),
+            ("spawn points outside the region", 5),
+            ("collision files of the area's binder no MSB part names", 2),
+        ] {
+            let n = find(reason);
+            assert_eq!((n.kind, n.count), (NoticeKind::Selection, count), "{reason}");
+        }
         assert_eq!(
             find("collision files named").examples,
             ["h11_00_00_00_009500.hkx"]
         );
+        assert_eq!(find("EDGE records of other kinds").examples, ["6 grapple"]);
         assert_eq!(find("no light bank").count, 1);
-        assert_eq!(notices.len(), 4, "{notices:?}");
-        assert!(Report::default().notices().is_empty());
+        assert_eq!(notices.len(), 9, "{notices:?}");
+        // a read without states says so; nothing else is left out of an empty read
+        let default = Report::default().notices();
+        assert_eq!(default.len(), 1, "{default:?}");
+        assert_eq!(default[0].kind, NoticeKind::Selection);
+        assert!(default[0].reason.starts_with("event-flag world states not read"));
+    }
+
+    #[test]
+    fn a_missing_model_is_not_an_empty_one() {
+        let at = |x: f32| Transform {
+            cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [x, 0., 0.]],
+        };
+        let placements = [
+            ("obj/missing".to_owned(), at(0.)),
+            ("obj/missing".to_owned(), at(1.)),
+            ("obj/empty".to_owned(), at(0.)),
+            ("obj/box".to_owned(), at(0.)),
+            ("obj/box".to_owned(), at(1000.)),
+        ];
+        let bounds = BTreeMap::from([
+            ("obj/empty".to_owned(), None),
+            ("obj/box".to_owned(), Some([[0.; 3], [1.; 3]])),
+        ]);
+        let mut report = Report::default();
+        let options = Options {
+            region: Some([-10., -10., 10., 10.]),
+            ..Options::default()
+        };
+        assert_eq!(
+            select_placements(&placements, &bounds, &options, &mut report),
+            [3]
+        );
+        assert_eq!(
+            (
+                report.skipped_missing,
+                report.skipped_empty,
+                report.skipped_outside
+            ),
+            (2, 1, 1)
+        );
     }
 }

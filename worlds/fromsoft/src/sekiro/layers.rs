@@ -34,7 +34,7 @@ impl<'a> AreaBake<'a> {
         for group in &mut groups {
             let material = group.material.layered.as_ref().expect("layered group");
             let prepared =
-                crate::layer_bake::Prepared::new(program(shaders, material)?, material, |_, _| Ok(None))?;
+                crate::layer_bake::Prepared::new(program(shaders, material)?, material, 0., |_, _| Ok(None))?;
             group.period = prepared.period;
             group.period_exact = prepared.period_exact;
         }
@@ -44,28 +44,34 @@ impl<'a> AreaBake<'a> {
             payloads,
         })
     }
-    pub fn prepare(&self, group: usize) -> Result<crate::layer_bake::Prepared> {
+    /// A group's program bound to its materials' inputs, sampled at `sample_time` seconds.
+    pub fn prepare(&self, group: usize, sample_time: f32) -> Result<crate::layer_bake::Prepared> {
         use primase_texcodec::TexDecoder;
         let material = self
             .groups
             .get(group)
             .and_then(|g| g.material.layered.as_ref())
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
-        crate::layer_bake::Prepared::new(program(self.shaders, material)?, material, |name, srgb| {
-            let Some(bytes) = self.payloads.get(name) else {
-                return Ok(None);
-            };
-            let texture = primase_dds::read(bytes).map_err(|e| invalid("area bake DDS", 0, e))?;
-            let pixels = primase_texcodec::Decoder::default()
-                .decode_rgba8(texture.format, texture.width, texture.height, &texture.levels[0])
-                .map_err(|e| invalid("area bake pixels", 0, e))?;
-            Ok(Some(Arc::new(crate::layer_bake::BaseMipBilinearWrap::new(
-                texture.width,
-                texture.height,
-                &pixels,
-                srgb,
-            )?)))
-        })
+        crate::layer_bake::Prepared::new(
+            program(self.shaders, material)?,
+            material,
+            sample_time,
+            |name, srgb| {
+                let Some(bytes) = self.payloads.get(name) else {
+                    return Ok(None);
+                };
+                let texture = primase_dds::read(bytes).map_err(|e| invalid("area bake DDS", 0, e))?;
+                let pixels = primase_texcodec::Decoder::default()
+                    .decode_rgba8(texture.format, texture.width, texture.height, &texture.levels[0])
+                    .map_err(|e| invalid("area bake pixels", 0, e))?;
+                Ok(Some(Arc::new(crate::layer_bake::BaseMipBilinearWrap::new(
+                    texture.width,
+                    texture.height,
+                    &pixels,
+                    srgb,
+                )?)))
+            },
+        )
     }
 }
 

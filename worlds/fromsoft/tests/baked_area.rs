@@ -34,7 +34,7 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     let run = common::run(
         &mut world,
         &format!(
-            "{}, bake-fromsoft-layers{{max-size=512}}, lower-fromsoft-materials{{layers=preview}}",
+            "{}, bake-fromsoft-layers{{max-size=512,sample-time=0}}, lower-fromsoft-materials{{layers=preview}}",
             common::LEGACY_GEOMETRY
         ),
     )?;
