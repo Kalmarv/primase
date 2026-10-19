@@ -30,7 +30,6 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
-pub mod level;
 pub mod passes;
 mod read;
 pub mod shader;
@@ -42,8 +41,8 @@ pub use read::typetree::TypeTree;
 pub use read::value::Value;
 pub use read::version::UnityVersion;
 pub use read::{
-    material, mesh, player, program, resource, scene, serialized, terrain, texture, tpk, typetree, value,
-    version,
+    level, material, mesh, player, program, resource, scene, serialized, terrain, texture, tpk, typetree,
+    value, version,
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,

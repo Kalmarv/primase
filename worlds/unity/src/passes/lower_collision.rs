@@ -24,8 +24,8 @@ use primase_core::{
 };
 use primase_meshops::convex_hull;
 
+use crate::components::UNITY;
 use crate::components::{UnityCollider, UnityColliderOf, UnityColliderShape, UnityTerrain};
-use crate::level::UNITY;
 use crate::{Result, invalid};
 
 type M3 = [[f64; 3]; 3];

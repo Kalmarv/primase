@@ -19,8 +19,8 @@ use primase_core::{
 use primase_image::{linear_to_srgb, srgb_to_linear};
 use primase_texcodec::{Decoder, TexDecoder};
 
+use crate::components::UNITY;
 use crate::components::{UnityMaterial, UnityTerrain, UnityTerrainLayer};
-use crate::level::UNITY;
 use crate::{Result, invalid};
 
 fn rgba8(t: &Texture) -> Result<Vec<u8>> {

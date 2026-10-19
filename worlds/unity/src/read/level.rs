@@ -32,7 +32,6 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::frame::{Axis, SourceFrame};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
     Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Source, Transform,
@@ -41,7 +40,7 @@ use primase_core::{
 
 use crate::Result;
 use crate::components::{
-    ColliderMesh, UnityBehaviour, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape,
+    ColliderMesh, UNITY, UnityBehaviour, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape,
     UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings,
     UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
     UnityTree, UnityTreeInstance,
@@ -54,16 +53,7 @@ use crate::read::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, Scene, S
 use crate::read::terrain::{TerrainData, TerrainLayerData};
 use crate::read::texture::UnityTexture as UnityTextureData;
 use crate::read::value::Value;
-
-/// Unity's frame: left-handed, +Y up, +Z forward, metres. Into the world (right-handed, +Y up, -Z north): x, y, -z,
-/// so Unity's forward is north; a mirroring frame (the mesh reader reverses triangle winding).
-pub const UNITY: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.0);
-
-/// Whether a shader builds its geometry from component data, drawing a placeholder mesh: Shapes (a widely used
-/// package's line, disc, triangle and sphere shaders).
-pub fn procedural(shader: &str) -> bool {
-    shader.starts_with("Shapes/")
-}
+use crate::shader::procedural;
 
 /// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
 fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {

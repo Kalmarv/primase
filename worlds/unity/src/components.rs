@@ -1,9 +1,14 @@
 //! The `unity.*` dialect: what a Unity scene says about an entity that the core components do not.
 
+use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
 use crate::shader::{PassKind, ShaderPass, SubShader};
+
+/// Unity's frame: left-handed, +Y up, +Z forward, metres. Into the world (right-handed, +Y up, -Z north): x, y, -z,
+/// so Unity's forward is north; a mirroring frame (the mesh reader reverses triangle winding).
+pub const UNITY: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.0);
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

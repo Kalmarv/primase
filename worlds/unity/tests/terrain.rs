@@ -417,8 +417,9 @@ fn terrain_geometry_matches_the_port() {
 #[test]
 fn trees_match_the_scan() {
     use primase_core::{Instance, Name, Transform, World};
+    use primase_unity::components::UNITY;
     use primase_unity::components::{UnityMesh, UnityRenderer};
-    use primase_unity::level::{UNITY, read_level};
+    use primase_unity::level::read_level;
     use std::collections::BTreeMap;
     let (Some(data), Some(tpk), Some(scan)) = (
         real_data("PRIMASE_UNITY_DATA"),

@@ -1,6 +1,13 @@
 //! A Shader's render state as stored (`m_ParsedForm`): its subshaders, their passes and the passes' render-state
 //! values, with the `BlendMode` values they use. The reader decodes them ([`crate::material::ShaderData`]),
-//! `unity.material` carries them ([`crate::components::UnityMaterial::shader_state`]) and the passes choose by them.
+//! `unity.material` carries them ([`crate::components::UnityMaterial::shader_state`]) and the passes choose by them;
+//! [`procedural`] says which shaders build their geometry from component data.
+
+/// Whether a shader builds its geometry from component data, drawing a placeholder mesh: Shapes (a widely used
+/// package's line, disc, triangle and sphere shaders).
+pub fn procedural(shader: &str) -> bool {
+    shader.starts_with("Shapes/")
+}
 
 /// Unity's `BlendMode` values (`UnityEngine.Rendering.BlendMode`) the lowering names.
 pub mod blend_mode {

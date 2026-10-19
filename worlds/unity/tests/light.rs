@@ -81,8 +81,9 @@ fn lights_match_the_scan() {
 #[test]
 fn lights_lower_to_core() {
     use primase_core::{Light, LightKind, Transform, World};
+    use primase_unity::components::UNITY;
     use primase_unity::components::UnityLight;
-    use primase_unity::level::{UNITY, read_level, transform_of};
+    use primase_unity::level::{read_level, transform_of};
     use primase_unity::lower_lights::lower_unity_lights;
     let (Some(data), Some(tpk), Some(scan)) = (
         real_data("PRIMASE_UNITY_DATA"),
