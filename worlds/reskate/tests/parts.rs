@@ -2,7 +2,8 @@
 //! what they decide on the whole map, whatever order the parts arrive in. The floor: measured on each part's own
 //! placements, merged, decided once, applied to each part. The light cap: each part's lights capped per cell, merged
 //! into the cap over every light, kept by each part. The texture budget: each part's textures weighed (exact sums),
-//! merged into the whole map's weights, the heaviest kept in each part.
+//! merged into the whole map's weights, the heaviest kept in each part. The region clip: local to each entity, so
+//! each part is clipped as the whole is.
 
 #![allow(clippy::unwrap_used)]
 
@@ -109,6 +110,24 @@ fn map() -> World {
         t.cols[3] = [(i * 13) as f32, 3.0, (i % 5) as f32 * -10.0];
         w.insert(l, t);
     }
+    // a world collision soup: two triangles, one each side of east 200 m, of the one surface
+    w.insert_resource(primase_core::Surfaces(vec![primase_core::Surface::new("concrete")]));
+    let soup = w.spawn();
+    w.insert(
+        soup,
+        primase_core::Collision {
+            positions: vec![
+                [100.0, 0.0, -1.0],
+                [102.0, 0.0, -1.0],
+                [101.0, 0.0, -3.0],
+                [300.0, 0.0, -1.0],
+                [302.0, 0.0, -1.0],
+                [301.0, 0.0, -3.0],
+            ],
+            triangles: vec![[0, 1, 2], [3, 4, 5]],
+            surfaces: vec![0, 0],
+        },
+    );
     primase_reskate::passes::raise_skate(
         &mut w,
         &RaiseOptions::new("parts", LightCalibration::Standard).unwrap(),
@@ -147,7 +166,13 @@ impl PartSource for Groups {
         let roots = world
             .iter::<Instance>()
             .map(|(e, _)| e)
-            .chain(world.iter::<SkateLight>().map(|(e, _)| e));
+            .chain(world.iter::<SkateLight>().map(|(e, _)| e))
+            .chain(
+                world
+                    .iter::<primase_core::Collision>()
+                    .map(|(e, _)| e)
+                    .filter(|&e| !world.iter::<Instance>().any(|(_, i)| i.prototype == e)),
+            );
         for (i, e) in roots.enumerate() {
             self.groups[i % self.parts].insert(e);
         }
@@ -470,4 +495,75 @@ fn the_map_summary_sums_over_parts() {
         .merge_order_free(&[part(10, 4096), part(1, 2048)])
         .unwrap_err();
     assert!(e.starts_with("skate.map_summary: parts summarized for"), "{e}");
+}
+
+/// Each placement's clip and each soup's triangles, as written.
+type Clipped = (BTreeMap<Entity, Option<bool>>, BTreeMap<Entity, usize>);
+
+fn clipped(w: &World) -> Clipped {
+    (
+        w.iter::<primase_reskate::components::SkatePlacement>()
+            .map(|(e, p)| (e, p.clip))
+            .collect(),
+        w.iter::<primase_core::Collision>()
+            .filter(|(e, _)| !w.iter::<Instance>().any(|(_, i)| i.prototype == *e))
+            .map(|(e, c)| (e, c.triangles.len()))
+            .collect(),
+    )
+}
+
+#[test]
+fn the_region_clip_over_parts_is_the_whole_maps() {
+    use primase_core::convert::convert_parts;
+    use primase_reskate::passes::ClipReskateRegion;
+    let clip = || ClipReskateRegion::new([0.0, -10.0, 200.0, 10.0], 30.0).unwrap();
+    let mut whole = map();
+    clip().run(&mut whole, &mut PassLog::default()).unwrap();
+    let expected = clipped(&whole);
+    let inside = expected.0.values().filter(|c| **c == Some(false)).count();
+    assert!(
+        inside > 0 && inside < expected.0.len(),
+        "some placements inside, some out"
+    );
+    assert_eq!(
+        expected.1.values().copied().collect::<Vec<_>>(),
+        [1],
+        "the soup cut to its inside triangle"
+    );
+    struct Got(Rc<RefCell<Clipped>>);
+    impl Writer for Got {
+        fn target(&self) -> Target {
+            primase_reskate::target()
+        }
+        fn write(&mut self, part: &World) -> Result<()> {
+            let (p, s) = clipped(part);
+            let mut g = self.0.borrow_mut();
+            g.0.extend(p);
+            g.1.extend(s);
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<Finished> {
+            Ok(Finished::default())
+        }
+    }
+    for order in [vec![0, 1, 2], vec![2, 0, 1], vec![1, 2, 0]] {
+        let got = Rc::new(RefCell::new((BTreeMap::new(), BTreeMap::new())));
+        convert_parts(
+            &mut Prepared(map()),
+            &mut Groups {
+                parts: 3,
+                order: order.clone(),
+                groups: Vec::new(),
+                next: 0,
+            },
+            Box::new(Got(got.clone())),
+            &PassManager::new(PassRegistry::new()),
+            &Pipeline { passes: Vec::new() },
+            &Pipeline {
+                passes: vec![Box::new(clip())],
+            },
+        )
+        .unwrap();
+        assert_eq!(got.take(), expected, "{order:?}");
+    }
 }

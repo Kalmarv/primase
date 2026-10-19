@@ -13,6 +13,9 @@
 //! the region; the writer and the passes that assemble its geometry apply that, reported as this pass's. The writer
 //! decides nothing from the region itself; without this pass nothing is clipped, and a placement marked outside by its
 //! scene is refused.
+//!
+//! Every decision it makes is local to an entity: a map converted in parts is clipped part by part as it would be
+//! whole.
 
 use std::collections::BTreeSet;
 
@@ -125,7 +128,8 @@ impl Pass for ClipReskateRegion {
         &[]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
+        // local: each placement is marked by its own position, each soup cut by its own triangles, and the region
+        // recorded is the program's, the same in every part; a map in parts clips each part as the whole would
         let r = self.region;
         let scene = w
             .resource_mut::<SkateScene>()

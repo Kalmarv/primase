@@ -66,11 +66,14 @@ pub(crate) fn owned(w: &World) -> impl Fn(Entity) -> bool + '_ {
     move |e| roots.is_none_or(|r| r.contains(&e))
 }
 
-/// A ReSkate map is written whole. A pass that works on the whole map (its floor, its region, its spawn, the marker
-/// snaps, its lights, water, pause map, overlays, blend chains and their budget) refuses a part that is not the whole
-/// of what is written, as its part source states it (`core.part_scope`'s `whole`): what it would compute from a part
-/// (a floor percentile, the collision a snap reaches, a spawn per part, a budget) is not the map's. A world outside the
-/// part protocol (no `core.part_scope`: a program composing passes and the writer directly) is the whole map.
+/// A pass that works on the whole map refuses a part that is not the whole of what is written, as its part source
+/// states it (`core.part_scope`'s `whole`), unless the decision was made over every part: what it would compute from a
+/// part (a floor percentile, the collision a snap reaches, a spawn per part, a budget) is not the map's. The floor, the
+/// light cap and the texture budget take their decisions from summaries merged over every part
+/// ([`primase_core::convert::convert_parts_summarized`]); the spawn, the marker snaps, water, the pause map, overlays,
+/// blend chains and their budget, the collision plan and the map's summary refuse parts until the writer lays out parts
+/// (B2c part 2, step 9 incomplete); the region clip is local. A world outside the part protocol (no
+/// `core.part_scope`: a program composing passes and the writer directly) is the whole map.
 pub fn require_whole_map(w: &World, pass: &str) -> Result<(), String> {
     match w.resource::<PartScope>() {
         Some(s) if !s.whole => Err(format!(
