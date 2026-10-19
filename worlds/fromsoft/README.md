@@ -272,9 +272,12 @@ converts frames; it does not lower:
   hit filter, is a `fromsoft.map_collision` entity: the naming parts (name, hit
   filter, clause with states read), every triangle in the world frame and its
   HitMtrl ID as the shape key binds it (-1: none);
-- each object prototype whose binder holds its main HKX carries every body as
-  stored (`fromsoft.object_collision`: name, stored motion type, shape class,
-  triangles in the prototype's space, HitMtrl IDs; convex shapes store none);
+- each object prototype whose binder holds its main HKX carries every body
+  (`fromsoft.object_collision`: name, stored motion type, shape class and its
+  geometry as stored: a compressed mesh's triangles in the prototype's space and
+  their HitMtrl IDs; a convex shape's core (vertices, planes, faces), convex
+  radius, a capsule's segment, and the map from its own space into the
+  prototype's; convex shapes store no material);
 - lights are `fromsoft.light` records where they stand (stored colours, powers,
   cone, radius and tangent); hang-edge segments and spawn points are the
   `fromsoft.area_extras` resource; what the read covered (area, region, margin,
@@ -315,13 +318,22 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
   around the read region. The records it lowered are consumed; files only other
   filters' parts name stay as source.
-- `lower-fromsoft-object-collision` places every placed object prototype's bodies
-  with each placement into an `objects` soup (`objects_state<n>` for conditioned
-  placements), at their stored pose whatever their motion type (counted);
-  `leave-out=`, `leave-out-motion=` (stored motion types), `reach=N` and
+- `lower-fromsoft-object-collision{convex=tessellate|leave-out}` places every
+  placed object prototype's bodies with each placement into an `objects` soup
+  (`objects_state<n>` for conditioned placements), at their stored pose whatever
+  their motion type (counted). A soup cannot hold a rounded shape, so `convex`
+  is required: `tessellate` gives a convex body the intersection of its planes
+  offset by its radius (sharp where Havok rounds, a capsule a box around its
+  segment; both counted), `leave-out` drops it (counted). `leave-out=`,
+  `leave-out-motion=` (stored motion types), `reach=N` and
   `convex-surface=default|render` (render: the surface of the prototype's largest
   colliding render area, measured on its stored level-0 face sets) are the
   program's choices.
+
+  In a part of a conversion (`core.part_scope`) both collision passes lower only
+  what the part's roots reach: a collision file or placement loaded as context is
+  its own part's (`tests/collision_parts.rs` converts two cells, each with the
+  other as its halo, and gets exactly the whole world's soups).
 - `lower-fromsoft-extras` makes each hang segment a two-point `core.curve` of kind
   `ledge` and each spawn point a `core.marker` of kind `travel`, in source order,
   named as stored. Joining ledges (`primase_meshops::chain`), the surface under
@@ -330,7 +342,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
 
 The collision and geometry the earlier reader produced by itself are this explicit
 composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
-lower-fromsoft-object-collision{leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
+lower-fromsoft-object-collision{convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
 drop-fromsoft-far, fromsoft-apply-rigid-skinning,
 lower-fromsoft-geometry{uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
@@ -340,7 +352,8 @@ travel markers exactly.
 `tests/sekiro_scene.rs` checks reads against a SoulsFormats dump of the area
 (`PRIMASE_FROMSOFT_RIGID_ORACLE`). The whole-area read, before any pass, places
 every dumped map piece and object part except those of the models the dump could
-not read either (missing from the read), and nothing else. Slice A's read accounts
+not read either (missing from the read) and exactly the parts of the models the
+dump holds no vertex of (empty), and nothing else. Slice A's read accounts
 for every part (kept, outside, missing, empty); every placement is an MSB part
 with its model, translation exact and basis within 1e-5; after the geometry
 composition every

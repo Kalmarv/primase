@@ -74,6 +74,29 @@ fn dump_parts(dump: &Path) -> Result<BTreeMap<String, Value>> {
         .collect()
 }
 
+/// The models the dump holds no vertex of (no mesh, or meshes of no vertex), by prototype key.
+fn dumped_without_vertices(dump: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let mut out = std::collections::BTreeSet::new();
+    for m in jsonl(&dump.join("models.jsonl"))? {
+        let bytes = std::fs::read(dump.join(m["file"].as_str().ok_or("file")?))?;
+        let mut words = bytes.as_chunks::<4>().0.iter().map(|w| u32::from_le_bytes(*w));
+        let meshes = words.next().ok_or("short dump")?;
+        let mut vertices = 0;
+        for _ in 0..meshes {
+            let n = words.next().ok_or("short dump")?;
+            vertices += n;
+            // each vertex is a position and a normal, six words
+            for _ in 0..n * 6 {
+                words.next().ok_or("short dump")?;
+            }
+        }
+        if vertices == 0 {
+            out.insert(m["key"].as_str().ok_or("key")?.to_owned());
+        }
+    }
+    Ok(out)
+}
+
 /// A dumped part's model as our prototype key.
 fn model_key(part: &Value) -> Result<String> {
     let model = part["model"].as_str().ok_or("model")?;
@@ -134,11 +157,34 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
         })
         .collect::<Result<_>>()?;
     assert_eq!(ours.len(), report.placements, "placement labels are unique");
-    // every placement a dumped part of its model; every dumped part a placement unless its model is missing or empty
+    // convex bodies are read as their stored cores, a capsule with its segment: nothing tessellated by reading
+    use primase_fromsoft::sekiro::source::{ObjectBodies, ObjectGeometry};
+    for (_, bodies) in world.iter::<ObjectBodies>() {
+        for b in &bodies.bodies {
+            let capsule = b.shape == "hknpCapsuleShape";
+            match &b.geometry {
+                ObjectGeometry::Convex { capsule: segment, .. } => {
+                    assert_eq!(segment.is_some(), capsule, "{} {}", bodies.file, b.name)
+                }
+                ObjectGeometry::Mesh { .. } => assert!(b.shape.contains("CompressedMesh"), "{}", b.shape),
+            }
+        }
+    }
+    println!(
+        "object bodies by shape {:?}",
+        report.object_collision.bodies_by_shape
+    );
+    // every placement a dumped part of its model; every dumped part a placement unless its model is missing, or empty
+    // by the dump's own count (no vertex at all): exactly those parts, by identity
+    let empty_models = dumped_without_vertices(&dump)?;
     let mut missing = 0;
     let mut absent = Vec::new();
+    let mut of_empty = Vec::new();
     for (source, part) in &parts {
         let key = model_key(part)?;
+        if empty_models.contains(&key) {
+            of_empty.push(source.clone());
+        }
         match ours.get(source) {
             Some(id) => assert_eq!(*id, key, "{source}"),
             None if report.missing_models.contains(&key) => missing += 1,
@@ -150,12 +196,17 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
         "a placement that is no dumped part"
     );
     assert_eq!((report.skipped_outside, report.skipped_missing), (0, missing));
-    assert_eq!(absent.len(), report.skipped_empty, "parts not placed: {absent:?}");
+    assert_eq!(
+        absent, of_empty,
+        "parts not placed against the parts of models the dump has no vertex of"
+    );
+    assert_eq!(absent.len(), report.skipped_empty);
     println!(
-        "whole area: {} parts, {} placements, {missing} of missing models, {} of empty models {absent:?}",
+        "whole area: {} parts, {} placements, {missing} of missing models, {} of the {} models the dump has no vertex of",
         parts.len(),
         ours.len(),
-        report.skipped_empty
+        report.skipped_empty,
+        empty_models.len()
     );
     Ok(())
 }

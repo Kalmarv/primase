@@ -1,10 +1,10 @@
 //! Sekiro collision metadata. The tagfile and mesh mechanism live in the toolkit;
 //! fsnp material tables and source-frame conventions belong here.
 use crate::{Result, invalid};
-use primase_havok::{Compendium, Tagfile, Value};
+use primase_havok::{Compendium, ConvexCore, Tagfile, Value};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Soup {
     /// Triangle-list positions in the file's source frame, after rigid-body pose.
     pub triangles: Vec<[[f32; 3]; 3]>,
@@ -111,20 +111,58 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
     }
     Ok(soup)
 }
+/// A body's geometry as its file stores it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BodyGeometry {
+    /// A compressed mesh: its triangles posed by the body, in the file frame, and their HitMtrl IDs.
+    Mesh(Soup),
+    /// A convex shape (box, polytope, capsule): its stored core and convex radius in the body's own space, a capsule's
+    /// stored segment, and the body's pose in the file frame. It stores no material.
+    Convex {
+        core: ConvexCore,
+        /// A capsule's segment end points `a`, `b` (its radius is the core's).
+        capsule: Option<[[f32; 3]; 2]>,
+        position: [f32; 3],
+        orientation: [f32; 4],
+    },
+}
+
+impl BodyGeometry {
+    /// Triangles in the file frame: a mesh's as stored; a convex shape's core tessellated as the intersection of its
+    /// planes offset by the radius ([`ConvexCore::expanded_triangles`]: sharp where the shape is rounded, a capsule a
+    /// box around its core), posed by the body. The convex tessellation is an approximation.
+    pub fn triangles(&self) -> Result<Vec<[[f32; 3]; 3]>> {
+        match self {
+            BodyGeometry::Mesh(soup) => Ok(soup.triangles.clone()),
+            BodyGeometry::Convex {
+                core,
+                position,
+                orientation,
+                ..
+            } => {
+                let pose = pose_columns(*position, *orientation);
+                Ok(core
+                    .expanded_triangles()?
+                    .into_iter()
+                    .map(|t| t.map(|v| posed(&pose, v)))
+                    .collect())
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Body {
     pub name: String,
     /// Stored motion classification; interpreting 2 as keyframed is policy.
     pub motion_type: u64,
     pub shape: String,
-    pub soup: Soup,
+    pub geometry: BodyGeometry,
 }
 
-/// Object bodies in their file frame. Convex shapes use an explicitly named
-/// offset-plane tessellation policy; capsules become boxes around their core.
-/// Convex shapes store no material: their triangles' materials are -1, as an
-/// unbound shape key's. Unsupported geometry is an error, never an empty
-/// successful body.
+/// Object bodies as their file stores them: compressed meshes as posed triangles in the file frame with their
+/// materials (-1 where the shape key binds none; a plain compressed mesh binds none), convex shapes as their stored
+/// core, radius and pose ([`BodyGeometry`]). Unsupported geometry is an error, never an empty successful body.
 pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<Body>> {
     let tag = Tagfile::read(bytes, compendium)?;
     let variants = tag.root()?.field("namedVariants")?.array()?;
@@ -145,8 +183,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                     return Err(invalid("collision", body.offset, "nonfinite body transform"));
                 }
                 let shape = body.field("shape")?.dereference()?;
-                let mut soup = Soup::default();
-                match shape.type_name() {
+                let geometry = match shape.type_name() {
                     "fsnpCustomParamCompressedMeshShape" | "hknpCompressedMeshShape" => {
                         let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
                         let (keys, invalid_keys) =
@@ -155,18 +192,47 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             } else {
                                 (BTreeMap::new(), 0)
                             };
-                        soup.invalid_material_keys = invalid_keys;
-                        soup.dead_primitives = mesh.dead_primitives;
+                        let mut soup = Soup {
+                            invalid_material_keys: invalid_keys,
+                            dead_primitives: mesh.dead_primitives,
+                            ..Soup::default()
+                        };
                         for tri in mesh.triangles {
                             let material = keys.get(&tri.key).copied().unwrap_or(-1);
                             soup.unmapped += usize::from(material == -1);
                             soup.materials.push(material);
-                            soup.triangles.push(tri.vertices);
+                            let vertices = tri.vertices.map(|v| pose(v, p, q));
+                            if vertices.iter().flatten().any(|f| !f.is_finite()) {
+                                return Err(invalid(
+                                    "collision",
+                                    body.offset,
+                                    "nonfinite transformed position",
+                                ));
+                            }
+                            soup.triangles.push(vertices);
                         }
+                        BodyGeometry::Mesh(soup)
                     }
                     "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" => {
-                        soup.triangles = primase_havok::ConvexCore::read(shape)?.expanded_triangles()?;
-                        soup.materials.resize(soup.triangles.len(), -1);
+                        let capsule = if shape.type_name() == "hknpCapsuleShape" {
+                            let end = |name: &str| -> Result<[f32; 3]> {
+                                let v = shape.field(name)?.vector::<4>()?;
+                                if v[..3].iter().all(|f| f.is_finite()) {
+                                    Ok([v[0], v[1], v[2]])
+                                } else {
+                                    Err(invalid("collision", shape.offset, "nonfinite capsule segment"))
+                                }
+                            };
+                            Some([end("a")?, end("b")?])
+                        } else {
+                            None
+                        };
+                        BodyGeometry::Convex {
+                            core: primase_havok::ConvexCore::read(shape)?,
+                            capsule,
+                            position: [p[0], p[1], p[2]],
+                            orientation: q,
+                        }
                     }
                     other => {
                         return Err(invalid(
@@ -175,29 +241,21 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             format!("unsupported object shape {other}"),
                         ));
                     }
-                }
-                for tri in &mut soup.triangles {
-                    *tri = tri.map(|v| pose(v, p, q));
-                    if tri.iter().flatten().any(|f| !f.is_finite()) {
-                        return Err(invalid(
-                            "collision",
-                            body.offset,
-                            "nonfinite transformed position",
-                        ));
-                    }
-                }
+                };
                 result.push(Body {
                     name: body.field("name")?.string()?,
                     motion_type: body.field("motionType")?.unsigned()?,
                     shape: shape.type_name().into(),
-                    soup,
+                    geometry,
                 });
             }
         }
     }
     Ok(result)
 }
-fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
+
+/// A body pose as the columns of its affine map (rotation by the unit quaternion `q`, then translation by `p`).
+pub fn pose_columns(p: [f32; 3], q: [f32; 4]) -> [[f32; 3]; 4] {
     let [x, y, z, w] = q;
     let xx = x * x;
     let yy = y * y;
@@ -209,8 +267,18 @@ fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
     let yw = y * w;
     let zw = z * w;
     [
-        v[0] * (1. - 2. * (yy + zz)) + v[1] * (2. * (xy - zw)) + v[2] * (2. * (xz + yw)) + p[0],
-        v[0] * (2. * (xy + zw)) + v[1] * (1. - 2. * (zz + xx)) + v[2] * (2. * (yz - xw)) + p[1],
-        v[0] * (2. * (xz - yw)) + v[1] * (2. * (yz + xw)) + v[2] * (1. - 2. * (yy + xx)) + p[2],
+        [1. - 2. * (yy + zz), 2. * (xy + zw), 2. * (xz - yw)],
+        [2. * (xy - zw), 1. - 2. * (zz + xx), 2. * (yz + xw)],
+        [2. * (xz + yw), 2. * (yz - xw), 1. - 2. * (yy + xx)],
+        p,
     ]
+}
+
+/// `v` through the affine map with columns `c`.
+pub fn posed(c: &[[f32; 3]; 4], v: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| v[0] * c[0][i] + v[1] * c[1][i] + v[2] * c[2][i] + c[3][i])
+}
+
+fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
+    posed(&pose_columns([p[0], p[1], p[2]], q), v)
 }

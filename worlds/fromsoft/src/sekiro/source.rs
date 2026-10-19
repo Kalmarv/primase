@@ -116,33 +116,46 @@ impl Component for MapCollision {
     }
 }
 
-/// One rigid body of an object's collision file as stored: its name, its stored motion type (what each value means
-/// is a pass's interpretation), its shape class, its triangles posed by the body in the prototype's space (the
-/// world frame's axes, as the prototype's model; stored vertex order, as [`MapCollision`]), and per triangle its
-/// HitMtrlParam ID (-1: none bound; shapes that store no materials, the convex box, polytope and capsule, are all
-/// -1). Convex shapes are their offset-plane tessellation and capsules boxes around their core
-/// ([`crate::collision::read_bodies`]).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// One rigid body of an object's collision file: its name, its stored motion type (what each value means is a pass's
+/// interpretation), its shape class and its geometry as stored.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ObjectBody {
     pub name: String,
     pub motion_type: u64,
     pub shape: String,
-    pub triangles: Vec<[[f32; 3]; 3]>,
-    pub materials: Vec<i32>,
+    pub geometry: ObjectGeometry,
 }
-impl ObjectBody {
-    /// Whether the shape is a convex one, which stores no material.
+
+/// A body's stored geometry in its prototype's space (the world frame's axes, as the prototype's model).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ObjectGeometry {
+    /// A compressed mesh: its triangles posed by the body, in stored vertex order (as [`MapCollision`]), and per
+    /// triangle its HitMtrlParam ID (-1: none bound).
+    Mesh {
+        triangles: Vec<[[f32; 3]; 3]>,
+        materials: Vec<i32>,
+    },
+    /// A convex shape (box, polytope, capsule) as stored: its core and convex radius in the body's own space and
+    /// the file's axes, a capsule's segment, and `to_prototype`, the columns of the affine map from the body's space
+    /// into the prototype's (the body's pose, then the file frame's reflection into the world frame's axes). It
+    /// stores no material. Turning it into triangles is a pass's approximation.
+    Convex {
+        core: primase_havok::ConvexCore,
+        capsule: Option<[[f32; 3]; 2]>,
+        to_prototype: [[f32; 3]; 4],
+    },
+}
+
+impl ObjectGeometry {
+    /// Whether it is a convex shape, which stores no material.
     pub fn convex(&self) -> bool {
-        matches!(
-            self.shape.as_str(),
-            "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape"
-        )
+        matches!(self, ObjectGeometry::Convex { .. })
     }
 }
 
 /// An object prototype's collision file as stored (`fromsoft.object_collision`): every body of its main HKX, for
 /// `lower-fromsoft-object-collision` to place with each placement. A prototype whose binder has no such file has none.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ObjectBodies {
     /// The binder member's file name (`o000100.hkx`).
     pub file: String,
@@ -150,41 +163,56 @@ pub struct ObjectBodies {
 }
 impl Component for ObjectBodies {
     const NAME: &'static str = "fromsoft.object_collision";
-    /// Prototype-space triangles: mapped as the prototype's mesh, a reflection reversing their order.
+    /// Prototype-space geometry, mapped as the prototype's mesh: mesh triangles moved (a reflection reversing their
+    /// order), a convex body's map composed with the mapping.
     fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         let mut out = self.clone();
         for body in &mut out.bodies {
-            for t in &mut body.triangles {
-                *t = t.map(|p| l.point(p));
-                if l.mirrors() {
-                    t.swap(1, 2);
+            match &mut body.geometry {
+                ObjectGeometry::Mesh { triangles, .. } => {
+                    for t in triangles {
+                        *t = t.map(|p| l.point(p));
+                        if l.mirrors() {
+                            t.swap(1, 2);
+                        }
+                    }
+                }
+                ObjectGeometry::Convex { to_prototype, .. } => {
+                    *to_prototype = to_prototype.map(|c| l.point(c));
                 }
             }
         }
         primase_core::world::Linearity::Applied(out)
     }
-    /// 36 bytes per triangle and 4 per material.
+    /// 36 bytes per mesh triangle and 4 per material; a convex core's vertices and planes.
     fn payload_bytes(&self) -> u64 {
         self.bodies
             .iter()
-            .map(|b| b.triangles.len() as u64 * 36 + b.materials.len() as u64 * 4)
+            .map(|b| match &b.geometry {
+                ObjectGeometry::Mesh { triangles, materials } => {
+                    triangles.len() as u64 * 36 + materials.len() as u64 * 4
+                }
+                ObjectGeometry::Convex { core, .. } => {
+                    core.vertices.len() as u64 * 12 + core.planes.len() as u64 * 16
+                }
+            })
             .sum()
     }
     fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
-        match self
-            .bodies
-            .iter()
-            .find(|b| b.materials.len() != b.triangles.len())
-        {
-            Some(b) => Err(format!(
-                "{} body {}: {} materials for {} triangles",
-                self.file,
-                b.name,
-                b.materials.len(),
-                b.triangles.len()
-            )),
-            None => Ok(()),
+        for b in &self.bodies {
+            if let ObjectGeometry::Mesh { triangles, materials } = &b.geometry
+                && materials.len() != triangles.len()
+            {
+                return Err(format!(
+                    "{} body {}: {} materials for {} triangles",
+                    self.file,
+                    b.name,
+                    materials.len(),
+                    triangles.len()
+                ));
+            }
         }
+        Ok(())
     }
 }
 

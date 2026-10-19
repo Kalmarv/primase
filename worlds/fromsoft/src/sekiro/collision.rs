@@ -10,6 +10,7 @@ use crate::{
     invalid,
     msb::{MapLayout, PartKind},
 };
+use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::{Clause, Condition};
 use primase_core::{
@@ -18,7 +19,7 @@ use primase_core::{
     world::Resource,
 };
 use primase_havok::Compendium;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 
 /// What the reader found of the area's map collision.
@@ -231,6 +232,14 @@ pub fn read(
     Ok(report)
 }
 
+/// The entities whose input a pass lowers: in a part of a conversion (`core.part_scope`), what the part's roots
+/// reach, as what it only loaded as context is its owner's to lower; without one, everything (`None`).
+pub(super) fn owned(world: &World) -> Option<BTreeSet<Entity>> {
+    world
+        .resource::<PartScope>()
+        .map(|s| world.closure(s.roots.iter().copied()))
+}
+
 /// The read region around which a pass crops at `reach`, if it crops: `None` without a reach or after a read of the
 /// whole area.
 pub(super) fn crop(
@@ -258,7 +267,8 @@ pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
 /// with its HitMtrl class's surface ([`known_surface`]; an ID the shape key does not bind, or a class without a known
 /// surface, gets `default`, counted); a file present only in some world states (its selected parts' clauses) goes
 /// into a `game_state<n>` soup with that condition. Files only parts of other hit filters name stay as source,
-/// counted.
+/// counted. In a part of a conversion (`core.part_scope`), only the files its roots reach are lowered: a file it
+/// loaded as context is its own part's.
 ///
 /// Options: `hit-filters=` the filters whose parts are lowered, joined by `+` (required: which placed collision is
 /// ground is the program's choice); `water=` HitMtrl classes lowered into separate `water` soups with the `default`
@@ -375,7 +385,17 @@ impl Pass for LowerFromSoftCollision {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
-        let mut records: Vec<(Entity, &MapCollision)> = world.iter::<MapCollision>().collect();
+        let owned = owned(world);
+        let mut records: Vec<(Entity, &MapCollision)> = world
+            .iter::<MapCollision>()
+            .filter(|(e, _)| {
+                let mine = owned.as_ref().is_none_or(|o| o.contains(e));
+                if !mine {
+                    log.count("context collision files, left to their own part", 1);
+                }
+                mine
+            })
+            .collect();
         records.sort_by(|a, b| a.1.file.cmp(&b.1.file));
         let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
         let mut index = |name: &str| surfaces.index(name).map_err(|e| e.to_string());

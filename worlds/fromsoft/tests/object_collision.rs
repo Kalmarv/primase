@@ -124,15 +124,16 @@ fn castle_object_bodies() -> Result<()> {
             let materials = (0..n)
                 .map(|_| u32le(&mut c).map(|x| x as i32))
                 .collect::<Result<Vec<_>>>()?;
-            if body.shape.contains("CompressedMesh") {
-                assert_eq!(body.soup.triangles, reference, "{} {}", path.display(), body.name);
-                assert_eq!(body.soup.materials, materials);
+            // the reference tessellates convex shapes as the lowering's approximation does
+            let triangles = body.geometry.triangles()?;
+            if let collision::BodyGeometry::Mesh(soup) = &body.geometry {
+                assert_eq!(soup.triangles, reference, "{} {}", path.display(), body.name);
+                assert_eq!(soup.materials, materials);
                 compressed_components += n * 9;
             } else {
                 assert!(materials.iter().all(|&m| m == -1));
-                assert!(body.soup.materials.iter().all(|&m| m == -1));
-                let (pa, da) = compare_surface(&body.soup.triangles, &reference);
-                let (pb, db) = compare_surface(&reference, &body.soup.triangles);
+                let (pa, da) = compare_surface(&triangles, &reference);
+                let (pb, db) = compare_surface(&reference, &triangles);
                 let d = da.max(db);
                 maximum = maximum.max(d);
                 probes += pa + pb;
@@ -142,12 +143,12 @@ fn castle_object_bodies() -> Result<()> {
                         "{} {}: ours->reference {da}, reference->ours {db}; triangles {}/{}",
                         path.display(),
                         body.name,
-                        body.soup.triangles.len(),
+                        triangles.len(),
                         reference.len()
                     ));
                 }
             }
-            ours += body.soup.triangles.len();
+            ours += triangles.len();
             reference_total += n;
             bodies_count += 1;
         }

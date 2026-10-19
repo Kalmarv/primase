@@ -2,7 +2,7 @@ use crate::{Result, Value, invalid};
 
 /// Stored polytope core. Radius expansion is a tessellation policy, not the
 /// rounded surface of a Havok convex shape (notably at capsule corners).
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConvexCore {
     pub vertices: Vec<[f32; 3]>,
     pub planes: Vec<[f32; 4]>,

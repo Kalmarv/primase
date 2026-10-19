@@ -787,11 +787,15 @@ pub fn register(registry: &mut PassRegistry) {
         },
         &[("hit-filters", "8+27")],
     );
-    registry.register("lower-fromsoft-object-collision", |o| {
-        Ok(Box::new(
-            super::objects::LowerFromSoftObjectCollision::from_options(o)?,
-        ))
-    });
+    registry.register_requiring(
+        "lower-fromsoft-object-collision",
+        |o| {
+            Ok(Box::new(
+                super::objects::LowerFromSoftObjectCollision::from_options(o)?,
+            ))
+        },
+        &[("convex", "tessellate")],
+    );
     registry.register(
         "lower-fromsoft-extras",
         without_options::<super::extras::LowerFromSoftExtras>,
