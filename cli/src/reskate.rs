@@ -1,5 +1,6 @@
-//! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`, [`primase_reskate::write_map`]) of the whole
-//! selection as one part, built from the world in memory. The part must have been through the passes the map needs
+//! `--to reskate`: a native ReSkate Studio map folder (`<out>/<name>`) of the whole selection as one part, or of the
+//! partition plan's parts as one map (`--parts`), written by the map sink ([`primase_reskate::MapSink`], the
+//! conversion's writer) from the world in memory. The part must have been through the passes the map needs
 //! after the reader's (`--passes`): `bake-normal-scale` (skate. has no normal strength), `raise-skate{name=<name>,light_scale=standard}`
 //! (the skate dialect; a spawn comes from `place-spawn` at selection), `lower-layered-reskate` (blends as decal
 //! overlays; the target refuses an unlowered blend), then the texture choices: `cap-textures{max=N}` (the writer
@@ -15,17 +16,9 @@
 //! writing; a map with blend chains and no budget is refused).
 use std::path::{Path, PathBuf};
 
-use primase_core::World;
-use primase_core::convert::{Report, Writer};
-use primase_core::pass::Target;
 use primase_reskate::{EncodingOptions, MapSink};
 
 use crate::convert::Result;
-
-struct Reskate {
-    /// The map writer: each part's payloads written as the part comes, the index files at the end.
-    sink: MapSink,
-}
 
 /// `[--name N] [--min-instances N] [--parts]`
 pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination> {
@@ -81,91 +74,6 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
     } else {
         Box::new(primase_core::convert::WholeWorld::default())
     };
-    Ok((
-        source,
-        Box::new(Reskate {
-            // the world carries every input in memory: no scene folder to read from
-            sink: MapSink::new(&PathBuf::new(), &encoding),
-        }),
-    ))
-}
-
-impl Writer for Reskate {
-    /// The map builder's names (`primase_reskate::target`): the skate dialect and the core names it reads; any other
-    /// name is reported as not written.
-    fn target(&self) -> Target {
-        primase_reskate::target()
-    }
-    fn write(&mut self, part: &World) -> Result<()> {
-        self.sink.part(part)?;
-        Ok(())
-    }
-    fn finish(self: Box<Self>) -> Result<primase_core::convert::Finished> {
-        let report = self.sink.finish()?;
-        let mut lines: Report = vec![
-            (
-                "reskate".into(),
-                format!(
-                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={} \
-                     peak_mesh_bytes={}",
-                    report.out_dir.display(),
-                    report.tiles,
-                    report.merged_tris,
-                    report.instances,
-                    report.prototypes,
-                    report.materials,
-                    report.textures,
-                    report.collision_tris,
-                    report.peak_mesh_bytes
-                ),
-            ),
-            ("blend order".into(), format!("{:?}", report.blend)),
-            (
-                "reskate parts".into(),
-                format!(
-                    "parts={} held_peak_cells={} held_peak_bytes={} cells_laid_at_finish={} parts_untold={}",
-                    report.parts,
-                    report.held.peak_cells,
-                    report.held.peak_bytes,
-                    report.held.at_finish,
-                    report.held.parts_untold
-                ),
-            ),
-        ];
-        // what the writer decided by a pass's rule, a map in parts: the collision plan, the blend budget and its basis
-        if let Some(p) = &report.collision_plan {
-            let leaves = p.leaves.as_ref().map_or(0, std::collections::BTreeMap::len);
-            lines.push(("reskate collision plan made".into(), format!("{leaves} leaves")));
-        }
-        if let Some(b) = &report.blend_budget {
-            lines.push(("reskate blend budget made".into(), format!("{b:?}")));
-        }
-        // the map's warnings (map.json's), each counted below when it is a loss
-        for w in report.warnings {
-            lines.push(("reskate warning".into(), w));
-        }
-        // what it left out, and what it wrote approximately; the names the target does not take the conversion
-        // reported itself before writing (report.unsupported_names, for direct callers)
-        let mut notices = Vec::new();
-        for (what, n) in report.omitted {
-            notices.push(primase_core::convert::Notice::new(
-                "reskate",
-                primase_core::convert::NoticeKind::Unsupported,
-                format!("{what}: not written"),
-                n,
-            ));
-        }
-        for (what, n) in report.approximated {
-            notices.push(primase_core::convert::Notice::new(
-                "reskate",
-                primase_core::convert::NoticeKind::Approximation,
-                what,
-                n,
-            ));
-        }
-        Ok(primase_core::convert::Finished {
-            report: lines,
-            notices,
-        })
-    }
+    // the world carries every input in memory: no scene folder to read from
+    Ok((source, Box::new(MapSink::new(&PathBuf::new(), &encoding))))
 }

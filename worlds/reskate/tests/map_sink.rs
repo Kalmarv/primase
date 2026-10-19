@@ -1,19 +1,22 @@
 //! The map writer as a sink of parts (`MapSink`): a part's payloads (its meshes' and textures' files) are on disk once
 //! the part is taken, the index files (`map.json`, `stats.json`) only once the sink finishes; `write_map` is the sink
-//! given the whole map and writes the same folder. A map is laid out whole for now: a second part, and a finish with no
-//! part, are refused.
+//! given the whole map and writes the same folder. A second part of a map taken as whole, and a finish with no part, are
+//! refused. As a conversion's writer, the sink reports what it left out and what it wrote approximately as notices.
 
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use primase_core::convert::{NoticeKind, Writer};
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{
     ColorSpace, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,
     Transform, World,
 };
-use primase_reskate::components::{MarkerKind, Other, SkateMarker};
+use primase_reskate::components::{
+    MarkerKind, Other, SkateMarker, SkateScene, Snap, SnapMode, TextureBudget,
+};
 use primase_reskate::passes::{LightCalibration, RaiseOptions};
 use primase_reskate::{EncodingOptions, MapSink};
 
@@ -160,7 +163,9 @@ fn a_part_writes_its_payloads_and_finish_the_index() {
     let e2 = encoding("write_map");
     let r2 = primase_reskate::write_map(&w, Path::new(""), &e2).unwrap();
     assert_eq!(files(&r2.out_dir), by_sink);
-    std::fs::remove_dir_all(e.out_root.parent().unwrap()).ok();
+    for e in [e, e2] {
+        std::fs::remove_dir_all(e.out_root).ok();
+    }
 }
 
 #[test]
@@ -168,4 +173,80 @@ fn a_finish_with_no_part_is_refused() {
     let e = encoding("empty");
     let err = MapSink::new(Path::new(""), &e).finish().unwrap_err().to_string();
     assert!(err.contains("given no part"), "{err}");
+}
+
+/// The sink as a conversion's writer: the parts through `write`, and at `finish` the map's report lines, what it left
+/// out as unsupported notices and what it wrote approximately as approximation notices, each with its count; the
+/// folder is the one `write_map` writes.
+#[test]
+fn as_a_conversions_writer_the_sink_reports_its_losses_as_notices() {
+    let mut w = map();
+    // left out: the scene's texture budget (a pass applies it); approximated: a marker whose snap is unresolved
+    let scene = w.resource_mut::<SkateScene>().unwrap();
+    scene.texture_budget = Some(TextureBudget {
+        max: Some(512.0),
+        ..TextureBudget::default()
+    });
+    let m = w.spawn();
+    w.insert(
+        m,
+        SkateMarker {
+            kind: MarkerKind::Travel,
+            position: Some(([5.0, -1.0], Some(0.0))),
+            yaw: None,
+            m: None,
+            blueprint: None,
+            snap: Some(Snap::Mode(SnapMode::Ground)),
+            lift: None,
+            shelter: None,
+            trainer: None,
+            other: Other::new(),
+        },
+    );
+    let e = encoding("writer");
+    let mut writer: Box<dyn Writer> = Box::new(MapSink::new(Path::new(""), &e));
+    writer.write(&w).unwrap();
+    let finished = writer.finish().unwrap();
+    let line = |label: &str| {
+        finished
+            .report
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| panic!("no {label} line: {:?}", finished.report))
+    };
+    assert!(line("reskate").contains("tiles="), "{}", line("reskate"));
+    assert!(
+        line("reskate parts").starts_with("parts=1 "),
+        "{}",
+        line("reskate parts")
+    );
+    let notices: Vec<(NoticeKind, &str, u64)> = finished
+        .notices
+        .iter()
+        .map(|n| (n.kind, n.reason.as_str(), n.count))
+        .collect();
+    assert_eq!(
+        notices,
+        [
+            (
+                NoticeKind::Unsupported,
+                "skate.scene texture_budget (budget-reskate-textures applies a budget): not written",
+                1
+            ),
+            (
+                NoticeKind::Approximation,
+                "markers whose snap is unresolved, written where they stand (snap-reskate-markers resolves it)",
+                1
+            ),
+        ]
+    );
+    assert!(finished.notices.iter().all(|n| n.stage == "reskate"));
+    // the same folder as write_map's
+    let e2 = encoding("writer_map");
+    let r = primase_reskate::write_map(&w, Path::new(""), &e2).unwrap();
+    assert_eq!(files(&r.out_dir), files(&e.out_root.join("sink")));
+    for e in [e, e2] {
+        std::fs::remove_dir_all(e.out_root).ok();
+    }
 }

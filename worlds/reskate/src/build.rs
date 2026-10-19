@@ -66,6 +66,72 @@ pub struct BuildReport {
     pub unsupported_names: Vec<(String, u64)>,
 }
 
+impl BuildReport {
+    /// What a conversion reports of the map: its log lines (the map's numbers, the blend order, how the parts came, the
+    /// collision plan and blend budget the writer made, the warnings), what it left out as unsupported notices and
+    /// what it wrote approximately as approximation notices. The names the target does not take the conversion
+    /// reported itself before writing (`unsupported_names` is for direct callers of [`write_map`]).
+    pub fn finished(self) -> primase_core::convert::Finished {
+        use primase_core::convert::{Finished, Notice, NoticeKind};
+        let mut report: primase_core::convert::Report = vec![
+            (
+                "reskate".into(),
+                format!(
+                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={}                      peak_mesh_bytes={}",
+                    self.out_dir.display(),
+                    self.tiles,
+                    self.merged_tris,
+                    self.instances,
+                    self.prototypes,
+                    self.materials,
+                    self.textures,
+                    self.collision_tris,
+                    self.peak_mesh_bytes
+                ),
+            ),
+            ("blend order".into(), format!("{:?}", self.blend)),
+            (
+                "reskate parts".into(),
+                format!(
+                    "parts={} held_peak_cells={} held_peak_bytes={} cells_laid_at_finish={} parts_untold={}",
+                    self.parts,
+                    self.held.peak_cells,
+                    self.held.peak_bytes,
+                    self.held.at_finish,
+                    self.held.parts_untold
+                ),
+            ),
+        ];
+        if let Some(p) = &self.collision_plan {
+            let leaves = p.leaves.as_ref().map_or(0, BTreeMap::len);
+            report.push(("reskate collision plan made".into(), format!("{leaves} leaves")));
+        }
+        if let Some(b) = &self.blend_budget {
+            report.push(("reskate blend budget made".into(), format!("{b:?}")));
+        }
+        // the map's warnings (map.json's), each counted below when it is a loss
+        for w in self.warnings {
+            report.push(("reskate warning".into(), w));
+        }
+        let omitted = self.omitted.into_iter().map(|(what, n)| {
+            Notice::new(
+                "reskate",
+                NoticeKind::Unsupported,
+                format!("{what}: not written"),
+                n,
+            )
+        });
+        let approximated = self
+            .approximated
+            .into_iter()
+            .map(|(what, n)| Notice::new("reskate", NoticeKind::Approximation, what, n));
+        Finished {
+            report,
+            notices: omitted.chain(approximated).collect(),
+        }
+    }
+}
+
 /// A level of detail as the reference build names it (`--lod`): `default` (the scene's `lod_default`), `highest`
 /// (the finest) or a level N (the coarsest form at N or finer).
 pub fn lod_choice(s: &str) -> Result<primase_core::LodChoice> {
@@ -909,6 +975,20 @@ impl MapSink {
                 .collect(),
             unsupported_names: unsupported_names.into_iter().collect(),
         })
+    }
+}
+
+/// The map sink as a conversion's writer ([`primase_core::convert::Writer`]): what it writes is [`target`]'s, each part
+/// is taken by [`MapSink::part`], and at the end its [`BuildReport`] is the conversion's ([`BuildReport::finished`]).
+impl primase_core::convert::Writer for MapSink {
+    fn target(&self) -> primase_core::pass::Target {
+        target()
+    }
+    fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
+        Ok(self.part(part)?)
+    }
+    fn finish(self: Box<Self>) -> primase_core::convert::Result<primase_core::convert::Finished> {
+        Ok(MapSink::finish(*self)?.finished())
     }
 }
 
