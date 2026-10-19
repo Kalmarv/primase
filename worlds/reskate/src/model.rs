@@ -12,8 +12,6 @@ pub struct SrcPart {
     pub material: Option<usize>,
     /// The scene part it came from (prototype index, part index), for the variant resolver.
     pub def: Option<(usize, usize)>,
-    /// Blended triangles over too many texture repeats: alpha tested instead (UV-repeat rule).
-    pub cutout: bool,
     pub shader: String,
     pub bucket: u8,
     pub model: i32,
@@ -216,7 +214,9 @@ pub fn content_key(parts: &[SrcPart]) -> [u8; 16] {
         h.update([
             p.class.map_or(0xFF, |c| c as u8),
             u8::from(p.emissive),
-            u8::from(p.cutout),
+            // the writer's former cutout flag (always clear: a cutout form is a material of its own now), kept so
+            // content keys stay as they were
+            0,
             u8::from(p.material.is_some()),
             p.bucket,
         ]);

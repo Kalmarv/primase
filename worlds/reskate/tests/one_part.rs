@@ -229,7 +229,7 @@ fn the_preparation_passes_run_under_the_pass_manager() {
                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds, \
                    place-reskate-spawn, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content}, \
-                   prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-overlays{step=0.004}, \
+                   prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004}, \
                    prepare-reskate-blend-order{grid=200}, summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
     let pipeline = registry.parse(program).unwrap();
     let n = pipeline.passes.len();

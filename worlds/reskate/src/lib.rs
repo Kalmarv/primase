@@ -107,6 +107,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
+    // what a map does with triangles over more texture repeats than Studio draws is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-uv-repeats",
+        passes::prepare_reskate_uv_repeats,
+        &[("decals", "omit"), ("blended", "cutout")],
+    );
     // the map's summary, for the encoding given (the writer's defaults unless stated)
     reg.register("summarize-reskate-map", passes::summarize_reskate_map);
     // the budget is the program's: no default

@@ -19,6 +19,7 @@ pub mod spawn;
 pub mod summarize;
 pub mod textures;
 pub mod tint;
+pub mod uv_repeats;
 pub mod vertex_alpha;
 pub mod water;
 
@@ -42,6 +43,7 @@ pub use snap::{SnapReskateMarkers, snap_reskate_markers};
 pub use spawn::{PlaceReskateSpawn, ReskateSpawnAt, place_reskate_spawn};
 pub use summarize::{SummarizeReskateMap, summarize_reskate_map};
 pub use textures::{PrepareReskateTextures, tint_pixels};
+pub use uv_repeats::{PrepareReskateUvRepeats, RepeatBlended, RepeatDecals, prepare_reskate_uv_repeats};
 pub use water::{OceanMaterials, PrepareReskateWater, WaterExtent, prepare_reskate_water};
 
 use primase_core::World;

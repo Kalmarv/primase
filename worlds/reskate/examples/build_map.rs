@@ -173,6 +173,12 @@ fn main() -> Result<(), BoxError> {
         ));
     }
     // last, on the prepared geometry, materials and textures: the overlays stacked 4 mm apart, as the writer stacked
+    // triangles over more texture repeats than Studio draws: decals' left out, blended surfaces drawn alpha tested, as
+    // the writer did them
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateUvRepeats::new(
+        primase_reskate::passes::RepeatDecals::Omit,
+        primase_reskate::passes::RepeatBlended::Cutout,
+    )));
     // them, over the meshes this encoding makes
     passes.push(Box::new(
         primase_reskate::passes::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,

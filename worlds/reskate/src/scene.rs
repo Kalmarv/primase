@@ -1054,7 +1054,7 @@ impl ProtoDef {
 #[derive(Debug)]
 pub struct Materializer {
     refs: HashMap<String, Arc<TexRef>>,
-    ids: HashMap<(String, bool), usize>,
+    ids: HashMap<String, usize>,
     derived: HashMap<String, i32>,
 }
 
@@ -1095,60 +1095,20 @@ impl Materializer {
             .clone()
     }
 
-    /// Whether the material repeats its texture.
-    pub fn repeats(scene: &Scene, key: &str) -> bool {
-        matches!(
-            scene.materials[key].wrap,
-            None | Some(Wrap::Repeat) | Some(Wrap::Mirror)
-        )
-    }
-
-    /// Studio cuts this material's triangles at texture repeats: (a decal, blended with a base texture).
-    pub fn cuts(scene: &Scene, key: &str) -> (bool, bool) {
-        let m = &scene.materials[key];
-        let cls = class(m.class);
-        let alpha = match m.alpha {
-            Some(AlphaMode::Mask) => 2,
-            Some(AlphaMode::Blend) => 3,
-            Some(AlphaMode::Opaque) => 1,
-            None => MaterialSpec::derived(cls, true).alpha,
-        };
-        (
-            cls == VClass::Decal,
-            matches!(cls, VClass::Glass | VClass::Alpha) && alpha == 3 && m.base.is_some(),
-        )
-    }
-
-    pub fn id(
-        &mut self,
-        scene: &Scene,
-        mats: &mut MatLib,
-        tex: &mut TexLib,
-        key: &str,
-        cutout: bool,
-    ) -> Result<usize> {
-        if let Some(&id) = self.ids.get(&(key.to_owned(), cutout)) {
+    pub fn id(&mut self, scene: &Scene, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
+        if let Some(&id) = self.ids.get(key) {
             return Ok(id);
         }
-        let id = self.make(scene, mats, tex, key, cutout)?;
-        self.ids.insert((key.to_owned(), cutout), id);
+        let id = self.make(scene, mats, tex, key)?;
+        self.ids.insert(key.to_owned(), id);
         Ok(id)
     }
 
-    fn make(
-        &mut self,
-        scene: &Scene,
-        mats: &mut MatLib,
-        tex: &mut TexLib,
-        key: &str,
-        cutout: bool,
-    ) -> Result<usize> {
+    fn make(&mut self, scene: &Scene, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
         let e = &scene.materials[key];
-        let cls = if cutout { VClass::Cutout } else { class(e.class) };
+        let cls = class(e.class);
         let mut alpha = MaterialSpec::derived(cls, true).alpha;
-        if cutout {
-            alpha = 2;
-        } else if let Some(a) = e.alpha {
+        if let Some(a) = e.alpha {
             alpha = match a {
                 AlphaMode::Mask => 2,
                 AlphaMode::Blend => 3,
@@ -1156,7 +1116,7 @@ impl Materializer {
             };
         }
         let mut spec = respec(cls, alpha);
-        if !cutout {
+        {
             if let Some(c) = e.cutoff {
                 spec.cutoff = c as f32;
             }
@@ -1253,6 +1213,26 @@ fn scene_label(scene: &Scene, key: &str) -> Option<String> {
     scene.labels.get(key).cloned()
 }
 
+/// Whether material `m` repeats its texture (its wrap repeat or mirror).
+pub(crate) fn repeats_texture(m: &SkateMaterial) -> bool {
+    matches!(m.wrap, None | Some(Wrap::Repeat) | Some(Wrap::Mirror))
+}
+
+/// Whether Studio cuts material `m`'s triangles at texture repeats: (a decal, a blended surface with a base texture).
+pub(crate) fn cut_at_repeats(m: &SkateMaterial) -> (bool, bool) {
+    let cls = class(m.class);
+    let alpha = match m.alpha {
+        Some(AlphaMode::Mask) => 2,
+        Some(AlphaMode::Blend) => 3,
+        Some(AlphaMode::Opaque) => 1,
+        None => MaterialSpec::derived(cls, true).alpha,
+    };
+    (
+        cls == VClass::Decal,
+        matches!(cls, VClass::Glass | VClass::Alpha) && alpha == 3 && m.base.is_some(),
+    )
+}
+
 /// Builds a prototype from its geometry (the reference's Meshes.Build): [`build_geometry`], then each part's
 /// material.
 pub fn build_mesh(
@@ -1261,9 +1241,8 @@ pub fn build_mesh(
     mat: &mut Materializer,
     mats: &mut MatLib,
     tex: &mut TexLib,
-    counters: &mut MeshCounters,
 ) -> Result<Option<SrcMesh>> {
-    let Some(mut mesh) = build_geometry(scene, p, counters)? else {
+    let Some(mut mesh) = build_geometry(p)? else {
         return Ok(None);
     };
     for (i, part) in mesh.parts.iter_mut().enumerate() {
@@ -1273,18 +1252,17 @@ pub fn build_mesh(
                 .material
                 .as_deref()
                 .ok_or_else(|| Error::Scene(format!("prototype '{}' part {i}: no material", p.id)))?;
-            let cut = part.cutout && Materializer::cuts(scene, mk).1;
-            part.material = Some(mat.id(scene, mats, tex, mk, cut)?);
+            part.material = Some(mat.id(scene, mats, tex, mk)?);
         }
     }
     mesh.content = crate::model::content_key(&mesh.parts);
     Ok(Some(mesh))
 }
 
-/// A prototype's geometry as the writer builds it, without its materials: parts in the writer's frame (decal
-/// triangles over too many UV repeats left out, flat normals made where none are given), triangle count, box and
-/// collision. `snap-reskate-markers` takes it to place collision as the writer does.
-pub fn build_geometry(scene: &Scene, p: &ProtoDef, counters: &mut MeshCounters) -> Result<Option<SrcMesh>> {
+/// A prototype's geometry as the writer builds it, without its materials: parts in the writer's frame (flat normals
+/// made where none are given), triangle count, box and collision. Triangles over more texture repeats than Studio
+/// draws are `prepare-reskate-uv-repeats`'s choice. `snap-reskate-markers` takes it to place collision as the writer does.
+pub fn build_geometry(p: &ProtoDef) -> Result<Option<SrcMesh>> {
     // a prototype that collides without drawing is a mesh without parts
     let prims = match p.prims() {
         Some(prims) => prims,
@@ -1337,45 +1315,6 @@ pub fn build_geometry(scene: &Scene, p: &ProtoDef, counters: &mut MeshCounters) 
             flat_normals(&mut part)?;
             verts = part.nverts();
         }
-        // the UV-repeat rule: decal triangles over too many repeats left out; a blended surface with such a
-        // triangle alpha tested instead
-        let keys: Vec<String> = d
-            .variants
-            .iter()
-            .flat_map(|v| v.values().cloned())
-            .chain(d.material.clone())
-            .collect();
-        if keys
-            .iter()
-            .all(|k| Materializer::cuts(scene, k).0 && Materializer::repeats(scene, k))
-        {
-            let mut kept = Vec::with_capacity(part.idx.len());
-            for t in part.idx.as_chunks::<3>().0 {
-                if !over(&part.uv, t)? {
-                    kept.extend_from_slice(t);
-                }
-            }
-            if kept.len() != part.idx.len() {
-                counters.repeat_dropped += ((part.idx.len() - kept.len()) / 3) as i64;
-                part.idx = kept;
-            }
-        }
-        let mut cutout = false;
-        if keys
-            .iter()
-            .any(|k| Materializer::cuts(scene, k).1 && Materializer::repeats(scene, k))
-        {
-            for t in part.idx.as_chunks::<3>().0 {
-                if over(&part.uv, t)? {
-                    cutout = true;
-                    break;
-                }
-            }
-        }
-        if cutout {
-            counters.repeat_masked += 1;
-        }
-        part.cutout = cutout;
         mesh.tris += (part.idx.len() / 3) as i64;
         mesh.verts += verts as i64;
         mesh.bytes += (part.pos.len() * 4 * 2 + part.uv.len() * 4 + part.idx.len() * 4) as i64;
@@ -1402,14 +1341,6 @@ pub fn build_geometry(scene: &Scene, p: &ProtoDef, counters: &mut MeshCounters) 
         mesh.col_ground = p.ground;
     }
     Ok(Some(mesh))
-}
-
-fn over(uv: &[f32], t: &[u32]) -> Result<bool> {
-    let c = |i: u32| [uv[i as usize * 2], uv[i as usize * 2 + 1]];
-    Ok(
-        primase_meshops::uv_tiles([c(t[0]), c(t[1]), c(t[2])]).map_err(|e| Error::Scene(e.to_string()))?
-            > primase_meshops::MAX_UV_TILES,
-    )
 }
 
 fn flat_normals(p: &mut SrcPart) -> Result<()> {
@@ -1448,12 +1379,10 @@ fn flat_normals(p: &mut SrcPart) -> Result<()> {
     Ok(())
 }
 
-/// Counts of the UV-repeat rule.
+/// What building the meshes counted.
 #[derive(Clone, Debug, Default)]
 pub struct MeshCounters {
     pub failed: i64,
-    pub repeat_dropped: i64,
-    pub repeat_masked: i64,
 }
 
 /// The material of a part for a placement's variant row (the reference's MaterialOf).
@@ -1482,8 +1411,7 @@ pub fn material_of(
             ))
         })?
         .clone();
-    let cut = part.cutout && Materializer::cuts(scene, &key).1;
-    mat.id(scene, mats, tex, &key, cut)
+    mat.id(scene, mats, tex, &key)
 }
 
 /// Hand out the kinds' name.

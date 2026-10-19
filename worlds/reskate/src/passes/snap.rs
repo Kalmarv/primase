@@ -28,7 +28,7 @@ use crate::collision::{PropSoup, Query, Snapped, add_prop, snap_queries};
 use crate::components::{MarkerKind, SkateMarker, SkateMarkerSnaps, Snap, SnapMode as DialectSnap};
 use crate::map::{Fate, PlacementRules, apron, placed_points, placement_fate};
 use crate::model::CollisionMode;
-use crate::scene::{MeshCounters, Scene, SnapMode, build_geometry};
+use crate::scene::{Scene, SnapMode, build_geometry};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -253,12 +253,11 @@ impl SnapReskateMarkers {
         };
         let off = Vec3::new(b.offset[0], b.offset[1], 0.0);
         // the prototypes' geometry and collision, as the writer builds them
-        let mut counters = MeshCounters::default();
         let mut meshes = HashMap::new();
         let placed_protos: std::collections::BTreeSet<u32> = placements.iter().map(|p| p.proto).collect();
         for p in &s.protos {
             if placed_protos.contains(&p.key)
-                && let Some(m) = build_geometry(s, p, &mut counters).map_err(|e| e.to_string())?
+                && let Some(m) = build_geometry(p).map_err(|e| e.to_string())?
             {
                 meshes.insert(p.key, m);
             }

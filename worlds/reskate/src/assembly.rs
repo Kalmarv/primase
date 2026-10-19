@@ -293,14 +293,7 @@ impl MeshSource for Meshes<'_> {
         for k in want {
             self.tried.insert(k);
             let p = &self.scene.protos[self.by_key[&k]];
-            if let Some(m) = scene::build_mesh(
-                self.scene,
-                p,
-                &mut self.mat,
-                &mut ctx.mats,
-                &mut ctx.tex,
-                &mut self.counters,
-            )? {
+            if let Some(m) = scene::build_mesh(self.scene, p, &mut self.mat, &mut ctx.mats, &mut ctx.tex)? {
                 meshes.insert(k, m);
             }
         }
