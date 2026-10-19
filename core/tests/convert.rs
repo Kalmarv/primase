@@ -274,6 +274,25 @@ impl Pass for ToyLowerRaw {
     }
 }
 
+/// A selection that lowers: every placement gets the `pbr.toy` form, which the program may make though the reader
+/// may not.
+struct ToyLower;
+impl Pass for ToyLower {
+    fn name(&self) -> &'static str {
+        "toy-lower"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["pbr.toy"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let placements: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        for e in placements {
+            w.insert(e, Lowered);
+        }
+        Ok(())
+    }
+}
+
 /// A partition: the first two placements in one part with the third as its context, the third in another part.
 struct ToyPartition;
 impl Pass for ToyPartition {
@@ -314,6 +333,7 @@ fn manager(select: &str) -> (PassManager, Pipeline, Pipeline) {
     r.register("toy-select", |_| Ok(Box::new(ToySelect)));
     r.register("toy-pass", |_| Ok(Box::new(ToyPass)));
     r.register("toy-lower-raw", |_| Ok(Box::new(ToyLowerRaw)));
+    r.register("toy-lower", |_| Ok(Box::new(ToyLower)));
     r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
     let (select, passes) = (r.parse(select).unwrap(), r.parse("toy-pass").unwrap());
     (PassManager::new(r), select, passes)
@@ -434,7 +454,41 @@ fn a_reader_outside_its_namespaces_fails_on_reading_and_on_loading() {
     let e = convert(&mut bad, writer(target()).0, &m, &select, &passes)
         .unwrap_err()
         .to_string();
-    assert!(e.starts_with("load: the reader put pbr.toy in the world"), "{e}");
+    // the whole world is one part; e0 is the first prototype, which the load gave the form
+    assert!(
+        e.starts_with("load: the reader put pbr.toy on e0, which the selection had not"),
+        "{e}"
+    );
+    assert!(!events().contains(&"write".to_string()));
+}
+
+/// What the program's selection lowered is in every loaded part, and it is the program's: the load check holds the
+/// reader to what its load adds, not to what the selection made.
+#[test]
+fn a_selection_may_lower_outside_the_reader_s_namespaces() {
+    let (m, select, passes) = manager("toy-select, toy-lower");
+    let (w, written) = writer(target());
+    let report = convert_parts(&mut reader(2), &mut ToyParts::default(), w, &m, &select, &passes).unwrap();
+    assert_eq!(report.parts, 2);
+    assert_eq!(written.borrow().len(), 2);
+    events();
+}
+
+/// The check is per entity: a load that puts a name the selection already made on entities the selection didn't
+/// give it (here the prototypes, where the selection lowered the placements) is still the reader's, and refused.
+#[test]
+fn a_load_adding_a_name_the_selection_made_elsewhere_is_refused() {
+    let (m, select, passes) = manager("toy-select, toy-lower");
+    let mut bad = reader(2);
+    bad.bad_load = true;
+    let e = convert(&mut bad, writer(target()).0, &m, &select, &passes)
+        .unwrap_err()
+        .to_string();
+    // e0 is the first prototype; the placements (e1, e3) carry the form from the selection
+    assert!(
+        e.starts_with("load: the reader put pbr.toy on e0, which the selection had not"),
+        "{e}"
+    );
     assert!(!events().contains(&"write".to_string()));
 }
 

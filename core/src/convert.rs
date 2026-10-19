@@ -31,7 +31,8 @@ pub trait Reader {
     /// stay `world`'s, and what loading spawns is reached through the roots.
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)>;
     /// The component namespaces it may put in a world (`core`, its own dialect): a reader reads, it lowers nothing
-    /// (no `pbr.*` unless its source format is PBR). [`check_emits`] holds it to that after reading and loading.
+    /// (no `pbr.*` unless its source format is PBR). [`check_emits`] holds it to that after reading, and
+    /// [`check_load_emits`] holds what each load adds to it.
     fn emits(&self) -> &'static [&'static str];
     /// A prototype's box (core frame) before its geometry is loaded, where the reader knows it.
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]>;
@@ -50,6 +51,31 @@ pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
         .find(|n| !emits.contains(&n.split('.').next().unwrap_or("")))
     {
         return Err(format!("{when}: the reader put {name} in the world (it emits {emits:?})").into());
+    }
+    Ok(())
+}
+
+/// An error naming the first component a load added outside the reader's namespaces: a component of the loaded `part`
+/// on an entity the `selected` world didn't have it on (an entity the load spawned, or one the selection hadn't given
+/// it). What the program's selection put there is the program's, not the reader's, so a selection that lowers is let
+/// through and a reader whose load adds the same name to other entities is not. It compares which entities carry each
+/// name, not values: a load that overwrites a component the selection already put on that entity is not seen.
+pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Result<()> {
+    for name in part.component_names() {
+        if emits.contains(&name.split('.').next().unwrap_or("")) {
+            continue;
+        }
+        let before: BTreeSet<Entity> = selected.entities_named(name).into_iter().collect();
+        if let Some(e) = part
+            .entities_named(name)
+            .into_iter()
+            .find(|e| !before.contains(e))
+        {
+            return Err(format!(
+                "load: the reader put {name} on {e:?}, which the selection had not (it emits {emits:?})"
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -650,7 +676,7 @@ fn run(
             loaded: sizes(&part),
             ..PartSize::default()
         };
-        check_emits(&part, reader.emits(), "load")?;
+        check_load_emits(&world, &part, reader.emits())?;
         *during = format!("part {ordinal}: passes");
         // the part's report is published before its passes run, so a failure keeps what ran
         report.part_reports.push(PartReport {
