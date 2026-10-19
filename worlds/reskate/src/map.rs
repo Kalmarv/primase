@@ -2093,11 +2093,25 @@ impl MapWriter {
         }
         self.mesh_files.extend(col_files);
 
-        // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked
-        for (i, g) in x.grind.iter().enumerate() {
-            let Some(p) = &g.prism else {
-                continue;
+        // grind curves: the invisible prism prepare-reskate-grinds made for each, world baked, numbered by what it is
+        // (its surface, then its geometry), not the order the curves came in; equal prisms write the same either way
+        let mut prisms: Vec<(usize, &crate::scene::GrindPrism)> = x
+            .grind
+            .iter()
+            .filter_map(|g| g.prism.as_ref().map(|p| (g.surface, p)))
+            .collect();
+        prisms.sort_by(|(sa, a), (sb, b)| {
+            let bits = |p: &crate::scene::GrindPrism| {
+                p.positions
+                    .iter()
+                    .flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()])
+                    .collect::<Vec<u32>>()
             };
+            sa.cmp(sb)
+                .then_with(|| bits(a).cmp(&bits(b)))
+                .then_with(|| a.indices.cmp(&b.indices))
+        });
+        for (i, (surface, p)) in prisms.into_iter().enumerate() {
             let (gpos, gidx, pieces, length) = (&p.positions, p.indices.clone(), p.pieces, p.length);
             if gidx.is_empty() {
                 self.r
@@ -2138,7 +2152,7 @@ impl MapWriter {
             ob.collision_mesh = Some(format!("meshes/{name}.glb"));
             ob.render = false;
             ob.collision_mode = "triangle_mesh";
-            ob.collision_packed = grind::SURFACES[g.surface].1;
+            ob.collision_packed = grind::SURFACES[surface].1;
             ob.grind_source = Some(name);
             col.objects.push(ob);
             self.r.grind_curves += 1;

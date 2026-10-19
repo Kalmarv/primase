@@ -424,21 +424,25 @@ impl MeshSource for Meshes<'_> {
 /// unplaced prototypes and prototypes without geometry, too many travel points.
 fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
     use crate::dialect::{SkateMaterial, SkateTexture};
+    // each kind in a stable order (by its text), not the order the world's entities came in
     let mut out = Vec::new();
     let mut used: HashSet<primase_core::Entity> = HashSet::new();
     for (_, m) in world.iter::<SkateMaterial>() {
         used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
     }
-    for (e, t) in world.iter::<SkateTexture>() {
-        if !used.contains(&e) {
-            out.push(format!("texture '{}' is not used", t.key));
-        }
-    }
+    let mut unused: Vec<String> = world
+        .iter::<SkateTexture>()
+        .filter(|(e, _)| !used.contains(e))
+        .map(|(_, t)| format!("texture '{}' is not used", t.key))
+        .collect();
+    unused.sort();
+    out.extend(unused);
+    let mut flat = Vec::new();
     for p in &s.protos {
         if let Some(prims) = p.prims() {
             for (i, prim) in prims.iter().enumerate() {
                 if prim.nrm.is_none() {
-                    out.push(format!(
+                    flat.push(format!(
                         "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
                         p.id
                     ));
@@ -446,20 +450,25 @@ fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
             }
         }
     }
+    flat.sort();
+    out.extend(flat);
     let mut placed = vec![false; s.protos.len()];
     for p in &s.placements {
         placed[p.proto as usize] = true;
     }
+    let mut unplaced = Vec::new();
     for (p, placed) in s.protos.iter().zip(placed) {
         if !placed {
-            out.push(format!("prototype '{}' is not placed", p.id));
+            unplaced.push(format!("prototype '{}' is not placed", p.id));
         } else if p.prims.is_none() {
-            out.push(format!(
+            unplaced.push(format!(
                 "prototype '{}' has no geometry; its placements draw nothing",
                 p.id
             ));
         }
     }
+    unplaced.sort();
+    out.extend(unplaced);
     let travel = s.markers.iter().filter(|m| m.kind == "travel").count();
     if travel > 25 {
         out.push(format!("{travel} travel points: Studio takes at most 25"));

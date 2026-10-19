@@ -160,8 +160,9 @@ fn grind_objects(map: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// The writer writes the prisms it is given (a curve's index names it; the empty one is warned of) and builds none: the
-/// curves of a world not through the pass are reported unsupported and not written.
+/// The writer writes the prisms it is given, numbered by what they are (surface, then geometry: the straight metal rail
+/// 0, the empty one on surface 1 is 1 and warned of, the concrete corner 2), and builds none: the curves of a world not
+/// through the pass are reported unsupported and not written.
 #[test]
 fn the_writer_writes_prisms_and_builds_none() {
     let (mut w, _) = world();
@@ -169,11 +170,11 @@ fn the_writer_writes_prisms_and_builds_none() {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let (r, map) = write(&w, "prepared");
-    assert_eq!(grind_objects(&map), ["grind_00000", "grind_00001"]);
+    assert_eq!(grind_objects(&map), ["grind_00000", "grind_00002"]);
     assert!(
         r.warnings
             .iter()
-            .any(|m| m == "grind curve 2 has no usable points"),
+            .any(|m| m == "grind curve 1 has no usable points"),
         "{:?}",
         r.warnings
     );
