@@ -17,7 +17,7 @@
 //! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
 //! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
 //!
-//! The passes:
+//! The passes ([`passes`], each module re-exported here):
 //! - [`drawn`]: what a renderer other than Unity's can draw of the scene's renderers (pass `unity-drawn`).
 //! - [`lower`]: materials lowered to `pbr.material` by shader.
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
@@ -27,15 +27,12 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
-pub mod drawn;
 pub mod level;
-pub mod lower;
-pub mod lower_lights;
 pub mod material;
 pub mod passes;
 mod read;
 
-pub use passes::{lower_collision, lower_terrain};
+pub use passes::{drawn, lower, lower_collision, lower_lights, lower_terrain};
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;
 pub use read::typetree::TypeTree;

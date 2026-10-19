@@ -125,27 +125,7 @@ reason = "writer I/O in Other"
 removed_when = "B2/B1: EncodingOptions, write_map and target() move to write/map; the dry assembly to an I/O-free assembly module"
 
 [[layout]]
-file = "worlds/unity/src/components.rs"
-reason = "Components names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/drawn.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
 file = "worlds/unity/src/level.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/lower.rs"
-reason = "Other names the I/O module primase_unity::player"
-removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
-
-[[layout]]
-file = "worlds/unity/src/lower_lights.rs"
 reason = "Other names the I/O module primase_unity::player"
 removed_when = "worlds/unity is arranged by role before the final review: a structural commit, then each mixed module split (read/ for player, container and resource decoding; passes/; components/)"
 

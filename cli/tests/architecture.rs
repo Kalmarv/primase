@@ -1666,11 +1666,7 @@ const KNOWN_BREAKS: &[&str] = &[
     "layout: file=worlds/gta/src/select.rs",
     "layout: file=worlds/gta/src/water.rs",
     "layout: file=worlds/reskate/src/build.rs",
-    "layout: file=worlds/unity/src/components.rs",
-    "layout: file=worlds/unity/src/drawn.rs",
     "layout: file=worlds/unity/src/level.rs",
-    "layout: file=worlds/unity/src/lower.rs",
-    "layout: file=worlds/unity/src/lower_lights.rs",
     "layout: file=worlds/unity/src/material.rs",
 ];
 

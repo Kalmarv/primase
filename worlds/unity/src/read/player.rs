@@ -10,33 +10,27 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::components::{RenderPipeline, URP_ASSET, UnityObject};
 use crate::read::serialized::SerializedFile;
 use crate::read::tpk::TypeTreePackage;
 use crate::read::typetree::TypeTree;
 use crate::read::value::Value;
 use crate::{Error, Result, invalid};
 
-/// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
-pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
-
-/// The render pipeline a player draws with: GraphicsSettings' default pipeline asset (`m_CustomRenderPipeline`), or a
-/// quality level's own (`customRenderPipeline`) where it sets one. Which quality level runs is the user's choice, so
-/// the pipeline is known only when every level gives the same kind.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub enum RenderPipeline {
-    /// No pipeline asset for any quality level: Unity's built-in renderer.
-    BuiltIn,
-    /// A Universal Render Pipeline asset ([`URP_ASSET`]) for every quality level.
-    Universal,
-    /// Anything else, or a mix: each level's asset script class (`built-in` for none), sorted, each once.
-    Other(Vec<String>),
-}
-
 /// An object of the player: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjRef {
     pub file: String,
     pub path_id: i64,
+}
+
+impl From<&ObjRef> for UnityObject {
+    fn from(r: &ObjRef) -> Self {
+        UnityObject {
+            file: r.file.clone(),
+            path_id: r.path_id,
+        }
+    }
 }
 
 #[derive(Debug)]

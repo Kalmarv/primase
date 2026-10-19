@@ -174,9 +174,9 @@ fn lights_lower_to_core() {
 fn the_sun_matches_the_independent_reader() {
     use primase_core::{Environment, Name, World};
     use primase_unity::components::UnityLight;
+    use primase_unity::components::{RenderPipeline, URP_ASSET};
     use primase_unity::level::read_level;
     use primase_unity::lower_lights::lower_unity_lights;
-    use primase_unity::player::{RenderPipeline, URP_ASSET};
     let (Some(data), Some(tpk), Some(scan), Some(oracle)) = (
         real_data("PRIMASE_UNITY_DATA"),
         real_data("PRIMASE_UNITY_TPK"),

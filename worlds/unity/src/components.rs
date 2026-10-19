@@ -4,22 +4,12 @@ use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
 use crate::material::{PassKind, ShaderPass, SubShader};
-use crate::read::player::{ObjRef, RenderPipeline};
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UnityObject {
     pub file: String,
     pub path_id: i64,
-}
-
-impl From<&ObjRef> for UnityObject {
-    fn from(r: &ObjRef) -> Self {
-        UnityObject {
-            file: r.file.clone(),
-            path_id: r.path_id,
-        }
-    }
 }
 
 impl Component for UnityObject {
@@ -615,6 +605,22 @@ pub struct UnityAmbient {
     pub intensity: f32,
 }
 
+/// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
+pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
+
+/// The render pipeline a player draws with: GraphicsSettings' default pipeline asset (`m_CustomRenderPipeline`), or a
+/// quality level's own (`customRenderPipeline`) where it sets one. Which quality level runs is the user's choice, so
+/// the pipeline is known only when every level gives the same kind.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum RenderPipeline {
+    /// No pipeline asset for any quality level: Unity's built-in renderer.
+    BuiltIn,
+    /// A Universal Render Pipeline asset ([`URP_ASSET`]) for every quality level.
+    Universal,
+    /// Anything else, or a mix: each level's asset script class (`built-in` for none), sorted, each once.
+    Other(Vec<String>),
+}
+
 /// The scene's RenderSettings as far as they are read, with the player's render pipeline (`unity.render_settings`, a
 /// world resource). `lower-unity-lights` chooses `core.environment`'s sun from them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -623,7 +629,7 @@ pub struct UnityRenderSettings {
     /// that does not shine.
     pub sun: Option<Entity>,
     /// The player's render pipeline; `None` when the player has no GraphicsSettings.
-    pub pipeline: Option<crate::read::player::RenderPipeline>,
+    pub pipeline: Option<RenderPipeline>,
     /// Its ambient lighting; `None` when the scene has no RenderSettings or they store no ambient mode.
     pub ambient: Option<UnityAmbient>,
 }
