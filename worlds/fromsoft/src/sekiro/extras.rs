@@ -13,7 +13,7 @@ use crate::{
     msb::MapLayout,
 };
 use primase_core::{Collision, Name, Source, Surfaces, Transform, World};
-use primase_skate_scene::{CollisionMode, MarkerKind, SkateCollision, SkateMarker, Snap, SnapMode};
+use primase_reskate::dialect::{CollisionMode, MarkerKind, SkateCollision, SkateMarker, Snap, SnapMode};
 #[derive(Debug, Default)]
 pub struct Report {
     pub hang_segments: usize,

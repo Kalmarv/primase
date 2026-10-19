@@ -8,7 +8,7 @@
 use primase_core::{Collision, Component, Entity, JsonError, Surfaces, World};
 use serde_json::{Value, json};
 
-use crate::components::{STANDARD_SURFACES, SkateScene, SkateSoup};
+use crate::dialect::{STANDARD_SURFACES, SkateScene, SkateSoup};
 
 /// Which triangles of the entity's `core.collision` are natural rock (v1's surface bit 7).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]

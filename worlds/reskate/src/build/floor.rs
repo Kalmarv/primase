@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn empty_and_collision_only_scenes_obey_pins_and_never_lower() {
         let mut world = World::new();
-        world.insert_resource(primase_skate_scene::SkateScene {
+        world.insert_resource(crate::dialect::SkateScene {
             name: "floor".into(),
             ..Default::default()
         });

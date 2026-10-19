@@ -339,8 +339,8 @@ fn weights_of(
 }
 
 /// A black material: a null slot's layer, and the darkening overlay.
-fn black(key: String, class: primase_skate_scene::MaterialClass) -> primase_skate_scene::SkateMaterial {
-    use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial};
+fn black(key: String, class: crate::dialect::MaterialClass) -> crate::dialect::SkateMaterial {
+    use crate::dialect::{AlphaMode, Domain, MaterialClass, SkateMaterial};
     let decal = class == MaterialClass::Decal;
     SkateMaterial {
         key,
@@ -436,8 +436,8 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         }
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
+        use crate::dialect::{AlphaMode, Domain, MaterialClass, SkateMaterial};
         use primase_core::{LayeredMaterial, MaterialVariants, MeshFile};
-        use primase_skate_scene::{AlphaMode, Domain, MaterialClass, SkateMaterial};
         use std::collections::{BTreeMap, BTreeSet};
         let mut layered: BTreeMap<Entity, LayeredMaterial> = world
             .iter::<LayeredMaterial>()
@@ -982,9 +982,9 @@ mod tests {
         );
     }
 
+    use crate::dialect::{MaterialClass, SkateMaterial, SkateParts, SkatePrototype};
     use primase_core::pass::{Pass, PassLog};
     use primase_core::{Layer, LayerWeights, LayeredMaterial, Primitive, Semantic, Stream, Topology};
-    use primase_skate_scene::{MaterialClass, SkateMaterial, SkateParts, SkatePrototype};
     use std::collections::BTreeMap;
 
     /// A two-layer material on one triangle whose last vertex is half layer 1; the layered entity is a

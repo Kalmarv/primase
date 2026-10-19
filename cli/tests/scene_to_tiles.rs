@@ -91,18 +91,18 @@ fn scene(name: &str) -> PathBuf {
     at(10.0, true, true);
     at(310.0, true, true);
     at(710.0, true, false);
-    primase_skate_scene::raise_skate(
+    primase_reskate::prepare::raise_skate(
         &mut w,
-        &primase_skate_scene::RaiseOptions {
+        &primase_reskate::prepare::RaiseOptions {
             name: "lights".into(),
             surfaces: BTreeMap::new(),
             ..Default::default()
         },
     )
     .unwrap();
-    primase_skate_scene::prepare_scene_assets(&mut w, &tmp(&format!("{name}_assets"))).unwrap();
+    primase_reskate::interchange::prepare_assets(&mut w, &tmp(&format!("{name}_assets"))).unwrap();
     let dir = tmp(name);
-    primase_skate_scene::write(&w, &dir).unwrap();
+    primase_reskate::interchange::write(&w, &dir).unwrap();
     dir
 }
 

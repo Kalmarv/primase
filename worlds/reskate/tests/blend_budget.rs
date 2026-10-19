@@ -15,7 +15,7 @@ use primase_core::{
 };
 use primase_reskate::BuildOptions;
 use primase_reskate::layered::LowerLayeredReskate;
-use primase_skate_scene::RaiseOptions;
+use primase_reskate::prepare::RaiseOptions;
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -125,7 +125,7 @@ fn world() -> World {
             yaw: None,
         },
     );
-    primase_skate_scene::raise_skate(
+    primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "budget".into(),

@@ -5,7 +5,7 @@
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{ColorSpace, Name, TexFormat, TexRole, Texture, World};
-use primase_skate_scene::{LowerSkatePbr, MaterialClass, Other, SkateMaterial, msk_to_orm};
+use primase_reskate::dialect::{LowerSkatePbr, MaterialClass, Other, SkateMaterial, msk_to_orm};
 
 fn rgba8(width: u32, height: u32, levels: Vec<Vec<u8>>) -> Texture {
     Texture {

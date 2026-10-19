@@ -7,7 +7,7 @@ use primase_core::{
     frame::{Axis, SourceFrame},
 };
 use primase_meshops::vector::Vec3;
-use primase_skate_scene::SkatePrototype;
+use primase_reskate::dialect::SkatePrototype;
 use std::collections::BTreeMap;
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]

@@ -107,8 +107,8 @@ fn foliage_cutoff_and_writer_fallback() {
     assert_eq!(output.base_color, Some([128, 128, 128, 255]));
     assert_eq!(output.cutoff, Some(0.5019608));
     assert_eq!((output.cutoff.unwrap() as f32).to_bits(), m.cutoff.to_bits());
-    assert_eq!(output.class, primase_skate_scene::MaterialClass::Leaves);
-    assert_eq!(output.domain, Some(primase_skate_scene::Domain::Surface));
+    assert_eq!(output.class, primase_reskate::dialect::MaterialClass::Leaves);
+    assert_eq!(output.domain, Some(primase_reskate::dialect::Domain::Surface));
     assert!(m.layered.is_none());
 }
 

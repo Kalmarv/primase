@@ -55,11 +55,11 @@ fn installed_area_scene() -> Result<()> {
     )?;
     println!("area {report:?}");
     sekiro::normals::lower(&mut world, sekiro::normals::Consumer::Skate)?;
-    sekiro::prepare_scene_assets(&mut world, &output.join("assets"))?;
+    sekiro::prepare_assets(&mut world, &output.join("assets"))?;
     let folder = output.join("scene");
-    primase_skate_scene::write(&world, &folder)?;
+    primase_reskate::interchange::write(&world, &folder)?;
     let mut reread = World::default();
-    primase_skate_scene::read(&folder, &mut reread)?;
+    primase_reskate::interchange::read(&folder, &mut reread)?;
     let mut cmd = if validator.extension().is_some_and(|v| v == "dll") {
         let mut c = Command::new("dotnet");
         c.arg(validator);
@@ -93,7 +93,7 @@ fn installed_area_scene() -> Result<()> {
         "selected prototypes"
     );
     let source_protos: BTreeMap<_, _> = world
-        .iter::<primase_skate_scene::SkatePrototype>()
+        .iter::<primase_reskate::dialect::SkatePrototype>()
         .map(|(e, p)| (p.id.as_str(), e))
         .collect();
     let mut parts = 0;
@@ -186,9 +186,10 @@ fn installed_area_scene() -> Result<()> {
         "written tangent streams preserved on {tangent_parts} parts; shader basis assumptions {:?}",
         report.normal_basis_assumptions
     );
-    let placements =
-        primase_skate_scene::tables::read_placements(&std::fs::read(folder.join("tables/placements.bin"))?)?;
-    let expected = primase_skate_scene::tables::read_placements(&std::fs::read(
+    let placements = primase_reskate::interchange::tables::read_placements(&std::fs::read(
+        folder.join("tables/placements.bin"),
+    )?)?;
+    let expected = primase_reskate::interchange::tables::read_placements(&std::fs::read(
         reference.join("tables/placements.bin"),
     )?)?;
     assert_eq!(placements.len(), expected.len());

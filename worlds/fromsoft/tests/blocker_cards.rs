@@ -43,7 +43,7 @@ fn installed_blocker_cards() -> Result<(), Box<dyn std::error::Error>> {
                 primase_core::json::to_value(&cards)?
             );
             let scene = world
-                .resource::<primase_skate_scene::SkateScene>()
+                .resource::<primase_reskate::dialect::SkateScene>()
                 .ok_or("scene")?;
             assert_eq!(
                 scene.other["extensions"]["sekiro"]["blocker_cards"]["drawn"],

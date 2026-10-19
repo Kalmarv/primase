@@ -13,9 +13,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::dialect::{MaterialClass, SkateMaterial};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, World};
-use primase_skate_scene::{MaterialClass, SkateMaterial};
 
 use crate::layered::{BlendOpacity, VertexBlend};
 

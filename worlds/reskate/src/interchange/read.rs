@@ -17,8 +17,8 @@ use primase_core::{
     Source, TextureFile, Tile, Transform, World,
 };
 
-use crate::components::*;
-use crate::tables::{self, flags};
+use super::tables::{self, flags};
+use crate::dialect::*;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 
@@ -441,7 +441,7 @@ pub fn read(dir: &Path, w: &mut World) -> Result<ReadReport> {
     if !path.is_file() {
         return Err(bad(format!("{}: no scene.json", dir.display())));
     }
-    let root: Value = serde_json::from_slice(&read_file(&path)?).map_err(|source| Error::Json {
+    let root: Value = serde_json::from_slice(&read_file(&path)?).map_err(|source| Error::Manifest {
         path: path.clone(),
         source,
     })?;
@@ -530,7 +530,7 @@ impl Reader<'_> {
                 list.len()
             }
         };
-        self.surface_names = crate::collision::scene_surfaces(surfaces.as_deref());
+        self.surface_names = crate::dialect::collision::scene_surfaces(surfaces.as_deref());
         scene.surfaces = surfaces;
 
         let v_textures = top.take("textures", self.rep);
@@ -866,7 +866,7 @@ impl Reader<'_> {
             }
         }
         for (entity, layers, weights) in layered {
-            crate::layered::read(self.w, entity, layers, weights, &out)?;
+            super::layered::read(self.w, entity, layers, weights, &out)?;
         }
         for (entity, material) in self.w.iter::<primase_core::LayeredMaterial>() {
             primase_core::Component::verify(material, entity, self.w).map_err(bad)?;
@@ -988,7 +988,7 @@ impl Reader<'_> {
                 Some((mut sref, paths)) => {
                     let soup = read_soups(&mut sref.table, &paths, n_surfaces)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
-                    crate::collision::insert_soup(self.w, p, soup, &self.surface_names)
+                    crate::dialect::collision::insert_soup(self.w, p, soup, &self.surface_names)
                         .map_err(|e| bad(format!("{what} collision: {e}")))?;
                     Some(sref)
                 }
@@ -1349,7 +1349,7 @@ impl Reader<'_> {
             let (mut sref, paths) = self.soup_ref(e, &what, true)?;
             let soup = read_soups(&mut sref.table, &paths, n_surfaces)?;
             let ent = self.w.spawn();
-            crate::collision::insert_soup(self.w, ent, soup, &self.surface_names)
+            crate::dialect::collision::insert_soup(self.w, ent, soup, &self.surface_names)
                 .map_err(|e| bad(format!("{what}: {e}")))?;
             self.w.insert(ent, SkateCollision(sref));
         }

@@ -166,9 +166,9 @@ fn stored_scene_placements() -> Result<()> {
         "stored scene placement basis per unit scale",
         Tolerance::Abs(1e-6),
     );
-    for p in
-        primase_skate_scene::tables::read_placements(&std::fs::read(scene.join("tables/placements.bin"))?)?
-    {
+    for p in primase_reskate::interchange::tables::read_placements(&std::fs::read(
+        scene.join("tables/placements.bin"),
+    )?)? {
         let label = sources[p.source as usize].as_str().ok_or("source")?;
         let (area, name) = label.split_once(':').ok_or("source key")?;
         // Object source labels omit the map; use the map-piece prototype set.

@@ -1,13 +1,11 @@
-//! A Unity level end to end: read, lowered, written as one GLB, as web tiles and (with a surface map) as a skate scene.
+//! A Unity level end to end: read, lowered, written as one GLB and as web tiles.
 //!
-//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--surfaces <map>]`.
-//! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2); with
-//! `--surfaces`, `<output>/skate/assets` and `<output>/skate/scene`. The surface map is an object of the game's surface
-//! names (its physic materials, `default` for none) onto skate surfaces. Prints every pass's counts and
-//! approximations.
+//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]`.
+//! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2).
+//! Prints every pass's counts and approximations. A ReSkate map of a Unity level is a program's recipe (raising,
+//! surfaces, spawn and travel points are its choices), composed with `primase-reskate` in the consumer program.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
@@ -15,7 +13,8 @@ use primase_unity::TypeTreePackage;
 use primase_unity::level::read_level;
 use primase_unity::player::Player;
 
-const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--surfaces <map>]";
+const USAGE: &str =
+    "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]";
 
 fn show(pass: &str, log: &PassLog) {
     println!("{pass}: {:?}", log.counts);
@@ -25,13 +24,11 @@ fn show(pass: &str, log: &PassLog) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut paths, mut web, mut ktx2, mut surfaces) = (Vec::new(), false, false, None);
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    let (mut paths, mut web, mut ktx2) = (Vec::new(), false, false);
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--web" => web = true,
             "--ktx2" => ktx2 = true,
-            "--surfaces" => surfaces = Some(PathBuf::from(args.next().ok_or(USAGE)?)),
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
             _ => paths.push(arg),
         }
@@ -149,28 +146,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_or("none", |e| e.sun.name.as_str())
         );
     }
-    let Some(map) = surfaces else { return Ok(()) };
-    let surfaces: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(map)?)?;
-    show(
-        "bake-texture-transforms",
-        &primase_meshops::bake_texture_transforms(&mut w),
-    );
-    show(
-        "raise-skate",
-        &primase_skate_scene::raise_skate(
-            &mut w,
-            &primase_skate_scene::RaiseOptions {
-                name: level.replace(
-                    |c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-                    "_",
-                ),
-                surfaces,
-                ..Default::default()
-            },
-        )?,
-    );
-    primase_skate_scene::prepare_scene_assets(&mut w, &out.join("skate").join("assets"))?;
-    let r = primase_skate_scene::write(&w, &out.join("skate").join("scene"))?;
-    println!("skate scene: {r:?}");
     Ok(())
 }

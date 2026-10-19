@@ -219,7 +219,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
     let mut built = 0;
     for scene in scenes(&root) {
         let mut w = World::new();
-        primase_skate_scene::read(&scene, &mut w).unwrap();
+        primase_reskate::interchange::read(&scene, &mut w).unwrap();
         if w.iter::<LayeredMaterial>().count() == 0 {
             continue;
         }
@@ -240,7 +240,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         // OverlayLimit::One (not the default) on a second copy: a base's overlays share no triangle, and the
         // overlapping area it counts is the default's
         let mut one = World::new();
-        primase_skate_scene::read(&scene, &mut one).unwrap();
+        primase_reskate::interchange::read(&scene, &mut one).unwrap();
         choose_lod(&mut one);
         primase_gltf::load_mesh_files(&mut one, &scene).unwrap();
         let mut one_log = PassLog::default();

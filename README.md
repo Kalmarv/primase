@@ -55,8 +55,8 @@ The core design is borrowed from **MLIR**:
 | :--- | :--- |
 | [`core/`](core/) | The `World`, core/PBR/LOD/state/layered components, `PassManager`, target legalisation and the world printer. |
 | [`toolkit/`](toolkit/) | Format and math primitives with no game knowledge: `bytes`, `compress`, `hash`, `dds`, `texcodec`, `image` (BCn/DDS/PNG textures), `meshops` and `vertex` (mesh and UV operations), `dxbc` (an SM5 shader interpreter), `havok`, `frostbite`, and `testdata` (real-data test configuration). |
-| [`formats/`](formats/) | Interchange readers and writers: `gltf`, `skate-scene` and `web` (tiled Three.js worlds with KTX2, meshopt and GPU instancing, for a web viewer). |
-| [`worlds/`](worlds/) | Per-game readers, dialect lowerings and builders: `fromsoft` (Sekiro), `unity`, `gta` (GTA V) and `reskate` (*skate.*). |
+| [`formats/`](formats/) | Interchange readers and writers: `gltf` and `web` (tiled Three.js worlds with KTX2, meshopt and GPU instancing, for a web viewer). |
+| [`worlds/`](worlds/) | Per-game readers, dialect lowerings and builders: `fromsoft` (Sekiro), `unity`, `gta` (GTA V) and `reskate` (*skate.*: its `skate.*` dialect, preparation passes, the skate-scene interchange and the Studio map writer). |
 | [`cli/`](cli/) | The `primase` binary (`primase convert`, for trying a reader, passes and a writer together) and the architecture test. |
 
 ## Getting started
@@ -65,7 +65,7 @@ The library is used from Rust. Worked compositions of a reader, passes and a wri
 
 ```sh
 # Export a skate-scene folder as web tiles
-cargo run --release -p primase-web --example scene_to_tiles -- path/to/scene path/to/out
+cargo run --release -p primase-cli --example scene_to_tiles -- path/to/scene path/to/out
 
 # Export a Unity level (needs the game's data folder and a type-tree package)
 cargo run --release -p primase-unity --example unity_export -- <Game>_Data typetrees.tpk level1 path/to/out --web

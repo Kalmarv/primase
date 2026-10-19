@@ -1,15 +1,19 @@
-//! ReSkate (skate.): the writer of ReSkate Studio normalized map folders from skate-scene worlds (`map.json`,
-//! `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`, `pieces.json`, `textures_index.json`), gated
-//! against the reference C# writer by what Studio reads: meshes, tables and texture payloads exactly, JSON as parsed
-//! values, PNGs by pixels.
+//! ReSkate (skate.): the target's own crate. It owns the `skate.*` dialect ([`dialect`]), the preparation passes a
+//! program selects to raise core data into it ([`prepare`], `raise-skate`, and the target's lowerings), the frozen
+//! skate-scene interchange v1 ([`interchange`]: read, load, write), and the writer of ReSkate Studio normalized map
+//! folders (`map.json`, `meshes/*.glb`, `textures/*`, `ui/*`, `trainer.json`, `stats.json`, `pieces.json`,
+//! `textures_index.json`), gated against the reference C# writer by what Studio reads: meshes, tables and texture
+//! payloads exactly, JSON as parsed values, PNGs by pixels.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod blend_order;
 pub mod build;
 pub mod collision;
+pub mod dialect;
 pub mod glb;
 pub mod grind;
 pub mod hash;
+pub mod interchange;
 pub mod layered;
 pub mod map;
 pub mod material;
@@ -17,6 +21,7 @@ pub mod model;
 pub mod overlay;
 pub mod pausemap;
 pub mod postcompile;
+pub mod prepare;
 pub mod records;
 pub mod scene;
 pub mod texture;
@@ -27,8 +32,11 @@ use std::path::PathBuf;
 
 pub use build::{BuildOptions, BuildReport, build, leave_out_optional, lod_choice, select_lod};
 
-/// The passes of the ReSkate target, by name.
+/// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
+/// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.register("raise-skate", prepare::raise_skate_pass);
+    dialect::lower::register(reg);
     reg.register("lower-layered-reskate", layered::lower_layered_reskate);
     reg.register("lower-tint-reskate", |o| {
         let mut pass = tint::LowerTintReskate::default();
@@ -63,6 +71,23 @@ pub enum Error {
         file: String,
         source: primase_core::JsonError,
     },
+    /// A scene manifest that is not JSON.
+    #[error("{}: {source}", path.display())]
+    Manifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    /// A scene table that breaks a rule of the format; the message names the item.
+    #[error("{path}: {message}")]
+    Table { path: String, message: String },
+    #[error("write: {0}")]
+    Write(String),
+    /// A scene's GLB that the glTF reader refused.
+    #[error(transparent)]
+    Gltf(#[from] primase_gltf::Error),
+    /// A scene's texture file that the image toolkit refused.
+    #[error(transparent)]
+    Image(#[from] primase_image::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -10,10 +10,11 @@ use primase_core::{
     Collision, ColorSpace, Instance, Light, LightKind, Mesh, Name, NormalConvention, NormalGreen, NormalX,
     NormalZ, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
 };
-use primase_skate_scene::{
-    self as scene, AlphaMode, MaterialClass, RaiseOptions, SkateLight, SkateMaterial, SkatePrototype,
-    SkateTexture,
+use primase_reskate::dialect::{
+    self, AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkatePrototype, SkateTexture,
 };
+use primase_reskate::interchange;
+use primase_reskate::prepare::{self, RaiseOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -156,7 +157,7 @@ fn options() -> RaiseOptions {
         name: "raised".into(),
         surfaces: BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]),
         unclassified: None,
-        light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
+        light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
     }
 }
 
@@ -186,7 +187,7 @@ fn a_core_world_becomes_a_scene() {
             yaw: None,
         },
     );
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["materials"], 2);
     assert_eq!(
         log.counts["materials no placed primitive is drawn with, not raised"],
@@ -197,14 +198,14 @@ fn a_core_world_becomes_a_scene() {
     assert_eq!(log.counts["prototypes"], 1);
     assert_eq!(log.counts["lights"], 1);
     assert_eq!(log.counts["markers"], 1);
-    let spawn: Vec<&scene::SkateMarker> = w.iter::<scene::SkateMarker>().map(|(_, m)| m).collect();
+    let spawn: Vec<&dialect::SkateMarker> = w.iter::<dialect::SkateMarker>().map(|(_, m)| m).collect();
     assert_eq!(spawn.len(), 1);
     assert_eq!(
         (spawn[0].kind, spawn[0].position, spawn[0].snap.clone()),
         (
-            scene::MarkerKind::Spawn,
+            dialect::MarkerKind::Spawn,
             Some(([2.0, -1.0], None)),
-            Some(scene::Snap::Mode(scene::SnapMode::Ground))
+            Some(dialect::Snap::Mode(dialect::SnapMode::Ground))
         )
     );
     assert_eq!(
@@ -232,20 +233,20 @@ fn a_core_world_becomes_a_scene() {
     assert!(l[0].spot && (l[0].spot_size - 1.0).abs() < 1e-6 && (l[0].spot_blend - 0.5).abs() < 1e-6);
     assert_eq!(l[0].direction, [0.0, -1.0, 0.0]);
     // 10 cd through raise-skate's calibration
-    assert!((l[0].energy - scene::studio_watts((10.0 * scene::SKATE_LIGHT_SCALE) as f32)).abs() < 1e-6);
+    assert!((l[0].energy - prepare::studio_watts((10.0 * prepare::SKATE_LIGHT_SCALE) as f32)).abs() < 1e-6);
     // assets, the scene, and back
     let assets = tmp("assets");
-    scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("scene");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let mut back = World::new();
-    scene::read(&out, &mut back).unwrap();
+    interchange::read(&out, &mut back).unwrap();
     let protos: Vec<(primase_core::Entity, &SkatePrototype)> = back.iter::<SkatePrototype>().collect();
     assert_eq!(
         (
             protos.len(),
             protos[0].1.id.as_str(),
-            back.get::<scene::SkateParts>(protos[0].0).unwrap().0.len()
+            back.get::<dialect::SkateParts>(protos[0].0).unwrap().0.len()
         ),
         (1, "boulder", 2)
     );
@@ -291,14 +292,14 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
         (SurfaceClass::Other, Some("default")),
     ];
     for (class, skate) in table {
-        assert_eq!(scene::class_to_skate(class), skate, "{class:?}");
+        assert_eq!(prepare::class_to_skate(class), skate, "{class:?}");
     }
     let classes: Vec<_> = table.iter().map(|(class, _)| *class).collect();
     assert_eq!(classes, SurfaceClass::ALL);
     let raised = |class, map: &[(&str, &str)]| {
         let mut w = world();
         w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
-        let r = scene::raise_skate(
+        let r = prepare::raise_skate(
             &mut w,
             &RaiseOptions {
                 name: "x".into(),
@@ -339,7 +340,7 @@ fn water_collision() {
         }
         w.insert(proto, c);
         // no surface map: the water class decides
-        let log = scene::raise_skate(
+        let log = prepare::raise_skate(
             &mut w,
             &RaiseOptions {
                 name: "raised".into(),
@@ -357,13 +358,13 @@ fn water_collision() {
             1
         );
         if mixed {
-            assert_eq!(mode, Some(scene::CollisionMode::TriangleMesh));
+            assert_eq!(mode, Some(dialect::CollisionMode::TriangleMesh));
             assert_eq!(
                 log.approximations["water triangles in a solid collision soup kept solid"],
                 1
             );
         } else {
-            assert_eq!(mode, Some(scene::CollisionMode::Water));
+            assert_eq!(mode, Some(dialect::CollisionMode::Water));
             assert_eq!(log.counts["prototypes with water collision"], 1);
         }
     }
@@ -385,13 +386,13 @@ fn material_usage_makes_water_and_foliage() {
     let (rock, plain) = (named(&w, "rock"), named(&w, "plain"));
     w.insert(rock, MaterialUsage::Foliage);
     w.insert(plain, MaterialUsage::Water);
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     let m = |e| w.get::<SkateMaterial>(e).unwrap();
     assert_eq!(
         (m(rock).class, m(rock).domain, m(rock).alpha, m(rock).two_sided),
         (
             MaterialClass::Leaves,
-            Some(scene::Domain::Foliage),
+            Some(dialect::Domain::Foliage),
             Some(AlphaMode::Mask),
             Some(true)
         )
@@ -407,11 +408,11 @@ fn material_usage_makes_water_and_foliage() {
     let rock = named(&w, "rock");
     w.insert(rock, MaterialUsage::Foliage);
     w.insert(rock, DrawOrder::conventional(DrawLayer::Decal, 2500));
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     let m = w.get::<SkateMaterial>(rock).unwrap();
     assert_eq!(
         (m.class, m.domain),
-        (MaterialClass::Decal, Some(scene::Domain::Decal))
+        (MaterialClass::Decal, Some(dialect::Domain::Decal))
     );
     assert_eq!(
         log.counts["foliage materials kept as decals (drawn over the surface beneath)"],
@@ -429,14 +430,14 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
         .map(|(e, _)| e)
         .unwrap();
     w.insert(plain, DrawOrder::conventional(DrawLayer::Decal, 2500));
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["materials raised as decals (core.draw_order)"], 1);
     let mats: BTreeMap<&str, &SkateMaterial> = w
         .iter::<SkateMaterial>()
         .map(|(_, m)| (m.key.as_str(), m))
         .collect();
     assert_eq!(mats["plain"].class, MaterialClass::Decal);
-    assert_eq!(mats["plain"].domain, Some(scene::Domain::Decal));
+    assert_eq!(mats["plain"].domain, Some(dialect::Domain::Decal));
     // without a draw order the class comes from the alpha mode, as before
     assert_eq!(mats["rock"].class, MaterialClass::Cutout);
     assert_eq!(mats["rock"].domain, None);
@@ -446,13 +447,13 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
 fn what_skate_cannot_take_is_refused() {
     // a surface with no skate surface
     let mut w = world();
-    let err = scene::raise_skate(
+    let err = prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "x".into(),
             surfaces: BTreeMap::new(),
             unclassified: None,
-            light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
+            light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
         },
     )
     .unwrap_err();
@@ -467,7 +468,7 @@ fn what_skate_cannot_take_is_refused() {
         .unwrap()
         .transform = Some(UvTransform::IDENTITY);
     assert!(
-        scene::raise_skate(&mut w, &options())
+        prepare::raise_skate(&mut w, &options())
             .unwrap_err()
             .to_string()
             .contains("bake")
@@ -485,15 +486,15 @@ fn what_skate_cannot_take_is_refused() {
         basis: primase_core::NormalBasis::TangentBitangent,
     });
     assert!(
-        scene::raise_skate(&mut w, &options())
+        prepare::raise_skate(&mut w, &options())
             .unwrap_err()
             .to_string()
             .contains("normalize-normals")
     );
     // raised twice
     let mut w = world();
-    scene::raise_skate(&mut w, &options()).unwrap();
-    assert!(scene::raise_skate(&mut w, &options()).is_err());
+    prepare::raise_skate(&mut w, &options()).unwrap();
+    assert!(prepare::raise_skate(&mut w, &options()).is_err());
 }
 
 fn masked_world() -> (World, primase_core::Entity, primase_core::Entity) {
@@ -516,7 +517,7 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
     let (mut w, m, source) = masked_world();
     let original = w.get::<PbrMaterial>(m).unwrap().clone();
     let source_pixels = w.get::<Texture>(source).unwrap().levels.clone();
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     let raised = w.get::<SkateMaterial>(m).unwrap();
     assert_eq!((raised.metallic, raised.roughness), (None, None));
     let mask = raised.mask.unwrap();
@@ -529,7 +530,7 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
     assert_eq!(pixels.color_space, ColorSpace::Linear);
     assert_eq!(pixels.role, TexRole::Mask);
     assert_eq!(
-        scene::msk_to_orm(pixels).unwrap().levels,
+        dialect::msk_to_orm(pixels).unwrap().levels,
         [[64, 128, 255, 255].repeat(4), vec![200, 31, 80, 255]]
     );
     assert_eq!(w.get::<PbrMaterial>(m), Some(&original));
@@ -541,11 +542,11 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
             .contains_key("PBR mask factors quantized to UNORM8")
     );
     let assets = tmp("mask-assets");
-    scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("mask-scene");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let mut read = World::new();
-    scene::read(&out, &mut read).unwrap();
+    interchange::read(&out, &mut read).unwrap();
     let material = read
         .iter::<SkateMaterial>()
         .find(|(_, x)| x.key == "rock")
@@ -573,7 +574,7 @@ fn mask_factors_and_explicit_occlusion_have_literal_results() {
             m.occlusion_texture = None;
         }
         [m.metallic, m.roughness, m.occlusion_strength] = factors;
-        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let log = prepare::raise_skate(&mut w, &options()).unwrap();
         let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
         assert_eq!(w.get::<Texture>(mask).unwrap().levels[0], expected.repeat(4));
         assert_eq!(
@@ -605,7 +606,7 @@ fn mask_cache_separates_factors_and_counts_materials_in_variants() {
         prototype,
         primase_core::MaterialVariants(vec![BTreeMap::from([(0, shared), (1, zero)])]),
     );
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["PBR materials raised with an MSK binding"], 3);
     assert_eq!(log.counts["derived MSK textures"], 2);
     let mask = |e| w.get::<SkateMaterial>(e).unwrap().mask.unwrap();
@@ -616,7 +617,7 @@ fn mask_cache_separates_factors_and_counts_materials_in_variants() {
 
 fn rejected_unchanged(mut w: World) {
     let mut before = w.clone();
-    assert!(scene::raise_skate(&mut w, &options()).is_err());
+    assert!(prepare::raise_skate(&mut w, &options()).is_err());
     assert_eq!(
         w.entities().collect::<Vec<_>>(),
         before.entities().collect::<Vec<_>>()
@@ -685,7 +686,7 @@ fn emission_losses_are_per_material_and_do_not_claim_radiance_transport() {
     m.emissive_texture = Some(TextureRef::new(source));
     let other = w.iter::<PbrMaterial>().find(|(e, _)| *e != first).unwrap().0;
     w.get_mut::<PbrMaterial>(other).unwrap().emissive_texture = Some(TextureRef::new(source));
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(
         log.approximations["PBR emission texture binding not representable in skate-scene"],
         2
@@ -707,7 +708,7 @@ fn unbound_normal_scale_is_inert_and_scalar_materials_stay_scalar() {
         .unwrap()
         .0;
     w.get_mut::<PbrMaterial>(m).unwrap().normal_scale = 0.5;
-    scene::raise_skate(&mut w, &options()).unwrap();
+    prepare::raise_skate(&mut w, &options()).unwrap();
     let raised = w.get::<SkateMaterial>(m).unwrap();
     assert_eq!(
         (raised.mask, raised.metallic, raised.roughness),
@@ -747,7 +748,7 @@ fn explicit_raise_uses_pbr_and_counts_shared_quantization_per_material() {
             other: Default::default(),
         },
     );
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.approximations["PBR mask factors quantized to UNORM8"], 2);
     assert_eq!(log.counts["derived MSK textures"], 1);
     let a = w.get::<SkateMaterial>(first).unwrap();
@@ -822,12 +823,12 @@ fn a_drawn_blend_becomes_a_layered_material() {
         transform: None,
     });
     w.insert(blend, l.clone());
-    let e = scene::raise_skate(&mut w, &options()).unwrap_err().to_string();
+    let e = prepare::raise_skate(&mut w, &options()).unwrap_err().to_string();
     assert!(e.contains("has no pbr.material"), "{e}");
     assert!(w.iter::<SkateMaterial>().next().is_none());
     l.layers[1] = None;
     w.insert(blend, l);
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["layered materials"], 1);
     // rock (drawn), dirt and grass (layers); plain is no longer drawn
     assert_eq!(log.counts["materials"], 3);
@@ -869,7 +870,7 @@ fn markers_are_raised_from_core_markers() {
     t.cols[3] = [4.0, 1.5, -3.0];
     w.insert(travel, t);
     let waypoint = marker(&mut w, "waypoint", Some([0.0, 0.0]), None);
-    let log = scene::raise_skate(
+    let log = prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "m".into(),
@@ -877,23 +878,23 @@ fn markers_are_raised_from_core_markers() {
         },
     )
     .unwrap();
-    let s = w.get::<scene::SkateMarker>(spawn).unwrap();
+    let s = w.get::<dialect::SkateMarker>(spawn).unwrap();
     assert_eq!(
         (s.kind, s.position, s.yaw, s.snap.clone()),
         (
-            scene::MarkerKind::Spawn,
+            dialect::MarkerKind::Spawn,
             Some(([6.0, -2.0], None)),
             Some(90.0),
-            Some(scene::Snap::Mode(scene::SnapMode::Ground))
+            Some(dialect::Snap::Mode(dialect::SnapMode::Ground))
         )
     );
-    let t = w.get::<scene::SkateMarker>(travel).unwrap();
+    let t = w.get::<dialect::SkateMarker>(travel).unwrap();
     assert_eq!(
         (t.kind, t.position, t.snap.clone()),
-        (scene::MarkerKind::Travel, Some(([4.0, -3.0], Some(1.5))), None)
+        (dialect::MarkerKind::Travel, Some(([4.0, -3.0], Some(1.5))), None)
     );
     assert!((t.yaw.unwrap() - 90.0).abs() < 1e-9, "{:?}", t.yaw);
-    assert!(!w.has::<scene::SkateMarker>(waypoint));
+    assert!(!w.has::<dialect::SkateMarker>(waypoint));
     assert_eq!(log.counts["markers"], 2);
     assert_eq!(
         log.counts["markers of kind 'waypoint' not raised (no skate marker kind)"],
@@ -915,7 +916,7 @@ fn unclassified_surfaces_and_prototype_collision() {
             surfaces: vec![0],
         },
     );
-    let log = scene::raise_skate(
+    let log = prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "x".into(),
@@ -927,11 +928,11 @@ fn unclassified_surfaces_and_prototype_collision() {
     assert_eq!(log.counts["unclassified surfaces made concrete: Snow"], 1);
     assert_eq!(w.resource::<Surfaces>().unwrap().0[0].name, "concrete");
     assert_eq!(log.counts["prototypes with their own collision"], 1);
-    let p = w.get::<scene::SkatePrototype>(proto).unwrap();
+    let p = w.get::<dialect::SkatePrototype>(proto).unwrap();
     let soup = p.collision.as_ref().unwrap();
-    assert_eq!(soup.mode, Some(scene::CollisionMode::TriangleMesh));
+    assert_eq!(soup.mode, Some(dialect::CollisionMode::TriangleMesh));
     // an unclassified surface that is no skate surface is refused
-    let e = scene::raise_skate(
+    let e = prepare::raise_skate(
         &mut world(),
         &RaiseOptions {
             name: "x".into(),
@@ -975,7 +976,7 @@ fn a_prototype_that_collides_without_drawing() {
     let nothing = w.spawn();
     w.insert(nothing, Name("nothing".into()));
     let nothing_at = place(&mut w, nothing);
-    let log = scene::raise_skate(&mut w, &options()).unwrap();
+    let log = prepare::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(log.counts["prototypes"], 2);
     assert_eq!(log.counts["prototypes that collide without drawing"], 1);
     assert_eq!(log.counts["prototypes with their own collision"], 1);
@@ -983,18 +984,18 @@ fn a_prototype_that_collides_without_drawing() {
     let p = w.get::<SkatePrototype>(fence).unwrap();
     assert_eq!(
         (p.glb.is_none(), p.collision.as_ref().unwrap().mode),
-        (true, Some(scene::CollisionMode::TriangleMesh))
+        (true, Some(dialect::CollisionMode::TriangleMesh))
     );
-    assert!(w.get::<scene::SkateParts>(fence).unwrap().0.is_empty());
+    assert!(w.get::<dialect::SkateParts>(fence).unwrap().0.is_empty());
     // through the scene file (which takes placements of skate prototypes only): no GLB, the soup kept on its
     // asphalt surface
     w.despawn(nothing_at);
     let assets = tmp("collision_only_assets");
-    scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    interchange::prepare_assets(&mut w, &assets).unwrap();
     let out = tmp("collision_only_scene");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let mut back = World::new();
-    scene::read(&out, &mut back).unwrap();
+    interchange::read(&out, &mut back).unwrap();
     let (e, p) = back
         .iter::<SkatePrototype>()
         .find(|(_, p)| p.id == "fence")
@@ -1018,13 +1019,13 @@ fn raise_skate_pass_options() {
         ("map".to_owned(), "PUDDLE:default;SNOW:asphalt".to_owned()),
         ("unclassified".to_owned(), "default".to_owned()),
     ]);
-    let pass = scene::raise_skate_pass(&o).unwrap();
+    let pass = prepare::raise_skate_pass(&o).unwrap();
     assert_eq!(
-        scene::raise_skate_pass(&pass.options()).unwrap().options(),
+        prepare::raise_skate_pass(&pass.options()).unwrap().options(),
         pass.options()
     );
     let spawn: Options = [("spawn".to_owned(), "centre".to_owned())].into();
-    let Err(e) = scene::raise_skate_pass(&spawn) else {
+    let Err(e) = prepare::raise_skate_pass(&spawn) else {
         panic!("spawn is not a raise-skate option");
     };
     assert!(e.contains("place-spawn"), "{e}");
@@ -1036,7 +1037,7 @@ fn raise_skate_pass_options() {
         vec![("colour", "red")],
     ] {
         let o: Options = bad.iter().map(|&(k, v)| (k.to_owned(), v.to_owned())).collect();
-        assert!(scene::raise_skate_pass(&o).is_err(), "{bad:?}");
+        assert!(prepare::raise_skate_pass(&o).is_err(), "{bad:?}");
     }
 }
 
@@ -1044,12 +1045,12 @@ fn raise_skate_pass_options() {
 /// peaks no higher (alpha' = alpha sqrt(0.04 / F0)); 0.04 or more keeps its roughness; nothing reflected is rough.
 #[test]
 fn reflectance_folds_into_roughness_by_the_highlight_peak() {
-    assert_eq!(scene::raise::fold_reflectance(0.5, 0.04), 0.5);
-    assert_eq!(scene::raise::fold_reflectance(0.5, 0.2), 0.5);
-    assert_eq!(scene::raise::fold_reflectance(0.5, 0.0), 1.0);
+    assert_eq!(prepare::raise::fold_reflectance(0.5, 0.04), 0.5);
+    assert_eq!(prepare::raise::fold_reflectance(0.5, 0.2), 0.5);
+    assert_eq!(prepare::raise::fold_reflectance(0.5, 0.0), 1.0);
     // F0 0.01: alpha 0.25 x 2 = 0.5, roughness sqrt(0.5)
-    assert!((scene::raise::fold_reflectance(0.5, 0.01) - 0.5f64.sqrt()).abs() < 1e-12);
-    assert_eq!(scene::raise::fold_reflectance(0.1, 1e-9), 1.0);
+    assert!((prepare::raise::fold_reflectance(0.5, 0.01) - 0.5f64.sqrt()).abs() < 1e-12);
+    assert_eq!(prepare::raise::fold_reflectance(0.1, 1e-9), 1.0);
 }
 
 /// A scalar material: specular factor 0.25 (F0 0.01) at roughness 0.5 is raised at roughness sqrt(0.5); the same with
@@ -1070,7 +1071,7 @@ fn scalar_materials_fold_their_specular_reflectance() {
             factor: 0.25,
             ..primase_core::pbr::Specular::default()
         });
-        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let log = prepare::raise_skate(&mut w, &options()).unwrap();
         let r = w.get::<SkateMaterial>(plain).unwrap().roughness.unwrap();
         assert!((r - want).abs() < 1e-4, "roughness {r}");
         assert_eq!(
@@ -1101,7 +1102,7 @@ fn masks_fold_reflectance_per_texel() {
             color: [0.5; 3],
             color_texture: None,
         });
-        let log = scene::raise_skate(&mut w, &options()).unwrap();
+        let log = prepare::raise_skate(&mut w, &options()).unwrap();
         let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
         let levels = &w.get::<Texture>(mask).unwrap().levels;
         assert_eq!(levels[0], level0.repeat(4));
@@ -1126,7 +1127,7 @@ fn masks_without_specular_keep_their_bytes() {
     m.metallic = 0.0;
     m.roughness = 0.3;
     m.specular = None;
-    scene::raise_skate(&mut w, &options()).unwrap();
+    prepare::raise_skate(&mut w, &options()).unwrap();
     let mask = w.get::<SkateMaterial>(material).unwrap().mask.unwrap();
     let levels = &w.get::<Texture>(mask).unwrap().levels;
     assert_eq!(levels[0], [0, 217, 64, 255].repeat(4));

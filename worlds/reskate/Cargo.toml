@@ -1,6 +1,6 @@
 [package]
 name = "primase-reskate"
-description = "ReSkate (skate.): the Studio normalized map writer, and later the Frostbite readers"
+description = "ReSkate (skate.): the skate.* dialect, its preparation passes, the skate-scene interchange and the Studio normalized map writer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,6 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
-primase-skate-scene.workspace = true
 primase-gltf.workspace = true
 primase-hash.workspace = true
 primase-compress.workspace = true

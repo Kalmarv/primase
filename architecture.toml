@@ -10,17 +10,10 @@
 
 [[dependency]]
 from = "worlds/fromsoft"
-to = "formats/skate-scene"
+to = "worlds/reskate"
 section = "dependencies"
 reason = "the Sekiro area reader still attaches skate.* components and skate scene policy"
 removed_when = "the reader attaches core and fromsoft.* only, and skate shaping runs as passes"
-
-[[dependency]]
-from = "worlds/reskate"
-to = "formats/skate-scene"
-section = "dependencies"
-reason = "the ReSkate writer takes the skate.* dialect as its input"
-removed_when = "the writer takes core plus target components its own passes produce"
 
 [[dependency]]
 from = "worlds/reskate"
@@ -30,16 +23,6 @@ reason = "the ReSkate writer and its post-compile step re-read prototype GLBs"
 removed_when = "meshes reach the writer as core.mesh through the reader's load step"
 
 # ---- game and engine names in core, toolkit and formats ----
-
-[[name]]
-crate = "formats/skate-scene"
-word = "skate"
-reason = "the interchange format is skate.'s; it owns the skate.* dialect"
-
-[[name]]
-crate = "formats/skate-scene"
-word = "studio"
-reason = "studio_watts: the light unit the format's consumer reads"
 
 [[name]]
 crate = "toolkit/frostbite"
@@ -67,13 +50,13 @@ removed_when = "it moves into toolkit/frostbite, its only user"
 # ---- composition without data logic (examples, bins, cli, pipelines) ----
 
 [[entry_point]]
-file = "formats/web/examples/scene_to_tiles.rs"
+file = "cli/examples/scene_to_tiles.rs"
 what = "queries or edits world components"
 reason = "turns skate.* markers and grind curves into viewer items, and measures placements for the spanning rule"
 removed_when = "primase convert replaces the example (the rule moves into primase-web, the lowering into a pass)"
 
 [[entry_point]]
-file = "formats/web/examples/scene_to_tiles.rs"
+file = "cli/examples/scene_to_tiles.rs"
 what = "runs a pass outside the pass manager"
 reason = "runs lower-skate-pbr and lower-skate-lights directly"
 removed_when = "primase convert replaces the example"
@@ -155,15 +138,15 @@ removed_when = "worlds/unity exports register()"
 # ---- writers take the world read-only ----
 
 [[writer]]
-file = "formats/skate-scene/src/assets.rs"
-what = "prepare_scene_assets takes &mut World"
+file = "worlds/reskate/src/interchange/assets.rs"
+what = "prepare_assets takes &mut World"
 reason = "writes prototype GLBs and texture PNGs, then points the world at them, before write"
 removed_when = "write serializes in-memory meshes and textures itself"
 
 # ---- file, environment and process access (clippy.toml), by module role ----
 
 [[io]]
-file = "formats/skate-scene/src/read.rs"
+file = "worlds/reskate/src/interchange/read.rs"
 role = "reader I/O"
 reason = "the skate-scene reader reads its folder"
 
@@ -213,7 +196,7 @@ role = "writer I/O"
 reason = "write_file writes the GLB"
 
 [[io]]
-file = "formats/skate-scene/src/write.rs"
+file = "worlds/reskate/src/interchange/write.rs"
 role = "writer I/O"
 reason = "the skate-scene writer writes its folder and copies the files the scene references"
 
@@ -286,9 +269,9 @@ reason = "the glTF writer embeds referenced PNG files as stored"
 removed_when = "textures reach the writer loaded"
 
 [[io]]
-file = "formats/skate-scene/src/assets.rs"
+file = "worlds/reskate/src/interchange/assets.rs"
 role = "exception"
-reason = "prepare_scene_assets writes assets and repoints the world before the writer runs"
+reason = "prepare_assets writes assets and repoints the world before the writer runs"
 removed_when = "write serializes in-memory meshes and textures itself"
 
 [[io]]

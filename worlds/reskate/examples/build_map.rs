@@ -45,7 +45,7 @@ fn main() -> Result<(), BoxError> {
     let scene = scene.ok_or("usage: build_map <scene folder> --out <root> [options]")?;
     let t0 = std::time::Instant::now();
     let mut w = World::new();
-    primase_skate_scene::read(&scene, &mut w)?;
+    primase_reskate::interchange::read(&scene, &mut w)?;
     let lods = primase_reskate::select_lod(&mut w, lod)?;
     let (warnings, dropped) = primase_reskate::leave_out_optional(&mut w, &scene, max_priority)?;
     o.scene_warnings = Some(warnings);

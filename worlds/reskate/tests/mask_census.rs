@@ -2,7 +2,10 @@
 //! This covers converter inputs, not a full scene bridge or native rendering.
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{ColorSpace, Instance, Mesh, Primitive, TexFormat, TexRole, Texture, World};
-use primase_skate_scene::{RaiseOptions, SkateMaterial, raise_skate};
+use primase_reskate::{
+    dialect::SkateMaterial,
+    prepare::{RaiseOptions, raise_skate},
+};
 use primase_testdata::real_data;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

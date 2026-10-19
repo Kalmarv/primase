@@ -997,7 +997,7 @@ fn real_data_variables_are_declared() {
 }
 
 /// The exceptions agreed before approvals were recorded. The list only shrinks: lower this number when one goes.
-const UNAPPROVED_EXCEPTIONS: usize = 36;
+const UNAPPROVED_EXCEPTIONS: usize = 33;
 
 /// An exception is new only with Caleb's approval (`approved = "Caleb, YYYY-MM-DD"`); the unapproved ones only go.
 #[test]

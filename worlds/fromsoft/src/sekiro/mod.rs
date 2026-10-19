@@ -22,10 +22,10 @@ use primase_core::{
     ColorSpace, Instance, Mesh, Name, NormalGreen, NormalZ, Primitive, Semantic, Source, Stream, TexRole,
     Topology, Transform, World,
 };
-pub use primase_skate_scene::prepare_scene_assets;
-use primase_skate_scene::{
+use primase_reskate::dialect::{
     FileRef, MinHeight, Part, SkateParts, SkatePlacement, SkatePrototype, SkateScene, SkateTexture, TableRef,
 };
+pub use primase_reskate::interchange::prepare_assets;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,

@@ -23,7 +23,6 @@ serde_json.workspace = true
 primase-testdata.workspace = true
 sha2.workspace = true
 primase-gltf.workspace = true
-primase-skate-scene.workspace = true
 primase-web = { workspace = true, features = ["ktx2"] }
 
 [lints]

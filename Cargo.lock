@@ -789,15 +789,18 @@ dependencies = [
 name = "primase-cli"
 version = "0.1.0"
 dependencies = [
+ "meshopt",
  "primase-cache",
  "primase-core",
+ "primase-gltf",
  "primase-gta",
  "primase-image",
  "primase-meshops",
  "primase-reskate",
- "primase-skate-scene",
  "primase-testdata",
  "primase-web",
+ "serde_json",
+ "sha2",
  "toml",
 ]
 
@@ -871,7 +874,7 @@ dependencies = [
  "primase-havok",
  "primase-image",
  "primase-meshops",
- "primase-skate-scene",
+ "primase-reskate",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -900,7 +903,6 @@ dependencies = [
  "primase-core",
  "primase-image",
  "primase-meshops",
- "primase-skate-scene",
  "primase-testdata",
  "serde_json",
  "sha2",
@@ -978,7 +980,6 @@ dependencies = [
  "primase-hash",
  "primase-image",
  "primase-meshops",
- "primase-skate-scene",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -995,21 +996,6 @@ version = "0.1.0"
 dependencies = [
  "primase-dxbc",
  "primase-dxil",
- "thiserror",
-]
-
-[[package]]
-name = "primase-skate-scene"
-version = "0.1.0"
-dependencies = [
- "primase-core",
- "primase-gltf",
- "primase-image",
- "primase-meshops",
- "primase-testdata",
- "serde",
- "serde_json",
- "sha2",
  "thiserror",
 ]
 
@@ -1043,7 +1029,6 @@ dependencies = [
  "primase-gltf",
  "primase-image",
  "primase-meshops",
- "primase-skate-scene",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -1074,7 +1059,6 @@ dependencies = [
  "primase-gltf",
  "primase-image",
  "primase-meshops",
- "primase-skate-scene",
  "primase-testdata",
  "serde",
  "serde_json",

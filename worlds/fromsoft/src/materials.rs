@@ -5,7 +5,7 @@ use crate::{
     mtd::{MaterialDefinition, Value},
 };
 use primase_core::world::{Component, Entity};
-use primase_skate_scene::components::{MaterialClass, SkateMaterial};
+use primase_reskate::dialect::{MaterialClass, SkateMaterial};
 use std::collections::BTreeMap;
 
 pub fn stem(path: &str) -> String {
@@ -306,7 +306,7 @@ impl Material {
             two_sided: (self.two_sided != masked).then_some(self.two_sided),
             // Consumer comparison: these leaves render lit in the surface
             // domain and black in the foliage domain. Keep the leaves class.
-            domain: (self.class == "leaves").then_some(primase_skate_scene::Domain::Surface),
+            domain: (self.class == "leaves").then_some(primase_reskate::dialect::Domain::Surface),
             metallic: None,
             roughness: None,
             wrap: None,

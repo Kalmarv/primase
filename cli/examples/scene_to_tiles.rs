@@ -1,7 +1,8 @@
 //! Export a scene folder as web tiles and (unless `--no-plain`) a plain comparison set, one cell at a time: each
 //! cell's closure of the scene is loaded, lowered and written, then dropped, so memory holds one cell and the index.
-// a path of its own, so a test can include this driver as a module (formats/web/tests/scene_to_tiles.rs)
-#[path = "support/mod.rs"]
+// a path of its own, so a test can include this driver as a module (cli/tests/scene_to_tiles.rs); the tile proof is
+// the web examples'
+#[path = "../../formats/web/examples/support/mod.rs"]
 mod support;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Entity, Instance, MeshFile, World};
@@ -22,7 +23,7 @@ fn prepare(
     primase_gltf::load_mesh_files(&mut w, folder)?;
     if render {
         primase_image::load_textures(&mut w, folder)?;
-        primase_skate_scene::LowerSkatePbr.run(&mut w, &mut PassLog::default())?;
+        primase_reskate::dialect::LowerSkatePbr.run(&mut w, &mut PassLog::default())?;
         // core.layered stays as it is: the writer carries it (PRIMASE_layered_material) for per-pixel blending. The
         // strongest-layer lowering is the skate target's lossy path and leaves the replaced layered and layer materials
         // in the world, which the per-cell closure check rejects.
@@ -87,7 +88,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     let folder = Path::new(&paths[0]);
     let output = Path::new(&paths[1]);
     let mut world = World::new();
-    primase_skate_scene::read(folder, &mut world)?;
+    primase_reskate::interchange::read(folder, &mut world)?;
     // placements more optional than --max-priority are left out, only when asked; each prototype is drawn with its
     // finest level of detail (the viewer does not choose between them yet)
     let mut passes: Vec<Box<dyn Pass>> = Vec::new();
@@ -106,9 +107,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<primase_web::Index,
     }
     // lights are planned from the whole scene, like viewer records, not loaded per cell; every scene light must be
     // lowered (the writer then checks each planned light reaches a tile)
-    primase_skate_scene::LowerSkateLights.run(&mut world, &mut PassLog::default())?;
+    primase_reskate::dialect::LowerSkateLights.run(&mut world, &mut PassLog::default())?;
     let (scene_lights, lowered) = (
-        world.iter::<primase_skate_scene::SkateLight>().count(),
+        world.iter::<primase_reskate::dialect::SkateLight>().count(),
         world.iter::<primase_core::Light>().count(),
     );
     if lowered != scene_lights {

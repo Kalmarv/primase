@@ -53,25 +53,25 @@ fn installed_layered_scene() {
     let (mut scenes, mut layered_total, mut triangles_total) = (0usize, 0usize, 0usize);
     for folder in &folders {
         let mut world = World::default();
-        primase_skate_scene::read(folder, &mut world).unwrap();
+        primase_reskate::interchange::read(folder, &mut world).unwrap();
         let layered = world.iter::<LayeredMaterial>().count();
         if layered == 0 {
             continue;
         }
         primase_gltf::load_mesh_files(&mut world, folder).unwrap();
         let before = triangles(&world);
-        primase_skate_scene::LowerSkatePbr
+        primase_reskate::dialect::LowerSkatePbr
             .run(&mut world, &mut PassLog::default())
             .unwrap();
         // Exercise the exact-closure contract of a prepared cell.
         let roots: Vec<_> = world.iter::<Mesh>().map(|(entity, _)| entity).collect();
         let mut cell = world.subset(&world.closure(roots.iter().copied()));
-        primase_skate_scene::LowerLayeredPbr
+        primase_reskate::dialect::LowerLayeredPbr
             .run(&mut cell, &mut PassLog::default())
             .unwrap();
         assert_eq!(cell.closure(roots).len(), cell.entity_count());
         let mut log = PassLog::default();
-        primase_skate_scene::LowerLayeredPbr
+        primase_reskate::dialect::LowerLayeredPbr
             .run(&mut world, &mut log)
             .unwrap();
         assert_eq!(triangles(&world), before, "{}", folder.display());
@@ -168,11 +168,11 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
         .streams
         .insert(Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3]));
     world.insert(unrelated, other);
-    primase_skate_scene::LowerLayeredPbr
+    primase_reskate::dialect::LowerLayeredPbr
         .run(&mut subset, &mut PassLog::default())
         .unwrap();
     let mut log = PassLog::default();
-    primase_skate_scene::LowerLayeredPbr
+    primase_reskate::dialect::LowerLayeredPbr
         .run(&mut world, &mut log)
         .unwrap();
     assert_eq!(log.counts["triangles selected layer 0"], 1);
@@ -204,7 +204,7 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
     );
     let before = world.entities().count();
     let mut again = PassLog::default();
-    primase_skate_scene::LowerLayeredPbr
+    primase_reskate::dialect::LowerLayeredPbr
         .run(&mut world, &mut again)
         .unwrap();
     assert!(again.counts.is_empty());
@@ -237,7 +237,7 @@ fn invalid_skate_metadata_refuses_all_changes() {
     );
     world.insert(
         mesh,
-        primase_skate_scene::SkatePrototype {
+        primase_reskate::dialect::SkatePrototype {
             id: "invalid".into(),
             glb: None,
             key: None,
@@ -247,11 +247,11 @@ fn invalid_skate_metadata_refuses_all_changes() {
             other: Default::default(),
         },
     );
-    world.insert(mesh, primase_skate_scene::SkateParts(vec![]));
+    world.insert(mesh, primase_reskate::dialect::SkateParts(vec![]));
     let before = format!("{world:?}");
     let mut log = PassLog::default();
     assert!(
-        primase_skate_scene::LowerLayeredPbr
+        primase_reskate::dialect::LowerLayeredPbr
             .run(&mut world, &mut log)
             .is_err()
     );
@@ -322,7 +322,7 @@ fn lowering_prunes_only_unreachable_replaced_dependencies() {
             roots.push(other);
         }
         assert_eq!(world.closure(roots.iter().copied()).len(), world.entity_count());
-        primase_skate_scene::LowerLayeredPbr
+        primase_reskate::dialect::LowerLayeredPbr
             .run(&mut world, &mut PassLog::default())
             .unwrap();
         let alive: std::collections::BTreeSet<_> = world.entities().collect();

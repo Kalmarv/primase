@@ -1,4 +1,5 @@
-//! The `skate.*` dialect: what scene-interchange v1 carries beyond the core components.
+//! The `skate.*` dialect: the target's components, what the ReSkate writers and scene-interchange v1 carry beyond
+//! the core components, and the lowerings back to core for other writers ([`lower`], [`LowerLayeredPbr`]).
 //!
 //! How a scene maps onto the world (entities in the manifest's order: textures, materials, prototypes, placements,
 //! collision soups, lights, grind curves, water, markers, then the prototypes' other levels of detail):
@@ -7,10 +8,10 @@
 //! |---|---|
 //! | `textures.<key>` | [`SkateTexture`], `core.texture_file`, `core.name` (`name`), `core.source` |
 //! | `materials.<key>` | [`SkateMaterial`] (texture references are entities), `core.name` (`label`), `core.source` |
-//! | `prototypes[i]` | [`SkatePrototype`], [`SkateParts`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, `core.collision` and [`crate::SkateRock`] (its collision), `core.lods` (`detail`, `lods`, `lod_default`) |
+//! | `prototypes[i]` | [`SkatePrototype`], [`SkateParts`], `core.mesh_file` (with each part's material), `core.material_variants` (when a part has variants), `core.name`, `core.source`, `core.collision` and [`collision::SkateRock`] (its collision), `core.lods` (`detail`, `lods`, `lod_default`) |
 //! | `prototypes[i].lods[k]` | a form of `core.lods`: [`SkateParts`], `core.mesh_file` (the prototype's GLB; none for `"mesh": null`), `core.material_variants`, [`SkateForm`] (its other keys, when it has any) |
 //! | `PLAC` record | `core.transform`, `core.instance`, `core.tile` (flag 1), [`SkatePlacement`], `core.source` (`placement_sources`) |
-//! | `collision[i]` | [`SkateCollision`], `core.collision` and [`crate::SkateRock`] (soups' surfaces named in `core.surfaces`) |
+//! | `collision[i]` | [`SkateCollision`], `core.collision` and [`collision::SkateRock`] (soups' surfaces named in `core.surfaces`) |
 //! | `LGHT` record | [`SkateLight`], `core.source` (`light_sources`) |
 //! | `CURV` curve | [`SkateGrindCurve`] |
 //! | `water[i]` | [`SkateWater`] |
@@ -25,6 +26,14 @@
 use primase_core::{Component, Entity, JsonError, NormalGreen, NormalZ, Resource, World};
 use serde::Serialize;
 use serde_json::{Map, Value};
+
+pub mod collision;
+mod layered_lower;
+pub mod lower;
+
+pub use collision::{SkateRock, scene_surfaces, soup};
+pub use layered_lower::LowerLayeredPbr;
+pub use lower::{LowerSkateLights, LowerSkatePbr, MskError, lower_light, lower_material, msk_to_orm};
 
 /// Keys of a manifest object this crate does not model, carried untouched (`extras`, `extensions`, unknown keys).
 pub type Other = Map<String, Value>;

@@ -268,9 +268,9 @@ A failed read leaves the destination unchanged. Region selection uses source
 map east/north coordinates and transformed prototype bounds with an explicit
 margin. Far map pieces are excluded by default. Missing model IDs are reported.
 
-`sekiro::prepare_scene_assets` writes prototype GLBs and PNG images through
+`sekiro::prepare_assets` writes prototype GLBs and PNG images through
 the toolkit into an empty asset directory, attaching file components required
-by `primase_skate_scene::write`. The scene output directory is separate.
+by `primase_reskate::interchange::write`. The scene output directory is separate.
 Normal maps retain the source convention until explicit consumer lowering:
 glTF uses the stored tangents and swapped R/G; the skate path uses the
 UV-derived frame, keeps R unswapped and inverts G. Both rebuild positive Z.

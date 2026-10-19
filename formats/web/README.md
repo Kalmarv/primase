@@ -142,7 +142,7 @@ may be cached immutably.
 The example omits collision soups with no triangles; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
-`cargo run --release -p primase-web --example scene_to_tiles -- <scene> <output>`
+`cargo run --release -p primase-cli --example scene_to_tiles -- <scene> <output>` (`--features ktx2` for KTX2)
 loads a skate-scene folder and writes compressed tiles, a `plain/` comparison
 set, and `proof.json` with artifact and decoded-stream SHA256 hashes, preparing
 one cell at a time for both sets, so memory holds one cell's closure. It files a

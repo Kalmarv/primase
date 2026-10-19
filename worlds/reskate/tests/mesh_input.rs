@@ -13,7 +13,7 @@ use primase_core::{
     Transform, World,
 };
 use primase_reskate::BuildOptions;
-use primase_skate_scene::RaiseOptions;
+use primase_reskate::prepare::RaiseOptions;
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -140,7 +140,7 @@ fn files(root: &Path) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn core_mesh_input_writes_what_the_file_input_writes() {
     let mut w = world();
-    primase_skate_scene::raise_skate(
+    primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "mesh_input".into(),
@@ -150,13 +150,13 @@ fn core_mesh_input_writes_what_the_file_input_writes() {
     )
     .unwrap();
     let assets = tmp("assets");
-    primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
-    primase_skate_scene::write(&w, &scene).unwrap();
+    primase_reskate::interchange::write(&w, &scene).unwrap();
     let build = |from_mesh: bool| {
         let out_root = tmp(if from_mesh { "mesh" } else { "file" });
         let mut w = World::new();
-        primase_skate_scene::read(&scene, &mut w).unwrap();
+        primase_reskate::interchange::read(&scene, &mut w).unwrap();
         if from_mesh {
             let r = primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
             assert_eq!(r.meshes, 1);
@@ -210,7 +210,7 @@ fn a_spawn_over_no_ground_is_refused() {
                 yaw: None,
             },
         );
-        primase_skate_scene::raise_skate(
+        primase_reskate::prepare::raise_skate(
             &mut w,
             &RaiseOptions {
                 name: "spawned".into(),
@@ -219,11 +219,11 @@ fn a_spawn_over_no_ground_is_refused() {
         )
         .unwrap();
         let assets = tmp(&format!("{tag}-assets"));
-        primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+        primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
         let scene = tmp(&format!("{tag}-scene"));
-        primase_skate_scene::write(&w, &scene).unwrap();
+        primase_reskate::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
-        primase_skate_scene::read(&scene, &mut w).unwrap();
+        primase_reskate::interchange::read(&scene, &mut w).unwrap();
         let out_root = tmp(&format!("{tag}-out"));
         primase_reskate::build(
             &w,
@@ -272,7 +272,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let mut t = Transform::IDENTITY;
     t.cols[3] = [10.0, 0.0, 10.0];
     w.insert(at, t);
-    primase_skate_scene::raise_skate(
+    primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "collides".into(),
@@ -281,11 +281,11 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     )
     .unwrap();
     let assets = tmp("collides-assets");
-    primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("collides-scene");
-    primase_skate_scene::write(&w, &scene).unwrap();
+    primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
-    primase_skate_scene::read(&scene, &mut w).unwrap();
+    primase_reskate::interchange::read(&scene, &mut w).unwrap();
     let out_root = tmp("collides-out");
     primase_reskate::build(
         &w,

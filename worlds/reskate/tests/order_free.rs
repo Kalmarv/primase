@@ -14,8 +14,8 @@ use primase_core::{
 use primase_meshops::vector::Vec3;
 use primase_reskate::BuildOptions;
 use primase_reskate::map::keep_lights;
+use primase_reskate::prepare::RaiseOptions;
 use primase_reskate::scene::PlacedLight;
-use primase_skate_scene::RaiseOptions;
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -175,7 +175,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
         |p| p,
     );
     w.insert(ground, c);
-    primase_skate_scene::raise_skate(
+    primase_reskate::prepare::raise_skate(
         &mut w,
         &RaiseOptions {
             name: "benches".into(),
@@ -184,11 +184,11 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     )
     .unwrap();
     let assets = tmp("assets");
-    primase_skate_scene::prepare_scene_assets(&mut w, &assets).unwrap();
+    primase_reskate::interchange::prepare_assets(&mut w, &assets).unwrap();
     let scene = tmp("scene");
-    primase_skate_scene::write(&w, &scene).unwrap();
+    primase_reskate::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
-    primase_skate_scene::read(&scene, &mut w).unwrap();
+    primase_reskate::interchange::read(&scene, &mut w).unwrap();
     let out_root = tmp("out");
     let report = primase_reskate::build(
         &w,

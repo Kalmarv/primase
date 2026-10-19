@@ -10,8 +10,11 @@ use primase_core::{
     ColorSpace, Instance, NormalConvention, NormalGreen, NormalX, NormalZ, Source, TexFormat, TexRole,
     Texture, Transform, World,
 };
-use primase_skate_scene::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
-use primase_skate_scene::{self as scene, SkateLight, SkatePrototype, SkateScene};
+use primase_reskate::dialect::{self, SkateLight, SkatePrototype, SkateScene};
+use primase_reskate::interchange;
+use primase_reskate::interchange::tables::{
+    self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags,
+};
 use serde_json::{Value, json};
 
 /// A fresh folder under the target directory's tmp.
@@ -288,15 +291,15 @@ fn fixture_with(name: &str, manifest: &str, edit: impl FnOnce(&Path)) -> PathBuf
     d
 }
 
-fn read(dir: &Path) -> (World, scene::ReadReport) {
+fn read(dir: &Path) -> (World, interchange::ReadReport) {
     let mut w = World::new();
-    let rep = scene::read(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    let rep = interchange::read(dir, &mut w).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     (w, rep)
 }
 
 fn read_err(dir: &Path) -> String {
     let mut w = World::new();
-    match scene::read(dir, &mut w) {
+    match interchange::read(dir, &mut w) {
         Ok(_) => panic!("{} read without error", dir.display()),
         Err(e) => e.to_string(),
     }
@@ -319,14 +322,14 @@ fn layered_materials_round_trip_and_follow_edits() {
     assert_eq!(material.layers.len(), 4);
     assert!(material.layers[1].is_none());
     let out = tmp("layered_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     assert_eq!(manifest(&out)["materials"], input["materials"]);
     w.get_mut::<primase_core::LayeredMaterial>(entity).unwrap().layers[0]
         .as_mut()
         .unwrap()
         .texcoord = Some(2);
     let out = tmp("layered_edited");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     assert_eq!(manifest(&out)["materials"]["ground"]["layers"][0]["uv"], 2);
     for (name, replacement) in [
         ("unknown", json!({"material":"absent"})),
@@ -347,11 +350,15 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     let dir = fixture("layered_cell");
     let (mut world, _) = read(&dir);
     let ordinary = world
-        .iter::<scene::SkateMaterial>()
+        .iter::<dialect::SkateMaterial>()
         .find(|(_, m)| m.key == "wall")
         .unwrap()
         .0;
-    let base = world.get::<scene::SkateMaterial>(ordinary).unwrap().base.unwrap();
+    let base = world
+        .get::<dialect::SkateMaterial>(ordinary)
+        .unwrap()
+        .base
+        .unwrap();
     let mask = world.spawn();
     world.insert(
         mask,
@@ -365,7 +372,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
             normal: None,
         },
     );
-    world.get_mut::<scene::SkateMaterial>(ordinary).unwrap().mask = Some(mask);
+    world.get_mut::<dialect::SkateMaterial>(ordinary).unwrap().mask = Some(mask);
     let layered = world.spawn();
     world.insert(
         layered,
@@ -402,10 +409,10 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     let mut cell = world.subset(&closure);
     primase_gltf::load_mesh_files(&mut cell, &dir).unwrap();
     primase_image::load_textures(&mut cell, &dir).unwrap();
-    scene::LowerSkatePbr
+    dialect::LowerSkatePbr
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
-    scene::LowerLayeredPbr
+    dialect::LowerLayeredPbr
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
     primase_image::normalize_normals(&mut cell).unwrap();
@@ -452,7 +459,7 @@ fn round_trip_is_exact() {
     );
     let out = tmp("rt_out");
     std::fs::remove_dir(&out).unwrap();
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     same_tree(&src, &out, ALL_FILES);
     let c = compare_json(&manifest(&src), &manifest(&out), 0);
     assert!(c.differences.is_empty(), "{:?}", c.differences);
@@ -460,12 +467,12 @@ fn round_trip_is_exact() {
     assert_eq!(c.f32_equal, 1);
     // writing again gives the same bytes, also the manifest
     let out2 = tmp("rt_out2");
-    scene::write(&w, &out2).unwrap();
+    interchange::write(&w, &out2).unwrap();
     same_tree(&out, &out2, &[&["scene.json"], ALL_FILES].concat());
     // and reading the output gives a world that writes the same again
     let (w3, _) = read(&out);
     let out3 = tmp("rt_out3");
-    scene::write(&w3, &out3).unwrap();
+    interchange::write(&w3, &out3).unwrap();
     same_tree(&out, &out3, &[&["scene.json"], ALL_FILES].concat());
 }
 
@@ -591,13 +598,13 @@ fn markers_and_curves_are_core_facts_too() {
 fn parts_follow_a_pass_that_rebuilds_the_primitives() {
     let (mut w, _) = read(&fixture("remap_parts"));
     let (proto, parts) = w
-        .iter::<scene::SkateParts>()
+        .iter::<dialect::SkateParts>()
         .find(|(_, p)| p.0.len() == 2)
         .map(|(e, p)| (e, p.0.clone()))
         .unwrap();
     // the second primitive split in two ahead of the first
     w.remap_primitives(proto, &[1, 1, 0]).unwrap();
-    let after = &w.get::<scene::SkateParts>(proto).unwrap().0;
+    let after = &w.get::<dialect::SkateParts>(proto).unwrap().0;
     assert_eq!(after, &vec![parts[1].clone(), parts[1].clone(), parts[0].clone()]);
     let err = w.remap_primitives(proto, &[3]).unwrap_err();
     assert!(
@@ -616,7 +623,7 @@ fn edits_are_written() {
     w.get_mut::<SkateLight>(le).unwrap().group = "street".into();
     w.insert(le, Source("new_light".into()));
     let out = tmp("edit_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let (w2, _) = read(&out);
     let (pe2, _) = w2.iter::<Instance>().next().unwrap();
     assert_eq!(w2.get::<Transform>(pe2).unwrap().cols[3], [1., 2., 3.]);
@@ -654,7 +661,7 @@ fn mirrored_and_sheared_placements_round_trip() {
     w.insert(placements[0], mirrored);
     w.insert(placements[1], sheared);
     let out = tmp("nonrigid_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let (w2, _) = read(&out);
     let got: Vec<Transform> = w2
         .iter::<Instance>()
@@ -686,17 +693,19 @@ fn placement_priority_round_trips_and_rejects_overflow() {
     let priorities: Vec<_> = w.iter::<primase_core::Priority>().map(|(_, p)| p.0).collect();
     assert_eq!(priorities, [0, 1, 3, 15]);
     let out = tmp("priority_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     assert_eq!(std::fs::read(out.join("tables/placements.bin")).unwrap(), bytes);
     let placed = w.iter::<Instance>().next().unwrap().0;
     w.insert(placed, primase_core::Priority(16));
-    let error = scene::write(&w, &tmp("priority_overflow"))
+    let error = interchange::write(&w, &tmp("priority_overflow"))
         .unwrap_err()
         .to_string();
     assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
     w.insert(placed, primase_core::Priority(3));
-    w.get_mut::<scene::SkatePlacement>(placed).unwrap().unknown_flags |= 1 << 8;
-    let error = scene::write(&w, &tmp("priority_conflict"))
+    w.get_mut::<dialect::SkatePlacement>(placed)
+        .unwrap()
+        .unknown_flags |= 1 << 8;
+    let error = interchange::write(&w, &tmp("priority_conflict"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -708,7 +717,7 @@ fn placement_priority_round_trips_and_rejects_overflow() {
 #[test]
 fn normal_maps_with_x_in_alpha_are_refused() {
     let (mut w, _) = read(&fixture("alpha_x_src"));
-    let (te, _) = w.iter::<primase_skate_scene::SkateTexture>().next().unwrap();
+    let (te, _) = w.iter::<primase_reskate::dialect::SkateTexture>().next().unwrap();
     w.insert(
         te,
         Texture {
@@ -726,7 +735,9 @@ fn normal_maps_with_x_in_alpha_are_refused() {
             }),
         },
     );
-    let e = scene::write(&w, &tmp("alpha_x_out")).unwrap_err().to_string();
+    let e = interchange::write(&w, &tmp("alpha_x_out"))
+        .unwrap_err()
+        .to_string();
     assert!(
         e.contains("X outside red") && e.contains("normalize-normals"),
         "{e}"
@@ -735,7 +746,7 @@ fn normal_maps_with_x_in_alpha_are_refused() {
         basis: primase_core::NormalBasis::BitangentTangent,
         ..NormalConvention::GLTF
     });
-    let e = scene::write(&w, &tmp("bitangent_first_out"))
+    let e = interchange::write(&w, &tmp("bitangent_first_out"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -773,7 +784,7 @@ fn chunked_tables_keep_their_chunks() {
     assert_eq!(w.iter::<Instance>().count(), 3);
     assert_eq!(rep.tolerated.len(), 1, "{:?}", rep.tolerated); // the list item {"file"} without sha256
     let out = tmp("chunks_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     same_tree(
         &src,
         &out,
@@ -807,7 +818,7 @@ fn sha256_is_checked_and_rewritten() {
     let src = fixture_with("sha_src", &m, |_| {});
     let (w, _) = read(&src);
     let out = tmp("sha_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let got = manifest(&out);
     assert_eq!(
         got.get("textures").unwrap().get("wall_n").unwrap().get("sha256"),
@@ -1201,7 +1212,7 @@ fn the_reference_validator_accepts_the_fixture_and_our_output() {
     reference(&v, &src).unwrap();
     let (w, _) = read(&src);
     let out = tmp("oracle_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     reference(&v, &out).unwrap();
 }
 
@@ -1211,7 +1222,7 @@ fn writer_refuses_unsafe_outputs() {
     let out = tmp("refuse_out");
     put(&out, "stale.txt", b"x");
     assert!(
-        scene::write(&w, &out)
+        interchange::write(&w, &out)
             .unwrap_err()
             .to_string()
             .contains("is not empty")
@@ -1219,7 +1230,7 @@ fn writer_refuses_unsafe_outputs() {
     let mut w2 = World::new();
     w2.spawn();
     assert!(
-        scene::write(&w2, &tmp("refuse_out2"))
+        interchange::write(&w2, &tmp("refuse_out2"))
             .unwrap_err()
             .to_string()
             .contains("no skate.scene")
@@ -1233,7 +1244,7 @@ fn lowering_to_pbr() {
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::pbr::{AlphaMode, PbrMaterial, Wrap};
     use primase_core::{ColorSpace, NormalGreen, NormalZ, TexFormat, TexRole, Texture};
-    use primase_skate_scene::{SkateMaterial, SkateTexture};
+    use primase_reskate::dialect::{SkateMaterial, SkateTexture};
 
     let (mut w, _) = read(&fixture("lower"));
     let key = |w: &World, k: &str| w.iter::<SkateMaterial>().find(|(_, m)| m.key == k).unwrap().0;
@@ -1253,7 +1264,7 @@ fn lowering_to_pbr() {
         },
     );
     let mut reg = PassRegistry::new();
-    primase_skate_scene::lower::register(&mut reg);
+    primase_reskate::register(&mut reg);
     let m = PassManager::new(reg);
     let mut report = RunReport::default();
     m.run(&mut w, &m.registry.parse("lower-skate-pbr").unwrap(), &mut report)
@@ -1302,7 +1313,7 @@ fn lowering_to_pbr() {
     let mut faded = w.get::<SkateMaterial>(key(&w, "trim_red")).unwrap().clone();
     faded.vertex_alpha = Some(true);
     let mut log = primase_core::pass::PassLog::default();
-    let lowered = primase_skate_scene::lower_material(&faded, None, &w, &mut log);
+    let lowered = primase_reskate::dialect::lower_material(&faded, None, &w, &mut log);
     assert_eq!(lowered.alpha_mode, AlphaMode::Blend);
     assert_eq!(
         log.approximations
@@ -1338,7 +1349,7 @@ fn soups_become_core_collision() {
     for (e, c) in soups.iter().filter(|(_, c)| !c.triangles.is_empty()) {
         // fixture soups: surface byte 1, then rock | 2
         assert_eq!(c.surfaces[..2], [1, 2], "{e:?}");
-        let rock = w.get::<scene::SkateRock>(*e).unwrap();
+        let rock = w.get::<dialect::SkateRock>(*e).unwrap();
         assert_eq!(rock.0[..2], [false, true]);
     }
     assert_eq!(w.verify_components(), Vec::new());
@@ -1348,7 +1359,7 @@ fn soups_become_core_collision() {
 fn collision_placed_by_an_entity_is_a_world_soup() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_self"));
-    let before = w.iter::<scene::SkateCollision>().count();
+    let before = w.iter::<dialect::SkateCollision>().count();
     let asphalt = w.resource_mut::<Surfaces>().unwrap().index("asphalt").unwrap();
     let e = w.spawn();
     let mut c = Collision::default();
@@ -1363,7 +1374,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     t.cols[3] = [10.0, 2.0, -3.0];
     w.insert(e, t);
     let out = tmp("collision_self_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let m = manifest(&out);
     let soups = m["collision"].as_array().unwrap();
     assert_eq!(soups.len(), before + 1);
@@ -1380,7 +1391,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
     // a surface the scene has no entry for is refused
     let lava = w.resource_mut::<Surfaces>().unwrap().index("lava").unwrap();
     w.get_mut::<Collision>(e).unwrap().surfaces[0] = lava;
-    let err = scene::write(&w, &tmp("collision_self_bad"))
+    let err = interchange::write(&w, &tmp("collision_self_bad"))
         .unwrap_err()
         .to_string();
     assert!(err.contains("'lava' is not one of the scene's surfaces"), "{err}");
@@ -1390,7 +1401,7 @@ fn collision_placed_by_an_entity_is_a_world_soup() {
 fn mirrored_collision_keeps_its_fronts() {
     use primase_core::{Collision, Surfaces};
     let (mut w, _) = read(&fixture("collision_mirror"));
-    let before = w.iter::<scene::SkateCollision>().count();
+    let before = w.iter::<dialect::SkateCollision>().count();
     let concrete = w.resource_mut::<Surfaces>().unwrap().index("concrete").unwrap();
     // a triangle facing up (+y), placed through a mirror in x
     let e = w.spawn();
@@ -1406,7 +1417,7 @@ fn mirrored_collision_keeps_its_fronts() {
     t.cols[0] = [-1.0, 0.0, 0.0];
     w.insert(e, t);
     let out = tmp("collision_mirror_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let m = manifest(&out);
     let entry = &m["collision"][before];
     let file = entry.as_str().or(entry["file"].as_str()).unwrap();
@@ -1466,11 +1477,11 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
     );
     assert_eq!(w.get::<MaterialVariants>(coarse).unwrap().0[0].len(), 2);
     assert_eq!(
-        w.get::<scene::SkateParts>(coarse).unwrap().0[0].source,
+        w.get::<dialect::SkateParts>(coarse).unwrap().0[0].source,
         Some(json!("lod1"))
     );
-    assert_eq!(w.get::<scene::SkateForm>(coarse).unwrap().other["note"], "kept");
-    assert!(!w.has::<MeshFile>(nothing) && w.get::<scene::SkateParts>(nothing).unwrap().0.is_empty());
+    assert_eq!(w.get::<dialect::SkateForm>(coarse).unwrap().other["note"], "kept");
+    assert!(!w.has::<MeshFile>(nothing) && w.get::<dialect::SkateParts>(nothing).unwrap().0.is_empty());
     assert_eq!(
         w.get::<Lods>(protos[1]).unwrap(),
         &Lods {
@@ -1483,14 +1494,14 @@ fn levels_of_detail_round_trip_exactly_as_forms() {
     assert_eq!(w.verify_components(), vec![]);
     let out = tmp("lods_out");
     std::fs::remove_dir(&out).unwrap();
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     same_tree(&src, &out, ALL_FILES);
     let c = compare_json(&input, &manifest(&out), 0);
     assert!(c.differences.is_empty(), "{:?}", c.differences);
     // a world whose levels of detail have no default form is refused: the format always names one
     let mut none = w.clone();
     none.get_mut::<Lods>(protos[0]).unwrap().default = None;
-    let err = scene::write(&none, &tmp("lods_no_default"))
+    let err = interchange::write(&none, &tmp("lods_no_default"))
         .unwrap_err()
         .to_string();
     assert!(err.contains("without a default form"), "{err}");
@@ -1510,7 +1521,7 @@ fn a_selected_form_is_written_as_the_prototype() {
     assert_eq!(log.counts["prototypes drawn with their own form"], 1);
     assert_eq!(log.counts["forms left out"], 1);
     let out = tmp("lods_select_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let p = &manifest(&out)["prototypes"];
     let want = lods_manifest()["prototypes"][0]["lods"][0]["parts"].clone();
     assert_eq!((&p[0]["mesh"], &p[0]["parts"]), (&json!(1), &want));
@@ -1524,7 +1535,7 @@ fn a_selected_form_is_written_as_the_prototype() {
     .run(&mut w, &mut PassLog::default())
     .unwrap();
     let out = tmp("lods_finest_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let want = serde_json::from_str::<Value>(MANIFEST).unwrap()["prototypes"].clone();
     assert_eq!(manifest(&out)["prototypes"], want);
 }
@@ -1616,7 +1627,7 @@ fn levels_of_detail_defaults_are_tolerated_and_written_in_full() {
         assert_eq!(rep.tolerated.get(t), Some(&1), "{t}: {:?}", rep.tolerated);
     }
     let out = tmp("lods_tolerated_out");
-    scene::write(&w, &out).unwrap();
+    interchange::write(&w, &out).unwrap();
     let p = &manifest(&out)["prototypes"];
     assert!(p[0].get("detail").is_none() && p[1].get("lods").is_none());
     assert_eq!(p[0]["lods"][1], json!({"detail": 0, "mesh": null, "parts": []}));

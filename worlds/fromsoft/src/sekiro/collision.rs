@@ -12,7 +12,7 @@ use primase_core::{
     frame::{Axis, SourceFrame},
 };
 use primase_havok::Compendium;
-use primase_skate_scene::{CollisionMode, SkateCollision, SoupRef, TableRef};
+use primase_reskate::dialect::{CollisionMode, SkateCollision, SoupRef, TableRef};
 use std::collections::{BTreeMap, BTreeSet};
 const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 #[derive(Debug, Default)]

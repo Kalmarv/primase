@@ -122,7 +122,7 @@ core/                 primase-core: world store, core components, TexFormat, fra
 toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, hash, image, meshops, vertex, ...)
 worlds/<name>/        primase-<name>: one crate per game, engine or destination (fromsoft, gta, unity, reskate, ...):
                       its reader, its passes, and for a destination its preparation passes and writer
-formats/<name>/       primase-<name>: file formats that are not one game's (skate-scene, gltf, web, ...)
+formats/<name>/       primase-<name>: file formats that are not one game's or destination's (gltf, web, ...)
 cli/                  primase: a small command line over the library, for trying it; not where recipes live
 ```
 
@@ -132,7 +132,7 @@ container other formats embed) only. What two of them share belongs lower. Dev-d
 (round-trip gates) and `toolkit/testdata`, which is never a normal dependency.
 
 Namespaced components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's or destination's
-crate (`skate.*`: `formats/skate-scene` until it folds into `worlds/reskate`). `pbr.*` lives in core.
+crate (`skate.*`: `worlds/reskate`, with the skate-scene interchange it carries). `pbr.*` lives in core.
 
 ### Where code goes
 

@@ -1,7 +1,7 @@
 # primase world format, version 2 (draft)
 
 Status: **accepted design, not implemented yet** (decisions in §10). Version 1 is the skate-scene interchange format that
-`formats/skate-scene` reads and writes unchanged; version 2 is core's own serialisation of a [`World`]: "core plus
+`primase_reskate::interchange` reads and writes unchanged; version 2 is core's own serialisation of a [`World`]: "core plus
 named component tables" (DESIGN.md §3 "On disk"). Open questions are collected in §10.
 
 ## 1. Goals
@@ -158,7 +158,7 @@ manifest's table hashes.
 
 ## 9. How v1 maps onto v2
 
-The skate-scene reader (`formats/skate-scene`) is the bridge; its world goes to v2 like any other:
+The skate-scene reader (`primase_reskate::interchange`) is the bridge; its world goes to v2 like any other:
 
 | v1 | v2 |
 |---|---|
@@ -347,7 +347,7 @@ manifest's table hashes.
 
 ## 9. How v1 maps onto v2
 
-The skate-scene reader (`formats/skate-scene`) is the bridge; its world goes to v2 like any other:
+The skate-scene reader (`primase_reskate::interchange`) is the bridge; its world goes to v2 like any other:
 
 | v1 | v2 |
 |---|---|

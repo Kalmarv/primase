@@ -21,9 +21,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::dialect::SkateMaterial;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World};
-use primase_skate_scene::SkateMaterial;
 
 /// Colours a primitive splits into at most; past it, one mean tint. 32 keeps palette gradients of 9 to 23 colours
 /// (GTA's trees and palms) exact while bounding the material copies a primitive can make.
@@ -309,7 +309,7 @@ impl LowerTintReskate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_skate_scene::MaterialClass;
+    use crate::dialect::MaterialClass;
 
     fn material(w: &mut World) -> Entity {
         let e = w.spawn();

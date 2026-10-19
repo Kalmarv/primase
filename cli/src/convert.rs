@@ -31,7 +31,6 @@ pub fn registry() -> PassRegistry {
     primase_image::register(&mut r);
     primase_meshops::register(&mut r);
     primase_gta::register(&mut r);
-    primase_skate_scene::register(&mut r);
     primase_reskate::register(&mut r);
     r
 }

@@ -2,7 +2,7 @@
 //! minimum length and wood/concrete selected from game-map collision only.
 use crate::{Result, invalid};
 use primase_core::{Collision, Surfaces};
-use primase_skate_scene::SkateGrindCurve;
+use primase_reskate::dialect::SkateGrindCurve;
 use std::collections::{BTreeMap, VecDeque};
 fn key(p: [f32; 3]) -> [i64; 3] {
     p.map(|x| (f64::from(x) * 100.).floor() as i64)

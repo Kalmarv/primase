@@ -117,7 +117,7 @@ pub fn lower(world: &mut World, consumer: Consumer) -> Result<primase_core::pass
                 .clone(),
         );
         world.remove::<primase_core::TextureFile>(e);
-        if let Some(scene) = world.get_mut::<primase_skate_scene::SkateTexture>(e) {
+        if let Some(scene) = world.get_mut::<primase_reskate::dialect::SkateTexture>(e) {
             scene.green = Some(NormalGreen::Up);
             scene.z = Some(NormalZ::Stored);
         }

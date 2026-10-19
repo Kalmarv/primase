@@ -361,7 +361,7 @@ impl MeshSource for Meshes<'_> {
 /// The scene reader's warnings as the reference build reports them: unused textures, primitives without normals,
 /// unplaced prototypes and prototypes without geometry, too many travel points.
 fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
-    use primase_skate_scene::{SkateMaterial, SkateTexture};
+    use crate::dialect::{SkateMaterial, SkateTexture};
     let mut out = Vec::new();
     let mut used: HashSet<primase_core::Entity> = HashSet::new();
     for (_, m) in world.iter::<SkateMaterial>() {
@@ -496,7 +496,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         pause_picture: None,
     };
     let sc = world
-        .resource::<primase_skate_scene::SkateScene>()
+        .resource::<crate::dialect::SkateScene>()
         .expect("checked by Scene::from_world");
     if let Some(pm) = &sc.pause_map {
         let src = TexSource::open(&pm.image_file, None, None)?;

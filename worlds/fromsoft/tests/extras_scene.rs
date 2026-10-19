@@ -3,7 +3,10 @@
 //! Derived bases are within 1e-6, yaw within 0.0051 degrees of rounded reference.
 use primase_core::World;
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout, sekiro};
-use primase_skate_scene::{SkateGrindCurve, SkateLight, SkateMarker, SkateScene, TableRef, tables};
+use primase_reskate::{
+    dialect::{SkateGrindCurve, SkateLight, SkateMarker, SkateScene, TableRef},
+    interchange::tables,
+};
 use primase_testdata::real_data;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
@@ -126,7 +129,7 @@ fn castle_extras_scene() -> Result<()> {
         ..Default::default()
     });
     if let Some(output) = primase_testdata::real_data_value("PRIMASE_FROMSOFT_EXTRAS_OUTPUT") {
-        primase_skate_scene::write(&world, std::path::Path::new(&output))?;
+        primase_reskate::interchange::write(&world, std::path::Path::new(&output))?;
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(std::path::Path::new(&output).join("scene.json"))?)?;
         for (a, b) in written["markers"]

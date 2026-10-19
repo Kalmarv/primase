@@ -6,15 +6,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::dialect::{
+    AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
+    SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
+    SkateScene, SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
+};
 use crate::hash::skate_fnv_string;
 use primase_core::{
     Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
     TextureFile, Tile, Transform, TransformKind, World,
-};
-use primase_skate_scene::{
-    AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
-    SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
-    SkateScene, SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
 };
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -625,7 +625,7 @@ impl Scene {
                     }
                 })
                 .collect();
-            let soup = primase_skate_scene::soup(world, e, Some(sc))
+            let soup = crate::dialect::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
             let collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)> = match (soup.as_ref(), &p.collision) {
                 (Some(s), Some(_)) => Some((
@@ -738,7 +738,7 @@ impl Scene {
         };
         let mut soups = Vec::new();
         for (e, c) in world.iter::<SkateCollision>() {
-            let s = primase_skate_scene::soup(world, e, Some(sc))
+            let s = crate::dialect::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| Error::Scene(format!("collision {e:?} has no soup")))?;
             let file =
@@ -758,7 +758,7 @@ impl Scene {
             if world.has::<SkateCollision>(e) || world.has::<SkatePrototype>(e) || prototypes.contains(&e) {
                 continue;
             }
-            let mut s = primase_skate_scene::soup(world, e, Some(sc))
+            let mut s = crate::dialect::soup(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .expect("core.collision");
             if let Some(t) = world.get::<Transform>(e) {
@@ -1479,7 +1479,7 @@ pub fn class_of(c: MaterialClass) -> VClass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_skate_scene::{MaterialClass, SkateMaterial, SkateScene};
+    use crate::dialect::{MaterialClass, SkateMaterial, SkateScene};
 
     #[test]
     fn out_of_range_placement_priority_is_refused() {

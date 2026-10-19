@@ -93,7 +93,7 @@ kind is marked **required**, in which case a reader that doesn't know it fails (
 
 **On disk:** the world serialises as "core + named component tables" (v2, `docs/SPEC.md`): a small manifest plus
 little-endian binary tables, generalising the skate-scene v1 interchange format (a JSON manifest, binary tables and
-GLB meshes) that existing front ends already write; `formats/skate-scene` reads and writes v1 unchanged.
+GLB meshes) that existing front ends already write; `primase_reskate::interchange` reads and writes v1 unchanged.
 
 ## 4. Passes and lowering
 
@@ -148,7 +148,7 @@ toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG,
               validate (identity rules)
 worlds/       one crate per game or engine: reskate (Frostbite CAS/TOC/EBX, map writer and reader), fromsoft, gta,
               forza, unity, insomniac, ...
-formats/      skate-scene (interchange v1), gltf, web, usd, stl/3mf, obj, ...
+formats/      gltf, web, usd, stl/3mf, obj, ... (skate-scene interchange v1: worlds/reskate)
 bindings/     python (pyo3) and C# (csbindgen), so existing tools can call the toolkit
 cli/          thin compositions: `primase extract sekiro --game <dir> --area m11_01 --to gltf out/`
 ```

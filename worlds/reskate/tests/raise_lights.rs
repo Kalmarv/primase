@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Light, LightKind, Transform, World};
-use primase_skate_scene::{LowerSkateLights, RaiseOptions, SkateLight, lower_light, raise_skate};
+use primase_reskate::{
+    dialect::{LowerSkateLights, SkateLight, lower_light},
+    prepare::{RaiseOptions, raise_skate},
+};
 
 fn close(a: f32, b: f32) -> bool {
     (a - b).abs() <= 1e-5 * a.abs().max(b.abs()).max(1.0)
@@ -74,7 +77,7 @@ fn raise_then_lower_restores_core_lights() {
             name: "lights".into(),
             surfaces: BTreeMap::new(),
             unclassified: None,
-            light_scale: primase_skate_scene::SKATE_LIGHT_SCALE,
+            light_scale: primase_reskate::prepare::SKATE_LIGHT_SCALE,
         },
     )
     .unwrap();
@@ -130,7 +133,7 @@ fn pass_lowers_once_and_builds_an_orthonormal_basis() {
             energy: (4.0
                 * std::f64::consts::PI
                 * std::f64::consts::PI
-                * primase_skate_scene::SKATE_LIGHT_SCALE) as f32,
+                * primase_reskate::prepare::SKATE_LIGHT_SCALE) as f32,
             range: 0.0,
             radius: 0.1,
             spot_size: 1.0,
@@ -201,7 +204,7 @@ fn raise_skate_calibrates_light_energy() {
         e
     };
     for (scale, watts, recorded) in [
-        (primase_skate_scene::SKATE_LIGHT_SCALE, 11.871_f32, false),
+        (primase_reskate::prepare::SKATE_LIGHT_SCALE, 11.871_f32, false),
         (0.5e-3, 19.739, true),
     ] {
         let mut w = World::new();

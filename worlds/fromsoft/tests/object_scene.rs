@@ -3,7 +3,7 @@
 //! by bidirectional, material-preserving surface probes within 0.2 mm after placement.
 use primase_core::{Collision, Surfaces, World};
 use primase_fromsoft::{dcx::Decoder, sekiro};
-use primase_skate_scene::{SkateCollision, SkateScene, SkateSoup};
+use primase_reskate::dialect::{SkateCollision, SkateScene, SkateSoup};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -86,9 +86,11 @@ fn placed_object_soup() -> Result<()> {
                 .is_some_and(|c| c.0.table.files.iter().any(|f| f.path == "collision/objects.bin"))
         })
         .ok_or("object soup")?;
-    let soup = primase_skate_scene::collision::soup(&world, entity, None)?.ok_or("converted soup")?;
-    let want =
-        primase_skate_scene::tables::read_soup(&std::fs::read(reference.join("collision/objects.bin"))?, 17)?;
+    let soup = primase_reskate::dialect::collision::soup(&world, entity, None)?.ok_or("converted soup")?;
+    let want = primase_reskate::interchange::tables::read_soup(
+        &std::fs::read(reference.join("collision/objects.bin"))?,
+        17,
+    )?;
     let want = SkateSoup {
         positions: want.positions,
         triangles: want.triangles,
@@ -115,9 +117,9 @@ fn placed_object_soup() -> Result<()> {
         ..Default::default()
     });
     let out = std::path::PathBuf::from(output).join("object-scene");
-    primase_skate_scene::write(&collision_world, &out)?;
+    primase_reskate::interchange::write(&collision_world, &out)?;
     let mut reread = World::default();
-    primase_skate_scene::read(&out, &mut reread)?;
+    primase_reskate::interchange::read(&out, &mut reread)?;
     if let Some(validator) = real_data("PRIMASE_SCENE_SKATE") {
         let result = std::process::Command::new("dotnet")
             .arg(validator)
@@ -148,7 +150,7 @@ fn object_world(
         msb::{MapLayout, PartKind},
         mtd::MaterialDefinition,
     };
-    use primase_skate_scene::SkatePrototype;
+    use primase_reskate::dialect::SkatePrototype;
     let scene: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;
     let wanted: std::collections::BTreeSet<_> = scene["prototypes"]
         .as_array()

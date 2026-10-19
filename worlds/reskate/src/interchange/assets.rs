@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use primase_core::{Mesh, MeshFile, Name, Texture, TextureFile, World};
 
-use crate::{Error, Result, SkatePrototype, SkateTexture};
+use crate::dialect::{SkatePrototype, SkateTexture};
+use crate::{Error, Result};
 
 /// `relative` inside `directory`, refused when it would leave it.
 fn asset_path(directory: &Path, relative: &str) -> Result<PathBuf> {
@@ -33,9 +34,9 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
 
 /// Write every prototype's mesh (a `skate.prototype` with a GLB and a `core.mesh`) as its GLB and every texture's
 /// level 0 (a `skate.texture` with a `core.texture`) as its PNG into `directory`, which must be empty, and point the
-/// entities at the files (`core.mesh_file`, `core.texture_file`) for [`crate::write`]. A GLB holds geometry only (the
+/// entities at the files (`core.mesh_file`, `core.texture_file`) for [`super::write`]. A GLB holds geometry only (the
 /// manifest links the materials); the glTF writer encodes it, the image toolkit the PNGs.
-pub fn prepare_scene_assets(world: &mut World, directory: &Path) -> Result<()> {
+pub fn prepare_assets(world: &mut World, directory: &Path) -> Result<()> {
     if directory.exists()
         && std::fs::read_dir(directory)
             .map_err(io(directory))?

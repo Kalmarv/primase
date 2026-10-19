@@ -8,7 +8,7 @@ use crate::{
 };
 use primase_core::Transform;
 use primase_meshops::vector::Vec3;
-use primase_skate_scene::SkateLight;
+use primase_reskate::dialect::SkateLight;
 /// Exact sRGB transfer is a named interpretation of BTL RGB bytes. Watts per
 /// source power unit and local +Z spotlight direction remain uncalibrated.
 #[derive(Clone, Copy, Debug)]

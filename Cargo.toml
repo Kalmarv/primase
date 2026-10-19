@@ -17,7 +17,6 @@ members = [
     "toolkit/dxil",
     "toolkit/frostbite",
     "toolkit/cache",
-    "formats/skate-scene",
     "formats/gltf",
     "formats/web",
     "cli",
@@ -66,7 +65,6 @@ primase-dxbc = { path = "toolkit/dxbc" }
 primase-shader = { path = "toolkit/shader" }
 primase-dxil = { path = "toolkit/dxil" }
 primase-frostbite = { path = "toolkit/frostbite" }
-primase-skate-scene = { path = "formats/skate-scene" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }
