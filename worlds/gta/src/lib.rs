@@ -27,6 +27,7 @@ pub mod pose;
 mod rbf;
 pub mod region;
 pub mod resource;
+pub mod roles;
 pub mod rpf;
 pub mod select;
 pub mod sga;
@@ -85,6 +86,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
             None => Ok(Box::new(pass)),
         }
     }
+    reg.register("classify-gta-texture-roles", |o| {
+        none(o, roles::ClassifyGtaTextureRoles)
+    });
     reg.register("gta-pose-fragments", |o| none(o, pose::PoseFragments));
     reg.register("lower-gta-pbr", |o| {
         Ok(Box::new(lower::LowerGtaPbr::from_options(o)?))
@@ -136,6 +140,7 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         super::register(&mut reg);
         let names = [
+            "classify-gta-texture-roles",
             "gta-leave-out-interiors",
             "gta-pose-fragments",
             "gta-select-collision",
