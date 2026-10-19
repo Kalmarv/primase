@@ -27,6 +27,7 @@ pub mod pausemap;
 pub mod postcompile;
 pub mod read;
 pub mod records;
+pub mod reference;
 pub mod scene;
 pub mod spool;
 pub mod texture;
@@ -93,9 +94,10 @@ pub mod vertex_alpha {
 use std::path::PathBuf;
 
 pub use assembly::{AssembledMaterial, EncodingOptions, assembled_materials};
-pub use write::map::{BuildReport, MapSink, leave_out_optional, lod_choice, select_lod, target, write_map};
 /// A skate-scene folder as the convert loop's reader.
 pub use read::scene::SceneReader;
+pub use reference::{leave_out_optional, lod_choice, select_lod};
+pub use write::map::{BuildReport, MapSink, target, write_map};
 
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.
