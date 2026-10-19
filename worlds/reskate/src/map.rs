@@ -49,7 +49,6 @@ pub struct WriterOptions {
     pub map_height: usize,
     pub water: bool,
     pub water_ocean: bool,
-    pub lights_max_per_cell: usize,
     pub light_prefix: String,
     pub streaming_distances: [f64; 3],
     pub max_render_edge: f32,
@@ -88,7 +87,6 @@ pub struct WriteResult {
     pub prop_col_tris: BTreeMap<String, i64>,
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
-    pub lights_dropped: usize,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
     /// The overlay stack's lift record: per mesh file (`meshes/...`), per primitive in file order, each vertex's lift
@@ -1706,75 +1704,6 @@ fn map_vec(v: Vec3) -> [f32; 3] {
     [v.x, v.z, -v.y]
 }
 
-/// A total order over lights by every field (position first), so which lights a cap keeps and how they are numbered
-/// never depends on the order they arrived in.
-fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
-    let v = |v: Vec3| [v.x, v.y, v.z];
-    let fields = |l: &PlacedLight| {
-        let [px, py, pz] = v(l.pos);
-        let [dx, dy, dz] = v(l.dir);
-        let [tx, ty, tz] = v(l.tan);
-        [
-            px,
-            py,
-            pz,
-            dx,
-            dy,
-            dz,
-            tx,
-            ty,
-            tz,
-            l.r,
-            l.g,
-            l.b,
-            l.energy,
-            l.range,
-            l.radius,
-            l.spot_size,
-            l.spot_blend,
-            l.priority,
-        ]
-    };
-    fields(a)
-        .iter()
-        .zip(fields(b).iter())
-        .map(|(x, y)| x.total_cmp(y))
-        .find(|o| o.is_ne())
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then(a.spot.cmp(&b.spot))
-        .then(a.time_of_day.cmp(&b.time_of_day))
-        .then(a.cast_shadow.cmp(&b.cast_shadow))
-        .then_with(|| a.group.cmp(&b.group))
-        .then_with(|| a.source.cmp(&b.source))
-}
-
-/// The lights a map keeps (at most `max` per 200 m cell: group "" first, then the highest priority, then
-/// [`light_order`]), in [`light_order`].
-pub fn keep_lights(lights: &[PlacedLight], max: usize) -> Vec<PlacedLight> {
-    let mut keep: Vec<PlacedLight> = if max > 0 {
-        let mut cells: BTreeMap<(i32, i32), Vec<&PlacedLight>> = BTreeMap::new();
-        for l in lights {
-            let k = ((l.pos.x / 200.0).floor() as i32, (l.pos.y / 200.0).floor() as i32);
-            cells.entry(k).or_default().push(l);
-        }
-        let mut out = Vec::new();
-        for (_, mut g) in cells {
-            g.sort_by(|a, b| {
-                (!a.group.is_empty())
-                    .cmp(&!b.group.is_empty())
-                    .then(b.priority.total_cmp(&a.priority))
-                    .then_with(|| light_order(a, b))
-            });
-            out.extend(g.into_iter().take(max).cloned());
-        }
-        out
-    } else {
-        lights.to_vec()
-    };
-    keep.sort_by(light_order);
-    keep
-}
-
 /// The light records of `kept`, named `prefix` + number, and how many had no usable tangent (their basis is built
 /// from a fallback axis: X, or Z for a light along X, made square to the light, since Studio refuses a basis that is
 /// not orthogonal).
@@ -2244,7 +2173,9 @@ impl MapWriter {
 
         // the chain overlays, within what the rest of the level leaves of the cull-ID pool: an ID per entity Studio
         // makes (each object once per 200 m cell it meets) and per light
-        let kept_lights = keep_lights(&x.lights, o.lights_max_per_cell);
+        // every light the world holds (a cap is a pass: select-reskate-lights), in a total order
+        let mut kept_lights = x.lights.clone();
+        kept_lights.sort_by(crate::scene::light_order);
         let other = self
             .objects
             .iter()
@@ -2281,7 +2212,6 @@ impl MapWriter {
         let obj_arr: Vec<MapObject> = objs.into_iter().chain(cobjs).chain(water.clone()).collect();
         self.r.object_records = obj_arr.len();
         self.r.lights_written = kept_lights.len();
-        self.r.lights_dropped = x.lights.len() - kept_lights.len();
 
         let (lights, without_tangent) = lights_json(&kept_lights, off, &o.light_prefix);
         self.r.lights_without_tangent = without_tangent;

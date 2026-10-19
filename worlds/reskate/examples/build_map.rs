@@ -27,6 +27,7 @@ fn main() -> Result<(), BoxError> {
     let mut lod = primase_core::LodChoice::Default;
     let mut max_priority: Option<u8> = None;
     let mut tex_cap: u32 = 256;
+    let mut lights_per_cell: Option<usize> = None;
     let mut name_caps: Vec<(String, u32)> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -48,7 +49,7 @@ fn main() -> Result<(), BoxError> {
                     name_caps.push((k.clone(), u32::try_from(c)?));
                 }
             }
-            "--lights-max-per-cell" => c.lights_max_per_cell = val()?.parse()?,
+            "--lights-max-per-cell" => lights_per_cell = Some(val()?.parse()?),
             "--water-ocean" => c.water_ocean = true,
             "--no-water" => c.no_water = true,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
@@ -102,6 +103,12 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::prepare::SnapReskateMarkers::for_encoding(&o)?,
     ));
+    // the lights capped per Studio 200 m cell when asked (the writer caps nothing of its own)
+    if let Some(n) = lights_per_cell {
+        passes.push(Box::new(primase_reskate::prepare::SelectReskateLights::new(
+            n, 200.0,
+        )?));
+    }
     // the writer's old cap: stored levels, else the 2 x 2 box down to the cap, normal maps alike
     let mut cap = primase_image::CapTextures::new(tex_cap)?.with_mode(primase_image::CapMode {
         normals: primase_image::NormalDownscale::Box,

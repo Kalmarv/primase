@@ -50,6 +50,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         prepare::prepare_reskate_overlays,
         &[("step", "0")],
     );
+    // a light cap and its grouping are the program's: no default
+    reg.register_requiring(
+        "select-reskate-lights",
+        prepare::select_reskate_lights,
+        &[("per_cell", "1"), ("cell", "200")],
+    );
     // the floor is the program's: no default
     reg.register_requiring(
         "prepare-reskate-floor",

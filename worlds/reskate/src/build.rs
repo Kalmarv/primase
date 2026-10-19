@@ -61,7 +61,7 @@ impl Default for EncodingOptions {
 }
 
 /// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
-/// blend chains, water, lights and the pause map's height. Delete a field when its pass lands.
+/// blend chains, water and the pause map's height. Delete a field when its pass lands.
 #[derive(Clone, Debug)]
 pub struct WriterChoices {
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
@@ -74,7 +74,6 @@ pub struct WriterChoices {
     pub map_height: usize,
     pub no_water: bool,
     pub water_ocean: bool,
-    pub lights_max_per_cell: usize,
 }
 
 impl Default for WriterChoices {
@@ -85,7 +84,6 @@ impl Default for WriterChoices {
             map_height: 2160,
             no_water: false,
             water_ocean: false,
-            lights_max_per_cell: 0,
         }
     }
 }
@@ -107,7 +105,6 @@ pub struct BuildOptions {
     pub map_height: usize,
     pub no_water: bool,
     pub water_ocean: bool,
-    pub lights_max_per_cell: usize,
     pub max_render_edge: Option<f32>,
     pub offset: [f64; 2],
     pub scene_warnings: Option<Vec<String>>,
@@ -129,7 +126,6 @@ impl Default for BuildOptions {
             map_height: c.map_height,
             no_water: c.no_water,
             water_ocean: c.water_ocean,
-            lights_max_per_cell: c.lights_max_per_cell,
             max_render_edge: e.max_render_edge,
             offset: e.offset,
             scene_warnings: e.scene_warnings,
@@ -159,7 +155,6 @@ impl BuildOptions {
                 map_height: a.map_height,
                 no_water: a.no_water,
                 water_ocean: a.water_ocean,
-                lights_max_per_cell: a.lights_max_per_cell,
             },
         )
     }
@@ -560,7 +555,6 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         map_height: c.map_height,
         water: !c.no_water,
         water_ocean: c.water_ocean,
-        lights_max_per_cell: c.lights_max_per_cell,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
         max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),
@@ -907,7 +901,6 @@ fn stats_json(
             placements_with_empty_mesh: r.empty_mesh,
             placements_collision_only: r.collision_only,
             lights_written: r.lights_written,
-            lights_dropped_by_cell_cap: r.lights_dropped,
             lights_without_tangent: r.lights_without_tangent,
             grind_curves: r.grind_curves,
             grind_pieces: r.grind_pieces,

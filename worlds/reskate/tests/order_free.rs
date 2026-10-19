@@ -13,7 +13,7 @@ use primase_core::{
     Collision, Instance, Mesh, Name, Primitive, Semantic, Stream, Surfaces, Topology, Transform, World,
 };
 use primase_meshops::vector::Vec3;
-use primase_reskate::map::keep_lights;
+use primase_reskate::prepare::lights::keep_lights;
 use primase_reskate::prepare::{RaiseOptions, SnapReskateMarkers};
 use primase_reskate::scene::PlacedLight;
 use primase_reskate::{EncodingOptions, WriterChoices};
@@ -64,9 +64,9 @@ fn lights_kept_by_a_cap_do_not_depend_on_their_order() {
         light(270.0, 10.0, 1.0, 6.0),
     ];
     let kept = |ls: &[PlacedLight]| -> Vec<String> {
-        keep_lights(ls, 2)
+        keep_lights(ls, 2, 200.0)
             .iter()
-            .map(|l| format!("x {} energy {}", l.pos.x, l.energy))
+            .map(|&i| format!("x {} energy {}", ls[i].pos.x, ls[i].energy))
             .collect()
     };
     let forward = kept(&lights);

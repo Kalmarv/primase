@@ -13,8 +13,8 @@ use crate::dialect::{
 };
 use crate::hash::skate_fnv_string;
 use primase_core::{
-    Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream, Tile,
-    Transform, TransformKind, World,
+    Entity, Instance, MaterialVariants, Mesh, MeshFile, Name, NormalGreen, NormalZ, Semantic, Source, Stream,
+    Tile, Transform, TransformKind, World,
 };
 
 use crate::layered::{BlendOpacity, VertexBlend};
@@ -220,6 +220,71 @@ pub struct PlacedLight {
     pub priority: f32,
     pub group: String,
     pub source: String,
+}
+
+/// Light `e` (its [`SkateLight`] `l`) in the writer's frame; its priority its own, else energy times range.
+pub fn placed_light(world: &World, e: Entity, l: &SkateLight) -> PlacedLight {
+    PlacedLight {
+        spot: l.spot,
+        pos: w(l.position[0], l.position[1], l.position[2]),
+        dir: w(l.direction[0], l.direction[1], l.direction[2]),
+        tan: w(l.tangent[0], l.tangent[1], l.tangent[2]),
+        r: l.color[0],
+        g: l.color[1],
+        b: l.color[2],
+        energy: l.energy,
+        range: l.range,
+        radius: l.radius,
+        spot_size: l.spot_size,
+        spot_blend: l.spot_blend,
+        time_of_day: l.time_of_day as i32,
+        cast_shadow: l.cast_shadow,
+        priority: l.priority.unwrap_or(l.energy * l.range),
+        group: l.group.clone(),
+        source: world.get::<Source>(e).map(|s| s.0.clone()).unwrap_or_default(),
+    }
+}
+
+/// A total order over lights by every field (position first), so which lights a cap keeps and how they are numbered
+/// never depends on the order they arrived in.
+pub fn light_order(a: &PlacedLight, b: &PlacedLight) -> std::cmp::Ordering {
+    let v = |v: Vec3| [v.x, v.y, v.z];
+    let fields = |l: &PlacedLight| {
+        let [px, py, pz] = v(l.pos);
+        let [dx, dy, dz] = v(l.dir);
+        let [tx, ty, tz] = v(l.tan);
+        [
+            px,
+            py,
+            pz,
+            dx,
+            dy,
+            dz,
+            tx,
+            ty,
+            tz,
+            l.r,
+            l.g,
+            l.b,
+            l.energy,
+            l.range,
+            l.radius,
+            l.spot_size,
+            l.spot_blend,
+            l.priority,
+        ]
+    };
+    fields(a)
+        .iter()
+        .zip(fields(b).iter())
+        .map(|(x, y)| x.total_cmp(y))
+        .find(|o| o.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(a.spot.cmp(&b.spot))
+        .then(a.time_of_day.cmp(&b.time_of_day))
+        .then(a.cast_shadow.cmp(&b.cast_shadow))
+        .then_with(|| a.group.cmp(&b.group))
+        .then_with(|| a.source.cmp(&b.source))
 }
 
 /// A grind curve in the writer's frame.
@@ -753,25 +818,7 @@ impl Scene {
         }
         let lights = world
             .iter::<SkateLight>()
-            .map(|(e, l)| PlacedLight {
-                spot: l.spot,
-                pos: w(l.position[0], l.position[1], l.position[2]),
-                dir: w(l.direction[0], l.direction[1], l.direction[2]),
-                tan: w(l.tangent[0], l.tangent[1], l.tangent[2]),
-                r: l.color[0],
-                g: l.color[1],
-                b: l.color[2],
-                energy: l.energy,
-                range: l.range,
-                radius: l.radius,
-                spot_size: l.spot_size,
-                spot_blend: l.spot_blend,
-                time_of_day: l.time_of_day as i32,
-                cast_shadow: l.cast_shadow,
-                priority: l.priority.unwrap_or(l.energy * l.range),
-                group: l.group.clone(),
-                source: world.get::<Source>(e).map(|s| s.0.clone()).unwrap_or_default(),
-            })
+            .map(|(e, l)| placed_light(world, e, l))
             .collect();
         let curves: Vec<GrindCurve> = world
             .iter::<SkateGrindCurve>()
