@@ -25,11 +25,11 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::bounds::Bound;
-use crate::le;
-use crate::resource::Resource;
-use crate::sga::BufferFormat;
-use crate::texture::{Texture, TextureDictionary};
+use crate::rage::bounds::Bound;
+use crate::rage::le;
+use crate::rage::resource::Resource;
+use crate::rage::sga::BufferFormat;
+use crate::rage::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {
@@ -664,7 +664,7 @@ fn rows<const R: usize, const B: usize>(m: &[u8; B], at: u64) -> Result<[[f32; 4
 fn read_bound(r: &Resource, p: u64) -> Result<Option<Bound>> {
     match p {
         0 => Ok(None),
-        p => crate::bounds::read(r, p, 0).map(Some),
+        p => crate::rage::bounds::read(r, p, 0).map(Some),
     }
 }
 
@@ -1034,7 +1034,7 @@ impl Fragment {
             for (p, name) in ptrs.iter().zip(names) {
                 let name = match u64::from_le_bytes(*name) {
                     0 => String::new(),
-                    p => crate::texture::c_string(r, p)?,
+                    p => crate::rage::texture::c_string(r, p)?,
                 };
                 if let Some(d) = opt(u64::from_le_bytes(*p))? {
                     extra.push((name, d));
@@ -1065,7 +1065,7 @@ impl Fragment {
             pose,
             name: match le::u64(h, 0x58)? {
                 0 => String::new(),
-                p => crate::texture::c_string(r, p)?,
+                p => crate::rage::texture::c_string(r, p)?,
             },
             drawable,
             extra,
@@ -1159,7 +1159,7 @@ fn pointer_list_u32(r: &Resource, at: u64) -> Result<Vec<u32>> {
 )]
 mod tests {
     use super::*;
-    use crate::resource::PageFlags;
+    use crate::rage::resource::PageFlags;
 
     /// A bone's pose is its own transform, then its parents' up to the root: a child turned a quarter about z and moved
     /// 1 along its parent's x, under a root moved 10 along z, takes (1, 0, 0) to (1, 1, 10).

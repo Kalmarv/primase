@@ -14,8 +14,8 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::le;
-use crate::resource::Resource;
+use crate::rage::le;
+use crate::rage::resource::Resource;
 use crate::{Result, invalid};
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {

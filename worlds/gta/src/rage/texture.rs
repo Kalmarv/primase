@@ -10,9 +10,9 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::le;
-use crate::resource::Resource;
-use crate::sga::BufferFormat;
+use crate::rage::le;
+use crate::rage::resource::Resource;
+use crate::rage::sga::BufferFormat;
 use crate::{Result, invalid};
 
 /// A texture as stored.

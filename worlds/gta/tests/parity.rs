@@ -24,14 +24,15 @@ mod codewalker;
 
 use codewalker::{check_drawable, check_ytd};
 use primase_core::Instance;
-use primase_gta::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::components::{GtaArchetype, GtaEntity};
-use primase_gta::drawable::{Drawable, DrawableDictionary, Fragment};
-use primase_gta::map::{ArchetypeDef, ArchetypeKind, EntityDef, EntityKind, MapData, MapTypes};
-use primase_gta::meta::Meta;
 use primase_gta::pipeline::{GtaSource, Map};
-use primase_gta::texture::TextureDictionary;
-use primase_gta::{Keys, Resource};
+use primase_gta::rage::drawable::{Drawable, DrawableDictionary, Fragment};
+use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind, EntityDef, EntityKind, MapData, MapTypes};
+use primase_gta::rage::meta::Meta;
+use primase_gta::rage::resource::Resource;
+use primase_gta::rage::texture::TextureDictionary;
+use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
+use primase_gta::read::archive::keys::Keys;
 use primase_testdata::real_data;
 use serde_json::Value;
 

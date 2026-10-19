@@ -26,7 +26,7 @@
 //! counted. It removes `gta.water`, counting the calming and wave quads of every file read (they are not placed).
 //!
 //! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
-//! material: the earlier exporter's blended colour ([`crate::lower::WATER`], as water shaders get), roughness from the
+//! material: the earlier exporter's blended colour ([`crate::passes::lower::WATER`], as water shaders get), roughness from the
 //! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated), marked
 //! `core.material_usage` water (what the water file states), and
 //! its `core.collision`: the same outline as triangles at the water's height, every one on surface `WATER` (class
@@ -43,9 +43,9 @@ use primase_core::{
     Semantic, Source, Stream, Surfaces, Topology, Transform, World,
 };
 
-use crate::archive_set::Install;
-use crate::keys::Keys;
-use crate::rect::GroundRect;
+use crate::passes::rect::GroundRect;
+use crate::read::archive::archive_set::Install;
+use crate::read::archive::keys::Keys;
 use crate::region::GTA;
 use crate::select::RegionExtent;
 use crate::{Result, invalid};
@@ -152,7 +152,7 @@ pub fn read_water(install: &Install, keys: &Keys) -> Result<Vec<(&'static str, W
 
 /// A tuning file's `SpecularFalloff`: `None` when it has none, an error when it is not a number.
 pub fn specular_falloff(tune: &[u8], path: &str) -> Result<Option<f32>> {
-    let root = crate::xml::parse(tune, path)?;
+    let root = crate::read::xml::parse(tune, path)?;
     root.child_value("SpecularFalloff")
         .map(|v| {
             v.parse()
@@ -249,15 +249,15 @@ pub fn place_water(w: &mut World, files: Vec<(&str, WaterFile)>) -> Vec<(String,
 
 /// Water data from `water.xml` bytes (`path` empty, no tuning).
 pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
-    let root = crate::xml::parse(bytes, "water.xml")?;
-    let num = |e: &crate::xml::Element, k: &str| -> Result<f32> {
+    let root = crate::read::xml::parse(bytes, "water.xml")?;
+    let num = |e: &crate::read::xml::Element, k: &str| -> Result<f32> {
         e.child_value(k)
             .ok_or_else(|| err(format!("a quad without {k}")))?
             .parse()
             .map_err(|_| err(format!("{k}: not a number")))
     };
     // a flag left out is false; any value but true or false is an error
-    let flag = |e: &crate::xml::Element, k: &str| -> Result<bool> {
+    let flag = |e: &crate::read::xml::Element, k: &str| -> Result<bool> {
         match e.child_value(k) {
             None => Ok(false),
             Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
@@ -265,7 +265,7 @@ pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
             Some(v) => Err(err(format!("{k}: {v:?} is neither true nor false"))),
         }
     };
-    let rect = |e: &crate::xml::Element| -> Result<([f32; 2], [f32; 2])> {
+    let rect = |e: &crate::read::xml::Element| -> Result<([f32; 2], [f32; 2])> {
         Ok((
             [num(e, "minX")?, num(e, "minY")?],
             [num(e, "maxX")?, num(e, "maxY")?],
@@ -585,7 +585,7 @@ pub struct LowerGtaWater;
 /// The water surface material (see the module documentation).
 pub fn water_material(specular_falloff: Option<f32>) -> PbrMaterial {
     let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
-    let w = crate::lower::WATER;
+    let w = crate::passes::lower::WATER;
     PbrMaterial {
         base_color: [srgb(w[0]), srgb(w[1]), srgb(w[2]), f32::from(w[3]) / 255.0],
         metallic: 0.0,
@@ -636,7 +636,7 @@ impl Pass for LowerGtaWater {
         let mut table = w.remove_resource::<Surfaces>().unwrap_or_default();
         let water = table.index("WATER").map_err(|e| e.to_string())?;
         if let Some(t) = table.0.get_mut(usize::from(water)) {
-            t.class = crate::surfaces::surface_class("WATER");
+            t.class = crate::passes::surfaces::surface_class("WATER");
         }
         for (proto, s) in surfaces {
             w.remove::<GtaWaterSurface>(proto);

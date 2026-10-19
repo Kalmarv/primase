@@ -8,8 +8,9 @@
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_gta::gtxd::TextureParents;
-use primase_gta::{ArchiveSet, Install, Keys, MapState};
+use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::gtxd::TextureParents;
 use primase_testdata::real_data;
 
 #[derive(serde::Deserialize)]

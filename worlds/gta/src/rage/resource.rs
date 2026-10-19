@@ -143,7 +143,7 @@ pub fn header(stored: &[u8]) -> Result<(u32, PageFlags, PageFlags)> {
     let h = stored
         .first_chunk::<16>()
         .ok_or_else(|| invalid("RSC7", 0, "shorter than its header"))?;
-    let [magic, version, system, graphics] = crate::le::u32x4_of(h);
+    let [magic, version, system, graphics] = crate::rage::le::u32x4_of(h);
     if magic != MAGIC {
         return Err(invalid("RSC7", 0, format!("magic {magic:#010x}")));
     }

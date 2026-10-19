@@ -1,4 +1,4 @@
-//! RBF ("RBF0"): RAGE's binary form of an XML data file, read into the same element tree as [`crate::xml`].
+//! RBF ("RBF0"): RAGE's binary form of an XML data file, read into the same element tree as [`crate::read::xml`].
 //!
 //! After the magic, records follow until the root closes: a descriptor index byte and a type byte. A descriptor
 //! index equal to the number of descriptors so far introduces a new one (a 16-bit name length and the name); its
@@ -12,7 +12,7 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::xml::Element;
+use crate::read::xml::Element;
 use crate::{Result, invalid};
 
 const MAGIC: &[u8; 4] = b"RBF0";

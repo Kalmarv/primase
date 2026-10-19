@@ -17,7 +17,7 @@ use std::path::Path;
 
 use sha1::{Digest, Sha1};
 
-use crate::key_hashes;
+use crate::read::archive::key_hashes;
 use crate::{Error, Result};
 
 /// One NG key: 17 round keys of four little-endian u32.

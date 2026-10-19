@@ -17,8 +17,9 @@
 //! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_gta::archive_set::MapState;
-use primase_gta::{ArchiveSet, Install, Keys};
+use primase_gta::read::archive::archive_set::MapState;
+use primase_gta::read::archive::archive_set::{ArchiveSet, Install};
+use primase_gta::read::archive::keys::Keys;
 use primase_testdata::real_data;
 
 #[test]

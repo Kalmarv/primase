@@ -5,7 +5,7 @@ use aes::{
     cipher::{Array, BlockCipherDecrypt, KeyInit},
 };
 
-use crate::keys::{Keys, NgKey, NgRound};
+use crate::read::archive::keys::{Keys, NgKey, NgRound};
 use crate::{Error, Result};
 
 /// Rounds 1, 2 and 17: each output word mixes four consecutive input bytes.

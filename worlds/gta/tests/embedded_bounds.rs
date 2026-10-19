@@ -15,12 +15,12 @@
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Collision, Instance, Surfaces, World};
-use primase_gta::Keys;
-use primase_gta::archive_set::{ArchiveSet, Install, MapState};
-use primase_gta::assets::attach_assets;
 use primase_gta::collision::{FlaggedVolumes, GtaMaterials, LowerGtaEmbeddedCollision, material_names};
 use primase_gta::components::GtaArchetype;
-use primase_gta::map::{ArchetypeDef, ArchetypeKind};
+use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind};
+use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::assets::attach_assets;
 use primase_testdata::real_data;
 use serde_json::Value as Json;
 

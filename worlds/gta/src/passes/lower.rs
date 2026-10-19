@@ -1,4 +1,4 @@
-//! GTA's shaders lowered to `pbr.material` and its vertex colours to glTF's meaning ([`crate::shader_class`] says what
+//! GTA's shaders lowered to `pbr.material` and its vertex colours to glTF's meaning ([`crate::passes::shader_class`] says what
 //! each shader draws).
 //!
 //! - `lower-gta-pbr`: the geometry of shaders with nothing a surface material can draw is dropped (counted by
@@ -40,7 +40,7 @@ use primase_core::{
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::{GtaDrawable, GtaParam, GtaShader, GtaSources};
-use crate::shader_class::{Class, ShaderClass, Skip, classify};
+use crate::passes::shader_class::{Class, ShaderClass, Skip, classify};
 
 /// A shader's render bucket (`grmShader` +0x39) as core's draw order: 0 opaque, 1 alpha, 2 decal, 3 cutout and 6 water
 /// (blended) as the layers, on the conventional queues with the decals after the cutouts; `None` for the other
@@ -80,12 +80,12 @@ pub const GTA_NORMALS: NormalConvention = NormalConvention {
     basis: NormalBasis::TangentBitangent,
 };
 
-/// The class of every shader material in `w` (an effect name hash no name in [`crate::shader_names`] gives is an
+/// The class of every shader material in `w` (an effect name hash no name in [`crate::passes::shader_names`] gives is an
 /// error).
 pub fn classes(w: &World) -> Result<BTreeMap<Entity, ShaderClass>, String> {
     w.iter::<GtaShader>()
         .map(|(e, s)| {
-            let effect = crate::shader_names::effect(s.name).ok_or_else(|| {
+            let effect = crate::passes::shader_names::effect(s.name).ok_or_else(|| {
                 format!(
                     "{}: shader {}: unknown effect {:#010x}",
                     s.drawable, s.index, s.name
@@ -656,7 +656,7 @@ impl Pass for LowerGtaPbr {
                         log.count(
                             &format!(
                                 "draw order: {} in render bucket {} drawn {:?}, its shader's class {:?}",
-                                crate::shader_names::effect(s.name).unwrap_or("?"),
+                                crate::passes::shader_names::effect(s.name).unwrap_or("?"),
                                 s.render_bucket,
                                 d.layer,
                                 c.class
@@ -1025,7 +1025,7 @@ impl LowerGtaPbr {
             double_sided: c.two_sided,
             ..PbrMaterial::default()
         };
-        if crate::shader_names::effect(s.name) == Some("distance_map") {
+        if crate::passes::shader_names::effect(s.name) == Some("distance_map") {
             // sign text: `fillColor` (linear, written to the albedo as it is) where the distance field's red passes
             // half
             match param(s, "fillColor") {

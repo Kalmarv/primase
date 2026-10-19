@@ -29,11 +29,11 @@ use primase_core::frame::SourceFrame;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
-use crate::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::components::{GtaArchetype, GtaEntity};
-use crate::keys::Keys;
-use crate::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
-use crate::meta::Meta;
+use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
+use crate::rage::meta::Meta;
+use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
+use crate::read::archive::keys::Keys;
 use crate::{Result, invalid};
 
 /// GTA V's frame: x east, y north, z up, metres.
@@ -112,7 +112,7 @@ fn map_name(path: &str) -> String {
     file.strip_suffix(".ymap").unwrap_or(file).to_string()
 }
 
-fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::meta::Struct> {
+fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::rage::meta::Struct> {
     let a = &set.install.archives[f.archive];
     let r = a.resource(&mut File::open(&a.file)?, f.entry, keys)?;
     Meta::read(&r)?.root()
@@ -296,7 +296,7 @@ pub fn archive_sets(
 }
 
 /// Reads the region into a new world: placements and their prototypes (geometry and textures come with
-/// [`crate::assets::attach_assets`]). `online`, when given, adds GTA Online's map and the `gta.map` conditions.
+/// [`crate::read::assets::attach_assets`]). `online`, when given, adds GTA Online's map and the `gta.map` conditions.
 pub fn read_region(
     story: &ArchiveSet,
     online: Option<&ArchiveSet>,
@@ -423,7 +423,10 @@ pub fn read_region(
             w.insert(p, GtaArchetype::new(ytyp, a));
             w.insert(p, Source(ytyp.clone()));
             let archetype = format!("archetype {:#010x}", a.name);
-            w.insert(p, Provenance::new(crate::assets::origin(ytyp, Some(&archetype))));
+            w.insert(
+                p,
+                Provenance::new(crate::read::assets::origin(ytyp, Some(&archetype))),
+            );
             // its asset's file name, in the archive set its archetype is read from: a drawable's or a fragment's; a
             // drawable dictionary's entry (stored by hash) or an asset with no live file keeps the archetype's hash
             let ext = match a.asset_type {
@@ -457,13 +460,13 @@ pub fn read_region(
                 w.insert(p, GtaEntity::new(ymap, *index, None, lod_parent.clone(), e));
                 w.insert(p, Source(format!("{ymap}#{index}")));
                 let item = format!("entity {index}");
-                w.insert(p, Provenance::new(crate::assets::origin(ymap, Some(&item))));
+                w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
             }
             Some(c) => {
                 w.insert(p, GtaEntity::new(ymap, *c, Some(*index), None, e));
                 w.insert(p, Source(format!("{ymap}#{index}/{c}")));
                 let item = format!("entity {index} child {c}");
-                w.insert(p, Provenance::new(crate::assets::origin(ymap, Some(&item))));
+                w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
                 report.interior_entities += 1;
             }
         }

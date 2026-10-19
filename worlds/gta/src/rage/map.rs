@@ -1,6 +1,6 @@
 //! Map data (ymap: `CMapData`, placed entities) and map types (ytyp: `CMapTypes`, archetypes), as stored.
 //!
-//! Read from a decoded META root ([`crate::meta::Meta::root`]) by field name; a missing field or one of another
+//! Read from a decoded META root ([`crate::rage::meta::Meta::root`]) by field name; a missing field or one of another
 //! kind is an error. Values are kept as the files store them (flags, enums and hashes raw); what they mean is the
 //! passes' business. Parts the first milestone does not use (occluders, grass, lights, car generators, interiors'
 //! rooms and portals, extensions) stay in the META tree.
@@ -9,7 +9,7 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::meta::Struct;
+use crate::rage::meta::Struct;
 use crate::{Result, invalid};
 
 fn name_is(s: &Struct, names: &[&str]) -> Result<usize> {

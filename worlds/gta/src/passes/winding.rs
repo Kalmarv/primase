@@ -7,7 +7,7 @@
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Primitive, Semantic, Stream, World};
 
-use crate::lower::for_each_mesh;
+use crate::passes::lower::for_each_mesh;
 
 /// Whether `p`'s triangles face away from its stored normals (`None`: no normals).
 pub fn faces_away(p: &Primitive) -> Option<bool> {

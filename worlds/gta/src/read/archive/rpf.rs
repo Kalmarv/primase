@@ -17,9 +17,9 @@ use std::path::Path;
 
 use primase_compress::{Decompressor, Deflate};
 
-use crate::keys::Keys;
-use crate::ng::{aes_decrypt, ng_decrypt};
-use crate::resource::{self, PageFlags, Resource};
+use crate::rage::resource::{self, PageFlags, Resource};
+use crate::read::archive::keys::Keys;
+use crate::read::archive::ng::{aes_decrypt, ng_decrypt};
 use crate::{Result, invalid};
 
 /// The "RPF7" magic, little-endian.
@@ -120,7 +120,7 @@ impl Record {
             u16_0: u32::from(u16::from_le_bytes([b0, b1])),
             u24_2: u32::from_le_bytes([b2, b3, b4, 0]),
             u24_5: u32::from_le_bytes([b5, b6, b7, 0]),
-            words: crate::le::u32x4_of(e),
+            words: crate::rage::le::u32x4_of(e),
         }
     }
 }
@@ -193,7 +193,7 @@ impl Archive {
         let mut h = [0u8; 16];
         f.seek(SeekFrom::Start(start))?;
         f.read_exact(&mut h)?;
-        let [magic, count, names_len, cipher] = crate::le::u32x4_of(&h);
+        let [magic, count, names_len, cipher] = crate::rage::le::u32x4_of(&h);
         if magic != MAGIC {
             return Err(invalid("RPF7", start, format!("{path}: magic {magic:#010x}")));
         }

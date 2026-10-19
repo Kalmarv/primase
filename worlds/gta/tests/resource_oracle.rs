@@ -18,9 +18,11 @@ use std::fs::File;
 mod codewalker;
 
 use codewalker::{check_drawable, check_ytd};
-use primase_gta::drawable::Drawable;
-use primase_gta::texture::TextureDictionary;
-use primase_gta::{Install, Keys, Resource};
+use primase_gta::rage::drawable::Drawable;
+use primase_gta::rage::resource::Resource;
+use primase_gta::rage::texture::TextureDictionary;
+use primase_gta::read::archive::archive_set::Install;
+use primase_gta::read::archive::keys::Keys;
 use primase_testdata::real_data;
 use serde_json::Value;
 

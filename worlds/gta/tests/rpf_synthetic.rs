@@ -4,7 +4,9 @@
 use std::io::Write;
 
 use primase_compress::{Compressor, Deflate};
-use primase_gta::{Archive, EntryKind, Keys, PageFlags};
+use primase_gta::rage::resource::PageFlags;
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::archive::rpf::{Archive, EntryKind};
 
 enum Item {
     Dir(&'static str, Vec<Item>),
@@ -234,14 +236,15 @@ fn a_body_may_end_inside_its_last_page_only() {
     assert_eq!(last, 0x2000);
     let body = |n: usize| Deflate.compress(&vec![7u8; n]).expect("deflate");
     // ends 100 bytes into the last page: accepted, the rest zero-filled
-    let r = primase_gta::resource::inflate(&body(full - last + 100), sys, gfx).expect("short last page");
+    let r =
+        primase_gta::rage::resource::inflate(&body(full - last + 100), sys, gfx).expect("short last page");
     assert_eq!(r.data.len(), full);
     assert_eq!(r.zero_filled as usize, last - 100);
     assert!(r.data[full - last + 100..].iter().all(|&b| b == 0));
     // ends before the last page: refused
-    assert!(primase_gta::resource::inflate(&body(full - last - 1), sys, gfx).is_err());
+    assert!(primase_gta::rage::resource::inflate(&body(full - last - 1), sys, gfx).is_err());
     // longer than the pages: refused
-    assert!(primase_gta::resource::inflate(&body(full + 1), sys, gfx).is_err());
+    assert!(primase_gta::rage::resource::inflate(&body(full + 1), sys, gfx).is_err());
 }
 
 #[test]

@@ -12,9 +12,9 @@
 )]
 use std::collections::BTreeMap;
 
-use crate::archive_set::{ArchiveSet, FileRef};
-use crate::keys::Keys;
-use crate::xml::Element;
+use crate::read::archive::archive_set::{ArchiveSet, FileRef};
+use crate::read::archive::keys::Keys;
+use crate::read::xml::Element;
 use crate::{Result, invalid};
 
 /// A child named twice with different parents.
@@ -86,9 +86,9 @@ impl TextureParents {
             let path = set.path(f).to_string();
             let bytes = set.install.binary(f, keys)?;
             let root = if rbf {
-                crate::rbf::parse(&bytes)?
+                crate::read::rbf::parse(&bytes)?
             } else {
-                crate::xml::parse(&bytes, &path)?
+                crate::read::xml::parse(&bytes, &path)?
             };
             for (child, parent) in pairs(&root, &path)? {
                 let (c, p) = (

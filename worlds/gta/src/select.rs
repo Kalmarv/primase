@@ -28,7 +28,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, Instance, JsonError, Name, Resource, Transform, World};
 
 use crate::components::{GtaArchetype, GtaEntity};
-use crate::rect::GroundRect;
+use crate::passes::rect::GroundRect;
 use crate::region::GTA;
 
 /// How far outside the region a box may reach and still be judged by its box, not its pivot (metres).

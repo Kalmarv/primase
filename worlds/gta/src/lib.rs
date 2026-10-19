@@ -1,51 +1,29 @@
 //! GTA V read straight from an install: archives (RPF7 with their NG or AES ciphers) and resources (RSC7).
 //!
-//! Key material is never part of this crate: the caller supplies it ([`Keys`]) and the crate checks it against
-//! published digests before using it.
+//! Arranged by role: [`read`] (the archives, the mount data and a region of the map into the world), [`rage`] (the
+//! resource formats, decoded from bytes), [`components`] (the `gta.*` dialect) and [`passes`].
+//!
+//! Key material is never part of this crate: the caller supplies it ([`Keys`](read::archive::keys::Keys)) and the
+//! crate checks it against published digests before using it.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-pub mod archive_set;
-pub mod assets;
-pub mod bounds;
 pub mod collision;
 pub mod components;
 pub mod convert;
-pub mod drawable;
-pub mod gtxd;
 pub mod ipl;
-mod key_hashes;
-pub mod keys;
-mod le;
 pub mod lights;
-pub mod lower;
-pub mod map;
-pub mod meta;
-pub mod mount;
-pub mod ng;
+pub mod passes;
 pub mod pipeline;
 pub mod pose;
-mod rbf;
-pub mod rect;
+pub mod rage;
+pub mod read;
 pub mod region;
-pub mod resource;
-pub mod roles;
-pub mod rpf;
 pub mod select;
-pub mod sga;
-pub mod shader_class;
-pub mod shader_names;
-pub mod surfaces;
-pub mod terrain;
-pub mod texture;
 pub mod tint;
 pub mod water;
-pub mod winding;
-mod xml;
 
-pub use archive_set::{ArchiveSet, FileRef, Install, MapState};
-pub use keys::Keys;
-pub use resource::{PageFlags, Resource};
-pub use rpf::{Archive, Encryption, Entry, EntryKind};
+// paths consumers use from before the crate was arranged by role
+pub use passes::{lower, rect, surfaces, terrain, winding};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -88,16 +66,18 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         }
     }
     reg.register("classify-gta-texture-roles", |o| {
-        none(o, roles::ClassifyGtaTextureRoles)
+        none(o, passes::roles::ClassifyGtaTextureRoles)
     });
     reg.register("gta-pose-fragments", |o| none(o, pose::PoseFragments));
     reg.register("lower-gta-pbr", |o| {
-        Ok(Box::new(lower::LowerGtaPbr::from_options(o)?))
+        Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?))
     });
-    reg.register("gta-winding", |o| none(o, winding::GtaWinding));
+    reg.register("gta-winding", |o| none(o, passes::winding::GtaWinding));
     reg.register("gta-tint", |o| none(o, tint::GtaTintVariants));
-    reg.register("gta-terrain-layers", |o| none(o, terrain::GtaTerrainLayers));
-    reg.register("gta-vertex-colours", |o| none(o, lower::GtaVertexColours));
+    reg.register("gta-terrain-layers", |o| {
+        none(o, passes::terrain::GtaTerrainLayers)
+    });
+    reg.register("gta-vertex-colours", |o| none(o, passes::lower::GtaVertexColours));
     // the region is the caller's choice: no default
     reg.register_requiring(
         "gta-select-region",
@@ -125,7 +105,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(collision::LowerGtaEmbeddedCollision::from_options(o)?)),
         &volumes,
     );
-    reg.register("lower-gta-surfaces", |o| none(o, surfaces::LowerGtaSurfaces));
+    reg.register("lower-gta-surfaces", |o| {
+        none(o, passes::surfaces::LowerGtaSurfaces)
+    });
     reg.register("gta-select-water", |o| {
         Ok(Box::new(water::SelectGtaWater::from_options(o)?))
     });

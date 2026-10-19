@@ -1,7 +1,7 @@
 //! The game's mount data: the pack list (`dlclist.xml`), each pack's `setup2.xml` and content file, extra folder
 //! mounts and title-update mounts. Read strictly (every element must be one the game's files use); items tagged
 //! for other platforms are left out (`platform="ps5|xbsx"`: the files they name are absent from PC installs).
-use crate::xml::{Element, parse};
+use crate::read::xml::{Element, parse};
 use crate::{Result, invalid};
 
 /// The platform name items are matched against (`x64`, as `%PLATFORM%` expands on PC).

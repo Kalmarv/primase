@@ -33,9 +33,9 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 
-use crate::keys::Keys;
-use crate::mount::{self, Content, Setup};
-use crate::rpf::{Archive, EntryKind};
+use crate::read::archive::keys::Keys;
+use crate::read::archive::rpf::{Archive, EntryKind};
+use crate::read::mount::{self, Content, Setup};
 use crate::{Result, invalid};
 
 /// A file of the install: archive index and entry index.
@@ -153,7 +153,7 @@ impl Install {
     }
 
     /// A resource file (RSC7), decoded.
-    pub fn resource(&self, f: FileRef, keys: &Keys) -> Result<crate::resource::Resource> {
+    pub fn resource(&self, f: FileRef, keys: &Keys) -> Result<crate::rage::resource::Resource> {
         let a = &self.archives[f.archive];
         a.resource(&mut File::open(&a.file)?, f.entry, keys)
     }

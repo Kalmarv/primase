@@ -36,19 +36,19 @@ use primase_core::{
 };
 use primase_core::{LodForm, Lods, Origin, Provenance};
 
-use crate::archive_set::ArchiveSet;
 use crate::collision::GtaEmbeddedBounds;
 use crate::components::{
     GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
 };
-use crate::drawable::{
+use crate::rage::drawable::{
     Bones, Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights,
 };
-use crate::gtxd::TextureParents;
-use crate::keys::Keys;
-use crate::le;
+use crate::rage::le;
+use crate::rage::texture::{Texture, TextureDictionary};
+use crate::read::archive::archive_set::ArchiveSet;
+use crate::read::archive::keys::Keys;
+use crate::read::gtxd::TextureParents;
 use crate::region::GTA;
-use crate::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
 
 /// The resident detail dictionary searched last (`x64a.rpf\textures\mapdetail.ytd`, the global textures folder): detail
@@ -95,7 +95,7 @@ struct Ctx<'a> {
 }
 
 /// One vertex element as a core stream (frame converted).
-fn stream(g: &Geometry, e: crate::drawable::Element) -> Result<(Semantic, Stream)> {
+fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<(Semantic, Stream)> {
     let bytes = g.element_bytes(e);
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(le::vec3_of).collect() };
     let fmt = e.format.0;
@@ -215,7 +215,10 @@ fn mesh(
 }
 
 /// The archive a file reference names.
-fn archive(set: &ArchiveSet, f: crate::archive_set::FileRef) -> Result<&crate::rpf::Archive> {
+fn archive(
+    set: &ArchiveSet,
+    f: crate::read::archive::archive_set::FileRef,
+) -> Result<&crate::read::archive::rpf::Archive> {
     set.install.archives.get(f.archive).ok_or_else(|| {
         invalid(
             "archive set",
@@ -226,7 +229,10 @@ fn archive(set: &ArchiveSet, f: crate::archive_set::FileRef) -> Result<&crate::r
 }
 
 impl Ctx<'_> {
-    fn decode(&self, f: crate::archive_set::FileRef) -> Result<crate::resource::Resource> {
+    fn decode(
+        &self,
+        f: crate::read::archive::archive_set::FileRef,
+    ) -> Result<crate::rage::resource::Resource> {
         let a = archive(self.set, f)?;
         a.resource(&mut File::open(&a.file)?, f.entry, self.keys)
     }
@@ -388,14 +394,15 @@ pub struct LightsReport {
 /// writer plans scene-wide) has them from the read world.
 pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<LightsReport> {
     let mut report = LightsReport::default();
-    let decode = |f: crate::archive_set::FileRef| -> Result<crate::resource::Resource> {
+    let decode = |f: crate::read::archive::archive_set::FileRef| -> Result<crate::rage::resource::Resource> {
         let a = archive(set, f)?;
         a.resource(&mut File::open(&a.file)?, f.entry, keys)
     };
     let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
     // per prototype the file to read and, for a dictionary entry, its name; dictionaries are read once, below
-    let mut files: Vec<(Entity, &'static str, crate::archive_set::FileRef)> = Vec::new();
-    let mut entries: BTreeMap<u32, (crate::archive_set::FileRef, Vec<(Entity, u32)>)> = BTreeMap::new();
+    let mut files: Vec<(Entity, &'static str, crate::read::archive::archive_set::FileRef)> = Vec::new();
+    let mut entries: BTreeMap<u32, (crate::read::archive::archive_set::FileRef, Vec<(Entity, u32)>)> =
+        BTreeMap::new();
     for (proto, a) in w.iter::<GtaArchetype>() {
         match a.asset_type {
             2 | 1 => {
@@ -475,12 +482,12 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
 }
 
 /// A prototype and the light records read for it.
-type ProtoLights = (Entity, (Vec<crate::drawable::LightAttr>, Bones));
+type ProtoLights = (Entity, (Vec<crate::rage::drawable::LightAttr>, Bones));
 
 /// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
 enum Job {
-    One(Entity, &'static str, crate::archive_set::FileRef),
-    Dictionary(crate::archive_set::FileRef, Vec<(Entity, u32)>),
+    One(Entity, &'static str, crate::read::archive::archive_set::FileRef),
+    Dictionary(crate::read::archive::archive_set::FileRef, Vec<(Entity, u32)>),
 }
 
 /// [`attach_assets`] with the texture dictionary parents already read ([`TextureParents::read`]): a driver that loads a
@@ -706,8 +713,8 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
 #[cfg(test)]
 mod tests {
     use super::{origin, stream};
-    use crate::drawable::{Element, Geometry};
-    use crate::sga::BufferFormat;
+    use crate::rage::drawable::{Element, Geometry};
+    use crate::rage::sga::BufferFormat;
     use primase_core::{Semantic, Stream};
 
     /// An install path splits into its archive chain and file; a dictionary entry's hash leads the item.

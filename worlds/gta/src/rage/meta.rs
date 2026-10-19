@@ -16,7 +16,7 @@
 )]
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::resource::Resource;
+use crate::rage::resource::Resource;
 use crate::{Result, invalid};
 
 /// Built-in type names of primitive data blocks (the field kind codes of their element types).
@@ -205,7 +205,7 @@ fn err(offset: u64, detail: impl ToString) -> crate::Error {
     invalid("META", offset, detail)
 }
 
-use crate::le::{f32 as f32_at, u8 as u8_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
+use crate::rage::le::{f32 as f32_at, u8 as u8_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
 
 /// `len` bytes of `d` at `offset`, if it holds them.
 fn span(d: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
@@ -315,7 +315,7 @@ impl Meta {
                     .0
                     .iter()
                     .map(|c| {
-                        let [k, v] = crate::le::u32x2_of(c);
+                        let [k, v] = crate::rage::le::u32x2_of(c);
                         (k, i32::from_le_bytes(v.to_le_bytes()))
                     })
                     .collect();
@@ -918,7 +918,7 @@ impl Struct {
 )]
 mod tests {
     use super::*;
-    use crate::resource::PageFlags;
+    use crate::rage::resource::PageFlags;
     use primase_hash::joaat_exact as joaat;
 
     fn put(d: &mut [u8], o: usize, b: &[u8]) {

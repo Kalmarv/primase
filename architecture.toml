@@ -15,38 +15,13 @@
 # listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
 
 [[layout]]
-file = "worlds/gta/src/archive_set.rs"
-reason = "reader I/O in Other; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::rpf"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/assets.rs"
-reason = "reader I/O in Other; Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region; Other names the I/O module primase_gta::rpf"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
 file = "worlds/gta/src/collision.rs"
 reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::region"
 removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
 
 [[layout]]
-file = "worlds/gta/src/gtxd.rs"
-reason = "Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/keys.rs"
-reason = "reader I/O in Other"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
 file = "worlds/gta/src/lights.rs"
 reason = "Other names the I/O module primase_gta::region"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/ng.rs"
-reason = "Other names the I/O module primase_gta::keys"
 removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
 
 [[layout]]
@@ -62,11 +37,6 @@ removed_when = "worlds/gta is arranged by role before the final review: a struct
 [[layout]]
 file = "worlds/gta/src/region.rs"
 reason = "reader I/O in Other; Other names the I/O module primase_gta::archive_set; Other names the I/O module primase_gta::keys; Other names the I/O module primase_gta::assets"
-removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
-
-[[layout]]
-file = "worlds/gta/src/rpf.rs"
-reason = "reader I/O in Other; Other names the I/O module primase_gta::keys"
 removed_when = "worlds/gta is arranged by role before the final review: a structural commit, then each mixed module split (read/ for archives, resources and regions; passes/; components/)"
 
 [[layout]]

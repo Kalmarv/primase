@@ -12,7 +12,7 @@
 use primase_core::{Component, Entity, JsonError, Lods, Mesh, World};
 use serde::Serialize;
 
-use crate::map::{ArchetypeDef, EntityDef, EntityKind};
+use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind};
 
 /// A copy of prototype `proto` for some of its placements to use instead: every component copied, its `core.lods`
 /// forms copied with it (so a pass may change the copy's forms without touching the original's).
@@ -125,9 +125,9 @@ impl GtaArchetype {
             ytyp: ytyp.to_string(),
             name: a.name,
             kind: match a.kind {
-                crate::map::ArchetypeKind::Base => "base",
-                crate::map::ArchetypeKind::Time => "time",
-                crate::map::ArchetypeKind::Interior => "interior",
+                crate::rage::map::ArchetypeKind::Base => "base",
+                crate::rage::map::ArchetypeKind::Time => "time",
+                crate::rage::map::ArchetypeKind::Interior => "interior",
             },
             flags: a.flags,
             special_attribute: a.special_attribute,
@@ -275,11 +275,11 @@ impl Component for GtaBones {
     }
 }
 
-/// A prototype's bones as its drawable and fragment store them ([`crate::drawable::Bones`]: the skeleton, each bone
+/// A prototype's bones as its drawable and fragment store them ([`crate::rage::drawable::Bones`]: the skeleton, each bone
 /// in its parent's space with its parent and tag, and a fragment's own bone pose). The passes compose a bone's pose
 /// from it: `gta-pose-fragments` for the models on bones (`gta.bones`), `lower-gta-lights` for the light records.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaSkeleton(pub crate::drawable::Bones);
+pub struct GtaSkeleton(pub crate::rage::drawable::Bones);
 
 impl Component for GtaSkeleton {
     const NAME: &'static str = "gta.skeleton";
@@ -292,7 +292,7 @@ impl Component for GtaSkeleton {
 /// its `bone_id` tags (the bones are the prototype's `gta.skeleton`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaLights {
-    pub records: Vec<crate::drawable::LightAttr>,
+    pub records: Vec<crate::rage::drawable::LightAttr>,
 }
 
 impl Component for GtaLights {
@@ -307,7 +307,7 @@ impl Component for GtaLights {
 /// A placed light's record as its drawable or fragment stores it (on the entity `lower-gta-lights` made for it): its
 /// hours, flashiness, volume and corona fields stay here for writers that use them.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaLight(pub crate::drawable::LightAttr);
+pub struct GtaLight(pub crate::rage::drawable::LightAttr);
 
 impl Component for GtaLight {
     const NAME: &'static str = "gta.light";

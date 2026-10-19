@@ -10,7 +10,7 @@
 //! Specular, as the terrain pixel shaders write it (no layer has its own): intensity `SpecularColor`^2 (dry), power
 //! `Specular`, Fresnel 0.98; `*_spm` effects take `specularIntensityMultSpecMap` and `specularFalloffMultSpecMap`
 //! scaled per pixel by the layers' height maps, which is not lowered (counted). In `KHR_materials_specular` terms
-//! (see [`crate::lower`]) factor the intensity, colour (1 - 0.98) / 0.04, roughness [`crate::lower::roughness`] of
+//! (see [`crate::passes::lower`]) factor the intensity, colour (1 - 0.98) / 0.04, roughness [`crate::passes::lower::roughness`] of
 //! the power.
 //!
 //! The lookup-blended effects (`*_cm*`, `*_2tex_blend*`) take green and blue per pixel from `lookupTexture` at
@@ -30,8 +30,8 @@ use primase_core::{
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::GtaShader;
-use crate::lower::{DEFAULT_FRESNEL, GREY, classes, for_each_mesh, roughness, scalar, texture};
-use crate::shader_class::Class;
+use crate::passes::lower::{DEFAULT_FRESNEL, GREY, classes, for_each_mesh, roughness, scalar, texture};
+use crate::passes::shader_class::Class;
 
 /// How a terrain effect gets green and blue of its weights.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +121,7 @@ impl Pass for GtaTerrainLayers {
                 continue;
             }
             let s = w.get::<GtaShader>(m).expect("shader");
-            let effect = crate::shader_names::effect(s.name).expect("named effect");
+            let effect = crate::passes::shader_names::effect(s.name).expect("named effect");
             if c.tint.is_some() {
                 log.approximate("tinted terrain layered without its tint", 1);
             }

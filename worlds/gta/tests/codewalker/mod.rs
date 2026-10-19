@@ -3,8 +3,8 @@
 //! with no format logic of its own.
 #![allow(dead_code)]
 
-use primase_gta::drawable::{Drawable, Geometry, Model, ParamValue};
-use primase_gta::texture::{Texture, TextureDictionary};
+use primase_gta::rage::drawable::{Drawable, Geometry, Model, ParamValue};
+use primase_gta::rage::texture::{Texture, TextureDictionary};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

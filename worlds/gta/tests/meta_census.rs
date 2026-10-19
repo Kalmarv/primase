@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_gta::map::{MapData, MapTypes};
-use primase_gta::meta::Meta;
-use primase_gta::{EntryKind, Install, Keys};
+use primase_gta::rage::map::{MapData, MapTypes};
+use primase_gta::rage::meta::Meta;
+use primase_gta::read::archive::archive_set::Install;
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::archive::rpf::EntryKind;
 use primase_hash::joaat_exact;
 use primase_testdata::real_data;
 

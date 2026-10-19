@@ -2,7 +2,7 @@
 //!
 //! A `_tnt` shader's vertex shader colours every vertex from its palette texture (`TintPaletteTex`, point sampled):
 //! the column at u = vertex colour blue / 255 (the second vertex colour's for three tree effects,
-//! [`crate::shader_class::TintColumn`]), the row the entity's tint (a tint past the palette's last row takes the last,
+//! [`crate::passes::shader_class::TintColumn`]), the row the entity's tint (a tint past the palette's last row takes the last,
 //! as the shader's clamped sampling does), and the colour multiplies the surface; across a triangle it is interpolated
 //! between its vertices. The pass writes that colour into each tinted primitive's COLOR_0 (linear RGB as 16-bit
 //! normalised, which glTF multiplies into the base colour; the alpha kept), per tint row: a prototype whose placements
@@ -21,8 +21,8 @@ use primase_texcodec::{Decoder, TexDecoder};
 use serde::Serialize;
 
 use crate::components::{GtaEntity, GtaShader};
-use crate::lower::{classes, texture};
-use crate::shader_class::TintColumn;
+use crate::passes::lower::{classes, texture};
+use crate::passes::shader_class::TintColumn;
 
 /// The tint row a tinted prototype is drawn with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

@@ -12,10 +12,11 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 
-use primase_gta::archive_set::MapState;
-use primase_gta::map::MapData;
-use primase_gta::meta::Meta;
-use primase_gta::{ArchiveSet, Install, Keys};
+use primase_gta::rage::map::MapData;
+use primase_gta::rage::meta::Meta;
+use primase_gta::read::archive::archive_set::MapState;
+use primase_gta::read::archive::archive_set::{ArchiveSet, Install};
+use primase_gta::read::archive::keys::Keys;
 use primase_testdata::real_data;
 
 /// Static maps of different packs that author the same placement (ymap names, either order).

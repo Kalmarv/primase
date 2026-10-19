@@ -12,9 +12,11 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_gta::drawable::{Drawable, DrawableDictionary, Fragment};
-use primase_gta::texture::TextureDictionary;
-use primase_gta::{EntryKind, Install, Keys};
+use primase_gta::rage::drawable::{Drawable, DrawableDictionary, Fragment};
+use primase_gta::rage::texture::TextureDictionary;
+use primase_gta::read::archive::archive_set::Install;
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::archive::rpf::EntryKind;
 use primase_testdata::real_data;
 
 #[derive(Default)]
@@ -75,9 +77,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                             *local.versions.entry((ext.to_string(), r.version)).or_default() += 1;
                             // resources in another version's layout (Legacy's, older tools') are counted, not read
                             let want = match ext {
-                                "ydr" | "ydd" => primase_gta::drawable::VERSION,
-                                "yft" => primase_gta::drawable::FRAGMENT_VERSION,
-                                _ => primase_gta::texture::VERSION,
+                                "ydr" | "ydd" => primase_gta::rage::drawable::VERSION,
+                                "yft" => primase_gta::rage::drawable::FRAGMENT_VERSION,
+                                _ => primase_gta::rage::texture::VERSION,
                             };
                             if r.version != want {
                                 other_layout = Some(r.version);
@@ -126,7 +128,7 @@ fn every_drawable_and_texture_dictionary_reads() {
                             for d in drawables {
                                 for sh in &d.shaders {
                                     *local.presets.entry(sh.preset).or_default() += 1;
-                                    if primase_gta::shader_names::effect(sh.name).is_none() {
+                                    if primase_gta::passes::shader_names::effect(sh.name).is_none() {
                                         *local
                                             .unnamed
                                             .entry(format!("effect {:#010x}", sh.name))
@@ -134,8 +136,10 @@ fn every_drawable_and_texture_dictionary_reads() {
                                     }
                                     for p in &sh.params {
                                         let named = match p.info & 3 {
-                                            0 => primase_gta::shader_names::texture_param(p.name).is_some(),
-                                            3 => primase_gta::shader_names::constant_param(p.name).is_some(),
+                                            0 => primase_gta::passes::shader_names::texture_param(p.name)
+                                                .is_some(),
+                                            3 => primase_gta::passes::shader_names::constant_param(p.name)
+                                                .is_some(),
                                             _ => true,
                                         };
                                         if !named {

@@ -13,7 +13,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use primase_gta::{Archive, EntryKind, Keys};
+use primase_gta::read::archive::keys::Keys;
+use primase_gta::read::archive::rpf::{Archive, EntryKind};
 use primase_testdata::real_data;
 
 #[derive(serde::Deserialize)]
@@ -48,7 +49,7 @@ fn rpf_files(dir: &Path, root: &Path, out: &mut Vec<(PathBuf, String)>) {
 }
 
 /// An entry as the oracle lists it.
-fn listed(a: &Archive, e: &primase_gta::Entry) -> Vec<serde_json::Value> {
+fn listed(a: &Archive, e: &primase_gta::read::archive::rpf::Entry) -> Vec<serde_json::Value> {
     use serde_json::json;
     match e.kind {
         EntryKind::Directory { .. } => vec![json!(e.path), json!("dir")],
@@ -111,10 +112,10 @@ fn walk(a: &Archive, f: &mut File, keys: &Keys, oracle: &BTreeMap<String, Oracle
         None => {}
         Some(o) => {
             let enc = match a.encryption {
-                primase_gta::Encryption::None => 0x4E45_504F,
-                primase_gta::Encryption::Open => 0x4F50_454E,
-                primase_gta::Encryption::Aes => 0x0FFF_FFF9,
-                primase_gta::Encryption::Ng => 0x0FEF_FFFF,
+                primase_gta::read::archive::rpf::Encryption::None => 0x4E45_504F,
+                primase_gta::read::archive::rpf::Encryption::Open => 0x4F50_454E,
+                primase_gta::read::archive::rpf::Encryption::Aes => 0x0FFF_FFF9,
+                primase_gta::read::archive::rpf::Encryption::Ng => 0x0FEF_FFFF,
             };
             if (o.file_size, o.start, o.encryption) != (a.size, a.start, enc) {
                 t.fail("archive header differs", a.path.clone());

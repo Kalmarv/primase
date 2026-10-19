@@ -32,11 +32,11 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Component, Entity, Instance, JsonError, Surfaces, Transform, World};
 
-use crate::archive_set::ArchiveSet;
-use crate::bounds::{Bound, Contents, Polygon, read_ybn};
 use crate::components::GtaEntity;
-use crate::keys::Keys;
-use crate::rect::GroundRect;
+use crate::passes::rect::GroundRect;
+use crate::rage::bounds::{Bound, Contents, Polygon, read_ybn};
+use crate::read::archive::archive_set::ArchiveSet;
+use crate::read::archive::keys::Keys;
 use crate::region::GTA;
 use crate::{Result, invalid};
 
@@ -131,7 +131,7 @@ pub fn attach_map_bounds(
     region: [f32; 4],
 ) -> Result<BoundsReport> {
     let mut report = BoundsReport::default();
-    let mut files: Vec<crate::archive_set::FileRef> = set
+    let mut files: Vec<crate::read::archive::archive_set::FileRef> = set
         .tables
         .get("ybn")
         .into_iter()
@@ -142,7 +142,7 @@ pub fn attach_map_bounds(
     let [x0, y0, x1, y1] = region;
     let next = std::sync::atomic::AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let read = |f: crate::archive_set::FileRef| -> Result<Option<Bound>> {
+    let read = |f: crate::read::archive::archive_set::FileRef| -> Result<Option<Bound>> {
         let r = set.install.resource(f, keys)?;
         let bound = read_ybn(&r)?;
         let (lo, hi) = (bound.header.box_min, bound.header.box_max);
@@ -667,7 +667,7 @@ impl Soup {
     }
 
     /// A geometry bound's polygons in its own space.
-    fn geometry(&mut self, g: &crate::bounds::Geometry, log: &mut PassLog) {
+    fn geometry(&mut self, g: &crate::rage::bounds::Geometry, log: &mut PassLog) {
         let v = &g.vertices;
         let material = |i: usize| -> u8 {
             let m = usize::from(g.polygon_materials.get(i).copied().unwrap_or(0));
@@ -902,7 +902,7 @@ impl Pass for LowerGtaEmbeddedCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bounds::BoundHeader;
+    use crate::rage::bounds::BoundHeader;
     use primase_core::Name;
 
     fn placement(w: &mut World, prototype: Entity, flags: u32) -> Entity {
@@ -1014,7 +1014,7 @@ mod tests {
     /// children are kept or left out as the options say, counted either way. Both options are required.
     #[test]
     fn flagged_volumes_are_the_callers_choice_and_reports_name_what_was_approximated() {
-        use crate::bounds::Child;
+        use crate::rage::bounds::Child;
         let child = |kind: u8, flags: u32| {
             let mut b = box_bound();
             b.header.kind = kind;
@@ -1251,7 +1251,7 @@ mod tests {
     /// 4 to 6 (radius 0.5 times 2 around 5), y -1.5 to 1.5 (its ends plus its radius) and z -0.5 to 0.5.
     #[test]
     fn curved_colliders_take_their_childs_scale() {
-        use crate::bounds::{Child, Geometry};
+        use crate::rage::bounds::{Child, Geometry};
         let child = |polygons: Vec<Polygon>, vertices: Vec<[f32; 3]>| {
             let mut b = box_bound();
             b.header.kind = 4;
