@@ -287,6 +287,8 @@ impl PartScope {
             if found.is_empty() {
                 break;
             }
+            // the ids themselves too: one the pass made, placed from and then consumed is no longer in the world
+            owned.extend(found.iter().copied());
             owned.extend(w.closure(found.iter().copied()));
             own.extend(found);
         }

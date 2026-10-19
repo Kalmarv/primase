@@ -1409,14 +1409,14 @@ fn declared_output_from_declared_output_is_the_parts() {
     w.insert(root, Name("root".into()));
     let halo = w.spawn();
     w.insert(halo, Name("halo".into()));
-    let made: Vec<Entity> = (0..7)
+    let made: Vec<Entity> = (0..9)
         .map(|_| {
             let e = w.spawn();
             w.insert(e, Name("made".into()));
             e
         })
         .collect();
-    let [a, b, late, early, eaten_from, ctx1, ctx2] = made[..] else {
+    let [a, b, late, early, eaten_from, ctx1, ctx2, mid, tail] = made[..] else {
         unreachable!()
     };
     w.insert_resource(PartScope {
@@ -1435,23 +1435,27 @@ fn declared_output_from_declared_output_is_the_parts() {
     // pass 3: a chain within one pass, the later link first in declaration order (late < early is not needed: both
     // orders must hold), plus one from a root the pass consumed, and a chain from context
     let before = w.resource::<PartScope>().unwrap().owned(&w);
+    // and an intermediate the pass made, placed, derived from, and consumed before it returned
     w.despawn(root);
+    w.despawn(mid);
     PartScope::declare(
         &mut w,
-        &BTreeSet::from([late, early, eaten_from, ctx1, ctx2]),
+        &BTreeSet::from([late, early, eaten_from, ctx1, ctx2, mid, tail]),
         &BTreeMap::from([
             (late, early),
             (early, b),
             (eaten_from, root),
             (ctx1, halo),
             (ctx2, ctx1),
+            (mid, a),
+            (tail, mid),
         ]),
         &before,
     );
     let out = w.resource::<PartScope>().unwrap().output(&w);
-    assert_eq!(out.placed, BTreeSet::from([a, b, late, early, eaten_from]));
+    assert_eq!(out.placed, BTreeSet::from([a, b, late, early, eaten_from, tail]));
     assert_eq!(out.from_context, BTreeSet::from([ctx1, ctx2]));
-    for e in [a, b, late, early, eaten_from] {
+    for e in [a, b, late, early, eaten_from, tail] {
         assert!(out.keep.contains(&e), "{e:?} kept");
     }
     assert!(!out.keep.contains(&ctx1) && !out.keep.contains(&ctx2));
