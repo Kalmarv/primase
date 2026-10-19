@@ -184,7 +184,7 @@ impl Pass for PrepareReskateOverlays {
         &["skate.overlay_stack"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateOverlayStack>().is_some() {
             return Err(
                 "prepare-reskate-overlays: the overlays are already stacked (skate.overlay_stack)".into(),

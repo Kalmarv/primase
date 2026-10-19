@@ -125,7 +125,7 @@ impl Pass for ClipReskateRegion {
         &[]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         let r = self.region;
         let scene = w
             .resource_mut::<SkateScene>()

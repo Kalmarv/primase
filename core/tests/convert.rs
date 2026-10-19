@@ -135,6 +135,7 @@ impl PartSource for ToyParts {
         Ok(self.placements.pop().map(|e| Part {
             roots: BTreeSet::from([e]),
             context: BTreeSet::new(),
+            whole: false,
         }))
     }
 }

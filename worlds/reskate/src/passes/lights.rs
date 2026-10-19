@@ -105,7 +105,7 @@ impl Pass for SelectReskateLights {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         let lights: Vec<(Entity, PlacedLight)> = w
             .iter::<SkateLight>()
             .map(|(e, l)| (e, placed_light(w, e, l)))

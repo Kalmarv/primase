@@ -1,7 +1,8 @@
-//! A ReSkate map is one part: the passes that work on the whole map (floor, region, spawn, marker snaps, lights, water,
-//! pause map) refuse a part of a world planned in two cells with a halo, and run on the whole world, as a conversion
-//! gives them each; and every preparation pass, run by the pass manager as a program runs it, keeps to its
-//! declarations.
+//! A ReSkate map is written whole: the passes that work on the whole map (floor, region, spawn, marker snaps, lights,
+//! water, pause map) refuse a part its source does not state is the whole (a part of a world planned in two cells
+//! with a halo, with or without context; two context-free parts of a source with no plan), and run on a part stated
+//! whole (the whole world, a one-group plan) and on a world outside the part protocol; and every preparation pass, run
+//! by the pass manager as a program runs it, keeps to its declarations.
 
 #![allow(clippy::unwrap_used)]
 
@@ -129,8 +130,9 @@ fn passes() -> Vec<Box<dyn Pass>> {
     ]
 }
 
-/// Each pass on a fresh world given `scope` (and the plan, when `with_plan`): its error, if it refused.
-fn run_each(scope: &Part, with_plan: bool) -> Vec<(&'static str, Result<(), String>)> {
+/// Each pass on a fresh world given `scope` (none: outside the part protocol; and the plan, when `with_plan`): its
+/// error, if it refused.
+fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<(), String>)> {
     passes()
         .into_iter()
         .map(|pass| {
@@ -145,19 +147,31 @@ fn run_each(scope: &Part, with_plan: bool) -> Vec<(&'static str, Result<(), Stri
                 let p = plan(&w, placed);
                 w.insert_resource(p);
             }
-            w.insert_resource(PartScope {
-                roots: scope.roots.clone(),
-                context: scope.context.clone(),
-            });
+            if let Some(scope) = scope {
+                w.insert_resource(PartScope {
+                    roots: scope.roots.clone(),
+                    context: scope.context.clone(),
+                    whole: scope.whole,
+                });
+            }
             (pass.name(), pass.run(&mut w, &mut PassLog::default()))
         })
         .collect()
 }
 
 #[test]
-fn a_part_of_a_map_is_refused_and_the_whole_map_is_taken() {
+fn a_part_not_stated_whole_is_refused_and_the_whole_map_is_taken() {
+    let refused = |scope: &Part, with_plan: bool| {
+        for (name, r) in run_each(Some(scope), with_plan) {
+            let e = r.unwrap_err();
+            assert!(
+                e.starts_with(name) && e.contains("does not state is the whole"),
+                "{e}"
+            );
+        }
+    };
     // the planned parts: the west cell has the east placement as context (its box reaches the halo); the east
-    // cell's halo does not reach the west placement
+    // cell's halo does not reach the west placement; neither is the whole
     let (mut w, placed) = world();
     let p = plan(&w, placed);
     w.insert_resource(p);
@@ -165,23 +179,40 @@ fn a_part_of_a_map_is_refused_and_the_whole_map_is_taken() {
     assert_eq!(planned.len(), 2);
     assert_eq!(planned[0].context, BTreeSet::from([placed[1]]));
     assert!(planned[1].context.is_empty());
-    // a part with context, the plan not in its world: refused for its context
-    for (name, r) in run_each(&planned[0], false) {
-        let e = r.unwrap_err();
-        assert!(e.starts_with(name) && e.contains("context"), "{e}");
-    }
-    // a part without context, in a world planned in two parts: refused for the plan
-    for (name, r) in run_each(&planned[1], true) {
-        let e = r.unwrap_err();
-        assert!(e.starts_with(name) && e.contains("planned in 2 parts"), "{e}");
-    }
-    // the whole world, one part: each runs
-    let (w, _) = world();
+    assert!(!planned[0].whole && !planned[1].whole);
+    refused(&planned[0], false);
+    refused(&planned[1], true);
+    // a source of its own giving two context-free parts with no plan in the world: refused by what it states
+    let all: BTreeSet<Entity> = world().0.entities().collect();
+    refused(
+        &Part {
+            roots: all.iter().copied().filter(|&e| e != placed[1]).collect(),
+            context: BTreeSet::new(),
+            whole: false,
+        },
+        false,
+    );
+    // the whole world, one part; a one-group plan without context; a world outside the part protocol: each runs
+    let (mut w, _) = world();
     let whole = parts(&mut WholeWorld::default(), &w);
     assert_eq!(whole.len(), 1);
-    assert!(whole[0].context.is_empty());
-    for (name, r) in run_each(&whole[0], false) {
-        assert!(r.is_ok(), "{name}: {r:?}");
+    assert!(whole[0].whole && whole[0].context.is_empty());
+    w.insert_resource(PartitionPlan {
+        by: "one cell".into(),
+        groups: vec![PartitionGroup {
+            key: "cell 0,0".into(),
+            roots: w.entities().collect(),
+            context: BTreeSet::new(),
+            area: None,
+        }],
+    });
+    let one = parts(&mut PlannedParts::default(), &w);
+    assert_eq!(one.len(), 1);
+    assert!(one[0].whole);
+    for scope in [Some(&whole[0]), Some(&one[0]), None] {
+        for (name, r) in run_each(scope, false) {
+            assert!(r.is_ok(), "{name}: {r:?}");
+        }
     }
 }
 

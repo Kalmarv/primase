@@ -110,6 +110,7 @@ impl PartSource for TileParts {
             return Ok(Some(Part {
                 roots: BTreeSet::from([e, proto]),
                 context: BTreeSet::new(),
+                whole: false,
             }));
         }
         let cells = self
@@ -121,6 +122,7 @@ impl PartSource for TileParts {
                 Some(Part {
                     roots: tiles.plans[0].roots(c),
                     context: BTreeSet::new(),
+                    whole: false,
                 })
             }
             None => None,

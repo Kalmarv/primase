@@ -84,7 +84,7 @@ impl Pass for PrepareReskateBlendOrder {
         &["skate.blend_chains"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateBlendChains>().is_some() {
             return Err(
                 "prepare-reskate-blend-order: the blend chains are already chosen (skate.blend_chains)"

@@ -12,6 +12,11 @@
 //!
 //! How the content is divided is a choice: [`WholeWorld`] is one part; [`PlannedParts`] takes the parts a partition
 //! pass (as `partition-grid`) put in the selected world's [`PartitionPlan`]; a destination may plan its own.
+//!
+//! Every part states whether it is the whole of what is written ([`Part::whole`]): the source says so, as it alone
+//! knows how it divides the content, and the part's passes read it in [`PartScope::whole`]; an operation that needs
+//! the whole (a map's floor, its spawn, a budget over all of it) refuses a part that is not. A world composed
+//! directly, outside this loop (no `core.part_scope` resource), is by definition the whole of what is written.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::pass::{PassManager, Pipeline, RunReport, Target};
@@ -102,10 +107,13 @@ pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Resul
 /// for it, goes to the writer, so content a part only reads is written by the part that owns it. The passes see which
 /// is which in the part's [`PartScope`]; content they make from a context entity ([`crate::pass::PassLog::place_from`])
 /// is left to the part that owns that entity.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Part {
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
+    /// Whether this part is the whole of what is written: every selected entity, nothing in another part. Stated by
+    /// the source (no default): an operation that needs the whole refuses a part that is not.
+    pub whole: bool,
 }
 
 /// How a conversion divides the selected world into parts.
@@ -136,6 +144,7 @@ impl PartSource for WholeWorld {
         Ok(self.roots.take().map(|roots| Part {
             roots,
             context: BTreeSet::new(),
+            whole: true,
         }))
     }
 }
@@ -165,10 +174,12 @@ pub struct PartitionGroup {
 /// `core.part_scope`: which entities of a part the conversion writes (its roots, and what they reach) and which it
 /// only loaded as context, for passes that make content per source entity. Put in the part's world before its passes
 /// and taken out before writing.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartScope {
     pub roots: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
+    /// The part's [`Part::whole`]: whether it is the whole of what is written.
+    pub whole: bool,
 }
 
 impl Resource for PartScope {
@@ -222,6 +233,8 @@ impl Resource for PartitionPlan {
 #[derive(Debug, Default)]
 pub struct PlannedParts {
     groups: std::vec::IntoIter<PartitionGroup>,
+    /// Whether the plan has one group (a part is then the whole when it needs no context).
+    single: bool,
 }
 
 /// The ground box `[west, south, east, north]` of a placement's prototype box.
@@ -264,11 +277,15 @@ impl PartSource for PlannedParts {
                 }
             }
         }
+        self.single = groups.len() == 1;
         self.groups = groups.into_iter();
         Ok(())
     }
     fn next_part(&mut self) -> Result<Option<Part>> {
+        // the whole only when the plan has one group and it needs no context
+        let single = self.single;
         Ok(self.groups.next().map(|g| Part {
+            whole: single && g.context.is_empty(),
             roots: g.roots,
             context: g.context,
         }))
@@ -682,7 +699,12 @@ fn run(
     let target = writer.target();
     "plan".clone_into(during);
     parts.plan(&world, &|p| reader.prototype_box(&world, p))?;
-    while let Some(Part { roots, context }) = parts.next_part()? {
+    while let Some(Part {
+        roots,
+        context,
+        whole,
+    }) = parts.next_part()?
+    {
         let ordinal = report.part_reports.len();
         *during = format!("part {ordinal}: load");
         let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
@@ -712,6 +734,7 @@ fn run(
         part.insert_resource(PartScope {
             roots: roots.clone(),
             context: context.clone(),
+            whole,
         });
         manager.run(&mut part, passes, &mut part_report.explicit)?;
         part.remove_resource::<PartScope>();

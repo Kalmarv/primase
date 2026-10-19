@@ -264,7 +264,7 @@ impl Pass for PrepareReskateWater {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         if self.ocean == OceanMaterials::All
             && let Some(mut col) = w.column_mut::<SkateMaterial>()
         {

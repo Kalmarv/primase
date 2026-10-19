@@ -113,7 +113,7 @@ impl Pass for PlanReskateBlendBudget {
         &["skate.blend_budget"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateBlendBudget>().is_some() {
             return Err(
                 "plan-reskate-blend-budget: the budget is already planned (skate.blend_budget)".into(),

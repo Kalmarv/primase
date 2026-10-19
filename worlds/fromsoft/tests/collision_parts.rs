@@ -186,10 +186,12 @@ fn two_parts_with_a_halo_write_each_file_and_body_once() {
         Part {
             roots: BTreeSet::from([a, pa]),
             context: BTreeSet::from([b, pb]),
+            whole: false,
         },
         Part {
             roots: BTreeSet::from([b, pb]),
             context: BTreeSet::from([a, pa]),
+            whole: false,
         },
     ]));
     assert_eq!(parts.len(), 2);

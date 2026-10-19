@@ -100,7 +100,7 @@ impl Pass for PlaceReskateSpawn {
         &["skate.marker"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_one_part(w, self.name())?;
+        super::require_whole_map(w, self.name())?;
         if w.iter::<SkateMarker>().any(|(_, m)| m.kind == MarkerKind::Spawn) {
             log.count("scenes with a spawn of their own: none placed", 1);
             return Ok(());

@@ -43,29 +43,20 @@ pub use textures::{PrepareReskateTextures, tint_pixels};
 pub use water::{OceanMaterials, PrepareReskateWater, WaterExtent, prepare_reskate_water};
 
 use primase_core::World;
-use primase_core::convert::{PartScope, PartitionPlan};
+use primase_core::convert::PartScope;
 
-/// A ReSkate map is one part. A pass that works on the whole map (its floor, its region, its spawn, the marker
-/// snaps) refuses a world that is one part of several: one whose `core.part_scope` loaded context from other parts,
-/// or whose `core.partition_plan` has more than one group. What it would compute from a part (a floor percentile,
-/// the collision a snap reaches, a spawn per part) is not the map's, until whole-map summaries reach a part.
-pub fn require_one_part(w: &World, pass: &str) -> Result<(), String> {
-    if let Some(s) = w.resource::<PartScope>()
-        && !s.context.is_empty()
-    {
-        return Err(format!(
-            "{pass}: a ReSkate map is one part, and this world is a part with {} entities of other parts as context",
+/// A ReSkate map is written whole. A pass that works on the whole map (its floor, its region, its spawn, the marker
+/// snaps, its lights, water, pause map, overlays, blend chains and their budget) refuses a part that is not the whole
+/// of what is written, as its part source states it (`core.part_scope`'s `whole`): what it would compute from a part
+/// (a floor percentile, the collision a snap reaches, a spawn per part, a budget) is not the map's. A world outside the
+/// part protocol (no `core.part_scope`: a program composing passes and the writer directly) is the whole map.
+pub fn require_whole_map(w: &World, pass: &str) -> Result<(), String> {
+    match w.resource::<PartScope>() {
+        Some(s) if !s.whole => Err(format!(
+            "{pass}: a ReSkate map is written whole, and this world is a part its source does not state is the whole              ({} roots, {} entities of other parts as context)",
+            s.roots.len(),
             s.context.len()
-        ));
+        )),
+        _ => Ok(()),
     }
-    if let Some(p) = w.resource::<PartitionPlan>()
-        && p.groups.len() > 1
-    {
-        return Err(format!(
-            "{pass}: a ReSkate map is one part, and this world is planned in {} parts ({})",
-            p.groups.len(),
-            p.by
-        ));
-    }
-    Ok(())
 }
