@@ -121,7 +121,7 @@ with its role (`allow(clippy::disallowed_*, reason = "<role>: ...")`).
 
 ```
 core/                 primase-core: world store, core components, TexFormat, frame, pass manager, conversion helper
-toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, hash, image, meshops, vertex, ...)
+toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, glb, hash, image, meshops, ...)
 worlds/<name>/        primase-<name>: one crate per game (or game family), engine family or destination (fromsoft,
                       gta, unity, frostbite, reskate, ...): its reader, its passes, and for a destination its
                       preparation passes and writer
@@ -133,8 +133,8 @@ Dependencies point down only: `cli -> worlds/formats -> toolkit -> core`. A worl
 core, never on a format. Each says what it is in its manifest (`[package.metadata.primase] kind`): a `game` crate (a
 game or a game family) or a `destination` crate may depend on its engine family's `engine` crate (`engine = "<package>"`),
 never the other way round, and an engine crate never depends on a game, a destination or a recipe; no other world
-depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the container other formats embed)
-only. What two of them share belongs lower. Dev-dependencies may add format crates (round-trip gates) and
+depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the scene writer other formats
+embed; the GLB codec itself is `toolkit/glb`) only. What two of them share belongs lower. Dev-dependencies may add format crates (round-trip gates) and
 `toolkit/testdata`, which is never a normal dependency.
 
 Names are owned: core, toolkit and formats name no game, engine or destination; a world crate uses only its own

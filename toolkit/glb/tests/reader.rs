@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_core::{Semantic, Stream, Topology};
-use primase_gltf::{Gltf, glb};
+use primase_glb::Gltf;
 use serde_json::{Value, json};
 
 /// Positions of one triangle, then unsigned-byte indices, then a unorm8 VEC2 texcoord with a 4-byte stride.
@@ -42,10 +42,10 @@ fn doc() -> Value {
 }
 
 fn glb_of(doc: &Value, bin: &[u8]) -> Vec<u8> {
-    glb::assemble(&serde_json::to_vec(doc).unwrap(), bin).unwrap()
+    primase_glb::assemble(&serde_json::to_vec(doc).unwrap(), bin).unwrap()
 }
 
-fn read(doc: &Value) -> Result<primase_gltf::ReadMesh, String> {
+fn read(doc: &Value) -> Result<primase_glb::ReadMesh, String> {
     Gltf::from_glb(&glb_of(doc, &bin()))
         .and_then(|g| g.read_mesh(0))
         .map_err(|e| e.to_string())

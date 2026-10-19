@@ -1,6 +1,8 @@
 //! Reader census over real scene folders: every mesh of every `prototypes/*.glb` (written by the games' existing
 //! exporters, not by us) is read by the strict reader, re-written by our writer and read back; the gate is a
-//! bit-exact match of every stream and index list. Skipped unless `PRIMASE_SCENES_SEKIRO` (scene folders whose own
+//! bit-exact match of every stream and index list. Each mesh is also encoded alone by primase-glb's single-mesh
+//! encoder, which must write what the writer writes for it as an unplaced prototype without materials, byte for byte
+//! but the generator (each names its crate). Skipped unless `PRIMASE_SCENES_SEKIRO` (scene folders whose own
 //! name starts with `scene_`) or `PRIMASE_SCENES_GTA` (every scene folder) is set. A configured root must yield at
 //! least one scene folder (a folder holding `scene.json` and `prototypes`).
 
@@ -10,8 +12,9 @@
 use std::path::{Path, PathBuf};
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_core::{Mesh, Transform, World};
-use primase_gltf::{Gltf, GroupBy, WriteOptions, write};
+use primase_core::{Mesh, Name, Transform, World};
+use primase_glb::Gltf;
+use primase_gltf::{GroupBy, WriteOptions, write};
 use primase_testdata::real_data;
 
 /// Every folder under `root` holding a `scene.json` and a `prototypes` folder whose own name starts with `prefix`
@@ -64,6 +67,11 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
                         .iter()
                         .map(|p| p.indices.as_ref().map_or(p.vertex_count(), Vec::len) as u64 / 3)
                         .sum::<u64>();
+                    let name = format!("mesh_{i}");
+                    match single_mesh_agrees(&name, &mesh) {
+                        Ok(()) => gate.record(format!("{item} mesh {i} alone"), 0.0),
+                        Err(why) => gate.fail(format!("{item} mesh {i} alone"), why),
+                    }
                     let e = world.spawn();
                     world.insert(e, Transform::IDENTITY);
                     world.insert(e, mesh.clone());
@@ -77,7 +85,9 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
             group_by: GroupBy::None,
             ..WriteOptions::default()
         };
-        let back = write(&world, &options).and_then(|(bytes, _)| Gltf::from_glb(&bytes));
+        let back = write(&world, &options)
+            .map_err(|e| e.to_string())
+            .and_then(|(bytes, _)| Gltf::from_glb(&bytes).map_err(|e| e.to_string()));
         let back = match back {
             Ok(b) => b,
             Err(e) => {
@@ -101,6 +111,46 @@ fn census(folder: &Path, gate: &mut GateReport) -> (u64, u64) {
         }
     }
     (meshes, triangles)
+}
+
+/// primase-glb's single-mesh encoder against the writer's GLB of `mesh` as the only, unplaced prototype (its
+/// primitives' materials cleared): the same JSON, key order included, and the same buffer, the generator aside.
+fn single_mesh_agrees(name: &str, mesh: &Mesh) -> Result<(), String> {
+    let mut bare = mesh.clone();
+    for mut p in bare.primitives_mut() {
+        *p.material_mut() = None;
+    }
+    let mut w = World::new();
+    let e = w.spawn();
+    w.insert(e, bare);
+    w.insert(e, Name(name.to_owned()));
+    let options = WriteOptions {
+        include_unplaced: true,
+        ..WriteOptions::default()
+    };
+    let theirs = write(&w, &options).map_err(|e| format!("writer: {e}"))?.0;
+    let ours = primase_glb::encode_mesh(name, mesh).map_err(|e| format!("encoder: {e}"))?;
+    let mut docs = [ours, theirs].map(|b| primase_glb::Document::parse(&b).unwrap());
+    let generators = docs
+        .each_mut()
+        .map(|d| std::mem::take(&mut d.json["asset"]["generator"]));
+    let version = env!("CARGO_PKG_VERSION");
+    let want = [
+        format!("primase-glb {version}"),
+        format!("primase-gltf {version}"),
+    ]
+    .map(serde_json::Value::from);
+    if generators != want {
+        return Err(format!("generators {generators:?}"));
+    }
+    let [a, b] = &docs;
+    if serde_json::to_string(&a.json).unwrap() != serde_json::to_string(&b.json).unwrap() {
+        return Err("the JSON differs".into());
+    }
+    if a.bin != b.bin {
+        return Err("the buffer differs".into());
+    }
+    Ok(())
 }
 
 fn run(var: &str, prefix: &str) {

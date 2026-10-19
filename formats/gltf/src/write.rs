@@ -56,19 +56,16 @@ use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
-    Primitive, Semantic, ShadowCast, Shadows, Stream, Texture, TextureFile, Tile, Topology, Transform,
-    TransformKind, World,
+    Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use primase_core::{LayeredMaterial, WeightMapping};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::read::bounds;
-use crate::{Error, Result, glb};
 use primase_core::json::f32s_value;
+use primase_glb::{Buffers, Document, PrimitiveAccessors};
 
-#[cfg(not(target_endian = "little"))]
-compile_error!("the writer casts vertex data to bytes and assumes little-endian");
+use crate::{Error, Result};
 
 /// How placements are grouped under empty nodes (Blender: parent empties; see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -252,9 +249,9 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
     Ok((bytes, report))
 }
 
-/// [`write`] as a [`glb::Document`], for a caller that changes it further before assembling the GLB once
+/// [`write`] as a [`Document`], for a caller that changes it further before assembling the GLB once
 /// (`WriteReport::glb_bytes` is then 0).
-pub fn write_document(world: &World, options: &WriteOptions) -> Result<(glb::Document, WriteReport)> {
+pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document, WriteReport)> {
     if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
         return Err(Error::World {
             entity,
@@ -265,9 +262,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(glb::Doc
         world,
         options,
         report: WriteReport::default(),
-        bin: Vec::new(),
-        views: Vec::new(),
-        accessors: Vec::new(),
+        buffers: Buffers::default(),
         meshes: Vec::new(),
         materials: Vec::new(),
         textures: Vec::new(),
@@ -286,7 +281,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(glb::Doc
         layered_weights: BTreeMap::new(),
     };
     let json = w.document()?;
-    Ok((glb::Document::new(json, std::mem::take(&mut w.bin)), w.report))
+    Ok((Document::new(json, std::mem::take(&mut w.buffers.bin)), w.report))
 }
 
 /// Write the world to a GLB file.
@@ -343,27 +338,18 @@ enum GroupKey {
     Untiled,
 }
 
-/// The accessors of one prototype primitive.
-#[derive(Clone)]
-struct PrimAccessors {
-    attributes: Vec<(String, usize)>,
-    indices: Option<usize>,
-    mode: Option<u32>,
-}
-
 struct Writer<'w> {
     world: &'w World,
     options: &'w WriteOptions,
     report: WriteReport,
-    bin: Vec<u8>,
-    views: Vec<Value>,
-    accessors: Vec<Value>,
+    /// The binary buffer, its views and accessors.
+    buffers: Buffers,
     meshes: Vec<Value>,
     materials: Vec<Value>,
     textures: Vec<Value>,
     samplers: Vec<Value>,
     images: Vec<Value>,
-    proto_accessors: BTreeMap<Src, Vec<PrimAccessors>>,
+    proto_accessors: BTreeMap<Src, Vec<PrimitiveAccessors>>,
     mesh_index: BTreeMap<(Src, Vec<Option<Entity>>), usize>,
     /// Material entity -> glTF index and the texture coordinate sets its written texture slots sample.
     /// Each material entity's glTF material and the sets it samples; `None` for one without `pbr.material`.
@@ -510,16 +496,16 @@ impl Writer<'_> {
             ("textures", std::mem::take(&mut self.textures)),
             ("samplers", std::mem::take(&mut self.samplers)),
             ("images", std::mem::take(&mut self.images)),
-            ("accessors", std::mem::take(&mut self.accessors)),
-            ("bufferViews", std::mem::take(&mut self.views)),
+            ("accessors", std::mem::take(&mut self.buffers.accessors)),
+            ("bufferViews", std::mem::take(&mut self.buffers.views)),
         ];
         for (key, list) in lists {
             if !list.is_empty() {
                 root.insert(key.into(), Value::Array(list));
             }
         }
-        if !self.bin.is_empty() {
-            root.insert("buffers".into(), json!([{"byteLength": self.bin.len()}]));
+        if !self.buffers.bin.is_empty() {
+            root.insert("buffers".into(), json!([{"byteLength": self.buffers.bin.len()}]));
         }
         Ok(Value::Object(root))
     }
@@ -781,7 +767,7 @@ impl Writer<'_> {
         &mut self,
         extras_of: &ExtrasOf,
         name: String,
-        accessors: &[PrimAccessors],
+        accessors: &[PrimitiveAccessors],
         materials: &[Option<Entity>],
         mesh: &Mesh,
     ) -> Result<usize> {
@@ -866,7 +852,7 @@ impl Writer<'_> {
     }
 
     /// Accessors of every primitive of a prototype, written once and shared by all its meshes.
-    fn prototype_accessors(&mut self, src: Src, mesh: &Mesh) -> Result<Vec<PrimAccessors>> {
+    fn prototype_accessors(&mut self, src: Src, mesh: &Mesh) -> Result<Vec<PrimitiveAccessors>> {
         if let Some(a) = self.proto_accessors.get(&src) {
             return Ok(a.clone());
         }
@@ -887,179 +873,19 @@ impl Writer<'_> {
                     .is_none_or(|m| primase_core::uses_color0(self.world, m)),
             };
             let a = self
-                .primitive_accessors(prim, color0)
+                .buffers
+                .primitive(prim, color0)
                 .map_err(|detail| Error::World {
                     entity: prototype,
                     detail: format!("primitive {i}: {detail}"),
                 })?;
+            for name in &a.skipped {
+                *self.report.streams_skipped.entry(name.clone()).or_default() += 1;
+            }
             out.push(a);
         }
         self.proto_accessors.insert(src, out.clone());
         Ok(out)
-    }
-
-    /// `color0`: whether `COLOR_0` is written (some drawing of the primitive reads it).
-    fn primitive_accessors(
-        &mut self,
-        prim: &Primitive,
-        color0: bool,
-    ) -> std::result::Result<PrimAccessors, String> {
-        let count = prim.vertex_count();
-        if !matches!(prim.streams.get(&Semantic::Position), Some(Stream::F32x3(_))) {
-            return Err("no f32x3 Position stream".into());
-        }
-        if count == 0 {
-            return Err("no vertices".into());
-        }
-        for (s, v) in &prim.streams {
-            if v.len() != count {
-                return Err(format!("{s:?} has {} values, Position {count}", v.len()));
-            }
-            let finite = match v {
-                Stream::F32x2(x) => x.iter().flatten().all(|f| f.is_finite()),
-                Stream::F32x3(x) => x.iter().flatten().all(|f| f.is_finite()),
-                Stream::F32x4(x) => x.iter().flatten().all(|f| f.is_finite()),
-                Stream::U8x4(_) | Stream::U16x4(_) => true,
-            };
-            if !finite {
-                return Err(format!("{s:?} has a non-finite value"));
-            }
-        }
-        let n = prim.indices.as_ref().map_or(count, Vec::len);
-        let per = match prim.topology {
-            Topology::Triangles => 3,
-            Topology::Lines => 2,
-            Topology::Points => 1,
-        };
-        if !n.is_multiple_of(per) || n == 0 {
-            return Err(format!("{n} vertices is not whole {:?}", prim.topology));
-        }
-        if let Some(idx) = &prim.indices
-            && let Some(bad) = idx.iter().find(|&&i| i as usize >= count)
-        {
-            return Err(format!("index {bad} of {count} vertices"));
-        }
-        let mut attributes = Vec::new();
-        for (semantic, stream) in &prim.streams {
-            if *semantic == Semantic::Color(0) && !color0 {
-                continue;
-            }
-            let (name, index) = match (semantic, stream) {
-                (Semantic::Position, Stream::F32x3(p)) => ("POSITION".to_owned(), self.positions_accessor(p)),
-                (Semantic::Normal, Stream::F32x3(v)) => (
-                    "NORMAL".to_owned(),
-                    self.float_accessor(bytemuck::cast_slice(v), count, "VEC3", None),
-                ),
-                (Semantic::Tangent, Stream::F32x4(v)) => (
-                    "TANGENT".to_owned(),
-                    self.float_accessor(bytemuck::cast_slice(v), count, "VEC4", None),
-                ),
-                (Semantic::TexCoord(n), Stream::F32x2(v)) => (
-                    format!("TEXCOORD_{n}"),
-                    self.float_accessor(bytemuck::cast_slice(v), count, "VEC2", None),
-                ),
-                (Semantic::Color(n), Stream::F32x3(v)) => (
-                    format!("COLOR_{n}"),
-                    self.float_accessor(bytemuck::cast_slice(v), count, "VEC3", None),
-                ),
-                (Semantic::Color(n), Stream::F32x4(v)) => (
-                    format!("COLOR_{n}"),
-                    self.float_accessor(bytemuck::cast_slice(v), count, "VEC4", None),
-                ),
-                (Semantic::Color(n), Stream::U8x4(v)) => (
-                    format!("COLOR_{n}"),
-                    self.unorm_accessor(bytemuck::cast_slice(v), count, 5121),
-                ),
-                (Semantic::Color(n), Stream::U16x4(v)) => (
-                    format!("COLOR_{n}"),
-                    self.unorm_accessor(bytemuck::cast_slice(v), count, 5123),
-                ),
-                (Semantic::Joints(n), _) | (Semantic::Weights(n), _) => {
-                    let name = match semantic {
-                        Semantic::Joints(_) => format!("JOINTS_{n}"),
-                        _ => format!("WEIGHTS_{n}"),
-                    };
-                    *self.report.streams_skipped.entry(name).or_default() += 1;
-                    continue;
-                }
-                (s, v) => return Err(format!("{s:?} stream of {} is not writable", stream_kind(v))),
-            };
-            attributes.push((name, index));
-        }
-        let indices = prim.indices.as_ref().map(|idx| self.indices_accessor(idx, count));
-        let mode = match prim.topology {
-            Topology::Triangles => None,
-            Topology::Lines => Some(1),
-            Topology::Points => Some(0),
-        };
-        Ok(PrimAccessors {
-            attributes,
-            indices,
-            mode,
-        })
-    }
-
-    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
-        self.bin.resize(self.bin.len().next_multiple_of(4), 0);
-        let mut v = Map::new();
-        v.insert("buffer".into(), json!(0));
-        v.insert("byteOffset".into(), json!(self.bin.len()));
-        v.insert("byteLength".into(), json!(bytes.len()));
-        if let Some(t) = target {
-            v.insert("target".into(), json!(t));
-        }
-        self.bin.extend_from_slice(bytes);
-        self.views.push(Value::Object(v));
-        self.views.len() - 1
-    }
-
-    fn positions_accessor(&mut self, p: &[[f32; 3]]) -> usize {
-        let (lo, hi) = bounds(p).expect("callers reject empty primitives");
-        self.float_accessor(bytemuck::cast_slice(p), p.len(), "VEC3", Some((&lo, &hi)))
-    }
-
-    fn float_accessor(
-        &mut self,
-        bytes: &[u8],
-        count: usize,
-        kind: &str,
-        minmax: Option<(&[f32], &[f32])>,
-    ) -> usize {
-        let view = self.view(bytes, Some(34962));
-        let mut a = Map::new();
-        a.insert("bufferView".into(), json!(view));
-        a.insert("componentType".into(), json!(5126));
-        a.insert("count".into(), json!(count));
-        a.insert("type".into(), json!(kind));
-        if let Some((lo, hi)) = minmax {
-            a.insert("min".into(), f32s_value(lo));
-            a.insert("max".into(), f32s_value(hi));
-        }
-        self.accessors.push(Value::Object(a));
-        self.accessors.len() - 1
-    }
-
-    fn unorm_accessor(&mut self, bytes: &[u8], count: usize, component: u32) -> usize {
-        let view = self.view(bytes, Some(34962));
-        self.accessors.push(json!({
-            "bufferView": view, "componentType": component, "normalized": true, "count": count, "type": "VEC4",
-        }));
-        self.accessors.len() - 1
-    }
-
-    /// Indices as unsigned short when every index is below 65535 (the primitive-restart value glTF forbids),
-    /// else unsigned int.
-    fn indices_accessor(&mut self, idx: &[u32], vertex_count: usize) -> usize {
-        let (view, component) = if vertex_count <= 65535 {
-            let short: Vec<u16> = idx.iter().map(|&i| i as u16).collect();
-            (self.view(bytemuck::cast_slice(&short), Some(34963)), 5123)
-        } else {
-            (self.view(bytemuck::cast_slice(idx), Some(34963)), 5125)
-        };
-        self.accessors.push(json!({
-            "bufferView": view, "componentType": component, "count": idx.len(), "type": "SCALAR",
-        }));
-        self.accessors.len() - 1
     }
 
     /// The glTF material of an entity, and the texture coordinate sets it samples; `None` for an entity with neither
@@ -1496,7 +1322,7 @@ impl Writer<'_> {
         let index = match self.image_by_hash.get(&hash) {
             Some(&i) => i,
             None => {
-                let view = self.view(&bytes, None);
+                let view = self.buffers.view(&bytes, None);
                 self.images
                     .push(json!({"name": image_name, "mimeType": "image/png", "bufferView": view}));
                 self.report.images += 1;
@@ -1586,16 +1412,6 @@ fn wrap_code(w: Wrap) -> u32 {
         Wrap::Repeat => 10497,
         Wrap::Clamp => 33071,
         Wrap::Mirror => 33648,
-    }
-}
-
-fn stream_kind(s: &Stream) -> &'static str {
-    match s {
-        Stream::F32x2(_) => "f32x2",
-        Stream::F32x3(_) => "f32x3",
-        Stream::F32x4(_) => "f32x4",
-        Stream::U8x4(_) => "u8x4",
-        Stream::U16x4(_) => "u16x4",
     }
 }
 

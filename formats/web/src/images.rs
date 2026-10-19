@@ -1,7 +1,7 @@
 //! Shared images (format 2.0): a tile GLB's embedded images move out into files named by the SHA256 of their bytes,
 //! referenced by URI, and the GLB's binary chunk is compacted to what remains (geometry and its views).
 use crate::{Error, Result};
-use primase_gltf::glb::Document;
+use primase_glb::Document;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;

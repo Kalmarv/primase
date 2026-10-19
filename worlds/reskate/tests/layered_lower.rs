@@ -58,7 +58,7 @@ fn installed_layered_scene() {
         if layered == 0 {
             continue;
         }
-        primase_gltf::load_mesh_files(&mut world, folder).unwrap();
+        primase_glb::load_mesh_files(&mut world, folder).unwrap();
         let before = triangles(&world);
         primase_reskate::passes::lower::LowerSkatePbr
             .run(&mut world, &mut PassLog::default())

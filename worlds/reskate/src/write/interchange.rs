@@ -778,22 +778,8 @@ impl Writer<'_> {
                                 sha256: g.sha256.clone(),
                             };
                             let g = &own;
-                            let mut local = mesh.clone();
-                            for mut prim in local.primitives_mut() {
-                                *prim.material_mut() = None;
-                            }
-                            let mut glb = World::default();
-                            let proto = glb.spawn();
-                            glb.insert(proto, local);
-                            glb.insert(proto, Name(p.id.clone()));
-                            let (bytes, _) = primase_gltf::write(
-                                &glb,
-                                &primase_gltf::WriteOptions {
-                                    include_unplaced: true,
-                                    ..Default::default()
-                                },
-                            )
-                            .map_err(|err| bad(format!("{what}: {err}")))?;
+                            let bytes = primase_glb::encode_mesh(&p.id, mesh)
+                                .map_err(|err| bad(format!("{what}: {err}")))?;
                             (self.encoded(g, bytes)?, 0)
                         }
                     };

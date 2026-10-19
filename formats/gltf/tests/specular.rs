@@ -46,7 +46,7 @@ fn world(specular: impl FnOnce(&mut World) -> Option<Specular>) -> World {
 
 fn document(w: &World) -> serde_json::Value {
     let (bytes, _) = primase_gltf::write(w, &primase_gltf::WriteOptions::default()).unwrap();
-    let chunks = primase_gltf::glb::parse(&bytes).unwrap();
+    let chunks = primase_glb::parse(&bytes).unwrap();
     serde_json::from_slice(chunks.json).unwrap()
 }
 

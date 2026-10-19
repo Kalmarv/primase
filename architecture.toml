@@ -8,13 +8,6 @@
 
 # ---- crate dependencies ----
 
-[[dependency]]
-from = "worlds/reskate"
-to = "formats/gltf"
-section = "dependencies"
-reason = "the interchange reads and writes prototype GLBs, and the post-compile step reads the map's"
-removed_when = "the GLB codec moves into the toolkit (separate change after step 15)"
-
 # ---- game, engine and destination names: none in core, toolkit and formats; a worlds crate only its own ----
 
 # ---- worlds crate layout: modules not yet arranged by role (read/, passes/, write/, components/, stages) ----

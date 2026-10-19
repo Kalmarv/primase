@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     support::write_entries(&proof, &output)?;
     let mut reference = Vec::new();
     for tile in &set.index.tiles {
-        let chunks = primase_gltf::glb::parse(&set.files[&tile.file])?;
+        let chunks = primase_glb::parse(&set.files[&tile.file])?;
         let doc: Value = serde_json::from_slice(chunks.json)?;
         if let Some(images) = doc["images"].as_array() {
             for (i, image) in images.iter().enumerate() {

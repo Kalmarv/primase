@@ -15,7 +15,7 @@ fn hash(bytes: &[u8]) -> String {
 }
 /// A tile's proof entry: its hash and every meshopt stream decoded independently, hashed.
 pub fn tile_proof(file: &str, bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
-    let chunks = primase_gltf::glb::parse(bytes)?;
+    let chunks = primase_glb::parse(bytes)?;
     let doc: Value = serde_json::from_slice(chunks.json)?;
     let mut streams = Vec::new();
     for (i, v) in doc["bufferViews"]

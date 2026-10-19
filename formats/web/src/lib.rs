@@ -30,6 +30,8 @@ pub enum Error {
     #[error(transparent)]
     Gltf(#[from] primase_gltf::Error),
     #[error(transparent)]
+    Glb(#[from] primase_glb::Error),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("{path}: {source}")]
     Io { path: PathBuf, source: std::io::Error },
@@ -1163,7 +1165,7 @@ impl TilePlan {
         let render = if triangles == 0 {
             Ok(None)
         } else {
-            (|| -> Result<Option<(TileInfo, primase_gltf::glb::Document, ImageFiles)>> {
+            (|| -> Result<Option<(TileInfo, primase_glb::Document, ImageFiles)>> {
                 if !min.iter().chain(&max).all(|v| v.is_finite()) {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
@@ -1246,7 +1248,7 @@ impl TilePlan {
         &self,
         (col, row): (i32, i32),
         sub: Option<Subcell>,
-        render: Option<(TileInfo, primase_gltf::glb::Document)>,
+        render: Option<(TileInfo, primase_glb::Document)>,
         records: &BTreeMap<usize, ViewerItem>,
         items: &[usize],
         lights: &[usize],
@@ -1377,7 +1379,7 @@ impl TilePlan {
             used.push(json!(LIGHTS));
             doc["extensionsUsed"] = Value::Array(used);
         }
-        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?;
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc)?, &bin)?;
         let descriptor = collision.as_ref().map(|(file, b)| CollisionFile {
             file: file.clone(),
             bytes: b.len() as u64,

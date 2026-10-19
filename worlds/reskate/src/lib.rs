@@ -244,9 +244,9 @@ pub enum Error {
     Table { path: String, message: String },
     #[error("write: {0}")]
     Write(String),
-    /// A scene's GLB that the glTF reader refused.
+    /// A scene's GLB that the GLB reader refused, or a prototype mesh the encoder did.
     #[error(transparent)]
-    Gltf(#[from] primase_gltf::Error),
+    Glb(#[from] primase_glb::Error),
     /// A scene's texture file that the image toolkit refused.
     #[error(transparent)]
     Image(#[from] primase_image::Error),

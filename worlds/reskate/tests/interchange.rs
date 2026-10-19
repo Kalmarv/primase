@@ -415,7 +415,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
         assert!(closure.contains(&entity));
     }
     let mut cell = world.subset(&closure);
-    primase_gltf::load_mesh_files(&mut cell, &dir).unwrap();
+    primase_glb::load_mesh_files(&mut cell, &dir).unwrap();
     primase_image::load_textures(&mut cell, &dir).unwrap();
     primase_reskate::passes::lower::LowerSkatePbr
         .run(&mut cell, &mut PassLog::default())

@@ -208,5 +208,5 @@ pub(super) fn write(items: &[&ViewerItem]) -> Result<Vec<u8>> {
         nodes.push(json!({"mesh":meshes.len()-1,"name":item.name}));
     }
     let doc = json!({"asset":{"version":"2.0","generator":"primase-web"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"accessors":accessors,"bufferViews":views,"buffers":[{"byteLength":bin.len()}]});
-    Ok(primase_gltf::glb::assemble(&serde_json::to_vec(&doc)?, &bin)?)
+    Ok(primase_glb::assemble(&serde_json::to_vec(&doc)?, &bin)?)
 }

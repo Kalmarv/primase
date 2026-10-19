@@ -1,6 +1,6 @@
 use crate::{Error, Result, require_extension};
 use primase_core::Transform;
-use primase_gltf::glb::Document;
+use primase_glb::Document;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 const EXT: &str = "EXT_mesh_gpu_instancing";

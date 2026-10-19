@@ -247,7 +247,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         let mut one = World::new();
         primase_reskate::interchange::read(&scene, &mut one).unwrap();
         choose_lod(&mut one);
-        primase_gltf::load_mesh_files(&mut one, &scene).unwrap();
+        primase_glb::load_mesh_files(&mut one, &scene).unwrap();
         let mut one_log = PassLog::default();
         LowerLayeredReskate::new(OverlayLimit::One)
             .run(&mut one, &mut one_log)
@@ -262,7 +262,7 @@ fn layered_scenes_build_with_vertex_blend_overlays() {
         let shared = shared_overlay_triangles(&one);
         assert_eq!(shared, 0, "{}: triangles with two overlays", scene.display());
         // the default draws every layer
-        primase_gltf::load_mesh_files(&mut w, &scene).unwrap();
+        primase_glb::load_mesh_files(&mut w, &scene).unwrap();
         let mut log = PassLog::default();
         LowerLayeredReskate::new(OverlayLimit::All)
             .run(&mut w, &mut log)

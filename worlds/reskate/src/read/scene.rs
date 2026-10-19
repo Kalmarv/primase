@@ -9,7 +9,7 @@ use primase_core::{Entity, MeshFile, World};
 /// A skate-scene folder read for a conversion: [`super::interchange::read`] gives the world to plan from (its GLBs and
 /// textures as file references), and each part's closure is loaded with [`super::interchange::load`] (the meshes, the
 /// textures and the pause-map picture its entities reference). Its components are `core` and the `skate` dialect; a
-/// prototype's box before loading is its GLB's, from the file's header ([`primase_gltf::mesh_file_box`]).
+/// prototype's box before loading is its GLB's, from the file's header ([`primase_glb::mesh_file_box`]).
 #[derive(Debug)]
 pub struct SceneReader {
     dir: PathBuf,
@@ -75,7 +75,7 @@ impl Reader for SceneReader {
 
     fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         let file = world.get::<MeshFile>(prototype)?;
-        match primase_gltf::mesh_file_box(&self.dir, file) {
+        match primase_glb::mesh_file_box(&self.dir, file) {
             Ok(b) => b,
             Err(e) => {
                 self.noticed.borrow_mut().push(Notice::new(

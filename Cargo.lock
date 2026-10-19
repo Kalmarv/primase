@@ -872,7 +872,6 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-dxbc",
- "primase-gltf",
  "primase-havok",
  "primase-image",
  "primase-meshops",
@@ -896,11 +895,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-glb"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "primase-core",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-gltf"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
  "primase-core",
+ "primase-glb",
  "primase-image",
  "primase-meshops",
  "primase-testdata",
@@ -977,6 +987,7 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-frostbite",
+ "primase-glb",
  "primase-gltf",
  "primase-hash",
  "primase-image",
@@ -1057,6 +1068,7 @@ dependencies = [
  "meshopt",
  "primase-cache",
  "primase-core",
+ "primase-glb",
  "primase-gltf",
  "primase-image",
  "primase-meshops",

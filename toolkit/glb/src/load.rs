@@ -2,7 +2,7 @@
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "reader I/O: a reader's load step reads the GLB files its world references"
+    reason = "toolkit I/O: the load step readers share reads the GLB files their world references"
 )]
 
 use std::collections::BTreeMap;

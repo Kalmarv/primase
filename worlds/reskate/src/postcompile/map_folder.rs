@@ -174,7 +174,7 @@ fn map_file(map: &Path, rel: &str) -> Result<PathBuf> {
 /// A map GLB, read and parsed once.
 struct MapGlb {
     path: PathBuf,
-    gltf: primase_gltf::Gltf,
+    gltf: primase_glb::Gltf,
 }
 
 /// Reads and parses the map GLB at `path`, which must hold the writer's one mesh.
@@ -184,7 +184,7 @@ fn load_glb(path: &Path) -> Result<MapGlb> {
         source,
     })?;
     let fail = |d: String| bad(W, 0, format!("{}: {d}", path.display()));
-    let gltf = primase_gltf::Gltf::from_glb(&bytes).map_err(|e| fail(e.to_string()))?;
+    let gltf = primase_glb::Gltf::from_glb(&bytes).map_err(|e| fail(e.to_string()))?;
     // the writer writes one mesh per GLB, and the record's primitive indices are that mesh's
     let meshes = gltf.json()["meshes"].as_array().map_or(0, Vec::len);
     if meshes != 1 {
@@ -293,7 +293,7 @@ mod tests {
             "meshes": vec![mesh; meshes],
         });
         let bin: Vec<u8> = [0.25f32, 0.5].iter().flat_map(|w| w.to_le_bytes()).collect();
-        let bytes = primase_gltf::glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
+        let bytes = primase_glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
         let path = std::env::temp_dir().join(format!("vbrecord-{name}-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         path
@@ -358,7 +358,7 @@ mod tests {
             .flat_map(|w| w.to_le_bytes())
             .collect();
         bin.extend(idx.iter().flat_map(|i| i.to_le_bytes()));
-        let bytes = primase_gltf::glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
+        let bytes = primase_glb::assemble(json.to_string().as_bytes(), &bin).unwrap();
         let path = std::env::temp_dir().join(format!("vbrecord-{name}-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         path

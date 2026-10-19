@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_gltf::glb::Document;
+use primase_glb::Document;
 use serde_json::{Map, Value, json};
 
 use crate::{Error, Result};

@@ -25,7 +25,6 @@ thiserror.workspace = true
 aes.workspace = true
 num-bigint.workspace = true
 [dev-dependencies]
-primase-gltf.workspace = true
 primase-testdata.workspace = true
 sha2.workspace = true
 [lints]

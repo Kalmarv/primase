@@ -1759,7 +1759,7 @@ struct PendingForm {
 /// What [`load`] read: the prototypes' meshes, the textures, and the scene's own pause-map picture.
 #[derive(Clone, Debug, Default)]
 pub struct LoadReport {
-    pub meshes: primase_gltf::LoadReport,
+    pub meshes: primase_glb::LoadReport,
     pub textures: primase_image::TextureLoadReport,
     /// Whether the scene names a pause-map picture, read into [`crate::passes::SkatePauseImage`].
     pub pause_image: bool,
@@ -1821,13 +1821,13 @@ pub fn load(dir: &Path, world: &mut primase_core::World) -> Result<LoadReport> {
     // every mesh file, each GLB parsed once
     let jobs: Vec<(primase_core::Entity, MeshFile)> =
         world.iter::<MeshFile>().map(|(e, f)| (e, f.clone())).collect();
-    let mut glbs: BTreeMap<std::path::PathBuf, (primase_gltf::Gltf, Arc<[u8]>)> = BTreeMap::new();
+    let mut glbs: BTreeMap<std::path::PathBuf, (primase_glb::Gltf, Arc<[u8]>)> = BTreeMap::new();
     let mut loaded_meshes = Vec::new();
     for (e, mf) in jobs {
         let path = dir.join(&mf.path);
         if !glbs.contains_key(&path) {
             let bytes = read_bytes(&path)?;
-            let gltf = primase_gltf::Gltf::from_glb(&bytes)
+            let gltf = primase_glb::Gltf::from_glb(&bytes)
                 .map_err(|err| crate::Error::Scene(format!("{}: {err}", path.display())))?;
             glbs.insert(path.clone(), (gltf, bytes));
             report.meshes.files += 1;

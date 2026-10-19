@@ -11,7 +11,7 @@ use basisu_c_sys::{
         types::Extent3d,
     },
 };
-use primase_gltf::glb::Document;
+use primase_glb::Document;
 
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -954,7 +954,7 @@ mod tests {
             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
             "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"alphaMode":"MASK","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0}},"normalTexture":{"index":0}}]});
-        primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap()
+        primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap()
     }
 
     #[test]
@@ -1098,9 +1098,9 @@ mod tests {
             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
             "images":[{"bufferView":0,"mimeType":"image/png","extras":{"primase.role":"data"}}],"textures":[{"source":0}],
             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}]});
-        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         let t = doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
             .as_u64()
@@ -1146,9 +1146,9 @@ mod tests {
             "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"extensions":{"KHR_materials_specular":{
                 "specularTexture":{"index":0},"specularColorTexture":{"index":0}}}}]});
-        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         let ext = &doc["materials"][0]["extensions"]["KHR_materials_specular"];
         let role = |slot: &str| {
@@ -1179,9 +1179,9 @@ mod tests {
                 "extensions":{"PRIMASE_layered_material":{"version":2,"weights":{"attribute":"COLOR_1",
                 "mapping":"identity","channels":[{"source":mask},{"threshold":{"v":{"vertex":{"attribute":"COLOR_0",
                 "channel":0}},"m":mask,"k":[0,1,1,0]}}]},"layers":[{"material":0},{"material":0}]}}}]});
-        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         let role = |pointer: &str| {
             let t = doc["materials"][0].pointer(pointer).unwrap().as_u64().unwrap() as usize;
@@ -1217,12 +1217,12 @@ mod tests {
             "accessors":[{"bufferView":0,"componentType":5126,"count":1,"type":"VEC3"}],
             "images":[{"bufferView":1,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0}},"normalTexture":{"index":0}}]});
-        let bytes = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &bin).unwrap();
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &bin).unwrap();
         let mut encoder = TextureEncoder::default();
         let output = glb(&mut encoder, bytes.clone()).unwrap();
         assert_eq!(output, glb(&mut encoder, bytes).unwrap());
         assert_eq!(encoder.memory.entries.len(), 3);
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         assert_eq!(doc["images"].as_array().unwrap().len(), 3);
         assert_eq!(&chunks.bin.unwrap()[..12], &[0; 12]);
@@ -1251,7 +1251,7 @@ mod tests {
             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
             "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}]});
-        let input = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let input = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let digest: [u8; 32] = Sha256::digest(&png).into();
         let chosen = encode_rgba8(4, 4, &[1, 2, 3, 255].repeat(16), true).unwrap();
         let prepared = crate::prepare::PreparedImages(BTreeMap::from([(
@@ -1268,7 +1268,7 @@ mod tests {
             .unwrap()
             .to_glb()
             .unwrap();
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         assert_eq!(
             doc["images"][0]["extras"]["primase.web_texture"],
@@ -1307,9 +1307,9 @@ mod tests {
             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
             "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"alphaMode":"BLEND","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}]});
-        let input = primase_gltf::glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let input = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let output = glb(&mut TextureEncoder::default(), input).unwrap();
-        let chunks = primase_gltf::glb::parse(&output).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
         let doc: Value = serde_json::from_slice(chunks.json).unwrap();
         assert_eq!(doc["images"][0]["mimeType"], "image/png");
         assert_eq!(doc["textures"][0]["source"], 0);

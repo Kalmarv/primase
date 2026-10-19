@@ -1,5 +1,5 @@
 use crate::{Error, Result, require_extension as extension};
-use primase_gltf::glb::Document;
+use primase_glb::Document;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for tile in index["tiles"].as_array().ok_or("tiles")? {
         let name = tile["file"].as_str().ok_or("tile file")?;
         let glb = std::fs::read(folder.join(name))?;
-        let chunks = primase_gltf::glb::parse(&glb)?;
+        let chunks = primase_glb::parse(&glb)?;
         let doc: Value = serde_json::from_slice(chunks.json)?;
         let Some(image_list) = doc["images"].as_array() else {
             continue;
@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
-        let plain = plain_bytes.as_deref().map(primase_gltf::glb::parse).transpose()?;
+        let plain = plain_bytes.as_deref().map(primase_glb::parse).transpose()?;
         let plain_doc: Option<Value> = plain.map(|p| serde_json::from_slice(p.json)).transpose()?;
         for (i, image) in image_list.iter().enumerate() {
             let bytes = &image_bytes(&folder, &doc, chunks.bin, image)?[..];

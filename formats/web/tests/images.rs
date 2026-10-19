@@ -110,7 +110,7 @@ fn images_are_shared_files_and_tiles_reference_them() {
                 set.index.images.iter().map(|i| &i.file).collect::<BTreeSet<_>>()
             );
             let glb = &set.files[&t.file];
-            let chunks = primase_gltf::glb::parse(glb).unwrap();
+            let chunks = primase_glb::parse(glb).unwrap();
             let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
             let uris: Vec<&str> = doc["images"]
                 .as_array()
@@ -140,7 +140,7 @@ fn images_are_shared_files_and_tiles_reference_them() {
             }
             // the plain set's geometry still reads back (primase-gltf does not decode meshopt)
             if !options.compress {
-                let g = primase_gltf::Gltf::from_glb(glb).unwrap();
+                let g = primase_glb::Gltf::from_glb(glb).unwrap();
                 assert!(g.mesh_count() >= 1);
             }
         }

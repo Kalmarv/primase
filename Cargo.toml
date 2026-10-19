@@ -10,6 +10,7 @@ members = [
     "toolkit/vertex",
     "toolkit/meshops",
     "toolkit/compress",
+    "toolkit/glb",
     "toolkit/hash",
     "toolkit/havok",
     "toolkit/dxbc",
@@ -58,6 +59,7 @@ primase-image = { path = "toolkit/image" }
 primase-vertex = { path = "toolkit/vertex" }
 primase-meshops = { path = "toolkit/meshops" }
 primase-compress = { path = "toolkit/compress" }
+primase-glb = { path = "toolkit/glb" }
 primase-hash = { path = "toolkit/hash" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }

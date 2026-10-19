@@ -14,7 +14,7 @@ use primase_core::{Mesh, Primitive, Semantic, Stream, Topology};
 use serde_json::Value;
 
 use crate::json::{Obj, invalid};
-use crate::{Error, Result, glb};
+use crate::{Error, Result};
 
 const BYTE: u64 = 5120;
 const UNSIGNED_BYTE: u64 = 5121;
@@ -59,7 +59,7 @@ impl ReadMesh {
 impl Gltf {
     /// Parse a GLB: the container, the JSON, the asset version, required extensions and the buffer.
     pub fn from_glb(bytes: &[u8]) -> Result<Gltf> {
-        let chunks = glb::parse(bytes)?;
+        let chunks = crate::parse(bytes)?;
         let json: Value = serde_json::from_slice(chunks.json)?;
         let root = Obj::new(&json, "")?;
         let asset = Obj::new(

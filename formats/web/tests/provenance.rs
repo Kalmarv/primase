@@ -65,7 +65,7 @@ fn world() -> World {
 }
 
 fn doc(bytes: &[u8]) -> Value {
-    let chunks = primase_gltf::glb::parse(bytes).expect("a GLB");
+    let chunks = primase_glb::parse(bytes).expect("a GLB");
     serde_json::from_slice(chunks.json).expect("its JSON")
 }
 
@@ -155,7 +155,7 @@ fn tiles_without_provenance_have_no_table() {
     }
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let text = String::from_utf8_lossy(
-        primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file])
+        primase_glb::parse(&set.files[&set.index.tiles[0].file])
             .unwrap()
             .json,
     )

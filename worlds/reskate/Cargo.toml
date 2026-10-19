@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
-primase-gltf.workspace = true
+primase-glb.workspace = true
 primase-hash.workspace = true
 primase-compress.workspace = true
 primase-frostbite.workspace = true
@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+primase-gltf.workspace = true
 primase-testdata.workspace = true
 
 [lints]

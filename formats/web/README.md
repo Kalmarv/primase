@@ -30,7 +30,7 @@ runs the pass before planning (no real scene converted so far has one).
 
 A reader that loads meshes only per cell plans with `plan_with_geometry`, saying
 which prototypes have geometry still to load; `spanning` finds, from prototype
-boxes (`primase_gltf::mesh_file_box` reads one from a GLB's JSON alone), the
+boxes (`primase_glb::mesh_file_box` reads one from a GLB's JSON alone), the
 placements whose pivot does not locate their geometry, to be filed by triangle
 centre.
 

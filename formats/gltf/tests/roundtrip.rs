@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 
 use common::{Built, build, scratch};
 use primase_core::{Entity, Mesh, MeshFile, Semantic, Stream, Topology, World};
-use primase_gltf::{Gltf, GroupBy, WriteOptions, WriteReport, load_mesh_files, write};
+use primase_glb::{Gltf, load_mesh_files};
+use primase_gltf::{GroupBy, WriteOptions, WriteReport, write};
 use serde_json::{Value, json};
 
 fn options(b: &Built) -> WriteOptions {

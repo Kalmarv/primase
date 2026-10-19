@@ -80,7 +80,7 @@ fn pivot_tiles_negative_coordinates_and_determinism() {
     );
     assert_eq!(a.files, write(&w, &options).unwrap().files);
     for t in &a.index.tiles {
-        let g = primase_gltf::Gltf::from_glb(&a.files[&t.file]).unwrap();
+        let g = primase_glb::Gltf::from_glb(&a.files[&t.file]).unwrap();
         assert_eq!(g.mesh_count(), 1);
         assert_eq!(g.json()["nodes"].as_array().unwrap().len() as u64, t.placements);
         assert_eq!(a.files[&t.file].len() as u64, t.bytes);
@@ -116,7 +116,7 @@ fn triangle_centres_keep_whole_faces() {
     assert_eq!(tiles.index.tiles[1].max[0], 203.);
     for t in &tiles.index.tiles {
         assert_eq!(t.triangles, 1);
-        let g = primase_gltf::Gltf::from_glb(&tiles.files[&t.file]).unwrap();
+        let g = primase_glb::Gltf::from_glb(&tiles.files[&t.file]).unwrap();
         let mesh = g.read_mesh(0).unwrap().to_mesh();
         assert_eq!(mesh.primitives()[0].vertex_count(), 3);
         assert_eq!(mesh.primitives()[0].indices, Some(vec![0, 1, 2]));
@@ -214,7 +214,7 @@ fn instancing_trs_and_baked_mirrors_shears() {
     assert_eq!(tile.instanced_placements, 3);
     let bytes = &out.files[&tile.file];
     assert_eq!(*bytes, write(&w, &plain()).unwrap().files[&tile.file]);
-    let chunks = primase_gltf::glb::parse(bytes).unwrap();
+    let chunks = primase_glb::parse(bytes).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let nodes = doc["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), 3);
@@ -334,7 +334,7 @@ fn quantized_streams_decode_exactly_and_validate() {
             .files
     );
     let bytes = set.files.values().next().unwrap();
-    let chunks = primase_gltf::glb::parse(bytes).unwrap();
+    let chunks = primase_glb::parse(bytes).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let a = &doc["accessors"][doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
         .as_u64()
@@ -442,7 +442,7 @@ fn one_mesh(positions: Vec<[f32; 3]>) -> (serde_json::Value, Vec<u8>) {
     w.insert(e, Transform::IDENTITY);
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     let bytes = set.files.values().next().unwrap();
-    let chunks = primase_gltf::glb::parse(bytes).unwrap();
+    let chunks = primase_glb::parse(bytes).unwrap();
     (
         serde_json::from_slice(chunks.json).unwrap(),
         chunks.bin.unwrap().to_vec(),
@@ -540,7 +540,7 @@ fn viewer_records_make_metadata_only_tiles_and_keep_payloads() {
         (tile.col, tile.row, tile.viewer_items, tile.triangles),
         (-1, -2, 1, 0)
     );
-    let chunks = primase_gltf::glb::parse(&set.files[&tile.file]).unwrap();
+    let chunks = primase_glb::parse(&set.files[&tile.file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     assert_eq!(doc["nodes"][0]["name"], "Viewer_spawn___test_0");
     assert!(doc.get("meshes").is_none());
@@ -611,7 +611,7 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
     let set = write(&w, &options).unwrap();
     let mut records = Vec::new();
     for tile in &set.index.tiles {
-        let chunks = primase_gltf::glb::parse(&set.files[&tile.file]).unwrap();
+        let chunks = primase_glb::parse(&set.files[&tile.file]).unwrap();
         let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
         for node in doc["nodes"].as_array().unwrap() {
             records.push((node["name"].clone(), node["extras"]["primase"].clone()));
@@ -695,7 +695,7 @@ fn collision_payload_is_external_and_referenced() {
     let hash: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
     assert!(collision.file.ends_with(&format!(".{hash}.glb")));
     assert_eq!(bytes.len() as u64, collision.bytes);
-    let collision_chunks = primase_gltf::glb::parse(bytes).unwrap();
+    let collision_chunks = primase_glb::parse(bytes).unwrap();
     let collision_doc: serde_json::Value = serde_json::from_slice(collision_chunks.json).unwrap();
     assert_eq!(collision_doc["meshes"].as_array().unwrap().len(), 1);
     assert_eq!(collision_doc["accessors"][2]["count"], 1);
@@ -704,7 +704,7 @@ fn collision_payload_is_external_and_referenced() {
         &[0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]
     );
     assert_eq!(collision_chunks.bin.unwrap()[48], 0);
-    let chunks = primase_gltf::glb::parse(&set.files[&tile.file]).unwrap();
+    let chunks = primase_glb::parse(&set.files[&tile.file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let record = &doc["nodes"][0]["extras"]["primase"]["web.viewer"]["value"];
     assert_eq!(record["kind"], "collision_reference");
@@ -733,7 +733,7 @@ fn compressed_plain_nodes_omit_absent_matrix() {
     w.insert(e, mesh());
     w.insert(e, Transform::IDENTITY);
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
-    let chunks = primase_gltf::glb::parse(set.files.values().next().unwrap()).unwrap();
+    let chunks = primase_glb::parse(set.files.values().next().unwrap()).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let node = &doc["nodes"][0];
     // 1 m across: the frame is centred on (0.5, 0, 0.5) with step 0.5/32767, the smallest f32 at or above it
@@ -804,7 +804,7 @@ fn texture_transforms_survive_instancing_and_compression() {
     }
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 3);
-    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let chunks = primase_glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let used: Vec<&str> = doc["extensionsUsed"]
         .as_array()
@@ -871,7 +871,7 @@ fn world_collision_is_placed_and_named() {
     let mut firsts = Vec::new();
     for tile in &set.index.tiles {
         let Some(c) = &tile.collision else { continue };
-        let chunks = primase_gltf::glb::parse(&set.collision_files[&c.file]).unwrap();
+        let chunks = primase_glb::parse(&set.collision_files[&c.file]).unwrap();
         let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
         let bin = chunks.bin.unwrap();
         for m in doc["meshes"].as_array().unwrap() {
@@ -902,7 +902,7 @@ fn collision_fronts(set: &primase_web::TileSet) -> Vec<([f32; 3], u16)> {
     let mut out = Vec::new();
     for tile in &set.index.tiles {
         let Some(c) = &tile.collision else { continue };
-        let chunks = primase_gltf::glb::parse(&set.collision_files[&c.file]).unwrap();
+        let chunks = primase_glb::parse(&set.collision_files[&c.file]).unwrap();
         let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
         let bin = chunks.bin.unwrap();
         let view = |a: &serde_json::Value| {
@@ -1071,8 +1071,7 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
     assert_eq!(index["tiles"][1]["content"], "metadata_only");
     for (tile, kind) in set.index.tiles.iter().zip(["point", "spot"]) {
         let bytes = &set.files[&tile.file];
-        let doc: serde_json::Value =
-            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(primase_glb::parse(bytes).unwrap().json).unwrap();
         assert!(
             doc["extensionsUsed"]
                 .as_array()
@@ -1137,7 +1136,7 @@ fn emissive_strength_survives_compression_and_instancing() {
     }
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 2);
-    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let chunks = primase_glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     assert_eq!(
         doc["materials"][0]["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"],
@@ -1184,7 +1183,7 @@ fn shadows_split_instance_groups_and_stay_on_their_nodes() {
     }
     let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
     assert_eq!(set.index.tiles[0].instanced_placements, 4);
-    let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+    let chunks = primase_glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let instanced: Vec<_> = doc["nodes"]
         .as_array()
@@ -1210,7 +1209,7 @@ fn shadows_split_instance_groups_and_stay_on_their_nodes() {
         ..plain()
     };
     let plain = write(&w, &uninstanced).unwrap();
-    let chunks = primase_gltf::glb::parse(&plain.files[&plain.index.tiles[0].file]).unwrap();
+    let chunks = primase_glb::parse(&plain.files[&plain.index.tiles[0].file]).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
     let with: usize = doc["nodes"]
         .as_array()
@@ -1262,7 +1261,7 @@ fn vertex_colours_survive_compression_and_instancing() {
         };
         let set = write(&w, &options).unwrap();
         assert_eq!(set.index.tiles[0].instanced_placements, 2);
-        let chunks = primase_gltf::glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
+        let chunks = primase_glb::parse(&set.files[&set.index.tiles[0].file]).unwrap();
         let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
         let prim = &doc["meshes"][0]["primitives"][0];
         let a = &doc["accessors"][prim["attributes"]["COLOR_0"].as_u64().unwrap() as usize];
@@ -1364,8 +1363,7 @@ fn layered_materials_survive_tiling_and_compression() {
         let index = serde_json::to_value(&set.index).unwrap();
         assert_eq!(index["tiles"][0]["layered_materials"], 1);
         let bytes = &set.files[&set.index.tiles[0].file];
-        let doc: serde_json::Value =
-            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(primase_glb::parse(bytes).unwrap().json).unwrap();
         assert!(
             doc["extensionsUsed"]
                 .as_array()
@@ -1470,8 +1468,7 @@ fn the_sun_is_indexed_scene_wide_and_bumps_the_minor_version() {
     assert_eq!(set.index.tiles.len(), 1);
     assert_eq!(set.index.tiles[0].lights, 0);
     for bytes in set.files.values() {
-        let doc: serde_json::Value =
-            serde_json::from_slice(primase_gltf::glb::parse(bytes).unwrap().json).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(primase_glb::parse(bytes).unwrap().json).unwrap();
         assert!(!doc.to_string().contains("core.environment"));
         assert!(
             doc.get("extensions")

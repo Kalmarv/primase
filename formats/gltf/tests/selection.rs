@@ -35,7 +35,7 @@ fn document(w: &World, selection: Option<Selection>) -> Value {
         },
     )
     .unwrap();
-    let chunks = primase_gltf::glb::parse(&bytes).unwrap();
+    let chunks = primase_glb::parse(&bytes).unwrap();
     let doc: Value = serde_json::from_slice(chunks.json).unwrap();
     assert_eq!(
         report.lights as usize,
