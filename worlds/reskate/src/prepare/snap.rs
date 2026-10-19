@@ -12,6 +12,9 @@
 //! The collision depends on settings the writer applies too (`limit`, `offset`, instancing: which placements past
 //! the limit are dropped whole); they default to the writer's defaults, and the writer refuses a map snapped with
 //! settings other than its own (`skate.marker_snaps` records them).
+//!
+//! A street snap keeps off the water surfaces as they are when it runs: run it before a pass that cuts them
+//! (`prepare-reskate-water`) to snap against the uncut water, as the writer did.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
