@@ -26,7 +26,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, World};
 
 use crate::assembly::{bounds, writer_placements};
-use crate::components::{MaterialClass, SkateMaterial, SkateScene, SkateWater};
+use crate::components::{MaterialClass, SkateContentBounds, SkateMaterial, SkateScene, SkateWater};
 use crate::scene::{Scene, WaterQuad};
 
 /// Which water surfaces [`PrepareReskateWater`] keeps, and where it clips them.
@@ -264,7 +264,8 @@ impl Pass for PrepareReskateWater {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
+        // every choice is the surface's own but the content extent, which a map in parts takes from its merged
+        // content bounds (skate.content_bounds)
         if self.ocean == OceanMaterials::All
             && let Some(mut col) = w.column_mut::<SkateMaterial>()
         {
@@ -309,9 +310,22 @@ impl Pass for PrepareReskateWater {
                 if water.is_empty() {
                     return Ok(());
                 }
-                // the writer's measure: the placements as it takes them (positions and box corners) and the soups
-                let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
-                (bounds(&s, &writer_placements(&s, 200.0)), margin)
+                match w.resource::<SkateContentBounds>() {
+                    // the whole map's, merged over its parts
+                    Some(b) => (b.extent(), margin),
+                    None => {
+                        super::require_whole_map(w, self.name()).map_err(|e| {
+                            format!(
+                                "{e}: a map in parts takes extent=content from its content over every part \
+                                 (summarize-reskate-content)"
+                            )
+                        })?;
+                        // the writer's measure: the placements as it takes them (positions and box corners) and the
+                        // soups
+                        let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
+                        (bounds(&s, &writer_placements(&s, 200.0)), margin)
+                    }
+                }
             }
             WaterExtent::Rect { rect, margin } => (rect.map(f64::from), margin),
         };
@@ -604,5 +618,36 @@ mod tests {
         ] {
             assert!(PrepareReskateWater::from_options(&bad).is_err(), "{bad:?}");
         }
+    }
+}
+
+/// `summarize-reskate-content`: the ground box of what this part owns, as the writer measures a map's content
+/// (`skate.content_bounds`, unrounded); merged over the parts, it is the whole map's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeReskateContent;
+
+/// [`SummarizeReskateContent`] as a pass factory: it takes no options.
+pub fn summarize_reskate_content(o: &Options) -> Result<Box<dyn Pass>, String> {
+    match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(SummarizeReskateContent)),
+    }
+}
+
+impl Pass for SummarizeReskateContent {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-content"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.content_bounds"]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
+        let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
+        let b = crate::assembly::content_bounds(&s, &writer_placements(&s, 200.0), &super::owned(w));
+        w.insert_resource(b);
+        Ok(())
     }
 }

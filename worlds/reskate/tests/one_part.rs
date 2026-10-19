@@ -167,8 +167,9 @@ fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<
 fn a_part_not_stated_whole_is_refused_and_the_whole_map_is_taken() {
     let refused = |scope: &Part, with_plan: bool| {
         for (name, r) in run_each(Some(scope), with_plan) {
-            // the region clip is local to each entity: a part is clipped as the whole is (tests/parts.rs)
-            if name == "clip-reskate-region" {
+            // the region clip is local to each entity, and so is water but for its content extent (which a part takes
+            // merged over every part): a part is prepared as the whole is (tests/parts.rs)
+            if name == "clip-reskate-region" || name == "prepare-reskate-water" {
                 assert!(r.is_ok(), "{r:?}");
                 continue;
             }

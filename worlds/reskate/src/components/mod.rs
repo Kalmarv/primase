@@ -775,6 +775,66 @@ impl primase_core::summary::Summary for SkateTextureWeights {
     }
 }
 
+/// `skate.content_bounds`: the ground box of what a part owns, as the writer measures a map's content (each placement's
+/// position and its prototype's box corners, the world soups' points), unrounded (`summarize-reskate-content`). Merged
+/// over the parts (the box of both, order-free), it is the whole map's: the extent `prepare-reskate-water{extent=content}`
+/// takes. `lo` past `hi`: nothing measured. Not part of scene-interchange v1.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SkateContentBounds {
+    pub lo: [f64; 2],
+    pub hi: [f64; 2],
+}
+
+impl SkateContentBounds {
+    /// Nothing measured.
+    pub const EMPTY: SkateContentBounds = SkateContentBounds {
+        lo: [f64::INFINITY; 2],
+        hi: [f64::NEG_INFINITY; 2],
+    };
+
+    /// The box grown to hold the ground point (`x`, `y`).
+    pub fn add(&mut self, x: f64, y: f64) {
+        self.lo = [self.lo[0].min(x), self.lo[1].min(y)];
+        self.hi = [self.hi[0].max(x), self.hi[1].max(y)];
+    }
+
+    /// The writer's extent of it: whole metres out, `[west, south, east, north]`; a box of 200 m about the origin
+    /// when nothing was measured.
+    pub fn extent(&self) -> [f64; 4] {
+        if self.lo[0] > self.hi[0] {
+            return [-100.0, -100.0, 100.0, 100.0];
+        }
+        [
+            self.lo[0].floor(),
+            self.lo[1].floor(),
+            self.hi[0].floor() + 1.0,
+            self.hi[1].floor() + 1.0,
+        ]
+    }
+}
+
+impl Resource for SkateContentBounds {
+    const NAME: &'static str = "skate.content_bounds";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({ "extent": self.extent() })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateContentBounds {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        for (k, v) in [(0, other.lo), (1, other.hi)] {
+            for (i, x) in v.into_iter().enumerate() {
+                if k == 0 {
+                    self.lo[i] = self.lo[i].min(x);
+                } else {
+                    self.hi[i] = self.hi[i].max(x);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]

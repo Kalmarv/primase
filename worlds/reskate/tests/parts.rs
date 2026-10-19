@@ -3,7 +3,8 @@
 //! placements, merged, decided once, applied to each part. The light cap: each part's lights capped per cell, merged
 //! into the cap over every light, kept by each part. The texture budget: each part's textures weighed (exact sums),
 //! merged into the whole map's weights, the heaviest kept in each part. The region clip: local to each entity, so
-//! each part is clipped as the whole is.
+//! each part is clipped as the whole is. Water's content extent: the content measured on each part, merged into the
+//! whole map's box, each part's surfaces clipped to it.
 
 #![allow(clippy::unwrap_used)]
 
@@ -111,7 +112,9 @@ fn map() -> World {
         w.insert(l, t);
     }
     // a world collision soup: two triangles, one each side of east 200 m, of the one surface
-    w.insert_resource(primase_core::Surfaces(vec![primase_core::Surface::new("concrete")]));
+    w.insert_resource(primase_core::Surfaces(vec![primase_core::Surface::new(
+        "concrete",
+    )]));
     let soup = w.spawn();
     w.insert(
         soup,
@@ -133,6 +136,18 @@ fn map() -> World {
         &RaiseOptions::new("parts", LightCalibration::Standard).unwrap(),
     )
     .unwrap();
+    // water: one inside the content, one across its east edge, one far beyond it
+    for x in [100.0, 440.0, 1000.0] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            primase_reskate::components::SkateWater {
+                corners: vec![[x, -5.0], [x + 80.0, -5.0], [x + 80.0, 5.0], [x, 5.0]],
+                height: Some(0.0),
+                other: Default::default(),
+            },
+        );
+    }
     w
 }
 
@@ -167,6 +182,11 @@ impl PartSource for Groups {
             .iter::<Instance>()
             .map(|(e, _)| e)
             .chain(world.iter::<SkateLight>().map(|(e, _)| e))
+            .chain(
+                world
+                    .iter::<primase_reskate::components::SkateWater>()
+                    .map(|(e, _)| e),
+            )
             .chain(
                 world
                     .iter::<primase_core::Collision>()
@@ -566,4 +586,79 @@ fn the_region_clip_over_parts_is_the_whole_maps() {
         .unwrap();
         assert_eq!(got.take(), expected, "{order:?}");
     }
+}
+
+/// Each water surface written: its corners, as bits.
+type Waters = BTreeMap<Entity, Vec<[u32; 2]>>;
+
+fn waters(w: &World) -> Waters {
+    w.iter::<primase_reskate::components::SkateWater>()
+        .map(|(e, s)| (e, s.corners.iter().map(|c| c.map(f32::to_bits)).collect()))
+        .collect()
+}
+
+#[test]
+fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
+    use primase_reskate::passes::{
+        OceanMaterials, PrepareReskateWater, SummarizeReskateContent, WaterExtent,
+    };
+    let water =
+        || PrepareReskateWater::new(WaterExtent::Content { margin: 5.0 }, OceanMaterials::Stated).unwrap();
+    let mut whole = map();
+    water().run(&mut whole, &mut PassLog::default()).unwrap();
+    let expected = waters(&whole);
+    // the far one goes, the one across the edge is cut, the inside one stays whole
+    assert_eq!(expected.len(), 2);
+    struct Got(Rc<RefCell<Waters>>);
+    impl Writer for Got {
+        fn target(&self) -> Target {
+            primase_reskate::target()
+        }
+        fn write(&mut self, part: &World) -> Result<()> {
+            self.0.borrow_mut().extend(waters(part));
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<Finished> {
+            Ok(Finished::default())
+        }
+    }
+    let mut registry = SummaryRegistry::new();
+    primase_reskate::register_summaries(&mut registry);
+    for order in [vec![0, 1, 2], vec![2, 0, 1], vec![1, 2, 0]] {
+        let got = Rc::new(RefCell::new(Waters::new()));
+        convert_parts_summarized(
+            &mut Prepared(map()),
+            &mut Groups {
+                parts: 3,
+                order: order.clone(),
+                groups: Vec::new(),
+                next: 0,
+            },
+            Box::new(Got(got.clone())),
+            &PassManager::new(PassRegistry::new()),
+            &Pipeline { passes: Vec::new() },
+            &Summarized {
+                registry: &registry,
+                summarize: &Pipeline {
+                    passes: vec![Box::new(SummarizeReskateContent)],
+                },
+                decide: &Pipeline { passes: Vec::new() },
+            },
+            &Pipeline {
+                passes: vec![Box::new(water())],
+            },
+        )
+        .unwrap();
+        assert_eq!(got.take(), expected, "{order:?}");
+    }
+    // a part without the merged content is refused
+    let mut w = map();
+    let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
+    w.insert_resource(primase_core::convert::PartScope {
+        roots,
+        context: BTreeSet::new(),
+        whole: false,
+    });
+    let e = water().run(&mut w, &mut PassLog::default()).unwrap_err();
+    assert!(e.contains("summarize-reskate-content"), "{e}");
 }

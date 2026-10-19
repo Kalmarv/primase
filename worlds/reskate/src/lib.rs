@@ -63,6 +63,7 @@ pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
     reg.summary::<components::SkateLightsSummary>();
     reg.summary::<components::SkateTextureWeights>();
     reg.summary::<components::SkateMapSummary>();
+    reg.summary::<components::SkateContentBounds>();
     reg.decision::<components::SkateFloorDecision>();
 }
 
@@ -160,6 +161,8 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
     );
+    // a map in parts: its content's extent measured over every part
+    reg.register("summarize-reskate-content", passes::summarize_reskate_content);
     // a map in parts: its textures weighed over every part (with budget-reskate-textures's budget)
     reg.register_requiring(
         "summarize-reskate-textures",

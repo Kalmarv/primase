@@ -118,15 +118,20 @@ pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
 
 /// The ground-frame box of the placements and soups.
 pub(crate) fn bounds(s: &Scene, ps: &[Placement]) -> [f64; 4] {
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    let mut add = |x: f32, y: f32| {
-        x0 = x0.min(f64::from(x));
-        y0 = y0.min(f64::from(y));
-        x1 = x1.max(f64::from(x));
-        y1 = y1.max(f64::from(y));
-    };
+    content_bounds(s, ps, &|_| true).extent()
+}
+
+/// The ground box of the content `owned` accepts (placements and world soups by their entity), as [`bounds`] measures
+/// it, unrounded.
+pub(crate) fn content_bounds(
+    s: &Scene,
+    ps: &[Placement],
+    owned: &dyn Fn(primase_core::Entity) -> bool,
+) -> crate::components::SkateContentBounds {
+    let mut b = crate::components::SkateContentBounds::EMPTY;
+    let mut add = |x: f32, y: f32| b.add(f64::from(x), f64::from(y));
     let protos: HashMap<u32, &scene::ProtoDef> = s.protos.iter().map(|p| (p.key, p)).collect();
-    for p in ps {
+    for p in ps.iter().filter(|p| p.entity.is_none_or(owned)) {
         add(p.pos.x, p.pos.y);
         let Some(d) = protos.get(&p.proto) else { continue };
         let (Some(mn), Some(mx)) = (d.min, d.max) else {
@@ -142,15 +147,12 @@ pub(crate) fn bounds(s: &Scene, ps: &[Placement]) -> [f64; 4] {
             add(w.x, w.y);
         }
     }
-    for sd in &s.soups {
+    for sd in s.soups.iter().filter(|sd| owned(sd.entity)) {
         for v in (0..sd.pos.len().saturating_sub(2)).step_by(3) {
             add(sd.pos[v], -sd.pos[v + 2]);
         }
     }
-    if x0 > x1 {
-        return [-100.0, -100.0, 100.0, 100.0];
-    }
-    [x0.floor(), y0.floor(), x1.floor() + 1.0, y1.floor() + 1.0]
+    b
 }
 
 /// World soups of one mode filed by triangle centre into 256 m cells (ground soups first in each cell).

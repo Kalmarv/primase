@@ -135,6 +135,8 @@ pub struct ProtoDef {
 /// A world collision soup.
 #[derive(Debug)]
 pub struct SoupDef {
+    /// Its entity in the world.
+    pub entity: primase_core::Entity,
     /// The first file, relative to the scene folder (for stats).
     pub file: String,
     pub mode: CollisionMode,
@@ -794,7 +796,8 @@ impl Scene {
                     .map(|p| p.0.clone()),
             });
         }
-        let soup_def = |file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
+        let soup_def = |entity, file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
+            entity,
             file,
             mode: mode_of(c.and_then(|c| c.mode)),
             ground: c.and_then(|c| c.ground).unwrap_or(true),
@@ -822,7 +825,7 @@ impl Scene {
                     .first()
                     .map(|f| f.path.clone())
                     .unwrap_or_default();
-            soups.push(soup_def(file, Some(&c.0), &s));
+            soups.push(soup_def(e, file, Some(&c.0), &s));
         }
         // collision placed by an entity of its own (a reader's world collision, not raised into a soup): a world
         // soup in scene space through its transform, as the scene writer files it
@@ -847,7 +850,12 @@ impl Scene {
                     }
                 }
             }
-            soups.push(soup_def(format!("collision/world_{}.bin", soups.len()), None, &s));
+            soups.push(soup_def(
+                e,
+                format!("collision/world_{}.bin", soups.len()),
+                None,
+                &s,
+            ));
         }
         let lights = world
             .iter::<SkateLight>()
