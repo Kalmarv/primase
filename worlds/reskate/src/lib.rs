@@ -50,6 +50,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         prepare::prepare_reskate_overlays,
         &[("step", "0")],
     );
+    // which water a map draws and how far is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-water",
+        prepare::prepare_reskate_water,
+        &[("extent", "none")],
+    );
     // a light cap and its grouping are the program's: no default
     reg.register_requiring(
         "select-reskate-lights",

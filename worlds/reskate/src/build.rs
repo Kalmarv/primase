@@ -61,7 +61,7 @@ impl Default for EncodingOptions {
 }
 
 /// The content choices the writer still makes, each until its preparation pass takes it over (PRIMASE-PLAN step 8):
-/// blend chains, water and the pause map's height. Delete a field when its pass lands.
+/// blend chains and the pause map's height. Delete a field when its pass lands.
 #[derive(Clone, Debug)]
 pub struct WriterChoices {
     /// The most objects added to draw blend-chain overlays in chain order ([`crate::blend_order`]; each is a MeshSet
@@ -72,8 +72,6 @@ pub struct WriterChoices {
     /// WorldPartition cell by default.
     pub blend_grid: f32,
     pub map_height: usize,
-    pub no_water: bool,
-    pub water_ocean: bool,
 }
 
 impl Default for WriterChoices {
@@ -82,8 +80,6 @@ impl Default for WriterChoices {
             blend_objects: None,
             blend_grid: 200.0,
             map_height: 2160,
-            no_water: false,
-            water_ocean: false,
         }
     }
 }
@@ -103,8 +99,6 @@ pub struct BuildOptions {
     pub blend_grid: f32,
     pub limit: f32,
     pub map_height: usize,
-    pub no_water: bool,
-    pub water_ocean: bool,
     pub max_render_edge: Option<f32>,
     pub offset: [f64; 2],
     pub scene_warnings: Option<Vec<String>>,
@@ -124,8 +118,6 @@ impl Default for BuildOptions {
             blend_grid: c.blend_grid,
             limit: e.limit,
             map_height: c.map_height,
-            no_water: c.no_water,
-            water_ocean: c.water_ocean,
             max_render_edge: e.max_render_edge,
             offset: e.offset,
             scene_warnings: e.scene_warnings,
@@ -153,8 +145,6 @@ impl BuildOptions {
                 blend_objects: a.blend_objects,
                 blend_grid: a.blend_grid,
                 map_height: a.map_height,
-                no_water: a.no_water,
-                water_ocean: a.water_ocean,
             },
         )
     }
@@ -553,8 +543,6 @@ fn writer_options(s: &Scene, a: &EncodingOptions, c: &WriterChoices) -> Result<W
         offset: [a.offset[0], a.offset[1], 0.0],
         limit: a.limit,
         map_height: c.map_height,
-        water: !c.no_water,
-        water_ocean: c.water_ocean,
         light_prefix: s.light_prefix.clone().unwrap_or_else(|| "light_".into()),
         streaming_distances: s.streaming.unwrap_or([50.0, 250.0, 500.0]),
         max_render_edge: a.max_render_edge.unwrap_or(s.max_render_edge),
@@ -843,6 +831,18 @@ fn write_map_with(
                 )),
                 _ => None,
             })
+            .chain(
+                [
+                    (
+                        "water outlines cut at the map's extent limit",
+                        r.water_cut_at_limit,
+                    ),
+                    ("water outlines with no area, not drawn", r.water_without_area),
+                ]
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(what, n)| (what.to_owned(), n as u64)),
+            )
             .collect(),
     })
 }

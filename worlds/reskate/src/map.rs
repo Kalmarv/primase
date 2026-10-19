@@ -47,8 +47,6 @@ pub struct WriterOptions {
     pub offset: [f64; 3],
     pub limit: f32,
     pub map_height: usize,
-    pub water: bool,
-    pub water_ocean: bool,
     pub light_prefix: String,
     pub streaming_distances: [f64; 3],
     pub max_render_edge: f32,
@@ -87,6 +85,9 @@ pub struct WriteResult {
     pub prop_col_tris: BTreeMap<String, i64>,
     pub collision: Option<collision::CollisionResult>,
     pub lights_written: usize,
+    /// Water outlines the map's extent limit cut, and those left with no area (not drawn).
+    pub water_cut_at_limit: usize,
+    pub water_without_area: usize,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
     /// The overlay stack's lift record: per mesh file (`meshes/...`), per primitive in file order, each vertex's lift
@@ -1759,73 +1760,24 @@ fn lights_json(kept: &[PlacedLight], off: Vec3, prefix: &str) -> (Vec<LightJson>
     (lights, fallback)
 }
 
-/// Sutherland-Hodgman, one step.
-fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(f32, f32)> {
-    let mut o = Vec::with_capacity(p.len() + 1);
-    for i in 0..p.len() {
-        let (a, b) = (p[i], p[(i + 1) % p.len()]);
-        let (mut da, mut db) = (
-            (if along_y { a.1 } else { a.0 }) - k,
-            (if along_y { b.1 } else { b.0 }) - k,
-        );
-        if !keep_above {
-            da = -da;
-            db = -db;
-        }
-        if da >= 0.0 {
-            o.push(a);
-        }
-        if (da > 0.0 && db < 0.0) || (da < 0.0 && db > 0.0) {
-            let t = da / (da - db);
-            o.push(if along_y {
-                (a.0 + (b.0 - a.0) * t, k)
-            } else {
-                (k, a.1 + (b.1 - a.1) * t)
-            });
-        }
-    }
-    o
-}
-
 impl MapWriter {
-    /// The water surfaces that touch the region as one mesh with Studio's ocean material.
+    /// Every water surface it is given (which and how far: `prepare-reskate-water`) as one mesh with Studio's ocean
+    /// material, each outline clipped to the map's extent limit (counted when it cuts) and drawn as a fan; an outline
+    /// with no area left is not drawn (counted).
     fn water(&mut self, quads: &[WaterQuad], material: &str) -> Result<Option<MapObject>> {
         let (r, off, limit) = (self.o.region, self.off, self.o.limit);
         let origin = Vec3::new((r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0, 0.0);
+        let bounds = [-limit - off.x, -limit - off.y, limit - off.x, limit - off.y];
         let (mut pos, mut nrm, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u32>::new());
         for q in quads {
-            if f64::from(q.x1) <= r[0]
-                || f64::from(q.x0) >= r[2]
-                || f64::from(q.y1) <= r[1]
-                || f64::from(q.y0) >= r[3]
-            {
-                continue;
-            }
             let z = q.z;
-            let bx0 = (r[0] as f32 - 400.0).max(-limit - off.x);
-            let bx1 = (r[2] as f32 + 400.0).min(limit - off.x);
-            let by0 = (r[1] as f32 - 400.0).max(-limit - off.y);
-            let by1 = (r[3] as f32 + 400.0).min(limit - off.y);
-            let mut cs = clip_half(
-                &clip_half(
-                    &clip_half(&clip_half(&q.corners, false, bx0, true), false, bx1, false),
-                    true,
-                    by0,
-                    true,
-                ),
-                true,
-                by1,
-                false,
-            );
-            if cs.len() < 3 {
-                continue;
+            let mut cs = crate::prepare::water::clip_rect(&q.corners, bounds);
+            if cs != q.corners {
+                self.r.water_cut_at_limit += 1;
             }
-            let mut a = 0f32;
-            for i in 0..cs.len() {
-                let (p, n) = (cs[i], cs[(i + 1) % cs.len()]);
-                a += p.0 * n.1 - n.0 * p.1;
-            }
-            if a.abs() < 1.0 {
+            let a = crate::prepare::water::signed_area2(&cs);
+            if cs.len() < 3 || a == 0.0 {
+                self.r.water_without_area += 1;
                 continue;
             }
             if a < 0.0 {
@@ -1875,7 +1827,7 @@ impl MapWriter {
 
     fn material_json(&self, m: &Material) -> MaterialJson {
         let files = self.ctx.tex.all();
-        if m.ocean.unwrap_or(self.o.water_ocean) && m.class == VClass::Water {
+        if m.ocean == Some(true) && m.class == VClass::Water {
             return MaterialJson::Ocean(OceanMaterial::OCEAN);
         }
         let domain = match m.domain {
@@ -2165,7 +2117,7 @@ impl MapWriter {
         }
 
         const OCEAN: &str = "ocean_water";
-        let water = if o.water && !x.water.is_empty() {
+        let water = if !x.water.is_empty() {
             self.water(&x.water, OCEAN)?
         } else {
             None

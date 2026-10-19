@@ -11,6 +11,7 @@ pub mod region;
 pub mod snap;
 pub mod spawn;
 pub mod textures;
+pub mod water;
 
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
 pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
@@ -24,6 +25,7 @@ pub use region::{ClipReskateRegion, clip_reskate_region};
 pub use snap::{SnapReskateMarkers, snap_reskate_markers};
 pub use spawn::{PlaceReskateSpawn, ReskateSpawnAt, place_reskate_spawn};
 pub use textures::{PrepareReskateTextures, tint_pixels};
+pub use water::{OceanMaterials, PrepareReskateWater, WaterExtent, prepare_reskate_water};
 
 use primase_core::World;
 use primase_core::convert::{PartScope, PartitionPlan};

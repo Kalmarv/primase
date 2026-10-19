@@ -22,12 +22,14 @@ type BoxError = Box<dyn std::error::Error>;
 
 fn main() -> Result<(), BoxError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut o, mut c) = (EncodingOptions::default(), WriterChoices::default());
+    let (mut o, c) = (EncodingOptions::default(), WriterChoices::default());
     let mut scene: Option<PathBuf> = None;
     let mut lod = primase_core::LodChoice::Default;
     let mut max_priority: Option<u8> = None;
     let mut tex_cap: u32 = 256;
     let mut lights_per_cell: Option<usize> = None;
+    let mut ocean = primase_reskate::prepare::OceanMaterials::Stated;
+    let mut no_water = false;
     let mut name_caps: Vec<(String, u32)> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -50,8 +52,8 @@ fn main() -> Result<(), BoxError> {
                 }
             }
             "--lights-max-per-cell" => lights_per_cell = Some(val()?.parse()?),
-            "--water-ocean" => c.water_ocean = true,
-            "--no-water" => c.no_water = true,
+            "--water-ocean" => ocean = primase_reskate::prepare::OceanMaterials::All,
+            "--no-water" => no_water = true,
             "--lod" => lod = primase_reskate::lod_choice(&val()?)?,
             "--max-priority" => max_priority = Some(val()?.parse()?),
             s if s.starts_with("--") => return Err(format!("unknown option {s}").into()),
@@ -103,6 +105,20 @@ fn main() -> Result<(), BoxError> {
     passes.push(Box::new(
         primase_reskate::prepare::SnapReskateMarkers::for_encoding(&o)?,
     ));
+    // the water as the writer drew it: the surfaces touching the scene's region, clipped 400 m beyond it (none with
+    // --no-water); without a region every surface as given (extent=all). --water-ocean: water materials as Studio's ocean
+    let region = w
+        .resource::<primase_reskate::dialect::SkateScene>()
+        .and_then(|s| s.region);
+    let extent = if no_water {
+        Some(primase_reskate::prepare::WaterExtent::None)
+    } else {
+        region.map(|_| primase_reskate::prepare::WaterExtent::Region { margin: 400.0 })
+    };
+    passes.push(Box::new(primase_reskate::prepare::PrepareReskateWater::new(
+        extent.unwrap_or(primase_reskate::prepare::WaterExtent::All),
+        ocean,
+    )?));
     // the lights capped per Studio 200 m cell when asked (the writer caps nothing of its own)
     if let Some(n) = lights_per_cell {
         passes.push(Box::new(primase_reskate::prepare::SelectReskateLights::new(
