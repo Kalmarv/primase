@@ -579,88 +579,104 @@ pub(crate) fn scene_warnings(s: &Scene, world: &World) -> Result<Vec<String>> {
     Ok(SceneWarnings::of(s, world)?.render())
 }
 
-/// The scene reader's warnings by kind, each kind a set (rendered in its order, `render`), and the travel points
-/// counted: the parts of a map merge into the whole map's ([`SceneWarnings::merge`]).
+/// The scene reader's warnings, as what they are judged from, so the parts of a map merge into the whole map's
+/// ([`SceneWarnings::merge`]) before they are judged: a texture is unused when no material anywhere uses it, a prototype
+/// unplaced when no placement anywhere places it (a part's own view of either is not the map's); the travel points
+/// counted.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SceneWarnings {
-    kinds: [BTreeSet<String>; 3],
+    /// Texture keys present, and those a material uses.
+    textures: BTreeSet<String>,
+    textures_used: BTreeSet<String>,
+    /// Prototype ids present, those a placement places, and those without geometry.
+    protos: BTreeSet<String>,
+    protos_placed: BTreeSet<String>,
+    no_geometry: BTreeSet<String>,
+    /// Primitives without normals, as their warnings.
+    flat: BTreeSet<String>,
     travel: usize,
 }
 
 impl SceneWarnings {
+    /// What `world` (its scene `s`) holds of them.
     pub(crate) fn of(s: &Scene, world: &World) -> Result<SceneWarnings> {
-        let found = scene_warning_kinds(s, world)?;
-        Ok(SceneWarnings {
-            kinds: found.0.map(|k| k.into_iter().collect()),
-            travel: found.1,
-        })
+        use crate::components::{SkateMaterial, SkateTexture};
+        let mut used: HashSet<primase_core::Entity> = HashSet::new();
+        for (_, m) in world.iter::<SkateMaterial>() {
+            used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
+        }
+        let mut w = SceneWarnings::default();
+        for (e, t) in world.iter::<SkateTexture>() {
+            w.textures.insert(t.key.clone());
+            if used.contains(&e) {
+                w.textures_used.insert(t.key.clone());
+            }
+        }
+        for p in &s.protos {
+            w.protos.insert(p.id.clone());
+            if p.prims.is_none() {
+                w.no_geometry.insert(p.id.clone());
+            }
+            if let Some(prims) = p.prims() {
+                for (i, prim) in prims.iter().enumerate() {
+                    if prim.nrm.is_none() {
+                        w.flat.insert(format!(
+                            "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
+                            p.id
+                        ));
+                    }
+                }
+            }
+        }
+        for p in &s.placements {
+            w.protos_placed.insert(s.protos[p.proto as usize].id.clone());
+        }
+        w.travel = s.markers.iter().filter(|m| m.kind == "travel").count();
+        Ok(w)
     }
 
     /// Another part's added.
     pub(crate) fn merge(&mut self, o: SceneWarnings) {
-        for (mine, theirs) in self.kinds.iter_mut().zip(o.kinds) {
-            mine.extend(theirs);
-        }
+        self.textures.extend(o.textures);
+        self.textures_used.extend(o.textures_used);
+        self.protos.extend(o.protos);
+        self.protos_placed.extend(o.protos_placed);
+        self.no_geometry.extend(o.no_geometry);
+        self.flat.extend(o.flat);
         self.travel += o.travel;
     }
 
-    /// Each kind in a stable order (by its text), then the travel points when Studio takes fewer.
+    /// Each kind in a stable order (by its text): unused textures, primitives without normals, unplaced prototypes and
+    /// placed ones without geometry; then the travel points when Studio takes fewer.
     pub(crate) fn render(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.kinds.iter().flatten().cloned().collect();
+        let mut out: Vec<String> = self
+            .textures
+            .difference(&self.textures_used)
+            .map(|k| format!("texture '{k}' is not used"))
+            .collect();
+        out.extend(self.flat.iter().cloned());
+        let mut protos: Vec<String> = self
+            .protos
+            .iter()
+            .filter_map(|id| {
+                if !self.protos_placed.contains(id) {
+                    Some(format!("prototype '{id}' is not placed"))
+                } else if self.no_geometry.contains(id) {
+                    Some(format!(
+                        "prototype '{id}' has no geometry; its placements draw nothing"
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        protos.sort();
+        out.extend(protos);
         if self.travel > 25 {
             out.push(format!("{} travel points: Studio takes at most 25", self.travel));
         }
         out
     }
-}
-
-/// The scene reader's warnings of each kind (unused textures, primitives without normals, unplaced prototypes and
-/// prototypes without geometry), and the travel points.
-fn scene_warning_kinds(s: &Scene, world: &World) -> Result<([Vec<String>; 3], usize)> {
-    use crate::components::{SkateMaterial, SkateTexture};
-    // each kind in a stable order (by its text), not the order the world's entities came in
-    let mut used: HashSet<primase_core::Entity> = HashSet::new();
-    for (_, m) in world.iter::<SkateMaterial>() {
-        used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
-    }
-    let mut unused: Vec<String> = world
-        .iter::<SkateTexture>()
-        .filter(|(e, _)| !used.contains(e))
-        .map(|(_, t)| format!("texture '{}' is not used", t.key))
-        .collect();
-    unused.sort();
-    let mut flat = Vec::new();
-    for p in &s.protos {
-        if let Some(prims) = p.prims() {
-            for (i, prim) in prims.iter().enumerate() {
-                if prim.nrm.is_none() {
-                    flat.push(format!(
-                        "prototype '{}': primitive {i} has no NORMAL (flat normals are made)",
-                        p.id
-                    ));
-                }
-            }
-        }
-    }
-    flat.sort();
-    let mut placed = vec![false; s.protos.len()];
-    for p in &s.placements {
-        placed[p.proto as usize] = true;
-    }
-    let mut unplaced = Vec::new();
-    for (p, placed) in s.protos.iter().zip(placed) {
-        if !placed {
-            unplaced.push(format!("prototype '{}' is not placed", p.id));
-        } else if p.prims.is_none() {
-            unplaced.push(format!(
-                "prototype '{}' has no geometry; its placements draw nothing",
-                p.id
-            ));
-        }
-    }
-    unplaced.sort();
-    let travel = s.markers.iter().filter(|m| m.kind == "travel").count();
-    Ok(([unused, flat, unplaced], travel))
 }
 
 /// What the writer lays out of a prepared world before it emits anything (what a pass asks of the writer's layout):
@@ -935,4 +951,59 @@ pub(crate) fn collision_plan(
         },
         rewritten,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SceneWarnings;
+
+    fn set(items: &[&str]) -> std::collections::BTreeSet<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// Judged over the whole map: a texture one part holds and no material of its uses, used by another part's
+    /// material, is not unused; a prototype one part holds unplaced, placed by another part, is not unplaced. Merged in
+    /// either order, the warnings are those of the whole map's facts.
+    #[test]
+    fn scene_warnings_are_judged_over_every_part() {
+        let a = SceneWarnings {
+            textures: set(&["stone", "moss"]),
+            textures_used: set(&["moss"]),
+            protos: set(&["bench", "bin"]),
+            protos_placed: set(&["bin"]),
+            ..SceneWarnings::default()
+        };
+        let b = SceneWarnings {
+            textures: set(&["stone"]),
+            textures_used: set(&["stone"]),
+            protos: set(&["bench"]),
+            protos_placed: set(&["bench"]),
+            travel: 1,
+            ..SceneWarnings::default()
+        };
+        let lone = SceneWarnings {
+            textures: set(&["lost"]),
+            protos: set(&["crate"]),
+            ..SceneWarnings::default()
+        };
+        let whole = SceneWarnings {
+            textures: set(&["stone", "moss", "lost"]),
+            textures_used: set(&["moss", "stone"]),
+            protos: set(&["bench", "bin", "crate"]),
+            protos_placed: set(&["bin", "bench"]),
+            travel: 1,
+            ..SceneWarnings::default()
+        };
+        for order in [[&a, &b, &lone], [&lone, &b, &a]] {
+            let mut merged = SceneWarnings::default();
+            for w in order {
+                merged.merge(w.clone());
+            }
+            assert_eq!(merged.render(), whole.render());
+        }
+        assert_eq!(
+            whole.render(),
+            ["texture 'lost' is not used", "prototype 'crate' is not placed"]
+        );
+    }
 }
