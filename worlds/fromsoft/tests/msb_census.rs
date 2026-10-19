@@ -86,7 +86,7 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
             ("scale", part.scale),
         ] {
             stored.compare_bytes(
-                &format!("{name}/{label}"),
+                format!("{name}/{label}"),
                 &bytes(&values),
                 &bytes(&floats(&want[label])?),
             );
