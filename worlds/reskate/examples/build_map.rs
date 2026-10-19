@@ -1,5 +1,6 @@
 //! A skate-scene folder -> a ReSkate Studio normalized map folder: read, its meshes and textures loaded, the chosen
-//! level of detail and placements, the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
+//! level of detail and placements, a spawn when the scene has none, the scene's region clipped when it states one
+//! (`clip-reskate-region`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
 //! (`budget-reskate-textures`), then the writer.
 //!
@@ -67,6 +68,18 @@ fn main() -> Result<(), BoxError> {
     // the meshes and textures the passes and the writer take (the writer reads no texture file)
     primase_reskate::interchange::load(&scene, &mut w)?;
     let mut passes: Vec<Box<dyn Pass>> = Vec::new();
+    // a scene that states its region is clipped to it (the writer clips nothing of its own)
+    if let Some(region) = w
+        .resource::<primase_reskate::dialect::SkateScene>()
+        .and_then(|s| s.region)
+    {
+        passes.push(Box::new(primase_reskate::prepare::ClipReskateRegion::new(
+            region,
+        )?));
+    }
+    // the writer makes no spawn: a scene without one gets this example's choice, street-snapped at the centre of the
+    // scene's region (else of its placements), where the writer used to place it
+    passes.push(Box::new(primase_reskate::prepare::PlaceReskateSpawn::centre()));
     // the writer's old cap: stored levels, else the 2 x 2 box down to the cap, normal maps alike
     let mut cap = primase_image::CapTextures::new(tex_cap)?.with_mode(primase_image::CapMode {
         normals: primase_image::NormalDownscale::Box,

@@ -38,6 +38,13 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     // the scene's name has no default
     reg.register_requiring("raise-skate", prepare::raise_skate_pass, &[("name", "n")]);
     dialect::lower::register(reg);
+    reg.register("place-reskate-spawn", prepare::place_reskate_spawn);
+    // the region is the program's: no default
+    reg.register_requiring(
+        "clip-reskate-region",
+        prepare::clip_reskate_region,
+        &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")],
+    );
     // the budget is the program's number: no default
     reg.register_requiring(
         "budget-reskate-textures",

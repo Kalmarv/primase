@@ -108,7 +108,7 @@ pub struct BuildReport {
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
-fn writer_placements(s: &Scene, tile: f32, region: Option<[f64; 4]>) -> Vec<Placement> {
+fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
     s.placements
         .iter()
         .enumerate()
@@ -128,13 +128,8 @@ fn writer_placements(s: &Scene, tile: f32, region: Option<[f64; 4]>) -> Vec<Plac
                 split_whole: p.split && proto.prims.is_some(),
                 ..Placement::default()
             };
-            pl.outside = match p.clip {
-                Some(c) => c,
-                None => region.is_some_and(|r| {
-                    let (x, y) = (f64::from(pl.pos.x), f64::from(pl.pos.y));
-                    !(x >= r[0] && x < r[2] && y >= r[1] && y < r[3])
-                }),
-            };
+            // clipped as the placement says (clip-reskate-region marks them); the writer decides none
+            pl.outside = p.clip.unwrap_or(false);
             match p.tile {
                 Some(t) => {
                     pl.tx = t[0];
@@ -504,7 +499,7 @@ pub fn build(world: &World, dir: &Path, a: &BuildOptions) -> Result<BuildReport>
         ));
     }
     let cut = s.region;
-    let mut placements = writer_placements(&s, o.tile, cut);
+    let mut placements = writer_placements(&s, o.tile);
     o.region = cut.unwrap_or_else(|| bounds(&s, &placements));
     let floor = floor::prepare(&s, &mut placements, a)?;
     let drop_below = floor.drop_below;

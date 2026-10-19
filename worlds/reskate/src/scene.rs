@@ -675,7 +675,8 @@ impl Scene {
             file,
             mode: mode_of(c.and_then(|c| c.mode)),
             ground: c.and_then(|c| c.ground).unwrap_or(true),
-            region_cut: c.and_then(|c| c.region_cut).unwrap_or(true),
+            // cut at the region as the soup says (clip-reskate-region cuts and marks them); the writer decides none
+            region_cut: c.and_then(|c| c.region_cut).unwrap_or(false),
             pos: s.positions.iter().flatten().copied().collect(),
             idx: s.triangles.iter().flatten().copied().collect(),
             surf: s

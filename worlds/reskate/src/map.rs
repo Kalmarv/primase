@@ -1967,25 +1967,15 @@ impl MapWriter {
     pub fn finish(&mut self, x: Extras) -> Result<()> {
         let o = self.o.clone();
         let (r, off) = (o.region, self.off);
-        let mut markers = x.markers.clone();
+        let markers = x.markers.clone();
+        // the map's spawn is the program's (place-spawn at selection, or a skate.marker of kind spawn): the writer
+        // makes none, and map.json cannot be written without one
         if !markers.iter().any(|m| m.kind == "spawn") {
-            markers.insert(
-                0,
-                Marker {
-                    kind: "spawn",
-                    name: Some("spawn".into()),
-                    x: (r[0] + r[2]) as f32 / 2.0,
-                    y: (r[1] + r[3]) as f32 / 2.0,
-                    z: f32::NAN,
-                    yaw: 0.0,
-                    snap: crate::scene::SnapSpec::of(SnapMode::Street),
-                    lift: f64::NAN,
-                    shelter: false,
-                    trainer: true,
-                    blueprint: None,
-                    transform: None,
-                },
-            );
+            return Err(Error::Scene(
+                "the map has no spawn marker: place one before writing (place-spawn at selection, or a skate.marker \
+                 of kind spawn)"
+                    .into(),
+            ));
         }
         let queries: Vec<Query> = markers
             .iter()
