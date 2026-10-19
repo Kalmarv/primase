@@ -144,6 +144,7 @@ mod tests {
                     variant: 0,
                 },
             );
+            w.insert(e, crate::Transform::IDENTITY);
             if let Some(p) = p {
                 w.insert(e, Priority(p));
             }

@@ -82,6 +82,7 @@ impl Reader for ToyReader {
                     variant: 0,
                 },
             );
+            w.insert(p, primase_core::Transform::IDENTITY);
             if self.bad_read {
                 w.insert(p, Lowered);
             }
@@ -343,6 +344,7 @@ fn manager(select: &str) -> (PassManager, Pipeline, Pipeline) {
 fn target() -> Target {
     Target::new("toy")
         .legal("core.instance")
+        .legal("core.transform")
         .legal("core.name")
         .legal("toy.mesh")
         .illegal("toy.raw")
@@ -924,4 +926,146 @@ fn planned_parts_read_what_reaches_them_by_its_authored_box() {
     assert_eq!(reader.loads[0].len(), 2);
     assert_eq!(written.borrow()[0].placements.len(), 1);
     assert_eq!(reader.loads[1].len(), 2);
+}
+
+/// What a malformed reader gets wrong: one fault per case.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fault {
+    /// A prototype mesh without positions, read.
+    MeshOnRead,
+    /// A resource outside the reader's namespaces, read.
+    ResourceOnRead,
+    /// A texture whose level is the wrong size, loaded.
+    TextureOnLoad,
+    /// A resource outside its namespaces, loaded.
+    ResourceOnLoad,
+    /// Nothing wrong, and nothing read.
+    Empty,
+}
+
+/// A toy resource of a namespace no reader here emits.
+#[derive(Clone, Debug, PartialEq)]
+struct Stray;
+impl primase_core::Resource for Stray {
+    const NAME: &'static str = "other.stray";
+}
+
+struct Malformed(Fault);
+
+impl Reader for Malformed {
+    fn read(&mut self) -> Result<(World, Report)> {
+        event("read");
+        let mut w = World::new();
+        if self.0 == Fault::Empty {
+            return Ok((w, Report::new()));
+        }
+        let proto = w.spawn();
+        let p = w.spawn();
+        w.insert(
+            p,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(p, primase_core::Transform::IDENTITY);
+        match self.0 {
+            Fault::MeshOnRead => {
+                w.insert(
+                    proto,
+                    primase_core::Mesh::new(vec![primase_core::Primitive {
+                        topology: primase_core::Topology::Triangles,
+                        streams: Default::default(),
+                        indices: None,
+                        material: None,
+                    }]),
+                );
+            }
+            Fault::ResourceOnRead => {
+                w.insert_resource(Stray);
+            }
+            _ => {}
+        }
+        Ok((w, Report::new()))
+    }
+    fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
+        event("load");
+        let mut w = world.subset(&world.closure(roots.iter().copied()));
+        match self.0 {
+            Fault::TextureOnLoad => {
+                let t = w.spawn();
+                w.insert(
+                    t,
+                    primase_core::Texture {
+                        width: 4,
+                        height: 4,
+                        format: primase_core::TexFormat::Rgba8Unorm,
+                        levels: vec![vec![0; 63]],
+                        color_space: primase_core::ColorSpace::Srgb,
+                        role: primase_core::TexRole::Color,
+                        normal: None,
+                    },
+                );
+            }
+            Fault::ResourceOnLoad => {
+                w.insert_resource(Stray);
+            }
+            _ => {}
+        }
+        Ok((w, Report::new()))
+    }
+    fn emits(&self) -> &'static [&'static str] {
+        &["core"]
+    }
+    fn prototype_box(&self, _world: &World, _prototype: Entity) -> Option<[[f64; 3]; 2]> {
+        Some([[0.0; 3], [1.0; 3]])
+    }
+}
+
+/// What was read and what was loaded are checked before anything uses them: malformed data or a resource outside
+/// the reader's namespaces stops the conversion at the read or the load, before the selection, the plan or a pass
+/// runs, with the partial report kept; an empty world passes the checks.
+#[test]
+fn read_and_loaded_data_are_checked_before_any_pass_runs() {
+    let run = |fault| {
+        let (m, select, passes) = manager("toy-select");
+        let (w, _) = writer(target());
+        let r = convert_parts(
+            &mut Malformed(fault),
+            &mut ToyParts::default(),
+            w,
+            &m,
+            &select,
+            &passes,
+        );
+        (r, events())
+    };
+    for (fault, during, words) in [
+        (Fault::MeshOnRead, "read", "no positions"),
+        (Fault::ResourceOnRead, "read", "other.stray"),
+        (Fault::TextureOnLoad, "part 0: load", "bytes, not 64"),
+        (Fault::ResourceOnLoad, "part 0: load", "other.stray"),
+    ] {
+        let (r, ev) = run(fault);
+        let e = r.unwrap_err().downcast::<ConvertError>().unwrap();
+        assert_eq!(e.during, during, "{words}");
+        assert!(
+            format!("{:?}", e.error).contains(words) || e.error.to_string().contains(words),
+            "{words}: {e:?}"
+        );
+        // the sentinel: no pass ran on what the check refused
+        if during == "read" {
+            assert_eq!(ev, ["read"], "{words}");
+        } else {
+            assert!(!ev.contains(&"passes".to_owned()), "{words}: {ev:?}");
+        }
+        assert!(
+            e.partial
+                .reported
+                .iter()
+                .any(|n| n.reason.contains("failed during"))
+        );
+    }
+    let (r, _) = run(Fault::Empty);
+    r.unwrap();
 }

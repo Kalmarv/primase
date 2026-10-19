@@ -326,6 +326,7 @@ mod tests {
                     variant: 0,
                 },
             );
+            w.insert(e, crate::Transform::IDENTITY);
         }
         let t = w.spawn();
         w.insert(t, TextureFile { path: "a.png".into() });
@@ -437,6 +438,7 @@ mod tests {
                     variant: 0,
                 },
             );
+            w.insert(e, crate::Transform::IDENTITY);
         };
         assert_eq!(left_out(swap, vec![]), (Measure::Placements, 1, 0));
         // loading a texture file keeps the texture: no drop; losing both is one
@@ -705,6 +707,7 @@ mod tests {
                 variant: 0,
             },
         );
+        w.insert(e, crate::Transform::IDENTITY);
         let prim = Primitive {
             topology: Topology::Triangles,
             streams: Default::default(),

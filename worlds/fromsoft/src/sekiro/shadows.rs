@@ -55,6 +55,7 @@ mod tests {
                     variant: 0,
                 },
             );
+            world.insert(e, primase_core::Transform::IDENTITY);
             let raw = ShadowFlags {
                 cast,
                 receive,
@@ -74,6 +75,7 @@ mod tests {
                 variant: 0,
             },
         );
+        world.insert(untouched, primase_core::Transform::IDENTITY);
         for (e, raw, expected) in placed {
             assert_eq!(world.get::<ShadowFlags>(e), Some(&raw));
             assert_eq!(

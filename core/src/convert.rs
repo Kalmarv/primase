@@ -43,14 +43,20 @@ pub trait Reader {
     }
 }
 
-/// An error naming the first component of `w` outside the reader's namespaces (`when`: after what).
+/// Whether `name` (a component or resource name) is in one of the namespaces in `emits`.
+fn emitted(name: &str, emits: &[&str]) -> bool {
+    emits.contains(&name.split('.').next().unwrap_or(""))
+}
+
+/// An error naming the first component or resource of `w` outside the reader's namespaces (`when`: after what).
 pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
-    if let Some(name) = w
-        .component_names()
-        .into_iter()
-        .find(|n| !emits.contains(&n.split('.').next().unwrap_or("")))
-    {
+    if let Some(name) = w.component_names().into_iter().find(|n| !emitted(n, emits)) {
         return Err(format!("{when}: the reader put {name} in the world (it emits {emits:?})").into());
+    }
+    if let Some(name) = w.resource_names().into_iter().find(|n| !emitted(n, emits)) {
+        return Err(
+            format!("{when}: the reader put the resource {name} in the world (it emits {emits:?})").into(),
+        );
     }
     Ok(())
 }
@@ -61,8 +67,19 @@ pub fn check_emits(w: &World, emits: &[&str], when: &str) -> Result<()> {
 /// through and a reader whose load adds the same name to other entities is not. It compares which entities carry each
 /// name, not values: a load that overwrites a component the selection already put on that entity is not seen.
 pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Result<()> {
+    let before: BTreeSet<&str> = selected.resource_names().into_iter().collect();
+    if let Some(name) = part
+        .resource_names()
+        .into_iter()
+        .find(|n| !emitted(n, emits) && !before.contains(n))
+    {
+        return Err(format!(
+            "load: the reader put the resource {name} in the part, which the selection had not (it emits {emits:?})"
+        )
+        .into());
+    }
     for name in part.component_names() {
-        if emits.contains(&name.split('.').next().unwrap_or("")) {
+        if emitted(name, emits) {
             continue;
         }
         let before: BTreeSet<Entity> = selected.entities_named(name).into_iter().collect();
@@ -658,6 +675,8 @@ fn run(
     let (mut world, read) = read?;
     report.read = read;
     check_emits(&world, reader.emits(), "read")?;
+    // what was read is checked before anything uses it: the selection, the plan, an empty pipeline too
+    manager.verify(&world, "read")?;
     "select".clone_into(during);
     manager.run(&mut world, select, &mut report.select)?;
     let target = writer.target();
@@ -677,6 +696,8 @@ fn run(
             ..PartSize::default()
         };
         check_load_emits(&world, &part, reader.emits())?;
+        // what was loaded is checked before the part's passes use it
+        manager.verify(&part, "load")?;
         *during = format!("part {ordinal}: passes");
         // the part's report is published before its passes run, so a failure keeps what ran
         report.part_reports.push(PartReport {

@@ -297,6 +297,14 @@ impl Component for Instance {
     fn references(&self, out: &mut Vec<Entity>) {
         out.push(self.prototype);
     }
+    /// A placement has its transform ([`Transform`] on the same entity).
+    fn verify(&self, e: Entity, w: &crate::World) -> Result<(), String> {
+        if w.has::<Transform>(e) {
+            Ok(())
+        } else {
+            Err("a placement without a core.transform".into())
+        }
+    }
 }
 
 /// How a placed entity takes part in shadows as a caster.
@@ -597,9 +605,42 @@ impl Component for Mesh {
             })
             .sum()
     }
-    /// Float streams finite (glTF and every writer we have refuse NaN and infinity).
+    /// Each primitive whole: a position stream of points, every stream as long as it (one value per vertex), indices
+    /// within it, whole triangles or lines; and float streams finite (glTF and every writer we have refuse NaN and
+    /// infinity).
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         for (i, p) in self.primitives.iter().enumerate() {
+            let n = match p.streams.get(&Semantic::Position) {
+                Some(Stream::F32x3(v)) => v.len(),
+                Some(_) => return Err(format!("primitive {i}: positions not 3 floats")),
+                None => return Err(format!("primitive {i}: no positions")),
+            };
+            if let Some((sem, st)) = p.streams.iter().find(|(_, st)| st.len() != n) {
+                return Err(format!(
+                    "primitive {i}: {sem:?} has {} values for {n} vertices",
+                    st.len()
+                ));
+            }
+            let corners = match &p.indices {
+                Some(idx) => {
+                    if let Some(bad) = idx.iter().find(|&&v| usize::try_from(v).map_or(true, |v| v >= n)) {
+                        return Err(format!("primitive {i}: index {bad} of {n} vertices"));
+                    }
+                    idx.len()
+                }
+                None => n,
+            };
+            let per = match p.topology {
+                Topology::Triangles => 3,
+                Topology::Lines => 2,
+                Topology::Points => 1,
+            };
+            if corners % per != 0 {
+                return Err(format!(
+                    "primitive {i}: {corners} corners are not whole {:?}",
+                    p.topology
+                ));
+            }
             for (sem, st) in &p.streams {
                 let what = format!("primitive {i} {sem:?}");
                 match st {
@@ -732,6 +773,40 @@ impl Component for Texture {
     /// Every level's bytes.
     fn payload_bytes(&self) -> u64 {
         self.levels.iter().map(|l| l.len() as u64).sum()
+    }
+    /// A size, at least one level and no more than the size has, each exactly its format's size for its dimensions.
+    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        if self.width == 0 || self.height == 0 {
+            return Err(format!("{} x {} pixels", self.width, self.height));
+        }
+        let most = self.width.max(self.height).ilog2() + 1;
+        if self.levels.is_empty() || self.levels.len() > most as usize {
+            return Err(format!(
+                "{} levels for {} x {} (1 to {most})",
+                self.levels.len(),
+                self.width,
+                self.height
+            ));
+        }
+        for (i, level) in self.levels.iter().enumerate() {
+            let shift = u32::try_from(i).unwrap_or(u32::MAX);
+            let (w, h) = (
+                self.width.checked_shr(shift).unwrap_or(0).max(1),
+                self.height.checked_shr(shift).unwrap_or(0).max(1),
+            );
+            match self.format.checked_level_size(w, h) {
+                Some(size) if size == level.len() => {}
+                Some(size) => {
+                    return Err(format!(
+                        "level {i} ({w} x {h} {:?}): {} bytes, not {size}",
+                        self.format,
+                        level.len()
+                    ));
+                }
+                None => return Err(format!("level {i}: {w} x {h} doesn't fit in memory")),
+            }
+        }
+        Ok(())
     }
     /// A summary, not the pixels: size, format, level count, colour space, role, normal convention.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
@@ -1258,6 +1333,137 @@ mod tests {
         assert_eq!(got[3].1, Some(json!("a")));
     }
 
+    /// A mesh, texture or placement that is whole is accepted; one whose parts don't fit together is refused,
+    /// naming what; an unloaded (file-backed) or collision-only prototype is fine.
+    #[test]
+    fn the_verifier_refuses_structurally_broken_data() {
+        let tri = |streams: BTreeMap<Semantic, Stream>, indices: Option<Vec<u32>>, topology| Primitive {
+            topology,
+            streams,
+            indices,
+            material: None,
+        };
+        let pos = |n: usize| (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; n]));
+        let mesh_err = |p: Primitive| {
+            let mut w = crate::World::new();
+            let e = w.spawn();
+            w.insert(e, Mesh::new(vec![p]));
+            w.verify_components()
+                .into_iter()
+                .map(|(_, _, m)| m)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            mesh_err(tri(
+                BTreeMap::from([pos(3)]),
+                Some(vec![0, 1, 2]),
+                Topology::Triangles
+            ))
+            .is_empty()
+        );
+        assert!(mesh_err(tri(BTreeMap::from([pos(4)]), Some(vec![0, 1]), Topology::Lines)).is_empty());
+        for (p, words) in [
+            (tri(BTreeMap::new(), None, Topology::Triangles), "no positions"),
+            (
+                tri(
+                    BTreeMap::from([(Semantic::Position, Stream::F32x2(vec![[0.0; 2]; 3]))]),
+                    None,
+                    Topology::Triangles,
+                ),
+                "not 3 floats",
+            ),
+            (
+                tri(
+                    BTreeMap::from([pos(3), (Semantic::Normal, Stream::F32x3(vec![[0.0; 3]; 2]))]),
+                    None,
+                    Topology::Triangles,
+                ),
+                "2 values for 3 vertices",
+            ),
+            (
+                tri(BTreeMap::from([pos(3)]), Some(vec![0, 1, 3]), Topology::Triangles),
+                "index 3 of 3",
+            ),
+            (
+                tri(
+                    BTreeMap::from([pos(3)]),
+                    Some(vec![0, 1, 2, 0]),
+                    Topology::Triangles,
+                ),
+                "4 corners",
+            ),
+            (tri(BTreeMap::from([pos(3)]), None, Topology::Lines), "3 corners"),
+        ] {
+            let got = mesh_err(p);
+            assert!(got.len() == 1 && got[0].contains(words), "{words}: {got:?}");
+        }
+        let tex = |width, height, levels: Vec<usize>| {
+            let mut w = crate::World::new();
+            let e = w.spawn();
+            w.insert(
+                e,
+                Texture {
+                    width,
+                    height,
+                    format: TexFormat::Rgba8Unorm,
+                    levels: levels.into_iter().map(|n| vec![0; n]).collect(),
+                    color_space: ColorSpace::Srgb,
+                    role: TexRole::Color,
+                    normal: None,
+                },
+            );
+            w.verify_components()
+                .into_iter()
+                .map(|(_, _, m)| m)
+                .collect::<Vec<_>>()
+        };
+        assert!(tex(4, 2, vec![32, 8, 4]).is_empty());
+        assert!(tex(0, 2, vec![0])[0].contains("0 x 2"));
+        assert!(tex(4, 4, vec![])[0].contains("0 levels"));
+        assert!(tex(4, 4, vec![64, 16, 4, 4])[0].contains("4 levels"));
+        assert!(tex(4, 4, vec![64, 15])[0].contains("level 1"));
+        assert!(tex(u32::MAX, u32::MAX, vec![0])[0].contains("doesn't fit"));
+        // a placement needs its transform; an unloaded and a collision-only prototype are whole as they are
+        let mut w = crate::World::new();
+        let (file, collision) = (w.spawn(), w.spawn());
+        w.insert(
+            file,
+            MeshFile {
+                path: "m.glb".into(),
+                mesh: 0,
+                materials: vec![None],
+            },
+        );
+        w.insert(collision, Name("collision only".into()));
+        let placed = w.spawn();
+        w.insert(
+            placed,
+            Instance {
+                prototype: file,
+                variant: 0,
+            },
+        );
+        let bare = w.spawn();
+        w.insert(
+            bare,
+            Instance {
+                prototype: collision,
+                variant: 0,
+            },
+        );
+        w.insert(placed, Transform::IDENTITY);
+        let tf = w.spawn();
+        w.insert(tf, TextureFile { path: "t.png".into() });
+        assert_eq!(
+            w.verify_components(),
+            [(
+                "core.instance",
+                bare,
+                "a placement without a core.transform".to_owned()
+            )]
+        );
+    }
+
     #[test]
     fn the_verifier_refuses_non_finite_geometry() {
         let mut w = crate::World::new();
@@ -1271,10 +1477,13 @@ mod tests {
             e2,
             Mesh::new(vec![Primitive {
                 topology: Topology::Triangles,
-                streams: BTreeMap::from([(
-                    Semantic::TexCoord(0),
-                    Stream::F32x2(vec![[0.0, f32::NEG_INFINITY]]),
-                )]),
+                streams: BTreeMap::from([
+                    (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
+                    (
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0.0, f32::NEG_INFINITY], [0.0; 2], [0.0; 2]]),
+                    ),
+                ]),
                 indices: None,
                 material: None,
             }]),

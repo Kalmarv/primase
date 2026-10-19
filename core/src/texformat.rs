@@ -110,10 +110,18 @@ impl TexFormat {
 
     /// Size in bytes of one level of `width` x `height` pixels: whole blocks, at least one per axis.
     pub fn level_size(self, width: u32, height: u32) -> usize {
+        self.checked_level_size(width, height)
+            .expect("a level size that fits in memory")
+    }
+
+    /// [`TexFormat::level_size`], `None` when it doesn't fit in a `usize` (dimensions a file states).
+    pub fn checked_level_size(self, width: u32, height: u32) -> Option<usize> {
         let (bw, bh) = self.block_dims();
-        let blocks_x = width.div_ceil(bw).max(1) as usize;
-        let blocks_y = height.div_ceil(bh).max(1) as usize;
-        blocks_x * blocks_y * self.block_bytes() as usize
+        let blocks_x = usize::try_from(width.div_ceil(bw).max(1)).ok()?;
+        let blocks_y = usize::try_from(height.div_ceil(bh).max(1)).ok()?;
+        blocks_x
+            .checked_mul(blocks_y)?
+            .checked_mul(usize::try_from(self.block_bytes()).ok()?)
     }
 }
 
