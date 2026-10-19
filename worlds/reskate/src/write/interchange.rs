@@ -17,7 +17,7 @@
     reason = "writer I/O: writes the scene folder"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component as PathComponent, Path};
 use std::sync::Arc;
 
@@ -518,7 +518,32 @@ impl Writer<'_> {
         );
         put("stats", scene.stats.as_ref().cloned());
 
-        // textures
+        // textures: one name, one image (the format's rule). A texture whose name an earlier one (by key) took, as two
+        // images from same-named sources (GTA's dictionaries) give, is written under a name of its own made from its
+        // key, its source name kept as its stem, the map's output file stem (its files stay named as before)
+        let mut by_key: Vec<(Entity, &SkateTexture)> = w.iter::<SkateTexture>().collect();
+        by_key.sort_by(|a, b| a.1.key.cmp(&b.1.key));
+        let mut taken: BTreeSet<String> = BTreeSet::new();
+        let mut naming: BTreeMap<Entity, (Option<String>, Option<String>)> = BTreeMap::new();
+        for (e, t) in by_key {
+            let name = w.get::<Name>(e).map(|n| n.0.clone());
+            let effective = name.clone().unwrap_or_else(|| {
+                Path::new(&t.file.path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            if taken.insert(effective.to_lowercase()) {
+                naming.insert(e, (name, t.stem.clone()));
+                continue;
+            }
+            let (mut own, mut n) = (t.key.clone(), 2);
+            while !taken.insert(own.to_lowercase()) {
+                own = format!("{}_{n}", t.key);
+                n += 1;
+            }
+            naming.insert(e, (Some(own), Some(t.stem.clone().unwrap_or(effective))));
+        }
         let mut tex_key: BTreeMap<Entity, String> = BTreeMap::new();
         let mut textures = ObjB::default();
         for (e, t) in w.iter::<SkateTexture>() {
@@ -552,8 +577,9 @@ impl Writer<'_> {
             let mut o = ObjB::default();
             o.put("file", text(&file.path));
             o.opt("sha256", file.sha256, Value::String);
-            o.opt("name", w.get::<Name>(e), |n| text(&n.0));
-            o.opt("stem", t.stem.as_ref(), |x| text(x));
+            let (name, stem) = &naming[&e];
+            o.opt("name", name.as_ref(), |n| text(n));
+            o.opt("stem", stem.as_ref(), |x| text(x));
             o.opt("source_format", t.source_format.as_ref(), |x| text(x));
             o.opt("source_size", t.source_size, |s| {
                 Value::Array(vec![Value::from(s[0]), Value::from(s[1])])
