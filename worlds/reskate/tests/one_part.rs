@@ -1,5 +1,6 @@
-//! A ReSkate map is one part: the passes that work on the whole map (floor, region, spawn, marker snaps) refuse a
-//! part of a world planned in two cells with a halo, and run on the whole world, as a conversion gives them each.
+//! A ReSkate map is one part: the passes that work on the whole map (floor, region, spawn, marker snaps, lights, water,
+//! pause map) refuse a part of a world planned in two cells with a halo, and run on the whole world, as a conversion
+//! gives them each.
 
 #![allow(clippy::unwrap_used)]
 
@@ -13,7 +14,9 @@ use primase_core::{
     Collision, Entity, Instance, Mesh, Primitive, Semantic, Stream, Surfaces, Topology, Transform, World,
 };
 use primase_reskate::prepare::{
-    ClipReskateRegion, PlaceReskateSpawn, PrepareReskateFloor, RaiseOptions, SnapReskateMarkers,
+    ClipReskateRegion, OceanMaterials, PauseExtent, PauseSource, PlaceReskateSpawn, PrepareReskateFloor,
+    PrepareReskatePauseMap, PrepareReskateWater, RaiseOptions, SelectReskateLights, SnapReskateMarkers,
+    WaterExtent,
 };
 
 /// Flat concrete over east 0..512, north 0..256 at height 0; one prototype placed in each 256 m cell (east 10 and
@@ -109,6 +112,15 @@ fn passes() -> Vec<Box<dyn Pass>> {
         Box::new(ClipReskateRegion::new([0.0, 0.0, 512.0, 256.0]).unwrap()),
         Box::new(PlaceReskateSpawn::centre()),
         Box::new(SnapReskateMarkers::new()),
+        Box::new(SelectReskateLights::new(8, 200.0).unwrap()),
+        Box::new(PrepareReskateWater::new(WaterExtent::All, OceanMaterials::All).unwrap()),
+        Box::new(
+            PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 720,
+                extent: PauseExtent::Content,
+            })
+            .unwrap(),
+        ),
     ]
 }
 

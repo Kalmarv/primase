@@ -88,22 +88,6 @@ pub fn keep_lights(lights: &[PlacedLight], per_cell: usize, cell: f32) -> Vec<us
     out
 }
 
-/// An error when `w` is one part of a conversion in several (see the module documentation).
-fn one_map(w: &World, pass: &str) -> Result<(), String> {
-    let context = w
-        .resource::<primase_core::convert::PartScope>()
-        .is_some_and(|s| !s.context.is_empty());
-    let groups = w
-        .resource::<primase_core::convert::PartitionPlan>()
-        .map_or(0, |p| p.groups.len());
-    if context || groups > 1 {
-        return Err(format!(
-            "{pass} works on the whole map: this is one part of a conversion in several"
-        ));
-    }
-    Ok(())
-}
-
 impl Pass for SelectReskateLights {
     fn name(&self) -> &'static str {
         "select-reskate-lights"
@@ -118,7 +102,7 @@ impl Pass for SelectReskateLights {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        one_map(w, self.name())?;
+        super::require_one_part(w, self.name())?;
         let lights: Vec<(Entity, PlacedLight)> = w
             .iter::<SkateLight>()
             .map(|(e, l)| (e, placed_light(w, e, l)))
@@ -224,10 +208,9 @@ mod tests {
         assert_eq!(energies(&w), [3.0, 4.0]);
     }
 
-    /// Both options are required and checked; the struct and its options are one; a part of a conversion in several
-    /// is refused.
+    /// Both options are required and checked; the struct and its options are one.
     #[test]
-    fn options_are_required_and_parts_refused() {
+    fn options_are_required_and_checked() {
         let o = |kv: &[(&str, &str)]| -> Options {
             kv.iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -239,17 +222,5 @@ mod tests {
         assert!(SelectReskateLights::new(8, f32::NAN).is_err());
         let full = o(&[("per_cell", "8"), ("cell", "200")]);
         assert_eq!(SelectReskateLights::from_options(&full).unwrap().options(), full);
-        let mut w = World::new();
-        let neighbour = w.spawn();
-        w.insert_resource(primase_core::convert::PartScope {
-            roots: Default::default(),
-            context: [neighbour].into(),
-        });
-        assert!(
-            SelectReskateLights::new(8, 200.0)
-                .unwrap()
-                .run(&mut w, &mut PassLog::default())
-                .is_err()
-        );
     }
 }

@@ -200,22 +200,6 @@ fn convex(p: &[(f32, f32)]) -> bool {
     !(pos && neg)
 }
 
-/// An error when `w` is one part of a conversion in several.
-fn one_map(w: &World, pass: &str) -> Result<(), String> {
-    let context = w
-        .resource::<primase_core::convert::PartScope>()
-        .is_some_and(|s| !s.context.is_empty());
-    let groups = w
-        .resource::<primase_core::convert::PartitionPlan>()
-        .map_or(0, |p| p.groups.len());
-    if context || groups > 1 {
-        return Err(format!(
-            "{pass} works on the whole map: this is one part of a conversion in several"
-        ));
-    }
-    Ok(())
-}
-
 impl Pass for PrepareReskateWater {
     fn name(&self) -> &'static str {
         "prepare-reskate-water"
@@ -260,7 +244,7 @@ impl Pass for PrepareReskateWater {
         "a water outline the source gives not convex, drawn as a fan from its first corner"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        one_map(w, self.name())?;
+        super::require_one_part(w, self.name())?;
         if self.ocean == OceanMaterials::All
             && let Some(mut col) = w.column_mut::<SkateMaterial>()
         {
