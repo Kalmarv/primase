@@ -7,6 +7,7 @@
 pub(super) mod bake_assembly;
 pub mod blockers;
 pub mod collision;
+pub mod extras;
 pub mod layers;
 pub mod lights;
 pub mod normals;
@@ -1008,7 +1009,7 @@ pub fn register(registry: &mut PassRegistry) {
         &[("convex", "tessellate")],
     );
     registry.register("lower-fromsoft-extras", |o| {
-        without_options(o, super::extras::LowerFromSoftExtras)
+        without_options(o, extras::LowerFromSoftExtras)
     });
     registry.register_requiring(
         "lower-fromsoft-lights",

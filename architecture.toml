@@ -15,11 +15,6 @@
 # listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
 
 [[layout]]
-file = "worlds/fromsoft/src/sekiro/extras.rs"
-reason = "Other names the I/O module primase_fromsoft::Archive"
-removed_when = "worlds/fromsoft is arranged by role before the final review: crate-level read/ and passes/ for shared engine work, sekiro/{read,passes,components} (what is FromSoft-wide vs Sekiro-only is revisited at Elden Ring)"
-
-[[layout]]
 file = "worlds/fromsoft/src/sekiro/mod.rs"
 reason = "Other names the I/O module primase_fromsoft::Archive"
 removed_when = "worlds/fromsoft is arranged by role before the final review: crate-level read/ and passes/ for shared engine work, sekiro/{read,passes,components} (what is FromSoft-wide vs Sekiro-only is revisited at Elden Ring)"

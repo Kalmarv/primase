@@ -2,7 +2,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Light, LightKind, Transform, World};
 use primase_fromsoft::{
     btl::{Kind, Light as BtlLight},
-    sekiro::{extras::light_record, passes, source::LightSource},
+    sekiro::{light_record, passes, source::LightSource},
 };
 fn light() -> BtlLight {
     BtlLight {

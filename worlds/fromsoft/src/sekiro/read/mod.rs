@@ -3,6 +3,7 @@
 pub mod area;
 pub mod collision;
 pub mod convert;
+pub mod extras;
 pub(super) mod shadows;
 pub mod states;
 pub(super) mod textures;
