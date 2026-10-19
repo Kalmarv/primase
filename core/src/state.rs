@@ -424,23 +424,8 @@ impl Pass for ResolveState {
             .iter()
             .filter_map(|(e, a)| a.default.map(|d| (*e, d)))
             .collect();
-        // a program's choice for a kind of axis, over the source's default
-        for (class, text) in &self.assign_class {
-            let mut any = false;
-            for (e, a) in axes.iter().filter(|(_, a)| &a.class == class) {
-                let v = a
-                    .domain
-                    .parse(text)
-                    .ok_or_else(|| format!("assign-class {class}:{text} is not a value of axis {}", a.key))?;
-                values.insert(*e, v);
-                any = true;
-            }
-            if any {
-                log.count(&format!("axes of class {class} assigned {text}"), 1);
-            } else {
-                log.count(&format!("assigned class {class}, which no axis has: ignored"), 1);
-            }
-        }
+        // the axes the snapshot or a key assignment set: a class assignment doesn't reach them
+        let mut explicit = BTreeSet::new();
         // a save holds every flag the game knows, a world has axes for a few: keys without an axis are counted
         let resource = w.remove_resource::<StateAssignment>().unwrap_or_default();
         for (k, &v) in &resource.0 {
@@ -455,6 +440,7 @@ impl Pass for ResolveState {
                 ));
             }
             values.insert(e, v);
+            explicit.insert(e);
         }
         // a program's choices name axes some of its worlds lack: counted by key
         for (k, text) in &self.assign {
@@ -467,6 +453,7 @@ impl Pass for ResolveState {
                 .parse(text)
                 .ok_or_else(|| format!("assign {k}:{text} is not one of its values"))?;
             values.insert(e, v);
+            explicit.insert(e);
         }
         // the kept axes: no value, their literals stay
         let mut kept = BTreeSet::new();
@@ -489,6 +476,30 @@ impl Pass for ResolveState {
                 kept_assignment.0.insert(k.clone(), v);
             }
             log.count(&format!("axis {k} kept unresolved"), 1);
+        }
+        // a program's choice for a kind of axis, over the source's default only: the value is read against each axis
+        // it falls to, not those a key assignment, the snapshot or keep settled
+        for (class, text) in &self.assign_class {
+            let mut any = false;
+            for (e, a) in axes
+                .iter()
+                .filter(|(e, a)| &a.class == class && !explicit.contains(e) && !kept.contains(e))
+            {
+                let v = a
+                    .domain
+                    .parse(text)
+                    .ok_or_else(|| format!("assign-class {class}:{text} is not a value of axis {}", a.key))?;
+                values.insert(*e, v);
+                any = true;
+            }
+            if any {
+                log.count(&format!("axes of class {class} assigned {text}"), 1);
+            } else {
+                log.count(
+                    &format!("assigned class {class}, which no axis it falls to has: ignored"),
+                    1,
+                );
+            }
         }
         // the axes nothing gave a value (their default unknown) stay as the kept ones do
         let mut unresolved = BTreeSet::new();
@@ -887,6 +898,65 @@ mod tests {
         assert!(
             c.w.is_alive(c.f8301) && !c.w.has::<StateAxis>(c.f8301),
             "axes lose their component, the entity stays"
+        );
+    }
+
+    /// A class assignment falls back after the key assignments, the snapshot and keep: its value is read only against
+    /// the axes it falls to (here A, of three levels; B, of two, is assigned lod0 by key, so lod2 is never read against
+    /// it), and an invalid value for an axis it does fall to is an error.
+    #[test]
+    fn a_class_assignment_reaches_only_the_axes_nothing_else_set() {
+        let lod_axis = |w: &mut World, key: &str, levels: usize| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                StateAxis {
+                    key: key.into(),
+                    domain: Domain::Enum((0..levels).map(|i| format!("lod{i}")).collect()),
+                    default: None,
+                    scope: Scope::Global,
+                    class: "lod".into(),
+                    source: key.into(),
+                },
+            );
+            e
+        };
+        let world = || {
+            let mut w = World::new();
+            let proto = w.spawn();
+            w.insert(proto, Name("proto".into()));
+            let (a, b) = (lod_axis(&mut w, "lod.a", 3), lod_axis(&mut w, "lod.b", 2));
+            // a placement for A at lod2 and one for B at lod0
+            for (axis, level, name) in [(a, 2, "a2"), (b, 0, "b0")] {
+                let p = placement(&mut w, proto, name);
+                w.insert(
+                    p,
+                    Condition(vec![Clause(vec![Literal {
+                        axis,
+                        values: 1 << level,
+                    }])]),
+                );
+            }
+            w
+        };
+        let resolve = |w: &mut World, assign: &[(&str, &str)]| {
+            ResolveState {
+                assign: assign.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect(),
+                assign_class: [("lod".to_owned(), "lod2".to_owned())].into(),
+                ..Default::default()
+            }
+            .run(w, &mut PassLog::default())
+        };
+        let mut w = world();
+        resolve(&mut w, &[("lod.b", "lod0")]).unwrap();
+        let mut left: Vec<String> = w.iter::<Name>().map(|(_, n)| n.0.clone()).collect();
+        left.sort();
+        assert_eq!(left, ["a2", "b0", "proto"]);
+        // without B's key assignment, lod2 falls to B too, which has no lod2
+        let e = resolve(&mut world(), &[]).unwrap_err();
+        assert!(
+            e.contains("assign-class lod:lod2 is not a value of axis lod.b"),
+            "{e}"
         );
     }
 
