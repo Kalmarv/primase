@@ -211,6 +211,14 @@ impl Pass for SelectLod {
             match chosen.checked_sub(1).map(|k| lods.forms[k]) {
                 None => log.count("prototypes drawn with their own form", 1),
                 Some(f) => {
+                    if let Some(own) = w.get::<Mesh>(proto) {
+                        let n = own.primitives().len() as u64;
+                        log.dropped(
+                            crate::ledger::Measure::Primitives,
+                            "the prototype's own form left out",
+                            n,
+                        );
+                    }
                     w.remove::<Mesh>(proto);
                     w.remove::<MeshFile>(proto);
                     w.remove::<MaterialVariants>(proto);
@@ -229,7 +237,7 @@ impl Pass for SelectLod {
             }
             for (k, f) in lods.forms.iter().enumerate() {
                 if k + 1 != chosen {
-                    w.despawn(f.form);
+                    crate::ledger::despawn(w, f.form, log, "forms left out");
                     log.count("forms left out", 1);
                 }
             }

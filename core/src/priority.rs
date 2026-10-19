@@ -102,8 +102,7 @@ impl Pass for DropOptional {
             ));
         }
         for (e, p) in dropped {
-            w.despawn(e);
-            log.count(&format!("placements at priority {p} left out"), 1);
+            crate::ledger::despawn(w, e, log, &format!("placements at priority {p} left out"));
         }
         Ok(())
     }
@@ -172,9 +171,17 @@ mod tests {
             ["core.name"],
             "only the dropped placement had a name"
         );
+        assert!(step.log.counts.is_empty());
         assert_eq!(
-            step.log.counts,
-            [("placements at priority 3 left out".to_owned(), 1)].into()
+            step.log.drops,
+            [(
+                (
+                    crate::ledger::Measure::Placements,
+                    "placements at priority 3 left out".to_owned()
+                ),
+                1
+            )]
+            .into()
         );
         assert_eq!(
             placed.iter().map(|e| w.is_alive(*e)).collect::<Vec<_>>(),

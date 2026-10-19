@@ -78,9 +78,8 @@ impl Pass for LeaveOutInteriors {
             .filter(|(_, g)| g.interior.is_some())
             .map(|(e, _)| e)
             .collect();
-        log.count("placements in an interior left out", inside.len() as u64);
         for e in inside {
-            w.despawn(e);
+            primase_core::ledger::despawn(w, e, log, "placements in an interior left out");
         }
         Ok(())
     }

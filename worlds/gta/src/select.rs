@@ -249,7 +249,8 @@ impl Pass for SelectRegion {
             .filter(|c| c.arch.kind == "interior" && c.ge.interior == Some(c.ge.index))
             .map(|c| ((c.ge.ymap.clone(), c.ge.index), self.inside(c.t.cols[3])))
             .collect();
-        let mut drop = BTreeSet::new();
+        // each placement left out, with why
+        let mut drop: BTreeMap<Entity, &'static str> = BTreeMap::new();
         let mut kept: Vec<&Candidate> = Vec::new();
         for c in &all {
             let ge = &c.ge;
@@ -303,8 +304,7 @@ impl Pass for SelectRegion {
             }
             match reason {
                 Some(r) => {
-                    log.count(&format!("dropped: {r}"), 1);
-                    drop.insert(c.entity);
+                    drop.insert(c.entity, r);
                 }
                 None => kept.push(c),
             }
@@ -327,13 +327,12 @@ impl Pass for SelectRegion {
                 .iter()
                 .any(|o| !stand_in(o) && (0..3).all(|i| (o.t.cols[3][i] - centre[i]).abs() <= half[i]));
             if over {
-                log.count("dropped: stand-in over placed real geometry", 1);
-                drop.insert(c.entity);
+                drop.insert(c.entity, "stand-in over placed real geometry");
             }
         }
         // how far what is kept reaches: each box placed, a box wider than the reach by its pivot
         let mut extent: Option<[f32; 4]> = None;
-        for c in kept.iter().filter(|c| !drop.contains(&c.entity)) {
+        for c in kept.iter().filter(|c| !drop.contains_key(&c.entity)) {
             let (cc, h) = box_centre_half(&c.arch);
             let (centre, half) = (point(&c.t, cc), half_extent(&c.t, h));
             let (lo, hi) = if half[0] <= REACH && half[1] <= REACH {
@@ -349,8 +348,8 @@ impl Pass for SelectRegion {
             *r = [r[0].min(lo[0]), r[1].min(lo[1]), r[2].max(hi[0]), r[3].max(hi[1])];
         }
         w.insert_resource(RegionExtent(extent));
-        for e in &drop {
-            w.despawn(*e);
+        for (&e, why) in &drop {
+            primase_core::ledger::despawn(w, e, log, why);
         }
         log.count("kept", (all.len() - drop.len()) as u64);
         Ok(())
@@ -451,15 +450,12 @@ impl Pass for SelectStandIns {
                 None
             };
             match reason {
-                Some(r) => {
-                    log.count(&format!("dropped: {r}"), 1);
-                    drop.push(e);
-                }
+                Some(r) => drop.push((e, r)),
                 None => log.count(&format!("kept: level {}", ge.lod_level), 1),
             }
         }
-        for e in drop {
-            w.despawn(e);
+        for (e, r) in drop {
+            primase_core::ledger::despawn(w, e, log, r);
         }
         Ok(())
     }
@@ -540,7 +536,13 @@ mod stand_in_tests {
             .unwrap();
         let alive: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
         assert_eq!(alive, vec![s1, s3]);
-        assert_eq!(log.counts.get("dropped: outside the region"), Some(&1));
+        assert_eq!(
+            log.drops.get(&(
+                primase_core::ledger::Measure::Placements,
+                "outside the region".into()
+            )),
+            Some(&1)
+        );
     }
 
     /// The region's extent is the kept boxes placed; a box wider than the reach counts by its pivot. Two HD leaves with
@@ -551,6 +553,8 @@ mod stand_in_tests {
         for (x, bb_min, bb_max) in [
             (1.0, [0.0, 0.0, 0.0], [20.0, 10.0, 1.0]),
             (2.0, [-700.0, -700.0, 0.0], [700.0, 700.0, 1.0]),
+            // its pivot and box outside the region: left out, with that reason
+            (500.0, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
         ] {
             let e = placed(&mut w, 0, None, x);
             let proto = w.get::<Instance>(e).unwrap().prototype;
@@ -578,10 +582,22 @@ mod stand_in_tests {
                 },
             );
         }
+        let mut log = PassLog::default();
         SelectRegion::new(GroundRect::new([0.0, 0.0, 10.0, 10.0]).unwrap())
-            .run(&mut w, &mut PassLog::default())
+            .run(&mut w, &mut log)
             .unwrap();
         assert_eq!(w.iter::<Instance>().count(), 2);
+        assert_eq!(
+            log.drops,
+            [(
+                (
+                    primase_core::ledger::Measure::Placements,
+                    "outside the region".to_owned()
+                ),
+                1
+            )]
+            .into()
+        );
         assert_eq!(
             w.resource::<RegionExtent>(),
             Some(&RegionExtent(Some([1.0, 5.0, 21.0, 15.0])))

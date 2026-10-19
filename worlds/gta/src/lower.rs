@@ -441,8 +441,9 @@ pub fn drop_hidden_models(w: &mut World, log: &mut PassLog) -> Result<(), String
         let from = retain_primitives(&mut mesh, |_| {
             let kept = k.next().copied().unwrap_or(true);
             if !kept {
-                log.count(
-                    "primitives dropped: model not drawn in the visible pass (render mask)",
+                log.dropped(
+                    primase_core::ledger::Measure::Primitives,
+                    "model not drawn in the visible pass (render mask)",
                     1,
                 );
             }
@@ -593,7 +594,7 @@ impl Pass for LowerGtaPbr {
             Ok(retain_primitives(mesh, |p| {
                 let skip = p.material.and_then(|m| dropped.get(&m));
                 if let Some(s) = skip {
-                    log.count(&format!("primitives dropped: {}", s.reason()), 1);
+                    log.dropped(primase_core::ledger::Measure::Primitives, s.reason(), 1);
                 }
                 skip.is_none()
             }))
@@ -1597,8 +1598,10 @@ mod tests {
         assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives().len(), 1);
         assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 0]]);
         assert_eq!(
-            log.counts
-                .get("primitives dropped: model not drawn in the visible pass (render mask)"),
+            log.drops.get(&(
+                primase_core::ledger::Measure::Primitives,
+                "model not drawn in the visible pass (render mask)".into()
+            )),
             Some(&1)
         );
     }

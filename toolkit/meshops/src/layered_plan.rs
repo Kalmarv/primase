@@ -89,7 +89,7 @@ impl LayeredPbrPlan {
         }
         let retained = world.closure(world.entities().filter(|e| !self.cleanup_candidates.contains(e)));
         for entity in self.cleanup_candidates.difference(&retained) {
-            world.despawn(*entity);
+            primase_core::ledger::despawn(world, *entity, log, "layered sources no longer used");
         }
     }
 }

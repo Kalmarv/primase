@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+pub use crate::ledger::Measure;
 use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
@@ -63,6 +64,9 @@ pub struct PassLog {
     pub placed: BTreeSet<Entity>,
     /// Of [`PassLog::placed`], those made from one source entity, with it ([`PassLog::place_from`]).
     pub placed_from: BTreeMap<Entity, Entity>,
+    /// What the pass left out on purpose, by measure and reason (`placements in an interior left out`); a conversion
+    /// reports each as a selection notice ([`crate::ledger`]).
+    pub drops: BTreeMap<(Measure, String), u64>,
 }
 
 impl PassLog {
@@ -85,6 +89,23 @@ impl PassLog {
         *self.omitted.entry(what.to_owned()).or_default() += n;
     }
 
+    /// Record `n` of `measure` left out on purpose, and why (see [`PassLog::drops`]; an entity despawned whole:
+    /// [`crate::ledger::despawn`]).
+    pub fn dropped(&mut self, measure: Measure, why: &str, n: u64) {
+        if n > 0 {
+            *self.drops.entry((measure, why.to_owned())).or_default() += n;
+        }
+    }
+
+    /// The drops it recorded in `measure`, over every reason.
+    pub fn declared(&self, measure: Measure) -> u64 {
+        self.drops
+            .iter()
+            .filter(|((m, _), _)| *m == measure)
+            .map(|(_, n)| n)
+            .sum()
+    }
+
     /// Record that the pass made `e` as content of its own (see [`PassLog::placed`]): content of the whole world, as a
     /// spawn a selection places. Content made from one source entity is [`PassLog::place_from`].
     pub fn place(&mut self, e: Entity) {
@@ -101,7 +122,7 @@ impl PassLog {
 
     /// Take in the log of work done on the pass's behalf (a function returning its own [`PassLog`]): every count,
     /// approximation and omission added to this log's, its recorded removals and its placed entities (with their
-    /// sources), so nothing it reported is lost on the way to the pass's report.
+    /// sources) and drops, so nothing it reported is lost on the way to the pass's report.
     pub fn absorb(&mut self, other: PassLog) {
         let PassLog {
             counts,
@@ -110,7 +131,11 @@ impl PassLog {
             removed,
             placed,
             placed_from,
+            drops,
         } = other;
+        for ((m, why), n) in drops {
+            self.dropped(m, &why, n);
+        }
         for (k, n) in counts {
             self.count(&k, n);
         }
@@ -838,6 +863,9 @@ impl fmt::Display for RunReport {
             }
             for (k, n) in &s.log.omitted {
                 write!(f, " -{k}={n}")?;
+            }
+            for ((m, why), n) in &s.log.drops {
+                write!(f, " -{m}:{why}={n}")?;
             }
             writeln!(f)?;
         }
@@ -1851,8 +1879,8 @@ mod tests {
             .illegal("toy.layered")
     }
 
-    /// A pass taking in a function's log keeps everything it reported: counts, approximations and omissions add up,
-    /// removals, placed entities and their sources join.
+    /// A pass taking in a function's log keeps everything it reported: counts, approximations, omissions and drops
+    /// add up, removals, placed entities and their sources join.
     #[test]
     fn absorb_keeps_every_part_of_the_log() {
         let mut w = World::new();
@@ -1868,6 +1896,8 @@ mod tests {
         other.omit("no form", 4);
         other.record_removed("toy.hat");
         other.place_from(b, source);
+        other.dropped(Measure::Placements, "left out", 2);
+        log.dropped(Measure::Placements, "left out", 1);
         log.absorb(other);
         assert_eq!(
             log.counts,
@@ -1878,6 +1908,7 @@ mod tests {
         assert_eq!(log.removed, BTreeSet::from(["toy.hat".to_owned()]));
         assert_eq!(log.placed, BTreeSet::from([a, b]));
         assert_eq!(log.placed_from, BTreeMap::from([(b, source)]));
+        assert_eq!(log.declared(Measure::Placements), 3);
     }
 
     #[test]

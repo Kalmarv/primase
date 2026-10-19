@@ -103,10 +103,12 @@ pub fn unity_drawn(w: &mut World) -> PassLog {
         }
     }
     for (e, why) in gone {
-        if !why.is_empty() {
-            log.count(&why, 1);
-        }
-        w.despawn(e);
+        let why = if why.is_empty() {
+            "renderers left out"
+        } else {
+            why.as_str()
+        };
+        primase_core::ledger::despawn(w, e, &mut log, why);
     }
     log
 }

@@ -548,12 +548,12 @@ impl Pass for SelectGtaWater {
             unplaced.len() as u64,
         );
         for e in unplaced {
+            // a prototype: its placement went with its state
             w.despawn(e);
         }
         if self.clip == Clip::None {
-            log.count("water surfaces left out: clip=none", placements.len() as u64);
             for (p, proto) in placements {
-                w.despawn(p);
+                primase_core::ledger::despawn(w, p, log, "water surfaces left out: clip=none");
                 w.despawn(proto);
             }
             return Ok(());
@@ -568,8 +568,7 @@ impl Pass for SelectGtaWater {
             };
             s.outline = clip(&s.outline, r);
             if s.outline.is_empty() {
-                log.count("water surfaces left out: outside the region", 1);
-                w.despawn(p);
+                primase_core::ledger::despawn(w, p, log, "water surfaces left out: outside the region");
                 w.despawn(proto);
             } else {
                 log.count("water surfaces kept", 1);
@@ -883,7 +882,13 @@ mod tests {
             .run(&mut w, &mut log)
             .unwrap();
         assert!(surfaces(&w).is_empty() && w.iter::<GtaWaterSurface>().next().is_none());
-        assert_eq!(log.counts.get("water surfaces left out: clip=none"), Some(&1));
+        assert_eq!(
+            log.drops.get(&(
+                primase_core::ledger::Measure::Placements,
+                "water surfaces left out: clip=none".into()
+            )),
+            Some(&1)
+        );
         let mut o = Options::new();
         o.insert("clip".into(), "kept".into());
         assert!(
@@ -937,7 +942,10 @@ mod tests {
             .unwrap();
         assert_eq!(log.counts.get("water surfaces kept"), Some(&2));
         assert_eq!(
-            log.counts.get("water surfaces left out: outside the region"),
+            log.drops.get(&(
+                primase_core::ledger::Measure::Placements,
+                "water surfaces left out: outside the region".into()
+            )),
             Some(&1)
         );
         assert_eq!(

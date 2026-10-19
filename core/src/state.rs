@@ -526,7 +526,7 @@ impl Pass for ResolveState {
                 w.insert(*e, Condition(reduced));
                 log.count("conditions kept on unresolved axes", 1);
             } else {
-                w.despawn(*e);
+                crate::ledger::despawn(w, *e, log, "not present in the resolved state");
             }
         }
 
