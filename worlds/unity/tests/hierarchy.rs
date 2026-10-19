@@ -9,12 +9,14 @@
 //! level in the world: one placement per renderer, its transform converted back to Unity's frame the f32 matrix bit
 //! for bit, one prototype per mesh or batch slice; each prototype's primitives, converted back to Unity's frame corner
 //! by corner, the mesh's own channels bit for bit (texture v as 1 - v), and the world's components valid. What
-//! `unity-drawn` leaves out: a procedural renderer with its Shapes component's data, or a placement of a mesh that
-//! draws nothing.
+//! `unity-drawn` leaves out: a procedural renderer with its Shapes component's data, a placement of a mesh that draws
+//! nothing, or an additive surface, each declared as a placement dropped (as many additive drops as scene renderers
+//! left out for neither of the other two reasons).
 
 #![allow(clippy::unwrap_used)]
 
 use primase_core::gate::{GateReport, Tolerance};
+use primase_core::ledger::Measure;
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
 use primase_testdata::real_data;
 use primase_unity::TypeTreePackage;
@@ -186,42 +188,51 @@ fn renderers_match_the_scan() {
     let mut drawn = w.clone();
     let log = primase_unity::drawn::unity_drawn(&mut drawn);
     let mut left_out_scripts = std::collections::BTreeMap::new();
-    let mut left_out = 0;
+    let (mut empty_left, mut shapes_left, mut other_left) = (0u64, 0u64, 0u64);
     for ((e, _), r) in entities.iter().zip(&ours) {
         if drawn.is_alive(*e) {
             continue;
         }
-        left_out += 1;
         let proto = w.get::<Instance>(*e).unwrap().prototype;
         let behaviours = w.get::<UnityBehaviours>(*e).map_or(&[][..], |b| &b.0);
         for b in behaviours {
             *left_out_scripts.entry(b.script.clone()).or_insert(0u64) += 1;
         }
-        // a mesh that draws nothing, a procedural renderer with the component a later lowering needs, or an
-        // additive surface (counted by the pass)
-        let empty = !w.has::<Mesh>(proto);
-        let shapes = behaviours
+        // a mesh that draws nothing, a procedural renderer with the component a later lowering needs, or else an
+        // additive surface (each declared by the pass as a placement it drops for that reason, checked below)
+        if !w.has::<Mesh>(proto) {
+            empty_left += 1;
+        } else if behaviours
             .iter()
-            .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty());
-        assert!(
-            empty || shapes || log.counts.keys().any(|k| k.contains("additive")),
-            "{}: left out, neither empty nor a Shapes renderer",
-            r.path
-        );
+            .any(|b| b.script.starts_with("Shapes.") && !b.data.is_empty())
+        {
+            shapes_left += 1;
+        } else {
+            other_left += 1;
+            println!("left out as additive: {}", r.path);
+        }
     }
     println!(
-        "unity-drawn: {:?}; left out, their MonoBehaviours by script: {left_out_scripts:?}",
-        log.counts
+        "unity-drawn: {:?}, drops {:?}; left out: {empty_left} empty, {shapes_left} Shapes, {other_left} other; \
+         their MonoBehaviours by script: {left_out_scripts:?}",
+        log.counts, log.drops
     );
-    // the pass counts each placement it leaves out once by reason (the placeholder mesh lines repeat the shader's)
+    // the pass declares each placement it leaves out once, by reason
+    let placements = |reason: &str| -> u64 {
+        log.drops
+            .iter()
+            .filter(|((m, why), _)| *m == Measure::Placements && why.contains(reason))
+            .map(|(_, n)| n)
+            .sum()
+    };
+    assert_eq!(
+        other_left,
+        placements("additive"),
+        "scene renderers left out that are neither empty nor a Shapes renderer: each an additive surface"
+    );
     let removed = w.iter::<Instance>().count() - drawn.iter::<Instance>().count();
-    let by_reason: u64 = log
-        .counts
-        .iter()
-        .filter(|(k, _)| !k.contains("placeholder mesh"))
-        .map(|(_, n)| n)
-        .sum();
-    assert_eq!(removed as u64, by_reason);
+    assert_eq!(removed as u64, log.declared(Measure::Placements));
+    let left_out = empty_left + shapes_left + other_left;
     // the scan's meshes or slices of the renderers placed
     // and the terrain trees' (gated with the terrains)
     let trees = scan["instances"]
