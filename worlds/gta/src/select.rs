@@ -28,6 +28,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, Instance, JsonError, Name, Resource, Transform, World};
 
 use crate::components::{GtaArchetype, GtaEntity};
+use crate::rect::GroundRect;
 use crate::region::GTA;
 
 /// How far outside the region a box may reach and still be judged by its box, not its pivot (metres).
@@ -47,40 +48,95 @@ impl Resource for RegionExtent {
     }
 }
 
-/// The region rules, with the region in GTA's ground coordinates.
+/// A placement's optionality, GTA's `priorityLevel` (option values 0-3): required, then optional at high, medium and
+/// low density settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PriorityLevel {
+    Required = 0,
+    OptionalHigh = 1,
+    OptionalMedium = 2,
+    OptionalLow = 3,
+}
+
+impl PriorityLevel {
+    /// Option text `v` (`0`-`3`).
+    pub fn parse(v: &str) -> Result<PriorityLevel, String> {
+        match v {
+            "0" => Ok(PriorityLevel::Required),
+            "1" => Ok(PriorityLevel::OptionalHigh),
+            "2" => Ok(PriorityLevel::OptionalMedium),
+            "3" => Ok(PriorityLevel::OptionalLow),
+            _ => Err(format!("max_priority: {v} is not 0-3")),
+        }
+    }
+
+    /// The option text.
+    pub fn number(self) -> i32 {
+        self as i32
+    }
+}
+
+/// The region rules (see the module documentation): a placement is kept when its pivot or its box reaches into the
+/// region and the rules keep it. Made with [`SelectRegion::new`] (every size and priority kept), its rules set by the
+/// checked setters; from options by the same calls (`x0`..`y1` required).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRegion {
-    pub min: [f32; 2],
-    pub max: [f32; 2],
-    /// Placements with a higher priority level are dropped (3: none).
-    pub max_priority: i32,
-    /// Placements whose bounding radius (the archetype's, times the larger of the entity's scales) is below this are
-    /// dropped (that export: 0.5 m).
-    pub min_size: f32,
+    region: GroundRect,
+    max_priority: PriorityLevel,
+    min_size: f32,
 }
 
 impl SelectRegion {
+    /// The rules over `region`, keeping every priority level and size.
+    pub fn new(region: GroundRect) -> SelectRegion {
+        SelectRegion {
+            region,
+            max_priority: PriorityLevel::OptionalLow,
+            min_size: 0.0,
+        }
+    }
+
+    /// Placements of a priority level above `level` are dropped.
+    pub fn max_priority(mut self, level: PriorityLevel) -> SelectRegion {
+        self.max_priority = level;
+        self
+    }
+
+    /// Placements whose bounding radius (the archetype's, times the larger of the entity's scales) is below `metres`
+    /// are dropped: an error unless it is finite and not negative.
+    pub fn min_size(mut self, metres: f32) -> Result<SelectRegion, String> {
+        if !(metres.is_finite() && metres >= 0.0) {
+            return Err(format!("min_size {metres}: finite and not negative"));
+        }
+        self.min_size = metres;
+        Ok(self)
+    }
+
+    pub fn region(&self) -> GroundRect {
+        self.region
+    }
+
     pub fn from_options(o: &Options) -> Result<SelectRegion, String> {
-        let num = |k: &str, d: f32| -> Result<f32, String> {
-            o.get(k).map_or(Ok(d), |v| {
-                v.parse().map_err(|_| format!("{k}: not a number: {v}"))
-            })
-        };
         for k in o.keys() {
             if !["x0", "y0", "x1", "y1", "max_priority", "min_size"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
-        Ok(SelectRegion {
-            min: [num("x0", 0.0)?, num("y0", 0.0)?],
-            max: [num("x1", 0.0)?, num("y1", 0.0)?],
-            max_priority: num("max_priority", 3.0)? as i32,
-            min_size: num("min_size", 0.0)?,
-        })
+        let region = GroundRect::from_options(o)?
+            .ok_or("x0, y0, x1 and y1 are required: the region is the caller's choice")?;
+        let mut pass = SelectRegion::new(region);
+        if let Some(v) = o.get("max_priority") {
+            pass = pass.max_priority(PriorityLevel::parse(v)?);
+        }
+        if let Some(v) = o.get("min_size") {
+            let metres = v.parse().map_err(|_| format!("min_size: not a number: {v}"))?;
+            pass = pass.min_size(metres)?;
+        }
+        Ok(pass)
     }
 
     fn inside(&self, p: [f32; 3]) -> bool {
-        p[0] >= self.min[0] && p[0] < self.max[0] && p[1] >= self.min[1] && p[1] < self.max[1]
+        self.region.contains(p[0], p[1])
     }
 
     /// Whether the archetype's box, placed by the transform (GTA's frame), reaches into the region.
@@ -95,10 +151,11 @@ impl SelectRegion {
         if !(half[0] <= REACH && half[1] <= REACH) {
             return false;
         }
-        centre[0] + half[0] > self.min[0]
-            && centre[0] - half[0] < self.max[0]
-            && centre[1] + half[1] > self.min[1]
-            && centre[1] - half[1] < self.max[1]
+        let [x0, y0, x1, y1] = self.region.get();
+        centre[0] + half[0] > x0
+            && centre[0] - half[0] < x1
+            && centre[1] + half[1] > y0
+            && centre[1] - half[1] < y1
     }
 }
 
@@ -139,17 +196,11 @@ impl Pass for SelectRegion {
         "gta-select-region"
     }
     fn options(&self) -> Options {
-        [
-            ("x0", self.min[0].to_string()),
-            ("y0", self.min[1].to_string()),
-            ("x1", self.max[0].to_string()),
-            ("y1", self.max[1].to_string()),
-            ("max_priority", self.max_priority.to_string()),
-            ("min_size", self.min_size.to_string()),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
+        let mut o = Options::new();
+        self.region.insert_options(&mut o);
+        o.insert("max_priority".into(), self.max_priority.number().to_string());
+        o.insert("min_size".into(), self.min_size.to_string());
+        o
     }
     fn requires(&self) -> &[&'static str] {
         &[GtaEntity::NAME, GtaArchetype::NAME]
@@ -246,7 +297,7 @@ impl Pass for SelectRegion {
                     < self.min_size
                 {
                     reason = Some("smaller than the minimum size");
-                } else if ge.priority_level > self.max_priority {
+                } else if ge.priority_level > self.max_priority.number() {
                     reason = Some("priority above the maximum");
                 }
             }
@@ -527,14 +578,9 @@ mod stand_in_tests {
                 },
             );
         }
-        SelectRegion {
-            min: [0.0, 0.0],
-            max: [10.0, 10.0],
-            max_priority: 3,
-            min_size: 0.0,
-        }
-        .run(&mut w, &mut PassLog::default())
-        .unwrap();
+        SelectRegion::new(GroundRect::new([0.0, 0.0, 10.0, 10.0]).unwrap())
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
         assert_eq!(w.iter::<Instance>().count(), 2);
         assert_eq!(
             w.resource::<RegionExtent>(),

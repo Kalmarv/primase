@@ -30,52 +30,50 @@ use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, 
 
 use crate::components::{GtaLight, GtaLights, GtaSkeleton};
 use crate::pose::Pose;
+use crate::rect::{GroundRect, Hour};
 use crate::region::GTA;
+
+/// Which lights `lower-gta-lights` places, by their hours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightHours {
+    /// Every light, each keeping its hours in its `gta.light` (option: neither `hour` nor `state`).
+    Every,
+    /// Only the lights on at this hour (option `hour=H`).
+    At(Hour),
+    /// Every light with its hours as a condition on `gta.hour`, the hour kept as state (option `state=true`).
+    State,
+}
 
 /// `lower-gta-lights` (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaLights {
-    /// Only the lights on at this hour; `None`: every light (each keeps its hours in its `gta.light`).
-    pub hour: Option<u8>,
-    /// Every light with its hours as a condition on `gta.hour` (the hour kept as state); not with `hour`.
-    pub state: bool,
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every light of the placements.
-    pub region: Option<[f32; 4]>,
+    pub hours: LightHours,
+    /// The lights inside it; `None`: every light of the placements.
+    pub region: Option<GroundRect>,
 }
 
 impl LowerGtaLights {
     pub fn from_options(o: &Options) -> Result<LowerGtaLights, String> {
-        let num = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
-                .map(|v| v.parse().map_err(|_| format!("{k}: not a number")))
-                .transpose()
-        };
         for k in o.keys() {
             if !["hour", "state", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let hour = num("hour")?;
-        if hour.is_some_and(|h| !(0.0..24.0).contains(&h) || h.fract() != 0.0) {
-            return Err("hour: 0-23".into());
-        }
-        let region = match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
-            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
-            [None, None, None, None] => None,
-            _ => return Err("x0, y0, x1 and y1 go together".into()),
-        };
+        let hour = o.get("hour").map(|v| Hour::parse(v)).transpose()?;
         let state = match o.get("state").map(String::as_str) {
             None | Some("false") => false,
             Some("true") => true,
             Some(v) => return Err(format!("state: not true or false: {v}")),
         };
-        if state && hour.is_some() {
-            return Err("hour and state=true: the hour is either resolved or kept".into());
-        }
+        let hours = match (hour, state) {
+            (Some(_), true) => return Err("hour and state=true: the hour is either resolved or kept".into()),
+            (Some(h), false) => LightHours::At(h),
+            (None, true) => LightHours::State,
+            (None, false) => LightHours::Every,
+        };
         Ok(LowerGtaLights {
-            hour: hour.map(|h| h as u8),
-            state,
-            region,
+            hours,
+            region: GroundRect::from_options(o)?,
         })
     }
 }
@@ -104,16 +102,17 @@ impl Pass for LowerGtaLights {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        if let Some(h) = self.hour {
-            o.insert("hour".to_string(), h.to_string());
-        }
-        if self.state {
-            o.insert("state".to_string(), "true".to_string());
-        }
-        if let Some([x0, y0, x1, y1]) = self.region {
-            for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
-                o.insert(k.to_string(), v.to_string());
+        match self.hours {
+            LightHours::Every => {}
+            LightHours::At(h) => {
+                o.insert("hour".to_string(), h.to_string());
             }
+            LightHours::State => {
+                o.insert("state".to_string(), "true".to_string());
+            }
+        }
+        if let Some(r) = self.region {
+            r.insert_options(&mut o);
         }
         o
     }
@@ -161,7 +160,11 @@ impl Pass for LowerGtaLights {
                     .and_then(|b| b.bone_of_tag(l.bone_id))
                     .and_then(|b| poses.get(b));
                 let hours = l.time_flags & 0x00FF_FFFF;
-                if self.hour.is_some_and(|h| hours != 0 && hours & (1 << h) == 0) {
+                let at = match self.hours {
+                    LightHours::At(h) => Some(h.get()),
+                    _ => None,
+                };
+                if at.is_some_and(|h| hours != 0 && hours & (1 << h) == 0) {
                     log.count("lights off at this hour", 1);
                     continue;
                 }
@@ -181,10 +184,7 @@ impl Pass for LowerGtaLights {
                 let at = t.apply(GTA.point(position));
                 // core (x, y, z) is GTA (x, -z, y)
                 let (gx, gy) = (at[0], -at[2]);
-                if self
-                    .region
-                    .is_some_and(|[x0, y0, x1, y1]| !(gx >= x0 && gx < x1 && gy >= y0 && gy < y1))
-                {
+                if self.region.is_some_and(|r| !r.contains(gx, gy)) {
                     log.count("lights outside the region", 1);
                     continue;
                 }
@@ -246,7 +246,7 @@ impl Pass for LowerGtaLights {
         }
         log.count("lights placed", made.len() as u64);
         // the hour as state: the axis (made when the region has none) and each light's hours on it
-        let axis = self.state.then(|| crate::region::hour_axis(w));
+        let axis = (self.hours == LightHours::State).then(|| crate::region::hour_axis(w));
         for (t, l, g, n, s, hours) in made {
             let e: Entity = w.spawn();
             w.insert(e, t);
@@ -326,8 +326,7 @@ mod tests {
         );
         let mut log = PassLog::default();
         super::LowerGtaLights {
-            hour: None,
-            state: false,
+            hours: super::LightHours::Every,
             region: None,
         }
         .run(&mut w, &mut log)
@@ -383,8 +382,7 @@ mod tests {
         );
         let mut log = PassLog::default();
         super::LowerGtaLights {
-            hour: None,
-            state: true,
+            hours: super::LightHours::State,
             region: None,
         }
         .run(&mut w, &mut log)

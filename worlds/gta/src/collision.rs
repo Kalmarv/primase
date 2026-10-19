@@ -36,6 +36,7 @@ use crate::archive_set::ArchiveSet;
 use crate::bounds::{Bound, Contents, Polygon, read_ybn};
 use crate::components::GtaEntity;
 use crate::keys::Keys;
+use crate::rect::GroundRect;
 use crate::region::GTA;
 use crate::{Result, invalid};
 
@@ -196,11 +197,40 @@ pub fn attach_map_bounds(
     Ok(report)
 }
 
+/// A map bound's detail: the plain bounds a body walks or rolls on, or the finer copies the game keeps for weapons
+/// (`hi@`) and vehicles (`ma@`). Option values `plain`, `hi`, `ma`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BoundDetail {
+    Plain,
+    Hi,
+    Ma,
+}
+
+impl BoundDetail {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BoundDetail::Plain => "plain",
+            BoundDetail::Hi => "hi",
+            BoundDetail::Ma => "ma",
+        }
+    }
+
+    /// A bound's detail as read ([`GtaBounds::detail`]); `None` for a prefix GTA's map archives don't use.
+    pub fn of(detail: Option<&str>) -> Option<BoundDetail> {
+        match detail {
+            None => Some(BoundDetail::Plain),
+            Some("hi") => Some(BoundDetail::Hi),
+            Some("ma") => Some(BoundDetail::Ma),
+            Some(_) => None,
+        }
+    }
+}
+
 /// `gta-select-collision` (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectCollision {
-    /// The details kept: `None` for plain bounds, `Some("hi")`, `Some("ma")`.
-    pub details: std::collections::BTreeSet<Option<String>>,
+    /// The details kept (a bound of an unknown detail is never kept).
+    pub details: std::collections::BTreeSet<BoundDetail>,
 }
 
 impl SelectCollision {
@@ -214,10 +244,11 @@ impl SelectCollision {
             .get("detail")
             .map_or("plain", String::as_str)
             .split(';')
-            .map(|d| match d.trim() {
-                "plain" => Ok(None),
-                "" => Err("detail: empty".to_string()),
-                d => Ok(Some(d.to_ascii_lowercase())),
+            .map(|d| match d.trim().to_ascii_lowercase().as_str() {
+                "plain" => Ok(BoundDetail::Plain),
+                "hi" => Ok(BoundDetail::Hi),
+                "ma" => Ok(BoundDetail::Ma),
+                d => Err(format!("detail: {d:?} is none of plain, hi and ma")),
             })
             .collect::<std::result::Result<_, _>>()?;
         Ok(SelectCollision { details })
@@ -230,11 +261,7 @@ impl Pass for SelectCollision {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        let d: Vec<&str> = self
-            .details
-            .iter()
-            .map(|d| d.as_deref().unwrap_or("plain"))
-            .collect();
+        let d: Vec<&str> = self.details.iter().map(|d| d.as_str()).collect();
         o.insert("detail".to_string(), d.join(";"));
         o
     }
@@ -246,7 +273,7 @@ impl Pass for SelectCollision {
         let mut drop = Vec::new();
         for (e, b) in w.iter::<GtaBounds>() {
             let name = b.detail.as_deref().unwrap_or("plain");
-            if self.details.contains(&b.detail) {
+            if BoundDetail::of(b.detail.as_deref()).is_some_and(|d| self.details.contains(&d)) {
                 log.count(&format!("map bounds kept: {name}"), 1);
             } else {
                 log.count(&format!("map bounds left out: {name}"), 1);
@@ -331,59 +358,25 @@ impl FlaggedVolumes {
 const APPROXIMATES: &str = "spheres as 32-triangle spheres, capsule and cylinder polygons as 8-sided tubes, capsule, \
                             disc and cylinder bounds as their bounding boxes";
 
-/// `lower-gta-collision` (see the module documentation): every triangle ([`LowerGtaCollision::new`]) or those of a
-/// region ([`LowerGtaCollision::within`], checked).
+/// `lower-gta-collision` (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaCollision {
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates, finite with x0 < x1 and y0 < y1; `None`: every triangle.
-    region: Option<[f32; 4]>,
+    /// The triangles whose centre lies in it; `None`: every triangle.
+    pub region: Option<GroundRect>,
     pub volumes: FlaggedVolumes,
 }
 
 impl LowerGtaCollision {
-    /// Every triangle, the flagged volumes as `volumes` says.
-    pub fn new(volumes: FlaggedVolumes) -> LowerGtaCollision {
-        LowerGtaCollision {
-            region: None,
-            volumes,
-        }
-    }
-
-    /// Only the triangles whose centre lies in `[x0, y0, x1, y1]` (GTA ground coordinates, half-open): an error unless
-    /// every value is finite, x0 < x1 and y0 < y1.
-    pub fn within(mut self, region: [f32; 4]) -> std::result::Result<LowerGtaCollision, String> {
-        let [x0, y0, x1, y1] = region;
-        if !region.iter().all(|v| v.is_finite()) || x0 >= x1 || y0 >= y1 {
-            return Err(format!(
-                "region {region:?}: x0, y0, x1, y1 finite, with x0 < x1 and y0 < y1"
-            ));
-        }
-        self.region = Some(region);
-        Ok(self)
-    }
-
-    /// The region, if any.
-    pub fn region(&self) -> Option<[f32; 4]> {
-        self.region
-    }
-
     pub fn from_options(o: &Options) -> std::result::Result<LowerGtaCollision, String> {
-        let num = |k: &str| -> std::result::Result<Option<f32>, String> {
-            o.get(k)
-                .map(|v| v.parse().map_err(|_| format!("{k}: not a number")))
-                .transpose()
-        };
         for k in o.keys() {
             if !["x0", "y0", "x1", "y1", "foliage", "river"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let pass = LowerGtaCollision::new(FlaggedVolumes::from_options(o)?);
-        match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
-            [Some(a), Some(b), Some(c), Some(d)] => pass.within([a, b, c, d]),
-            [None, None, None, None] => Ok(pass),
-            _ => Err("x0, y0, x1 and y1 go together".into()),
-        }
+        Ok(LowerGtaCollision {
+            region: GroundRect::from_options(o)?,
+            volumes: FlaggedVolumes::from_options(o)?,
+        })
     }
 }
 
@@ -763,10 +756,8 @@ impl Pass for LowerGtaCollision {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        if let Some([x0, y0, x1, y1]) = self.region {
-            for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
-                o.insert(k.to_string(), v.to_string());
-            }
+        if let Some(r) = self.region {
+            r.insert_options(&mut o);
         }
         self.volumes.insert_options(&mut o);
         o
@@ -791,10 +782,7 @@ impl Pass for LowerGtaCollision {
             .unwrap_or_default();
         let holders: Vec<Entity> = w.iter::<GtaBounds>().map(|(e, _)| e).collect();
         let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
-        let inside = |[x, y]: [f32; 2]| {
-            self.region
-                .is_none_or(|[x0, y0, x1, y1]| x >= x0 && x < x1 && y >= y0 && y < y1)
-        };
+        let inside = |[x, y]: [f32; 2]| self.region.is_none_or(|r| r.contains(x, y));
         for e in holders {
             let mut soup = Soup::default();
             let raw = w.remove::<GtaBounds>(e).expect("bounds");
@@ -1005,11 +993,12 @@ mod tests {
             b.bound.header.box_max[0] = 101.0;
         }
         let mut log = PassLog::default();
-        LowerGtaCollision::new(FlaggedVolumes::LEAVE_OUT)
-            .within([-10.0, -10.0, 10.0, 10.0])
-            .unwrap()
-            .run(&mut w, &mut log)
-            .unwrap();
+        LowerGtaCollision {
+            region: Some(GroundRect::new([-10.0, -10.0, 10.0, 10.0]).unwrap()),
+            volumes: FlaggedVolumes::LEAVE_OUT,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
         assert_eq!(w.get::<Collision>(inside).map(|c| c.triangles.len()), Some(12));
         assert!(w.get::<GtaBounds>(inside).is_none());
         assert!(!w.is_alive(outside));
@@ -1119,18 +1108,8 @@ mod tests {
         .collect();
         let made = LowerGtaCollision::from_options(&o).unwrap();
         assert_eq!(made.options(), o);
-        assert_eq!(made.region(), Some([-1.0, -2.0, 3.0, 4.0]));
-        // a region the constructor refuses, from options or not
-        for bad in [
-            [1.0, 0.0, 1.0, 2.0],
-            [0.0, 3.0, 1.0, 2.0],
-            [f32::NAN, 0.0, 1.0, 1.0],
-        ] {
-            assert!(
-                LowerGtaCollision::new(FlaggedVolumes::KEEP).within(bad).is_err(),
-                "{bad:?}"
-            );
-        }
+        assert_eq!(made.region.map(GroundRect::get), Some([-1.0, -2.0, 3.0, 4.0]));
+        // a region GroundRect refuses is refused from options too
         let mut reversed = o.clone();
         reversed.insert("x1".into(), "-5".into());
         assert!(LowerGtaCollision::from_options(&reversed).is_err());

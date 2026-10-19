@@ -45,6 +45,7 @@ use primase_core::{
 
 use crate::archive_set::Install;
 use crate::keys::Keys;
+use crate::rect::GroundRect;
 use crate::region::GTA;
 use crate::select::RegionExtent;
 use crate::{Result, invalid};
@@ -429,15 +430,32 @@ pub enum Clip {
     None,
 }
 
-/// `gta-select-water{x0,y0,x1,y1,clip}` (see the module documentation).
-#[derive(Clone, Debug, Default, PartialEq)]
+/// `gta-select-water{x0,y0,x1,y1,clip}` (see the module documentation), made by [`SelectGtaWater::new`], which
+/// checks that `clip=kept` has its region.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SelectGtaWater {
-    /// `[x0, y0, x1, y1]`, GTA ground coordinates; `None`: every surface whole.
-    pub region: Option<[f32; 4]>,
-    pub clip: Clip,
+    region: Option<GroundRect>,
+    clip: Clip,
 }
 
 impl SelectGtaWater {
+    /// The surfaces clipped by `clip` to `region` (`None`: every surface whole): an error for [`Clip::Kept`] without a
+    /// region.
+    pub fn new(region: Option<GroundRect>, clip: Clip) -> std::result::Result<SelectGtaWater, String> {
+        if clip == Clip::Kept && region.is_none() {
+            return Err("clip=kept needs the region (x0, y0, x1, y1)".into());
+        }
+        Ok(SelectGtaWater { region, clip })
+    }
+
+    pub fn region(&self) -> Option<GroundRect> {
+        self.region
+    }
+
+    pub fn clip(&self) -> Clip {
+        self.clip
+    }
+
     pub fn from_options(o: &Options) -> std::result::Result<SelectGtaWater, String> {
         for k in o.keys() {
             if !["x0", "y0", "x1", "y1", "clip"].contains(&k.as_str()) {
@@ -450,20 +468,7 @@ impl SelectGtaWater {
             Some("none") => Clip::None,
             Some(v) => return Err(format!("clip: {v} is none of region, kept and none")),
         };
-        let num = |k: &str| -> std::result::Result<Option<f32>, String> {
-            o.get(k)
-                .map(|v| v.parse().map_err(|_| format!("{k}: not a number")))
-                .transpose()
-        };
-        let region = match [num("x0")?, num("y0")?, num("x1")?, num("y1")?] {
-            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
-            [None, None, None, None] => None,
-            _ => return Err("x0, y0, x1 and y1 go together".into()),
-        };
-        if clip == Clip::Kept && region.is_none() {
-            return Err("clip=kept needs the region (x0, y0, x1, y1)".into());
-        }
-        Ok(SelectGtaWater { region, clip })
+        SelectGtaWater::new(GroundRect::from_options(o)?, clip)
     }
 }
 
@@ -473,10 +478,8 @@ impl Pass for SelectGtaWater {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        if let Some([x0, y0, x1, y1]) = self.region {
-            for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)] {
-                o.insert(k.to_string(), v.to_string());
-            }
+        if let Some(r) = self.region {
+            r.insert_options(&mut o);
         }
         match self.clip {
             Clip::Region => {}
@@ -517,7 +520,7 @@ impl Pass for SelectGtaWater {
             log.count("wave quads not drawn", water.waves.len() as u64);
         }
         // the region, and with clip=kept as far as what is drawn
-        let clip_to = match (self.region, self.clip) {
+        let clip_to = match (self.region.map(GroundRect::get), self.clip) {
             (Some(r), Clip::Kept) => {
                 let extent = w
                     .remove_resource::<RegionExtent>()
