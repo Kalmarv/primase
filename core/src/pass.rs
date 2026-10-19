@@ -171,7 +171,11 @@ pub trait Pass: Send + Sync {
     fn removes(&self) -> &[&'static str] {
         &[]
     }
-    /// Names whose values it edits in place.
+    /// Names whose values it edits in place, and resources it writes (replaced, or borrowed with
+    /// [`World::resource_mut`]). The pass manager checks the resources; an in-place edit of a component's value on an
+    /// entity that keeps it (`get_mut`) is declared here and not checked: seeing it would take a controlled editing
+    /// interface, later work. Adding a name to an entity, taking one away and despawning are checked entity by entity
+    /// against [`Pass::provides`], [`Pass::removes`] and [`Pass::despawns_entities`].
     fn modifies(&self) -> &[&'static str] {
         &[]
     }
@@ -1124,6 +1128,13 @@ impl PassManager {
         } else {
             BTreeMap::new()
         };
+        // who held each name, per entity: what the pass adds to or takes from an entity is checked against its
+        // declarations, not only the names that appear or disappear across the whole world
+        let held_before: BTreeMap<&str, BTreeSet<Entity>> = before
+            .iter()
+            .map(|n| (n.as_str(), w.entities_named(n).into_iter().collect()))
+            .collect();
+        w.start_effects();
         let first_made = w.next_index();
         let ledger = (self.conservation != Conservation::Off).then(|| {
             w.start_rebuild_log();
@@ -1131,6 +1142,7 @@ impl PassManager {
         });
         let ran = p.run(w, log);
         let rebuilds = w.take_rebuild_log();
+        let effects = w.take_effects();
         ran.map_err(|message| Error::Pass {
             pass: text.to_owned(),
             message,
@@ -1225,6 +1237,7 @@ impl PassManager {
         }
         added.sort();
         removed.sort();
+        self.check_entity_effects(w, p, text, log, &held_before, &effects)?;
         self.verify(w, text)?;
         Ok(StepReport {
             pass: text.to_owned(),
@@ -1235,6 +1248,94 @@ impl PassManager {
             conservation,
             failed: None,
         })
+    }
+
+    /// The pass's effects entity by entity, against its declarations: a name it put on an entity that didn't hold it
+    /// (other than by copying an entity that did, [`World::duplicate`] / [`World::copy_components`]) is in
+    /// [`Pass::provides`]; a name it took from an entity that survives is in [`Pass::removes`] (or, for
+    /// [`Pass::removes_by_log`], in its log); an entity it despawned while it held names needs
+    /// [`Pass::despawns_entities`]; a resource it replaced or borrowed to write is in [`Pass::modifies`] or
+    /// [`Pass::provides`]. Values a pass edits in place on entities that keep the name (`get_mut`) are not seen: that is
+    /// declared in [`Pass::modifies`] and not checked (a controlled editing interface would be needed to see it).
+    fn check_entity_effects(
+        &self,
+        w: &World,
+        p: &dyn Pass,
+        text: &str,
+        log: &PassLog,
+        held_before: &BTreeMap<&str, BTreeSet<Entity>>,
+        effects: &crate::world::Effects,
+    ) -> Result<()> {
+        let undeclared = |what: &'static str, names: Vec<String>| -> Result<()> {
+            if names.is_empty() {
+                Ok(())
+            } else {
+                Err(Error::Undeclared {
+                    pass: text.to_owned(),
+                    what,
+                    names,
+                })
+            }
+        };
+        let some = |n: &str, es: &[Entity]| format!("{n} ({} entities, the first {:?})", es.len(), es[0]);
+        let copied = |e: Entity, name: &str| {
+            effects.copies.iter().any(|&(from, to)| {
+                to == e
+                    && (held_before.get(name).is_some_and(|h| h.contains(&from))
+                        || w.entity_has_named(from, name))
+            })
+        };
+        // added to entities
+        let mut added = Vec::new();
+        for name in w.component_names() {
+            if p.provides().contains(&name) {
+                continue;
+            }
+            let before = held_before.get(name);
+            let new: Vec<Entity> = w
+                .entities_named(name)
+                .into_iter()
+                .filter(|e| !before.is_some_and(|b| b.contains(e)) && !copied(*e, name))
+                .collect();
+            if !new.is_empty() {
+                added.push(some(name, &new));
+            }
+        }
+        undeclared("added to entities", added)?;
+        // taken from entities that survive; entities despawned while they held names
+        let (mut taken, mut despawned) = (Vec::new(), BTreeSet::new());
+        for (&name, before) in held_before {
+            let declared = p.removes().contains(&name) || (p.removes_by_log() && log.removed.contains(name));
+            let gone: Vec<Entity> = before
+                .iter()
+                .copied()
+                .filter(|&e| !w.entity_has_named(e, name))
+                .collect();
+            let (alive, dead): (Vec<Entity>, Vec<Entity>) = gone.into_iter().partition(|&e| w.is_alive(e));
+            if !declared && !alive.is_empty() {
+                taken.push(some(name, &alive));
+            }
+            if !p.despawns_entities() {
+                despawned.extend(dead);
+            }
+        }
+        undeclared("taken from entities", taken)?;
+        if let Some(first) = despawned.first() {
+            return Err(Error::Pass {
+                pass: text.to_owned(),
+                message: format!(
+                    "despawned {} entities (the first {first:?}) without declaring it (Pass::despawns_entities)",
+                    despawned.len()
+                ),
+            });
+        }
+        let written: Vec<String> = effects
+            .resources_written
+            .iter()
+            .filter(|r| !p.modifies().contains(&r.as_str()) && !p.provides().contains(&r.as_str()))
+            .cloned()
+            .collect();
+        undeclared("written (resources)", written)
     }
 
     /// Choose the passes that take the world to what `target` accepts (see the module docs), in run order, each made
@@ -2412,11 +2513,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.steps[0].added, ["toy.env"]);
-        // replacing one that is there is no change of names
-        let report = env_run(
+        // replacing one that is there is a write: refused undeclared, accepted declared (no change of names)
+        let err = env_run(
             EnvPass {
                 add: true,
                 declared: false,
+                despawns: false,
+            },
+            &mut w,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "pass env written (resources) `[\"toy.env\"]` without declaring it"
+        );
+        let report = env_run(
+            EnvPass {
+                add: true,
+                declared: true,
                 despawns: false,
             },
             &mut w,

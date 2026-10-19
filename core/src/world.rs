@@ -471,6 +471,18 @@ pub struct World {
     /// ([`World::rebuild_primitives`]), the rebuilds composed; `None` for an entity whose mesh was also replaced another
     /// way in between (counted net).
     rebuilds: Option<RebuildLog>,
+    /// While a pass runs ([`World::start_effects`]): what it did that the pass manager can't see by comparing the world
+    /// before and after (resources written in place or replaced, entities filled by copying another).
+    effects: Option<Effects>,
+}
+
+/// What a pass did to a world that a before/after comparison of names doesn't show ([`World::start_effects`]).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Effects {
+    /// Resources it replaced or borrowed mutably (an existing one written, or written in place), by name.
+    pub(crate) resources_written: BTreeSet<String>,
+    /// Copies it made: (source, target) for each [`World::duplicate`] and [`World::copy_components`].
+    pub(crate) copies: Vec<(Entity, Entity)>,
 }
 
 /// The primitive rebuilds a pass made, per entity; `None` when its mesh was also replaced another way between two of
@@ -500,6 +512,7 @@ impl Clone for World {
             resources: self.resources.iter().map(|(k, v)| (*k, v.clone_box())).collect(),
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
+            effects: None,
         }
     }
 }
@@ -595,6 +608,7 @@ impl World {
         }
         self.alive.remove(&from);
         self.forget_in_resources(|x| x == from);
+        self.note_copy(from, to);
         true
     }
 
@@ -614,6 +628,7 @@ impl World {
                 values.insert(d, v);
             }
         }
+        self.note_copy(e, d);
         Some(d)
     }
 
@@ -721,6 +736,7 @@ impl World {
                 col.insert(to, v);
             }
         }
+        self.note_copy(from, to);
         true
     }
 
@@ -827,6 +843,28 @@ impl World {
     }
 
     /// Start recording primitive rebuilds (the pass manager, around a pass with conservation diagnostics on).
+    /// Record, until [`World::take_effects`], the resources written and the copies made.
+    pub(crate) fn start_effects(&mut self) {
+        self.effects = Some(Effects::default());
+    }
+
+    /// Stop recording and return what was recorded since [`World::start_effects`].
+    pub(crate) fn take_effects(&mut self) -> Effects {
+        self.effects.take().unwrap_or_default()
+    }
+
+    fn note_resource_write(&mut self, name: &str) {
+        if let Some(fx) = &mut self.effects {
+            fx.resources_written.insert(name.to_owned());
+        }
+    }
+
+    fn note_copy(&mut self, from: Entity, to: Entity) {
+        if let Some(fx) = &mut self.effects {
+            fx.copies.push((from, to));
+        }
+    }
+
     pub(crate) fn start_rebuild_log(&mut self) {
         self.rebuilds = Some(BTreeMap::new());
     }
@@ -932,6 +970,7 @@ impl World {
                 .collect(),
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
+            effects: None,
         }
     }
 
@@ -967,6 +1006,7 @@ impl World {
             alive,
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
+            effects: None,
         }
     }
 
@@ -1374,6 +1414,7 @@ impl World {
             T::NAME
         );
         let old = self.resources.insert(TypeId::of::<T>(), Box::new(value))?;
+        self.note_resource_write(T::NAME);
         let any: Box<dyn Any> = old;
         any.downcast::<T>().ok().map(|b| *b)
     }
@@ -1384,7 +1425,11 @@ impl World {
             .and_then(|r| r.as_any().downcast_ref())
     }
 
+    /// Borrowed to write: a pass that does declares the name in [`crate::pass::Pass::modifies`].
     pub fn resource_mut<T: Resource>(&mut self) -> Option<&mut T> {
+        if self.resources.contains_key(&TypeId::of::<T>()) {
+            self.note_resource_write(T::NAME);
+        }
         self.resources
             .get_mut(&TypeId::of::<T>())
             .and_then(|r| r.as_any_mut().downcast_mut())
@@ -1402,7 +1447,11 @@ impl World {
             !self.is_component_name(name),
             "{name} is a component's name: a name is a component's or a resource's, not both"
         );
-        self.opaque_resources.insert(name.to_owned(), value)
+        let old = self.opaque_resources.insert(name.to_owned(), value);
+        if old.is_some() {
+            self.note_resource_write(name);
+        }
+        old
     }
 
     /// Names of every resource (typed and opaque), sorted.

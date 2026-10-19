@@ -354,8 +354,10 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "core.material_variants", "skate.prototype"]
     }
+    /// The layered form, and from the layered materials and meshes it folds: their raised `skate.material` and the
+    /// mesh file the folded mesh no longer is.
     fn removes(&self) -> &[&'static str] {
-        &["core.layered"]
+        &["core.layered", "skate.material", "core.mesh_file"]
     }
     fn approximates(&self) -> &'static str {
         match self.overlays {

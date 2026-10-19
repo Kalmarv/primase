@@ -378,6 +378,10 @@ impl Pass for ResolveState {
     fn modifies(&self) -> &[&'static str] {
         &[Transform::NAME, Instance::NAME]
     }
+    /// Entities not present in the resolved state are despawned (declared as drops).
+    fn despawns_entities(&self) -> bool {
+        true
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the value of every axis: assign option > assignment resource > default
         let axes: Vec<(Entity, StateAxis)> = w.iter::<StateAxis>().map(|(e, a)| (e, a.clone())).collect();
