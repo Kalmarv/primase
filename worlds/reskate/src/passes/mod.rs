@@ -28,7 +28,10 @@ pub use blend_budget::{PlanReskateBlendBudget, plan_reskate_blend_budget};
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use budget::{BudgetReskateTextures, budget_reskate_textures};
 pub use collision::{PrepareReskateCollision, prepare_reskate_collision};
-pub use floor::{PrepareReskateFloor, prepare_reskate_floor};
+pub use floor::{
+    DecideReskateFloor, PrepareReskateFloor, SummarizeReskateFloor, decide_reskate_floor,
+    prepare_reskate_floor, summarize_reskate_floor,
+};
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use layered_lower::LowerLayeredPbr;
 pub use lights::{SelectReskateLights, select_reskate_lights};

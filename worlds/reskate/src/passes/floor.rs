@@ -17,15 +17,22 @@
 //! The plan is recorded (`skate.floor_plan`): floor, lift, cutoff and what was left out. Without this pass nothing is
 //! lifted or left out. The measurement uses the map writer's frame and arithmetic, so a map lifted here matches one
 //! the writer used to lift itself.
+//!
+//! A map converted in parts ([`primase_core::convert::convert_parts_summarized`]) measures its floor over every part:
+//! `summarize-reskate-floor` records what each part owns (`skate.floor_summary`), the summaries are merged, and
+//! `decide-reskate-floor{min_height,stub_below[,floor]}` decides the floor once (`skate.floor_decision`); this pass
+//! then applies that decision to each part, with the same settings (a decision for others is refused). A part that is
+//! not the whole and has no decision is refused. The whole map measured at once gives the same floor.
 
 use std::collections::BTreeSet;
 
+use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Mesh, Transform, World};
 
 use crate::components::{
-    CollisionMode, SkateCollision, SkateFloorPlan, SkateGrindCurve, SkateLight, SkateMarker, SkatePartsOff,
-    SkatePrototype, SkateRock, SkateScene, SkateWater,
+    CollisionMode, SkateCollision, SkateFloorDecision, SkateFloorPlan, SkateFloorSummary, SkateGrindCurve,
+    SkateLight, SkateMarker, SkatePartsOff, SkatePrototype, SkateRock, SkateScene, SkateWater,
 };
 
 /// See the module documentation.
@@ -134,16 +141,53 @@ fn spans(mesh: &Mesh, t: &Transform) -> Vec<[f32; 2]> {
         .collect()
 }
 
-/// The floor: `pinned`, else the 1st percentile of `lows`; `None` without either.
-fn select_floor(lows: &mut [f32], pinned: Option<f32>) -> Option<f32> {
+/// The floor: `pinned`, else the 1st percentile of `lows` (sorted); `None` without either.
+fn select_floor(lows: &[f32], pinned: Option<f32>) -> Option<f32> {
     if pinned.is_some() {
         return pinned;
     }
     if lows.is_empty() {
         return None;
     }
-    lows.sort_by(f32::total_cmp);
     Some(lows[lows.len() / 100])
+}
+
+/// Whether `e` is the world's to measure: every entity of a world outside the part protocol or of a whole part, a
+/// part's own roots otherwise (its context is measured by the part that owns it).
+fn owned(w: &World) -> impl Fn(Entity) -> bool + '_ {
+    let roots = w.resource::<PartScope>().filter(|s| !s.whole).map(|s| &s.roots);
+    move |e| roots.is_none_or(|r| r.contains(&e))
+}
+
+/// What the floor is measured on of the entities `owned` accepts: the lowest point of each part of the placements the
+/// map draws and, when there are none, of each world collision triangle; each sorted.
+fn measure(w: &World, owned: &dyn Fn(Entity) -> bool) -> SkateFloorSummary {
+    let mut lows: Vec<f32> = w
+        .iter::<Instance>()
+        .filter(|(e, i)| owned(*e) && w.has::<SkatePrototype>(i.prototype))
+        .flat_map(|(e, i)| {
+            let t = w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+            w.get::<Mesh>(i.prototype).map_or_else(Vec::new, |m| spans(m, &t))
+        })
+        .map(|b| b[0])
+        .filter(|v| v.is_finite())
+        .collect();
+    let mut soup_lows = Vec::new();
+    if lows.is_empty() {
+        for (e, t) in world_soups(w).into_iter().filter(|(e, _)| owned(*e)) {
+            let c = w.get::<Collision>(e).expect("listed");
+            for tri in &c.triangles {
+                soup_lows.push(
+                    tri.iter()
+                        .map(|&i| t.apply(c.positions[i as usize])[1])
+                        .fold(f32::INFINITY, f32::min),
+                );
+            }
+        }
+    }
+    lows.sort_by(f32::total_cmp);
+    soup_lows.sort_by(f32::total_cmp);
+    SkateFloorSummary { lows, soup_lows }
 }
 
 /// The world's collision soups (no placed prototype's), each with the transform that puts it in scene space.
@@ -206,12 +250,78 @@ impl Pass for PrepareReskateFloor {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        super::require_whole_map(w, self.name())?;
         if w.resource::<SkateFloorPlan>().is_some() {
             return Err(
                 "prepare-reskate-floor: the world's floor is already prepared (skate.floor_plan)".into(),
             );
         }
+        // the floor decided over every part, for these settings; else, on the whole map, measured here
+        let decision = match w.resource::<SkateFloorDecision>() {
+            Some(d) => {
+                let mine = (self.min_height, self.stub_below, self.floor);
+                let theirs = (d.min_height, d.stub_below, d.pinned);
+                if mine != theirs {
+                    return Err(format!(
+                        "prepare-reskate-floor: the floor was decided for (min_height, stub_below, floor) {theirs:?}, \
+                         this pass's are {mine:?}"
+                    ));
+                }
+                d.clone()
+            }
+            None => {
+                super::require_whole_map(w, self.name()).map_err(|e| {
+                    format!(
+                        "{e}: a map in parts measures its floor over every part (summarize-reskate-floor, then \
+                         decide-reskate-floor)"
+                    )
+                })?;
+                self.decide(&measure(w, &|_| true))
+            }
+        };
+        self.apply(w, log, &decision);
+        Ok(())
+    }
+}
+
+impl PrepareReskateFloor {
+    /// The floor of the map whose measurements are `summary`: pinned, else measured; the lift up to `min_height` and the
+    /// cutoff `stub_below` under it.
+    fn decide(&self, summary: &SkateFloorSummary) -> SkateFloorDecision {
+        let lows = if summary.lows.is_empty() {
+            &summary.soup_lows
+        } else {
+            &summary.lows
+        };
+        let floor = select_floor(lows, self.floor);
+        SkateFloorDecision {
+            min_height: self.min_height,
+            stub_below: self.stub_below,
+            pinned: self.floor,
+            floor,
+            lift: floor.map_or(0.0, |f| (self.min_height - f).max(0.)),
+            drop_below: floor.map(|f| f - self.stub_below),
+        }
+    }
+
+    /// `decision` applied to the world: the parts below the cutoff left out, every coordinate lifted, the plan
+    /// recorded.
+    fn apply(&self, w: &mut World, log: &mut PassLog, decision: &SkateFloorDecision) {
+        // the scene's own floor statement (min_height) is the program's to apply: this pass applied its choice
+        if let Some(scene) = w.resource_mut::<SkateScene>() {
+            scene.min_height = None;
+        }
+        let (Some(floor), Some(drop_below)) = (decision.floor, decision.drop_below) else {
+            log.count("maps with nothing to measure a floor on: nothing moved", 1);
+            w.insert_resource(SkateFloorPlan {
+                floor: None,
+                lift: 0.0,
+                drop_below: None,
+                placements_removed: 0,
+                parts_removed: 0,
+            });
+            return;
+        };
+        let lift = decision.lift;
         // the placements the map draws and their parts' height spans
         let placed: Vec<(Entity, Vec<[f32; 2]>)> = w
             .iter::<Instance>()
@@ -224,41 +334,7 @@ impl Pass for PrepareReskateFloor {
                 )
             })
             .collect();
-        let mut lows: Vec<f32> = placed
-            .iter()
-            .flat_map(|(_, s)| s.iter().map(|b| b[0]))
-            .filter(|v| v.is_finite())
-            .collect();
         let soups = world_soups(w);
-        if lows.is_empty() {
-            for (e, t) in &soups {
-                let c = w.get::<Collision>(*e).expect("listed");
-                for tri in &c.triangles {
-                    lows.push(
-                        tri.iter()
-                            .map(|&i| t.apply(c.positions[i as usize])[1])
-                            .fold(f32::INFINITY, f32::min),
-                    );
-                }
-            }
-        }
-        // the scene's own floor statement (min_height) is the program's to apply: this pass applied its choice
-        if let Some(scene) = w.resource_mut::<SkateScene>() {
-            scene.min_height = None;
-        }
-        let Some(floor) = select_floor(&mut lows, self.floor) else {
-            log.count("maps with nothing to measure a floor on: nothing moved", 1);
-            w.insert_resource(SkateFloorPlan {
-                floor: None,
-                lift: 0.0,
-                drop_below: None,
-                placements_removed: 0,
-                parts_removed: 0,
-            });
-            return Ok(());
-        };
-        let lift = (self.min_height - floor).max(0.);
-        let drop_below = floor - self.stub_below;
         // parts wholly below the cutoff left out; a placement left with none removed
         let (mut parts_removed, mut placements_removed) = (0u64, 0u64);
         for (e, spans) in placed {
@@ -335,11 +411,8 @@ impl Pass for PrepareReskateFloor {
             placements_removed,
             parts_removed,
         });
-        Ok(())
     }
-}
 
-impl PrepareReskateFloor {
     /// Every coordinate of the map moved up by `lift`.
     fn lift(&self, w: &mut World, soups: &[(Entity, Transform)], lift: f32) {
         let placements: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
@@ -396,5 +469,88 @@ impl PrepareReskateFloor {
                 }
             }
         }
+    }
+}
+
+/// `summarize-reskate-floor`: what this part owns of the map's floor, `skate.floor_summary` (see the module
+/// documentation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizeReskateFloor;
+
+/// [`SummarizeReskateFloor`] as a pass factory: it takes no options.
+pub fn summarize_reskate_floor(o: &Options) -> Result<Box<dyn Pass>, String> {
+    match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(SummarizeReskateFloor)),
+    }
+}
+
+impl Pass for SummarizeReskateFloor {
+    fn name(&self) -> &'static str {
+        "summarize-reskate-floor"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.scene"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.floor_summary"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let summary = measure(w, &owned(w));
+        log.count("placed parts measured", summary.lows.len() as u64);
+        log.count(
+            "world collision triangles measured",
+            summary.soup_lows.len() as u64,
+        );
+        w.insert_resource(summary);
+        Ok(())
+    }
+}
+
+/// `decide-reskate-floor{min_height,stub_below[,floor]}`: the map's floor decided once from the parts' merged
+/// `skate.floor_summary`, as `skate.floor_decision`, with [`PrepareReskateFloor`]'s settings and rule.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecideReskateFloor(PrepareReskateFloor);
+
+impl DecideReskateFloor {
+    /// With the settings `prepare-reskate-floor` applies it with.
+    pub fn new(settings: PrepareReskateFloor) -> DecideReskateFloor {
+        DecideReskateFloor(settings)
+    }
+}
+
+/// [`DecideReskateFloor`] from [`PrepareReskateFloor::from_options`]'s options, as a pass factory.
+pub fn decide_reskate_floor(o: &Options) -> Result<Box<dyn Pass>, String> {
+    Ok(Box::new(DecideReskateFloor(PrepareReskateFloor::from_options(
+        o,
+    )?)))
+}
+
+impl Pass for DecideReskateFloor {
+    fn name(&self) -> &'static str {
+        "decide-reskate-floor"
+    }
+    fn options(&self) -> Options {
+        self.0.options()
+    }
+    fn requires(&self) -> &[&'static str] {
+        &["skate.floor_summary"]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["skate.floor_decision"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        if w.resource::<SkateFloorDecision>().is_some() {
+            return Err("decide-reskate-floor: the floor is already decided (skate.floor_decision)".into());
+        }
+        let summary = w.resource::<SkateFloorSummary>().ok_or(
+            "decide-reskate-floor: no skate.floor_summary: run summarize-reskate-floor on every part",
+        )?;
+        let d = self.0.decide(summary);
+        if d.floor.is_none() {
+            log.count("maps with nothing to measure a floor on", 1);
+        }
+        w.insert_resource(d);
+        Ok(())
     }
 }

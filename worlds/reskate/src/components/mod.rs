@@ -560,6 +560,65 @@ impl Resource for SkateFloorPlan {
     }
 }
 
+/// `skate.floor_summary`: what one part holds of the map's floor (`summarize-reskate-floor`): the lowest point of each
+/// part of the placements it owns, and, only while it has none, the lowest point of each world collision triangle it
+/// owns; each sorted. Merged over the parts (a [`primase_core::summary::Summary`]): every placement low, and the
+/// collision lows only while no part has a placement low, which is what the floor is measured on over the whole map.
+/// Not part of scene-interchange v1.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SkateFloorSummary {
+    pub lows: Vec<f32>,
+    pub soup_lows: Vec<f32>,
+}
+
+/// `a` and `b`, each sorted, as one sorted list.
+fn merge_sorted(a: &mut Vec<f32>, b: Vec<f32>) {
+    a.extend(b);
+    a.sort_by(f32::total_cmp);
+}
+
+impl Resource for SkateFloorSummary {
+    const NAME: &'static str = "skate.floor_summary";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "lows": self.lows.len(),
+            "soup_lows": self.soup_lows.len(),
+        })))
+    }
+}
+
+impl primase_core::summary::Summary for SkateFloorSummary {
+    fn merge(&mut self, other: Self) -> Result<(), String> {
+        merge_sorted(&mut self.lows, other.lows);
+        if self.lows.is_empty() {
+            merge_sorted(&mut self.soup_lows, other.soup_lows);
+        } else {
+            self.soup_lows.clear();
+        }
+        Ok(())
+    }
+}
+
+/// `skate.floor_decision`: the floor `decide-reskate-floor` decided over every part, for the settings it was decided
+/// with (`min_height`, `stub_below`, the pinned floor): the floor (`None`: nothing to measure, nothing moves), the lift
+/// and the cutoff. `prepare-reskate-floor` applies it to each part. Not part of scene-interchange v1.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateFloorDecision {
+    pub min_height: f32,
+    pub stub_below: f32,
+    pub pinned: Option<f32>,
+    pub floor: Option<f32>,
+    pub lift: f32,
+    pub drop_below: Option<f32>,
+}
+
+impl Resource for SkateFloorDecision {
+    const NAME: &'static str = "skate.floor_decision";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 /// The writer settings `snap-reskate-markers` snapped the markers with (the collision depends on them): the writer
 /// refuses a map whose own differ. Not part of scene-interchange v1.
 #[derive(Clone, Debug, PartialEq, Serialize)]

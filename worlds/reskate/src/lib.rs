@@ -55,6 +55,13 @@ pub mod prepare {
     };
 }
 
+/// The summaries a map converted in parts merges over its parts, and the decisions made from them
+/// ([`primase_core::convert::convert_parts_summarized`]).
+pub fn register_summaries(reg: &mut primase_core::summary::SummaryRegistry) {
+    reg.summary::<components::SkateFloorSummary>();
+    reg.decision::<components::SkateFloorDecision>();
+}
+
 /// `lower-layered-reskate` and its components by their former path.
 pub mod layered {
     pub use crate::passes::layered::{LowerLayeredReskate, OverlayLimit};
@@ -78,7 +85,6 @@ pub use build::{BuildReport, leave_out_optional, lod_choice, select_lod, target,
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    // the scene's name has no default
     // the scene's name and the lights' calibration are the program's: no default
     reg.register_requiring(
         "raise-skate",
@@ -148,6 +154,13 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "prepare-reskate-floor",
         passes::prepare_reskate_floor,
+        &[("min_height", "0"), ("stub_below", "0")],
+    );
+    // a map in parts: its floor measured on every part, decided once (with prepare-reskate-floor's settings)
+    reg.register("summarize-reskate-floor", passes::summarize_reskate_floor);
+    reg.register_requiring(
+        "decide-reskate-floor",
+        passes::decide_reskate_floor,
         &[("min_height", "0"), ("stub_below", "0")],
     );
     // the region is the program's: no default
