@@ -4,6 +4,8 @@
 mod curves;
 mod distance;
 pub mod frames;
+mod grid;
+pub use grid::{Triangle, TriangleGrid};
 mod layered;
 pub use curves::{Chain, SurfaceIndex, chain};
 pub use distance::{closest_point_on_triangle, point_triangle_distance_squared};
@@ -40,6 +42,17 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("cell", "100")],
     );
     // what becomes of the variants nobody places is the program's: no default
+    // the grouping is the program's: every option required
+    reg.register_requiring(
+        "split-by-collision",
+        split::split_by_collision,
+        &[
+            ("placements", "level"),
+            ("groups", "floor=ground"),
+            ("tolerance", "0.05"),
+            ("rest", "other"),
+        ],
+    );
     reg.register_requiring(
         "specialize-material-variants",
         variants::specialize_material_variants,
@@ -51,6 +64,8 @@ pub use materialless::OmitMateriallessPrimitives;
 mod partition;
 pub use partition::PartitionGrid;
 mod primitive;
+mod split;
+pub use split::{SplitByCollision, split_by_collision};
 mod texcoords;
 mod variants;
 pub use variants::{SpecializeMaterialVariants, UnusedVariants, specialize_material_variants};
