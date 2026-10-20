@@ -272,6 +272,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install; two MeshShape bodies' prefixes, section runs and tails hand-checked in a separate read-only decode (games/riders-republic docs/recon/meshshape-second-fixture.md, c068d20)",
     },
     Variable {
+        name: "PRIMASE_ANVIL_DIR",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"an Anvil game's folder of forge archives (Riders Republic, Steam build 25394987: its six `.forge` files, about 24 GB); worlds/anvil/tests/census.rs, run by hand (ignored)"#,
+        status: Status::Live,
+        source: "the user's own install; the census reads every entry of the readers' kinds and reports what each reader refuses",
+    },
+    Variable {
         name: "PRIMASE_ANVIL_FORGE_USNAT_PATCH",
         kind: Kind::Input,
         gate: false,

@@ -148,7 +148,8 @@ pub struct NameRecord {
     /// The name table's id (not the index record's).
     pub id: u64,
     pub unknown_0c: i32,
-    /// CRC-32 of the type's name (`Mesh`, `TextureMap`, ...).
+    /// The entry's type id as the name table holds it (on every type read here it equals the record's own type id,
+    /// itself equal to the CRC-32 of a type name: `Mesh`, `TextureMap`, ...; the names are labels).
     pub type_id: u32,
     pub unknown_14: [i32; 2],
     pub unknown_1c: i32,
