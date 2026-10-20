@@ -1,11 +1,16 @@
 //! `set-reskate-shadow-casting{materials=<name>;...,placements=<prefix>;...,shared=copy|refuse}`: materials that cast
 //! no shadow (`skate.material` `cast_shadows` false, which the writer honours), after `raise-skate`. An indoor level's
-//! room shell (SkateBIRD's `Level Elements / Bounds`) shadows the whole room from the sun and sky; drawn without casting,
+//! room shell (SkateBIRD's `Level Elements/Bounds/`) shadows the whole room from the sun and sky; drawn without casting,
 //! the sun and sky light the inside. The selection is the program's, at least one of:
 //!
 //! - `materials`: the materials of these names (a material's `core.name`, else its key), wherever they are drawn;
 //! - `placements`: the materials drawn by the placements whose name starts with one of these prefixes (a placement's
-//!   prototype's materials, its variant's where it has one).
+//!   prototype's materials, its variant's where it has one). A placement's name is its reader's: the Unity reader's is
+//!   the GameObject path joined by a bare `/` (`Level Elements/Bounds/Walls`), so a prefix ending in `/` selects a
+//!   subtree.
+//!
+//! A name that matches no material, or a prefix that matches no placement, is an error naming it: a selection that
+//! selects nothing is a mistake, not an empty change.
 //!
 //! A material the selected placements draw that a placement outside the selection draws too (and no name selects) is
 //! the required `shared` choice: `refuse` is an error naming it; `copy` gives the selected placements a copy that casts
@@ -202,8 +207,24 @@ impl Pass for SetReskateShadowCasting {
             .filter(|&e| self.materials.contains(&name_of(w, e)))
             .collect();
         let found: BTreeSet<String> = named.iter().map(|&e| name_of(w, e)).collect();
-        for missing in self.materials.difference(&found) {
-            log.count(&format!("named materials not in the world: {missing}"), 1);
+        if let Some(missing) = self.materials.difference(&found).next() {
+            return Err(format!(
+                "set-reskate-shadow-casting: no material is named {missing}"
+            ));
+        }
+        // a prefix no placement's name starts with
+        let names: Vec<&str> = w
+            .iter::<Instance>()
+            .filter_map(|(e, _)| w.get::<Name>(e).map(|n| n.0.as_str()))
+            .collect();
+        if let Some(p) = self
+            .placements
+            .iter()
+            .find(|p| !names.iter().any(|n| n.starts_with(p.as_str())))
+        {
+            return Err(format!(
+                "set-reskate-shadow-casting: no placement's name starts with {p} (a Unity path is joined by a bare /)"
+            ));
         }
         // the placements selected and the others, each prototype's of each
         let selects = |e: Entity| {
@@ -467,9 +488,9 @@ mod tests {
         let (wall, floor) = (material(&mut w, "wall"), material(&mut w, "floor"));
         let walls = prototype(&mut w, "walls", wall);
         let slab = prototype(&mut w, "slab", floor);
-        place(&mut w, "Level Elements / Bounds / Walls", walls);
-        let shell = place(&mut w, "Level Elements / Bounds / Floor", slab);
-        let table = place(&mut w, "Level Elements / Thin Table", slab);
+        place(&mut w, "Level Elements/Bounds/Walls", walls);
+        let shell = place(&mut w, "Level Elements/Bounds/Floor", slab);
+        let table = place(&mut w, "Level Elements/Thin Table", slab);
         Room {
             w,
             wall,
@@ -480,16 +501,28 @@ mod tests {
         }
     }
 
-    /// Named materials cast no shadow wherever they are drawn, each reported; a name in no material is counted.
+    /// Named materials cast no shadow wherever they are drawn, each reported; a name matching no material, and a
+    /// prefix matching no placement (a path written with spaced slashes), are refused with nothing changed.
     #[test]
     fn named_materials_cast_no_shadow() {
         let Room {
             mut w, wall, floor, ..
         } = room();
-        let log = run(&mut w, pass(&["floor", "ceiling"], &[], SharedMaterials::Refuse)).unwrap();
+        let e = run(&mut w, pass(&["floor", "ceiling"], &[], SharedMaterials::Refuse)).unwrap_err();
+        assert!(e.contains("no material is named ceiling"), "{e}");
+        let e = run(
+            &mut w,
+            pass(&[], &["Level Elements / Bounds"], SharedMaterials::Copy),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("no placement's name starts with Level Elements / Bounds"),
+            "{e}"
+        );
+        assert_eq!((casts(&w, wall), casts(&w, floor)), (None, None));
+        let log = run(&mut w, pass(&["floor"], &[], SharedMaterials::Refuse)).unwrap();
         assert_eq!((casts(&w, wall), casts(&w, floor)), (None, Some(false)));
         assert_eq!(log.counts["material made to cast no shadow: floor"], 1);
-        assert_eq!(log.counts["named materials not in the world: ceiling"], 1);
     }
 
     /// By placements: a material drawn outside the selection too is refused under shared=refuse, and nothing changes.
@@ -498,7 +531,7 @@ mod tests {
         let Room { mut w, wall, .. } = room();
         let e = run(
             &mut w,
-            pass(&[], &["Level Elements / Bounds"], SharedMaterials::Refuse),
+            pass(&[], &["Level Elements/Bounds/"], SharedMaterials::Refuse),
         )
         .unwrap_err();
         assert!(
@@ -523,7 +556,7 @@ mod tests {
         } = room();
         let log = run(
             &mut w,
-            pass(&[], &["Level Elements / Bounds"], SharedMaterials::Copy),
+            pass(&[], &["Level Elements/Bounds/"], SharedMaterials::Copy),
         )
         .unwrap();
         assert_eq!((casts(&w, wall), casts(&w, floor)), (Some(false), None));
@@ -556,7 +589,7 @@ mod tests {
         let floor = material(&mut w, "floor");
         let shell_slab = prototype(&mut w, "shell slab", floor);
         let table_slab = prototype(&mut w, "table slab", floor);
-        let shell = place(&mut w, "Bounds / Floor", shell_slab);
+        let shell = place(&mut w, "Bounds/Floor", shell_slab);
         place(&mut w, "Table", table_slab);
         let log = run(&mut w, pass(&[], &["Bounds"], SharedMaterials::Copy)).unwrap();
         assert_eq!(w.get::<Instance>(shell).unwrap().prototype, shell_slab);
@@ -585,7 +618,7 @@ mod tests {
             SetReskateShadowCasting::from_options(&o(&[("placements", "a"), ("shared", "some")])).is_err()
         );
         let p = SetReskateShadowCasting::from_options(&o(&[
-            ("placements", "Level Elements / Bounds"),
+            ("placements", "Level Elements/Bounds/"),
             ("shared", "copy"),
         ]))
         .unwrap();
