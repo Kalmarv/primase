@@ -136,7 +136,14 @@ fn a_world_that_loads_its_meshes_per_cell_writes_what_the_loaded_world_writes() 
     let mut files = [BTreeMap::new(), BTreeMap::new()];
     for cell in plans[0].cells() {
         assert_eq!(plans[1].roots(cell), plans[0].roots(cell));
-        let w = load(&plans[0].roots(cell));
+        assert_eq!(plans[1].shared(cell), plans[0].shared(cell));
+        let w = load(
+            &plans[0]
+                .roots(cell)
+                .union(&plans[0].shared(cell))
+                .copied()
+                .collect(),
+        );
         for (plan, files) in plans.iter_mut().zip(&mut files) {
             for tile in plan.write_cell(cell, &w).unwrap() {
                 files.insert(tile.info.file.clone(), tile.bytes);

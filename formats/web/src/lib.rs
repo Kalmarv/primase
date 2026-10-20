@@ -457,11 +457,13 @@ impl WrittenTile {
 /// world holds of other cells' (reached through a reference) is theirs to write. A placement filed by element centre
 /// is drawn piecewise by every cell holding its elements, and their passes must prepare its mesh alike (the same
 /// primitives and element counts); it is owned by one of them, its home (the cell of its pivot when that holds some
-/// of its elements, else the first), which writes the rest of it: its collision, and its other roles. Content the
-/// cells' passes make from it is made, and written, by each of those cells.
+/// of its elements, else the first), which writes the rest of it: its collision, and its other roles. The other cells
+/// share it ([`TilePlan::shared`], a conversion's [`primase_core::convert::Part::shared`]): content their passes make
+/// from it is its home's, which makes it too, so it is written once, the same whatever the cells.
 ///
-/// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`] with what
-/// its passes made, as a [`World::subset`], with its meshes and textures loaded and lowered to PBR, then
+/// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`] and
+/// [`TilePlan::shared`] with what its passes made for what it owns (as a conversion keeps a part's output: not what
+/// they made from what it shares), as a [`World::subset`], with its meshes and textures loaded and lowered to PBR, then
 /// [`TilePlan::write_cell`]; then [`TilePlan::finish`]. The writer neither loads nor lowers: it fails, as before, on
 /// what is missing. Placements filed by element centre need their prototype's geometry to be planned:
 /// [`TilePlan::split`] each of [`TilePlan::unsplit`] first, from a world holding that prototype loaded.
@@ -932,21 +934,31 @@ impl TilePlan {
     pub fn cells(&self) -> Vec<(i32, i32)> {
         self.cells.keys().copied().collect()
     }
-    /// The entities a cell's tiles are written from: those it owns (placements, lights, curves, markers, collision
-    /// holders) and the placements it holds elements of. A driver prepares the world's [`World::closure`] of them
-    /// (their prototypes with them).
+    /// The entities a cell owns: its placements (those filed by element centre it is the home of included), lights,
+    /// curves, markers and collision holders. A driver prepares the world's [`World::closure`] of them and of
+    /// [`TilePlan::shared`] (their prototypes with them).
     pub fn roots(&self, cell: (i32, i32)) -> BTreeSet<Entity> {
-        let Some(c) = self.cells.get(&cell) else {
-            return BTreeSet::new();
-        };
-        c.owned
-            .iter()
-            .copied()
-            .chain(c.pieces.iter().map(|(e, _)| *e))
-            .collect()
+        self.cells
+            .get(&cell)
+            .map(|c| c.owned.iter().copied().collect())
+            .unwrap_or_default()
     }
-    /// Write cell `cell` from `world`, as prepared: the closure of its [`TilePlan::roots`] and what the cell's passes
-    /// made (meshes and textures loaded, materials lowered). The world is authoritative (see [`TilePlan`]): the
+    /// The placements filed by element centre a cell holds elements of and does not own (another cell is their home):
+    /// it draws those elements, and what its passes make from them is their home's.
+    pub fn shared(&self, cell: (i32, i32)) -> BTreeSet<Entity> {
+        self.cells
+            .get(&cell)
+            .map(|c| {
+                c.pieces
+                    .iter()
+                    .map(|(e, _)| *e)
+                    .filter(|e| !c.owned.contains(e))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    /// Write cell `cell` from `world`, as prepared: the closure of its [`TilePlan::roots`] and [`TilePlan::shared`] and
+    /// what the cell's passes made for what it owns (meshes and textures loaded, materials lowered). The world is authoritative (see [`TilePlan`]): the
     /// entities the cell owns are written as the world holds them, with what the world holds that the planning world
     /// did not; what it holds of other cells' (reached through a reference) is theirs to write. The writer only reads
     /// it: each tile is a selection of the world's placements (and of the triangles of those filed by triangle
@@ -1823,7 +1835,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         notices: Vec::new(),
     };
     for cell in plan.cells() {
-        let w = world.subset(&world.closure(plan.roots(cell)));
+        let w = world.subset(&world.closure(plan.roots(cell).into_iter().chain(plan.shared(cell))));
         for tile in plan.write_cell(cell, &w)? {
             set.files.insert(tile.info.file.clone(), tile.bytes);
             set.images.extend(tile.images);

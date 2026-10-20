@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use primase_core::convert::{NoticeKind, Reader, Report, Result, convert_parts};
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline};
 use primase_core::{
-    Component, Entity, Instance, Marker, Mesh, Primitive, Semantic, Stream, Topology, Transform, World,
+    Component, Entity, Instance, Light, LightKind, Marker, Mesh, Primitive, Semantic, Stream, Topology,
+    Transform, World,
 };
 use primase_web::{Options, TileSize};
 
@@ -102,6 +103,41 @@ impl Pass for MarkPlacements {
     }
 }
 
+/// A point light 3 m above each placement of the part's own, made from that placement.
+struct LightPlacements;
+impl Pass for LightPlacements {
+    fn name(&self) -> &'static str {
+        "light-placements"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Light::NAME, Transform::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let placed: Vec<(Entity, Transform)> = w
+            .iter::<Instance>()
+            .map(|(e, _)| (e, *w.get::<Transform>(e).unwrap()))
+            .collect();
+        for (p, t) in placed {
+            let l = w.spawn();
+            w.insert(
+                l,
+                Light {
+                    kind: LightKind::Point,
+                    color: [1., 1., 1.],
+                    intensity: 10.,
+                    range: None,
+                    cast_shadows: None,
+                },
+            );
+            let mut at = Transform::IDENTITY;
+            at.cols[3] = [t.cols[3][0], 3., t.cols[3][2]];
+            w.insert(l, at);
+            log.place_from(l, p);
+        }
+        Ok(())
+    }
+}
+
 /// Every placement moved 1 m east.
 struct MoveEast;
 impl Pass for MoveEast {
@@ -187,13 +223,24 @@ fn convert(
     out: &Path,
     passes: Vec<Box<dyn Pass>>,
 ) -> primase_core::convert::ConvertReport {
+    convert_selected(world, options, out, Vec::new(), passes)
+}
+
+/// [`convert`], with `select` run on the whole world before it is planned.
+fn convert_selected(
+    world: World,
+    options: Options,
+    out: &Path,
+    select: Vec<Box<dyn Pass>>,
+    passes: Vec<Box<dyn Pass>>,
+) -> primase_core::convert::ConvertReport {
     let (mut parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]).unwrap();
     convert_parts(
         &mut Given(world),
         &mut parts,
         Box::new(writer),
         &PassManager::new(PassRegistry::new()),
-        &Pipeline { passes: Vec::new() },
+        &Pipeline { passes: select },
         &Pipeline { passes },
     )
     .unwrap()
@@ -491,4 +538,114 @@ fn tile_sets_differing_in_encoding_alone_share_the_plan() {
     assert_eq!(cells(&b), [(0, 0, 1), (0, 0, 1), (2, 0, 1)]);
     let _ = std::fs::remove_dir_all(&a);
     let _ = std::fs::remove_dir_all(&b);
+}
+
+/// One placement at the origin of a mesh of two triangles 1 m wide, centred near x 10 and x 210: with 200 m cells,
+/// filed by element centre, its elements in two cells.
+fn split_world() -> (World, Entity, Options) {
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(
+        proto,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([(
+                Semantic::Position,
+                Stream::F32x3(vec![
+                    [9.5, 0., 0.],
+                    [10.5, 0., 0.],
+                    [10., 0., -1.],
+                    [209.5, 0., 0.],
+                    [210.5, 0., 0.],
+                    [210., 0., -1.],
+                ]),
+            )]),
+            indices: Some(vec![0, 1, 2, 3, 4, 5]),
+            material: None,
+        }]),
+    );
+    let p = w.spawn();
+    w.insert(
+        p,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    w.insert(p, Transform::IDENTITY);
+    let options = Options {
+        compress: false,
+        split_by_tile: BTreeSet::from([p]),
+        ..Options::new(TileSize::new(200.).unwrap())
+    };
+    (w, p, options)
+}
+
+/// Each published tile's column, triangles and lights (omitted when none).
+fn drawn(out: &Path) -> Vec<(i64, u64, u64)> {
+    let (index, _) = tiles(out);
+    index["tiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["col"].as_i64().unwrap(),
+                t["triangles"].as_u64().unwrap(),
+                t["lights"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn content_made_from_a_placement_split_among_cells_is_written_once() {
+    let (w, _, options) = split_world();
+    let out = folder("split-made");
+    let report = convert(
+        w,
+        options,
+        &out,
+        vec![Box::new(MarkPlacements), Box::new(LightPlacements)],
+    );
+    // the placement drawn in both cells; its marker and light, made in each, written by its home (its pivot's cell)
+    assert_eq!(drawn(&out), [(0, 1, 1), (1, 1, 0)]);
+    assert_eq!(
+        records(&out),
+        [(0, "marker".into(), serde_json::json!([0., 2., 0.]))]
+    );
+    // the other cell's are left to the home
+    let left: u64 = report
+        .counts
+        .iter()
+        .filter(|(k, _)| k.starts_with("convert: entities placed from context"))
+        .map(|(_, v)| v)
+        .sum();
+    assert_eq!(left, 2, "{:?}", report.counts);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn content_made_from_a_split_placement_is_the_same_in_parts_as_whole() {
+    let (w, _, options) = split_world();
+    let (parts, whole) = (folder("split-parts"), folder("split-whole"));
+    convert(
+        w.clone(),
+        options.clone(),
+        &parts,
+        vec![Box::new(MarkPlacements), Box::new(LightPlacements)],
+    );
+    // made once from the whole world, before it is divided
+    convert_selected(
+        w,
+        options,
+        &whole,
+        vec![Box::new(MarkPlacements), Box::new(LightPlacements)],
+        Vec::new(),
+    );
+    assert_eq!(records(&parts), records(&whole));
+    assert_eq!(drawn(&parts), drawn(&whole));
+    assert_eq!(drawn(&whole), [(0, 1, 1), (1, 1, 0)]);
+    let _ = std::fs::remove_dir_all(&parts);
+    let _ = std::fs::remove_dir_all(&whole);
 }

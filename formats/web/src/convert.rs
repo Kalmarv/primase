@@ -146,9 +146,11 @@ impl PartSource for TileParts {
         Ok(match cells.next() {
             Some(c) => {
                 tiles.asked = Some(Asked::Cell(c));
+                // a placement filed by element centre is shared by the cells holding its elements but its home: what
+                // their passes make from it is the home's, written once
                 Some(Part {
                     roots: tiles.plans[0].roots(c),
-                    shared: BTreeSet::new(),
+                    shared: tiles.plans[0].shared(c),
                     context: BTreeSet::new(),
                     whole: false,
                     area: None,
