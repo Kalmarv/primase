@@ -52,10 +52,12 @@ fn extrema(positions: &[[f32; 3]]) -> [[f32; 3]; 2] {
     [lo, hi]
 }
 
-/// How many triangles' stored normals (the first direction group read as `b / 127.5 - 1`) face the way their winding
-/// does, and how many don't.
+/// A measured count, not a claim about the bytes' meaning: for how many triangles the sum of its vertices' bytes 8..11,
+/// each read as `b / 127.5 - 1`, has a positive dot product with the triangle's winding normal (and for how many not).
+/// It checks vertex indexing, not a normal reading: with the wrong indices of an earlier reader (c1f82990), Prada's
+/// middle range measured mixed.
 fn facing(m: &AnvilMesh) -> (usize, usize) {
-    let n = |i: u32| m.direction_a[i as usize].map(|b| f32::from(b) / 127.5 - 1.0);
+    let n = |i: u32| m.bytes_8[i as usize].map(|b| f32::from(b) / 127.5 - 1.0);
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let mut agree = (0, 0);
     for &[a, b, c] in &m.triangles {
@@ -166,7 +168,7 @@ fn prada_barrier_reads_three_ranges() {
     let (_, m) = read(&path, 136_194);
     assert_eq!((m.positions.len(), m.triangles.len()), (110, 60));
     // ranges from indices 0, 12 and 120, counted from vertices 0, 8 and 70; read with only the last record's base,
-    // the middle range named the wrong vertices and its normals seemed to disagree with its triangles
+    // the middle range named the wrong vertices, and the bytes-8 sign agreement below was mixed on it
     assert_eq!(m.ranges, [0, 4, 40]);
     assert_eq!(
         m.materials,
@@ -233,7 +235,7 @@ fn bowls_read_every_range() {
         assert_eq!((m.positions.len(), m.triangles.len()), (vertices, triangles));
         assert_eq!(m.ranges, ranges);
         ranges_tile(m);
-        // the first direction group read as a normal faces nearly every triangle once each range has its own base
+        // bytes 8..11 read as b / 127.5 - 1 agree in sign with the winding normal on these counts of triangles
         assert_eq!(facing(m), faces);
     }
 }
@@ -316,7 +318,7 @@ fn decoded_extrema_meet_the_stored_bounds() {
         let step = mesh
             .vertices
             .iter()
-            .map(|v| f32::from(v.scale).abs() / 32768.0)
+            .map(|v| f32::from(v.w).abs() / 32768.0)
             .fold(0.0f32, f32::max);
         assert!(off <= step, "{input} {entry}: off by {off}, a step {step}");
     }

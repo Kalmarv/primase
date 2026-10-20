@@ -18,11 +18,11 @@
 
 pub use crate::read::mesh::MATERIAL;
 
-/// TextureSet's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `TextureSet` (the name a label).
 pub const TEXTURE_SET: u32 = 0xD70E_6670;
-/// TextureMap's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `TextureMap` (the name a label).
 pub const TEXTURE_MAP: u32 = 0xA2B7_E917;
-/// MaterialTemplate's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `MaterialTemplate` (the name a label).
 pub const MATERIAL_TEMPLATE: u32 = 0xBCFB_3C7A;
 
 /// Why a Material or TextureSet body can't be read.

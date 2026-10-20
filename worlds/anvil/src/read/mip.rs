@@ -13,7 +13,7 @@
     clippy::cast_possible_truncation
 )]
 
-/// CompiledMip's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `CompiledMip` (the name a label).
 pub const COMPILED_MIP: u32 = 0x1D4B_87A3;
 /// The bytes around the image: the flag and length before it, the zero byte, parent and level after.
 const ENVELOPE: usize = 5 + 13;
@@ -36,7 +36,8 @@ pub struct StoredMip {
     pub image: Vec<u8>,
     /// The class id of the TextureMap this level belongs to.
     pub parent: u64,
-    /// The mip level (0 the largest, as the names' `Mip0`, `Mip1` have it).
+    /// The u32 ending the body. On TextureMap 31 (base WhiteRoom) the CompiledMips it refers to first and second store
+    /// 0 and 1, and their images are exactly its BC7 level 0 and 1 sizes (worlds/anvil/tests/texture.rs).
     pub level: u32,
 }
 

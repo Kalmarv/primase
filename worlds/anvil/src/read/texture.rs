@@ -2,17 +2,25 @@
 //! levels it holds itself, read as stored. Pixels are not decoded here (`primase-texcodec` decodes a level once its
 //! format is known); colour space and role are not read.
 //!
-//! The body (little-endian, after the resource's class id and extension): a byte (1); u32 width, height, depth, array
-//! size, engine format code, dimension, gamma flag and mip count; 14 bytes; the reference count r (u32 at 47) and r
+//! Width, height, mip count, format code and the references are established by the fixtures: the levels they give
+//! fill the pixels exactly, the referenced CompiledMips are exactly the missing levels' sizes, and the levels decode
+//! (worlds/anvil/tests/texture.rs). The reference tool's names for the u32s at 9, 13, 21 and 25 (depth, array size,
+//! dimension, gamma) are its claims, not established here: the first three are 1 on every fixture and only 1 is read,
+//! the fourth is kept as stored.
+//!
+//! The body (little-endian, after the resource's class id and extension): a byte (1); u32 width, height, the u32 at 9,
+//! the u32 at 13, the engine format code, the u32 at 21, the u32 at 25 and the mip count; 14 bytes; the reference
+//! count r (u32 at 47) and r
 //! references (a tag byte, 0, and a u64 ClassID: the CompiledMips holding the first r levels); 9 bytes; at 60 + 9r the
-//! compiled header (60 bytes: `CompiledTextureMap`'s CRC-32 0x13237FE9, u32 1, then width, height, depth, array size,
-//! mip count, format code, dimension and gamma again, 16 bytes, and the pixel byte length); then the pixels, ending
+//! compiled header (60 bytes: 0x13237FE9, equal to the CRC-32 of `CompiledTextureMap`; u32 1; then width, height,
+//! the u32s at 9 and 13, mip count, format code and the u32s at 21 and 25 again; 16 bytes; and the pixel byte
+//! length); then the pixels, ending
 //! the body: levels r to mip count - 1, largest first, each its format's size for its dimensions.
 //!
 //! Established on three TextureMaps of the base WhiteRoom forge (Riders Republic build 25394987: entries 217, 218 and
 //! 31; BC1 and BC7, 9 and 11 levels, none and two external; games/riders-republic docs/recon/texture-format-validation.md,
 //! bff28dc and 0ad60f1, where each level's bytes and both formats' decodes are checked independently). Refused, naming
-//! it: another first byte, depth, array size, dimension, reference tag or compiled header marker, a compiled header
+//! it: another first byte, u32 at 9, 13 or 21, reference tag or compiled header marker, a compiled header
 //! disagreeing with the first, or pixels not ending the body. [`format`] knows the format codes those fixtures
 //! establish (2 BC1, 10 BC7); [`StoredTextureMap::levels`] refuses another.
 #![deny(
@@ -25,11 +33,13 @@ use primase_core::TexFormat;
 
 pub use crate::read::material::TEXTURE_MAP;
 
-/// The compiled header's marker (CRC-32 of `CompiledTextureMap`).
+/// The compiled header's marker: equals the CRC-32 of `CompiledTextureMap` (the name a label).
 pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 
-/// The texture format a TextureMap's engine format code names, for the codes established on fixtures: 2 (BC1) and 10
-/// (BC7). Another code is `None`: not refused as stored, but its layout isn't known.
+/// The texture format a TextureMap's engine format code names, for the codes established on fixtures: 2 (BC1: maps 217
+/// and its levels' sizes; decoded within 1 of Pillow in 32,524 of 131,072 channels, the rest equal) and 10 (BC7: maps
+/// 218 and 31; 218's top level decoded equal to an independent decoder's). Another code is `None`: not refused as
+/// stored, but its layout isn't known.
 pub fn format(code: u32) -> Option<TexFormat> {
     match code {
         2 => Some(TexFormat::Bc1),
@@ -73,8 +83,8 @@ pub struct StoredTextureMap {
     pub height: u32,
     /// The engine's format code ([`format`]).
     pub format: u32,
-    /// The gamma flag as stored (1 and 0 seen; what it selects is not read).
-    pub gamma: u32,
+    /// The u32 at 25, as stored (1 on map 217, 0 on 218 and 31; what it selects is not established).
+    pub field_25: u32,
     pub mip_count: u32,
     /// The 14 bytes after the mip count.
     pub head_rest: [u8; 14],
@@ -144,11 +154,11 @@ impl StoredTextureMap {
         }
         let width = c.u32("width")?;
         let height = c.u32("height")?;
-        c.only("depth", 1)?;
-        c.only("array size", 1)?;
+        c.only("u32 at 9", 1)?;
+        c.only("u32 at 13", 1)?;
         let format = c.u32("format")?;
-        c.only("dimension", 1)?;
-        let gamma = c.u32("gamma")?;
+        c.only("u32 at 21", 1)?;
+        let field_25 = c.u32("u32 at 25")?;
         let mip_count = c.u32("mip count")?;
         let head_rest = c.array::<14>("bytes after the mip count")?;
         let count = c.u32("reference count")?;
@@ -172,12 +182,12 @@ impl StoredTextureMap {
         let again = [
             ("width", width),
             ("height", height),
-            ("depth", 1),
-            ("array size", 1),
+            ("u32 at 9", 1),
+            ("u32 at 13", 1),
             ("mip count", mip_count),
             ("format", format),
-            ("dimension", 1),
-            ("gamma", gamma),
+            ("u32 at 21", 1),
+            ("u32 at 25", field_25),
         ];
         for (what, stored) in again {
             let found = c.u32(what)?;
@@ -197,7 +207,7 @@ impl StoredTextureMap {
             width,
             height,
             format,
-            gamma,
+            field_25,
             mip_count,
             head_rest,
             references,

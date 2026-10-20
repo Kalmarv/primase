@@ -21,7 +21,7 @@
     clippy::cast_possible_truncation
 )]
 
-/// MeshShape's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `MeshShape` (the name a label).
 pub const MESH_SHAPE: u32 = 0xB22B_3E61;
 /// The marker in every section header.
 pub const SECTION_MARKER: u16 = 0xECD7;

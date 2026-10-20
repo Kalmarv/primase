@@ -6,9 +6,9 @@
 //! starts: its marker 0xFC9E1595 (CRC-32 of `CompiledMesh`), a byte at marker+4, 8 bytes, and at marker+13 a u32
 //! that with that byte names its layout ([`Layout`]). Two layouts are read; another is refused:
 //!
-//! - **ranged** (0 at marker+4, 0xC351EE43 at marker+13): the vertex stride (u32 at marker+22), the range record
-//!   count N (u32 at marker+63), then from marker+75 N range records, each the record id 0x07B19A87 (u32), a version
-//!   byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
+//! - **ranged** (0 at marker+4, 0xC351EE43 at marker+13): a u32 at marker+22 (24 on every ranged fixture, equal to
+//!   the vertex size; only 24 is read), the range record count N (u32 at marker+63), then from marker+75 N range
+//!   records, each 0x07B19A87 (u32), a byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
 //!   carries 8 more bytes. Then the vertex buffer's byte length (u32) and the vertices; 8 bytes; the index buffer's
 //!   byte length (u32) and the indices (u16). Then a u32 byte length (32 per range) and that many bytes; 8 bytes;
 //!   `MeshData` (its CRC-32 0x0645ABB5 and 18 bytes); one `MeshPrimitive` entry per range ([`StoredPrimitive`], 8
@@ -17,8 +17,8 @@
 //!   the vertex buffer's byte length (u32, 24 bytes per vertex of the entry's count) and the vertices; 8 bytes; the
 //!   index buffer's byte length (u32) and the indices (u32); then the material list.
 //!
-//! A `MeshPrimitive` entry: its CRC-32 0xA57387EF, vertex base, a u32, vertex count, first index, triangle count and
-//! version 1. The material list, ending the body ([`MaterialList`]): the range count (u32) and 8 bytes; one material
+//! A `MeshPrimitive` entry: 0xA57387EF (equal to the CRC-32 of `MeshPrimitive`), vertex base, a u32, vertex count,
+//! first index, triangle count and a u32 (1); the four counts are checked against the ranges, so they are established. The material list, ending the body ([`MaterialList`]): the range count (u32) and 8 bytes; one material
 //! descriptor per range (0x0B1D34C1, 4 bytes, a zero byte, a u16 vertex count, a zero byte, the u64 ClassID of a
 //! Material, 8 bytes); the range count (u32) and 6 bytes; one 31-byte group per range, holding its descriptor's ClassID
 //! at +8 and +17; 20 bytes.
@@ -49,9 +49,9 @@
 
 use std::ops::Range;
 
-/// Mesh's type id (CRC-32 of its type name).
+/// A record type: equals the CRC-32 of the ASCII string `Mesh` (the name a label).
 pub const MESH: u32 = 0x415D_9568;
-/// The compiled mesh's marker (CRC-32 of `CompiledMesh`).
+/// The compiled mesh's marker: equals the CRC-32 of `CompiledMesh` (the name a label).
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;
 /// The ranged layout's id at marker+13 (its name unknown).
 pub const RANGED: u32 = 0xC351_EE43;
@@ -61,13 +61,15 @@ pub const HEADER: usize = 61;
 pub const RANGE_RECORD: u32 = 0x07B1_9A87;
 /// The one vertex stride read.
 pub const STRIDE: u32 = 24;
-/// `MeshData`'s marker (its CRC-32): the inline layout's id at marker+13, and in the ranged layout's tail.
+/// Equals the CRC-32 of `MeshData` (the name a label): the inline layout's id at marker+13, and in the ranged
+/// layout's tail.
 pub const MESH_DATA: u32 = 0x0645_ABB5;
-/// A `MeshPrimitive` entry's marker (its CRC-32).
+/// A `MeshPrimitive` entry's marker: equals the CRC-32 of `MeshPrimitive` (the name a label).
 pub const MESH_PRIMITIVE: u32 = 0xA573_87EF;
 /// A material descriptor's marker (its name unknown).
 pub const MATERIAL_DESCRIPTOR: u32 = 0x0B1D_34C1;
-/// The type of the resources material descriptors refer to (CRC-32 of `Material`).
+/// The record type of the entries material descriptors' ClassIDs resolve to on the fixtures: equals the CRC-32 of
+/// `Material` (the name a label).
 pub const MATERIAL: u32 = 0x85C8_17C3;
 
 /// Why a Mesh body can't be read.
@@ -86,7 +88,7 @@ pub enum Error {
          0x0645ABB5 with 3 (inline) are read"
     )]
     Layout { id: u32, flags: u8 },
-    #[error("Mesh vertex stride {0}: only 24 is read")]
+    #[error("Mesh u32 at marker+22: {0}, only 24 is read")]
     Stride(u32),
     #[error("Mesh range record {index}: {why}")]
     Record { index: usize, why: String },
@@ -109,29 +111,33 @@ pub struct RangeRecord {
     pub extension: Option<[u32; 2]>,
 }
 
-/// One vertex of stride 24, every field as stored.
+/// One 24-byte vertex, every byte as stored. Only bytes 0..8 are decoded ([`StoredVertex::position`]); what bytes
+/// 8..24 hold is not established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredVertex {
-    pub position: [i16; 3],
-    /// The position's scale (signed).
-    pub scale: i16,
-    /// Bytes 8..12 (a packed direction: the normal, where its geometry agrees).
-    pub direction_a: [u8; 4],
-    /// Bytes 12..16 (a packed direction: the tangent, where its geometry agrees).
-    pub direction_b: [u8; 4],
-    /// Bytes 16..20.
-    pub unknown: [u16; 2],
-    /// Bytes 20..24 (texture coordinates; their divisor isn't stored).
-    pub uv: [u16; 2],
+    /// Bytes 0..6: three i16.
+    pub xyz: [i16; 3],
+    /// Bytes 6..8: an i16.
+    pub w: i16,
+    pub bytes_8: [u8; 4],
+    pub bytes_12: [u8; 4],
+    pub bytes_16: [u8; 4],
+    pub bytes_20: [u8; 4],
 }
 
 impl StoredVertex {
-    /// The position: each component times the scale over 32768. The evidence is the extrema only: on the fixtures
-    /// (tests/meshes.rs) the decoded positions' least and greatest coordinates lie within one quantization step of the
-    /// header's stored bounds. No single vertex between them is checked against anything.
+    /// `xyz` times `w` over 32768. Its evidence is the extrema alone: on every fixture in tests/meshes.rs each axis's
+    /// least and greatest decoded value differs from the header's stored bound by at most one step (`|w| / 32768`; the
+    /// differences measured there, largest 1.14e-4). No stored value checks a vertex between them.
     pub fn position(&self) -> [f32; 3] {
-        let s = f32::from(self.scale) / 32768.0;
-        self.position.map(|v| f32::from(v) * s)
+        let s = f32::from(self.w) / 32768.0;
+        self.xyz.map(|v| f32::from(v) * s)
+    }
+
+    /// Bytes 20..24 as two little-endian u16 (a layout reading; their meaning is not established).
+    pub fn words_20(&self) -> [u16; 2] {
+        let [a, b, c, d] = self.bytes_20;
+        [u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d])]
     }
 }
 
@@ -221,7 +227,7 @@ pub enum Layout {
 pub struct StoredMesh {
     /// The 61 header bytes.
     pub header: Vec<u8>,
-    /// The header's bounds: its minimum and maximum corners.
+    /// The header's two f32 triples at 20 and 36 (each fixture's decoded extrema lie within a step of them).
     pub bounds: [[f32; 3]; 2],
     /// The 8 bytes after the compiled mesh's layout byte (marker+5).
     pub compiled_flags: [u8; 8],
@@ -452,16 +458,16 @@ fn vertex(v: &[u8; 24]) -> StoredVertex {
         t3,
     ] = *v;
     StoredVertex {
-        position: [
+        xyz: [
             i16::from_le_bytes([p0, p1]),
             i16::from_le_bytes([p2, p3]),
             i16::from_le_bytes([p4, p5]),
         ],
-        scale: i16::from_le_bytes([s0, s1]),
-        direction_a: [a0, a1, a2, a3],
-        direction_b: [b0, b1, b2, b3],
-        unknown: [u16::from_le_bytes([u0, u1]), u16::from_le_bytes([u2, u3])],
-        uv: [u16::from_le_bytes([t0, t1]), u16::from_le_bytes([t2, t3])],
+        w: i16::from_le_bytes([s0, s1]),
+        bytes_8: [a0, a1, a2, a3],
+        bytes_12: [b0, b1, b2, b3],
+        bytes_16: [u0, u1, u2, u3],
+        bytes_20: [t0, t1, t2, t3],
     }
 }
 

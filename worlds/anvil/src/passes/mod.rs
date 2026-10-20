@@ -84,16 +84,16 @@ impl Pass for LowerAnvilCollision {
     }
 }
 
-/// What `lower-anvil-mesh` makes of the first packed direction group.
+/// Whether `lower-anvil-mesh` reads normals from each vertex's bytes 8..11.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshNormals {
     /// No normals (the writer's or viewer's flat shading).
     Omit,
-    /// Each of its first three bytes `b / 127.5 - 1`, normalized, converted through the reader's frame.
+    /// Bytes 8, 9 and 10 each read as `b / 127.5 - 1`, normalized, converted through the reader's frame.
     Packed,
 }
 
-/// What `lower-anvil-mesh` makes of the stored texture coordinates' v.
+/// What `lower-anvil-mesh` makes of the second u16 of each vertex's bytes 20..24.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UvV {
     /// v as stored, over the divisor.
@@ -102,11 +102,12 @@ pub enum UvV {
     OneMinus,
 }
 
-/// `lower-anvil-mesh{uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed}`: every Mesh's buffers
-/// ([`AnvilMesh`]) become a core mesh on its prototype, one triangle primitive, no material. Positions and
-/// triangles as read; texture coordinates the stored ones over `uv-divisor`, v per `uv-v`; normals per `normals`.
-/// The divisor, v's origin and whether the first direction group is the normal are not established: each is the
-/// program's stated choice, and every lowered mesh reports them as approximations. The buffers are consumed.
+/// `lower-anvil-mesh{uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed}`: a diagnostic lowering. Every
+/// Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype, one triangle primitive, no material: positions
+/// and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as two u16 over `uv-divisor`, the
+/// second per `uv-v`; normals per `normals`. That bytes 20..24 are texture coordinates, their divisor and origin, and
+/// that bytes 8..11 are a normal are not established: each reading is the program's stated choice, every lowered mesh
+/// reports it as an approximation, and the output is not evidence of the format. The buffers are consumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMesh {
     pub uv_divisor: f32,
@@ -187,7 +188,7 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "texture coordinates over a stated divisor and v origin; normals from a stated reading of the packed bytes"
+        "texture coordinates and normals from stated readings of bytes whose meaning isn't established"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let meshes: Vec<Entity> = w.iter::<AnvilMesh>().map(|(e, _)| e).collect();
@@ -196,24 +197,25 @@ impl Pass for LowerAnvilMesh {
                 continue;
             };
             let mut streams = BTreeMap::new();
-            let uv =
-                m.uv.iter()
-                    .map(|&[u, v]| {
-                        let (u, v) = (f32::from(u) / self.uv_divisor, f32::from(v) / self.uv_divisor);
-                        [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
-                    })
-                    .collect();
+            let uv = m
+                .words_20
+                .iter()
+                .map(|&[u, v]| {
+                    let (u, v) = (f32::from(u) / self.uv_divisor, f32::from(v) / self.uv_divisor);
+                    [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
+                })
+                .collect();
             streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
             log.approximate(
                 &format!(
-                    "texture coordinates: stored over {} (a stated divisor), v {:?}",
+                    "texture coordinates: bytes 20..24 as two u16 over {} (a stated reading), v {:?}",
                     self.uv_divisor, self.uv_v
                 ),
                 1,
             );
             if self.normals == MeshNormals::Packed {
                 let normals = m
-                    .direction_a
+                    .bytes_8
                     .iter()
                     .map(|b| {
                         let d = [b[0], b[1], b[2]].map(|x| f32::from(x) / 127.5 - 1.0);
@@ -227,10 +229,7 @@ impl Pass for LowerAnvilMesh {
                     })
                     .collect();
                 streams.insert(Semantic::Normal, Stream::F32x3(normals));
-                log.approximate(
-                    "normals: the first packed direction group read as the normal (stated)",
-                    1,
-                );
+                log.approximate("normals: bytes 8..11 read as a normal (stated)", 1);
             } else {
                 log.count("meshes lowered without normals (stated)", 1);
             }

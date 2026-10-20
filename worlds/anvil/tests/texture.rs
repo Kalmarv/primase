@@ -29,16 +29,16 @@ fn texture_maps_read_their_levels_and_decode() {
         let block = read_entry(&payload, MAX_RECORD).expect("entry");
         Resource::parse(&block.resource.data).expect("resource")
     };
-    // entry, format, gamma, top level's bytes' SHA-256 (the separate decode's), its RGBA decode's SHA-256
+    // entry, format, u32 at 25, top level's bytes' SHA-256 (the separate decode's), its RGBA decode's SHA-256
     let fixtures = [
         (
             217,
             TexFormat::Bc1,
             1,
             "3410c1ec4ee2b9729873c9e72b0d016d1040eb866ab54802adb18f4e4d34b66c",
-            // primase-texcodec's BC1. Pillow's (b974d7c3..., the separate decode's) differs by at most 1 in 32,524 of
-            // 131,072 RGB channels and in no alpha: the two decoders round expanded and interpolated colours
-            // differently (measured with scratch bc1_compare.py, 2026-10-20). BC7 below matches exactly.
+            // primase-texcodec's BC1 decode. Pillow's (b974d7c3..., the separate decode's) differs from it in 32,524
+            // of 131,072 channels, each by exactly 1, none of them alpha; the other 98,548 are equal (measured with
+            // scratch bc1_compare.py, 2026-10-20; why the decoders differ is not established). BC7 below is equal.
             "4b3ea6deedfaad1f74c2c8a7a25b9e6bd3c7c0f383ae61da14c9bab6cc9df043",
         ),
         (
@@ -49,11 +49,14 @@ fn texture_maps_read_their_levels_and_decode() {
             "365e4a520183cf462ee3bdbace600e6172f17ed32f47e30df647b4b9a2a39962",
         ),
     ];
-    for (entry, format, gamma, top, rgba) in fixtures {
+    for (entry, format, field_25, top, rgba) in fixtures {
         let r = resource(entry);
         assert_eq!(r.type_id, TEXTURE_MAP);
         let t = StoredTextureMap::parse(&r.body).expect("texture map");
-        assert_eq!((t.width, t.height, t.mip_count, t.gamma), (256, 128, 9, gamma));
+        assert_eq!(
+            (t.width, t.height, t.mip_count, t.field_25),
+            (256, 128, 9, field_25)
+        );
         assert_eq!(texture::format(t.format), Some(format));
         assert!(t.references.is_empty());
         let levels = t.levels().expect("levels");
