@@ -165,6 +165,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_wrap,
         &[("anchor", "base-colour"), ("axis", "u")],
     );
+    // which materials cast no shadow, and what becomes of one other placements draw too, are the program's: no default
+    reg.register_requiring(
+        "set-reskate-shadow-casting",
+        passes::set_reskate_shadow_casting,
+        &[("materials", "shell"), ("shared", "refuse")],
+    );
     // what a map does with triangles over more texture repeats than Studio draws is the program's: no default
     reg.register_requiring(
         "prepare-reskate-uv-repeats",

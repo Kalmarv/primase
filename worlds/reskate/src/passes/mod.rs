@@ -19,6 +19,7 @@ pub mod pause_map;
 pub mod raise;
 pub mod region;
 pub mod sampling;
+pub mod shadows;
 pub mod snap;
 pub mod spawn;
 pub mod summarize;
@@ -66,6 +67,7 @@ pub use sampling::{
     PrepareReskateUvTransforms, PrepareReskateWrap, SamplingConflicts, prepare_reskate_uv_transforms,
     prepare_reskate_wrap,
 };
+pub use shadows::{SetReskateShadowCasting, SharedMaterials, set_reskate_shadow_casting};
 pub use snap::{
     SnapReskateMarkers, SummarizeReskateInstances, SummarizeReskateWater, snap_reskate_markers,
     summarize_reskate_instances, summarize_reskate_water,
