@@ -148,11 +148,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
-    // which blended surfaces a map draws as cutouts, and at what alpha, is the program's: no default
+    // which blended surfaces a map draws as cutouts, at what alpha, and what a uniform one below it becomes, are the
+    // program's: no default
     reg.register_requiring(
         "prepare-reskate-blended-surfaces",
         passes::prepare_reskate_blended_surfaces,
-        &[("cutoff", "0.5"), ("materials", "all")],
+        &[("cutoff", "0.5"), ("materials", "all"), ("uniform", "cutout")],
     );
     // which slot a material's textures sample as, and what becomes of a slot that differs, are the program's: no default
     reg.register_requiring(

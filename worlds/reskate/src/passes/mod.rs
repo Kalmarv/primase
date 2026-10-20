@@ -34,7 +34,9 @@ pub use blend_budget::{
     plan_reskate_blend_budget,
 };
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
-pub use blended::{BlendedSelection, PrepareReskateBlendedSurfaces, prepare_reskate_blended_surfaces};
+pub use blended::{
+    BlendedSelection, PrepareReskateBlendedSurfaces, UniformAlpha, prepare_reskate_blended_surfaces,
+};
 pub use budget::{
     BudgetReskateTextures, SummarizeReskateTextures, budget_reskate_textures, summarize_reskate_textures,
 };
