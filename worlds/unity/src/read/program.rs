@@ -1,7 +1,13 @@
 //! A Shader's compiled programs, as a player stores them: per pass, the fragment program's variants (each a keyword
-//! set, a GPU program type and an entry of the compressed blob) and the parameters common to them (constant buffers
-//! with each field's name and byte offset, texture and sampler bind slots), read from `m_ParsedForm`; and a variant's
-//! code from the platform's LZ4-compressed blob. What the bindings mean for a material is the caller's.
+//! set, a GPU program type and an entry of the compressed blob) and their parameters (constant buffers with each
+//! field's name and byte offset, texture and sampler bind slots), read from `m_ParsedForm`; and a variant's code from
+//! the platform's LZ4-compressed blob. What the bindings mean for a material is the caller's.
+//!
+//! Players store the variants in one of two layouts, told apart by their fields: from 2021.2, `m_PlayerSubPrograms`
+//! (lists of variants, keywords indexing the form's `m_KeywordNames`) with `m_CommonParameters` shared by them;
+//! before it, `m_SubPrograms` (one list, each variant with its hardware tier, its keywords as global and local indices
+//! into the pass's name table, and its own parameters). Struct fields (instancing's per-draw arrays) are read as
+//! [`StructField`]s.
 //!
 //! The blob of one platform is split into segments (`offsets`, `compressedLengths`, `decompressedLengths`, one
 //! entry per segment). Segment 0 starts with the entry table: a count, then per entry its offset, length and segment.
@@ -33,14 +39,27 @@ pub enum Shape {
     Matrix { rows: u32 },
 }
 
+/// A constant-buffer field of a struct type (Unity's instancing arrays): its name, byte offset, array size (0: not
+/// an array), the struct's size in bytes and its members (offsets within the struct).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct StructField {
+    pub name: String,
+    pub offset: u32,
+    pub array_size: u32,
+    pub size: u32,
+    pub members: Vec<Field>,
+}
+
 /// A constant buffer: its name, the bind slot it is bound to (`b<n>`; `None` when no binding names it), its size in
-/// bytes and its fields.
+/// bytes, its fields and its struct fields (by offset).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ConstantBuffer {
     pub name: String,
     pub slot: Option<u32>,
     pub size: u32,
     pub fields: Vec<Field>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub structs: Vec<StructField>,
 }
 
 /// A texture parameter: its name, bind slot (`t<n>`), the sampler slot it samples with (`None`: none of its own) and
@@ -63,8 +82,9 @@ pub struct Parameters {
 }
 
 /// One compiled variant: the blob entry holding its code, its keywords, its GPU program type (Unity's
-/// `ShaderGpuProgramType`: 18 a D3D11 SM 5.0 pixel program) and its shader requirements mask; `group` is the index
-/// of the player sub-program list it is in.
+/// `ShaderGpuProgramType`: 17 a D3D11 pixel program before 2021.2, 18 an SM 5.0 one after) and its shader
+/// requirements mask; `group` is the index of the player sub-program list it is in (from 2021.2) or its hardware tier
+/// (before); `parameters` its own, where the player stores them per variant (before 2021.2), else `None`: the pass's.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Variant {
     pub group: usize,
@@ -72,13 +92,23 @@ pub struct Variant {
     pub keywords: Vec<String>,
     pub gpu_program_type: i64,
     pub requirements: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Parameters>,
 }
 
-/// One pass's fragment program.
+/// One pass's fragment program: its variants and the parameters common to them (empty where each variant has its
+/// own).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct PassProgram {
     pub variants: Vec<Variant>,
     pub parameters: Parameters,
+}
+
+impl PassProgram {
+    /// The parameters variant `v` (of this pass) is compiled with.
+    pub fn parameters_of<'a>(&'a self, v: &'a Variant) -> &'a Parameters {
+        v.parameters.as_ref().unwrap_or(&self.parameters)
+    }
 }
 
 /// A Shader's compiled fragment programs: `passes[subshader][pass]`, and its per-platform blobs.
@@ -138,15 +168,49 @@ fn u32_of(n: i64, what: &str) -> Result<u32> {
     u32::try_from(n).map_err(|_| invalid(format!("shader program: {what} {n} out of range")))
 }
 
+/// The name an entry's `m_NameIndex` gives in the pass's name table.
+fn name_of(e: &Value, names: &std::collections::BTreeMap<i64, String>) -> Result<String> {
+    let i = int(e, "m_NameIndex")?;
+    names
+        .get(&i)
+        .cloned()
+        .ok_or_else(|| invalid(format!("shader program: name index {i} past the pass's names")))
+}
+
+/// The vector (`vectors`) and matrix (`matrices`) fields of a constant buffer or struct, by offset.
+fn fields(
+    v: &Value,
+    vectors: &str,
+    matrices: &str,
+    names: &std::collections::BTreeMap<i64, String>,
+) -> Result<Vec<Field>> {
+    let mut fields = Vec::new();
+    for (key, matrix) in [(vectors, false), (matrices, true)] {
+        for f in items(v, key)? {
+            fields.push(Field {
+                name: name_of(f, names)?,
+                offset: u32_of(int(f, "m_Index")?, "field offset")?,
+                kind: int(f, "m_Type")?,
+                shape: if matrix {
+                    Shape::Matrix {
+                        rows: u32_of(int(f, "m_RowCount")?, "matrix rows")?,
+                    }
+                } else {
+                    Shape::Vector {
+                        columns: u32_of(int(f, "m_Dim")?, "vector size")?,
+                    }
+                },
+                array_size: u32_of(int(f, "m_ArraySize")?, "array size")?,
+            });
+        }
+    }
+    fields.sort_by_key(|f| f.offset);
+    Ok(fields)
+}
+
 /// The parameters as stored, their names resolved through the pass's name table.
 fn parameters(v: &Value, names: &std::collections::BTreeMap<i64, String>) -> Result<Parameters> {
-    let name = |e: &Value| -> Result<String> {
-        let i = int(e, "m_NameIndex")?;
-        names
-            .get(&i)
-            .cloned()
-            .ok_or_else(|| invalid(format!("shader program: name index {i} past the pass's names")))
-    };
+    let name = |e: &Value| name_of(e, names);
     let bindings = items(v, "m_ConstantBufferBindings")?
         .iter()
         .map(|b| {
@@ -158,37 +222,25 @@ fn parameters(v: &Value, names: &std::collections::BTreeMap<i64, String>) -> Res
         .collect::<Result<std::collections::BTreeMap<i64, u32>>>()?;
     let mut constant_buffers = Vec::new();
     for cb in items(v, "m_ConstantBuffers")? {
-        let mut fields = Vec::new();
-        for (key, matrix) in [("m_VectorParams", false), ("m_MatrixParams", true)] {
-            for f in items(cb, key)? {
-                fields.push(Field {
-                    name: name(f)?,
-                    offset: u32_of(int(f, "m_Index")?, "field offset")?,
-                    kind: int(f, "m_Type")?,
-                    shape: if matrix {
-                        Shape::Matrix {
-                            rows: u32_of(int(f, "m_RowCount")?, "matrix rows")?,
-                        }
-                    } else {
-                        Shape::Vector {
-                            columns: u32_of(int(f, "m_Dim")?, "vector size")?,
-                        }
-                    },
-                    array_size: u32_of(int(f, "m_ArraySize")?, "array size")?,
-                });
-            }
-        }
-        if !items(cb, "m_StructParams")?.is_empty() {
-            return Err(crate::Error::Unsupported(
-                "constant buffers with struct fields".into(),
-            ));
-        }
-        fields.sort_by_key(|f| f.offset);
+        let mut structs = items(cb, "m_StructParams")?
+            .iter()
+            .map(|s| {
+                Ok(StructField {
+                    name: name(s)?,
+                    offset: u32_of(int(s, "m_Index")?, "struct offset")?,
+                    array_size: u32_of(int(s, "m_ArraySize")?, "array size")?,
+                    size: u32_of(int(s, "m_StructSize")?, "struct size")?,
+                    members: fields(s, "m_VectorMembers", "m_MatrixMembers", names)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        structs.sort_by_key(|s| s.offset);
         constant_buffers.push(ConstantBuffer {
             name: name(cb)?,
             slot: bindings.get(&int(cb, "m_NameIndex")?).copied(),
             size: u32_of(int(cb, "m_Size")?, "buffer size")?,
-            fields,
+            fields: fields(cb, "m_VectorParams", "m_MatrixParams", names)?,
+            structs,
         });
     }
     let textures = items(v, "m_TextureParams")?
@@ -262,6 +314,28 @@ impl ShaderPrograms {
                     continue;
                 };
                 let mut variants = Vec::new();
+                // before 2021.2: one list, each variant with its tier, keywords by name index and own parameters
+                for v in items(fragment, "m_SubPrograms")? {
+                    let mut keywords = Vec::new();
+                    for k in ["m_GlobalKeywordIndices", "m_LocalKeywordIndices"] {
+                        if let Some(k) = v.get(k) {
+                            for i in ints(k)? {
+                                keywords.push(names.get(&i).cloned().ok_or_else(|| {
+                                    invalid(format!("shader {name}: keyword index {i} past the pass's names"))
+                                })?);
+                            }
+                        }
+                    }
+                    variants.push(Variant {
+                        group: usize::try_from(int(v, "m_ShaderHardwareTier")?)
+                            .map_err(|_| invalid("shader program: a negative hardware tier"))?,
+                        blob_index: u32_of(int(v, "m_BlobIndex")?, "blob index")?,
+                        keywords,
+                        gpu_program_type: int(v, "m_GpuProgramType")?,
+                        requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+                        parameters: Some(parameters(v, &names)?),
+                    });
+                }
                 for (group, list) in items(fragment, "m_PlayerSubPrograms")?.iter().enumerate() {
                     let list: &[Value] = match list {
                         Value::Array(Array::Values(x)) => x,
@@ -288,6 +362,7 @@ impl ShaderPrograms {
                             keywords,
                             gpu_program_type: int(v, "m_GpuProgramType")?,
                             requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+                            parameters: None,
                         });
                     }
                 }
@@ -481,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn parameters_resolve_names_slots_and_offsets_and_refuse_what_they_cannot() {
+    fn parameters_resolve_names_slots_offsets_and_structs_and_refuse_what_they_cannot() {
         let names: std::collections::BTreeMap<i64, String> = [
             (0, "UnityPerMaterial".to_owned()),
             (1, "_BaseColor".to_owned()),
@@ -510,13 +585,31 @@ mod tests {
                 ("_Smoothness", 16, Shape::Vector { columns: 1 })
             ]
         );
-        // a name index past the table, a negative offset and struct fields are refused
+        // a struct field: an array of members (instancing's per-draw arrays)
+        let instanced = obj(vec![
+            ("m_NameIndex", Value::Int(1)),
+            ("m_Index", Value::Int(0)),
+            ("m_ArraySize", Value::Int(2)),
+            ("m_StructSize", Value::Int(32)),
+            ("m_VectorMembers", list(vec![vector(2, 16, 4)])),
+            ("m_MatrixMembers", list(Vec::new())),
+        ]);
+        let p = parameters(&params(vec![cbuffer(Vec::new(), vec![instanced])]), &names).unwrap();
+        let s = &p.constant_buffers[0].structs[0];
+        assert_eq!(
+            (s.name.as_str(), s.offset, s.array_size, s.size),
+            ("_BaseColor", 0, 2, 32)
+        );
+        assert_eq!(
+            s.members
+                .iter()
+                .map(|f| (f.name.as_str(), f.offset))
+                .collect::<Vec<_>>(),
+            vec![("_Smoothness", 16)]
+        );
+        // a name index past the table and a negative offset are refused
         assert!(parameters(&params(vec![cbuffer(vec![vector(9, 0, 4)], Vec::new())]), &names).is_err());
         assert!(parameters(&params(vec![cbuffer(vec![vector(1, -4, 4)], Vec::new())]), &names).is_err());
-        assert!(matches!(
-            parameters(&params(vec![cbuffer(Vec::new(), vec![obj(Vec::new())])]), &names),
-            Err(crate::Error::Unsupported(_))
-        ));
     }
 
     #[test]
