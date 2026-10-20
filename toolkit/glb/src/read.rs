@@ -1,12 +1,16 @@
-//! The strict GLB reader: meshes into [`primase_core::Mesh`], plus checked access to the rest of the document for
-//! round-trip tests.
+//! The strict glTF reader: meshes into [`primase_core::Mesh`], plus checked access to the rest of the document for
+//! round-trip tests and for readers that take materials, nodes and images from the JSON themselves.
 //!
-//! What it reads (a superset of skate-scene v1's prototype GLB rules): one buffer held in
-//! the BIN chunk; primitives of mode points, lines or triangles; `indices` unsigned byte, short or int (or none:
-//! sequential); `POSITION` float VEC3, `NORMAL` float VEC3, `TANGENT` float VEC4, `TEXCOORD_n` float or normalized
-//! unsigned byte/short VEC2, `COLOR_n` float or normalized unsigned byte/short VEC3/VEC4. Everything else that could
-//! change the geometry is an error naming the item: sparse accessors, morph targets, skin attributes, external or
-//! extra buffers, required extensions, any extension on what is read, unknown properties.
+//! What it reads (a superset of skate-scene v1's prototype GLB rules): a GLB with one buffer held in the BIN chunk
+//! ([`Gltf::from_glb`]), or a `.gltf` JSON document whose buffers, each named by a `uri`, the caller supplies
+//! ([`Gltf::from_gltf`]: where the bytes come from, a file beside it or a game's container, is the caller's);
+//! primitives of mode points, lines or triangles; `indices` unsigned byte, short or int (or none: sequential);
+//! `POSITION` float VEC3, `NORMAL` float VEC3, `TANGENT` float VEC4, `TEXCOORD_n` float or normalized unsigned
+//! byte/short VEC2, `COLOR_n` float or normalized unsigned byte/short VEC3/VEC4; application-specific attributes
+//! (named `_...`, glTF 3.7.2.1) as stored ([`AccessorData`]), for the caller to state. Everything else that could
+//! change the geometry is an error naming the item: sparse accessors, morph targets, skin attributes, a GLB's
+//! external or extra buffers, required extensions, any extension on what is read, unknown properties. Extensions
+//! a document only uses (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
 
 use std::collections::BTreeMap;
 
@@ -23,12 +27,12 @@ const UNSIGNED_SHORT: u64 = 5123;
 const UNSIGNED_INT: u64 = 5125;
 const FLOAT: u64 = 5126;
 
-/// A parsed GLB: its JSON document and its binary buffer.
+/// A parsed glTF document: its JSON and its binary buffers.
 #[derive(Debug)]
 pub struct Gltf {
     json: Value,
-    /// The buffer, `buffers[0].byteLength` bytes (without the BIN chunk's padding); empty when there is none.
-    bin: Vec<u8>,
+    /// The buffers in the document's order, each its `byteLength` bytes (a GLB's without the BIN chunk's padding).
+    buffers: Vec<Vec<u8>>,
 }
 
 /// One primitive as read: the core primitive (its `material` entity left `None`) and the glTF material it named.
@@ -39,6 +43,64 @@ pub struct ReadPrimitive {
     pub material: Option<usize>,
     /// That material's `name`.
     pub material_name: Option<String>,
+    /// Application-specific attributes (named `_...`) by name, as stored: one element per vertex, like POSITION.
+    pub custom: BTreeMap<String, AccessorData>,
+}
+
+/// An accessor's component type (glTF 3.6.2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComponentType {
+    I8,
+    U8,
+    I16,
+    U16,
+    U32,
+    F32,
+}
+
+impl ComponentType {
+    /// Bytes per component.
+    pub fn size(self) -> usize {
+        match self {
+            ComponentType::I8 | ComponentType::U8 => 1,
+            ComponentType::I16 | ComponentType::U16 => 2,
+            ComponentType::U32 | ComponentType::F32 => 4,
+        }
+    }
+}
+
+/// An accessor's element type: how many components an element has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElementType {
+    Scalar,
+    Vec2,
+    Vec3,
+    Vec4,
+}
+
+impl ElementType {
+    /// Components per element.
+    pub fn components(self) -> usize {
+        match self {
+            ElementType::Scalar => 1,
+            ElementType::Vec2 => 2,
+            ElementType::Vec3 => 3,
+            ElementType::Vec4 => 4,
+        }
+    }
+}
+
+/// An accessor's elements as stored: `count` elements of `element` components of `component`, packed tight (the
+/// view's stride removed), each component little-endian as the buffer holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessorData {
+    pub component: ComponentType,
+    /// The integers stand for `[0, 1]` (unsigned) or `[-1, 1]` (signed) values.
+    pub normalized: bool,
+    pub element: ElementType,
+    pub count: usize,
+    /// `count * element.components() * component.size()` bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// One glTF mesh as read.
@@ -61,25 +123,7 @@ impl Gltf {
     pub fn from_glb(bytes: &[u8]) -> Result<Gltf> {
         let chunks = crate::parse(bytes)?;
         let json: Value = serde_json::from_slice(chunks.json)?;
-        let root = Obj::new(&json, "")?;
-        let asset = Obj::new(
-            root.get("asset").ok_or_else(|| invalid("asset", "missing"))?,
-            "asset",
-        )?;
-        if asset.str_opt("version")? != Some("2.0") {
-            return Err(invalid("asset.version", "not \"2.0\""));
-        }
-        if let Some(req) = root.get("extensionsRequired")
-            && req.as_array().is_none_or(|a| !a.is_empty())
-        {
-            return Err(invalid("extensionsRequired", &format!("unsupported: {req}")));
-        }
-        let buffers = match root.get("buffers") {
-            None => &[][..],
-            Some(Value::Array(a)) => a.as_slice(),
-            Some(_) => return Err(invalid("buffers", "not an array")),
-        };
-        let bin = match (buffers, chunks.bin) {
+        let buffers = match (document_buffers(&json)?, chunks.bin) {
             ([], None) => Vec::new(),
             ([], Some(_)) => return Err(invalid("buffers", "a BIN chunk but no buffer")),
             ([b], bin) => {
@@ -99,11 +143,44 @@ impl Gltf {
                 if len.checked_next_multiple_of(4) != Some(bin.len()) {
                     return Err(mismatch());
                 }
-                bin.get(..len).ok_or_else(mismatch)?.to_vec()
+                vec![bin.get(..len).ok_or_else(mismatch)?.to_vec()]
             }
             _ => return Err(invalid("buffers", "more than one buffer")),
         };
-        Ok(Gltf { json, bin })
+        Ok(Gltf { json, buffers })
+    }
+
+    /// Parse a `.gltf` JSON document, its buffers supplied by the caller: `buffer(i, uri)` returns buffer `i`'s
+    /// bytes for the `uri` the document names it by, as written (a relative path, a `data:` URI: resolving it is the
+    /// caller's), or why it cannot. Each buffer needs a `uri` and must be exactly its `byteLength` bytes. The asset
+    /// version and required extensions are checked as for a GLB.
+    pub fn from_gltf(
+        json: &[u8],
+        mut buffer: impl FnMut(usize, &str) -> std::result::Result<Vec<u8>, String>,
+    ) -> Result<Gltf> {
+        let json: Value = serde_json::from_slice(json)?;
+        let mut buffers = Vec::new();
+        for (i, b) in document_buffers(&json)?.iter().enumerate() {
+            let path = format!("buffers[{i}]");
+            let b = Obj::new(b, &path)?;
+            b.only(&["byteLength", "uri", "name"])?;
+            let len = b.usize("byteLength")?;
+            let uri = b
+                .str_opt("uri")?
+                .ok_or_else(|| invalid(&path, "no uri (only a GLB's BIN chunk buffer has none)"))?;
+            let bytes = buffer(i, uri).map_err(|e| invalid(&path, &format!("{uri}: {e}")))?;
+            if bytes.len() != len {
+                return Err(invalid(
+                    &path,
+                    &format!(
+                        "byteLength {len} does not match the {}-byte buffer {uri}",
+                        bytes.len()
+                    ),
+                ));
+            }
+            buffers.push(bytes);
+        }
+        Ok(Gltf { json, buffers })
     }
 
     /// The whole JSON document.
@@ -120,6 +197,14 @@ impl Gltf {
 
     pub fn mesh_count(&self) -> usize {
         self.array("meshes").len()
+    }
+
+    /// Buffer `index`'s bytes.
+    pub fn buffer(&self, index: usize) -> Result<&[u8]> {
+        self.buffers
+            .get(index)
+            .map(Vec::as_slice)
+            .ok_or_else(|| invalid(&format!("buffers[{index}]"), "does not exist"))
     }
 
     /// The bytes of a buffer view, bounds-checked.
@@ -143,9 +228,11 @@ impl Gltf {
             "target",
             "name",
         ])?;
-        if v.u64("buffer")? != 0 {
-            return Err(invalid(&path, "buffer is not 0"));
-        }
+        let buffer = v.usize("buffer")?;
+        let bin = self
+            .buffers
+            .get(buffer)
+            .ok_or_else(|| invalid(&path, &format!("buffer {buffer} does not exist")))?;
         let off = v.usize_opt("byteOffset")?.unwrap_or(0);
         let len = v.usize("byteLength")?;
         let stride = v.usize_opt("byteStride")?;
@@ -156,9 +243,9 @@ impl Gltf {
         }
         let end = off
             .checked_add(len)
-            .filter(|&e| e <= self.bin.len())
+            .filter(|&e| e <= bin.len())
             .ok_or_else(|| invalid(&path, "runs past the buffer"))?;
-        Ok((&self.bin[off..end], stride))
+        Ok((&bin[off..end], stride))
     }
 
     /// Read mesh `index` into core primitives.
@@ -207,11 +294,19 @@ impl Gltf {
             &apath,
         )?;
         let mut streams = BTreeMap::new();
+        let mut custom = BTreeMap::new();
         for (name, acc) in attrs.map {
             let acc = acc
                 .as_u64()
                 .and_then(|a| usize::try_from(a).ok())
                 .ok_or_else(|| invalid(&apath, &format!("{name} is not an accessor index")))?;
+            if name.starts_with('_') {
+                let data = self
+                    .accessor_data(acc)
+                    .map_err(|e| e.context(&format!("{apath}.{name}")))?;
+                custom.insert(name.clone(), data);
+                continue;
+            }
             let semantic =
                 semantic(name).ok_or_else(|| invalid(&apath, &format!("unsupported attribute {name}")))?;
             let stream = self
@@ -227,6 +322,12 @@ impl Gltf {
             return Err(invalid(
                 &apath,
                 &format!("{s:?} count differs from POSITION's {count}"),
+            ));
+        }
+        if let Some((name, _)) = custom.iter().find(|(_, d)| d.count != count) {
+            return Err(invalid(
+                &apath,
+                &format!("{name} count differs from POSITION's {count}"),
             ));
         }
         let indices = p
@@ -266,6 +367,43 @@ impl Gltf {
             },
             material,
             material_name,
+            custom,
+        })
+    }
+
+    /// Accessor `index`'s elements as stored.
+    pub fn accessor_data(&self, index: usize) -> Result<AccessorData> {
+        let acc = self.accessor(index)?;
+        let component = match acc.component {
+            BYTE => ComponentType::I8,
+            UNSIGNED_BYTE => ComponentType::U8,
+            SHORT => ComponentType::I16,
+            UNSIGNED_SHORT => ComponentType::U16,
+            UNSIGNED_INT => ComponentType::U32,
+            _ => ComponentType::F32,
+        };
+        // glTF 3.6.2.3: only 8- and 16-bit integers are normalized
+        if acc.normalized && matches!(component, ComponentType::U32 | ComponentType::F32) {
+            return Err(invalid(&acc.path, &format!("{component:?} is normalized")));
+        }
+        let element = match acc.kind {
+            "SCALAR" => ElementType::Scalar,
+            "VEC2" => ElementType::Vec2,
+            "VEC3" => ElementType::Vec3,
+            _ => ElementType::Vec4,
+        };
+        let elem = element.components() * component.size();
+        // the accessor checked that its last element ends inside its view
+        let bytes = (0..acc.count)
+            .flat_map(|k| &acc.bytes[k * acc.stride..k * acc.stride + elem])
+            .copied()
+            .collect();
+        Ok(AccessorData {
+            component,
+            normalized: acc.normalized,
+            element,
+            count: acc.count,
+            bytes,
         })
     }
 
@@ -409,6 +547,28 @@ impl Gltf {
             min,
             max,
         })
+    }
+}
+
+/// The document's checked header (asset version 2.0, no required extension) and its `buffers`.
+fn document_buffers(json: &Value) -> Result<&[Value]> {
+    let root = Obj::new(json, "")?;
+    let asset = Obj::new(
+        root.get("asset").ok_or_else(|| invalid("asset", "missing"))?,
+        "asset",
+    )?;
+    if asset.str_opt("version")? != Some("2.0") {
+        return Err(invalid("asset.version", "not \"2.0\""));
+    }
+    if let Some(req) = root.get("extensionsRequired")
+        && req.as_array().is_none_or(|a| !a.is_empty())
+    {
+        return Err(invalid("extensionsRequired", &format!("unsupported: {req}")));
+    }
+    match root.get("buffers") {
+        None => Ok(&[]),
+        Some(Value::Array(a)) => Ok(a.as_slice()),
+        Some(_) => Err(invalid("buffers", "not an array")),
     }
 }
 

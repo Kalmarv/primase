@@ -1,11 +1,11 @@
-//! Reader strictness: a small hand-built GLB reads; each change that could alter the geometry, or that the reader
-//! does not understand, is an error naming the item.
+//! Reader strictness: a small hand-built GLB reads, and the same document as a `.gltf` with its buffer supplied;
+//! each change that could alter the geometry, or that the reader does not understand, is an error naming the item.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
 
 use primase_core::{Semantic, Stream, Topology};
-use primase_glb::Gltf;
+use primase_glb::{AccessorData, ComponentType, ElementType, Gltf};
 use serde_json::{Value, json};
 
 /// Positions of one triangle, then unsigned-byte indices, then a unorm8 VEC2 texcoord with a 4-byte stride.
@@ -85,11 +85,6 @@ fn rejects_what_it_does_not_read() {
             "skin attribute",
             |d| d["meshes"][0]["primitives"][0]["attributes"]["JOINTS_0"] = json!(0),
             "JOINTS_0",
-        ),
-        (
-            "custom attribute",
-            |d| d["meshes"][0]["primitives"][0]["attributes"]["_ID"] = json!(0),
-            "_ID",
         ),
         (
             "aliasing set name",
@@ -258,4 +253,130 @@ fn buffer_length_is_checked() {
     assert!(parse(u64::MAX, &[]).is_err());
     // an empty buffer: whatever the accessors make of it, the length check doesn't panic
     let _ = parse(0, &[]);
+}
+
+/// The base document as a `.gltf`: its buffer named by a uri.
+fn gltf_doc() -> Value {
+    let mut d = doc();
+    d["buffers"][0]["uri"] = json!("tri.bin");
+    d
+}
+
+fn from_gltf(d: &Value, bin: Vec<u8>) -> Result<Gltf, String> {
+    let mut bin = Some(bin);
+    Gltf::from_gltf(&serde_json::to_vec(d).unwrap(), |i, uri| {
+        assert_eq!((i, uri), (0, "tri.bin"));
+        bin.take().ok_or_else(|| "asked twice".to_owned())
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// A `.gltf` whose buffer the caller supplies reads as the same document in a GLB does.
+#[test]
+fn a_gltf_reads_with_the_buffer_the_caller_supplies() {
+    let g = from_gltf(&gltf_doc(), bin()).unwrap();
+    assert_eq!(g.read_mesh(0).unwrap(), read(&doc()).unwrap());
+    assert_eq!(g.buffer(0).unwrap(), bin().as_slice());
+    assert!(g.buffer(1).is_err());
+}
+
+/// A `.gltf`'s buffers: each needs a uri and exactly its byteLength bytes; the caller's error names the uri.
+#[test]
+fn a_gltf_buffer_is_checked() {
+    let mut d = gltf_doc();
+    d["buffers"][0].as_object_mut().unwrap().remove("uri");
+    let e = from_gltf(&d, bin()).unwrap_err();
+    assert!(e.contains("buffers[0]") && e.contains("no uri"), "{e}");
+    let e = from_gltf(&gltf_doc(), bin()[..48].to_vec()).unwrap_err();
+    assert!(
+        e.contains("byteLength 52 does not match the 48-byte buffer tri.bin"),
+        "{e}"
+    );
+    let e = Gltf::from_gltf(&serde_json::to_vec(&gltf_doc()).unwrap(), |_, _| {
+        Err("not in the archive".to_owned())
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("tri.bin: not in the archive"), "{e}");
+    let mut d = gltf_doc();
+    d["extensionsRequired"] = json!(["KHR_draco_mesh_compression"]);
+    assert!(from_gltf(&d, bin()).unwrap_err().contains("extensionsRequired"));
+    // used, not required: the caller reads it from the JSON
+    let mut d = gltf_doc();
+    d["extensionsUsed"] = json!(["KHR_materials_specular"]);
+    d["materials"][0]["extensions"] = json!({"KHR_materials_specular": {"specularFactor": 0.5}});
+    assert!(from_gltf(&d, bin()).unwrap().read_mesh(0).is_ok());
+}
+
+/// Views pick their buffer: positions in a second buffer read from it, and a view naming no buffer is an error.
+#[test]
+fn views_read_the_buffer_they_name() {
+    let mut d = gltf_doc();
+    d["buffers"] = json!([{"byteLength": 52, "uri": "tri.bin"}, {"byteLength": 36, "uri": "far.bin"}]);
+    d["bufferViews"][0] = json!({"buffer": 1, "byteOffset": 0, "byteLength": 36});
+    let mut far = Vec::new();
+    for v in [0.0f32, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0, 0.0] {
+        far.extend_from_slice(&v.to_le_bytes());
+    }
+    d["accessors"][0]["max"] = json!([2, 2, 0]);
+    let json = serde_json::to_vec(&d).unwrap();
+    let g = Gltf::from_gltf(&json, |i, _| Ok(if i == 0 { bin() } else { far.clone() })).unwrap();
+    assert_eq!(
+        g.read_mesh(0).unwrap().primitives[0]
+            .primitive
+            .streams
+            .get(&Semantic::Position),
+        Some(&Stream::F32x3(vec![
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0]
+        ]))
+    );
+    d["bufferViews"][0]["buffer"] = json!(2);
+    let json = serde_json::to_vec(&d).unwrap();
+    let e = Gltf::from_gltf(&json, |i, _| Ok(if i == 0 { bin() } else { far.clone() }))
+        .unwrap()
+        .read_mesh(0)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("buffer 2 does not exist"), "{e}");
+}
+
+/// An application-specific attribute (`_...`) is returned as stored, its view's stride removed; its count must be
+/// POSITION's, and a normalized float is not a glTF accessor.
+#[test]
+fn application_specific_attributes_are_returned_as_stored() {
+    let mut d = doc();
+    d["meshes"][0]["primitives"][0]["attributes"]["_COLOR_SHIFT"] = json!(2);
+    let m = read(&d).unwrap();
+    assert_eq!(
+        m.primitives[0].custom["_COLOR_SHIFT"],
+        AccessorData {
+            component: ComponentType::U8,
+            normalized: true,
+            element: ElementType::Vec2,
+            count: 3,
+            bytes: vec![0, 0, 255, 0, 0, 255],
+        }
+    );
+    // the same accessor still serves TEXCOORD_0; the custom attribute is not a stream
+    assert_eq!(m.primitives[0].primitive.streams.len(), 2);
+    let mut short = d.clone();
+    short["accessors"][2]["count"] = json!(2);
+    short["meshes"][0]["primitives"][0]["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("TEXCOORD_0");
+    let e = read(&short).unwrap_err();
+    assert!(e.contains("_COLOR_SHIFT count differs from POSITION's 3"), "{e}");
+    let mut float = d.clone();
+    float["accessors"].as_array_mut().unwrap().push(json!(
+        {"bufferView": 0, "componentType": 5126, "normalized": true, "count": 3, "type": "VEC3"}
+    ));
+    float["meshes"][0]["primitives"][0]["attributes"]["_COLOR_SHIFT"] = json!(3);
+    let e = read(&float).unwrap_err();
+    assert!(
+        e.contains("_COLOR_SHIFT") && e.contains("F32 is normalized"),
+        "{e}"
+    );
 }

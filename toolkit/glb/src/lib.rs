@@ -1,7 +1,8 @@
 //! The GLB codec, shared by everything that reads or writes glTF binaries.
 //!
 //! - [`parse`] / [`assemble`] / [`Document`]: the container (glTF 2.0 §4.4).
-//! - [`Gltf`]: the strict reader, meshes into [`primase_core::Mesh`].
+//! - [`Gltf`]: the strict reader of a GLB, or of a `.gltf` whose buffers the caller supplies, meshes into
+//!   [`primase_core::Mesh`].
 //! - [`load_mesh_files`]: a reader's load step, `core.mesh_file` prototypes into `core.mesh`; [`mesh_file_box`]: a
 //!   mesh file's box from its JSON alone.
 //! - [`Buffers`]: a primitive's vertex streams and indices as accessors in one binary buffer, the encoding every
@@ -23,7 +24,7 @@ use primase_core::Entity;
 pub use container::{Chunks, Document, assemble, parse};
 pub use encode::{Buffers, PrimitiveAccessors, encode_mesh};
 pub use load::{LoadReport, load_mesh_files, mesh_file_box};
-pub use read::{Gltf, ReadMesh, ReadPrimitive};
+pub use read::{AccessorData, ComponentType, ElementType, Gltf, ReadMesh, ReadPrimitive};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
