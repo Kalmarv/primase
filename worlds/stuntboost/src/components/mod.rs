@@ -273,6 +273,65 @@ mod tests {
         );
         assert!(StuntboostPhysics::parse("bake_mat_0").is_none());
     }
+
+    /// `_COLOR_SHIFT` as stored: two bytes per vertex, vertex `i`'s bytes `[base + i, base + i]`.
+    fn shift(base: u8, vertices: u8) -> BTreeMap<String, StuntboostAttribute> {
+        BTreeMap::from([(
+            "_COLOR_SHIFT".to_string(),
+            StuntboostAttribute {
+                component: "U8".into(),
+                normalized: true,
+                element: "Vec2".into(),
+                count: usize::from(vertices),
+                bytes: (0..vertices).flat_map(|i| [base + i, base + i]).collect(),
+            },
+        )])
+    }
+
+    /// A two-primitive prototype rebuilt keeping primitive 1 only: its attributes are primitive 1's, not primitive
+    /// 0's.
+    #[test]
+    fn attributes_follow_a_rebuild_of_the_primitives() {
+        let mut w = primase_core::World::new();
+        let e = w.spawn();
+        w.insert(e, StuntboostAttributes(vec![shift(0, 3), shift(100, 4)]));
+        w.remap_primitives(e, &[1]).unwrap();
+        assert_eq!(
+            w.get::<StuntboostAttributes>(e),
+            Some(&StuntboostAttributes(vec![shift(100, 4)]))
+        );
+        assert!(
+            w.remap_primitives(e, &[0, 1])
+                .unwrap_err()
+                .contains("primitive 1 of 1")
+        );
+    }
+
+    /// A primitive's vertices compacted (its vertices 3 and 1 kept, in that order): its attribute's elements follow
+    /// them, the other primitive's stay; a primitive with no attribute holds nothing per vertex; an index past the
+    /// count fails naming the attribute, changing nothing.
+    #[test]
+    fn attributes_follow_a_compaction_of_a_primitive_s_vertices() {
+        let mut w = primase_core::World::new();
+        let e = w.spawn();
+        w.insert(
+            e,
+            StuntboostAttributes(vec![shift(0, 3), shift(100, 4), BTreeMap::new()]),
+        );
+        w.remap_vertices(e, 1, &[3, 1]).unwrap();
+        let a = &w.get::<StuntboostAttributes>(e).unwrap().0;
+        let moved = &a[1]["_COLOR_SHIFT"];
+        assert_eq!(
+            (moved.count, moved.bytes.as_slice()),
+            (2, &[103, 103, 101, 101][..])
+        );
+        assert_eq!(a[0], shift(0, 3));
+        w.remap_vertices(e, 2, &[0]).unwrap();
+        let before = w.get::<StuntboostAttributes>(e).cloned();
+        let err = w.remap_vertices(e, 0, &[3]).unwrap_err();
+        assert!(err.contains("_COLOR_SHIFT: vertex 3 of 3"), "{err}");
+        assert_eq!(w.get::<StuntboostAttributes>(e).cloned(), before);
+    }
 }
 
 /// An application-specific vertex attribute of a primitive as stored (`_COLOR_SHIFT`: the outline offset the game's
@@ -288,6 +347,34 @@ pub struct StuntboostAttribute {
     pub bytes: Vec<u8>,
 }
 
+impl StuntboostAttribute {
+    /// The attribute of a primitive whose vertices were compacted or reordered: new element `i` is old element
+    /// `from[i]`, each element's bytes as stored. An error for an index past its count, or bytes that are not whole
+    /// elements.
+    pub fn remap(&self, from: &[u32]) -> Result<StuntboostAttribute, String> {
+        let stride = match self.count {
+            0 => 0,
+            n if self.bytes.len().is_multiple_of(n) => self.bytes.len() / n,
+            n => return Err(format!("{} bytes for {n} elements", self.bytes.len())),
+        };
+        let mut bytes = Vec::with_capacity(from.len() * stride);
+        for &i in from {
+            let i = i as usize;
+            if i >= self.count {
+                return Err(format!("vertex {i} of {}", self.count));
+            }
+            bytes.extend_from_slice(&self.bytes[i * stride..(i + 1) * stride]);
+        }
+        Ok(StuntboostAttribute {
+            component: self.component.clone(),
+            normalized: self.normalized,
+            element: self.element.clone(),
+            count: from.len(),
+            bytes,
+        })
+    }
+}
+
 impl From<&primase_glb::AccessorData> for StuntboostAttribute {
     fn from(a: &primase_glb::AccessorData) -> StuntboostAttribute {
         StuntboostAttribute {
@@ -300,7 +387,8 @@ impl From<&primase_glb::AccessorData> for StuntboostAttribute {
     }
 }
 
-/// A prototype's application-specific vertex attributes, by primitive (in the mesh's order), by name.
+/// A prototype's application-specific vertex attributes, by primitive (in the mesh's order), by name. They follow a
+/// rebuild of the mesh's primitives and a compaction of a primitive's vertices.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StuntboostAttributes(pub Vec<BTreeMap<String, StuntboostAttribute>>);
 
@@ -308,6 +396,31 @@ impl Component for StuntboostAttributes {
     const NAME: &'static str = "stuntboost.attributes";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(StuntboostAttributes))
+    }
+    /// `None` for a primitive with no attribute.
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        let Some(named) = self.0.get(primitive) else {
+            return Some(Err(format!("primitive {primitive} of {}", self.0.len())));
+        };
+        if named.is_empty() {
+            return None;
+        }
+        let remapped: Result<BTreeMap<String, StuntboostAttribute>, String> = named
+            .iter()
+            .map(|(n, a)| {
+                a.remap(from)
+                    .map(|a| (n.clone(), a))
+                    .map_err(|m| format!("{n}: {m}"))
+            })
+            .collect();
+        Some(remapped.map(|named| {
+            let mut out = self.0.clone();
+            out[primitive] = named;
+            StuntboostAttributes(out)
+        }))
     }
 }
 
