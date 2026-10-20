@@ -378,6 +378,7 @@ fn the_finalize_stage_decides_as_the_whole_map() {
 fn the_budget_refuses_a_part_and_summaries_without_cell_counts() {
     let scope = primase_core::convert::PartScope {
         roots: Default::default(),
+        shared: Default::default(),
         context: Default::default(),
         whole: false,
         area: None,

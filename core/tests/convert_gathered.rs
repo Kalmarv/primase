@@ -137,6 +137,7 @@ impl PartSource for OrderedParts {
         self.next += 1;
         Ok(Some(Part {
             roots: BTreeSet::from([self.placements[i]]),
+            shared: BTreeSet::new(),
             context: BTreeSet::new(),
             whole: false,
             area: None,

@@ -106,6 +106,22 @@ pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Resul
     Ok(())
 }
 
+/// What a part asks the reader to load: its roots, what it shares and its context. What it shares is another part's,
+/// so it cannot also be one of its roots (sharing would take away that root's ownership) or its context; the part
+/// source is refused, naming the entity.
+fn asked(
+    roots: &BTreeSet<Entity>,
+    shared: &BTreeSet<Entity>,
+    context: &BTreeSet<Entity>,
+) -> Result<BTreeSet<Entity>> {
+    for (set, what) in [(roots, "one of its roots"), (context, "its context")] {
+        if let Some(e) = shared.intersection(set).next() {
+            return Err(format!("part source: a part shares {e:?}, which is also {what}").into());
+        }
+    }
+    Ok(roots.iter().chain(shared).chain(context).copied().collect())
+}
+
 /// One part to load: the roots it outputs, and the context its passes need around them (neighbouring placements a
 /// collision or normal operation reads). The reader loads both; only the roots' closure, with what the passes placed
 /// for it, goes to the writer, so content a part only reads is written by the part that owns it. The passes see which
@@ -114,6 +130,11 @@ pub fn check_load_emits(selected: &World, part: &World, emits: &[&str]) -> Resul
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub roots: BTreeSet<Entity>,
+    /// Entities the part writes a share of and another part owns (a placement whose elements are divided among the
+    /// parts holding them): loaded and output with the roots, but content its passes make from them
+    /// ([`crate::pass::PassLog::place_from`]) is their owner's, left to it as content made from the context is, so it is
+    /// written once whatever the division.
+    pub shared: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
     /// Whether this part is the whole of what is written: every selected entity, nothing in another part. Stated by
     /// the source (no default): an operation that needs the whole refuses a part that is not.
@@ -163,6 +184,7 @@ impl PartSource for WholeWorld {
         self.given = true;
         Ok(Some(Part {
             roots: self.planned.clone(),
+            shared: BTreeSet::new(),
             context: BTreeSet::new(),
             whole: true,
             area: None,
@@ -203,6 +225,8 @@ pub struct PartitionGroup {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartScope {
     pub roots: BTreeSet<Entity>,
+    /// The part's [`Part::shared`]: output with the roots, owned by another part.
+    pub shared: BTreeSet<Entity>,
     pub context: BTreeSet<Entity>,
     /// The part's [`Part::whole`]: whether it is the whole of what is written.
     pub whole: bool,
@@ -214,8 +238,8 @@ pub struct PartScope {
     pub first_made: Option<u32>,
     /// What the part's passes declared as its output so far ([`crate::pass::PassLog::place`]): `true`, the part's own
     /// (placed with no source, or from an entity in the roots' closure when it was placed); `false`, placed from an
-    /// entity it only loaded as context ([`crate::pass::PassLog::place_from`]: that part's). Classified when declared,
-    /// so a source a later pass removes does not change it. The pass manager adds each pass's declarations after it
+    /// entity it only loaded as context or shares ([`crate::pass::PassLog::place_from`]: that part's). Classified when
+    /// declared, so a source a later pass removes does not change it. The pass manager adds each pass's declarations after it
     /// runs ([`PartScope::declare`]); empty in a scope composed by hand.
     pub placed: BTreeMap<Entity, bool>,
 }
@@ -233,10 +257,11 @@ pub struct PartOutput {
 }
 
 impl PartScope {
-    /// The part's output in `w`: the closure of its roots and of what its passes placed, but for what they placed
-    /// from an entity outside the roots' closure (its context's: that part's). Context is not output unless the output
-    /// reaches it; what the passes made and did not place is not output unless it reaches it. The one rule: the
-    /// conversion writes it, and a pass that needs what a part owns (a summary of its content) asks it.
+    /// The part's output in `w`: the closure of its roots, of what it shares and of what its passes placed, but for
+    /// what they placed from an entity it does not own (its context's or a shared entity's: that part's). Context is
+    /// not output unless the output reaches it; what the passes made and did not place is not output unless it reaches
+    /// it. The one rule: the conversion writes it, and a pass that needs what a part owns (a summary of its content)
+    /// asks it.
     pub fn output(&self, w: &World) -> PartOutput {
         let mut out = PartOutput::default();
         for (&e, &own) in self.placed.iter().filter(|(e, _)| w.is_alive(**e)) {
@@ -246,14 +271,17 @@ impl PartScope {
                 out.from_context.insert(e);
             }
         }
-        out.keep = w.closure(self.roots.iter().chain(&out.placed).copied());
+        out.keep = w.closure(self.roots.iter().chain(&self.shared).chain(&out.placed).copied());
         out
     }
 
-    /// What the part owns in `w` now: the closure of its roots and of what its passes declared as its own.
+    /// What the part owns in `w` now: the closure of its roots and of what its passes declared as its own, but for
+    /// what it shares (another part's, also where something it owns reaches it).
     pub fn owned(&self, w: &World) -> BTreeSet<Entity> {
         let own = self.placed.iter().filter(|(e, own)| **own && w.is_alive(**e));
-        w.closure(self.roots.iter().copied().chain(own.map(|(e, _)| *e)))
+        let mut owned = w.closure(self.roots.iter().copied().chain(own.map(|(e, _)| *e)));
+        owned.retain(|e| !self.shared.contains(e));
+        owned
     }
 
     /// A pass's declarations (`placed`, with their sources `placed_from`) added to `w`'s part scope, each classified
@@ -302,10 +330,17 @@ impl PartScope {
 impl Resource for PartScope {
     const NAME: &'static str = "core.part_scope";
     fn references(&self, out: &mut Vec<Entity>) {
-        out.extend(self.roots.iter().chain(&self.context).copied());
+        out.extend(
+            self.roots
+                .iter()
+                .chain(&self.shared)
+                .chain(&self.context)
+                .copied(),
+        );
     }
     fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
         self.roots.retain(|&e| keep(e));
+        self.shared.retain(|&e| keep(e));
         self.context.retain(|&e| keep(e));
     }
 }
@@ -432,6 +467,7 @@ impl PartSource for PlannedParts {
         Ok(self.groups.next().map(|g| Part {
             whole: single && g.context.is_empty(),
             roots: g.roots,
+            shared: BTreeSet::new(),
             context: g.context,
             area: g.area,
         }))
@@ -548,6 +584,8 @@ pub struct PartReport {
     pub ordinal: usize,
     /// The roots asked for. Entity ids are the planning world's; a pass's own entities are the part's.
     pub roots: BTreeSet<Entity>,
+    /// What it shares with the part that owns it ([`Part::shared`]).
+    pub shared: BTreeSet<Entity>,
     /// The context loaded with them, not written by this part.
     pub context: BTreeSet<Entity>,
     /// The reader's report on loading it.
@@ -1139,6 +1177,7 @@ fn run(
             let mut kept = Vec::new();
             while let Some(Part {
                 roots,
+                shared,
                 context,
                 whole,
                 area,
@@ -1146,7 +1185,7 @@ fn run(
             {
                 let ordinal = kept.len();
                 *during = format!("summary {ordinal}: load");
-                let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+                let asked = asked(&roots, &shared, &context)?;
                 let loaded = reader.load(&world, &asked);
                 report.reported.extend(reader.notices());
                 let (mut part, loaded) = loaded?;
@@ -1158,6 +1197,7 @@ fn run(
                 let first_made = Some(part.next_index());
                 part.insert_resource(PartScope {
                     roots,
+                    shared,
                     context,
                     whole,
                     area,
@@ -1204,6 +1244,7 @@ fn run(
     };
     while let Some(Part {
         roots,
+        shared,
         context,
         whole,
         area,
@@ -1211,7 +1252,7 @@ fn run(
     {
         let ordinal = report.part_reports.len();
         *during = format!("part {ordinal}: load");
-        let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+        let asked = asked(&roots, &shared, &context)?;
         let loaded = reader.load(&world, &asked);
         report.reported.extend(reader.notices());
         let (mut part, loaded) = loaded?;
@@ -1229,6 +1270,7 @@ fn run(
         report.part_reports.push(PartReport {
             ordinal,
             roots: roots.clone(),
+            shared: shared.clone(),
             context: context.clone(),
             load: loaded,
             ..PartReport::default()
@@ -1241,6 +1283,7 @@ fn run(
         let first_made = Some(part.next_index());
         part.insert_resource(PartScope {
             roots: roots.clone(),
+            shared: shared.clone(),
             context: context.clone(),
             whole,
             area,
@@ -1342,6 +1385,7 @@ fn gather(
     // need, which the spool takes; nothing is written
     while let Some(Part {
         roots,
+        shared,
         context,
         whole,
         area,
@@ -1349,7 +1393,7 @@ fn gather(
     {
         let ordinal = report.gather_runs.len();
         *during = format!("gather {ordinal}: load");
-        let asked: BTreeSet<Entity> = roots.union(&context).copied().collect();
+        let asked = asked(&roots, &shared, &context)?;
         let loaded = reader.load(world, &asked);
         report.reported.extend(reader.notices());
         let (mut part, loaded) = loaded?;
@@ -1360,6 +1404,7 @@ fn gather(
         let first_made = Some(part.next_index());
         part.insert_resource(PartScope {
             roots,
+            shared,
             context,
             whole,
             area,

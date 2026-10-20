@@ -260,6 +260,7 @@ fn no_ambient_or_a_black_one_makes_no_lights_and_a_part_is_refused() {
     let mut part = w.clone();
     part.insert_resource(PartScope {
         roots: Default::default(),
+        shared: Default::default(),
         context: Default::default(),
         whole: false,
         area: None,
@@ -272,6 +273,7 @@ fn no_ambient_or_a_black_one_makes_no_lights_and_a_part_is_refused() {
     let mut whole = w.clone();
     whole.insert_resource(PartScope {
         roots: Default::default(),
+        shared: Default::default(),
         context: Default::default(),
         whole: true,
         area: None,

@@ -134,6 +134,7 @@ impl PartSource for ToyParts {
     fn next_part(&mut self) -> Result<Option<Part>> {
         Ok(self.placements.pop().map(|e| Part {
             roots: BTreeSet::from([e]),
+            shared: BTreeSet::new(),
             context: BTreeSet::new(),
             whole: false,
             area: None,
@@ -1378,6 +1379,7 @@ fn a_parts_output_is_its_roots_and_what_it_declared() {
     }
     w.insert_resource(PartScope {
         roots: BTreeSet::from([root]),
+        shared: BTreeSet::new(),
         context: BTreeSet::from([halo]),
         whole: false,
         area: None,
@@ -1397,6 +1399,101 @@ fn a_parts_output_is_its_roots_and_what_it_declared() {
     assert_eq!(out.from_context, BTreeSet::from([from_halo]));
     assert!(!out.keep.contains(&temporary) && !out.keep.contains(&halo));
     assert!(out.keep.contains(&from_root) && out.keep.contains(&alone));
+}
+
+/// What a part shares (`Part::shared`, a placement whose elements several parts write, owned by one) is output with its
+/// roots, but not its own: what its passes place from it is the owner's, also where a root reaches it.
+#[test]
+fn what_a_part_shares_is_output_and_what_is_made_from_it_is_the_owners() {
+    let mut w = World::new();
+    let split = w.spawn();
+    w.insert(split, Name("split".into()));
+    let root = w.spawn();
+    // the root reaches what is shared: still not the part's
+    w.insert(
+        root,
+        Instance {
+            prototype: split,
+            variant: 0,
+        },
+    );
+    let (from_root, from_split) = (w.spawn(), w.spawn());
+    for e in [from_root, from_split] {
+        w.insert(e, Name("made".into()));
+    }
+    w.insert_resource(PartScope {
+        roots: BTreeSet::from([root]),
+        shared: BTreeSet::from([split]),
+        context: BTreeSet::new(),
+        whole: false,
+        area: None,
+        first_made: Some(from_root.index()),
+        placed: BTreeMap::new(),
+    });
+    let scope = w.resource::<PartScope>().unwrap().clone();
+    assert_eq!(scope.owned(&w), BTreeSet::from([root]));
+    PartScope::declare(
+        &mut w,
+        &BTreeSet::from([from_root, from_split]),
+        &BTreeMap::from([(from_root, root), (from_split, split)]),
+        &BTreeSet::new(),
+    );
+    let out = w.resource::<PartScope>().unwrap().output(&w);
+    assert_eq!(out.placed, BTreeSet::from([from_root]));
+    assert_eq!(out.from_context, BTreeSet::from([from_split]));
+    assert_eq!(out.keep, BTreeSet::from([root, split, from_root]));
+}
+
+/// A part source whose part shares one of its roots, or its context, is refused before anything is loaded: what a part
+/// shares is another part's, and sharing a root would take away its ownership.
+#[test]
+fn a_part_sharing_its_own_root_or_context_is_refused() {
+    /// One part: the first placement shared, and also a root (`as_root`) or context.
+    struct Sharing {
+        as_root: bool,
+        part: Option<Part>,
+    }
+    impl PartSource for Sharing {
+        fn plan(&mut self, world: &World, _boxes: &dyn Fn(Entity) -> Option<[[f64; 3]; 2]>) -> Result<()> {
+            let placed: Vec<Entity> = world.iter::<Instance>().map(|(e, _)| e).collect();
+            let (a, b) = (placed[0], placed[1]);
+            self.part = Some(Part {
+                roots: if self.as_root {
+                    BTreeSet::from([a, b])
+                } else {
+                    BTreeSet::from([b])
+                },
+                shared: BTreeSet::from([a]),
+                context: if self.as_root {
+                    BTreeSet::new()
+                } else {
+                    BTreeSet::from([a])
+                },
+                whole: false,
+                area: None,
+            });
+            Ok(())
+        }
+        fn next_part(&mut self) -> Result<Option<Part>> {
+            Ok(self.part.take())
+        }
+    }
+    for (as_root, what) in [(true, "also one of its roots"), (false, "also its context")] {
+        let mut toy = reader(2);
+        let (w, _) = writer(Target::new("t").carry_unknown());
+        let err = convert_parts(
+            &mut toy,
+            &mut Sharing { as_root, part: None },
+            w,
+            &PassManager::new(PassRegistry::new()),
+            &Pipeline { passes: Vec::new() },
+            &Pipeline { passes: Vec::new() },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(what), "{err}");
+        assert!(toy.loads.is_empty());
+        events();
+    }
 }
 
 /// Declared output derived from declared output is the part's, whatever generation and order: a placement from one an
@@ -1421,6 +1518,7 @@ fn declared_output_from_declared_output_is_the_parts() {
     };
     w.insert_resource(PartScope {
         roots: BTreeSet::from([root]),
+        shared: BTreeSet::new(),
         context: BTreeSet::from([halo]),
         whole: false,
         area: None,

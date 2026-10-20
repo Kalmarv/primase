@@ -361,6 +361,7 @@ fn a_part_whose_area_does_not_hold_a_markers_search_is_refused() {
     }
     w.insert_resource(PartScope {
         roots: roots.clone(),
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,
@@ -384,6 +385,7 @@ fn a_part_whose_area_does_not_hold_a_markers_search_is_refused() {
         }
         w.insert_resource(PartScope {
             roots: roots.clone(),
+            shared: Default::default(),
             context: BTreeSet::new(),
             whole: false,
             area: Some([-1e4, -1e4, 1e4, 1e4]),

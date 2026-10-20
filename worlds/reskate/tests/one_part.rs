@@ -154,6 +154,7 @@ fn run_each(scope: Option<&Part>, with_plan: bool) -> Vec<(&'static str, Result<
             if let Some(scope) = scope {
                 w.insert_resource(PartScope {
                     roots: scope.roots.clone(),
+                    shared: scope.shared.clone(),
                     context: scope.context.clone(),
                     whole: scope.whole,
                     area: scope.area,
@@ -203,6 +204,7 @@ fn a_part_not_stated_whole_is_refused_and_the_whole_map_is_taken() {
     refused(
         &Part {
             roots: all.iter().copied().filter(|&e| e != placed[1]).collect(),
+            shared: Default::default(),
             context: BTreeSet::new(),
             whole: false,
             area: None,

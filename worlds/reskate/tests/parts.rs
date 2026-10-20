@@ -205,6 +205,7 @@ impl PartSource for Groups {
         self.next += 1;
         Ok(Some(Part {
             roots: self.groups[g].clone(),
+            shared: Default::default(),
             context: BTreeSet::new(),
             whole: self.parts == 1,
             area: None,
@@ -408,6 +409,7 @@ fn a_part_takes_only_the_decision_made_for_its_settings() {
     let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
     w.insert_resource(primase_core::convert::PartScope {
         roots,
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,
@@ -438,6 +440,7 @@ fn the_light_cap_over_parts_is_the_whole_maps_in_any_order() {
     let roots: BTreeSet<Entity> = w.iter::<SkateLight>().map(|(e, _)| e).step_by(3).collect();
     w.insert_resource(primase_core::convert::PartScope {
         roots,
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,
@@ -667,6 +670,7 @@ fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
     let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
     w.insert_resource(primase_core::convert::PartScope {
         roots,
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,
@@ -744,6 +748,7 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
     let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
     w.insert_resource(primase_core::convert::PartScope {
         roots,
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,
@@ -840,6 +845,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
     let roots: BTreeSet<Entity> = w.iter::<Instance>().map(|(e, _)| e).take(5).collect();
     w.insert_resource(primase_core::convert::PartScope {
         roots,
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: false,
         area: None,

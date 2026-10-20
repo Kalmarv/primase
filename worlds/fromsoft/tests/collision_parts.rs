@@ -185,12 +185,14 @@ fn two_parts_with_a_halo_write_each_file_and_body_once() {
     let parts = convert(&mut Fixed(vec![
         Part {
             roots: BTreeSet::from([a, pa]),
+            shared: BTreeSet::new(),
             context: BTreeSet::from([b, pb]),
             whole: false,
             area: None,
         },
         Part {
             roots: BTreeSet::from([b, pb]),
+            shared: BTreeSet::new(),
             context: BTreeSet::from([a, pa]),
             whole: false,
             area: None,

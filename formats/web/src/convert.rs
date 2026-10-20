@@ -133,6 +133,7 @@ impl PartSource for TileParts {
             tiles.asked = Some(Asked::Split(e));
             return Ok(Some(Part {
                 roots: BTreeSet::from([e, proto]),
+                shared: BTreeSet::new(),
                 context: BTreeSet::new(),
                 whole: false,
                 // no context loaded: it states no area
@@ -147,6 +148,7 @@ impl PartSource for TileParts {
                 tiles.asked = Some(Asked::Cell(c));
                 Some(Part {
                     roots: tiles.plans[0].roots(c),
+                    shared: BTreeSet::new(),
                     context: BTreeSet::new(),
                     whole: false,
                     area: None,

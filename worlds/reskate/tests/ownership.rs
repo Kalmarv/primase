@@ -70,6 +70,7 @@ impl PartSource for Given {
 fn part(roots: &[Entity], context: &[Entity]) -> Part {
     Part {
         roots: roots.iter().copied().collect(),
+        shared: Default::default(),
         context: context.iter().copied().collect(),
         whole: false,
         area: None,
@@ -390,6 +391,7 @@ fn made_lights_are_owned_as_conversion_writes_them() {
     };
     let whole = run(vec![Part {
         roots: BTreeSet::from([s1, s2]),
+        shared: Default::default(),
         context: BTreeSet::new(),
         whole: true,
         area: None,
