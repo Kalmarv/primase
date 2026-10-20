@@ -17,12 +17,19 @@ pub mod read;
 
 pub use read::{MarkersReport, read_markers, read_voronoi_programs};
 
-/// Registers SkateBIRD's passes by name: `lower-skatebird-voronoi`, which takes no option.
+/// Registers SkateBIRD's passes by name: `lower-skatebird-voronoi`, whose options (`keywords`, `tier`, `cells`,
+/// `max-texels`) are the program's choices, without defaults.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register("lower-skatebird-voronoi", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(passes::voronoi::LowerSkatebirdVoronoi)),
-    });
+    reg.register_requiring(
+        "lower-skatebird-voronoi",
+        |o| Ok(Box::new(passes::voronoi::LowerSkatebirdVoronoi::from_options(o)?)),
+        &[
+            ("keywords", "DIRECTIONAL"),
+            ("tier", "3"),
+            ("cells", "2"),
+            ("max-texels", "1024"),
+        ],
+    );
 }
 
 #[derive(Debug, thiserror::Error)]
