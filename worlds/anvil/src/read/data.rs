@@ -3,15 +3,16 @@
 //!
 //! A data block (little-endian; offsets from the block's start):
 //! - magic 0x1004FA9957FBAA33 (u64);
-//! - the compression info, 11 bytes: version (u16), algorithm (u8), two u16 (observed 0 and 32772), block count
+//! - the compression info, 11 bytes: version (u16), algorithm (u8), two u16 (observed 0 and 32772), chunk count
 //!   (u32);
-//! - for its one block: decoded size (u32), stored size (u32), checksum (u32: Adler-32 started from 0 over the
-//!   stored bytes);
-//! - the stored bytes.
+//! - every chunk's decoded size and stored size (u32 each), in order;
+//! - then for each chunk in order: its checksum (u32: Adler-32 started from 0 over its stored bytes) and its stored
+//!   bytes.
 //!
-//! Read here: version 2, algorithm 5 (zstd: established on two Mesh resources, Riders Republic build 25394987) with
-//! one block; a block whose stored size equals its decoded size is stored raw. An entry is two consecutive blocks: a
-//! metadata block (16 bytes decoded, kept as stored) and the resource's. Anything else is refused, naming what it
+//! Read here: version 2, algorithm 5 (zstd: established on Mesh resources and a three-chunk CompiledMip, Riders
+//! Republic build 25394987); a chunk whose stored size equals its decoded size is stored raw. The block's data is its
+//! chunks' decoded bytes in order. An entry is two consecutive blocks: a metadata block (16 bytes decoded, kept as
+//! stored) and the resource's. Anything else is refused, naming what it
 //! found. A forge's `GlobalMetaFile` entry has no block magic: it is not data blocks, and is refused as such.
 #![deny(
     clippy::arithmetic_side_effects,
@@ -39,19 +40,29 @@ pub enum Error {
     Version { at: usize, version: u16 },
     #[error("block at {at}: compression algorithm {algorithm}: only algorithm 5 (zstd) is read")]
     Algorithm { at: usize, algorithm: u8 },
-    #[error("block at {at}: {count} blocks: only one is read")]
-    Blocks { at: usize, count: u32 },
-    #[error("block at {at}: stored size {stored}, decoded size {decoded}: {why}")]
+    #[error("block at {at}: {count} chunks: {why}")]
+    Chunks {
+        at: usize,
+        count: u32,
+        why: &'static str,
+    },
+    #[error("block at {at}, chunk {chunk}: stored size {stored}, decoded size {decoded}: {why}")]
     Size {
         at: usize,
+        chunk: usize,
         stored: u32,
         decoded: u32,
         why: &'static str,
     },
     #[error(
-        "block at {at}: checksum {stored:08x}, computed {computed:08x} (Adler-32 from 0 over the stored bytes)"
+        "block at {at}, chunk {chunk}: checksum {stored:08x}, computed {computed:08x} (Adler-32 from 0 over the stored bytes)"
     )]
-    Checksum { at: usize, stored: u32, computed: u32 },
+    Checksum {
+        at: usize,
+        chunk: usize,
+        stored: u32,
+        computed: u32,
+    },
     #[error("block at {at}: {source}")]
     Decode {
         at: usize,
@@ -70,6 +81,14 @@ pub enum Error {
     Resource(String),
 }
 
+/// One chunk of a block as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chunk {
+    pub decoded_size: u32,
+    pub stored_size: u32,
+    pub checksum: u32,
+}
+
 /// One data block as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
@@ -77,11 +96,16 @@ pub struct Block {
     pub algorithm: u8,
     /// The two u16 after the algorithm (observed 0 and 32772).
     pub unknown: [u16; 2],
-    pub decoded_size: u32,
-    pub stored_size: u32,
-    pub checksum: u32,
-    /// The decoded bytes (the stored bytes where they are stored raw).
+    pub chunks: Vec<Chunk>,
+    /// The chunks' decoded bytes in order (the stored bytes where a chunk is stored raw).
     pub data: Vec<u8>,
+}
+
+impl Block {
+    /// The decoded size of all its chunks.
+    pub fn decoded_size(&self) -> usize {
+        self.data.len()
+    }
 }
 
 /// An entry's two blocks: the metadata (16 bytes, as stored) and the resource.
@@ -147,30 +171,25 @@ fn u64_at(b: &[u8], at: usize, what: &'static str) -> Result<u64, Error> {
 }
 
 /// The block at `at` in `bytes`, checked and decoded, and where the next one starts. `max_decoded` bounds the decoded
-/// size the block may declare.
+/// size its chunks may declare in all.
 pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block, usize), Error> {
     let magic = u64_at(bytes, at, "block magic")?;
     if magic != BLOCK_MAGIC {
         return Err(Error::Magic { at, found: magic });
     }
-    let info = |off: usize| {
-        at.checked_add(off).ok_or(Error::Short {
-            what: "block",
-            have: bytes.len(),
-            need: usize::MAX,
-        })
+    let short = |what| Error::Short {
+        what,
+        have: bytes.len(),
+        need: usize::MAX,
     };
+    let info = |off: usize| at.checked_add(off).ok_or(short("block"));
     let version = u16_at(bytes, info(8)?, "compression version")?;
     if version != VERSION {
         return Err(Error::Version { at, version });
     }
     let algorithm = *take(bytes, info(10)?, 1, "compression algorithm")?
         .first()
-        .ok_or(Error::Short {
-            what: "compression algorithm",
-            have: 0,
-            need: 1,
-        })?;
+        .ok_or(short("compression algorithm"))?;
     if algorithm != ALGORITHM_ZSTD {
         return Err(Error::Algorithm { at, algorithm });
     }
@@ -178,53 +197,112 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
         u16_at(bytes, info(11)?, "compression info")?,
         u16_at(bytes, info(13)?, "compression info")?,
     ];
-    let count = u32_at(bytes, info(15)?, "block count")?;
-    if count != 1 {
-        return Err(Error::Blocks { at, count });
-    }
-    let decoded_size = u32_at(bytes, info(19)?, "decoded size")?;
-    let stored_size = u32_at(bytes, info(23)?, "stored size")?;
-    let checksum = u32_at(bytes, info(27)?, "checksum")?;
-    let size = |why| Error::Size {
+    let count = u32_at(bytes, info(15)?, "chunk count")?;
+    let n = usize::try_from(count).map_err(|_| Error::Chunks {
         at,
-        stored: stored_size,
-        decoded: decoded_size,
-        why,
-    };
-    let decoded = usize::try_from(decoded_size).map_err(|_| size("decoded size past this machine"))?;
-    let stored_len = usize::try_from(stored_size).map_err(|_| size("stored size past this machine"))?;
-    if decoded > max_decoded {
-        return Err(size("decoded size over the stated bound"));
-    }
-    let stored = take(bytes, info(31)?, stored_len, "stored bytes")?;
-    let computed = primase_hash::adler32(CHECKSUM_INIT, stored);
-    if computed != checksum {
-        return Err(Error::Checksum {
+        count,
+        why: "past this machine",
+    })?;
+    if n == 0 {
+        return Err(Error::Chunks {
             at,
-            stored: checksum,
-            computed,
+            count,
+            why: "a block holds at least one",
         });
     }
-    let data = if stored_len == decoded {
-        stored.to_vec()
-    } else {
-        Zstd.decompress(stored, decoded)
-            .map_err(|source| Error::Decode { at, source })?
-    };
-    let next = info(31)?
-        .checked_add(stored_len)
-        .ok_or(size("block past the entry"))?;
+    // every chunk needs 8 bytes of sizes and 4 of checksum: a count the bytes can't hold is refused before allocating
+    let tables = n.checked_mul(12).ok_or(short("chunk table"))?;
+    if tables > bytes.len().saturating_sub(at) {
+        return Err(Error::Chunks {
+            at,
+            count,
+            why: "more than the bytes can hold",
+        });
+    }
+    let mut chunks = Vec::with_capacity(n);
+    let mut total = 0usize;
+    for k in 0..n {
+        let pair = info(19)?
+            .checked_add(k.checked_mul(8).ok_or(short("chunk table"))?)
+            .ok_or(short("chunk table"))?;
+        let decoded_size = u32_at(bytes, pair, "chunk decoded size")?;
+        let stored_size = u32_at(
+            bytes,
+            pair.checked_add(4).ok_or(short("chunk table"))?,
+            "chunk stored size",
+        )?;
+        let decoded = usize::try_from(decoded_size).map_err(|_| Error::Size {
+            at,
+            chunk: k,
+            stored: stored_size,
+            decoded: decoded_size,
+            why: "decoded size past this machine",
+        })?;
+        total = total.checked_add(decoded).ok_or(short("decoded sizes"))?;
+        if total > max_decoded {
+            return Err(Error::Size {
+                at,
+                chunk: k,
+                stored: stored_size,
+                decoded: decoded_size,
+                why: "decoded sizes over the stated bound",
+            });
+        }
+        chunks.push(Chunk {
+            decoded_size,
+            stored_size,
+            checksum: 0,
+        });
+    }
+    let mut data = Vec::new();
+    data.try_reserve_exact(total)
+        .map_err(|_| short("decoded bytes"))?;
+    let mut cursor = info(19)?
+        .checked_add(n.checked_mul(8).ok_or(short("chunk table"))?)
+        .ok_or(short("chunk table"))?;
+    for (k, chunk) in chunks.iter_mut().enumerate() {
+        let size = |why| Error::Size {
+            at,
+            chunk: k,
+            stored: chunk.stored_size,
+            decoded: chunk.decoded_size,
+            why,
+        };
+        chunk.checksum = u32_at(bytes, cursor, "chunk checksum")?;
+        let from = cursor.checked_add(4).ok_or(short("chunk"))?;
+        let stored_len =
+            usize::try_from(chunk.stored_size).map_err(|_| size("stored size past this machine"))?;
+        let decoded =
+            usize::try_from(chunk.decoded_size).map_err(|_| size("decoded size past this machine"))?;
+        let stored = take(bytes, from, stored_len, "chunk stored bytes")?;
+        let computed = primase_hash::adler32(CHECKSUM_INIT, stored);
+        if computed != chunk.checksum {
+            return Err(Error::Checksum {
+                at,
+                chunk: k,
+                stored: chunk.checksum,
+                computed,
+            });
+        }
+        if stored_len == decoded {
+            data.extend_from_slice(stored);
+        } else {
+            let out = Zstd
+                .decompress(stored, decoded)
+                .map_err(|source| Error::Decode { at, source })?;
+            data.extend_from_slice(&out);
+        }
+        cursor = from.checked_add(stored_len).ok_or(size("chunk past the entry"))?;
+    }
     Ok((
         Block {
             version,
             algorithm,
             unknown,
-            decoded_size,
-            stored_size,
-            checksum,
+            chunks,
             data,
         },
-        next,
+        cursor,
     ))
 }
 

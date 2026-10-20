@@ -33,6 +33,27 @@ fn block(version: u16, algorithm: u8, count: u32, decoded: u32, stored: &[u8], c
     b
 }
 
+/// A block of several chunks, each (decoded length, stored bytes), with their checksums from 0: the sizes first,
+/// then each chunk's checksum and bytes.
+fn chunked(chunks: &[(usize, &[u8])]) -> Vec<u8> {
+    let len = |n: usize| u32::try_from(n).expect("a test length").to_le_bytes();
+    let mut b = BLOCK_MAGIC.to_le_bytes().to_vec();
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.push(5);
+    b.extend_from_slice(&0u16.to_le_bytes());
+    b.extend_from_slice(&32772u16.to_le_bytes());
+    b.extend_from_slice(&len(chunks.len()));
+    for (decoded, stored) in chunks {
+        b.extend_from_slice(&len(*decoded));
+        b.extend_from_slice(&len(stored.len()));
+    }
+    for (_, stored) in chunks {
+        b.extend_from_slice(&primase_hash::adler32(0, stored).to_le_bytes());
+        b.extend_from_slice(stored);
+    }
+    b
+}
+
 fn good(decoded: &[u8], stored: &[u8]) -> Vec<u8> {
     block(
         2,
@@ -68,7 +89,7 @@ fn an_entry_reads_its_two_blocks_and_its_resource() {
     entry.extend(good(&res, &zstd_raw(&res)));
     let e = read_entry(&entry, BOUND).unwrap();
     assert_eq!(
-        (e.metadata.data.as_slice(), e.metadata.decoded_size),
+        (e.metadata.data.as_slice(), e.metadata.decoded_size()),
         (&metadata[..], 16)
     );
     assert_eq!(e.resource.data, res);
@@ -116,8 +137,8 @@ fn what_is_not_established_is_refused() {
         Err(Error::Algorithm { .. })
     ));
     assert!(matches!(
-        read_entry(&entry(block(2, 5, 2, n, &frame, sum)), BOUND),
-        Err(Error::Blocks { .. })
+        read_entry(&entry(block(2, 5, 0, n, &frame, sum)), BOUND),
+        Err(Error::Chunks { .. })
     ));
     assert!(matches!(
         read_entry(&entry(block(2, 5, 1, n, &frame, sum ^ 1)), BOUND),
@@ -149,6 +170,34 @@ fn what_is_not_established_is_refused() {
     let mut short = res.clone();
     short.push(9);
     assert!(Resource::parse(&short).is_err());
+}
+
+/// A block of three chunks (raw, zstd, raw) decodes to their bytes in order; a chunk's wrong checksum names the chunk;
+/// a chunk count the bytes can't hold is refused before reading.
+#[test]
+fn a_block_of_chunks_decodes_in_order() {
+    let res = resource(0x1D4B_87A3, "Mip", 3, b"first second third");
+    let (a, rest) = res.split_at(10);
+    let (b, c) = rest.split_at(12);
+    let mut entry = good(&[0u8; 16], &[0u8; 16]);
+    entry.extend(chunked(&[(a.len(), a), (b.len(), &zstd_raw(b)), (c.len(), c)]));
+    let e = read_entry(&entry, BOUND).unwrap();
+    assert_eq!(e.resource.data, res);
+    assert_eq!(e.resource.chunks.len(), 3);
+    assert_eq!(e.resource.chunks[1].decoded_size, 12);
+    assert_eq!(Resource::parse(&e.resource.data).unwrap().name, "Mip");
+    // the second chunk's checksum broken
+    let mut bad = entry.clone();
+    let second = 47 + 19 + 3 * 8 + 4 + a.len();
+    bad[second] ^= 1;
+    assert!(matches!(
+        read_entry(&bad, BOUND),
+        Err(Error::Checksum { chunk: 1, .. })
+    ));
+    // a count far past the bytes
+    let mut many = good(&[0u8; 16], &[0u8; 16]);
+    many.extend(block(2, 5, 1 << 30, 1, b"x", 0));
+    assert!(matches!(read_entry(&many, BOUND), Err(Error::Chunks { .. })));
 }
 
 /// Two real Mesh resources, one per forge (Riders Republic build 25394987, hand-checked in a separate read-only
@@ -187,13 +236,11 @@ fn two_real_mesh_resources_decode() {
         );
         let bytes = f.payload(&mut File::open(&path).unwrap(), k).unwrap();
         let e = read_entry(&bytes, BOUND).unwrap();
-        assert_eq!(e.metadata.decoded_size, 16, "{var}");
+        assert_eq!(e.metadata.decoded_size(), 16, "{var}");
+        assert_eq!(e.resource.chunks.len(), 1, "{var}");
+        let c = &e.resource.chunks[0];
         assert_eq!(
-            (
-                e.resource.decoded_size,
-                e.resource.stored_size,
-                e.resource.checksum
-            ),
+            (c.decoded_size, c.stored_size, c.checksum),
             (decoded, stored, checksum),
             "{var}"
         );
@@ -211,4 +258,38 @@ fn two_real_mesh_resources_decode() {
             "{var}"
         );
     }
+}
+
+/// A real CompiledMip of three chunks (base forge entry 373, Riders Republic build 25394987; layout and values
+/// hand-checked in a separate read-only decode, games/riders-republic docs/recon/texture-layout.md, dcb4f2b): each
+/// chunk's sizes and checksum, the total, and the resource's type and name (its name record's).
+#[test]
+fn a_real_three_chunk_mip_decodes() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+        return;
+    };
+    let f = Forge::open(&path).unwrap();
+    let k = 373;
+    assert_eq!((f.index[k].offset, f.index[k].size), (3_846_990, 117_193));
+    let bytes = f.payload(&mut File::open(&path).unwrap(), k).unwrap();
+    let e = read_entry(&bytes, 1 << 21).unwrap();
+    let chunks: Vec<(u32, u32, u32)> = e
+        .resource
+        .chunks
+        .iter()
+        .map(|c| (c.decoded_size, c.stored_size, c.checksum))
+        .collect();
+    assert_eq!(
+        chunks,
+        [
+            (262_144, 56_773, 0xB97E_701B),
+            (262_144, 60_230, 0x31C3_950E),
+            (107, 88, 0x12A0_2467)
+        ]
+    );
+    assert_eq!(e.resource.decoded_size(), 524_395);
+    let r = Resource::parse(&e.resource.data).unwrap();
+    assert_eq!(r.type_id, 0x1D4B_87A3);
+    assert_eq!(r.type_id, f.names[k].type_id);
+    assert_eq!(r.name, f.names[k].name);
 }
