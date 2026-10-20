@@ -8,7 +8,7 @@ use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{LowerAnvilMesh, MeshNormals, UvV};
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
-use primase_anvil::read::mesh::StoredMesh;
+use primase_anvil::read::mesh::{self, StoredMesh};
 use primase_anvil::read::meshes::{Error, read_meshes};
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_core::frame::SourceFrame;
@@ -284,5 +284,26 @@ fn decoded_extrema_meet_the_stored_bounds() {
             .map(|v| f32::from(v.scale).abs() / 32768.0)
             .fold(0.0f32, f32::max);
         assert!(off <= step, "{input} {entry}: off by {off}, a step {step}");
+    }
+}
+
+/// A Mesh of another compiled layout (`MeshData`'s CRC-32 at marker+13, 3 at marker+4: MAD_MOD_FAVELA_Wooden_BigTurn_B
+/// LOD0) is refused as that layout, before any of its fields is read at this layout's offsets.
+#[test]
+fn another_compiled_layout_is_refused() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+        return;
+    };
+    let mut w = World::new();
+    match read_meshes(&path, &[651_945], SourceFrame::WORLD, &mut w) {
+        Err(Error::Mesh {
+            entry: 651_945,
+            source:
+                mesh::Error::Layout {
+                    id: 0x0645_ABB5,
+                    flags: 3,
+                },
+        }) => {}
+        other => panic!("{other:?}"),
     }
 }

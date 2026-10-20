@@ -3,7 +3,8 @@
 //!
 //! The body (little-endian; offsets from the body's start, after the resource's class id and extension):
 //! - a 61-byte header, kept as stored; its bounds (two f32 triples at 20 and 36) are read;
-//! - at 61, the compiled mesh: its marker 0xFC9E1595 (u32), the vertex stride (u32 at marker+22), the range record
+//! - at 61, the compiled mesh: its marker 0xFC9E1595 (u32), a zero byte at marker+4, its layout 0xC351EE43 (u32 at
+//!   marker+13; the offsets after it are this layout's), the vertex stride (u32 at marker+22), the range record
 //!   count N (u32 at marker+63), then from marker+75 N range records, each the record id 0x07B19A87 (u32), a version
 //!   byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
 //!   carries 8 more bytes;
@@ -13,7 +14,8 @@
 //!
 //! The indices are in ranges, one per record: a range runs from its first index to the next record's (the last to the
 //! buffer's end), and its stored indices count from its vertex base; its vertices run from its base to the next
-//! record's (the last to the buffer's end). Refused, naming it: a header without the marker at 61, another stride,
+//! record's (the last to the buffer's end). Refused, naming it: a header without the marker at 61, another layout or
+//! stride,
 //! record id or version, a buffer past the body, an index buffer not of whole triangles, and ranges that don't
 //! partition the buffers in order (the first at index and vertex 0, each range at a whole triangle and at or after the
 //! one before, none past either buffer) or an index outside its range's vertices. An empty range (no indices, or no
@@ -31,8 +33,11 @@ use std::ops::Range;
 
 /// Mesh's type id (CRC-32 of its type name).
 pub const MESH: u32 = 0x415D_9568;
-/// The compiled mesh's marker.
+/// The compiled mesh's marker (CRC-32 of `CompiledMesh`).
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;
+/// The one compiled mesh layout read: the u32 at marker+13 (its name unknown), with the byte at marker+4 0. Another
+/// layout places its fields elsewhere: one with `MeshData`'s CRC-32 (0x0645ABB5) there and 3 at marker+4 is seen.
+pub const LAYOUT: u32 = 0xC351_EE43;
 /// Where the compiled mesh starts in the body.
 pub const HEADER: usize = 61;
 /// A range record's id.
@@ -51,6 +56,10 @@ pub enum Error {
     },
     #[error("Mesh body: {found:#010x} at 61, not the compiled mesh marker 0xFC9E1595")]
     Marker { found: u32 },
+    #[error(
+        "Mesh compiled layout {id:#010x} at marker+13, byte {flags} at marker+4: only 0xC351EE43 and 0 are read"
+    )]
+    Layout { id: u32, flags: u8 },
     #[error("Mesh vertex stride {0}: only 24 is read")]
     Stride(u32),
     #[error("Mesh range record {index}: {why}")]
@@ -196,6 +205,10 @@ impl StoredMesh {
         let found = word(0);
         if found != COMPILED_MESH {
             return Err(Error::Marker { found });
+        }
+        let (id, flags) = (word(13), compiled_head.get(4).copied().unwrap_or_default());
+        if (id, flags) != (LAYOUT, 0) {
+            return Err(Error::Layout { id, flags });
         }
         let stride = word(22);
         if stride != STRIDE {
