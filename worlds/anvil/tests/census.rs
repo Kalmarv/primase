@@ -4,6 +4,99 @@
 //!
 //! Run by hand (about 24 GB read for Riders Republic): `PRIMASE_ANVIL_DIR=<folder> cargo test -p primase-anvil --test
 //! census -- --ignored --nocapture`.
+//!
+//! With `PRIMASE_ANVIL_RRAS_MESHES` (RRAssetStudio's read of every Mesh), every Mesh primase reads is also compared
+//! with the third-party tool's: vertex and triangle counts, the submesh partition and material ids, and the
+//! SHA-256s of its positions (f32 little-endian, in stored order, no frame) and absolute indices (u32
+//! little-endian, in stored order and winding). Each difference is counted with examples, under `vs RRAssetStudio`.
+
+/// RRAssetStudio's row for a mesh, by forge file name and entry.
+type Oracle = std::collections::HashMap<(String, usize), Value>;
+
+fn oracle() -> Option<Oracle> {
+    let dir = real_data("PRIMASE_ANVIL_RRAS_MESHES")?;
+    let text = std::fs::read_to_string(dir.join("summary.jsonl")).expect("summary.jsonl");
+    Some(
+        text.lines()
+            .map(|l| {
+                let v: Value = serde_json::from_str(l).expect("a summary row");
+                let key = (
+                    v["forge"].as_str().expect("forge").to_owned(),
+                    usize::try_from(v["ordinal"].as_u64().expect("ordinal")).expect("small"),
+                );
+                (key, v)
+            })
+            .collect(),
+    )
+}
+
+fn sha(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Where a mesh primase read differs from RRAssetStudio's row (none: they agree on everything compared).
+fn against(m: &StoredMesh, row: &Value) -> Vec<String> {
+    let mut differ = Vec::new();
+    let triangles = m.triangles().unwrap_or_default();
+    let counts = (m.vertices.len() as u64, triangles.len() as u64);
+    let theirs = (
+        row["vertex_count"].as_u64().unwrap_or(0),
+        row["triangle_count"].as_u64().unwrap_or(0),
+    );
+    if counts != theirs {
+        differ.push(format!("counts {counts:?}, RRAssetStudio's {theirs:?}"));
+    }
+    let materials = m.materials().unwrap_or_default();
+    let ours: Vec<[u64; 5]> = m
+        .ranges()
+        .unwrap_or_default()
+        .iter()
+        .zip(&materials)
+        .map(|(r, &id)| {
+            [
+                r.indices.start as u64,
+                r.indices.len() as u64,
+                r.vertices.start as u64,
+                r.vertices.len() as u64,
+                id,
+            ]
+        })
+        .collect();
+    let theirs: Vec<[u64; 5]> = row["submeshes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| {
+                    [
+                        "first_index",
+                        "index_count",
+                        "vertex_base",
+                        "vertex_count",
+                        "material_id",
+                    ]
+                    .map(|k| s[k].as_u64().unwrap_or(u64::MAX))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if ours != theirs {
+        differ.push(format!("submeshes {ours:?}, RRAssetStudio's {theirs:?}"));
+    }
+    let positions: Vec<u8> = m
+        .vertices
+        .positions()
+        .flatten()
+        .flat_map(f32::to_le_bytes)
+        .collect();
+    if Some(sha(&positions).as_str()) != row["positions_sha256"].as_str() {
+        differ.push("positions".into());
+    }
+    let indices: Vec<u8> = triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+    if Some(sha(&indices).as_str()) != row["indices_sha256"].as_str() {
+        differ.push("indices".into());
+    }
+    differ
+}
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
@@ -19,6 +112,8 @@ use primase_anvil::read::shapes::MAX_RECORD;
 use primase_anvil::read::texture::{self, StoredTextureMap};
 use primase_core::TexFormat;
 use primase_testdata::real_data;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
 const KINDS: [(u32, &str); 7] = [
@@ -84,7 +179,12 @@ fn resource(forge: &Forge, file: &mut File, k: usize) -> Result<Resource, String
     Resource::parse(&entry.resource.data).map_err(|e| format!("resource: {e}"))
 }
 
-fn census_forge(path: &Path, tallies: &mut BTreeMap<&'static str, Tally>) {
+fn census_forge(
+    path: &Path,
+    tallies: &mut BTreeMap<&'static str, Tally>,
+    oracle: Option<&Oracle>,
+    rras: &mut Tally,
+) {
     let forge = Forge::open(path).expect("forge");
     let mut file = File::open(path).expect("open");
     let label = path
@@ -126,6 +226,20 @@ fn census_forge(path: &Path, tallies: &mut BTreeMap<&'static str, Tally>) {
                         Layout::Ranged(r) => ("ranged", r.mesh_data),
                         Layout::Inline(i) => ("inline", i.mesh_data),
                     };
+                    if let Some(o) = oracle {
+                        match o.get(&(label.clone(), k)) {
+                            None => rras.refuse("no RRAssetStudio row", &example),
+                            Some(row) => {
+                                let differ = against(&m, row);
+                                if differ.is_empty() {
+                                    rras.read += 1;
+                                }
+                                for d in differ {
+                                    rras.refuse(&d, &example);
+                                }
+                            }
+                        }
+                    }
                     tally.outcome(layout);
                     // a measured relation, not a reading: MeshData's first byte against the vertex count
                     tally.outcome(format!(
@@ -222,9 +336,14 @@ fn every_entry_of_the_kinds_read() {
         .collect();
     forges.sort();
     let mut tallies = BTreeMap::new();
+    let oracle = oracle();
+    let mut rras = Tally::default();
     for path in &forges {
         eprintln!("census: {}", path.display());
-        census_forge(path, &mut tallies);
+        census_forge(path, &mut tallies, oracle.as_ref(), &mut rras);
+    }
+    if oracle.is_some() {
+        tallies.insert("Mesh vs RRAssetStudio", rras);
     }
     for (kind, t) in &tallies {
         let refused: u64 = t.refused.values().map(|(n, _)| n).sum();

@@ -784,6 +784,7 @@ dependencies = [
  "primase-meshops",
  "primase-testdata",
  "primase-texcodec",
+ "serde_json",
  "sha2",
  "thiserror",
 ]

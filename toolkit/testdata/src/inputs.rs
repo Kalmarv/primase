@@ -280,6 +280,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install; the census reads every entry of the readers' kinds and reports what each reader refuses",
     },
     Variable {
+        name: "PRIMASE_ANVIL_RRAS_MESHES",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"RRAssetStudio v3's read of every Mesh in PRIMASE_ANVIL_DIR (a folder: summary.jsonl, one row per Mesh with counts, submeshes and material ids, and SHA-256s of its positions as f32 and absolute indices as u32, little-endian; sample/; identity.json); worlds/anvil/tests/census.rs, run by hand"#,
+        status: Status::Live,
+        source: "a third-party oracle: RRAssetStudio v3 (zip SHA-256 f13edec5...) run over the user's own install by the primase-oracles harness dumps/rras-anvil (d5c48a9); identity.json pins its modules and the forges",
+    },
+    Variable {
         name: "PRIMASE_ANVIL_FORGE_USNAT_PATCH",
         kind: Kind::Input,
         gate: false,

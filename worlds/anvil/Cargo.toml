@@ -19,6 +19,7 @@ primase-testdata.workspace = true
 primase-meshops.workspace = true
 primase-texcodec.workspace = true
 sha2.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
