@@ -10,4 +10,5 @@ pub mod meshes;
 pub mod mip;
 pub mod reference;
 pub mod shapes;
+pub mod template;
 pub mod texture;

@@ -104,11 +104,14 @@ use std::path::Path;
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET};
+use primase_anvil::read::material::{
+    MATERIAL, Payload, StoredMaterial, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET,
+};
 use primase_anvil::read::mesh::{Layout, MESH, StoredMesh};
 use primase_anvil::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
 use primase_anvil::read::shapes::MAX_RECORD;
+use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
 use primase_anvil::read::texture::{self, StoredTextureMap};
 use primase_core::TexFormat;
 use primase_testdata::real_data;
@@ -116,7 +119,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
-const KINDS: [(u32, &str); 7] = [
+const KINDS: [(u32, &str); 8] = [
+    (MATERIAL_TEMPLATE, "MaterialTemplate"),
     (MESH, "Mesh"),
     (TEXTURE_MAP, "TextureMap"),
     (COMPILED_MIP, "CompiledMip"),
@@ -190,6 +194,9 @@ fn census_forge(
     let label = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut textured: Vec<(Option<u64>, Vec<u32>)> = Vec::new();
+    let mut labels: std::collections::HashMap<u64, std::collections::HashSet<u32>> =
+        std::collections::HashMap::new();
     for k in 0..forge.names.len() {
         let name_type = forge.names[k].type_id;
         let Some(&(type_id, kind)) = KINDS.iter().find(|(t, _)| *t == name_type) else {
@@ -309,7 +316,22 @@ fn census_forge(
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
             MATERIAL => StoredMaterial::parse(&r.body)
-                .map(|_| ())
+                .map(|m| {
+                    // the join measured after the forge: each texture record's key against its template's labels
+                    let template = m.references[0].map(|t| t.id);
+                    let keys = m
+                        .properties
+                        .iter()
+                        .filter(|p| matches!(p.payload, Payload::Texture { .. }))
+                        .map(|p| p.key)
+                        .collect::<Vec<_>>();
+                    textured.push((template, keys));
+                })
+                .map_err(|e| e.to_string()),
+            MATERIAL_TEMPLATE => template::descriptors(&r.body)
+                .map(|d| {
+                    labels.insert(r.class_id, d.iter().map(template::Descriptor::key).collect());
+                })
                 .map_err(|e| e.to_string()),
             LOD_SELECTOR => StoredLodSelector::parse(&r.body)
                 .map(|_| ())
@@ -322,6 +344,19 @@ fn census_forge(
         match result {
             Ok(()) => tally.read += 1,
             Err(e) => tally.refuse(&e, &example),
+        }
+    }
+    // a measurement: Material texture keys against their own template's descriptor labels, within this forge
+    let join = tallies
+        .entry("Material texture key vs its template's labels")
+        .or_default();
+    for (template, keys) in textured {
+        for key in keys {
+            match template.and_then(|t| labels.get(&t)) {
+                None => join.outcome("template not read in this forge"),
+                Some(set) if set.contains(&key) => join.read += 1,
+                Some(_) => join.refuse(&format!("key {key:#010x} no label of its template"), &label),
+            }
         }
     }
 }
