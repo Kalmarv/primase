@@ -776,7 +776,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         PrepareReskatePauseMap::new(PauseSource::Geometry {
             height: 720,
             extent: PauseExtent::Content,
-            drawing,
+            drawing: drawing.clone(),
         })
         .unwrap()
     };
@@ -788,7 +788,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         Some(&SkatePausePicture::Geometry {
             height: 720,
             extent: None,
-            drawing
+            drawing: drawing.clone()
         })
     );
     let mut measured = map();
@@ -842,7 +842,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         let stated = SkatePausePicture::Geometry {
             height: 720,
             extent: Some(extent.map(|v| v as f32)),
-            drawing,
+            drawing: drawing.clone(),
         };
         assert_eq!(got.take(), vec![stated; 3], "{order:?}");
     }

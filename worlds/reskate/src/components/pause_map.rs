@@ -38,11 +38,14 @@ pub enum SkatePausePicture {
 }
 
 /// Which triangles a pause-map picture drawn from the geometry leaves out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PauseLeaveOut {
     /// Those whose material casts no shadow (`skate.material` `cast_shadows` false: a room's shell, its ceiling
     /// included, selected by `set-reskate-shadow-casting`), counted.
     Shadowless,
+    /// Those of the placements whose name starts with one of these prefixes (a room's shell named by its path, while
+    /// other structures that cast no shadow stay in the picture), counted.
+    Placements(std::collections::BTreeSet<String>),
     /// None.
     Nothing,
 }
@@ -57,7 +60,7 @@ pub enum PauseColour {
 }
 
 /// How a pause-map picture drawn from the geometry draws it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PauseDrawing {
     pub leave_out: PauseLeaveOut,
     pub colour: PauseColour,

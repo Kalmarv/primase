@@ -1,5 +1,5 @@
 //! `prepare-reskate-pause-map{from=image | from=geometry,height=H,extent=region|content|x0,y0,x1,y1,
-//! leave-out=shadowless|nothing,colour=mean|texture}`: the pause-menu map picture a map writer writes
+//! leave-out=shadowless|placements|nothing[,prefixes=<prefix>;...],colour=mean|texture}`: the pause-menu map picture a map writer writes
 //! (`ui/map_image.png`, `ui/map_image.json`, `ui/map_clouds.png`), chosen explicitly.
 //!
 //! - `from=image`: the scene's own picture (`skate.scene` `pause_map`: its image, decoded by the reader's loader into
@@ -10,7 +10,12 @@
 //!   ground rectangle; padded by 10% and at least 50 m high. Two more choices, both required:
 //!   - `leave-out=shadowless` leaves out the triangles whose material casts no shadow (`skate.material`
 //!     `cast_shadows` false: an indoor level's shell and ceiling, as `set-reskate-shadow-casting` selected them), so
-//!     the picture shows the room from above, counted in the writer's report; `leave-out=nothing` draws them.
+//!     the picture shows the room from above, counted in the writer's report. `leave-out=placements` with
+//!     `prefixes` leaves out the triangles of the placements whose name starts with one of the prefixes (names as
+//!     their reader wrote them, path separators included): the ceiling and walls only, while the floor and other
+//!     structures that cast no shadow stay in the picture; counted. A prefix no placement's name starts with is an
+//!     error on a whole map, and counted in a part of one (the part may hold none of it). `leave-out=nothing`
+//!     draws every triangle.
 //!   - `colour=mean` draws each triangle in its material's base texture's mean colour; `colour=texture` samples the
 //!     base texture at each pixel through the triangle's coordinates (transforms are baked before `raise-skate`),
 //!     times the material's base colour factor (in linear light), wrapping as the material says: bilinear, in the
@@ -46,7 +51,7 @@ pub enum PauseExtent {
 }
 
 /// Where [`PrepareReskatePauseMap`] takes the picture from.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PauseSource {
     /// The scene's own picture.
     Image,
@@ -59,7 +64,7 @@ pub enum PauseSource {
 }
 
 /// See the module documentation. Made by [`PrepareReskatePauseMap::new`]; from options by the same call.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrepareReskatePauseMap {
     source: PauseSource,
 }
@@ -68,7 +73,18 @@ impl PrepareReskatePauseMap {
     /// An error for a picture under 9 pixels high (16:9 needs a whole pixel across) or a rectangle that is not finite
     /// with east0 < east1 and north0 < north1.
     pub fn new(source: PauseSource) -> Result<PrepareReskatePauseMap, String> {
-        if let PauseSource::Geometry { height, extent, .. } = source {
+        if let PauseSource::Geometry {
+            height,
+            extent,
+            drawing,
+        } = &source
+        {
+            let (height, extent) = (*height, *extent);
+            if let PauseLeaveOut::Placements(prefixes) = &drawing.leave_out
+                && (prefixes.is_empty() || prefixes.iter().any(String::is_empty))
+            {
+                return Err("leave-out=placements names no prefix (prefixes separated by ;)".into());
+            }
             if height < 9 {
                 return Err(format!("height {height}: at least 9 pixels"));
             }
@@ -84,14 +100,15 @@ impl PrepareReskatePauseMap {
         Ok(PrepareReskatePauseMap { source })
     }
 
-    pub fn source(&self) -> PauseSource {
-        self.source
+    pub fn source(&self) -> &PauseSource {
+        &self.source
     }
 
     /// From its options, through [`PrepareReskatePauseMap::new`]: `from=image`, or `from=geometry` with `height`,
-    /// `extent=region|content` or `x0,y0,x1,y1`, `leave-out=shadowless|nothing` and `colour=mean|texture`.
+    /// `extent=region|content` or `x0,y0,x1,y1`, `leave-out=shadowless|nothing|placements` (`placements` with
+    /// `prefixes`, separated by `;`) and `colour=mean|texture`.
     pub fn from_options(o: &Options) -> Result<PrepareReskatePauseMap, String> {
-        const KEYS: [&str; 9] = [
+        const KEYS: [&str; 10] = [
             "from",
             "height",
             "extent",
@@ -101,6 +118,7 @@ impl PrepareReskatePauseMap {
             "y1",
             "leave-out",
             "colour",
+            "prefixes",
         ];
         if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
@@ -136,14 +154,25 @@ impl PrepareReskatePauseMap {
                         );
                     }
                 };
-                let leave_out = match o.get("leave-out").map(String::as_str) {
-                    Some("shadowless") => PauseLeaveOut::Shadowless,
-                    Some("nothing") => PauseLeaveOut::Nothing,
-                    Some(v) => return Err(format!("leave-out={v}: shadowless or nothing")),
-                    None => {
+                let leave_out = match (o.get("leave-out").map(String::as_str), o.get("prefixes")) {
+                    (Some("shadowless"), None) => PauseLeaveOut::Shadowless,
+                    (Some("nothing"), None) => PauseLeaveOut::Nothing,
+                    (Some("placements"), Some(p)) => {
+                        PauseLeaveOut::Placements(p.split(';').map(str::to_owned).collect())
+                    }
+                    (Some("placements"), None) => {
                         return Err(
-                            "leave-out is required with from=geometry: shadowless (materials casting no shadow) or \
-                             nothing"
+                            "leave-out=placements requires prefixes (placement name prefixes, by ;)".into(),
+                        );
+                    }
+                    (Some("shadowless" | "nothing"), Some(_)) => {
+                        return Err("prefixes are leave-out=placements' only".into());
+                    }
+                    (Some(v), _) => return Err(format!("leave-out={v}: shadowless, placements or nothing")),
+                    (None, _) => {
+                        return Err(
+                            "leave-out is required with from=geometry: shadowless (materials casting no shadow), \
+                             placements (with prefixes) or nothing"
                                 .into(),
                         );
                     }
@@ -178,7 +207,7 @@ impl Pass for PrepareReskatePauseMap {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        match self.source {
+        match &self.source {
             PauseSource::Image => {
                 o.insert("from".into(), "image".into());
             }
@@ -191,12 +220,16 @@ impl Pass for PrepareReskatePauseMap {
                 o.insert("height".into(), height.to_string());
                 o.insert(
                     "leave-out".into(),
-                    match drawing.leave_out {
+                    match &drawing.leave_out {
                         PauseLeaveOut::Shadowless => "shadowless",
+                        PauseLeaveOut::Placements(_) => "placements",
                         PauseLeaveOut::Nothing => "nothing",
                     }
                     .into(),
                 );
+                if let PauseLeaveOut::Placements(p) = &drawing.leave_out {
+                    o.insert("prefixes".into(), p.iter().cloned().collect::<Vec<_>>().join(";"));
+                }
                 o.insert(
                     "colour".into(),
                     match drawing.colour {
@@ -232,7 +265,7 @@ impl Pass for PrepareReskatePauseMap {
         &["skate.scene"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let picture = match self.source {
+        let picture = match &self.source {
             PauseSource::Image => {
                 let bounds = w
                     .resource::<SkateScene>()
@@ -255,7 +288,28 @@ impl Pass for PrepareReskatePauseMap {
                 extent,
                 drawing,
             } => {
-                let extent = match extent {
+                if let PauseLeaveOut::Placements(prefixes) = &drawing.leave_out {
+                    // a prefix naming nothing is a mistake; a part may hold none of a prefix's placements, counted
+                    let names: Vec<&str> = w
+                        .iter::<primase_core::Instance>()
+                        .filter_map(|(e, _)| w.get::<primase_core::Name>(e).map(|n| n.0.as_str()))
+                        .collect();
+                    let part = w
+                        .resource::<primase_core::convert::PartScope>()
+                        .is_some_and(|s| !s.whole);
+                    for p in prefixes {
+                        if !names.iter().any(|n| n.starts_with(p.as_str())) {
+                            if !part {
+                                return Err(format!(
+                                    "leave-out=placements: no placement's name starts with {p} (names are matched as \
+                                     their reader wrote them, path separators included)"
+                                ));
+                            }
+                            log.count(&format!("prefixes matching no placement of this part: {p}"), 1);
+                        }
+                    }
+                }
+                let extent = match *extent {
                     PauseExtent::Region => Some(w.resource::<SkateScene>().and_then(|s| s.region).ok_or(
                         "extent=region: the scene states no region (extent=content, or x0, y0, x1, y1)",
                     )?),
@@ -279,9 +333,9 @@ impl Pass for PrepareReskatePauseMap {
                 };
                 log.count("pause-map pictures: drawn from the geometry", 1);
                 SkatePausePicture::Geometry {
-                    height,
+                    height: *height,
                     extent,
-                    drawing,
+                    drawing: drawing.clone(),
                 }
             }
         };
@@ -329,6 +383,14 @@ mod tests {
                 ("leave-out", "nothing"),
                 ("colour", "mean"),
             ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "720"),
+                ("extent", "content"),
+                ("leave-out", "placements"),
+                ("prefixes", "Level Bounds/Ceiling;Level Bounds/Longer Wall"),
+                ("colour", "texture"),
+            ]),
         ] {
             assert_eq!(
                 PrepareReskatePauseMap::from_options(&good).unwrap().options(),
@@ -371,9 +433,75 @@ mod tests {
                 ("colour", "photo"),
             ]),
             o(&[("from", "image"), ("colour", "mean")]),
+            // placements take prefixes, which the others do not take
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "placements"),
+                ("colour", "mean"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "shadowless"),
+                ("prefixes", "Level Bounds/Ceiling"),
+                ("colour", "mean"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "placements"),
+                ("prefixes", "a;"),
+                ("colour", "mean"),
+            ]),
         ] {
             assert!(PrepareReskatePauseMap::from_options(&bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// leave-out=placements: a prefix no placement's name starts with is refused on a whole map; one that names a
+    /// placement is recorded for the writer.
+    #[test]
+    fn a_placements_prefix_naming_nothing_is_refused() {
+        let pass = |prefix: &str| {
+            PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 720,
+                extent: PauseExtent::Content,
+                drawing: PauseDrawing {
+                    leave_out: PauseLeaveOut::Placements([prefix.to_owned()].into()),
+                    colour: PauseColour::Mean,
+                },
+            })
+            .unwrap()
+        };
+        let mut w = World::new();
+        let (proto, p) = (w.spawn(), w.spawn());
+        w.insert(
+            p,
+            primase_core::Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(p, primase_core::Name("Level Bounds/Ceiling".into()));
+        let e = pass("Level Bounds / Ceiling")
+            .run(&mut w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(
+            e.contains("no placement's name starts with Level Bounds / Ceiling"),
+            "{e}"
+        );
+        pass("Level Bounds/")
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        assert!(matches!(
+            w.resource::<SkatePausePicture>(),
+            Some(SkatePausePicture::Geometry { drawing, .. })
+                if drawing.leave_out == PauseLeaveOut::Placements(["Level Bounds/".to_owned()].into())
+        ));
     }
 
     /// From the geometry over the scene's region, its content or a rectangle; from the scene's own image, which must be
@@ -388,7 +516,7 @@ mod tests {
             PrepareReskatePauseMap::new(PauseSource::Geometry {
                 height: 720,
                 extent,
-                drawing,
+                drawing: drawing.clone(),
             })
             .unwrap()
         };
@@ -406,7 +534,7 @@ mod tests {
             Some(&SkatePausePicture::Geometry {
                 height: 720,
                 extent: None,
-                drawing
+                drawing: drawing.clone()
             })
         );
         w.insert_resource(SkateScene {
@@ -422,7 +550,7 @@ mod tests {
             Some(&SkatePausePicture::Geometry {
                 height: 720,
                 extent: Some([0.0, 0.0, 100.0, 50.0]),
-                drawing
+                drawing: drawing.clone()
             })
         );
         let image = PrepareReskatePauseMap::new(PauseSource::Image).unwrap();

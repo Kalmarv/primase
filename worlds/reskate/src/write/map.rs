@@ -773,6 +773,7 @@ impl MapSink {
         }
         t.parts += 1;
         t.writer.set_counts(counts);
+        t.writer.set_pause_left(crate::map::pause_left_of(world, &o));
         // the part's own overlay stack and blend chains, replayed on its meshes and tiles; a prototype stacked by
         // several parts must be stacked alike (counted once), a tile chained by one
         if let Some(st) = records.stack {
@@ -1218,6 +1219,10 @@ impl MapSink {
                         (
                             "pause-map picture: triangles of materials casting no shadow left out (leave-out=shadowless)",
                             r.pause_shadowless,
+                        ),
+                        (
+                            "pause-map picture: triangles of the named placements left out (leave-out=placements)",
+                            r.pause_placements,
                         ),
                     ]
                     .into_iter()

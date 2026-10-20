@@ -61,12 +61,32 @@ pub struct WriterOptions {
 
 impl WriterOptions {
     /// How the writer draws its geometry into the pause-map picture (`None`: it does not).
-    fn pause_drawing(&self) -> Option<PauseDrawing> {
-        match self.pause {
+    fn pause_drawing(&self) -> Option<&PauseDrawing> {
+        match &self.pause {
             Some(SkatePausePicture::Geometry { drawing, .. }) => Some(drawing),
             _ => None,
         }
     }
+}
+
+/// The placements of `world` (a map, or one part of it) that a pause-map picture drawn as `o` says leaves out by name
+/// (`leave-out=placements`): those whose name starts with one of its prefixes; none for any other picture.
+pub(crate) fn pause_left_of(
+    world: &primase_core::World,
+    o: &WriterOptions,
+) -> std::collections::HashSet<primase_core::Entity> {
+    let Some(PauseLeaveOut::Placements(prefixes)) = o.pause_drawing().map(|d| &d.leave_out) else {
+        return std::collections::HashSet::new();
+    };
+    world
+        .iter::<primase_core::Instance>()
+        .filter(|(e, _)| {
+            world
+                .get::<primase_core::Name>(*e)
+                .is_some_and(|n| prefixes.iter().any(|p| n.0.starts_with(p.as_str())))
+        })
+        .map(|(e, _)| e)
+        .collect()
 }
 
 /// How the pause-map picture draws a material's triangles.
@@ -129,6 +149,8 @@ pub struct WriteResult {
     pub water_without_area: usize,
     /// Pause-map picture: triangles left out because their material casts no shadow (`leave-out=shadowless`).
     pub pause_shadowless: i64,
+    /// Pause-map picture: triangles of the placements left out by name (`leave-out=placements`).
+    pub pause_placements: i64,
     /// Pause-map picture: per material name, the triangles drawn in the mean colour because no texture could be
     /// sampled (`colour=texture`).
     pub pause_untextured: BTreeMap<String, i64>,
@@ -653,6 +675,8 @@ pub struct MapWriter {
     /// The placements of each prototype key over the whole map, which decide what is instanced; `None`: the
     /// placements [`MapWriter::tiles`] is given are the whole map's.
     counts: Option<HashMap<u32, i64>>,
+    /// The placements of the part being laid that the pause-map picture leaves out (`leave-out=placements`).
+    pause_left: std::collections::HashSet<primase_core::Entity>,
     /// The prototype keys placed, over every part.
     placed_keys: BTreeSet<u32>,
     /// The world soups (triangle mesh, water) whose cells are not laid out yet ([`MapWriter::lay_cells`]).
@@ -833,6 +857,7 @@ impl MapWriter {
             collision_plan: None,
             protos: HashMap::new(),
             counts: None,
+            pause_left: std::collections::HashSet::new(),
             placed_keys: BTreeSet::new(),
             soups: SoupWorld::default(),
             water_soups: SoupWorld::default(),
@@ -1035,6 +1060,11 @@ impl MapWriter {
     /// key over the whole map (`None`: those placements are the whole map's).
     pub(crate) fn set_counts(&mut self, counts: Option<HashMap<u32, i64>>) {
         self.counts = counts;
+    }
+
+    /// The placements of the part about to be laid that the pause-map picture leaves out ([`pause_left_of`]).
+    pub(crate) fn set_pause_left(&mut self, left: std::collections::HashSet<primase_core::Entity>) {
+        self.pause_left = left;
     }
 
     /// The textures the materials drawn so far use.
@@ -1504,7 +1534,7 @@ impl MapWriter {
     }
 
     /// How the pause-map picture draws map material `mat`'s triangles (the picture's drawing choice `d`).
-    fn pause_pick(&self, cache: &mut HashMap<usize, PausePick>, mat: usize, d: PauseDrawing) -> PausePick {
+    fn pause_pick(&self, cache: &mut HashMap<usize, PausePick>, mat: usize, d: &PauseDrawing) -> PausePick {
         *cache.entry(mat).or_insert_with(|| {
             let m = self.ctx.mats.by_id(mat);
             if matches!(m.class, VClass::Decal | VClass::Glass | VClass::Alpha) {
@@ -1908,7 +1938,12 @@ impl MapWriter {
                         self.r.proto_list[info].count += 1;
                         let iname = format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[info].name);
                         let rows = MapObject::rows(s.ex, s.ey, s.ez, s.pos + off);
-                        if let Some(d) = o.pause_drawing() {
+                        if o.pause_drawing().is_some()
+                            && s.entity.is_some_and(|e| self.pause_left.contains(&e))
+                        {
+                            self.r.pause_placements +=
+                                m.parts.iter().map(|p| (p.idx.len() / 3) as i64).sum::<i64>();
+                        } else if let Some(d) = o.pause_drawing() {
                             for p in &m.parts {
                                 let mat = source.material_of(p, row, &mut self.ctx)?;
                                 let pick = self.pause_pick(&mut colours, mat, d);
@@ -1995,10 +2030,39 @@ impl MapWriter {
                     if let Some(d) = o.pause_drawing() {
                         for (&k, a) in &parts {
                             let pick = self.pause_pick(&mut colours, k, d);
+                            // the triangles of placements left out by name, by the pieces they were appended as
+                            let kept = (!self.pause_left.is_empty()).then(|| {
+                                let mut left = vec![false; a.idx.len() / 3];
+                                for pc in &a.pieces {
+                                    if let OverlayPiece::Placed { placement, .. } = pc.id
+                                        && self.pause_left.contains(&placement)
+                                    {
+                                        left[pc.t0..pc.t1].iter_mut().for_each(|l| *l = true);
+                                    }
+                                }
+                                let gone = left.iter().filter(|l| **l).count() as i64;
+                                let idx: Vec<u32> = a
+                                    .idx
+                                    .as_chunks::<3>()
+                                    .0
+                                    .iter()
+                                    .zip(&left)
+                                    .filter(|(_, l)| !**l)
+                                    .flat_map(|(t, _)| *t)
+                                    .collect();
+                                (idx, gone)
+                            });
+                            let idx = match &kept {
+                                Some((idx, gone)) => {
+                                    self.r.pause_placements += gone;
+                                    idx.as_slice()
+                                }
+                                None => a.idx.as_slice(),
+                            };
                             self.pause_draw(
                                 pick,
                                 k,
-                                (&a.pos, &a.uv, &a.idx),
+                                (&a.pos, &a.uv, idx),
                                 Vec3::new(origin.x + off.x, origin.y + off.y, off.z),
                                 Vec3::UNIT_X,
                                 Vec3::UNIT_Y,
