@@ -232,6 +232,71 @@ fn position(w: &World, e: Entity) -> Option<[f64; 2]> {
     w.get::<Transform>(e).map(|t| at(t.cols[3]))
 }
 
+/// The strongly connected components of the graph on `nodes` whose edges `next` gives (to nodes among them), each
+/// node in exactly one (Tarjan's algorithm, iterative: no recursion however long a chain).
+fn strongly_connected(nodes: &[Entity], next: &dyn Fn(Entity) -> Vec<Entity>) -> Vec<Vec<Entity>> {
+    let mut s = Tarjan::default();
+    for &start in nodes {
+        if s.index.contains_key(&start) {
+            continue;
+        }
+        s.visit(start, next);
+        while let Some(top) = s.calls.len().checked_sub(1) {
+            let v = s.calls[top].0;
+            if let Some(&u) = s.calls[top].1.get(s.calls[top].2) {
+                s.calls[top].2 += 1;
+                if !s.index.contains_key(&u) {
+                    s.visit(u, next);
+                } else if s.on_stack.contains(&u) {
+                    let m = s.low[&v].min(s.index[&u]);
+                    s.low.insert(v, m);
+                }
+                continue;
+            }
+            s.calls.pop();
+            if let Some(&(parent, _, _)) = s.calls.last() {
+                let m = s.low[&parent].min(s.low[&v]);
+                s.low.insert(parent, m);
+            }
+            if s.low[&v] == s.index[&v] {
+                let mut component = Vec::new();
+                while let Some(x) = s.stack.pop() {
+                    s.on_stack.remove(&x);
+                    component.push(x);
+                    if x == v {
+                        break;
+                    }
+                }
+                s.out.push(component);
+            }
+        }
+    }
+    s.out
+}
+
+/// [`strongly_connected`]'s state: each node's visit order and lowest reachable order, the nodes on the component
+/// stack, the search's own stack (each node, its successors and the next one to look at), the components found.
+#[derive(Default)]
+struct Tarjan {
+    index: BTreeMap<Entity, usize>,
+    low: BTreeMap<Entity, usize>,
+    on_stack: BTreeSet<Entity>,
+    stack: Vec<Entity>,
+    calls: Vec<(Entity, Vec<Entity>, usize)>,
+    out: Vec<Vec<Entity>>,
+}
+
+impl Tarjan {
+    fn visit(&mut self, v: Entity, next: &dyn Fn(Entity) -> Vec<Entity>) {
+        let n = self.index.len();
+        self.index.insert(v, n);
+        self.low.insert(v, n);
+        self.stack.push(v);
+        self.on_stack.insert(v);
+        self.calls.push((v, next(v), 0));
+    }
+}
+
 impl Pass for PartitionGrid {
     fn name(&self) -> &'static str {
         "partition-grid"
@@ -263,17 +328,43 @@ impl Pass for PartitionGrid {
         let names = w.component_names();
         let has_any = |e: Entity| names.iter().any(|n| w.entity_has_named(e, n));
         let mut content: Vec<Entity> = w.unreferenced().into_iter().filter(|&e| has_any(e)).collect();
-        // content only reachable from itself (a reference cycle, a self-reference) has no unreferenced root: each
-        // such group gets its smallest entity as a root, so it is in exactly one part, never left out or duplicated
-        let mut covered = w.closure(content.iter().copied());
-        let mut cycles = 0u64;
-        for e in w.entities().collect::<Vec<_>>() {
-            if covered.contains(&e) || !has_any(e) {
-                continue;
+        // content only reachable from itself (a reference cycle, a self-reference, and what only they reach) has no
+        // unreferenced root. Among what no root covers (nothing covered refers to it, or it would be covered), its
+        // strongly connected components condensed: a component nothing outside it refers to is a root of its own, at
+        // its smallest entity with a component; every other uncovered entity is reached from one, so it is in a
+        // root's closure, never a root itself (an entity a cycle reaches is not rooted before the cycle)
+        let covered = w.closure(content.iter().copied());
+        let uncovered: Vec<Entity> = w.entities().filter(|e| !covered.contains(e)).collect();
+        let inside: BTreeSet<Entity> = uncovered.iter().copied().collect();
+        let next = |e: Entity| -> Vec<Entity> {
+            let mut r: Vec<Entity> = w
+                .references(e)
+                .into_iter()
+                .filter(|r| inside.contains(r))
+                .collect();
+            r.sort_unstable();
+            r.dedup();
+            r
+        };
+        let components = strongly_connected(&uncovered, &next);
+        let mut component_of: BTreeMap<Entity, usize> = BTreeMap::new();
+        for (i, c) in components.iter().enumerate() {
+            component_of.extend(c.iter().map(|&e| (e, i)));
+        }
+        let mut entered = vec![false; components.len()];
+        for &e in &uncovered {
+            for r in next(e) {
+                if component_of[&r] != component_of[&e] {
+                    entered[component_of[&r]] = true;
+                }
             }
-            content.push(e);
-            covered.extend(w.closure([e]));
-            cycles += 1;
+        }
+        let mut cycles = 0u64;
+        for (c, _) in components.iter().zip(&entered).filter(|(_, entered)| !**entered) {
+            if let Some(&e) = c.iter().filter(|&&e| has_any(e)).min() {
+                content.push(e);
+                cycles += 1;
+            }
         }
         if cycles > 0 {
             log.count(
@@ -724,5 +815,44 @@ mod tests {
         }
         assert_eq!(cell_of(stated), cell_of_tile(Tile { col: 5, row: -3 }));
         assert_eq!(cell_of(stated), "cell 3,-2");
+    }
+
+    /// Refers to the entities it holds.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Refers(Vec<Entity>);
+    impl primase_core::Component for Refers {
+        const NAME: &'static str = "test.refers";
+        fn references(&self, out: &mut Vec<Entity>) {
+            out.extend(&self.0);
+        }
+    }
+
+    /// A cycle that reaches more (e1 -> e2, e2 -> e1, e2 -> e0, e0 the smallest id, nothing else referring to them) is
+    /// one root's: its component nothing outside refers to is rooted at its smallest entity (e1), and e0, reached from
+    /// it, is no root of its own; no entity is in two roots' closures, and nothing is left out.
+    #[test]
+    fn content_a_cycle_reaches_is_not_rooted_before_the_cycle() {
+        let mut w = World::new();
+        let (e0, e1, e2) = (w.spawn(), w.spawn(), w.spawn());
+        w.insert(e0, Refers(Vec::new()));
+        w.insert(e1, Refers(vec![e2]));
+        w.insert(e2, Refers(vec![e1, e0]));
+        let mut log = PassLog::default();
+        grid(&[("cell", "100")]).run(&mut w, &mut log).unwrap();
+        let plan = w.resource::<PartitionPlan>().unwrap().clone();
+        let roots: Vec<Entity> = plan.groups.iter().flat_map(|g| g.roots.iter().copied()).collect();
+        assert_eq!(roots, [e1], "{roots:?}");
+        assert_eq!(
+            log.counts["content reached only from itself (reference cycles), rooted at its smallest entity"],
+            1
+        );
+        // no entity owned by two parts, nothing left out
+        let mut owned: BTreeMap<Entity, usize> = BTreeMap::new();
+        for g in &plan.groups {
+            for e in w.closure(g.roots.iter().copied()) {
+                *owned.entry(e).or_default() += 1;
+            }
+        }
+        assert_eq!(owned, BTreeMap::from([(e0, 1), (e1, 1), (e2, 1)]));
     }
 }
