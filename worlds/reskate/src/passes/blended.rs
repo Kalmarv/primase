@@ -5,17 +5,22 @@
 //! is neither a decal (drawn over the surface beneath it, which skate's decal path draws: `core.draw_order`'s decal
 //! layer) nor water (`core.material_usage` water) is drawn as a mask at the stated cutoff: soft edges become hard.
 //!
-//! A material whose alpha is uniform (its base colour factor's alpha, times its base colour texture's when that
-//! texture's alpha is the same at every texel of its first level) and below the cutoff would vanish whole as a mask,
-//! though it still collides (glass). What it becomes is the required `uniform` choice:
-//! - `cutout`: the mask at the cutoff, like any other (it vanishes);
+//! A material's alpha is uniform when it is its base colour factor's alpha, times its base colour texture's when that
+//! is the same at every texel the material's primitives sample: their triangles rasterised in the texture's first
+//! level through the slot's coordinate set, transform and wrap (an atlas transparent in its gutters is judged on its
+//! islands only); over the whole first level when no loaded primitive's coordinates can say. Each material is reported
+//! with how it was judged and over what. A uniform alpha at or above the cutoff draws whole: the material is drawn
+//! opaque (exactly what the mask draws, without an alpha texture). A uniform alpha below the cutoff would vanish
+//! whole as a mask, though it still collides (glass). What it becomes is the required `uniform` choice:
+//! - `cutout`: drawn as nothing (a mask on its base colour factor below the cutoff, its texture dropped, so no texture
+//!   alpha draws it in its place);
 //! - `frost` (with `opacity=F` in (0, 1] and `grey=G` in [0, 1], both required): drawn opaque as frosted glass, its
 //!   colour its base colour composited over a light grey at an opacity a = max(alpha, F), in linear light:
 //!   colour = a * base + (1 - a) * (G, G, G), where base is the base colour factor's colour times the base colour
-//!   texture's mean colour (its first level, sRGB decoded); the texture is dropped.
+//!   texture's mean colour over the texels its primitives sample (sRGB decoded); the texture is dropped.
 //!
-//! A uniform alpha at or above the cutoff, and an alpha that varies over the texture, take the mask. A material whose
-//! base colour texture is not loaded is taken as varying, counted. Each material changed is reported by name as an
+//! An alpha that varies over the texels sampled takes the mask. A material whose base colour texture is not loaded is
+//! taken as varying, counted. Each material changed is reported by name as an
 //! approximation.
 //!
 //! An explicit workaround for the compiled rendering path observed, chosen by the program: `materials=all` takes every
@@ -23,11 +28,14 @@
 //! blended, is refused). No choice has a default. Not the same predicate as `prepare-reskate-uv-repeats{blended=}`,
 //! which adapts only triangles past Studio's repeat limit, after raising.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial};
-use primase_core::{DrawLayer, DrawOrder, Entity, MaterialUsage, Name, Texture, World};
+use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
+use primase_core::{
+    DrawLayer, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, Name, Semantic, Stream, Texture,
+    Topology, World,
+};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Which blended materials become cutouts.
@@ -171,35 +179,174 @@ fn linear(b: u8) -> f32 {
     }
 }
 
-/// What material `m`'s alpha is: `Ok(Some((alpha, base colour)))` when uniform (the factor's, times its base colour
-/// texture's when that is the same at every texel of its first level; the colour the factor's times the texture's
-/// mean, linear), `Ok(None)` when it varies; `Err` when its base colour texture is not loaded.
-fn uniform_alpha(w: &World, m: &PbrMaterial) -> Result<Option<(f32, [f32; 3])>, String> {
+/// The primitives drawing each material: (mesh entity, primitive index), its own material or one of its variants.
+type Uses = HashMap<Entity, Vec<(Entity, usize)>>;
+
+fn uses(w: &World) -> Uses {
+    let mut uses: Uses = HashMap::new();
+    for (e, mesh) in w.iter::<Mesh>() {
+        let variants = w.get::<MaterialVariants>(e);
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            let mut drawn: BTreeSet<Entity> = p.material.into_iter().collect();
+            if let Some(v) = variants.and_then(|v| v.0.get(i)) {
+                drawn.extend(v.values().copied());
+            }
+            for m in drawn {
+                uses.entry(m).or_default().push((e, i));
+            }
+        }
+    }
+    uses
+}
+
+/// Texel `i` of a `n`-texel axis under `wrap`.
+fn wrapped(i: i64, n: u32, wrap: Wrap) -> usize {
+    let n = i64::from(n.max(1));
+    (match wrap {
+        Wrap::Repeat => i.rem_euclid(n),
+        Wrap::Clamp => i.clamp(0, n - 1),
+        Wrap::Mirror => {
+            let m = i.rem_euclid(2 * n);
+            if m >= n { 2 * n - 1 - m } else { m }
+        }
+    }) as usize
+}
+
+/// The texels of a `tw` x `th` texture that triangle `t` (in texel units) covers: those whose centre it holds, and
+/// each vertex's own, wrapped as `wrap` says. A triangle spanning the texture both ways covers all of it.
+fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2]; 3]) {
+    let mut set =
+        |x: i64, y: i64| covered[wrapped(y, th, wrap[1]) * tw as usize + wrapped(x, tw, wrap[0])] = true;
+    for q in t {
+        set(q[0].floor() as i64, q[1].floor() as i64);
+    }
+    let lo = [0, 1].map(|c| t.iter().map(|q| q[c]).fold(f32::INFINITY, f32::min).floor() as i64);
+    let hi = [0, 1].map(|c| t.iter().map(|q| q[c]).fold(f32::NEG_INFINITY, f32::max).ceil() as i64);
+    let span = [hi[0] - lo[0], hi[1] - lo[1]];
+    if (span[0] >= i64::from(tw) && span[1] >= i64::from(th))
+        || span[0].saturating_mul(span[1]) > 4 * i64::from(tw) * i64::from(th)
+    {
+        covered.iter_mut().for_each(|c| *c = true);
+        return;
+    }
+    let [a, b, c] = t;
+    let area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+    if area.abs() < 1e-12 {
+        return;
+    }
+    let edge = |p: [f32; 2], q: [f32; 2], x: f32, y: f32| {
+        ((q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])) / area
+    };
+    for y in lo[1]..hi[1] {
+        for x in lo[0]..hi[0] {
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            if edge(a, b, fx, fy) >= 0.0 && edge(b, c, fx, fy) >= 0.0 && edge(c, a, fx, fy) >= 0.0 {
+                set(x, y);
+            }
+        }
+    }
+}
+
+/// The texels of a `size` texture that the primitives `drawing` sample through slot `r` (its coordinate set, transform
+/// and wrap); `None` when none can say (no loaded triangle list with those coordinates draws the material).
+fn footprint(w: &World, drawing: &[(Entity, usize)], r: &TextureRef, size: (u32, u32)) -> Option<Vec<bool>> {
+    let (tw, th) = size;
+    let mut covered = vec![false; tw as usize * th as usize];
+    let transform = r.transform.unwrap_or(UvTransform::IDENTITY);
+    let mut any = false;
+    for &(mesh, i) in drawing {
+        let p = w.get::<Mesh>(mesh)?.primitives().get(i)?;
+        if p.topology != Topology::Triangles {
+            return None;
+        }
+        let Some(Stream::F32x2(uv)) = p.streams.get(&Semantic::TexCoord(r.texcoord)) else {
+            return None;
+        };
+        let texel = |k: u32| -> Option<[f32; 2]> {
+            let q = transform.apply(*uv.get(k as usize)?);
+            Some([q[0] * tw as f32, q[1] * th as f32])
+        };
+        let n = uv.len() as u32;
+        let triangles: Vec<[u32; 3]> = match &p.indices {
+            Some(idx) => idx.as_chunks::<3>().0.to_vec(),
+            None => (0..n / 3).map(|k| [3 * k, 3 * k + 1, 3 * k + 2]).collect(),
+        };
+        for [a, b, c] in triangles {
+            mark(&mut covered, size, r.wrap, [texel(a)?, texel(b)?, texel(c)?]);
+            any = true;
+        }
+    }
+    any.then_some(covered)
+}
+
+/// How an eligible material's alpha was judged: uniform (the alpha and the base colour, the factor's times the texels'
+/// mean, linear) or varying (`None`), and over what.
+struct Judged {
+    uniform: Option<(f32, [f32; 3])>,
+    over: &'static str,
+}
+
+/// Material `m`'s alpha (drawn by the primitives `drawing`): its base colour factor's alpha, times its base colour
+/// texture's when that is the same at every texel its primitives sample (the whole first level when none can say);
+/// `Err` when its base colour texture is not loaded. `decoded` keeps each texture's first level for the run.
+fn judge(
+    w: &World,
+    m: &PbrMaterial,
+    drawing: &[(Entity, usize)],
+    decoded: &mut HashMap<Entity, (u32, u32, Vec<u8>)>,
+) -> Result<Judged, String> {
     let factor = [m.base_color[0], m.base_color[1], m.base_color[2]];
     let Some(r) = m.base_color_texture else {
-        return Ok(Some((m.base_color[3], factor)));
+        return Ok(Judged {
+            uniform: Some((m.base_color[3], factor)),
+            over: "its base colour factor",
+        });
     };
-    let t = w
-        .get::<Texture>(r.texture)
-        .ok_or("its base colour texture is not loaded")?;
-    let level = t.levels.first().ok_or("its base colour texture has no level")?;
-    let rgba = Decoder::default()
-        .decode_rgba8(t.format, t.width, t.height, level)
-        .map_err(|e| e.to_string())?;
+    let (tw, th, rgba) = match decoded.entry(r.texture) {
+        std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+        std::collections::hash_map::Entry::Vacant(v) => {
+            let t = w
+                .get::<Texture>(r.texture)
+                .ok_or("its base colour texture is not loaded")?;
+            let level = t.levels.first().ok_or("its base colour texture has no level")?;
+            let rgba = Decoder::default()
+                .decode_rgba8(t.format, t.width, t.height, level)
+                .map_err(|e| e.to_string())?;
+            v.insert((t.width, t.height, rgba))
+        }
+    };
     let texels = rgba.as_chunks::<4>().0;
-    let Some(first) = texels.first() else {
-        return Ok(None);
+    let (sampled, over): (Vec<&[u8; 4]>, _) = match footprint(w, drawing, &r, (*tw, *th)) {
+        Some(covered) => (
+            texels
+                .iter()
+                .zip(covered)
+                .filter(|(_, c)| *c)
+                .map(|(p, _)| p)
+                .collect(),
+            "the texels its primitives sample",
+        ),
+        None => (
+            texels.iter().collect(),
+            "its whole base colour texture (no primitive's coordinates to sample it by)",
+        ),
     };
-    if texels.iter().any(|p| p[3] != first[3]) {
-        return Ok(None);
+    let Some(first) = sampled.first() else {
+        return Ok(Judged { uniform: None, over });
+    };
+    if sampled.iter().any(|p| p[3] != first[3]) {
+        return Ok(Judged { uniform: None, over });
     }
-    let n = texels.len() as f64;
+    let n = sampled.len() as f64;
     let mean: [f32; 3] =
-        std::array::from_fn(|c| (texels.iter().map(|p| f64::from(linear(p[c]))).sum::<f64>() / n) as f32);
-    Ok(Some((
-        m.base_color[3] * f32::from(first[3]) / 255.0,
-        std::array::from_fn(|c| factor[c] * mean[c]),
-    )))
+        std::array::from_fn(|c| (sampled.iter().map(|p| f64::from(linear(p[c]))).sum::<f64>() / n) as f32);
+    Ok(Judged {
+        uniform: Some((
+            m.base_color[3] * f32::from(first[3]) / 255.0,
+            std::array::from_fn(|c| factor[c] * mean[c]),
+        )),
+        over,
+    })
 }
 
 impl Pass for PrepareReskateBlendedSurfaces {
@@ -243,6 +390,8 @@ impl Pass for PrepareReskateBlendedSurfaces {
         let name_of =
             |w: &World, e: Entity| w.get::<Name>(e).map_or_else(|| format!("{e:?}"), |n| n.0.clone());
         let materials: Vec<Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
+        let uses = uses(w);
+        let mut decoded = HashMap::new();
         for e in materials {
             let name = name_of(w, e);
             let named = match &self.selection {
@@ -272,7 +421,10 @@ impl Pass for PrepareReskateBlendedSurfaces {
                 (true, Some(why), _) => {
                     log.count(&format!("blended materials kept blended: {why}"), 1);
                 }
-                (true, None, _) => self.lower(w, e, &name, log),
+                (true, None, _) => {
+                    let drawing = uses.get(&e).map_or(&[][..], Vec::as_slice);
+                    self.lower(w, e, &name, drawing, &mut decoded, log);
+                }
             }
         }
         Ok(())
@@ -280,23 +432,44 @@ impl Pass for PrepareReskateBlendedSurfaces {
 }
 
 impl PrepareReskateBlendedSurfaces {
-    /// Eligible blended material `e`, named `name`: frosted when it is of uniform alpha below the cutoff and frost is
-    /// chosen, else a cutout.
-    fn lower(&self, w: &mut World, e: Entity, name: &str, log: &mut PassLog) {
+    /// Eligible blended material `e`, named `name`, drawn by `drawing`: opaque when its alpha is uniform at or above the
+    /// cutoff; below it, frosted or drawn as nothing as `uniform` says; a cutout when its alpha varies.
+    fn lower(
+        &self,
+        w: &mut World,
+        e: Entity,
+        name: &str,
+        drawing: &[(Entity, usize)],
+        decoded: &mut HashMap<Entity, (u32, u32, Vec<u8>)>,
+        log: &mut PassLog,
+    ) {
         let m = w.get::<PbrMaterial>(e).expect("listed");
-        let frost = match (self.uniform, uniform_alpha(w, m)) {
-            (UniformAlpha::Frost { opacity, grey }, Ok(Some((alpha, base)))) if alpha < self.cutoff => {
-                Some((alpha.max(opacity), base, grey))
+        let judged = match judge(w, m, drawing, decoded) {
+            Ok(j) => {
+                let how = if j.uniform.is_some() { "uniform" } else { "varying" };
+                log.count(
+                    &format!("blended materials judged {how} over {}: {name}", j.over),
+                    1,
+                );
+                j.uniform
             }
-            (UniformAlpha::Frost { .. }, Err(why)) => {
+            Err(why) => {
                 log.count(&format!("blended materials taken as varying alpha: {why}"), 1);
                 None
             }
-            _ => None,
         };
         let m = w.get_mut::<PbrMaterial>(e).expect("listed");
-        match frost {
-            Some((a, base, grey)) => {
+        match (judged, self.uniform) {
+            (Some((alpha, _)), _) if alpha >= self.cutoff => {
+                m.alpha_mode = AlphaMode::Opaque;
+                m.base_color[3] = 1.0;
+                log.count(
+                    &format!("blended surfaces of uniform alpha at or above the cutoff drawn opaque: {name}"),
+                    1,
+                );
+            }
+            (Some((alpha, base)), UniformAlpha::Frost { opacity, grey }) => {
+                let a = alpha.max(opacity);
                 let colour: [f32; 3] = std::array::from_fn(|c| a * base[c] + (1.0 - a) * grey);
                 m.base_color = [colour[0], colour[1], colour[2], 1.0];
                 m.base_color_texture = None;
@@ -307,7 +480,20 @@ impl PrepareReskateBlendedSurfaces {
                 );
                 log.count("blended surfaces drawn as frosted glass", 1);
             }
-            None => {
+            (Some((alpha, _)), UniformAlpha::Cutout) => {
+                m.base_color[3] = alpha;
+                m.base_color_texture = None;
+                m.alpha_mode = AlphaMode::Mask { cutoff: self.cutoff };
+                log.approximate(
+                    &format!(
+                        "blended surface of uniform alpha {alpha} below the cutoff {} drawn as nothing: {name}",
+                        self.cutoff
+                    ),
+                    1,
+                );
+                log.count("blended surfaces drawn as nothing", 1);
+            }
+            (None, _) => {
                 m.alpha_mode = AlphaMode::Mask { cutoff: self.cutoff };
                 log.approximate(
                     &format!("blended surface drawn as a cutout at {}: {name}", self.cutoff),
@@ -323,13 +509,16 @@ impl PrepareReskateBlendedSurfaces {
 mod tests {
     use super::*;
 
+    /// A material `name` drawn as `alpha`, its base colour texture's alpha varying (soft-edged foliage).
     fn material(w: &mut World, name: &str, alpha: AlphaMode) -> Entity {
+        let soft = texture(w, [[255, 255, 255, 10], [255, 255, 255, 250]]);
         let e = w.spawn();
         w.insert(e, Name(name.into()));
         w.insert(
             e,
             PbrMaterial {
                 alpha_mode: alpha,
+                base_color_texture: Some(primase_core::pbr::TextureRef::new(soft)),
                 ..PbrMaterial::default()
             },
         );
@@ -558,10 +747,15 @@ mod tests {
             log.approximations["blended surface of uniform alpha drawn opaque as frosted glass at opacity 0.35: Clean Shiny Glass"],
             1
         );
-        for e in [thick, leaves] {
-            assert_eq!(mode(&w, e), AlphaMode::Mask { cutoff: 0.5 });
-        }
-        // uniform=cutout: the thin glass vanishes as a mask, as before
+        // uniform 0.6 at or above the cutoff draws whole: opaque; a varying alpha takes the cutout
+        assert_eq!(mode(&w, thick), AlphaMode::Opaque);
+        assert_eq!(w.get::<PbrMaterial>(thick).unwrap().base_color[3], 1.0);
+        assert_eq!(mode(&w, leaves), AlphaMode::Mask { cutoff: 0.5 });
+        assert_eq!(
+            log.counts["blended materials judged uniform over its base colour factor: Glass_MAT"],
+            1
+        );
+        // uniform=cutout: the thin glass is drawn as nothing (a mask on its factor, below the cutoff)
         let mut w = World::new();
         let clean = tinted(&mut w, "Clean Shiny Glass", [0.2, 0.4, 0.6, 6.0 / 255.0], None);
         PrepareReskateBlendedSurfaces::new(0.5, BlendedSelection::All, UniformAlpha::Cutout)
@@ -569,6 +763,139 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         assert_eq!(mode(&w, clean), AlphaMode::Mask { cutoff: 0.5 });
+        assert!(w.get::<PbrMaterial>(clean).unwrap().base_color[3] < 0.5);
+    }
+
+    /// An atlas opaque under the material's coordinates and transparent around them (its gutters), the material's
+    /// factor alpha 0.2: judged over the texels its primitives sample, the alpha is the factor's, uniform, below the
+    /// cutoff: drawn as nothing (uniform=cutout, the atlas dropped so its alpha cannot draw it) or frosted
+    /// (uniform=frost); unplaced (no primitive to say), the whole atlas is judged, varying: a cutout on the atlas.
+    #[test]
+    fn an_atlas_is_judged_over_the_texels_the_primitives_sample() {
+        let atlas = |w: &mut World| {
+            let t = w.spawn();
+            // 4 x 4: opaque in the left half (the island), transparent in the right (the gutter)
+            let level: Vec<u8> = (0..16)
+                .flat_map(|i| {
+                    if i % 4 < 2 {
+                        [200, 200, 200, 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect();
+            w.insert(
+                t,
+                Texture {
+                    width: 4,
+                    height: 4,
+                    format: primase_core::TexFormat::Rgba8Unorm,
+                    levels: vec![level],
+                    color_space: primase_core::ColorSpace::Srgb,
+                    role: primase_core::TexRole::Color,
+                    normal: None,
+                },
+            );
+            t
+        };
+        let drawn = |w: &mut World, m: Entity| {
+            let p = w.spawn();
+            w.insert(
+                p,
+                Mesh::new(vec![primase_core::Primitive {
+                    topology: Topology::Triangles,
+                    streams: std::collections::BTreeMap::from([
+                        (
+                            Semantic::Position,
+                            Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                        ),
+                        (
+                            Semantic::TexCoord(0),
+                            Stream::F32x2(vec![[0.05, 0.05], [0.45, 0.05], [0.05, 0.95]]),
+                        ),
+                    ]),
+                    indices: None,
+                    material: Some(m),
+                }]),
+            );
+        };
+        let glass = |w: &mut World, placed: bool| {
+            let t = atlas(w);
+            let m = tinted(w, "glass", [1.0, 1.0, 1.0, 0.2], Some(t));
+            if placed {
+                drawn(w, m);
+            }
+            m
+        };
+        let cutout =
+            PrepareReskateBlendedSurfaces::new(0.5, BlendedSelection::All, UniformAlpha::Cutout).unwrap();
+        let mut w = World::new();
+        let m = glass(&mut w, true);
+        let mut log = PassLog::default();
+        cutout.run(&mut w, &mut log).unwrap();
+        let mat = w.get::<PbrMaterial>(m).unwrap();
+        assert_eq!(mat.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+        assert!(mat.base_color_texture.is_none());
+        assert!((mat.base_color[3] - 0.2).abs() < 1e-6);
+        assert_eq!(
+            log.counts["blended materials judged uniform over the texels its primitives sample: glass"],
+            1
+        );
+        assert_eq!(log.counts["blended surfaces drawn as nothing"], 1);
+        // frost: opaque at max(0.2, 0.35), over the island's colour
+        let mut w = World::new();
+        let m = glass(&mut w, true);
+        frost().run(&mut w, &mut PassLog::default()).unwrap();
+        let mat = w.get::<PbrMaterial>(m).unwrap();
+        assert_eq!(mat.alpha_mode, AlphaMode::Opaque);
+        let island = linear(200);
+        assert!((mat.base_color[0] - (0.35 * island + 0.65 * 0.8)).abs() < 1e-5);
+        // unplaced: the whole atlas, varying
+        let mut w = World::new();
+        let m = glass(&mut w, false);
+        let mut log = PassLog::default();
+        cutout.run(&mut w, &mut log).unwrap();
+        let mat = w.get::<PbrMaterial>(m).unwrap();
+        assert_eq!(mat.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+        assert!(mat.base_color_texture.is_some());
+        assert_eq!(
+            log.counts["blended materials judged varying over its whole base colour texture (no primitive's \
+                         coordinates to sample it by): glass"],
+            1
+        );
+    }
+
+    /// A triangle covers the texels whose centre it holds and its vertices' own, wrapped; one spanning the texture
+    /// both ways covers it all.
+    #[test]
+    fn a_footprint_marks_the_texels_a_triangle_covers() {
+        let mut c = vec![false; 16];
+        mark(
+            &mut c,
+            (4, 4),
+            [Wrap::Repeat; 2],
+            [[0.2, 0.2], [1.8, 0.2], [0.2, 3.8]],
+        );
+        let set: Vec<usize> = (0..16).filter(|&i| c[i]).collect();
+        // centres (0.5, 0.5), (1.5, 0.5), (0.5, 1.5), (0.5, 2.5) inside; (0, 3) the third vertex's own
+        assert_eq!(set, [0, 1, 4, 8, 12]);
+        // past the right edge, repeating: column 0 again
+        let mut c = vec![false; 16];
+        mark(
+            &mut c,
+            (4, 4),
+            [Wrap::Repeat; 2],
+            [[4.2, 0.2], [4.6, 0.2], [4.2, 0.6]],
+        );
+        assert!(c[0] && c.iter().filter(|x| **x).count() == 1);
+        let mut c = vec![false; 16];
+        mark(
+            &mut c,
+            (4, 4),
+            [Wrap::Clamp; 2],
+            [[-10.0, -10.0], [30.0, -10.0], [-10.0, 30.0]],
+        );
+        assert!(c.iter().all(|x| *x));
     }
 
     /// A texture whose alpha is the same at every texel makes the alpha uniform (the factor's times the texture's):
