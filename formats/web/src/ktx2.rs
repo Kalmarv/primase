@@ -673,7 +673,7 @@ fn encode_image(
     Ok((e.bytes, metadata))
 }
 
-/// What a texture's preparation reads, as one key (the memo's and the disk cache's): the format version and the code
+/// What a texture's preparation reads, as one key (the memo's): the format version and the code
 /// and encoders that compute it, the texture's stored level 0 and description, its role, cap, byte budget and alpha
 /// policy. A change to any of them is a different key, so a preparation made under other settings is never served.
 pub(crate) fn preparation_key(
@@ -706,22 +706,21 @@ pub(crate) fn preparation_key(
     k.finish()
 }
 
-/// What one texture is prepared as and with: its role, cap, alpha policy and byte budget, and the key of all of it.
+/// What one texture is prepared as and with: its role, cap, alpha policy and byte budget.
 pub(crate) struct Preparation<'a> {
     pub(crate) role: Role,
     pub(crate) cap: u32,
     pub(crate) policy: &'a AlphaPolicy,
     pub(crate) budget: Option<usize>,
-    pub(crate) key: &'a primase_cache::Key,
 }
 
 /// `prepare-web-textures` for one texture in one role: its level 0 snapped to the largest power of two within its own
 /// size and `cap` (at least 4 on a side; colour filtered in linear light, normal maps renormalized), and with a
-/// `budget`, encoded and halved until the encoding fits. Returns the texture as prepared and what was chosen.
+/// `budget`, encoded and halved until the encoding fits. Returns the texture as prepared and what was chosen. Pure:
+/// no I/O (what to keep across runs is its caller's to decide, outside a pass).
 pub(crate) fn prepare_image(
     texture: &primase_core::Texture,
     p: &Preparation<'_>,
-    cache: Option<&primase_cache::Cache>,
     log: &mut primase_core::pass::PassLog,
 ) -> Result<(primase_core::Texture, crate::prepare::PreparedImage)> {
     let Preparation {
@@ -729,7 +728,6 @@ pub(crate) fn prepare_image(
         cap,
         policy,
         budget,
-        key,
     } = *p;
     let image = primase_image::texture_level_rgba8(texture, 0).map_err(invalid)?;
     let source = [image.width, image.height];
@@ -767,54 +765,23 @@ pub(crate) fn prepare_image(
     }
     let mut encoded = None;
     if let Some(budget) = budget.filter(|_| role != Role::Normal) {
-        let hit = cache.and_then(|c| c.get(key)).and_then(|v| unframe(&v));
-        let (bytes, meta) = match hit {
-            Some((bytes, meta)) => {
-                // the encoding is known: the pixels it was made of are the snapped ones halved to its size
-                let want = meta["dimensions"]
-                    .as_array()
-                    .and_then(|d| Some([d.first()?.as_u64()? as u32, d.get(1)?.as_u64()? as u32]))
-                    .ok_or_else(|| invalid("cached web texture without its dimensions"))?;
-                while [width, height] != want {
-                    if width <= 4 && height <= 4 {
-                        return Err(invalid("cached web texture dimensions out of reach"));
-                    }
-                    (width, height, rgba) = resize(
-                        width,
-                        height,
-                        &rgba,
-                        role,
-                        (width / 2).max(4),
-                        (height / 2).max(4),
-                    );
-                    changed = true;
-                }
-                (bytes, meta)
-            }
-            None => {
-                let e = encode_pixels(width, height, rgba, role, policy, Some(budget))?;
-                if e.halvings > 0 {
-                    changed = true;
-                }
-                (width, height, rgba) = (e.width, e.height, e.rgba);
-                let meta = metadata(
-                    source,
-                    [width, height],
-                    role,
-                    Some(cap),
-                    if e.png { None } else { Some(budget) },
-                    e.bytes.len(),
-                    e.png,
-                    near_zero,
-                    e.alpha,
-                );
-                if let Some(c) = cache {
-                    // a value that cannot be stored is still the right value; the cache counts the failure
-                    let _ = c.put(key, &frame(&e.bytes, &meta)?);
-                }
-                (e.bytes, meta)
-            }
-        };
+        let e = encode_pixels(width, height, rgba, role, policy, Some(budget))?;
+        if e.halvings > 0 {
+            changed = true;
+        }
+        (width, height, rgba) = (e.width, e.height, e.rgba);
+        let meta = metadata(
+            source,
+            [width, height],
+            role,
+            Some(cap),
+            if e.png { None } else { Some(budget) },
+            e.bytes.len(),
+            e.png,
+            near_zero,
+            e.alpha,
+        );
+        let bytes = e.bytes;
         if [width, height] != [w, h] {
             log.approximate("images halved until their encoding fits its byte budget", 1);
         }

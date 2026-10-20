@@ -159,7 +159,9 @@ A skate-scene folder's tiles are a conversion like any other (`primase convert -
 --select "select-lod{form=finest}, lower-skate-lights" --passes "lower-skate-pbr, normalize-normals,
 fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}" --to web
 <output>`; `--features ktx2` and `--ktx2` with `prepare-web-textures{...,memo-mib=512}` after those passes for KTX2
-tiles, the memo keeping each texture's preparation for the parts that share it; the
+tiles, the memo keeping each texture's preparation, in memory, for the parts that share it (the pass does no
+I/O: a later item could keep budget-fit encodings across runs, stored and restored at the program or writer
+boundary, not by the pass); the
 plain comparison set is a second conversion with `--plain` and without `prepare-web-textures`), one cell at a time,
 so memory holds one cell's closure. The tile parts file a placement by element centre (`split_by_tile`) when its
 pivot does not locate its geometry: its world-space box, from its prototype GLB's POSITION bounds (the reader's

@@ -113,14 +113,14 @@ impl RoleCaps {
 /// of textures whose name starts with a prefix, the first that matches; without a byte budget an image is not encoded
 /// here and never halved. `memo-mib` keeps the preparations in memory across the pass's runs, at most N MiB (a
 /// conversion runs it once per part, and parts share textures; the same output either way); without it, none kept.
+/// Like every pass it does no I/O: an encoding it measures against a budget is made in memory, and nothing is kept
+/// across runs of the program (the web writer's KTX2 disk cache is the writer's, at the sink).
 #[derive(Clone)]
 pub struct PrepareWebTextures {
     pub caps: RoleCaps,
     pub caps_by_name: Vec<(String, RoleCaps)>,
     pub color_bytes: Option<ByteBudget>,
     pub mask_bytes: Option<ByteBudget>,
-    /// Encodings kept across runs (`None`: encode every run). The same output either way.
-    pub cache: Option<Arc<primase_cache::Cache>>,
     /// Preparations kept in memory between runs, owned by the program that hands it to the pass (it runs the pass
     /// once per cell, and cells share textures); `None`: none kept. The same output either way.
     pub memo: Option<Arc<std::sync::Mutex<Memo>>>,
@@ -189,7 +189,6 @@ impl std::fmt::Debug for PrepareWebTextures {
             .field("caps_by_name", &self.caps_by_name)
             .field("color_bytes", &self.color_bytes)
             .field("mask_bytes", &self.mask_bytes)
-            .field("cache", &self.cache.is_some())
             .finish()
     }
 }
@@ -202,7 +201,6 @@ impl PrepareWebTextures {
             caps_by_name: Vec::new(),
             color_bytes: None,
             mask_bytes: None,
-            cache: None,
             memo: None,
         }
     }
@@ -525,11 +523,9 @@ impl Pass for PrepareWebTextures {
                             cap,
                             policy: &policy,
                             budget,
-                            key: &input,
                         };
-                        let (prepared, image) =
-                            crate::ktx2::prepare_image(&texture, &job, self.cache.as_deref(), &mut made)
-                                .map_err(|e| format!("{}: {e}", name.as_deref().unwrap_or("texture")))?;
+                        let (prepared, image) = crate::ktx2::prepare_image(&texture, &job, &mut made)
+                            .map_err(|e| format!("{}: {e}", name.as_deref().unwrap_or("texture")))?;
                         let png =
                             primase_image::texture_level_png(&prepared, 0).map_err(|e| e.to_string())?;
                         let key: [u8; 32] = Sha256::digest(&png).into();
