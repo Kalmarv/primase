@@ -32,8 +32,8 @@
 //!     incidence `_SpecColor`, as Standard's specular setup reads `_SpecColor`, `UnityStandardInput.cginc`:143) and
 //!     strength texture `_MainTex` (A, the gloss). The cutout variant's `alphatest:_Cutoff` is its render type's
 //!     cutout at `_Cutoff`; the transparent one's `alpha:fade` its pass's SrcAlpha OneMinusSrcAlpha.
-//!   - **Legacy Shaders/Bumped Diffuse** (`Normal-Bumped.shader`:26-31), lit by `Lambert`: diffuse only (specular
-//!     factor 0).
+//!   - **Legacy Shaders/Bumped Diffuse** (`Normal-Bumped.shader`:26-31) and **Legacy Shaders/Diffuse**
+//!     (`Normal-Diffuse.shader`:22-26, no normal map), lit by `Lambert`: diffuse only (specular factor 0).
 //!   - **Legacy Shaders/Self-Illumin/Diffuse** (`Illumin-Diffuse.shader`:27-36): `Lambert` without a normal map,
 //!     emitting `_MainTex` x `_Color` x `_Illum`'s alpha: emissive `_Color`, the texture `_MainTex`, or `_Illum`'s
 //!     alpha, or with both the two multiplied (re-encoded as sRGB; on different tilings, the base map's only, counted).
@@ -113,8 +113,9 @@ enum Legacy {
     /// Lit by `BlinnPhong`, reading `_MainTex` (gloss in A), `_Color`, `_SpecColor`, `_Shininess` and `_BumpMap`: the
     /// legacy bumped specular shaders and `Houdini/SpecularVertexColor`.
     BlinnPhong,
-    /// Lit by `Lambert`, reading `_MainTex`, `_Color` and `_BumpMap`: Legacy Bumped Diffuse.
-    Lambert,
+    /// Lit by `Lambert`, reading `_MainTex`, `_Color` and, when `true`, `_BumpMap`: Legacy Bumped Diffuse (`true`) and
+    /// Legacy Diffuse.
+    Lambert(bool),
     /// Legacy Self-Illumin/Diffuse: `Lambert` with emission.
     SelfIllumin,
 }
@@ -133,7 +134,8 @@ fn family(shader: Option<&str>) -> Family {
             | "Legacy Shaders/Transparent/Cutout/Bumped Specular"
             | "Houdini/SpecularVertexColor",
         ) => Family::Legacy(Legacy::BlinnPhong),
-        Some("Legacy Shaders/Bumped Diffuse") => Family::Legacy(Legacy::Lambert),
+        Some("Legacy Shaders/Bumped Diffuse") => Family::Legacy(Legacy::Lambert(true)),
+        Some("Legacy Shaders/Diffuse") => Family::Legacy(Legacy::Lambert(false)),
         Some("Legacy Shaders/Self-Illumin/Diffuse") => Family::Legacy(Legacy::SelfIllumin),
         Some("Unlit/Color") => Family::UnlitColor,
         _ => Family::Other,
@@ -900,8 +902,9 @@ impl Lowering {
         p: &mut PbrMaterial,
     ) -> Result<()> {
         let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
-        // `UnpackNormal(tex2D(_BumpMap, IN.uv_BumpMap))`: unscaled, on `_BumpMap`'s own `_ST`
-        if legacy != Legacy::SelfIllumin
+        // `UnpackNormal(tex2D(_BumpMap, IN.uv_BumpMap))`: unscaled, on `_BumpMap`'s own `_ST`; a shader without one
+        // does not read a `_BumpMap` left from another
+        if matches!(legacy, Legacy::BlinnPhong | Legacy::Lambert(true))
             && let Some(env) = m.texture("_BumpMap")
         {
             p.normal_texture = self.slot(w, env, tiling(m, "_BumpMap"), TexRole::Normal);
@@ -923,7 +926,7 @@ impl Lowering {
                     1,
                 );
             }
-            Legacy::Lambert => {
+            Legacy::Lambert(_) => {
                 p.specular = Some(NO_SPECULAR);
                 self.log.count("Lambert as diffuse only (specular factor 0)", 1);
             }
@@ -1807,7 +1810,7 @@ mod tests {
     }
 
     /// Legacy Bumped Diffuse, `Lambert`: diffuse only (specular factor 0), rough, its normal map through its own
-    /// tiling.
+    /// tiling. Legacy Diffuse the same without a normal map, a `_BumpMap` left from another shader not read.
     #[test]
     fn bumped_diffuse_is_lambert() {
         let mut w = World::new();
@@ -1815,7 +1818,16 @@ mod tests {
         let bump = pixel(&mut w, [128, 128, 255, 255], ColorSpace::Linear);
         let mut m = material(1, Some("Legacy Shaders/Bumped Diffuse"), &[]);
         m.textures = vec![env("_MainTex", Some(main), 1.0), env("_BumpMap", Some(bump), 8.0)];
-        let (ps, log) = lowered(&mut w, vec![m]);
+        let mut plain = m.clone();
+        plain.material.path_id = 2;
+        plain.shader = Some("Legacy Shaders/Diffuse".into());
+        let (ps, log) = lowered(&mut w, vec![m, plain]);
+        let q = &ps[1];
+        assert_eq!(
+            (q.metallic, q.roughness, q.specular),
+            (0.0, 1.0, Some(NO_SPECULAR))
+        );
+        assert_eq!(q.normal_texture, None);
         let p = &ps[0];
         assert_eq!((p.metallic, p.roughness), (0.0, 1.0));
         assert_eq!(p.specular, Some(NO_SPECULAR));
@@ -1828,7 +1840,7 @@ mod tests {
             log.counts
                 .get("Lambert as diffuse only (specular factor 0)")
                 .copied(),
-            Some(1)
+            Some(2)
         );
     }
 
