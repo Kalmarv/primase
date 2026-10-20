@@ -27,6 +27,7 @@
     clippy::cast_possible_truncation
 )]
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -85,6 +86,8 @@ pub enum Error {
     },
     #[error("entry {0}: its name is not UTF-8")]
     Name(usize),
+    #[error("entries {first} and {second} share the index id {id:#x}")]
+    DuplicateId { id: u64, first: usize, second: usize },
     #[error("{0}: shorter than its layout")]
     Short(&'static str),
 }
@@ -167,6 +170,8 @@ pub struct Forge {
     pub data_header_2: DataHeader2,
     pub index: Vec<IndexRecord>,
     pub names: Vec<NameRecord>,
+    /// Each index id's entry (index ids are unique within a forge; a repeated one is refused).
+    by_id: BTreeMap<u64, usize>,
 }
 
 impl Forge {
@@ -283,6 +288,16 @@ impl Forge {
             }
             names.push(n);
         }
+        let mut by_id = BTreeMap::new();
+        for (k, e) in index.iter().enumerate() {
+            if let Some(first) = by_id.insert(e.id, k) {
+                return Err(Error::DuplicateId {
+                    id: e.id,
+                    first,
+                    second: k,
+                });
+            }
+        }
         Ok(Forge {
             file_size,
             header,
@@ -290,7 +305,14 @@ impl Forge {
             data_header_2,
             index,
             names,
+            by_id,
         })
+    }
+
+    /// The entry whose index record has id `id`. A resource's ClassID equals its entry's index id, and resources
+    /// refer to one another by that 64-bit id: this resolves such a reference within this forge (not across forges).
+    pub fn find(&self, id: u64) -> Option<usize> {
+        self.by_id.get(&id).copied()
     }
 
     /// Every entry's index and name records, by position.

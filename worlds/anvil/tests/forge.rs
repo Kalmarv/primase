@@ -258,3 +258,31 @@ fn a_real_forge_s_rows_are_the_hand_checked_ones() {
         )
     );
 }
+
+/// An entry is found by its index id; two entries with one index id are refused (a reference would be ambiguous).
+#[test]
+fn entries_are_found_by_index_id_and_a_repeated_id_is_refused() {
+    let f = read(two()).unwrap();
+    assert_eq!(f.find(16), Some(0));
+    assert_eq!(f.find(2_008_284_084_114), Some(1));
+    // a name record's id is not an index id
+    assert_eq!(f.find(0x5E5E_0000_0000_0001), None);
+    let start = (INDEX_TABLE + 20 * 3 + 192 * 3) as i64;
+    let row = |offset, name| Row {
+        offset,
+        id: 7,
+        size: 4,
+        name_id: offset as u64,
+        type_id: 0,
+        name,
+    };
+    let twice = forge(&[row(start, "A"), row(start + 4, "B")], 8);
+    assert!(matches!(
+        read(twice),
+        Err(Error::DuplicateId {
+            id: 7,
+            first: 0,
+            second: 1
+        })
+    ));
+}

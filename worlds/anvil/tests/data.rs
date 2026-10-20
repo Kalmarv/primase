@@ -293,3 +293,27 @@ fn a_real_three_chunk_mip_decodes() {
     assert_eq!(r.type_id, f.names[k].type_id);
     assert_eq!(r.name, f.names[k].name);
 }
+
+/// A resource's ClassID is its entry's index id, and a reference to another resource resolves by it: one Material ->
+/// TextureSet -> textures chain of the base forge (ids and ordinals hand-checked in a separate read-only decode,
+/// games/riders-republic docs/recon/material-binding.md, ceebc6e). Only the id resolution is claimed, not the
+/// Material's or TextureSet's field layout.
+#[test]
+fn class_ids_are_index_ids_and_resolve() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+        return;
+    };
+    let f = Forge::open(&path).unwrap();
+    let mut file = File::open(&path).unwrap();
+    for (k, type_id) in [(162usize, 0x85C8_17C3u32), (163, 0xD70E_6670)] {
+        let e = read_entry(&f.payload(&mut file, k).unwrap(), BOUND).unwrap();
+        let r = Resource::parse(&e.resource.data).unwrap();
+        assert_eq!((r.type_id, r.class_id), (type_id, f.index[k].id), "entry {k}");
+        assert_eq!(f.find(r.class_id), Some(k));
+    }
+    assert_eq!(f.find(0x01D3_970D_C220), Some(163));
+    assert_eq!(f.find(0x01D3_970D_C221), Some(217));
+    assert_eq!(f.find(0x01D3_970D_C22A), Some(218));
+    // the Material's other 64-bit value at body+3 resolves to no entry of this forge
+    assert_eq!(f.find(0x01C3_C9ED_9E7E), None);
+}
