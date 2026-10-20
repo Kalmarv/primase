@@ -6,8 +6,8 @@
 //! the base colour (factors as stored): the destination lights it again, so it reads darker and shadows double where
 //! the destination's lights differ from the bake's. As `emission`, it is the emission (strength 1) over a black base:
 //! the surface shows the baked light as baked, whatever the destination's lighting (its specular aside). The bake's
-//! direct-light atlas (`KHR_materials_specular`'s colour texture, `Bake<N>_DIRECT_Denoised`) is not a specular colour
-//! and is not lowered (counted; it stays in the dialect).
+//! direct-light mask ([`crate::components::StuntboostDirectLight`]) gates only the game's dynamic shadows and is not
+//! lowered (counted; it stays in the dialect).
 //!
 //! Other materials keep their glTF meaning: base colour, metal, roughness, emission, alpha mode, double-sidedness and
 //! texture coordinates as stored. A transparent node (a name containing `Transparent`,
@@ -24,7 +24,9 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, Instance, MaterialVariants, Mesh, Name, World};
 
-use crate::components::{StuntboostDraw, StuntboostMaterial, StuntboostNode, StuntboostTextureRef};
+use crate::components::{
+    StuntboostDirectLight, StuntboostDraw, StuntboostMaterial, StuntboostNode, StuntboostTextureRef,
+};
 
 /// How a bake material's atlas lowers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,11 +146,8 @@ impl Pass for LowerStuntboostMaterials {
                     pbr.base_color = [0.0, 0.0, 0.0, m.base_color[3]];
                 }
             }
-            if m.specular_color_texture.is_some() {
-                log.count(
-                    "baked direct-light atlases (KHR_materials_specular colour) not lowered",
-                    1,
-                );
+            if w.has::<StuntboostDirectLight>(e) {
+                log.count("direct-light masks kept in the dialect, not lowered", 1);
             }
             w.insert(e, pbr);
         }

@@ -26,8 +26,8 @@ use primase_monogame::xnb::Xnb;
 use serde_json::Value;
 
 use crate::components::{
-    StuntboostAttribute, StuntboostAttributes, StuntboostMaterial, StuntboostNode, StuntboostPart,
-    StuntboostRole, StuntboostTextureRef,
+    StuntboostAttribute, StuntboostAttributes, StuntboostDirectLight, StuntboostMaterial, StuntboostNode,
+    StuntboostPart, StuntboostRole, StuntboostTextureRef,
 };
 use crate::read::names;
 use crate::{Error, Result};
@@ -180,7 +180,8 @@ fn transform(m: &[f64; 16]) -> Transform {
 ///   [`names`], its extras), and an `Instance` of its mesh's prototype when it has one;
 /// - each mesh a prototype with `core.mesh` (positions scaled; its primitives' materials the material entities) and
 ///   `core.source`, and its application-specific vertex attributes as [`StuntboostAttributes`] (as stored, unscaled);
-/// - each material an entity with [`StuntboostMaterial`] and `core.name`; each image a texture entity with
+/// - each material an entity with [`StuntboostMaterial`] and `core.name`, and a bake material's direct-light mask as
+///   [`StuntboostDirectLight`]; each image a texture entity with
 ///   `core.texture` (the QOI decoded to RGBA8, sRGB; role other), `core.name` and `core.source`. An image the install
 ///   does not ship is counted and left unbound.
 pub fn read_level(install: &Path, level: &str, metres_per_unit: f64, w: &mut World) -> Result<LevelReport> {
@@ -381,7 +382,6 @@ fn read_part(
                 .and_then(|p| p.get("roughnessFactor"))
                 .and_then(Value::as_f64)
                 .unwrap_or(1.0) as f32,
-            specular_color_texture: texture_ref(specular),
             emissive: [em[0], em[1], em[2]],
             double_sided: m.get("doubleSided").and_then(Value::as_bool).unwrap_or(false),
             alpha_mode: m
@@ -394,6 +394,9 @@ fn read_part(
         };
         let e = w.spawn();
         w.insert(e, material);
+        if let Some(texture) = texture_ref(specular) {
+            w.insert(e, StuntboostDirectLight { texture });
+        }
         w.insert(e, Name(name));
         materials.push(e);
         report.materials += 1;

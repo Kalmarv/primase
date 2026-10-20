@@ -31,7 +31,6 @@ fn material(w: &mut World, name: &str, texture: Option<Entity>) -> Entity {
             }),
             metallic: 0.0,
             roughness: 0.5,
-            specular_color_texture: None,
             emissive: [0.0; 3],
             double_sided: true,
             alpha_mode: "OPAQUE".into(),

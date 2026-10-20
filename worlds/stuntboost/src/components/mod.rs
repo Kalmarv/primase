@@ -168,8 +168,9 @@ pub struct StuntboostTextureRef {
     pub texcoord: u32,
 }
 
-/// A glTF material as stored: its name, the PBR factors and textures, `KHR_materials_specular`'s colour texture (the
-/// baked direct light, on the bake materials), whether it is double-sided and its alpha mode. A bake material's base
+/// A glTF material as stored: its name, the PBR factors and textures, whether it is double-sided and its alpha mode.
+/// A bake material's `KHR_materials_specular` colour texture is not a specular colour: it is the bake's direct-light
+/// mask, [`StuntboostDirectLight`] on the same entity. A bake material's base
 /// colour texture is the baked atlas: lighting baked in. Collision materials (`C_*`) are physics materials
 /// ([`StuntboostPhysics`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -179,7 +180,6 @@ pub struct StuntboostMaterial {
     pub base_color_texture: Option<StuntboostTextureRef>,
     pub metallic: f32,
     pub roughness: f32,
-    pub specular_color_texture: Option<StuntboostTextureRef>,
     pub emissive: [f32; 3],
     pub double_sided: bool,
     /// `OPAQUE`, `MASK` or `BLEND`, and `MASK`'s cutoff.
@@ -195,12 +195,7 @@ impl Component for StuntboostMaterial {
         to_json(self)
     }
     fn references(&self, out: &mut Vec<Entity>) {
-        out.extend(
-            [&self.base_color_texture, &self.specular_color_texture]
-                .into_iter()
-                .flatten()
-                .map(|t| t.texture),
-        );
+        out.extend(self.base_color_texture.iter().map(|t| t.texture));
     }
 }
 
@@ -311,5 +306,27 @@ impl Component for StuntboostAttributes {
     const NAME: &'static str = "stuntboost.attributes";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+}
+
+/// A bake group's direct-light mask (`Bake<N>_DIRECT_Denoised`, stored as the bake material's `KHR_materials_specular`
+/// colour texture, which the game binds as its `DiffuseTex`): the light that reached each texel straight from the sun,
+/// without bounces. A baked level (one with a `SetBakedLighting` node) draws unlit:
+/// `colour = atlas * (1 + k * ShadowColor) * lerp(AmbientLightInShadow, 1, 1 - k)` with
+/// `k = clamp((mask.r - 0.07) * 1.075, 0, 1) * dynamic shadow`, so the mask only gates the dynamic shadows (the
+/// board's) to directly lit texels (the defaults: `ShadowColor` 0, `AmbientLightInShadow` 0.5). No N.L, no specular.
+/// On the material's entity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StuntboostDirectLight {
+    pub texture: StuntboostTextureRef,
+}
+
+impl Component for StuntboostDirectLight {
+    const NAME: &'static str = "stuntboost.direct_light";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.texture.texture);
     }
 }
