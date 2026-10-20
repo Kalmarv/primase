@@ -96,6 +96,69 @@ impl Component for UnityTexture {
     }
 }
 
+// A shader program's parameters as the player records them (the reader, `crate::program`, fills them).
+
+/// A constant-buffer field: its name, byte offset in the buffer, element type (Unity's `ShaderParamType`: 0 float, 1
+/// int, 2 bool, 3 half, 4 short, 5 uint), shape (a vector of `columns` lanes, or a matrix of `rows` rows) and array
+/// size (0: not an array).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Field {
+    pub name: String,
+    pub offset: u32,
+    pub kind: i64,
+    pub shape: Shape,
+    pub array_size: u32,
+}
+
+/// A field's shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Shape {
+    Vector { columns: u32 },
+    Matrix { rows: u32 },
+}
+
+/// A constant-buffer field of a struct type (Unity's instancing arrays): its name, byte offset, array size (0: not
+/// an array), the struct's size in bytes and its members (offsets within the struct).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct StructField {
+    pub name: String,
+    pub offset: u32,
+    pub array_size: u32,
+    pub size: u32,
+    pub members: Vec<Field>,
+}
+
+/// A constant buffer: its name, the bind slot it is bound to (`b<n>`; `None` when no binding names it), its size in
+/// bytes, its fields and its struct fields (by offset).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ConstantBuffer {
+    pub name: String,
+    pub slot: Option<u32>,
+    pub size: u32,
+    pub fields: Vec<Field>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub structs: Vec<StructField>,
+}
+
+/// A texture parameter: its name, bind slot (`t<n>`), the sampler slot it samples with (`None`: none of its own) and
+/// dimension (Unity's `TextureDimension`: 2 a 2D texture, 3 3D, 4 a cube).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct TextureParam {
+    pub name: String,
+    pub slot: u32,
+    pub sampler: Option<u32>,
+    pub dim: i64,
+}
+
+/// The parameters the variants of a program share.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Parameters {
+    pub constant_buffers: Vec<ConstantBuffer>,
+    pub textures: Vec<TextureParam>,
+    /// Sampler states: Unity's packed sampler value and its bind slot (`s<n>`).
+    pub samplers: Vec<(u32, u32)>,
+}
+
 /// The compiled fragment program a material draws with, as the player stores it ([`crate::program::read_programs`]):
 /// its shader's name, the pass (subshader and pass index in the shader's parsed form), the variant's keywords, its
 /// parameters (constant-buffer fields with their offsets, texture and sampler slots) and its D3D11 code, a DXBC
@@ -106,7 +169,7 @@ pub struct UnityProgram {
     pub subshader: usize,
     pub pass: usize,
     pub keywords: Vec<String>,
-    pub parameters: crate::program::Parameters,
+    pub parameters: Parameters,
     #[serde(skip)]
     pub code: Vec<u8>,
 }

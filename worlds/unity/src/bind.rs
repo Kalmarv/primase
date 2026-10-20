@@ -19,8 +19,7 @@ use primase_image::srgb_to_linear;
 use primase_shader::{Constants, Field, Layout};
 use primase_texcodec::TexDecoder;
 
-use crate::components::{UnityMaterial, UnityProgram};
-use crate::program::Shape;
+use crate::components::{Shape, UnityMaterial, UnityProgram};
 use crate::{Result, invalid};
 
 /// A program bound to its layout.
