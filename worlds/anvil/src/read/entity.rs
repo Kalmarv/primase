@@ -467,6 +467,47 @@ impl Cursor<'_> {
                 }
                 self.take(10, "MaterialOverrider")?;
             }
+            // GuidanceSystem: 4 bytes, N GuidanceObjects (an object, 29 bytes), 12 bytes, a counted run of 2-byte
+            // items, an EdgeFilter (40), a Partitioner (46 + 2k, its u16 p at +12 and u32 k at +14), p + 1 PartNodes
+            // (an object, 12 bytes), a byte
+            0x55AF_1C3E => {
+                self.take(4, "GuidanceSystem")?;
+                let n = self.count("GuidanceSystem object count", 41)?;
+                for _ in 0..n {
+                    self.object("GuidanceObject", 0x344F_A659)?;
+                    self.take(29, "GuidanceObject")?;
+                }
+                self.take(12, "GuidanceSystem")?;
+                let m = self.count("GuidanceSystem run count", 2)?;
+                self.take(m.saturating_mul(2), "GuidanceSystem run")?;
+                self.take(40, "EdgeFilter")?;
+                self.take(12, "Partitioner")?;
+                let p = usize::from(u16::from_le_bytes(self.array::<2>("Partitioner")?));
+                let k = self.count("Partitioner count", 2)?;
+                self.take(k.saturating_mul(2).saturating_add(28), "Partitioner")?;
+                for _ in 0..=p {
+                    self.object("PartNode", 0x5374_195C)?;
+                    self.take(12, "PartNode")?;
+                }
+                self.take(1, "GuidanceSystem")?;
+            }
+            // HoudiniDecalInstancerComponent: 212 bytes, an object, R references, S items (00, an object, 3 bytes, a
+            // count k, 100 k bytes), 46 bytes
+            0x4148_CD56 => {
+                self.take(212, "HoudiniDecalInstancerComponent")?;
+                self.object("HoudiniDecalInstancerComponent", 0xB43F_ECF1)?;
+                let r = self.count("HoudiniDecalInstancerComponent references", 10)?;
+                self.take(r.saturating_mul(10), "HoudiniDecalInstancerComponent references")?;
+                let items = self.count("HoudiniDecalInstancerComponent items", 20)?;
+                for _ in 0..items {
+                    self.expect("HoudiniDecalInstancerComponent item", 0, 1)?;
+                    self.object("HoudiniDecalInstancerComponent item", 0x1ADB_43B0)?;
+                    self.take(3, "HoudiniDecalInstancerComponent item")?;
+                    let k = self.count("HoudiniDecalInstancerComponent item count", 100)?;
+                    self.take(k.saturating_mul(100), "HoudiniDecalInstancerComponent item")?;
+                }
+                self.take(46, "HoudiniDecalInstancerComponent")?;
+            }
             // fixed sizes, observed on every body measured
             0x5139_1C93 => {
                 self.take(12, "component")?;
