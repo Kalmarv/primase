@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial};
+use primase_core::pbr::{AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, Wrap};
 use primase_core::{
     Collision, Entity, Instance, Marker, MaterialVariants, Mesh, Primitive, Semantic, Stream, SurfaceClass,
     Surfaces, Topology, Transform, World,
@@ -25,8 +25,12 @@ fn material(w: &mut World, name: &str, texture: Option<Entity>) -> Entity {
             base_color: [1.0; 4],
             base_color_texture: texture.map(|texture| StuntboostTextureRef {
                 texture,
-                mag_filter: Some(9728),
-                min_filter: Some(9984),
+                filters: Filters {
+                    mag: Some(Filter::Nearest),
+                    min: Some(Filter::Nearest),
+                    mip: Some(MipFilter::Linear),
+                },
+                wrap: [Wrap::Repeat; 2],
                 texcoord: 0,
             }),
             metallic: 0.0,
@@ -35,6 +39,7 @@ fn material(w: &mut World, name: &str, texture: Option<Entity>) -> Entity {
             double_sided: true,
             alpha_mode: "OPAQUE".into(),
             alpha_cutoff: None,
+            shading: Shading::Lit,
             other: BTreeMap::new(),
         },
     );
@@ -233,6 +238,20 @@ fn the_baked_atlas_lowers_as_stated() {
         (blended.alpha_mode, blended.base_color[3]),
         (AlphaMode::Blend, 0.5)
     );
+
+    // unlit: the atlas as the base colour of an unlit material, its nearest filters kept
+    let mut l = level();
+    LowerStuntboostMaterials {
+        baked: Baked::Unlit,
+        transparent: Transparent::Opaque,
+    }
+    .run(&mut l.w, &mut PassLog::default())
+    .unwrap();
+    let bake = l.w.get::<PbrMaterial>(l.bake).unwrap();
+    assert_eq!(bake.shading, Shading::Unlit);
+    let atlas = bake.base_color_texture.as_ref().unwrap();
+    assert_eq!(atlas.filters.mag, Some(Filter::Nearest));
+    assert_eq!(l.w.get::<PbrMaterial>(l.glass).unwrap().shading, Shading::Lit);
 
     let mut l = level();
     LowerStuntboostMaterials {

@@ -2,6 +2,7 @@
 //! the scale the program read the level with ([Frame](crate#frame)).
 use std::collections::BTreeMap;
 
+use primase_core::pbr::{Filters, Shading, Wrap};
 use primase_core::{Component, Entity, JsonError};
 use serde::Serialize;
 
@@ -149,12 +150,14 @@ impl Component for StuntboostNode {
     }
 }
 
-/// A texture a material binds: the texture entity and its glTF sampler's filters as stored (`None`: not given).
+/// A texture a material binds: the texture entity, its glTF sampler's filters and wrap in core's terms (a filter the
+/// sampler states none of stays unstated; the levels' samplers state nearest magnification, nearest-mipmap-linear
+/// minification: crisp texels), and the texture coordinate set it samples.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StuntboostTextureRef {
     pub texture: Entity,
-    pub mag_filter: Option<u32>,
-    pub min_filter: Option<u32>,
+    pub filters: Filters,
+    pub wrap: [Wrap; 2],
     pub texcoord: u32,
 }
 
@@ -175,6 +178,8 @@ pub struct StuntboostMaterial {
     /// `OPAQUE`, `MASK` or `BLEND`, and `MASK`'s cutoff.
     pub alpha_mode: String,
     pub alpha_cutoff: Option<f32>,
+    /// Lit, or unlit when the material carries `KHR_materials_unlit`.
+    pub shading: Shading,
     /// What else the material states, by key, as stored (extensions, extras).
     pub other: BTreeMap<String, serde_json::Value>,
 }

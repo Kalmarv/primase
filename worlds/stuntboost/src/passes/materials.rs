@@ -1,11 +1,17 @@
-//! `lower-stuntboost-materials{baked=base-colour|emission,transparent=blend|opaque}`: every `stuntboost.material` gets
-//! a `pbr.material` on its own entity.
+//! `lower-stuntboost-materials{baked=base-colour|emission|unlit,transparent=blend|opaque}`: every
+//! `stuntboost.material` gets a `pbr.material` on its own entity, its textures sampled with the filters and wrap their
+//! samplers state.
 //!
 //! A bake material (`bake_mat_<N>`, on the `bake_<N>_object` meshes) samples its bake group's atlas
 //! (`Bake<N>_Denoised`), the final colour with the level's lighting baked in. Lowered as `base-colour`, the atlas is
 //! the base colour (factors as stored): the destination lights it again, so it reads darker and shadows double where
 //! the destination's lights differ from the bake's. As `emission`, it is the emission (strength 1) over a black base:
-//! the surface shows the baked light as baked, whatever the destination's lighting (its specular aside). The bake's
+//! the surface shows the baked light as baked, whatever the destination's lighting (its specular aside). As
+//! `unlit`, it is the base colour of an unlit material (`Shading::Unlit`): drawn as baked, no light added. That is how
+//! the game draws a baked level (one with a `SetBakedLighting` node): unlit,
+//! `colour = atlas * (1 + k * ShadowColor) * lerp(AmbientLightInShadow, 1, 1 - k)`, where `k` is the board's dynamic
+//! shadow gated by the direct-light mask; with no dynamic shadow (`k = 0`) exactly the atlas. Choosing `unlit` for a
+//! level without that node (the game lights it) is counted. The bake's
 //! direct-light mask ([`crate::components::StuntboostDirectLight`]) gates only the game's dynamic shadows and is not
 //! lowered (counted; it stays in the dialect).
 //!
@@ -21,7 +27,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef};
 use primase_core::{Component, Entity, Instance, MaterialVariants, Mesh, Name, World};
 
 use crate::components::{
@@ -33,6 +39,7 @@ use crate::components::{
 pub enum Baked {
     BaseColour,
     Emission,
+    Unlit,
 }
 
 /// What a transparent node's materials become.
@@ -57,14 +64,15 @@ impl LowerStuntboostMaterials {
         }
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: baked=base-colour|emission, transparent=blend|opaque")
+                format!("{k} is required: baked=base-colour|emission|unlit, transparent=blend|opaque")
             })
         };
         Ok(LowerStuntboostMaterials {
             baked: match get("baked")? {
                 "base-colour" => Baked::BaseColour,
                 "emission" => Baked::Emission,
-                v => return Err(format!("baked={v}: base-colour or emission")),
+                "unlit" => Baked::Unlit,
+                v => return Err(format!("baked={v}: base-colour, emission or unlit")),
             },
             transparent: match get("transparent")? {
                 "blend" => Transparent::Blend,
@@ -77,9 +85,12 @@ impl LowerStuntboostMaterials {
 
 fn texture(t: &Option<StuntboostTextureRef>) -> Option<TextureRef> {
     let t = t.as_ref()?;
-    let mut r = TextureRef::new(t.texture);
-    r.texcoord = u8::try_from(t.texcoord).unwrap_or(0);
-    Some(r)
+    Some(TextureRef {
+        texcoord: u8::try_from(t.texcoord).unwrap_or(0),
+        wrap: t.wrap,
+        filters: t.filters,
+        ..TextureRef::new(t.texture)
+    })
 }
 
 impl Pass for LowerStuntboostMaterials {
@@ -93,6 +104,7 @@ impl Pass for LowerStuntboostMaterials {
                 match self.baked {
                     Baked::BaseColour => "base-colour",
                     Baked::Emission => "emission",
+                    Baked::Unlit => "unlit",
                 }
                 .to_owned(),
             ),
@@ -116,6 +128,9 @@ impl Pass for LowerStuntboostMaterials {
         &[Instance::NAME, MaterialVariants::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let baked_level = w
+            .iter::<StuntboostNode>()
+            .any(|(_, n)| n.name.class_name() == "SetBakedLighting");
         let materials: Vec<(Entity, StuntboostMaterial)> = w
             .iter::<StuntboostMaterial>()
             .map(|(e, m)| (e, m.clone()))
@@ -135,15 +150,28 @@ impl Pass for LowerStuntboostMaterials {
                     ("BLEND", _) => AlphaMode::Blend,
                     _ => AlphaMode::Opaque,
                 },
+                shading: m.shading,
                 ..PbrMaterial::default()
             };
             if m.name.starts_with("bake_mat_") {
                 log.count("bake materials", 1);
-                if self.baked == Baked::Emission {
-                    pbr.emissive = [1.0, 1.0, 1.0];
-                    pbr.emissive_texture = pbr.base_color_texture.take();
-                    pbr.emissive_strength = 1.0;
-                    pbr.base_color = [0.0, 0.0, 0.0, m.base_color[3]];
+                match self.baked {
+                    Baked::BaseColour => {}
+                    Baked::Emission => {
+                        pbr.emissive = [1.0, 1.0, 1.0];
+                        pbr.emissive_texture = pbr.base_color_texture.take();
+                        pbr.emissive_strength = 1.0;
+                        pbr.base_color = [0.0, 0.0, 0.0, m.base_color[3]];
+                    }
+                    Baked::Unlit => {
+                        pbr.shading = Shading::Unlit;
+                        if !baked_level {
+                            log.count(
+                                "bake materials drawn unlit in a level the game lights (no SetBakedLighting)",
+                                1,
+                            );
+                        }
+                    }
                 }
             }
             if w.has::<StuntboostDirectLight>(e) {

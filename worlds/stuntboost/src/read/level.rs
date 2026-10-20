@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use primase_core::frame::{Axis, SourceFrame};
+use primase_core::pbr::{Filters, Wrap};
 use primase_core::{
     ColorSpace, Curve, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
     Transform, World,
@@ -59,8 +60,8 @@ pub struct LevelReport {
     pub derived_missing: Vec<String>,
 }
 
-/// A glTF texture: its image's entity and its sampler's magnification and minification filters.
-type GltfTexture = (Entity, Option<u32>, Option<u32>);
+/// A glTF texture: its image's entity and its sampler's filters and wrap.
+type GltfTexture = (Entity, Filters, [Wrap; 2]);
 
 fn format(file: &str, detail: impl std::fmt::Display) -> Error {
     Error::Format(format!("{file}: {detail}"))
@@ -328,21 +329,19 @@ fn read_part(
             .get("sampler")
             .and_then(Value::as_u64)
             .and_then(|i| samplers.get(i as usize));
-        let filter = |k: &str| {
-            sampler
-                .and_then(|s| s.get(k))
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
+        let (filters, wrap) = match sampler {
+            Some(s) => primase_glb::sampler_filters(s)?,
+            None => (Filters::default(), [Wrap::Repeat; 2]),
         };
-        texture_refs.push(entity.map(|e| (e, filter("magFilter"), filter("minFilter"))));
+        texture_refs.push(entity.map(|e| (e, filters, wrap)));
     }
     let texture_ref = |info: Option<&Value>| -> Option<StuntboostTextureRef> {
         let info = info?;
-        let (texture, mag_filter, min_filter) = (*texture_refs.get(info.get("index")?.as_u64()? as usize)?)?;
+        let (texture, filters, wrap) = (*texture_refs.get(info.get("index")?.as_u64()? as usize)?)?;
         Some(StuntboostTextureRef {
             texture,
-            mag_filter,
-            min_filter,
+            filters,
+            wrap,
             texcoord: info.get("texCoord").and_then(Value::as_u64).unwrap_or(0) as u32,
         })
     };
@@ -384,7 +383,9 @@ fn read_part(
             .and_then(|e| e.get("KHR_materials_specular"))
             .and_then(|s| s.get("specularColorTexture"));
         let name = m.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+        let shading = primase_glb::material_shading(&m)?;
         let material = StuntboostMaterial {
+            shading,
             name: name.clone(),
             base_color: [bc[0], bc[1], bc[2], bc[3]],
             base_color_texture: texture_ref(pbr.and_then(|p| p.get("baseColorTexture"))),
