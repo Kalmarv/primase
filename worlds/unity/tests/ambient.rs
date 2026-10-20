@@ -3,8 +3,13 @@
 //! `Main Mountain Scene` (found by name in BuildSettings' scene list, `levelN` by its index), and RenderSettings'
 //! ambient is one per scene, so the lodge shares the mountain's. Whether the game varies ambient inside the lodge (a
 //! volume of its own) is a separate question this does not answer. Per stored mode: trilight lowers to the gradient
-//! of the stored colours made linear, flat to the sky colour, skybox and custom to nothing (omitted) or the stored
-//! gradient (an approximation), as the program chooses. A player without that scene (another game) is skipped.
+//! of the stored colours made linear, flat to the sky colour, skybox and custom to nothing (omitted), the stored
+//! gradient (an approximation) or the stored probe's average (flat, an approximation; none for an all-zero probe), as
+//! the program chooses. A player without that scene (another game) is skipped.
+//!
+//! As read (Sledding Game on Unity 6000.3.12f1): skybox (mode 0), its stored colours Unity's defaults (reported
+//! under `stored-gradient`), its probe's average 0.1792, 0.2244, 0.3062 (Unity's `m_IndirectSpecularColor`):
+//! `probe=probe-average` is the choice that lights the lodge as the game does on average.
 
 #![allow(clippy::unwrap_used)]
 
@@ -14,7 +19,7 @@ use primase_image::srgb_to_linear_f32;
 use primase_testdata::real_data;
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityRenderSettings;
-use primase_unity::lower_ambient::{LowerUnityAmbient, UnityAmbientProbe};
+use primase_unity::lower_ambient::{LowerUnityAmbient, UnityAmbientProbe, probe_average};
 use primase_unity::player::{ObjRef, Player};
 use primase_unity::scene::Scene;
 use primase_unity::value::{Array, Value};
@@ -91,7 +96,11 @@ fn the_lodges_ambient_lowers_by_its_stored_mode() {
             ground: lin(stored.ground),
         },
     };
-    for probe in [UnityAmbientProbe::Omit, UnityAmbientProbe::StoredGradient] {
+    for probe in [
+        UnityAmbientProbe::Omit,
+        UnityAmbientProbe::StoredGradient,
+        UnityAmbientProbe::ProbeAverage,
+    ] {
         let (ambient, log) = lower(probe);
         println!(
             "{probe:?}: {ambient:?}; approximated {:?}; omitted {:?}",
@@ -113,6 +122,18 @@ fn the_lodges_ambient_lowers_by_its_stored_mode() {
             (0 | 4, UnityAmbientProbe::StoredGradient) => {
                 assert_eq!(ambient, Some(gradient.clone()));
                 assert!(log.approximations.keys().any(|k| k.contains("skybox or custom")));
+            }
+            (0 | 4, UnityAmbientProbe::ProbeAverage) => {
+                match stored.probe.filter(|p| p.iter().any(|&c| c != 0.0)) {
+                    Some(p) => assert_eq!(
+                        ambient,
+                        Some(Ambient {
+                            intensity: 1.0,
+                            light: AmbientLight::Flat(probe_average(&p)),
+                        })
+                    ),
+                    None => assert_eq!(ambient, None),
+                }
             }
             (m, _) => panic!("{LODGE_SCENE} stores ambient mode {m}, which Unity does not define"),
         }

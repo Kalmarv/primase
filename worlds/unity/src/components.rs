@@ -599,8 +599,11 @@ impl Component for UnityCamera {
 }
 
 /// A scene's ambient lighting as RenderSettings stores it: `mode` (`m_AmbientMode`: 0 skybox, 1 trilight, a gradient
-/// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored, and
-/// `intensity` (`m_AmbientIntensity`).
+/// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored,
+/// `intensity` (`m_AmbientIntensity`) and the ambient probe as stored (`m_AmbientProbe`, Unity's SphericalHarmonicsL2:
+/// nine coefficients per channel, red 0..8, green 9..17, blue 18..26; `None` when the RenderSettings store none). The
+/// probe is what the editor last generated: all zeros when it never did, and not necessarily from the colours stored
+/// beside it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityAmbient {
     pub mode: i64,
@@ -608,6 +611,7 @@ pub struct UnityAmbient {
     pub equator: [f32; 4],
     pub ground: [f32; 4],
     pub intensity: f32,
+    pub probe: Option<[f32; 27]>,
 }
 
 /// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
@@ -641,8 +645,8 @@ pub struct UnityRenderSettings {
 
 impl primase_core::Resource for UnityRenderSettings {
     const NAME: &'static str = "unity.render_settings";
-    /// 2: `pipeline`; 3: `ambient`.
-    const VERSION: u32 = 3;
+    /// 2: `pipeline`; 3: `ambient`; 4: the ambient's `probe`.
+    const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

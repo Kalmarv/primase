@@ -213,6 +213,7 @@ fn level(mode: i64) -> World {
             equator: [0.7835, 0.7835, 0.7835, 1.0],
             ground: [0.5457, 0.5457, 0.5457, 1.0],
             intensity: 1.0,
+            probe: None,
         }),
     });
     let mut place = |corners: Vec<[f32; 3]>, indices: Option<Vec<u32>>, cols: [[f32; 3]; 4]| {

@@ -764,6 +764,23 @@ impl Scene {
                         .ok_or_else(|| {
                             invalid(format!("{file}: RenderSettings without m_AmbientIntensity"))
                         })?,
+                    probe: match settings.get("m_AmbientProbe") {
+                        None => None,
+                        Some(sh) => {
+                            let mut out = [0.0f32; 27];
+                            for (i, c) in out.iter_mut().enumerate() {
+                                // the type tree names the coefficients `sh[ 0]` .. `sh[26]`
+                                *c = sh.get(&format!("sh[{i:2}]")).and_then(Value::as_f32).ok_or_else(
+                                    || {
+                                        invalid(format!(
+                                            "{file}: RenderSettings' m_AmbientProbe without sh[{i:2}]"
+                                        ))
+                                    },
+                                )?;
+                            }
+                            Some(out)
+                        }
+                    },
                 }),
             };
             found = Some(SceneRenderSettings { sun, ambient });
