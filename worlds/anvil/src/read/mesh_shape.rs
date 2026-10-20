@@ -1,10 +1,12 @@
 //! A MeshShape resource's body as a run of sections, each kept as stored; nothing in it is interpreted (no geometry).
 //!
 //! The body (little-endian; offsets from the body's start, after the resource's class id and extension):
-//! - a prefix: a u32 (observed 1), a u8 (observed 0), the section run's length (u32);
+//! - a prefix: a byte (1), a byte (0, 0x21 or 0x3F, kept as stored), three zero bytes, the section run's length
+//!   (u32);
 //! - the section run, from byte 9 for that length: consecutive sections, each a type (u16), the marker 0xECD7 (u16),
 //!   its size (i32, its 8 header bytes included), then its bytes; the sections close the run exactly;
-//! - a tail: whatever follows the run, kept as stored (not sections).
+//! - a tail, kept as stored, which [`MeshShape::surfaces`] reads: a u16, a u32 count (0 or the face count) and that
+//!   many bytes, a u32 count n and n references ([`crate::read::reference`]), and eight f32, ending the body.
 //!
 //! Established on two MeshShape resources of different sizes (Riders Republic build 25394987: ten sections each, in
 //! the same type order).
@@ -21,14 +23,14 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::reference;
+
 /// A record type: equals the CRC-32 of the ASCII string `MeshShape` (the name a label).
 pub const MESH_SHAPE: u32 = 0xB22B_3E61;
 /// The marker in every section header.
 pub const SECTION_MARKER: u16 = 0xECD7;
-/// The prefix's first u32, the one value read.
-pub const VERSION: u32 = 1;
-/// The prefix's byte, the one value read.
-pub const FLAG: u8 = 0;
+/// The prefix's second byte's values read (every MeshShape of Riders Republic has one of them).
+pub const SECOND_BYTES: [u8; 3] = [0, 0x21, 0x3F];
 /// The prefix's length: where the section run starts.
 pub const PREFIX: usize = 9;
 /// A section header's length (type, marker, size).
@@ -43,10 +45,14 @@ pub enum Error {
         have: usize,
         need: usize,
     },
-    #[error("MeshShape prefix: version {0}: only version 1 is read")]
-    Version(u32),
-    #[error("MeshShape prefix: byte {0}: only 0 is read (another value isn't established)")]
-    Flag(u8),
+    #[error("MeshShape prefix: byte {found} at {at}, not {read}")]
+    Prefix {
+        at: usize,
+        found: u8,
+        read: &'static str,
+    },
+    #[error("MeshShape tail: {0}")]
+    Tail(String),
     #[error("MeshShape section run: {length} bytes from {PREFIX} past the body's {body} bytes")]
     Run { length: u32, body: usize },
     #[error("MeshShape section {index} at {at}: marker {marker:#06x}, not 0xECD7")]
@@ -109,13 +115,26 @@ pub struct Section {
 /// A MeshShape body: its prefix, its sections in order and its tail, all as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshShape {
-    pub version: u32,
-    pub flag: u8,
+    /// The prefix's second byte.
+    pub second: u8,
     /// The section run's length as stored.
     pub run_length: u32,
     pub sections: Vec<Section>,
     /// The bytes after the run, as stored.
     pub tail: Vec<u8>,
+}
+
+/// A MeshShape's tail as [`MeshShape::surfaces`] reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Surfaces {
+    /// The u16 the tail starts with.
+    pub first: u16,
+    /// Each face's index into `references`, or empty (one reference for every face).
+    pub per_face: Vec<u8>,
+    /// The references (CollisionMaterials on Riders Republic).
+    pub references: Vec<Option<reference::Reference>>,
+    /// The eight f32 ending the tail, as stored.
+    pub floats: [f32; 8],
 }
 
 fn field<const N: usize>(body: &[u8], at: usize, what: &'static str) -> Result<[u8; N], Error> {
@@ -133,13 +152,27 @@ fn field<const N: usize>(body: &[u8], at: usize, what: &'static str) -> Result<[
 impl MeshShape {
     /// A MeshShape resource's body (its [`crate::read::data::Resource::body`]).
     pub fn parse(body: &[u8]) -> Result<MeshShape, Error> {
-        let version = u32::from_le_bytes(field(body, 0, "prefix")?);
-        if version != VERSION {
-            return Err(Error::Version(version));
+        let [first, second, z0, z1, z2] = field::<5>(body, 0, "prefix")?;
+        if first != 1 {
+            return Err(Error::Prefix {
+                at: 0,
+                found: first,
+                read: "1",
+            });
         }
-        let [flag] = field::<1>(body, 4, "prefix")?;
-        if flag != FLAG {
-            return Err(Error::Flag(flag));
+        if !SECOND_BYTES.contains(&second) {
+            return Err(Error::Prefix {
+                at: 1,
+                found: second,
+                read: "0, 0x21 or 0x3F",
+            });
+        }
+        if let Some((at, &found)) = [z0, z1, z2].iter().enumerate().find(|(_, b)| **b != 0) {
+            return Err(Error::Prefix {
+                at: at.saturating_add(2),
+                found,
+                read: "0",
+            });
         }
         let run_length = u32::from_le_bytes(field(body, 5, "prefix")?);
         let past = || Error::Run {
@@ -186,8 +219,7 @@ impl MeshShape {
         }
         let tail = body.get(run_end..).ok_or_else(past)?.to_vec();
         Ok(MeshShape {
-            version,
-            flag,
+            second,
             run_length,
             sections,
             tail,
@@ -211,6 +243,62 @@ impl MeshShape {
     /// Its triangle geometry as stored: each section's length exact for its count, every index in range, and each
     /// edge's face ids the faces that name it (two for an edge between faces, one and [`NO_FACE`] for a boundary
     /// edge). Nothing is converted: positions are as stored, in the shape's own units and frame.
+    /// The tail read: a u16, a u32 count that is 0 or the face count and that many bytes (each face's index into the
+    /// references), a u32 count and that many references ([`crate::read::reference`]), and eight f32, ending the
+    /// tail. Every MeshShape of Riders Republic reads so in the census, its face bytes each below the reference count
+    /// (CollisionMaterials on every one resolved); what the u16 and the eight f32 hold is kept, not read.
+    pub fn surfaces(&self) -> Result<Surfaces, Error> {
+        let faces = self.geometry()?.faces.len();
+        let bad = |why: String| Error::Tail(why);
+        let t = &self.tail;
+        let mut at = 0usize;
+        let mut take = |n: usize| -> Result<&[u8], Error> {
+            let end = at.checked_add(n).ok_or_else(|| bad("past the tail".into()))?;
+            let s = t
+                .get(at..end)
+                .ok_or_else(|| bad(format!("{} bytes, shorter than {end}", t.len())))?;
+            at = end;
+            Ok(s)
+        };
+        let u32_at = |s: &[u8]| s.try_into().map(u32::from_le_bytes).unwrap_or(0);
+        let first: [u8; 2] = take(2)?.try_into().map_err(|_| bad("short".into()))?;
+        let count = usize::try_from(u32_at(take(4)?)).unwrap_or(usize::MAX);
+        if count != 0 && count != faces {
+            return Err(bad(format!("{count} per-face bytes for {faces} faces")));
+        }
+        let per_face = take(count)?.to_vec();
+        let n = usize::try_from(u32_at(take(4)?)).unwrap_or(usize::MAX);
+        if n > t.len() / reference::LENGTH {
+            return Err(bad(format!("{n} references past the tail")));
+        }
+        let mut references = Vec::with_capacity(n);
+        for _ in 0..n {
+            let bytes: [u8; reference::LENGTH] = take(reference::LENGTH)?
+                .try_into()
+                .map_err(|_| bad("short".into()))?;
+            references.push(reference::parse(bytes).map_err(|e| bad(e.to_string()))?);
+        }
+        if let Some(b) = per_face.iter().find(|&&b| usize::from(b) >= n) {
+            return Err(bad(format!("a face's byte {b}, of {n} references")));
+        }
+        let mut floats = [0.0f32; 8];
+        for f in &mut floats {
+            *f = f32::from_le_bytes(take(4)?.try_into().map_err(|_| bad("short".into()))?);
+        }
+        if at != t.len() {
+            return Err(bad(format!(
+                "{} bytes after its eight f32",
+                t.len().saturating_sub(at)
+            )));
+        }
+        Ok(Surfaces {
+            first: u16::from_le_bytes(first),
+            per_face,
+            references,
+            floats,
+        })
+    }
+
     pub fn geometry(&self) -> Result<Geometry, Error> {
         let bad = |kind: u16, why: String| Error::Geometry { kind, why };
         let counts = self.section(COUNTS)?;

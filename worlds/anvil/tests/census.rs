@@ -315,7 +315,7 @@ fn census_forge(
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
             MESH_SHAPE => MeshShape::parse(&r.body)
-                .and_then(|s| s.geometry().map(|_| ()))
+                .and_then(|s| s.surfaces().map(|_| ()))
                 .map_err(|e| e.to_string()),
             _ => Ok(()),
         };

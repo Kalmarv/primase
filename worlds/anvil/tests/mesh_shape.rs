@@ -9,7 +9,7 @@ use primase_anvil::read::mesh_shape::{
 };
 use primase_testdata::real_data;
 
-/// A body: the prefix (version, byte, run length), the sections (type, marker, payload; size = 8 + payload), a tail.
+/// A body: the prefix (a u32 holding its first four bytes, a byte, run length), the sections (type, marker, payload; size = 8 + payload), a tail.
 fn body(version: u32, flag: u8, run: Option<u32>, sections: &[(u16, u16, &[u8])], tail: &[u8]) -> Vec<u8> {
     let mut s = Vec::new();
     for (kind, marker, payload) in sections {
@@ -40,7 +40,7 @@ fn a_body_reads_as_its_sections_and_tail() {
         b"tail",
     );
     let m = MeshShape::parse(&b).unwrap();
-    assert_eq!((m.version, m.flag, m.run_length), (1, 0, 13 + 11));
+    assert_eq!((m.second, m.run_length), (0, 13 + 11));
     let got: Vec<(usize, u16, u32, &[u8])> = m
         .sections
         .iter()
@@ -64,11 +64,26 @@ fn what_is_not_established_is_refused() {
     let one: &[(u16, u16, &[u8])] = &[(0x0201, 0xECD7, b"ab")];
     assert!(matches!(
         MeshShape::parse(&body(2, 0, None, one, b"")),
-        Err(Error::Version(2))
+        Err(Error::Prefix { at: 0, found: 2, .. })
+    ));
+    // the second byte 0x3F is read, 0x40 isn't
+    assert_eq!(
+        MeshShape::parse(&body(0x3F01, 0, None, one, b""))
+            .expect("read")
+            .second,
+        0x3F
+    );
+    assert!(matches!(
+        MeshShape::parse(&body(0x4001, 0, None, one, b"")),
+        Err(Error::Prefix {
+            at: 1,
+            found: 0x40,
+            ..
+        })
     ));
     assert!(matches!(
         MeshShape::parse(&body(1, 1, None, one, b"")),
-        Err(Error::Flag(1))
+        Err(Error::Prefix { at: 4, found: 1, .. })
     ));
     // the run longer than the body
     assert!(matches!(
@@ -129,7 +144,7 @@ fn two_real_mesh_shapes_read_as_their_sections() {
         let r = Resource::parse(&e.resource.data).unwrap();
         assert_eq!((r.type_id, r.body.len()), (MESH_SHAPE, body_len), "entry {k}");
         let m = MeshShape::parse(&r.body).unwrap();
-        assert_eq!((m.version, m.flag, m.run_length), (1, 0, run), "entry {k}");
+        assert_eq!((m.second, m.run_length), (0, run), "entry {k}");
         let got: Vec<(u16, u32)> = m.sections.iter().map(|s| (s.kind, s.size)).collect();
         let want: Vec<(u16, u32)> = kinds.iter().copied().zip(sizes).collect();
         assert_eq!(got, want, "entry {k}");
