@@ -120,7 +120,7 @@ impl FillGrid {
         Ok(grid)
     }
 
-    /// From pipeline options: `anchor=X,Y,Z`, `spacing=S`, `bounds=X0,Y0,Z0,X1,Y1,Z1`, `cells=meeting|inside`,
+    /// From pipeline options: `anchor=X;Y;Z`, `spacing=S`, `bounds=X0;Y0;Z0;X1;Y1;Z1`, `cells=meeting|inside`,
     /// `clearance=C` and `reach=R`, each required.
     pub fn from_options(o: &Options) -> Result<FillGrid, String> {
         const KEYS: [&str; 6] = ["anchor", "spacing", "bounds", "cells", "clearance", "reach"];
@@ -130,7 +130,7 @@ impl FillGrid {
         let numbers = |k: &str, n: usize| -> Result<Vec<f64>, String> {
             let v = o.get(k).ok_or_else(|| format!("{k} is required ({n} numbers)"))?;
             let xs: Vec<f64> = v
-                .split(',')
+                .split(';')
                 .map(|x| {
                     x.trim()
                         .parse::<f64>()
@@ -162,7 +162,7 @@ impl FillGrid {
     }
 
     fn options(&self) -> Options {
-        let list = |xs: &[f64]| xs.iter().map(f64::to_string).collect::<Vec<_>>().join(",");
+        let list = |xs: &[f64]| xs.iter().map(f64::to_string).collect::<Vec<_>>().join(";");
         Options::from([
             ("anchor".to_owned(), list(&self.anchor)),
             ("spacing".to_owned(), self.spacing.to_string()),

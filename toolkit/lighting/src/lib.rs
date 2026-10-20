@@ -14,9 +14,9 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "fill-ambient-lights",
         |o| Ok(Box::new(FillAmbientLights::new(FillGrid::from_options(o)?))),
         &[
-            ("anchor", "0,0,0"),
+            ("anchor", "0;0;0"),
             ("spacing", "15"),
-            ("bounds", "0,0,0,15,15,15"),
+            ("bounds", "0;0;0;15;15;15"),
             ("cells", "meeting"),
             ("clearance", "3.75"),
             ("reach", "22.5"),

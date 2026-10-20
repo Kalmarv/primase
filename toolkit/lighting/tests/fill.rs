@@ -307,9 +307,9 @@ fn the_registered_pass_takes_every_choice_from_its_options() {
     let mut reg = PassRegistry::new();
     primase_lighting::register(&mut reg);
     let options: Options = [
-        ("anchor", "1,2,3"),
+        ("anchor", "1;2;3"),
         ("spacing", "15"),
-        ("bounds", "-10,0,-20,40,12,30"),
+        ("bounds", "-10;0;-20;40;12;30"),
         ("cells", "inside"),
         ("clearance", "3.75"),
         ("reach", "22.5"),
