@@ -123,6 +123,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("kinds", "spawn+travel"), ("above", "1")],
     );
     reg.register("snap-reskate-markers", passes::snap_reskate_markers);
+    // which curves grind, how thick and on what are the program's: no default
+    reg.register_requiring(
+        "lower-reskate-grind-curves",
+        |o| Ok(Box::new(passes::LowerReskateGrindCurves::from_options(o)?)),
+        &[("kinds", "rail"), ("radius", "0.03"), ("surface", "metal_rail")],
+    );
     reg.register("prepare-reskate-grinds", passes::prepare_reskate_grinds);
     // the step is the program's: no default
     reg.register_requiring(

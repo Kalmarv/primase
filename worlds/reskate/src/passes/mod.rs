@@ -7,6 +7,7 @@ pub mod blended;
 pub mod budget;
 pub mod collision;
 pub mod floor;
+pub mod grind_curves;
 pub mod grinds;
 pub mod ground_markers;
 pub mod layered;
@@ -48,6 +49,7 @@ pub use floor::{
     DecideReskateFloor, PrepareReskateFloor, SummarizeReskateFloor, decide_reskate_floor,
     prepare_reskate_floor, summarize_reskate_floor,
 };
+pub use grind_curves::LowerReskateGrindCurves;
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
 pub use ground_markers::GroundReskateMarkers;
 pub use layered_lower::LowerLayeredPbr;
