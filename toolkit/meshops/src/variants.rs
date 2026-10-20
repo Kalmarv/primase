@@ -1,7 +1,9 @@
 //! `specialize-material-variants{unused=keep|discard}`: placements that use different material variants of a prototype
 //! ([`MaterialVariants`]: per primitive, variant -> material, overriding the primitive's material for the placements
 //! whose [`Instance::variant`] matches) get prototypes of their own, each drawing its variant's materials as its
-//! primitives' own. A placement whose variant draws the prototype's own materials stays on it; each other form used
+//! primitives' own. A placement whose variant draws the prototype's own materials stays on it, choosing what it drew:
+//! its own variant while the prototype keeps its variants (variant 0 is not neutral: a map may list it), variant 0
+//! once they are discarded (none is left to choose). Each other form used
 //! gets one copy of the prototype (its components copied, its mesh drawing the variant's materials, no variants, no
 //! mesh file: the file names the prototype's own materials), named `<name> variant <v>`, declared as made from the
 //! prototype ([`PassLog::place_from`]), and its placements point at it with variant 0. A destination whose coordinates
@@ -165,14 +167,18 @@ impl Pass for SpecializeMaterialVariants {
                 let materials = resolved(&mesh, &variants, variant);
                 if materials == own {
                     stays = true;
-                    for e in placements {
-                        w.insert(
-                            e,
-                            Instance {
-                                prototype: proto,
-                                variant: 0,
-                            },
-                        );
+                    // kept, the variants still resolve: the placement's own variant draws what it drew, where
+                    // variant 0 may draw another form; discarded, none is left and variant 0 draws the own materials
+                    if self.unused == UnusedVariants::Discard {
+                        for e in placements {
+                            w.insert(
+                                e,
+                                Instance {
+                                    prototype: proto,
+                                    variant: 0,
+                                },
+                            );
+                        }
                     }
                     continue;
                 }

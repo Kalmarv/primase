@@ -79,14 +79,15 @@ fn place(w: &mut World, prototype: Entity, variant: u32) -> Entity {
     e
 }
 
-/// The prototype a placement draws and its material; the placement chooses no variant.
+/// The prototype a placement draws and the material it draws there, as a writer resolves it: the prototype's
+/// variant map for the placement's variant, else the primitive's own material.
 fn drawn(w: &World, placement: Entity) -> (Entity, Option<Entity>) {
     let i = w.get::<Instance>(placement).unwrap();
-    assert_eq!(i.variant, 0);
-    (
-        i.prototype,
-        w.get::<Mesh>(i.prototype).unwrap().primitives()[0].material,
-    )
+    let own = w.get::<Mesh>(i.prototype).unwrap().primitives()[0].material;
+    let chosen = w
+        .get::<MaterialVariants>(i.prototype)
+        .and_then(|v| v.0[0].get(&i.variant).copied());
+    (i.prototype, chosen.or(own))
 }
 
 /// Kept: the placements drawing the prototype's own materials stay on it; each other form used gets one copy drawing
@@ -139,6 +140,30 @@ fn each_form_used_gets_its_prototype_and_nothing_is_lost() {
     assert_eq!(log.counts["prototype copies drawing a material variant"], 1);
     assert_eq!(log.counts["placements given their variant's prototype"], 2);
     assert!(log.omitted.is_empty());
+}
+
+/// Variant 0 is not neutral: a map may list it. Kept, a placement whose variant no map lists still draws the
+/// prototype's own material on it, not variant 0's; discarded, it draws the own material with no variant left.
+#[test]
+fn a_placement_drawing_the_own_materials_keeps_them_when_variant_0_is_listed() {
+    for unused in [UnusedVariants::Keep, UnusedVariants::Discard] {
+        let mut w = World::new();
+        let (a, b) = (material(&mut w, "a", None), material(&mut w, "b", None));
+        let p = prototype(&mut w, a, &[(0, b)]);
+        let (zero, seven) = (place(&mut w, p, 0), place(&mut w, p, 7));
+        let before = (drawn(&w, zero).1, drawn(&w, seven).1);
+        assert_eq!(before, (Some(b), Some(a)));
+        specialize(&mut w, unused);
+        assert_eq!(drawn(&w, seven), (p, Some(a)), "{unused:?}");
+        let (copy, m) = drawn(&w, zero);
+        assert_ne!(copy, p, "{unused:?}");
+        assert_eq!(m, Some(b), "{unused:?}");
+        let variant = w.get::<Instance>(seven).unwrap().variant;
+        match unused {
+            UnusedVariants::Keep => assert_eq!(variant, 7),
+            UnusedVariants::Discard => assert_eq!(variant, 0),
+        }
+    }
 }
 
 /// Discarded: every prototype's variants go; a prototype none of whose placements draws its own materials draws its
