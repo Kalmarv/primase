@@ -6,9 +6,12 @@
 //! layer) nor water (`core.material_usage` water) is drawn as a mask at the stated cutoff: soft edges become hard.
 //!
 //! A material's alpha is uniform when it is its base colour factor's alpha, times its base colour texture's when that
-//! is the same at every texel the material's primitives sample: their triangles rasterised in the texture's first
-//! level through the slot's coordinate set, transform and wrap (an atlas transparent in its gutters is judged on its
-//! islands only); over the whole first level when no loaded primitive's coordinates can say. Each material is reported
+//! is the same at every texel the material's primitives can sample, at every level they sample (an atlas transparent
+//! in its gutters is judged on its islands only): their triangles through the slot's coordinate set, transform and
+//! wrap; under nearest filtering (stated both ways) each texel whose square a triangle touches, else each texel a
+//! bilinear tap within a triangle weighs (its square grown by half a texel); every stored mip level too, unless the
+//! slot states the base level only, while a triangle covers one of the level's texels at least (smaller, it is under a
+//! pixel on screen there). Over every texel of every level when no loaded primitive's coordinates can say. Each material is reported
 //! with how it was judged and over what. A uniform alpha at or above the cutoff draws whole: the material is drawn
 //! opaque (exactly what the mask draws, without an alpha texture). A uniform alpha below the cutoff would vanish
 //! whole as a mask, though it still collides (glass). What it becomes is the required `uniform` choice:
@@ -212,47 +215,85 @@ fn wrapped(i: i64, n: u32, wrap: Wrap) -> usize {
     }) as usize
 }
 
-/// The texels of a `tw` x `th` texture that triangle `t` (in texel units) covers: those whose centre it holds, and
-/// each vertex's own, wrapped as `wrap` says. A triangle spanning the texture both ways covers all of it.
-fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2]; 3]) {
+/// Whether triangle `t` and the axis-aligned box `lo`..`hi` share any point (touching counts), by separating axes:
+/// the box's two and the triangle's three edge normals.
+fn overlaps(t: [[f32; 2]; 3], lo: [f32; 2], hi: [f32; 2]) -> bool {
+    let corners = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]];
+    let mut axes = vec![[1.0, 0.0], [0.0, 1.0]];
+    for k in 0..3 {
+        let (a, b) = (t[k], t[(k + 1) % 3]);
+        let n = [b[1] - a[1], a[0] - b[0]];
+        if n[0] != 0.0 || n[1] != 0.0 {
+            axes.push(n);
+        }
+    }
+    axes.iter().all(|n| {
+        let dot = |p: &[f32; 2]| p[0] * n[0] + p[1] * n[1];
+        let (t0, t1) = t
+            .iter()
+            .map(dot)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+                (a.min(v), b.max(v))
+            });
+        let (s0, s1) = corners
+            .iter()
+            .map(dot)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+                (a.min(v), b.max(v))
+            });
+        t1 >= s0 && s1 >= t0
+    })
+}
+
+/// The texels of a `tw` x `th` level that triangle `t` (in that level's texel units) can sample, wrapped as `wrap`
+/// says: under nearest filtering each texel whose square the triangle touches; under linear filtering (`reach`) each
+/// texel a bilinear tap at a point of the triangle weighs, those whose square grown by half a texel on every side it
+/// touches. A triangle spanning the level both ways samples all of it.
+fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2]; 3], reach: bool) {
     let mut set =
         |x: i64, y: i64| covered[wrapped(y, th, wrap[1]) * tw as usize + wrapped(x, tw, wrap[0])] = true;
-    for q in t {
-        set(q[0].floor() as i64, q[1].floor() as i64);
-    }
-    let lo = [0, 1].map(|c| t.iter().map(|q| q[c]).fold(f32::INFINITY, f32::min).floor() as i64);
-    let hi = [0, 1].map(|c| t.iter().map(|q| q[c]).fold(f32::NEG_INFINITY, f32::max).ceil() as i64);
+    let grow = if reach { 0.5 } else { 0.0 };
+    let lo = [0, 1].map(|c| (t.iter().map(|q| q[c]).fold(f32::INFINITY, f32::min) - grow).floor() as i64 - 1);
+    let hi =
+        [0, 1].map(|c| (t.iter().map(|q| q[c]).fold(f32::NEG_INFINITY, f32::max) + grow).ceil() as i64 + 1);
     let span = [hi[0] - lo[0], hi[1] - lo[1]];
-    if (span[0] >= i64::from(tw) && span[1] >= i64::from(th))
+    if (span[0] >= i64::from(tw) + 2 && span[1] >= i64::from(th) + 2)
         || span[0].saturating_mul(span[1]) > 4 * i64::from(tw) * i64::from(th)
     {
         covered.iter_mut().for_each(|c| *c = true);
         return;
     }
-    let [a, b, c] = t;
-    let area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
-    if area.abs() < 1e-12 {
-        return;
-    }
-    let edge = |p: [f32; 2], q: [f32; 2], x: f32, y: f32| {
-        ((q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])) / area
-    };
     for y in lo[1]..hi[1] {
         for x in lo[0]..hi[0] {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            if edge(a, b, fx, fy) >= 0.0 && edge(b, c, fx, fy) >= 0.0 && edge(c, a, fx, fy) >= 0.0 {
+            let (x0, y0) = (x as f32 - grow, y as f32 - grow);
+            if overlaps(t, [x0, y0], [x0 + 1.0 + 2.0 * grow, y0 + 1.0 + 2.0 * grow]) {
                 set(x, y);
             }
         }
     }
 }
 
-/// The texels of a `size` texture that the primitives `drawing` sample through slot `r` (its coordinate set, transform
-/// and wrap); `None` when none can say (no loaded triangle list with those coordinates draws the material).
-fn footprint(w: &World, drawing: &[(Entity, usize)], r: &TextureRef, size: (u32, u32)) -> Option<Vec<bool>> {
-    let (tw, th) = size;
-    let mut covered = vec![false; tw as usize * th as usize];
+/// Each stored level's texels (`sizes`, largest first) that the primitives `drawing` can sample through slot `r` (its
+/// coordinate set, transform, wrap and filters): `Some(covered)` for each level judged, `None` for a level not sampled
+/// (below the base when the slot states no mip levels, or where every triangle covers under one of its texels: it is
+/// then under a pixel on screen). `None` overall when no primitive can say (no loaded triangle list with those
+/// coordinates draws the material).
+fn footprint(
+    w: &World,
+    drawing: &[(Entity, usize)],
+    r: &TextureRef,
+    sizes: &[(u32, u32)],
+) -> Option<Vec<Option<Vec<bool>>>> {
+    use primase_core::pbr::{Filter, MipFilter};
     let transform = r.transform.unwrap_or(UvTransform::IDENTITY);
+    // bilinear reach unless the slot states nearest both ways
+    let reach = !(r.filters.mag == Some(Filter::Nearest) && r.filters.min == Some(Filter::Nearest));
+    let base_only = r.filters.mip == Some(MipFilter::None);
+    let mut covered: Vec<Option<Vec<bool>>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(k, &(lw, lh))| (k == 0 || !base_only).then(|| vec![false; lw as usize * lh as usize]))
+        .collect();
     let mut any = false;
     for &(mesh, i) in drawing {
         let p = w.get::<Mesh>(mesh)?.primitives().get(i)?;
@@ -262,17 +303,28 @@ fn footprint(w: &World, drawing: &[(Entity, usize)], r: &TextureRef, size: (u32,
         let Some(Stream::F32x2(uv)) = p.streams.get(&Semantic::TexCoord(r.texcoord)) else {
             return None;
         };
-        let texel = |k: u32| -> Option<[f32; 2]> {
-            let q = transform.apply(*uv.get(k as usize)?);
-            Some([q[0] * tw as f32, q[1] * th as f32])
-        };
+        let at = |k: u32| -> Option<[f32; 2]> { Some(transform.apply(*uv.get(k as usize)?)) };
         let n = uv.len() as u32;
         let triangles: Vec<[u32; 3]> = match &p.indices {
             Some(idx) => idx.as_chunks::<3>().0.to_vec(),
             None => (0..n / 3).map(|k| [3 * k, 3 * k + 1, 3 * k + 2]).collect(),
         };
         for [a, b, c] in triangles {
-            mark(&mut covered, size, r.wrap, [texel(a)?, texel(b)?, texel(c)?]);
+            let t = [at(a)?, at(b)?, at(c)?];
+            for (k, level) in covered.iter_mut().enumerate() {
+                let Some(level) = level else { continue };
+                let (lw, lh) = sizes[k];
+                let s = t.map(|q| [q[0] * lw as f32, q[1] * lh as f32]);
+                // a coarser level samples this triangle only while it covers one of its texels at least
+                let area = ((s[1][0] - s[0][0]) * (s[2][1] - s[0][1])
+                    - (s[2][0] - s[0][0]) * (s[1][1] - s[0][1]))
+                    .abs()
+                    / 2.0;
+                if k > 0 && area < 1.0 {
+                    continue;
+                }
+                mark(level, (lw, lh), r.wrap, s, reach);
+            }
             any = true;
         }
     }
@@ -286,14 +338,19 @@ struct Judged {
     over: &'static str,
 }
 
+/// A texture's stored levels decoded to RGBA8, largest first, with their sizes.
+type Levels = Vec<(u32, u32, Vec<u8>)>;
+
 /// Material `m`'s alpha (drawn by the primitives `drawing`): its base colour factor's alpha, times its base colour
-/// texture's when that is the same at every texel its primitives sample (the whole first level when none can say);
-/// `Err` when its base colour texture is not loaded. `decoded` keeps each texture's first level for the run.
+/// texture's when that is the same at every texel its primitives can sample, at every stored level they sample
+/// ([`footprint`]; every texel of every level when none can say); `Err` when its base colour texture is not loaded.
+/// The colour is the factor's times the mean of the base level's texels sampled. `decoded` keeps each texture's
+/// levels for the run.
 fn judge(
     w: &World,
     m: &PbrMaterial,
     drawing: &[(Entity, usize)],
-    decoded: &mut HashMap<Entity, (u32, u32, Vec<u8>)>,
+    decoded: &mut HashMap<Entity, Levels>,
 ) -> Result<Judged, String> {
     let factor = [m.base_color[0], m.base_color[1], m.base_color[2]];
     let Some(r) = m.base_color_texture else {
@@ -302,47 +359,66 @@ fn judge(
             over: "its base colour factor",
         });
     };
-    let (tw, th, rgba) = match decoded.entry(r.texture) {
+    let levels = match decoded.entry(r.texture) {
         std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
         std::collections::hash_map::Entry::Vacant(v) => {
             let t = w
                 .get::<Texture>(r.texture)
                 .ok_or("its base colour texture is not loaded")?;
-            let level = t.levels.first().ok_or("its base colour texture has no level")?;
-            let rgba = Decoder::default()
-                .decode_rgba8(t.format, t.width, t.height, level)
-                .map_err(|e| e.to_string())?;
-            v.insert((t.width, t.height, rgba))
+            if t.levels.is_empty() {
+                return Err("its base colour texture has no level".into());
+            }
+            let mut out = Vec::new();
+            for (k, level) in t.levels.iter().enumerate() {
+                let (lw, lh) = ((t.width >> k).max(1), (t.height >> k).max(1));
+                let rgba = Decoder::default()
+                    .decode_rgba8(t.format, lw, lh, level)
+                    .map_err(|e| e.to_string())?;
+                out.push((lw, lh, rgba));
+            }
+            v.insert(out)
         }
     };
-    let texels = rgba.as_chunks::<4>().0;
-    let (sampled, over): (Vec<&[u8; 4]>, _) = match footprint(w, drawing, &r, (*tw, *th)) {
-        Some(covered) => (
-            texels
-                .iter()
-                .zip(covered)
-                .filter(|(_, c)| *c)
-                .map(|(p, _)| p)
-                .collect(),
-            "the texels its primitives sample",
-        ),
+    let sizes: Vec<(u32, u32)> = levels.iter().map(|(lw, lh, _)| (*lw, *lh)).collect();
+    let (covered, over) = match footprint(w, drawing, &r, &sizes) {
+        Some(c) => (c, "the texels its primitives can sample"),
         None => (
-            texels.iter().collect(),
+            sizes
+                .iter()
+                .map(|&(lw, lh)| Some(vec![true; lw as usize * lh as usize]))
+                .collect(),
             "its whole base colour texture (no primitive's coordinates to sample it by)",
         ),
     };
-    let Some(first) = sampled.first() else {
+    // every texel sampled, at every level judged, of one alpha
+    let mut alpha: Option<u8> = None;
+    for ((_, _, rgba), level) in levels.iter().zip(&covered) {
+        let Some(level) = level else { continue };
+        for (p, _) in rgba.as_chunks::<4>().0.iter().zip(level).filter(|(_, c)| **c) {
+            match alpha {
+                Some(a) if a != p[3] => return Ok(Judged { uniform: None, over }),
+                _ => alpha = Some(p[3]),
+            }
+        }
+    }
+    let Some(alpha) = alpha else {
         return Ok(Judged { uniform: None, over });
     };
-    if sampled.iter().any(|p| p[3] != first[3]) {
-        return Ok(Judged { uniform: None, over });
-    }
-    let n = sampled.len() as f64;
+    let base: Vec<&[u8; 4]> = levels[0]
+        .2
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(covered[0].as_deref().unwrap_or(&[]))
+        .filter(|(_, c)| **c)
+        .map(|(p, _)| p)
+        .collect();
+    let n = base.len().max(1) as f64;
     let mean: [f32; 3] =
-        std::array::from_fn(|c| (sampled.iter().map(|p| f64::from(linear(p[c]))).sum::<f64>() / n) as f32);
+        std::array::from_fn(|c| (base.iter().map(|p| f64::from(linear(p[c]))).sum::<f64>() / n) as f32);
     Ok(Judged {
         uniform: Some((
-            m.base_color[3] * f32::from(first[3]) / 255.0,
+            m.base_color[3] * f32::from(alpha) / 255.0,
             std::array::from_fn(|c| factor[c] * mean[c]),
         )),
         over,
@@ -440,7 +516,7 @@ impl PrepareReskateBlendedSurfaces {
         e: Entity,
         name: &str,
         drawing: &[(Entity, usize)],
-        decoded: &mut HashMap<Entity, (u32, u32, Vec<u8>)>,
+        decoded: &mut HashMap<Entity, Levels>,
         log: &mut PassLog,
     ) {
         let m = w.get::<PbrMaterial>(e).expect("listed");
@@ -774,10 +850,10 @@ mod tests {
     fn an_atlas_is_judged_over_the_texels_the_primitives_sample() {
         let atlas = |w: &mut World| {
             let t = w.spawn();
-            // 4 x 4: opaque in the left half (the island), transparent in the right (the gutter)
-            let level: Vec<u8> = (0..16)
+            // 8 x 8: opaque in columns 0..6 (the island), transparent in 6 and 7 (the gutter)
+            let level: Vec<u8> = (0..64)
                 .flat_map(|i| {
-                    if i % 4 < 2 {
+                    if i % 8 < 6 {
                         [200, 200, 200, 255]
                     } else {
                         [0, 0, 0, 0]
@@ -787,8 +863,8 @@ mod tests {
             w.insert(
                 t,
                 Texture {
-                    width: 4,
-                    height: 4,
+                    width: 8,
+                    height: 8,
                     format: primase_core::TexFormat::Rgba8Unorm,
                     levels: vec![level],
                     color_space: primase_core::ColorSpace::Srgb,
@@ -811,7 +887,8 @@ mod tests {
                         ),
                         (
                             Semantic::TexCoord(0),
-                            Stream::F32x2(vec![[0.05, 0.05], [0.45, 0.05], [0.05, 0.95]]),
+                            // texels 1..4 across and 1..6 down: a bilinear tap reaches columns 0..4, all island
+                            Stream::F32x2(vec![[0.125, 0.125], [0.5, 0.125], [0.125, 0.75]]),
                         ),
                     ]),
                     indices: None,
@@ -838,7 +915,7 @@ mod tests {
         assert!(mat.base_color_texture.is_none());
         assert!((mat.base_color[3] - 0.2).abs() < 1e-6);
         assert_eq!(
-            log.counts["blended materials judged uniform over the texels its primitives sample: glass"],
+            log.counts["blended materials judged uniform over the texels its primitives can sample: glass"],
             1
         );
         assert_eq!(log.counts["blended surfaces drawn as nothing"], 1);
@@ -865,20 +942,20 @@ mod tests {
         );
     }
 
-    /// A triangle covers the texels whose centre it holds and its vertices' own, wrapped; one spanning the texture
-    /// both ways covers it all.
+    /// Nearest: the texels whose square a triangle touches; bilinear: those whose square grown by half a texel it
+    /// touches (a tap's reach), clamped or wrapped; a triangle spanning the texture both ways covers it all.
     #[test]
-    fn a_footprint_marks_the_texels_a_triangle_covers() {
+    fn a_footprint_marks_the_texels_a_triangle_can_sample() {
+        let thin = [[0.5, 0.5], [2.5, 0.5], [0.5, 0.6]];
+        let set = |c: &[bool]| (0..c.len()).filter(|&i| c[i]).collect::<Vec<usize>>();
         let mut c = vec![false; 16];
-        mark(
-            &mut c,
-            (4, 4),
-            [Wrap::Repeat; 2],
-            [[0.2, 0.2], [1.8, 0.2], [0.2, 3.8]],
-        );
-        let set: Vec<usize> = (0..16).filter(|&i| c[i]).collect();
-        // centres (0.5, 0.5), (1.5, 0.5), (0.5, 1.5), (0.5, 2.5) inside; (0, 3) the third vertex's own
-        assert_eq!(set, [0, 1, 4, 8, 12]);
+        mark(&mut c, (4, 4), [Wrap::Clamp; 2], thin, false);
+        assert_eq!(set(&c), [0, 1, 2]);
+        // bilinear: column 3 (its grown square reaches 2.5) and row 1 (it reaches 0.5) too; columns and rows below 0
+        // clamp onto 0
+        let mut c = vec![false; 16];
+        mark(&mut c, (4, 4), [Wrap::Clamp; 2], thin, true);
+        assert_eq!(set(&c), (0..8).collect::<Vec<usize>>());
         // past the right edge, repeating: column 0 again
         let mut c = vec![false; 16];
         mark(
@@ -886,16 +963,94 @@ mod tests {
             (4, 4),
             [Wrap::Repeat; 2],
             [[4.2, 0.2], [4.6, 0.2], [4.2, 0.6]],
+            false,
         );
-        assert!(c[0] && c.iter().filter(|x| **x).count() == 1);
+        assert_eq!(set(&c), [0]);
         let mut c = vec![false; 16];
         mark(
             &mut c,
             (4, 4),
             [Wrap::Clamp; 2],
             [[-10.0, -10.0], [30.0, -10.0], [-10.0, 30.0]],
+            true,
         );
         assert!(c.iter().all(|x| *x));
+    }
+
+    /// A thin triangle across a nearest-sampled 4 x 2 texture, (0.1, 0.1), (3.1, 0.1), (0.1, 0.2) in texels, whose
+    /// end texels (0, 0) and (3, 0) are opaque and middle ones (1, 0) and (2, 0) transparent: the triangle samples the
+    /// middle though it holds none of their centres, so its alpha varies and it stays a mask.
+    #[test]
+    fn a_thin_triangle_over_transparent_texels_stays_a_mask() {
+        use primase_core::pbr::{Filter, Filters, TextureRef};
+        let mut w = World::new();
+        let tex = w.spawn();
+        let level: Vec<u8> = (0..8)
+            .flat_map(|i| {
+                if i == 1 || i == 2 {
+                    [0, 0, 0, 0]
+                } else {
+                    [200, 200, 200, 255]
+                }
+            })
+            .collect();
+        w.insert(
+            tex,
+            Texture {
+                width: 4,
+                height: 2,
+                format: primase_core::TexFormat::Rgba8Unorm,
+                levels: vec![level],
+                color_space: primase_core::ColorSpace::Srgb,
+                role: primase_core::TexRole::Color,
+                normal: None,
+            },
+        );
+        let m = w.spawn();
+        w.insert(m, Name("pane".into()));
+        w.insert(
+            m,
+            PbrMaterial {
+                alpha_mode: AlphaMode::Blend,
+                base_color_texture: Some(TextureRef {
+                    filters: Filters {
+                        mag: Some(Filter::Nearest),
+                        min: Some(Filter::Nearest),
+                        mip: None,
+                    },
+                    ..TextureRef::new(tex)
+                }),
+                ..PbrMaterial::default()
+            },
+        );
+        let p = w.spawn();
+        w.insert(
+            p,
+            Mesh::new(vec![primase_core::Primitive {
+                topology: Topology::Triangles,
+                streams: std::collections::BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                    ),
+                    (
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0.025, 0.05], [0.775, 0.05], [0.025, 0.1]]),
+                    ),
+                ]),
+                indices: None,
+                material: Some(m),
+            }]),
+        );
+        let mut log = PassLog::default();
+        frost().run(&mut w, &mut log).unwrap();
+        let mat = w.get::<PbrMaterial>(m).unwrap();
+        assert_eq!(mat.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+        assert!(mat.base_color_texture.is_some());
+        assert_eq!(
+            log.counts["blended materials judged varying over the texels its primitives can sample: pane"],
+            1
+        );
     }
 
     /// A texture whose alpha is the same at every texel makes the alpha uniform (the factor's times the texture's):
