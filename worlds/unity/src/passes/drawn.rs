@@ -208,8 +208,8 @@ mod tests {
         );
     }
 
-    /// SkateBIRD level2's cameras: the screen camera's mask leaves layer 28 out, the minimap camera (into a texture)
-    /// draws it. Its markers on layer 28 are left out, counted by layer; the rest stay.
+    /// A level's cameras as one game stores them: the screen camera's mask leaves layer 28 out, the minimap camera
+    /// (into a texture) draws it. Its markers on layer 28 are left out, counted by layer; the rest stay.
     #[test]
     fn layers_no_screen_camera_draws_are_left_out() {
         let mut w = World::default();

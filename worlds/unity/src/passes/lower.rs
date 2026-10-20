@@ -90,7 +90,7 @@ pub fn modelled(shader: Option<&str>) -> bool {
 
 /// The shaders whose family states what their surfaces are (`core.material_usage`): FlatKit's water shader draws a
 /// water surface; URP's SpeedTree 7 shader draws a tree's vegetation (wind sway, hue variation, alpha test), except a
-/// material whose geometry keyword is bark ([`SPEEDTREE_BARK`]). A shader's own name decides nothing else: Sledding's
+/// material whose geometry keyword is bark ([`SPEEDTREE_BARK`]). A shader's own name decides nothing else: one game's
 /// `Shader Graphs/ocean` draws a spray-paint bottle.
 const SHADER_USAGE: [(&str, MaterialUsage); 2] = [
     ("FlatKit/Water", MaterialUsage::Water),
@@ -1014,7 +1014,7 @@ mod tests {
 
     /// URP takes its forward pass in its own subshader; a built-in subshader's base pass is not URP's, so a Standard
     /// material under URP has no draw pass (counted) and is opaque. SrcAlpha OneMinusSrcAlpha in the Geometry queue
-    /// writing depth (Sledding's snow shader) is drawn opaque, counted; the same without depth writes blends. Without a
+    /// writing depth (a game's snow shader) is drawn opaque, counted; the same without depth writes blends. Without a
     /// known pipeline nothing is read.
     #[test]
     fn urp_takes_its_forward_pass_and_an_unknown_pipeline_reads_none() {
