@@ -25,5 +25,5 @@ workspace = true
 
 [package.metadata.primase]
 kind = "game"
-names = ["stuntboost", "monogame"]
+names = ["stuntboost", "monogame", "xna"]
 engine = "primase-monogame"

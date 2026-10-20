@@ -27,4 +27,6 @@ workspace = true
 [package.metadata.primase]
 kind = "game"
 names = ["skatebird", "unity"]
+# the game's own script class holding the destination's word, matched as a whole string
+source-names = ["SkateCollectible"]
 engine = "primase-unity"

@@ -20,8 +20,9 @@
 //!   carries a migration status in `architecture.toml` (`[[layout]]`, per module, counted like a break). The rules
 //!   are checked on `layout_rules`' and `layout_paths`' fixtures.
 //! - `game_names`: no game, engine or destination names in core, toolkit and formats code (the test-input registry
-//!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`), a game crate's string literals
-//!   aside (its game's own names).
+//!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`). A game crate's source names
+//!   that hold another crate's word (SkateBIRD's script class `SkateCollectible`) are declared in its manifest
+//!   (`source-names`), each matched as a whole string literal and each used.
 //! - `entry_points`: examples, bins and the cli compose library entry points; no world data or format handling of
 //!   their own.
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
@@ -66,6 +67,8 @@ struct Member {
     kind: Option<String>,
     /// The game, engine and destination names its code may use.
     names: Vec<String>,
+    /// A game crate's source names (whole string literals, as its game stores them) that hold another crate's word.
+    source_names: Vec<String>,
     /// The engine crate (package name) a game or destination crate may depend on.
     engine: Option<String>,
     /// The later stages a worlds crate holds, each in its own folder (`postcompile`): a stage reads and writes its
@@ -108,7 +111,7 @@ fn members() -> Vec<Member> {
                     .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
                     .unwrap_or_default()
             };
-            let (names, stages) = (list("names"), list("stages"));
+            let (names, stages, source_names) = (list("names"), list("stages"), list("source-names"));
             let (kind, engine) = (text("kind"), text("engine"));
             if path.starts_with("worlds/") {
                 assert!(
@@ -119,12 +122,17 @@ fn members() -> Vec<Member> {
                     kind.as_deref() != Some("engine") || engine.is_none(),
                     "{path}: an engine crate names no engine of its own"
                 );
+                assert!(
+                    kind.as_deref() == Some("game") || source_names.is_empty(),
+                    "{path}: only a game crate declares source names"
+                );
             }
             Member {
                 path,
                 name,
                 kind,
                 names,
+                source_names,
                 engine,
                 stages,
             }
@@ -1228,14 +1236,18 @@ fn game_names() {
         // the test-input registry describes each game's inputs by role (see TEST_INPUT_REGISTRY)
         .filter(|m| m.path != TEST_INPUT_REGISTRY)
     {
-        // a worlds crate's own names (its games, its engine, its destination); shared code has none
+        // a worlds crate's own names (its games, its engine, its destination); shared code has none. A game crate's
+        // declared source names are its game's own (a whole literal, as stored), and each must be used.
+        let mut used = BTreeSet::new();
         for file in rust_files(&root().join(&m.path).join("src")) {
             for t in code(&file) {
-                // a game crate's string literals are its game's own names (script classes, paths), which may hold a
-                // destination's word (SkateBIRD's `SkateCollectible`); its identifiers are still checked
                 let s = match t {
                     Tok::Ident(s) => s,
-                    Tok::Str(s) if m.kind.as_deref() != Some("game") => s,
+                    Tok::Str(s) if m.source_names.contains(&s) => {
+                        used.insert(s);
+                        continue;
+                    }
+                    Tok::Str(s) => s,
                     _ => continue,
                 };
                 for w in words(&s) {
@@ -1244,6 +1256,9 @@ fn game_names() {
                     }
                 }
             }
+        }
+        for n in m.source_names.iter().filter(|n| !used.contains(*n)) {
+            found.insert(format!("{}: declared source name {n:?} is not used", m.path));
         }
     }
     let excused = entries("name")
