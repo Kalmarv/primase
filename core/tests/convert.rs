@@ -1444,6 +1444,52 @@ fn what_a_part_shares_is_output_and_what_is_made_from_it_is_the_owners() {
     assert_eq!(out.keep, BTreeSet::from([root, split, from_root]));
 }
 
+/// What a part shares stays the owner's when something the part declares reaches it: content declared from the root
+/// that refers back to it (and through it to the shared entity) does not make what is placed from the shared entity
+/// the part's.
+#[test]
+fn what_a_declaration_reaches_does_not_make_the_shared_entity_the_parts() {
+    let mut w = World::new();
+    let split = w.spawn();
+    w.insert(split, Name("split".into()));
+    let root = w.spawn();
+    w.insert(
+        root,
+        Instance {
+            prototype: split,
+            variant: 0,
+        },
+    );
+    // A, made from the root, refers back to it (a backlink); B is made from the shared entity
+    let (a, b) = (w.spawn(), w.spawn());
+    w.insert(
+        a,
+        Instance {
+            prototype: root,
+            variant: 0,
+        },
+    );
+    w.insert(b, Name("made".into()));
+    w.insert_resource(PartScope {
+        roots: BTreeSet::from([root]),
+        shared: BTreeSet::from([split]),
+        context: BTreeSet::new(),
+        whole: false,
+        area: None,
+        first_made: Some(a.index()),
+        placed: BTreeMap::new(),
+    });
+    PartScope::declare(
+        &mut w,
+        &BTreeSet::from([a, b]),
+        &BTreeMap::from([(a, root), (b, split)]),
+        &BTreeSet::new(),
+    );
+    let out = w.resource::<PartScope>().unwrap().output(&w);
+    assert_eq!(out.placed, BTreeSet::from([a]));
+    assert_eq!(out.from_context, BTreeSet::from([b]));
+}
+
 /// A part source whose part shares one of its roots, or its context, is refused before anything is loaded: what a part
 /// shares is another part's, and sharing a root would take away its ownership.
 #[test]

@@ -301,8 +301,9 @@ impl PartScope {
         if placed.is_empty() {
             return;
         }
+        let shared = scope.shared.clone();
         let mut owned = scope.owned(w);
-        owned.extend(owned_before);
+        owned.extend(owned_before.difference(&shared));
         let mut own: BTreeSet<Entity> = BTreeSet::new();
         // to a fixpoint: one declared from another of this pass's own is the part's too
         loop {
@@ -316,8 +317,9 @@ impl PartScope {
                 break;
             }
             // the ids themselves too: one the pass made, placed from and then consumed is no longer in the world
+            // what it shares stays another part's, also where something declared here reaches it
             owned.extend(found.iter().copied());
-            owned.extend(w.closure(found.iter().copied()));
+            owned.extend(w.closure(found.iter().copied()).difference(&shared));
             own.extend(found);
         }
         let classified: Vec<(Entity, bool)> = placed.iter().map(|e| (*e, own.contains(e))).collect();
