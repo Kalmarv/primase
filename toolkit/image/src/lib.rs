@@ -16,12 +16,14 @@ pub use orm::{MissingLevels, OrmSize, PackOrm};
 mod qoi;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 mod texture;
+mod upscale;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use std::io::Cursor;
 pub use texture::{
     BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, decode_texture_file,
     load_textures, normalize_normals, texture_level_png, texture_level_rgba8,
 };
+pub use upscale::{MAX_UPSCALED, UpscaleBy, UpscaleNearest, enlarge_nearest, upscale_nearest};
 
 use thiserror::Error;
 
@@ -37,6 +39,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
+    ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];
 
 #[derive(Debug, Error)]

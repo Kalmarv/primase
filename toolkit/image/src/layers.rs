@@ -41,6 +41,12 @@ pub fn register(reg: &mut PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(crate::BakeNormalScale)),
     });
+    // which textures are enlarged, and how much, are the program's: no default
+    reg.register_requiring(
+        "upscale-nearest",
+        crate::upscale_nearest,
+        &[("factor", "2"), ("textures", "pixels")],
+    );
 }
 
 #[derive(Debug)]
