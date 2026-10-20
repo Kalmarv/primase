@@ -1043,6 +1043,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-stuntboost"
+version = "0.1.0"
+dependencies = [
+ "primase-core",
+ "primase-glb",
+ "primase-image",
+ "primase-monogame",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-testdata"
 version = "0.1.0"
 dependencies = [

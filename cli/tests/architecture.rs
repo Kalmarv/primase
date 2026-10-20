@@ -1194,6 +1194,7 @@ const NAMES: &[&str] = &[
     "monogame",
     "xna",
     "fna",
+    "stuntboost",
 ];
 
 /// The words of an identifier or string: split at non-alphanumerics, underscores and lower-to-upper case changes.
