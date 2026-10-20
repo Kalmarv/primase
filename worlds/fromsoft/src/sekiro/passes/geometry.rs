@@ -96,89 +96,63 @@ choice! {
 /// the game switches by distance). Positions, unit normals, stored tangents (handedness reflected) and UV0 in the
 /// world frame; a layered material's Byte4C members as raw `Color(n)` streams listed by `fromsoft.layer_inputs`.
 ///
-/// Options: `pose=rigid|stored` (required: which model is lowered, the posed one `fromsoft-apply-rigid-skinning` made
-/// or the stored one, has no faithful default), and choices whose default is the source as stored: `uv-tiling=keep|apply` (multiply UV0 by
-/// the material's tiling, recorded as `fromsoft.uv_tiling`); `winding=stored|normals` (reverse a part whose stored
-/// normals oppose its winding on balance); `degenerates=keep|drop` (triangles of doubled area squared at most
-/// 1e-14); `leave-out=` classes joined by `+` (`sky`, `light-volume`, `shadow`: meshes of materials of that source
-/// class are not lowered); `blocker-cards=draw|record` (record the level-0 parts of interior blocker cards in
-/// `fromsoft.blocker_cards` with every placement of their prototype, instead of drawing them). A prototype left
-/// drawing nothing at any level is despawned with its placements, counted.
+/// Every field is the program's choice, stated (no default): `pose`, which model is lowered (the posed one
+/// `fromsoft-apply-rigid-skinning` made, or the stored one); `uv_tiling` (multiply UV0 by the material's tiling,
+/// recorded as `fromsoft.uv_tiling`, or keep it); `winding` (reverse a part whose stored normals oppose its winding on
+/// balance, or keep it); `degenerates` (drop triangles of doubled area squared at most 1e-14, or keep them);
+/// `leave_out`, material source classes whose meshes are not lowered; `blocker_cards` (record the level-0 parts of
+/// interior blocker cards in `fromsoft.blocker_cards` with every placement of their prototype, or draw them). A
+/// prototype left drawing nothing at any level is despawned with its placements, counted. Options, all required:
+/// `pose=rigid|stored`, `uv-tiling=keep|apply`, `winding=stored|normals`, `degenerates=keep|drop`, `leave-out=`
+/// classes joined by `+` (`sky`, `light-volume`, `shadow`; empty: none), `blocker-cards=draw|record`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerFromSoftGeometry {
-    pose: Pose,
-    uv_tiling: Tiling,
-    winding: Winding,
-    degenerates: Degenerates,
-    /// Material skip classes whose meshes are not lowered.
-    leave_out: BTreeSet<materials::SkipClass>,
-    blocker_cards: Cards,
+    pub pose: Pose,
+    pub uv_tiling: Tiling,
+    pub winding: Winding,
+    pub degenerates: Degenerates,
+    pub leave_out: BTreeSet<materials::SkipClass>,
+    pub blocker_cards: Cards,
 }
 
 impl LowerFromSoftGeometry {
-    /// The model `pose` names lowered as stored: UV0 as stored, windings as stored, degenerate triangles kept, every
-    /// material class lowered, blocker cards drawn.
-    pub fn new(pose: Pose) -> Self {
-        LowerFromSoftGeometry {
-            pose,
-            uv_tiling: Tiling::Keep,
-            winding: Winding::Stored,
-            degenerates: Degenerates::Keep,
-            leave_out: BTreeSet::new(),
-            blocker_cards: Cards::Draw,
-        }
-    }
-    pub fn with_uv_tiling(mut self, uv_tiling: Tiling) -> Self {
-        self.uv_tiling = uv_tiling;
-        self
-    }
-    pub fn with_winding(mut self, winding: Winding) -> Self {
-        self.winding = winding;
-        self
-    }
-    pub fn with_degenerates(mut self, degenerates: Degenerates) -> Self {
-        self.degenerates = degenerates;
-        self
-    }
-    /// The material skip classes whose meshes are not lowered.
-    pub fn with_leave_out(mut self, leave_out: BTreeSet<materials::SkipClass>) -> Self {
-        self.leave_out = leave_out;
-        self
-    }
-    pub fn with_blocker_cards(mut self, blocker_cards: Cards) -> Self {
-        self.blocker_cards = blocker_cards;
-        self
-    }
-    pub fn pose(&self) -> Pose {
-        self.pose
-    }
-
-    /// From its options, through [`LowerFromSoftGeometry::new`] and its setters.
+    /// From its options, every one required.
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        let pose = o
-            .get("pose")
-            .ok_or("pose=rigid|stored is required: which model is lowered is the program's choice")?;
-        let mut pass = Self::new(Pose::parse("pose", pose)?);
-        for (k, v) in o {
-            pass = match k.as_str() {
-                "pose" => pass,
-                "uv-tiling" => pass.with_uv_tiling(Tiling::parse(k, v)?),
-                "winding" => pass.with_winding(Winding::parse(k, v)?),
-                "degenerates" => pass.with_degenerates(Degenerates::parse(k, v)?),
-                "blocker-cards" => pass.with_blocker_cards(Cards::parse(k, v)?),
-                "leave-out" => {
-                    let mut classes = BTreeSet::new();
-                    for class in v.split('+').filter(|c| !c.is_empty()) {
-                        classes.insert(materials::SkipClass::from_word(class).ok_or_else(|| {
-                            format!("leave-out class {class} is not sky, light-volume or shadow")
-                        })?);
-                    }
-                    pass.with_leave_out(classes)
-                }
-                _ => return Err(format!("unknown option {k}")),
-            };
+        const KEYS: [&str; 6] = [
+            "pose",
+            "uv-tiling",
+            "winding",
+            "degenerates",
+            "leave-out",
+            "blocker-cards",
+        ];
+        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
+            return Err(format!("unknown option {k}"));
         }
-        Ok(pass)
+        let get = |k: &str| {
+            o.get(k).map(String::as_str).ok_or_else(|| {
+                format!(
+                    "{k} is required: pose=rigid|stored, uv-tiling=keep|apply, winding=stored|normals, \
+                     degenerates=keep|drop, leave-out= (sky+light-volume+shadow, empty for none), \
+                     blocker-cards=draw|record"
+                )
+            })
+        };
+        let mut leave_out = BTreeSet::new();
+        for class in get("leave-out")?.split('+').filter(|c| !c.is_empty()) {
+            leave_out.insert(
+                materials::SkipClass::from_word(class)
+                    .ok_or_else(|| format!("leave-out class {class} is not sky, light-volume or shadow"))?,
+            );
+        }
+        Ok(LowerFromSoftGeometry {
+            pose: Pose::parse("pose", get("pose")?)?,
+            uv_tiling: Tiling::parse("uv-tiling", get("uv-tiling")?)?,
+            winding: Winding::parse("winding", get("winding")?)?,
+            degenerates: Degenerates::parse("degenerates", get("degenerates")?)?,
+            leave_out,
+            blocker_cards: Cards::parse("blocker-cards", get("blocker-cards")?)?,
+        })
     }
     fn input(&self) -> &'static str {
         match self.pose {
@@ -369,25 +343,15 @@ impl Pass for LowerFromSoftGeometry {
         "lower-fromsoft-geometry"
     }
     fn options(&self) -> Options {
-        // every setting; an empty leave-out set is no option
-        let mut o = Options::from([
+        let leave_out: Vec<&str> = self.leave_out.iter().map(|c| c.word()).collect();
+        Options::from([
             ("pose".to_owned(), self.pose.word().to_owned()),
             ("uv-tiling".to_owned(), self.uv_tiling.word().to_owned()),
             ("winding".to_owned(), self.winding.word().to_owned()),
             ("degenerates".to_owned(), self.degenerates.word().to_owned()),
+            ("leave-out".to_owned(), leave_out.join("+")),
             ("blocker-cards".to_owned(), self.blocker_cards.word().to_owned()),
-        ]);
-        if !self.leave_out.is_empty() {
-            o.insert(
-                "leave-out".into(),
-                self.leave_out
-                    .iter()
-                    .map(|c| c.word())
-                    .collect::<Vec<_>>()
-                    .join("+"),
-            );
-        }
-        o
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         match self.pose {

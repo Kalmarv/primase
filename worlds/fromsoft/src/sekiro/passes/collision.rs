@@ -130,24 +130,23 @@ pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
 /// counted. In a part of a conversion (`core.part_scope`), only the files its roots reach are lowered: a file it
 /// loaded as context is its own part's.
 ///
-/// Options: `hit-filters=` the filters whose parts are lowered, joined by `+` (required: which placed collision is
-/// ground is the program's choice); `water=` HitMtrl classes lowered into separate `water` soups with the `default`
-/// surface; `leave-out=` classes not lowered, counted; `reach=N` leaves out, counted, the triangles whose centre lies
-/// more than N metres outside the read region (`fromsoft.read_scope`). Without these every triangle of the chosen
-/// files is ground.
+/// Every field is the program's choice, stated (no default): `hit_filters`, the filters whose parts are lowered (which
+/// placed collision is ground); `water`, HitMtrl classes lowered into separate `water` soups with the `default`
+/// surface; `leave_out`, classes not lowered, counted (a class in both is refused); `reach`, leaving out, counted, the
+/// triangles whose centre lies more than that many metres outside the read region (`fromsoft.read_scope`), or `None`
+/// for no crop. Options, all required: `hit-filters=` and `water=`/`leave-out=` classes joined by `+` (empty: none),
+/// `reach=N|none`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftCollision {
-    /// The hit filters whose parts' files are lowered.
-    hit_filters: HitFilters,
-    /// What becomes of the triangles of a HitMtrl class other than ground; a class not listed is ground.
-    classes: BTreeMap<HitClass, ClassChoice>,
-    /// The crop around the read region, if any.
-    reach: Option<Metres>,
+    pub hit_filters: HitFilters,
+    pub water: BTreeSet<HitClass>,
+    pub leave_out: BTreeSet<HitClass>,
+    pub reach: Option<Metres>,
 }
 
-/// What `lower-fromsoft-collision` makes of a HitMtrl class's triangles instead of ground.
+/// What a HitMtrl class's triangles become instead of ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClassChoice {
+enum ClassChoice {
     /// The `water` soups, with the `default` surface.
     Water,
     /// Not lowered, counted.
@@ -155,76 +154,36 @@ pub enum ClassChoice {
 }
 
 impl LowerFromSoftCollision {
-    /// Every triangle of the files that parts of `hit_filters` name lowered as ground, uncropped.
-    pub fn new(hit_filters: HitFilters) -> Self {
-        LowerFromSoftCollision {
-            hit_filters,
-            classes: BTreeMap::new(),
-            reach: None,
-        }
-    }
-
-    /// The triangles of HitMtrl class `class` made what `choice` says instead of ground; an error for a class given a
-    /// choice already.
-    pub fn with_class(mut self, class: HitClass, choice: ClassChoice) -> std::result::Result<Self, String> {
-        if self.classes.insert(class, choice).is_some() {
-            return Err(format!("HitMtrl class {class} is both water and left out"));
-        }
-        Ok(self)
-    }
-    /// [`Self::with_class`] for each of `classes`.
-    pub fn with_classes(
-        self,
-        classes: impl IntoIterator<Item = HitClass>,
-        choice: ClassChoice,
-    ) -> std::result::Result<Self, String> {
-        classes.into_iter().try_fold(self, |p, c| p.with_class(c, choice))
-    }
-    /// The triangles whose centre lies more than `reach` outside the read region left out.
-    pub fn with_reach(mut self, reach: Metres) -> Self {
-        self.reach = Some(reach);
-        self
-    }
-    pub fn hit_filters(&self) -> &HitFilters {
-        &self.hit_filters
-    }
-    pub fn classes(&self) -> &BTreeMap<HitClass, ClassChoice> {
-        &self.classes
-    }
-    pub fn reach(&self) -> Option<Metres> {
-        self.reach
-    }
-
-    /// From its options, through [`LowerFromSoftCollision::new`] and its setters.
+    /// From its options, every one required.
     pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        let filters = o
-            .get("hit-filters")
-            .ok_or("hit-filters is required: which placed collision is ground is the program's choice")?;
-        let mut pass = Self::new(HitFilters::parse("hit-filters", filters)?);
-        for (k, v) in o {
-            let choice = match k.as_str() {
-                "hit-filters" => continue,
-                "water" => ClassChoice::Water,
-                "leave-out" => ClassChoice::LeaveOut,
-                "reach" => {
-                    pass = pass.with_reach(Metres::parse(k, v)?);
-                    continue;
-                }
-                _ => return Err(format!("unknown option {k}")),
-            };
-            for class in HitClass::parse_set(k, v)? {
-                pass = pass.with_class(class, choice)?;
-            }
+        if let Some(k) = o
+            .keys()
+            .find(|k| !["hit-filters", "water", "leave-out", "reach"].contains(&k.as_str()))
+        {
+            return Err(format!("unknown option {k}"));
         }
-        Ok(pass)
+        let get = |k: &str| {
+            o.get(k).map(String::as_str).ok_or_else(|| {
+                format!("{k} is required: hit-filters=, water=, leave-out= (classes joined by +, empty for none), reach=N|none")
+            })
+        };
+        Ok(LowerFromSoftCollision {
+            hit_filters: HitFilters::parse("hit-filters", get("hit-filters")?)?,
+            water: HitClass::parse_set("water", get("water")?)?,
+            leave_out: HitClass::parse_set("leave-out", get("leave-out")?)?,
+            reach: Metres::parse_or_none("reach", get("reach")?)?,
+        })
     }
 
-    fn classes_of(&self, choice: ClassChoice) -> Vec<HitClass> {
-        self.classes
-            .iter()
-            .filter(|(_, c)| **c == choice)
-            .map(|(class, _)| *class)
-            .collect()
+    /// What becomes of a class's triangles instead of ground, refusing a class both water and left out.
+    fn classes(&self) -> std::result::Result<BTreeMap<HitClass, ClassChoice>, String> {
+        if let Some(c) = self.water.intersection(&self.leave_out).next() {
+            return Err(format!("HitMtrl class {c} is both water and left out"));
+        }
+        let water = self.water.iter().map(|&c| (c, ClassChoice::Water));
+        Ok(water
+            .chain(self.leave_out.iter().map(|&c| (c, ClassChoice::LeaveOut)))
+            .collect())
     }
 }
 
@@ -233,20 +192,12 @@ impl Pass for LowerFromSoftCollision {
         "lower-fromsoft-collision"
     }
     fn options(&self) -> Options {
-        let mut o = Options::from([("hit-filters".to_owned(), self.hit_filters.to_string())]);
-        for (key, choice) in [
-            ("water", ClassChoice::Water),
-            ("leave-out", ClassChoice::LeaveOut),
-        ] {
-            let classes = self.classes_of(choice);
-            if !classes.is_empty() {
-                o.insert(key.into(), joined(classes));
-            }
-        }
-        if let Some(r) = self.reach {
-            o.insert("reach".into(), r.to_string());
-        }
-        o
+        Options::from([
+            ("hit-filters".to_owned(), self.hit_filters.to_string()),
+            ("water".to_owned(), joined(self.water.iter().copied())),
+            ("leave-out".to_owned(), joined(self.leave_out.iter().copied())),
+            ("reach".to_owned(), Metres::text_or_none(self.reach)),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &[MapCollision::NAME]
@@ -275,6 +226,7 @@ impl Pass for LowerFromSoftCollision {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
+        let classes = self.classes()?;
         let owned = owned(world);
         let mut records: Vec<(Entity, &MapCollision)> = world
             .iter::<MapCollision>()
@@ -328,7 +280,7 @@ impl Pass for LowerFromSoftCollision {
                     log.count("triangles beyond the reach around the read region, left out", 1);
                     continue;
                 }
-                match HitClass::of(material).and_then(|c| self.classes.get(&c)) {
+                match HitClass::of(material).and_then(|c| classes.get(&c)) {
                     Some(ClassChoice::Water) => {
                         push(water, *vertices, index("default")?)?;
                         log.count("water triangles", 1);
@@ -473,24 +425,30 @@ mod tests {
     }
 
     #[test]
-    fn without_policy_options_every_triangle_of_the_chosen_files_is_ground() {
+    fn with_no_classes_and_no_reach_stated_every_triangle_of_the_chosen_files_is_ground() {
+        let options = |water: &str, leave_out: &str| {
+            Options::from([
+                ("hit-filters".into(), "8+15".into()),
+                ("water".into(), water.into()),
+                ("leave-out".into(), leave_out.into()),
+                ("reach".into(), "none".into()),
+            ])
+        };
         let mut w = world();
-        let pass =
-            LowerFromSoftCollision::from_options(&Options::from([("hit-filters".into(), "8+15".into())]))
-                .unwrap();
+        let pass = LowerFromSoftCollision::from_options(&options("", "")).unwrap();
+        assert_eq!(pass.options(), options("", ""));
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         assert_eq!(soups(&w)["game"].len(), 6);
         assert!(w.iter::<MapCollision>().next().is_none());
-        // the filters are the program's; a class cannot be both water and left out
+        // every option is the program's to state; a class cannot be both water and left out
         assert!(LowerFromSoftCollision::from_options(&Options::new()).is_err());
         assert!(
-            LowerFromSoftCollision::from_options(&Options::from([
-                ("hit-filters".into(), "8".into()),
-                ("water".into(), "22".into()),
-                ("leave-out".into(), "22".into()),
-            ]))
-            .is_err()
+            LowerFromSoftCollision::from_options(&Options::from([("hit-filters".into(), "8".into())]))
+                .is_err()
         );
+        let both = LowerFromSoftCollision::from_options(&options("22", "22")).unwrap();
+        let err = both.run(&mut world(), &mut PassLog::default()).unwrap_err();
+        assert!(err.contains("both water and left out"), "{err}");
     }
 
     #[test]
@@ -498,9 +456,19 @@ mod tests {
         let mut w = world();
         let (b, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "b.hkx").unwrap();
         w.get_mut::<MapCollision>(b).unwrap().unread_bodies = vec!["hknpConvexShape".into()];
-        let only_8 = LowerFromSoftCollision::new(HitFilters::new([8]).unwrap());
+        let only_8 = LowerFromSoftCollision {
+            hit_filters: HitFilters::new([8]).unwrap(),
+            water: BTreeSet::new(),
+            leave_out: BTreeSet::new(),
+            reach: None,
+        };
         only_8.run(&mut w.clone(), &mut PassLog::default()).unwrap();
-        let with_15 = LowerFromSoftCollision::new(HitFilters::new([8, 15]).unwrap());
+        let with_15 = LowerFromSoftCollision {
+            hit_filters: HitFilters::new([8, 15]).unwrap(),
+            water: BTreeSet::new(),
+            leave_out: BTreeSet::new(),
+            reach: None,
+        };
         let err = with_15.run(&mut w, &mut PassLog::default()).unwrap_err();
         assert!(err.contains("b.hkx") && err.contains("hknpConvexShape"), "{err}");
     }

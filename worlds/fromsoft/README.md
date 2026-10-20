@@ -332,7 +332,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   (`game`, `water`, `game_state<n>` with the file's condition), each triangle with
   its HitMtrl class's surface (`default` without one, counted); `water=` and
   `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
-  around the read region. The records it lowered are consumed; files only other
+  around the read region (every option required: empty classes for none, `reach=none`). The records it lowered are consumed; files only other
   filters' parts name stay as source.
 - `lower-fromsoft-object-collision{convex=tessellate|leave-out}` places every
   placed object prototype's bodies with each placement into an `objects` soup
@@ -340,7 +340,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   their motion type (counted). A soup cannot hold a rounded shape, so `convex`
   is required: `tessellate` gives a convex body the intersection of its planes
   offset by its radius (sharp where Havok rounds, a capsule a box around its
-  segment; both counted), `leave-out` drops it (counted). `leave-out=`,
+  segment; both counted), `leave-out` drops it (counted). Every option is required: `leave-out=`,
   `leave-out-motion=` (stored motion types), `reach=N` and
   `convex-surface=default|render` (render: the surface of the prototype's largest
   colliding render area, measured on its stored level-0 face sets) are the

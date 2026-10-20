@@ -10,7 +10,7 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;
 use primase_fromsoft::sekiro;
-use primase_fromsoft::sekiro::collision::{ClassChoice, LowerFromSoftCollision};
+use primase_fromsoft::sekiro::collision::LowerFromSoftCollision;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
 use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
@@ -47,39 +47,23 @@ fn main() -> Result<()> {
     };
 
     // Run once on the area as read: Sekiro's own data lowered to core meanings.
-    let (reach, water, left_out) =
-        (Metres::new(50.0)?, [HitClass::new(22)?, HitClass::new(36)?], [HitClass::new(29)?, HitClass::new(40)?]);
+    let (reach, water, leave_out) = (Some(Metres::new(50.0)?), HitClass::set([22, 36])?, HitClass::set([29, 40])?);
+    let hit_filters = HitFilters::new([8, 27])?;
+    let skip = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into();
+    #[rustfmt::skip]
     let lower = Pipeline {
         passes: vec![
-            Box::new(
-                LowerFromSoftCollision::new(HitFilters::new([8, 27])?)
-                    .with_reach(reach)
-                    .with_classes(water, ClassChoice::Water)?
-                    .with_classes(left_out, ClassChoice::LeaveOut)?,
-            ),
-            Box::new(
-                LowerFromSoftObjectCollision::new(ConvexBodies::Tessellate)
-                    .with_leave_out(water.into_iter().chain(left_out).collect())
-                    .with_leave_out_motion([2].into())
-                    .with_convex_surface(ConvexSurface::Render)
-                    .with_reach(reach),
-            ),
+            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach }),
+            Box::new(LowerFromSoftObjectCollision { convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
+                leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),
             Box::new(ApplyRigidSkinning),
-            Box::new(
-                LowerFromSoftGeometry::new(Pose::Rigid)
-                    .with_uv_tiling(Tiling::Apply)
-                    .with_winding(Winding::Normals)
-                    .with_degenerates(Degenerates::Drop)
-                    .with_leave_out([SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into())
-                    .with_blocker_cards(Cards::Record),
-            ),
+            Box::new(LowerFromSoftGeometry { pose: Pose::Rigid, uv_tiling: Tiling::Apply, winding: Winding::Normals,
+                degenerates: Degenerates::Drop, leave_out: skip, blocker_cards: Cards::Record }),
             Box::new(SelectLod { choice: LodChoice::Finest }),
             Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
             Box::new(LowerFromSoftMaterials::new(None)),
-            Box::new(
-                LowerFromSoftLights::new(Factor::new(1.0)?, Fraction::new(0.15)?).with_min_range(Metres::new(0.5)?),
-            ),
+            Box::new(LowerFromSoftLights::new(Factor::new(1.0)?, Fraction::new(0.15)?).with_min_range(Metres::new(0.5)?)),
             Box::new(LowerFromSoftExtras),
         ],
     };

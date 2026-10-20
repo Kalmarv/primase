@@ -107,107 +107,68 @@ impl ConvexBodies {
 /// (`core.part_scope`), only the placements its roots reach are lowered: a context placement's collision is its own
 /// part's.
 ///
-/// Options: `convex=` ([`ConvexBodies`], required: a soup cannot hold a rounded shape, so the program chooses its
-/// approximation); `leave-out=` HitMtrl classes (an ID's base value, modulo 100) not lowered, counted;
-/// `leave-out-motion=` stored motion types whose bodies are not lowered, counted; `convex-surface=default|render`
-/// ([`ConvexSurface`]); `reach=N` leaves out, counted, the triangles whose centre lies more than N metres outside the
-/// read region (`fromsoft.read_scope`).
+/// Every field is the program's choice, stated (no default): `convex`, what convex bodies become (a soup cannot hold a
+/// rounded shape, so the program chooses its approximation); `leave_out`, HitMtrl classes (an ID's base value, modulo
+/// 100) not lowered, counted; `leave_out_motion`, stored motion types whose bodies are not lowered, counted;
+/// `convex_surface` ([`ConvexSurface`]); `reach`, leaving out, counted, the triangles whose centre lies more than that
+/// many metres outside the read region (`fromsoft.read_scope`), or `None` for no crop. Options, all required:
+/// `convex=tessellate|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
+/// `convex-surface=default|render`, `reach=N|none`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftObjectCollision {
-    /// What convex bodies become.
-    convex: ConvexBodies,
-    /// HitMtrl classes whose triangles are not lowered.
-    leave_out: BTreeSet<HitClass>,
-    /// Stored motion types whose bodies are not lowered.
-    leave_out_motion: BTreeSet<u64>,
-    /// The surface of convex bodies.
-    convex_surface: ConvexSurface,
-    /// The crop around the read region, if any.
-    reach: Option<Metres>,
+    pub convex: ConvexBodies,
+    pub leave_out: BTreeSet<HitClass>,
+    pub leave_out_motion: BTreeSet<u64>,
+    pub convex_surface: ConvexSurface,
+    pub reach: Option<Metres>,
 }
 
 impl LowerFromSoftObjectCollision {
-    /// Every body lowered whole at its stored pose, convex ones as `convex` says, with their stored materials.
-    pub fn new(convex: ConvexBodies) -> Self {
-        LowerFromSoftObjectCollision {
-            convex,
-            leave_out: BTreeSet::new(),
-            leave_out_motion: BTreeSet::new(),
-            convex_surface: ConvexSurface::Default,
-            reach: None,
-        }
-    }
-
-    /// The HitMtrl classes whose triangles are not lowered.
-    pub fn with_leave_out(mut self, leave_out: BTreeSet<HitClass>) -> Self {
-        self.leave_out = leave_out;
-        self
-    }
-    /// The stored motion types whose bodies are not lowered.
-    pub fn with_leave_out_motion(mut self, leave_out_motion: BTreeSet<u64>) -> Self {
-        self.leave_out_motion = leave_out_motion;
-        self
-    }
-    pub fn with_convex_surface(mut self, convex_surface: ConvexSurface) -> Self {
-        self.convex_surface = convex_surface;
-        self
-    }
-    /// The triangles whose centre lies more than `reach` outside the read region left out.
-    pub fn with_reach(mut self, reach: Metres) -> Self {
-        self.reach = Some(reach);
-        self
-    }
-    pub fn convex(&self) -> ConvexBodies {
-        self.convex
-    }
-    pub fn leave_out(&self) -> &BTreeSet<HitClass> {
-        &self.leave_out
-    }
-    pub fn leave_out_motion(&self) -> &BTreeSet<u64> {
-        &self.leave_out_motion
-    }
-    pub fn convex_surface(&self) -> ConvexSurface {
-        self.convex_surface
-    }
-    pub fn reach(&self) -> Option<Metres> {
-        self.reach
-    }
-
-    /// From its options, through [`LowerFromSoftObjectCollision::new`] and its setters.
+    /// From its options, every one required.
     pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        let convex = match o.get("convex").map(String::as_str) {
-            Some("tessellate") => ConvexBodies::Tessellate,
-            Some("leave-out") => ConvexBodies::LeaveOut,
-            Some(v) => return Err(format!("convex={v} is not tessellate or leave-out")),
-            None => {
-                return Err(
-                    "convex=tessellate|leave-out is required: a soup cannot hold a rounded shape as stored"
-                        .into(),
-                );
-            }
-        };
-        let mut pass = Self::new(convex);
-        for (k, v) in o {
-            pass = match (k.as_str(), v.as_str()) {
-                ("convex", _) => pass,
-                ("leave-out", v) => pass.with_leave_out(HitClass::parse_set(k, v)?),
-                ("leave-out-motion", v) => pass.with_leave_out_motion(
-                    v.split('+')
-                        .filter(|m| !m.is_empty())
-                        .map(|m| {
-                            m.parse::<u64>()
-                                .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
-                        })
-                        .collect::<std::result::Result<_, _>>()?,
-                ),
-                ("convex-surface", "default") => pass.with_convex_surface(ConvexSurface::Default),
-                ("convex-surface", "render") => pass.with_convex_surface(ConvexSurface::Render),
-                ("convex-surface", v) => return Err(format!("convex-surface={v} is not default or render")),
-                ("reach", v) => pass.with_reach(Metres::parse(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            };
+        const KEYS: [&str; 5] = [
+            "convex",
+            "leave-out",
+            "leave-out-motion",
+            "convex-surface",
+            "reach",
+        ];
+        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
+            return Err(format!("unknown option {k}"));
         }
-        Ok(pass)
+        let get = |k: &str| {
+            o.get(k).map(String::as_str).ok_or_else(|| {
+                format!(
+                    "{k} is required: convex=tessellate|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
+                     for none), convex-surface=default|render, reach=N|none"
+                )
+            })
+        };
+        let convex = match get("convex")? {
+            "tessellate" => ConvexBodies::Tessellate,
+            "leave-out" => ConvexBodies::LeaveOut,
+            v => return Err(format!("convex={v} is not tessellate or leave-out")),
+        };
+        let convex_surface = match get("convex-surface")? {
+            "default" => ConvexSurface::Default,
+            "render" => ConvexSurface::Render,
+            v => return Err(format!("convex-surface={v} is not default or render")),
+        };
+        let leave_out_motion = get("leave-out-motion")?
+            .split('+')
+            .filter(|m| !m.is_empty())
+            .map(|m| {
+                m.parse::<u64>()
+                    .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(LowerFromSoftObjectCollision {
+            convex,
+            leave_out: HitClass::parse_set("leave-out", get("leave-out")?)?,
+            leave_out_motion,
+            convex_surface,
+            reach: Metres::parse_or_none("reach", get("reach")?)?,
+        })
     }
 
     /// A body's triangles in its prototype's space and their HitMtrl IDs, in the stored-order convention (facing
@@ -261,20 +222,17 @@ impl Pass for LowerFromSoftObjectCollision {
         "lower-fromsoft-object-collision"
     }
     fn options(&self) -> Options {
-        let mut o = Options::from([("convex".to_owned(), self.convex.word().to_owned())]);
-        if !self.leave_out.is_empty() {
-            o.insert("leave-out".into(), joined(&self.leave_out));
-        }
-        if !self.leave_out_motion.is_empty() {
-            o.insert("leave-out-motion".into(), joined(&self.leave_out_motion));
-        }
-        if self.convex_surface == ConvexSurface::Render {
-            o.insert("convex-surface".into(), "render".into());
-        }
-        if let Some(r) = self.reach {
-            o.insert("reach".into(), r.to_string());
-        }
-        o
+        let surface = match self.convex_surface {
+            ConvexSurface::Default => "default",
+            ConvexSurface::Render => "render",
+        };
+        Options::from([
+            ("convex".to_owned(), self.convex.word().to_owned()),
+            ("leave-out".to_owned(), joined(&self.leave_out)),
+            ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
+            ("convex-surface".to_owned(), surface.to_owned()),
+            ("reach".to_owned(), Metres::text_or_none(self.reach)),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &[ObjectBodies::NAME]
@@ -504,14 +462,19 @@ mod tests {
             .collect()
     }
 
+    /// The pass from `options` over every other option stated as nothing left out, the default surface and no reach.
     fn pass(options: &[(&str, &str)]) -> LowerFromSoftObjectCollision {
-        LowerFromSoftObjectCollision::from_options(
-            &options
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-        )
-        .unwrap()
+        let mut o = Options::from(
+            [
+                ("leave-out", ""),
+                ("leave-out-motion", ""),
+                ("convex-surface", "default"),
+                ("reach", "none"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        o.extend(options.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+        LowerFromSoftObjectCollision::from_options(&o).unwrap()
     }
 
     #[test]

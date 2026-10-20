@@ -72,7 +72,14 @@ pub fn register(registry: &mut PassRegistry) {
     registry.register_requiring(
         "lower-fromsoft-geometry",
         |o| Ok(Box::new(LowerFromSoftGeometry::from_options(o)?)),
-        &[("pose", "rigid")],
+        &[
+            ("pose", "rigid"),
+            ("uv-tiling", "apply"),
+            ("winding", "normals"),
+            ("degenerates", "drop"),
+            ("leave-out", "sky+light-volume+shadow"),
+            ("blocker-cards", "record"),
+        ],
     );
     registry.register("drop-fromsoft-far", |o| without_options(o, DropFromSoftFar));
     registry.register_requiring(
@@ -89,7 +96,12 @@ pub fn register(registry: &mut PassRegistry) {
     registry.register_requiring(
         "lower-fromsoft-collision",
         |o| Ok(Box::new(collision::LowerFromSoftCollision::from_options(o)?)),
-        &[("hit-filters", "8+27")],
+        &[
+            ("hit-filters", "8+27"),
+            ("water", "22+36"),
+            ("leave-out", "29+40"),
+            ("reach", "50"),
+        ],
     );
     registry.register_requiring(
         "lower-fromsoft-object-collision",
@@ -98,7 +110,13 @@ pub fn register(registry: &mut PassRegistry) {
                 object_collision::LowerFromSoftObjectCollision::from_options(o)?,
             ))
         },
-        &[("convex", "tessellate")],
+        &[
+            ("convex", "tessellate"),
+            ("leave-out", "22+29+36+40"),
+            ("leave-out-motion", "2"),
+            ("convex-surface", "render"),
+            ("reach", "50"),
+        ],
     );
     registry.register("lower-fromsoft-extras", |o| {
         without_options(o, extras::LowerFromSoftExtras)

@@ -22,6 +22,18 @@ impl Metres {
     pub fn parse(key: &str, text: &str) -> Result<Self, String> {
         Self::new(number(key, text)?).map_err(|e| format!("{key}: {e}"))
     }
+    /// A distance, or `none` for no distance (an option stated as having none).
+    pub fn parse_or_none(key: &str, text: &str) -> Result<Option<Self>, String> {
+        if text == "none" {
+            Ok(None)
+        } else {
+            Self::parse(key, text).map(Some)
+        }
+    }
+    /// The text [`Metres::parse_or_none`] reads back.
+    pub fn text_or_none(m: Option<Self>) -> String {
+        m.map_or_else(|| "none".to_owned(), |m| m.to_string())
+    }
     pub fn get(self) -> f32 {
         self.0
     }
@@ -143,7 +155,11 @@ impl HitClass {
     pub fn of(material: i32) -> Option<Self> {
         u8::try_from(material.checked_rem(100)?).ok().map(HitClass)
     }
-    /// Classes joined by `+`.
+    /// The classes `classes`, each checked.
+    pub fn set(classes: impl IntoIterator<Item = u8>) -> Result<BTreeSet<Self>, String> {
+        classes.into_iter().map(Self::new).collect()
+    }
+    /// Classes joined by `+` (empty: none).
     pub fn parse_set(key: &str, text: &str) -> Result<BTreeSet<Self>, String> {
         text.split('+')
             .filter(|c| !c.is_empty())

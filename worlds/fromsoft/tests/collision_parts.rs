@@ -12,7 +12,7 @@ use primase_core::convert::{
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
 use primase_fromsoft::sekiro::collision::LowerFromSoftCollision;
-use primase_fromsoft::sekiro::objects::{ConvexBodies, LowerFromSoftObjectCollision};
+use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
 use primase_fromsoft::sekiro::settings::HitFilters;
 use primase_fromsoft::sekiro::source::{
     CollisionPart, MapCollision, ObjectBodies, ObjectBody, ObjectGeometry,
@@ -147,8 +147,19 @@ fn convert(parts: &mut dyn PartSource) -> Vec<BTreeMap<String, Vec<Tri>>> {
     let (w, _) = world();
     let passes = Pipeline {
         passes: vec![
-            Box::new(LowerFromSoftCollision::new(HitFilters::new([8]).unwrap())),
-            Box::new(LowerFromSoftObjectCollision::new(ConvexBodies::Tessellate)),
+            Box::new(LowerFromSoftCollision {
+                hit_filters: HitFilters::new([8]).unwrap(),
+                water: BTreeSet::new(),
+                leave_out: BTreeSet::new(),
+                reach: None,
+            }),
+            Box::new(LowerFromSoftObjectCollision {
+                convex: ConvexBodies::Tessellate,
+                leave_out: BTreeSet::new(),
+                leave_out_motion: BTreeSet::new(),
+                convex_surface: ConvexSurface::Default,
+                reach: None,
+            }),
         ],
     };
     let written = Rc::new(RefCell::new(Vec::new()));
