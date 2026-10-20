@@ -223,7 +223,7 @@ impl Pass for SetReskateShadowCasting {
             .find(|p| !names.iter().any(|n| n.starts_with(p.as_str())))
         {
             return Err(format!(
-                "set-reskate-shadow-casting: no placement's name starts with {p} (a Unity path is joined by a bare /)"
+                "set-reskate-shadow-casting: no placement's name starts with {p} (a name is matched as its reader wrote it, path separators included)"
             ));
         }
         // the placements selected and the others, each prototype's of each

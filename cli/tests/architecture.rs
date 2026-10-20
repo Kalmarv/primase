@@ -20,7 +20,8 @@
 //!   carries a migration status in `architecture.toml` (`[[layout]]`, per module, counted like a break). The rules
 //!   are checked on `layout_rules`' and `layout_paths`' fixtures.
 //! - `game_names`: no game, engine or destination names in core, toolkit and formats code (the test-input registry
-//!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`).
+//!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`), a game crate's string literals
+//!   aside (its game's own names).
 //! - `entry_points`: examples, bins and the cli compose library entry points; no world data or format handling of
 //!   their own.
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
@@ -1226,8 +1227,12 @@ fn game_names() {
         // a worlds crate's own names (its games, its engine, its destination); shared code has none
         for file in rust_files(&root().join(&m.path).join("src")) {
             for t in code(&file) {
-                let (Tok::Ident(s) | Tok::Str(s)) = t else {
-                    continue;
+                // a game crate's string literals are its game's own names (script classes, paths), which may hold a
+                // destination's word (SkateBIRD's `SkateCollectible`); its identifiers are still checked
+                let s = match t {
+                    Tok::Ident(s) => s,
+                    Tok::Str(s) if m.kind.as_deref() != Some("game") => s,
+                    _ => continue,
                 };
                 for w in words(&s) {
                     if NAMES.contains(&w.as_str()) && !m.names.contains(&w) {
