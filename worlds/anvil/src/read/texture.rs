@@ -36,9 +36,9 @@ pub use crate::read::material::TEXTURE_MAP;
 /// The compiled header's marker: equals the CRC-32 of `CompiledTextureMap` (the name a label).
 pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 
-/// The texture format a TextureMap's engine format code names, for the codes established on fixtures: 2 (BC1: maps 217
-/// and its levels' sizes; decoded within 1 of Pillow in 32,524 of 131,072 channels, the rest equal) and 10 (BC7: maps
-/// 218 and 31; 218's top level decoded equal to an independent decoder's). Another code is `None`: not refused as
+/// The texture format a TextureMap's engine format code names, for the codes established on fixtures: 2 (BC1: map
+/// 217, every level's bytes and its top level decoded equal to the third-party bcdec's) and 10 (BC7: maps 218 and 31,
+/// 218's top level decoded equal to the independent texture2ddecoder's). Another code is `None`: not refused as
 /// stored, but its layout isn't known.
 pub fn format(code: u32) -> Option<TexFormat> {
     match code {

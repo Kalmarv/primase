@@ -276,3 +276,54 @@ fn reserved_bc7_is_transparent_black() {
         );
     }
 }
+
+/// BC1 against Pillow, whose decode of this fixture equals the D3D11.3 functional spec's reference on every channel
+/// (19.5.3: endpoints promoted to UNORM8 by MSB extension; 19.5.6: palette by division, truncated; measured
+/// 2026-10-20 against a transcription of that reference). Ours divides with rounding from the unpromoted endpoints,
+/// which 19.5.2 permits ("may optionally promote or do round-to-nearest division") when, per channel,
+/// |ours - reference| < 1/255 + 0.03 * max(|e0 - e1|, |e0p - e1p|) (endpoints as floats), and is exact where the
+/// reference is 0 or 1. That is the gate; the channels it lets differ are counted.
+#[test]
+fn bc1_within_the_d3d11_tolerance_of_pillow() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let blocks = std::fs::read(root.join("bc1.blocks")).expect("fixture");
+    let pillow = std::fs::read(root.join("bc1.pillow.rgba")).expect("oracle");
+    let ours = Decoder::default()
+        .decode_rgba8(TexFormat::Bc1, 32, 32, &blocks)
+        .expect("decode");
+    // 19.5.3's MSB extension to 8 bits
+    let promote = |v: u32, bits: u32| (v << (8 - bits)) | (v >> (2 * bits - 8));
+    let (mut differing, mut outside) = (0usize, Vec::new());
+    for (k, block) in blocks.as_chunks::<8>().0.iter().enumerate() {
+        let c0 = u32::from(u16::from_le_bytes([block[0], block[1]]));
+        let c1 = u32::from(u16::from_le_bytes([block[2], block[3]]));
+        let raw = |c: u32| [c >> 11, (c >> 5) & 63, c & 31];
+        let (r0, r1) = (raw(c0), raw(c1));
+        let tolerance: [f64; 3] = [0, 1, 2].map(|ch| {
+            let bits = if ch == 1 { 6 } else { 5 };
+            let max = f64::from((1u32 << bits) - 1);
+            let unpromoted = f64::from(r0[ch].abs_diff(r1[ch])) / max;
+            let promoted = f64::from(promote(r0[ch], bits).abs_diff(promote(r1[ch], bits))) / 255.;
+            1. / 255. + 0.03 * unpromoted.max(promoted)
+        });
+        let (bx, by) = (k % 8, k / 8);
+        for (y, x, ch) in (0..4).flat_map(|y| (0..4).flat_map(move |x| (0..4).map(move |ch| (y, x, ch)))) {
+            let i = ((by * 4 + y) * 32 + bx * 4 + x) * 4 + ch;
+            let (a, b) = (ours[i], pillow[i]);
+            if a == b {
+                continue;
+            }
+            differing += 1;
+            let allowed = ch < 3 && b != 0 && b != 255 && f64::from(a.abs_diff(b)) / 255. < tolerance[ch];
+            if !allowed {
+                outside.push(format!("block {k} pixel ({x},{y}) channel {ch}: {a} vs {b}"));
+            }
+        }
+    }
+    println!(
+        "bc1 vs Pillow: {differing} of {} channels differ, {} outside D3D11.3 19.5.2",
+        ours.len(),
+        outside.len()
+    );
+    assert!(outside.is_empty(), "{outside:?}");
+}
