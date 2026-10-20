@@ -368,22 +368,19 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
 /// The elements (triangles, line segments, points) of each primitive of a placement a cell or tile holds:
 /// (primitive, element indices).
 type Pieces = Vec<(usize, Vec<u32>)>;
-/// A placement a cell owns: whole, or (filed by element centre) the elements of each of its primitives the cell
-/// holds, by index into that primitive's element list. Ownership only: what is drawn of it is read from the cell's
-/// world when the cell is written.
-#[derive(Clone, Debug)]
-struct Owned {
-    entity: Entity,
-    /// Its prototype in the planning world: loaded with it.
-    prototype: Entity,
-    elements: Option<Pieces>,
-}
-/// A planned cell: what it owns. The entities' content (transforms, lights, records) is read from the cell's world.
+/// A planned cell: what it owns, and the elements it holds of placements filed by element centre. Ownership only:
+/// what the entities are and hold (placements, records, lights, collision; transforms) is read from the cell's world
+/// when the cell is written.
 #[derive(Clone, Debug, Default)]
 struct Cell {
-    placements: Vec<Owned>,
-    /// Lights, curves, markers and collision holders that are not placements, filed by their position.
-    entities: Vec<Entity>,
+    /// The entities it owns, each filed by its first role when planned: a placement by its pivot, a curve, marker,
+    /// light or collision holder by its position; and the placements filed by element centre it is the home of. Each
+    /// is written in every role its world gives it, whatever its role was when planned.
+    owned: Vec<Entity>,
+    /// The placements filed by element centre it holds elements of, each with the elements of each of its primitives
+    /// it holds, by index into that primitive's element list. Their home (one of these cells, owning them) writes the
+    /// rest of them.
+    pieces: Vec<(Entity, Pieces)>,
     /// The given viewer records ([`Options::viewer_items`]) filed here, by number.
     records: Vec<usize>,
 }
@@ -446,17 +443,22 @@ impl WrittenTile {
         Ok(())
     }
 }
-/// Which cell writes what, decided before any tile is written: placements by pivot (or, for
-/// [`Options::split_by_tile`], by transformed element centre), lights, curves, markers and standalone collision by
-/// position, given viewer records by anchor. A placement's collision goes with the placement.
+/// Which cell writes what, decided before any tile is written: each entity is owned by one cell, filed by its first
+/// role: placements by pivot (or, for [`Options::split_by_tile`], by transformed element centre), then curves,
+/// markers, lights and standalone collision by position; given viewer records by anchor. A placement's collision
+/// goes with the placement.
 ///
-/// The plan holds ownership, not content: a cell is written from its world as prepared, which is authoritative.
-/// Transforms, lights, records and collision are read from it, so what the cell's passes changed is what is written.
-/// An entity is written by the cell that owns it, wherever a pass moved it (its tile's bounds follow it); what the
-/// cell's world holds that the planning world did not (made by its load or its passes, and kept by the conversion as
-/// the part's output) is that cell's. A placement filed by element centre is owned piecewise by every cell holding
-/// its elements: their passes must prepare its mesh alike (the same primitives and element counts), and content
-/// they make from it is made, and written, by each of those cells.
+/// The plan holds ownership, not content or roles: a cell is written from its world as prepared, which is
+/// authoritative. What each entity it owns is (a placement, a curve, a marker, a light, a collision holder, or
+/// several), its transform and its values are read from it, so what the cell's passes changed is what is written: a
+/// placement a pass turned into a marker is written as the marker. An entity is written by the cell that owns it,
+/// wherever a pass moved it (its tile's bounds follow it); what the cell's world holds that the planning world did
+/// not (made by its load or its passes, and kept by the conversion as the part's output) is that cell's. What the
+/// world holds of other cells' (reached through a reference) is theirs to write. A placement filed by element centre
+/// is drawn piecewise by every cell holding its elements, and their passes must prepare its mesh alike (the same
+/// primitives and element counts); it is owned by one of them, its home (the cell of its pivot when that holds some
+/// of its elements, else the first), which writes the rest of it: its collision, and its other roles. Content the
+/// cells' passes make from it is made, and written, by each of those cells.
 ///
 /// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`] with what
 /// its passes made, as a [`World::subset`], with its meshes and textures loaded and lowered to PBR, then
@@ -475,8 +477,6 @@ pub struct TilePlan {
     first_made: u32,
     /// The sun: indexed scene-wide, not written as a tile's light.
     sun_entity: Option<Entity>,
-    /// Placements filed by element centre whose collision has been written (with the first cell holding them).
-    collided: BTreeSet<Entity>,
     /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
@@ -630,9 +630,10 @@ fn curve_anchor(e: Entity, c: &primase_core::Curve) -> Result<[f64; 3]> {
 }
 
 /// [`plan`] for a world whose geometry its cells will load (a reader that loads assets per cell): `geometry` says
-/// which prototypes have geometry before it is loaded (they have a box, see [`spanning`]). A placement is planned
-/// when its prototype has a mesh, a mesh file, `geometry` or collision; one whose cell then loads no mesh counts as a
-/// placement without mesh ([`TilePlan::write_cell`]).
+/// which prototypes have geometry before it is loaded (they have a box, see [`spanning`]): a placement of one of
+/// [`Options::split_by_tile`] is filed by element centre only when its prototype has a mesh, a mesh file or
+/// `geometry`. Every placement is owned; one whose cell's world then holds no mesh for it counts as a placement
+/// without mesh, one with a degenerate transform as skipped ([`TilePlan::write_cell`]).
 pub fn plan_with_geometry(
     world: &World,
     options: &Options,
@@ -676,7 +677,6 @@ pub fn plan_with_geometry(
         next_item: options.viewer_items.len(),
         first_made: world.next_index(),
         sun_entity,
-        collided: BTreeSet::new(),
         shapes: BTreeMap::new(),
         ground_markers: 0,
         omitted: BTreeMap::new(),
@@ -694,30 +694,23 @@ pub fn plan_with_geometry(
         textures: ktx2::TextureEncoder::new(options.cache.clone(), options.cache_verify)
             .with_memory(options.encoding_memory),
     };
+    // every placement owned by one cell, as a placement (its first role): what it draws or collides with, and whether
+    // its transform is degenerate, is what its cell's world holds when the cell is written
+    let mut filed = BTreeSet::new();
     for (&e, &prototype) in &placements {
         let t = *world.get::<Transform>(e).expect("a placement has a transform");
-        match t.classify() {
-            TransformKind::Degenerate => {
-                plan.skipped += 1;
-                continue;
-            }
-            TransformKind::Mirrored | TransformKind::Sheared => {
-                return Err(Error::Invalid(format!(
-                    "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
-                )));
-            }
-            TransformKind::Regular => {}
+        let kind = t.classify();
+        if matches!(kind, TransformKind::Mirrored | TransformKind::Sheared) {
+            return Err(Error::Invalid(format!(
+                "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
+            )));
         }
+        filed.insert(e);
         let draws = !meshless(world, prototype) || geometry(prototype);
-        if !draws && !collides(world, prototype) {
-            // nothing to draw or collide with: counted now, as no cell writes it
-            plan.without_mesh += 1;
-            continue;
-        }
-        if draws && options.split_by_tile.contains(&e) {
+        if draws && kind == TransformKind::Regular && options.split_by_tile.contains(&e) {
             plan.unsplit.push(e);
         } else {
-            plan.own_whole(e, prototype, t)?;
+            plan.own_whole(e, t)?;
         }
     }
     for (i, item) in plan.given.iter().enumerate() {
@@ -729,10 +722,9 @@ pub fn plan_with_geometry(
         let key = coordinate(item.anchor, options.tile_size.get())?;
         plan.cells.entry(key).or_default().records.push(i);
     }
-    // the standalone entities, each filed by its first role: curves (at their first point), markers, lights (the sun
+    // the other entities, each filed by its first role: curves (at their first point), markers, lights (the sun
     // aside: it is indexed scene-wide), then collision no placement places; their records numbered in that order,
     // after the given ones
-    let mut filed = BTreeSet::new();
     for (e, c) in world.iter::<Curve>() {
         let first = curve_anchor(e, c)?;
         plan.numbers.insert((e, Curve::NAME), plan.next_item);
@@ -844,7 +836,7 @@ impl TilePlan {
     pub fn unsplit(&self) -> Vec<Entity> {
         self.unsplit.clone()
     }
-    /// File `e` in the cell of `at` (ground position), once: a standalone entity, by its first role.
+    /// File `e` in the cell of `at` (ground position), once: an entity that is not a placement, by its first role.
     fn file(&mut self, filed: &mut BTreeSet<Entity>, e: Entity, at: [f64; 3]) -> Result<()> {
         if at.iter().any(|v| !v.is_finite()) {
             return Err(Error::Invalid(format!(
@@ -853,25 +845,21 @@ impl TilePlan {
         }
         if filed.insert(e) {
             let key = coordinate(at, self.options.tile_size.get())?;
-            self.cells.entry(key).or_default().entities.push(e);
+            self.cells.entry(key).or_default().owned.push(e);
         }
         Ok(())
     }
     /// Own placement `e` whole, in the cell of its pivot.
-    fn own_whole(&mut self, e: Entity, prototype: Entity, t: Transform) -> Result<()> {
+    fn own_whole(&mut self, e: Entity, t: Transform) -> Result<()> {
         let key = coordinate(t.cols[3].map(f64::from), self.options.tile_size.get())?;
-        self.cells.entry(key).or_default().placements.push(Owned {
-            entity: e,
-            prototype,
-            elements: None,
-        });
+        self.cells.entry(key).or_default().owned.push(e);
         Ok(())
     }
     /// File the elements (triangles, line segments, points) of placement `e` (one of [`TilePlan::unsplit`]) by
     /// their centres, through its transform in
-    /// `world`, which holds its prototype's mesh loaded and prepared as each cell holding them will. A placement that
-    /// turned out to have no mesh (none loaded and no file) is owned whole, by its pivot (its collision written there,
-    /// and it is counted as a placement without mesh); a degenerate one is counted as skipped.
+    /// `world`, which holds its prototype's mesh loaded and prepared as each cell holding them will; it is owned by its
+    /// home, the cell of its pivot when that holds some of its elements, else the first that does. A placement that
+    /// turned out to have no mesh (none loaded and no file) or a degenerate transform is owned whole, by its pivot.
     pub fn split(&mut self, world: &World, e: Entity) -> Result<()> {
         let i = self
             .unsplit
@@ -884,10 +872,7 @@ impl TilePlan {
             .get::<Transform>(e)
             .ok_or_else(|| Error::Invalid(format!("placement {e:?} has no transform")))?;
         match transform.classify() {
-            TransformKind::Degenerate => {
-                self.skipped += 1;
-                return Ok(());
-            }
+            TransformKind::Degenerate => return self.own_whole(e, transform),
             TransformKind::Mirrored | TransformKind::Sheared => {
                 return Err(Error::Invalid(format!(
                     "placement {e:?}: a non-rigid transform; the writer takes rigid placements, run bake-nonrigid first"
@@ -896,7 +881,7 @@ impl TilePlan {
             TransformKind::Regular => {}
         }
         if meshless(world, prototype) {
-            return self.own_whole(e, prototype, transform);
+            return self.own_whole(e, transform);
         }
         let mesh = loaded(world, prototype)?;
         validate_mesh(mesh)?;
@@ -921,13 +906,19 @@ impl TilePlan {
                 parts.entry(key).or_default().push((part, elements));
             }
         }
+        let pivot = coordinate(transform.cols[3].map(f64::from), self.options.tile_size.get())?;
+        let Some(&first) = parts.keys().next() else {
+            // no elements to file: owned whole
+            return self.own_whole(e, transform);
+        };
         self.shapes.insert(e, shape);
+        let home = if parts.contains_key(&pivot) { pivot } else { first };
         for (key, elements) in parts {
-            self.cells.entry(key).or_default().placements.push(Owned {
-                entity: e,
-                prototype,
-                elements: Some(elements),
-            });
+            let cell = self.cells.entry(key).or_default();
+            if key == home {
+                cell.owned.push(e);
+            }
+            cell.pieces.push((e, elements));
         }
         Ok(())
     }
@@ -941,16 +932,17 @@ impl TilePlan {
     pub fn cells(&self) -> Vec<(i32, i32)> {
         self.cells.keys().copied().collect()
     }
-    /// The entities a cell's tiles are written from: its placements and their prototypes, and its lights, curves,
-    /// markers and standalone collision holders. A driver prepares the world's [`World::closure`] of them.
+    /// The entities a cell's tiles are written from: those it owns (placements, lights, curves, markers, collision
+    /// holders) and the placements it holds elements of. A driver prepares the world's [`World::closure`] of them
+    /// (their prototypes with them).
     pub fn roots(&self, cell: (i32, i32)) -> BTreeSet<Entity> {
         let Some(c) = self.cells.get(&cell) else {
             return BTreeSet::new();
         };
-        c.placements
+        c.owned
             .iter()
-            .flat_map(|p| [p.entity, p.prototype])
-            .chain(c.entities.iter().copied())
+            .copied()
+            .chain(c.pieces.iter().map(|(e, _)| *e))
             .collect()
     }
     /// Write cell `cell` from `world`, as prepared: the closure of its [`TilePlan::roots`] and what the cell's passes
@@ -987,82 +979,85 @@ impl TilePlan {
             cw.records.insert(i, self.given[i].clone());
             content.items.push(i);
         }
-        // what the world holds that the planning world did not: made by the cell's load or passes, the cell's
+        // what the cell writes, each in every role its world gives it now: what it owns; the placements filed by
+        // element centre it holds elements of, as those elements alone (their home, which owns them, writes the rest);
+        // and what the world holds that the planning world did not (made by the cell's load or passes: the cell's)
         let first_made = self.first_made;
-        let made = |e: Entity| e.index() >= first_made;
         let placements = placements(world);
-        let mut standalone: Vec<Entity> = owned
-            .entities
+        let homes: BTreeSet<Entity> = owned.owned.iter().copied().collect();
+        let pieces: BTreeMap<Entity, Pieces> = owned.pieces.iter().cloned().collect();
+        let held = owned
+            .owned
             .iter()
-            .copied()
-            .filter(|&e| world.is_alive(e))
-            .collect();
-        standalone.extend(world.entities().filter(|&e| made(e)).filter(|&e| {
-            world.has::<Light>(e)
-                || world.has::<Curve>(e)
-                || world.has::<Marker>(e)
-                || standalone_collision(world, e, &placements)
-        }));
-        for e in standalone {
-            if let Some(c) = world.get::<Curve>(e) {
-                let r = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
-                let n = self.number(e, Curve::NAME);
-                self.unencoded(&r);
-                cw.put(&mut content, n, r.item, r.components);
-            }
-            if let Some(m) = world.get::<Marker>(e) {
-                let (anchor, ground) = marker_anchor(world, e, m)?;
-                self.ground_markers += u64::from(ground);
-                let kind = if m.kind == "spawn" { "spawn" } else { "marker" };
-                let r = core_record(world, e, kind, anchor, Marker::NAME)?;
-                let n = self.number(e, Marker::NAME);
-                self.unencoded(&r);
-                cw.put(&mut content, n, r.item, r.components);
-            }
-            if let Some(light) = world.get::<Light>(e)
-                && Some(e) != self.sun_entity
-            {
-                let transform = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
-                if transform.cols[3].iter().any(|v| !v.is_finite()) {
-                    return Err(Error::Invalid(format!("light {e:?} without a finite position")));
+            .map(|&e| (e, true))
+            .chain(
+                owned
+                    .pieces
+                    .iter()
+                    .filter(|(e, _)| !homes.contains(e))
+                    .map(|&(e, _)| (e, false)),
+            )
+            .chain(
+                world
+                    .entities()
+                    .filter(|e| e.index() >= first_made)
+                    .map(|e| (e, true)),
+            )
+            .filter(|&(e, _)| world.is_alive(e))
+            .collect::<Vec<_>>();
+        for (e, owner) in held {
+            if owner {
+                if let Some(c) = world.get::<Curve>(e) {
+                    let r = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
+                    let n = self.number(e, Curve::NAME);
+                    self.unencoded(&r);
+                    cw.put(&mut content, n, r.item, r.components);
                 }
-                content.lights.push(cw.lights.len());
-                cw.lights.push(SceneLight {
-                    name: world
-                        .get::<Name>(e)
-                        .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
-                    light: light.clone(),
-                    transform,
-                });
-            }
-            if standalone_collision(world, e, &placements) {
-                let c = world.get::<Collision>(e).expect("standalone collision");
-                let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
-                if let Some(item) = collision::record(world, e, c, t)? {
-                    let n = self.number(e, Collision::NAME);
-                    cw.put(&mut content, n, item, serde_json::Map::new());
+                if let Some(m) = world.get::<Marker>(e) {
+                    let (anchor, ground) = marker_anchor(world, e, m)?;
+                    self.ground_markers += u64::from(ground);
+                    let kind = if m.kind == "spawn" { "spawn" } else { "marker" };
+                    let r = core_record(world, e, kind, anchor, Marker::NAME)?;
+                    let n = self.number(e, Marker::NAME);
+                    self.unencoded(&r);
+                    cw.put(&mut content, n, r.item, r.components);
+                }
+                if let Some(light) = world.get::<Light>(e)
+                    && Some(e) != self.sun_entity
+                {
+                    let transform = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+                    if transform.cols[3].iter().any(|v| !v.is_finite()) {
+                        return Err(Error::Invalid(format!("light {e:?} without a finite position")));
+                    }
+                    content.lights.push(cw.lights.len());
+                    cw.lights.push(SceneLight {
+                        name: world
+                            .get::<Name>(e)
+                            .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
+                        light: light.clone(),
+                        transform,
+                    });
+                }
+                if standalone_collision(world, e, &placements) {
+                    let c = world.get::<Collision>(e).expect("standalone collision");
+                    let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+                    if let Some(item) = collision::record(world, e, c, t)? {
+                        let n = self.number(e, Collision::NAME);
+                        cw.put(&mut content, n, item, serde_json::Map::new());
+                    }
                 }
             }
-        }
-        // the cell's placements as its world holds them, then those made in it: each drawn, and its prototype's
-        // collision through its transform (a placement filed by element centre's with the first cell holding it)
-        let mut held: Vec<(Entity, Option<Pieces>)> = owned
-            .placements
-            .iter()
-            .filter(|p| world.is_alive(p.entity))
-            .map(|p| (p.entity, p.elements.clone()))
-            .collect();
-        held.extend(placements.keys().filter(|&&e| made(e)).map(|&e| (e, None)));
-        for (e, elements) in held {
-            // one a pass made no longer a placement (no instance, no mesh with a transform) has nothing to write
+            // as a placement (an instance, or a mesh with a transform): drawn, whole or the elements the cell holds,
+            // and its owner writes its prototype's collision through its transform
             let Some(&prototype) = placements.get(&e) else {
                 continue;
             };
+            let elements = pieces.get(&e).cloned();
             let variant = world.get::<Instance>(e).map_or(0, |i| i.variant);
             let transform = *world.get::<Transform>(e).expect("a placement has a transform");
             match transform.classify() {
                 TransformKind::Degenerate => {
-                    self.skipped += 1;
+                    self.skipped += u64::from(owner);
                     continue;
                 }
                 TransformKind::Mirrored | TransformKind::Sheared => {
@@ -1072,7 +1067,7 @@ impl TilePlan {
                 }
                 TransformKind::Regular => {}
             }
-            if (elements.is_none() || self.collided.insert(e))
+            if owner
                 && let Some(c) = world.get::<Collision>(prototype)
                 && let Some(item) = collision::record(world, e, c, transform)?
             {
@@ -1080,8 +1075,8 @@ impl TilePlan {
                 cw.put(&mut content, n, item, serde_json::Map::new());
             }
             if meshless(world, prototype) {
-                // a prototype whose cell loaded no mesh (planned from a world that loads per cell)
-                self.without_mesh += 1;
+                // a prototype whose cell has no mesh (none loaded, or planned from a world that loads per cell)
+                self.without_mesh += u64::from(owner);
                 continue;
             }
             if elements.is_some() {

@@ -162,14 +162,20 @@ fn nothing_to_draw_still_publishes_an_index() {
     for p in w.iter::<Mesh>().map(|(e, _)| e).collect::<Vec<_>>() {
         w.remove::<Mesh>(p);
     }
-    let plan = plan_with_geometry(
+    let mut plan = plan_with_geometry(
         &w,
         &Options::new(primase_web::TileSize::new(200.).unwrap()),
         &|_| false,
     )
     .unwrap();
-    assert!(plan.cells().is_empty());
+    // each placement still owned by its cell (a pass there could give it a mesh), which writes no tile for it
+    assert_eq!(plan.cells().len(), 2);
+    for cell in plan.cells() {
+        let part = w.subset(&w.closure(plan.roots(cell)));
+        assert!(plan.write_cell(cell, &part).unwrap().is_empty());
+    }
     let index = plan.finish().unwrap();
+    assert!(index.tiles.is_empty());
     assert_eq!(index.placements_without_mesh, 2);
     let out = std::env::temp_dir().join(format!("primase-web-empty-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);

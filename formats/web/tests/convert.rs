@@ -31,22 +31,24 @@ impl Reader for Given {
     }
 }
 
+/// A triangle 1 m wide.
+fn triangle() -> Mesh {
+    Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([(
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]]),
+        )]),
+        indices: Some(vec![0, 1, 2]),
+        material: None,
+    }])
+}
+
 /// One prototype, a triangle 1 m wide, placed at each of `xs` (metres east).
 fn world(xs: &[f32]) -> (World, Vec<Entity>) {
     let mut w = World::new();
     let proto = w.spawn();
-    w.insert(
-        proto,
-        Mesh::new(vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([(
-                Semantic::Position,
-                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]]),
-            )]),
-            indices: Some(vec![0, 1, 2]),
-            material: None,
-        }]),
-    );
+    w.insert(proto, triangle());
     let placed = xs
         .iter()
         .map(|&x| {
@@ -120,6 +122,57 @@ impl Pass for MoveEast {
     }
 }
 
+/// Each placement turned into a marker where it is: its instance taken away, a marker put on it.
+struct PlacementsToMarkers;
+impl Pass for PlacementsToMarkers {
+    fn name(&self) -> &'static str {
+        "placements-to-markers"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Marker::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[Instance::NAME]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let placed: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
+        for e in placed {
+            w.remove::<Instance>(e);
+            w.insert(
+                e,
+                Marker {
+                    kind: "travel".into(),
+                    ground: None,
+                    yaw: None,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Each marker turned into a mesh placed as itself: its marker taken away, a triangle put on it.
+struct MarkersToMeshes;
+impl Pass for MarkersToMeshes {
+    fn name(&self) -> &'static str {
+        "markers-to-meshes"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Mesh::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[Marker::NAME]
+    }
+    fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
+        let marked: Vec<Entity> = w.iter::<Marker>().map(|(e, _)| e).collect();
+        for e in marked {
+            w.remove::<Marker>(e);
+            w.insert(e, triangle());
+        }
+        Ok(())
+    }
+}
+
 /// A fresh output folder for `name`.
 fn folder(name: &str) -> PathBuf {
     let out = std::env::temp_dir().join(format!("primase-web-convert-{name}-{}", std::process::id()));
@@ -185,6 +238,24 @@ fn vec3s(doc: &serde_json::Value, bin: &[u8], a: &serde_json::Value) -> Vec<[f32
         .collect()
 }
 
+/// The viewer records the published tiles hold: each its tile's column, kind and anchor.
+fn records(out: &Path) -> Vec<(i64, serde_json::Value, serde_json::Value)> {
+    let (index, docs) = tiles(out);
+    let mut records = Vec::new();
+    for (tile, (doc, _)) in index["tiles"].as_array().unwrap().iter().zip(&docs) {
+        for node in doc["nodes"].as_array().unwrap() {
+            if let Some(v) = node["extras"]["primase"]["web.viewer"]["value"].as_object() {
+                records.push((
+                    tile["col"].as_i64().unwrap(),
+                    v["kind"].clone(),
+                    v["anchor"].clone(),
+                ));
+            }
+        }
+    }
+    records
+}
+
 #[test]
 fn a_marker_a_cells_pass_places_from_a_placement_is_written() {
     let (w, _) = world(&[10., 450.]);
@@ -194,27 +265,85 @@ fn a_marker_a_cells_pass_places_from_a_placement_is_written() {
         ..Options::new(TileSize::new(200.).unwrap())
     };
     convert(w, options, &out, vec![Box::new(MarkPlacements)]);
-    let (index, docs) = tiles(&out);
-    let mut markers = Vec::new();
-    for (tile, (doc, _)) in index["tiles"].as_array().unwrap().iter().zip(&docs) {
-        for node in doc["nodes"].as_array().unwrap() {
-            if let Some(v) = node["extras"]["primase"]["web.viewer"]["value"].as_object() {
-                markers.push((
-                    tile["col"].as_i64().unwrap(),
-                    v["kind"].clone(),
-                    v["anchor"].clone(),
-                ));
-            }
-        }
-    }
     // one marker for each placement, written with its placement's cell
     assert_eq!(
-        markers,
+        records(&out),
         [
             (0, "marker".into(), serde_json::json!([10., 2., 0.])),
             (2, "marker".into(), serde_json::json!([450., 2., 0.])),
         ]
     );
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_placement_a_cells_pass_turns_into_a_marker_is_written_as_the_marker() {
+    let (w, _) = world(&[10., 450.]);
+    let out = folder("to-marker");
+    let options = Options {
+        compress: false,
+        ..Options::new(TileSize::new(200.).unwrap())
+    };
+    convert(w, options, &out, vec![Box::new(PlacementsToMarkers)]);
+    // each cell's placement, now a marker where it was, and nothing drawn
+    assert_eq!(
+        records(&out),
+        [
+            (0, "marker".into(), serde_json::json!([10., 0., 0.])),
+            (2, "marker".into(), serde_json::json!([450., 0., 0.])),
+        ]
+    );
+    let (index, _) = tiles(&out);
+    assert!(
+        index["tiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["placements"] == 0),
+        "{index}"
+    );
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_marker_a_cells_pass_turns_into_a_mesh_is_drawn_as_placed() {
+    let mut w = World::new();
+    for x in [10., 450.] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Marker {
+                kind: "travel".into(),
+                ground: None,
+                yaw: None,
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [x, 0., 0.];
+        w.insert(e, t);
+    }
+    let out = folder("to-mesh");
+    let options = Options {
+        compress: false,
+        ..Options::new(TileSize::new(200.).unwrap())
+    };
+    convert(w, options, &out, vec![Box::new(MarkersToMeshes)]);
+    // each cell's marker, now a triangle placed as itself where it was, and no record
+    assert_eq!(records(&out), []);
+    let (index, _) = tiles(&out);
+    let drawn: Vec<(i64, u64, Option<f64>)> = index["tiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["col"].as_i64().unwrap(),
+                t["placements"].as_u64().unwrap(),
+                t["min"][0].as_f64(),
+            )
+        })
+        .collect();
+    assert_eq!(drawn, [(0, 1, Some(10.)), (2, 1, Some(450.))]);
     let _ = std::fs::remove_dir_all(&out);
 }
 

@@ -6,13 +6,17 @@ materials to PBR before export.
 
 A scene too large to hold loaded at once goes through the same writer one cell at
 a time. `plan(&World, &Options)` decides which cell owns what, without loading
-anything: placements by pivot, lights, curves, markers and standalone collision by
-position, a placement's collision with the placement. The plan holds ownership,
-not content: each cell is written from its world as prepared (after a converter's
-passes for that cell), which is authoritative. Transforms, lights, records and
-collision are read from it, an entity stays with the cell that owns it wherever a
-pass moved it (the tile's bounds follow it), and what the cell's world holds that
-the planning world did not (made by its load or passes) is the cell's. With KTX2, encodings are held in memory between tiles up to
+anything: each entity by its first role, placements by pivot, then curves,
+markers, lights and standalone collision by position; a placement's collision
+with the placement. The plan holds ownership, not content or roles: each cell is
+written from its world as prepared (after a converter's passes for that cell),
+which is authoritative. What each entity it owns is (a placement turned into a
+marker is written as the marker), its transforms, lights, records and collision
+are read from it, an entity stays with the cell that owns it wherever a pass
+moved it (the tile's bounds follow it), and what the cell's world holds that the
+planning world did not (made by its load or passes) is the cell's. A
+`split_by_tile` placement is drawn piecewise by the cells holding its elements
+and owned by one of them, its home, which writes the rest of it. With KTX2, encodings are held in memory between tiles up to
 `Options::encoding_memory` (least recently used dropped, then read from the disk
 cache or encoded again); the bytes are the same at any bound. `TilePlan::split` files the
 triangles of each `split_by_tile` placement from a world holding its prototype
