@@ -21,7 +21,7 @@ use primase_core::frame::ground;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Curve, Entity, Marker, Resource, Tile, Transform, World};
 
-/// `partition-grid{cell=C[,origin=E,N][,halo=H][,region=E0,N0,E1,N1][,tile=T]}`: see the module documentation. `cell`
+/// `partition-grid{cell=C[,origin=E;N][,halo=H][,region=E0;N0;E1;N1][,tile=T]}`: see the module documentation. `cell`
 /// has no default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
 /// left out and counted. Built by [`PartitionGrid::new`] and its setters, which check every value; the pipeline text
 /// goes through the same constructor ([`PartitionGrid::from_options`]).
@@ -138,7 +138,7 @@ impl PartitionGrid {
     pub fn from_options(o: &Options) -> Result<PartitionGrid, String> {
         let numbers = |k: &str, v: &str, n: usize| -> Result<Vec<f64>, String> {
             let xs: Vec<f64> = v
-                .split(',')
+                .split(';')
                 .map(|x| {
                     x.trim()
                         .parse::<f64>()
@@ -304,13 +304,13 @@ impl Pass for PartitionGrid {
     fn options(&self) -> Options {
         let mut o = Options::from([("cell".to_owned(), self.cell.to_string())]);
         if self.origin != [0.0; 2] {
-            o.insert("origin".into(), format!("{},{}", self.origin[0], self.origin[1]));
+            o.insert("origin".into(), format!("{};{}", self.origin[0], self.origin[1]));
         }
         if self.halo > 0.0 {
             o.insert("halo".into(), self.halo.to_string());
         }
         if let Some(r) = self.region {
-            o.insert("region".into(), format!("{},{},{},{}", r[0], r[1], r[2], r[3]));
+            o.insert("region".into(), format!("{};{};{};{}", r[0], r[1], r[2], r[3]));
         }
         if let Some(t) = self.tile {
             o.insert("tile".into(), t.to_string());
@@ -493,7 +493,7 @@ mod tests {
         placement(&mut w2, proto, 10.0, 10.0);
         placement(&mut w2, proto, 150.0, 10.0);
         let mut log = PassLog::default();
-        grid(&[("cell", "100"), ("region", "0,0,100,100")])
+        grid(&[("cell", "100"), ("region", "0;0;100;100")])
             .run(&mut w2, &mut log)
             .unwrap();
         assert_eq!(w2.resource::<PartitionPlan>().unwrap().groups.len(), 1);
@@ -670,7 +670,7 @@ mod tests {
         let inside = placement(&mut w, proto, 98.0, 10.0);
         let outside = placement(&mut w, proto, 102.0, 10.0);
         let mut log = PassLog::default();
-        grid(&[("cell", "100"), ("halo", "5"), ("region", "0,0,100,100")])
+        grid(&[("cell", "100"), ("halo", "5"), ("region", "0;0;100;100")])
             .run(&mut w, &mut log)
             .unwrap();
         let plan = w.resource::<PartitionPlan>().unwrap();
@@ -737,6 +737,36 @@ mod tests {
         assert!(p.contains("partition-grid{cell=250}"), "{p}");
     }
 
+    /// Every option, the lists included, survives the pipeline text: options are separated by commas, so a list's
+    /// numbers by semicolons.
+    #[test]
+    fn every_option_round_trips_through_the_pipeline_text() {
+        let g = PartitionGrid::new(400.0)
+            .unwrap()
+            .with_tile(200.0)
+            .unwrap()
+            .with_origin([-200.0, 200.0])
+            .unwrap()
+            .with_halo(37.5)
+            .unwrap()
+            .with_region([-1000.0, -600.0, 1400.0, 2000.0])
+            .unwrap();
+        let text = primase_core::pass::pass_text(&g);
+        assert_eq!(
+            text,
+            "partition-grid{cell=400,halo=37.5,origin=-200;200,region=-1000;-600;1400;2000,tile=200}"
+        );
+        let mut reg = primase_core::pass::PassRegistry::new();
+        crate::register(&mut reg);
+        let parsed = reg.parse(&text).unwrap();
+        assert_eq!(parsed.passes.len(), 1);
+        assert_eq!(parsed.passes[0].options(), g.options());
+        assert_eq!(
+            PartitionGrid::from_options(&parsed.passes[0].options()).unwrap(),
+            g
+        );
+    }
+
     /// Aligned to a writer's 200 m tiles: a cell or origin that is not a whole multiple of the tile is refused; content
     /// is filed by the tile it stands in, by the writers' own rule, so a cell holds whole tiles (on both sides of every
     /// border, in f32 as a writer computes it), and a placement stating its tile is filed by that tile.
@@ -744,7 +774,7 @@ mod tests {
     fn aligned_cells_hold_whole_tiles_by_the_writers_rule() {
         for bad in [
             &[("cell", "300"), ("tile", "200")][..],
-            &[("cell", "400"), ("tile", "200"), ("origin", "100,0")],
+            &[("cell", "400"), ("tile", "200"), ("origin", "100;0")],
             &[("cell", "400"), ("tile", "0.1")],
             &[("cell", "400"), ("tile", "0")],
         ] {
@@ -763,7 +793,7 @@ mod tests {
                 .with_origin([100.0, 0.0])
                 .is_err()
         );
-        let g = grid(&[("cell", "400"), ("tile", "200"), ("origin", "-200,200")]);
+        let g = grid(&[("cell", "400"), ("tile", "200"), ("origin", "-200;200")]);
         assert_eq!(g.tile(), Some(200.0));
         assert_eq!(PartitionGrid::from_options(&g.options()).unwrap(), g);
         // every f32 position within a few steps of a tile border, both sides, both signs
