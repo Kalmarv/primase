@@ -1,6 +1,8 @@
 //! The `skatebird.*` dialect: what SkateBIRD's scripts state about an object, as stored. Each is on its own entity
 //! with the object's world `core.transform`, `core.name` (its GameObject's), `core.source` and, when the object is
-//! stored inactive or the script disabled, a `core.condition` on the Unity level read's axes.
+//! stored inactive or the script disabled, a `core.condition` on the Unity level read's axes. The object's forward
+//! (Unity's +Z) is that transform's -Z column in the core frame: a yaw of atan2(-x, -z) over it gives the game's own
+//! (level2's start 7.0659 degrees, level1's 234.8157).
 use primase_core::{Component, JsonError};
 use primase_unity::components::UnityObject;
 use serde::Serialize;
