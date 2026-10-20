@@ -178,6 +178,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_wrap,
         &[("anchor", "base-colour"), ("axis", "u")],
     );
+    // the lit form an unlit material takes is the program's: no default
+    reg.register_requiring(
+        "lower-reskate-unlit",
+        passes::lower_reskate_unlit,
+        &[("as", "matte")],
+    );
     // shadow casting as core states it (core.shadows), lowered to skate's per-material flag
     reg.register("lower-reskate-shadows", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),

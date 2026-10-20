@@ -26,6 +26,7 @@ pub mod spawn;
 pub mod summarize;
 pub mod textures;
 pub mod tint;
+pub mod unlit;
 pub mod uv_repeats;
 pub mod vertex_alpha;
 pub mod water;
@@ -81,6 +82,7 @@ pub use spawn::{
 };
 pub use summarize::{SummarizeReskateMap, summarize_reskate_map};
 pub use textures::{PrepareReskateTextures, tint_pixels};
+pub use unlit::{LowerReskateUnlit, UnlitAs, lower_reskate_unlit};
 pub use uv_repeats::{PrepareReskateUvRepeats, RepeatBlended, RepeatDecals, prepare_reskate_uv_repeats};
 pub use water::{
     OceanMaterials, PrepareReskateWater, SummarizeReskateContent, WaterExtent, prepare_reskate_water,

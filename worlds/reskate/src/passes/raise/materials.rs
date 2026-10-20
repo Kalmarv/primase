@@ -2,8 +2,8 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::PassLog;
-use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
-use primase_core::{ColorSpace, Entity, NormalConvention, TexRole, Texture, TextureFile, World};
+use primase_core::pbr::{Filter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
+use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexRole, Texture, TextureFile, World};
 
 use crate::{Error, Result};
 
@@ -181,6 +181,32 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                     "normal map not in glTF's convention: run normalize-normals first",
                 ));
             }
+        }
+        // skate lights every surface and filters every texture linearly: what it cannot draw is reported by name
+        let label = || {
+            world
+                .get::<Name>(entity)
+                .map_or_else(|| format!("{entity:?}"), |n| n.0.clone())
+        };
+        if m.shading == Shading::Unlit {
+            plan.log.approximate(
+                &format!(
+                    "unlit material drawn lit (lower-reskate-unlit lowers it first): {}",
+                    label()
+                ),
+                1,
+            );
+        }
+        if m.textures()
+            .any(|r| r.filters.mag == Some(Filter::Nearest) || r.filters.min == Some(Filter::Nearest))
+        {
+            plan.log.approximate(
+                &format!(
+                    "textures sampled nearest drawn filtered linearly (upscale-nearest keeps their look): {}",
+                    label()
+                ),
+                1,
+            );
         }
         if m.emissive_texture.is_some() {
             plan.log
