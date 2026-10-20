@@ -11,6 +11,8 @@ pub use frames::{Bitangent, UvFrameNormals};
 mod layers;
 pub use layers::{BakeLayerChannels, register};
 mod normals;
+mod orm;
+pub use orm::{MissingLevels, OrmSize, PackOrm};
 mod texture;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use std::io::Cursor;
@@ -30,6 +32,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
     ("image/normals.rs", include_bytes!("normals.rs")),
+    ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
 ];
 

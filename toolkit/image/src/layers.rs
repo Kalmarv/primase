@@ -31,6 +31,12 @@ pub fn register(reg: &mut PassRegistry) {
         |o: &Options| Ok(Box::new(crate::UvFrameNormals::from_options(o)?)),
         &[("bitangent", "-v")],
     );
+    // packing, the packed size and what to do without a level are the program's: no default
+    reg.register_requiring(
+        "pack-orm",
+        |o: &Options| Ok(Box::new(crate::PackOrm::from_options(o)?)),
+        &[("size", "metallic-roughness"), ("missing-levels", "generate")],
+    );
     reg.register("bake-normal-scale", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(crate::BakeNormalScale)),

@@ -56,3 +56,14 @@ shorter than sqrt(3)/255 become flat +Z; the returned count records each such
 replacement. Alpha is averaged separately and no sRGB transfer is applied.
 Generic `half`/`mip_chain` continue to filter stored channel values; callers
 with normal-map semantics must use the normal-specific functions.
+
+`PackOrm` (`pack-orm{size=metallic-roughness|occlusion,missing-levels=generate|refuse}`,
+both required) packs a material's separate occlusion and metallic-roughness maps into
+one linear RGBA8 image, glTF's ORM layout (R occlusion, G roughness, B metallic, A
+255), and points both slots at it; materials sharing a pair share the image. The
+slots must sample alike (coordinate set, wrap, transform) and both maps be linear,
+or the pass refuses. Every stored level is decoded through `texture_level_rgba8`.
+The image takes the size and stored levels of the map `size` names; the other map's
+level of another size is resampled nearest (counted), and a level it does not store
+is box-filtered from its full level with `mip_chain` (`generate`, counted) or refused
+(`refuse`): occlusion is never replaced by white.
