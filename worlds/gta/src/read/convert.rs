@@ -51,7 +51,11 @@ fn read_notices(missing_archetypes: usize) -> Vec<Notice> {
 
 /// What loading couldn't find: prototypes without a live drawable file (left without geometry), and textures the
 /// archives don't hold (each named, as the example, with how many bindings asked for it).
-fn load_notices(missing_assets: usize, textures_not_found: &BTreeMap<String, usize>) -> Vec<Notice> {
+fn load_notices(
+    missing_assets: usize,
+    textures_not_found: &BTreeMap<String, usize>,
+    non_finite_streams: &BTreeMap<String, usize>,
+) -> Vec<Notice> {
     let mut out = Vec::new();
     if missing_assets > 0 {
         out.push(Notice::new(
@@ -70,6 +74,18 @@ fn load_notices(missing_assets: usize, textures_not_found: &BTreeMap<String, usi
         );
         for (name, uses) in textures_not_found {
             n = n.example(format!("{name} ({uses} bindings)"));
+        }
+        out.push(n);
+    }
+    if !non_finite_streams.is_empty() {
+        let mut n = Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "vertex streams storing values that are not finite (NaN, infinity), left out (one per primitive)",
+            non_finite_streams.values().sum::<usize>() as u64,
+        );
+        for (semantic, primitives) in non_finite_streams {
+            n = n.example(format!("{semantic} ({primitives} primitives)"));
         }
         out.push(n);
     }
@@ -116,15 +132,18 @@ impl Reader for GtaReader {
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
         let (w, r) = self.source.load(world, roots)?;
-        self.pending
-            .extend(load_notices(r.asset_missing, &r.textures_not_found));
+        self.pending.extend(load_notices(
+            r.asset_missing,
+            &r.textures_not_found,
+            &r.non_finite_streams,
+        ));
         let mut report = Report::new();
-        if !r.textures_not_found.is_empty() || r.asset_missing > 0 {
+        if !r.textures_not_found.is_empty() || r.asset_missing > 0 || !r.non_finite_streams.is_empty() {
             report.push((
                 "gta assets".into(),
                 format!(
-                    "{} prototypes without a live file, textures not found {:?}",
-                    r.asset_missing, r.textures_not_found
+                    "{} prototypes without a live file, textures not found {:?}, non-finite vertex streams left out {:?}",
+                    r.asset_missing, r.textures_not_found, r.non_finite_streams
                 ),
             ));
         }
@@ -155,19 +174,26 @@ pub fn map_named(name: &str) -> Option<Map> {
 mod tests {
     use super::*;
 
-    /// Missing source inputs become notices with their counts and the names the source has; nothing missing, none.
+    /// Missing source inputs, and vertex streams left out for values that are not finite, become notices with their
+    /// counts and the names the source has; nothing missing or left out, none.
     #[test]
     fn missing_inputs_are_notices() {
         assert!(read_notices(0).is_empty());
-        assert!(load_notices(0, &BTreeMap::new()).is_empty());
+        assert!(load_notices(0, &BTreeMap::new(), &BTreeMap::new()).is_empty());
         let r = read_notices(15);
         assert_eq!((r.len(), r[0].count, r[0].kind), (1, 15, NoticeKind::Unsupported));
         let textures = BTreeMap::from([("road_01".to_owned(), 3), ("sign_02".to_owned(), 1)]);
-        let l = load_notices(2, &textures);
+        let l = load_notices(2, &textures, &BTreeMap::new());
         assert_eq!(l.len(), 2);
         assert_eq!(l[0].count, 2);
         assert!(l[0].reason.contains("drawable"));
         assert_eq!(l[1].count, 2);
         assert_eq!(l[1].examples, ["road_01 (3 bindings)", "sign_02 (1 bindings)"]);
+        // a NaN normal stream on one primitive, a tangent stream on two: one notice, counted per primitive
+        let streams = BTreeMap::from([("Normal".to_owned(), 1), ("Tangent".to_owned(), 2)]);
+        let n = load_notices(0, &BTreeMap::new(), &streams);
+        assert_eq!((n.len(), n[0].count, n[0].kind), (1, 3, NoticeKind::Unsupported));
+        assert!(n[0].reason.contains("not finite"));
+        assert_eq!(n[0].examples, ["Normal (1 primitives)", "Tangent (2 primitives)"]);
     }
 }
