@@ -39,7 +39,15 @@
 //!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
 //!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
 //!   dropped silently; a component whose view would lose a value (a non-finite float) is an error.
-//! - **Levels of detail** (`core.lods`) are refused: a pipeline chooses one form per prototype first (`select-lod`).
+//! - **Levels of detail**: glTF draws one mesh per node and the writer chooses no form, so a placement of a prototype
+//!   with other forms (`core.lods` listing any) is not written, counted (`placements_with_lods`); a pipeline that wants
+//!   it drawn chooses one form per prototype first (`select-lod`). The forms are not prototypes of their own. A
+//!   `core.lods` without other forms leaves nothing to choose: the mesh is written, `core.lods` in its extras.
+//! - **Everything else**: without a [`Selection`], an entity the writer neither writes nor counts under one of the
+//!   causes above (a `core.marker`, a standalone collision soup, a material only an unplaced variant draws) is not in
+//!   the glTF; its components are counted by name (`components_unwritten`). An entity left out whole under a counted
+//!   cause (an unplaced prototype, a degenerate placement, one with levels of detail) takes what it reaches with it.
+//!   A selection is the caller's choice of what to write, so what it leaves out is not counted.
 //! - **Shadows**: what is known of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ..., "receive":
 //!   ...}`, each key only when known: a placement's `core.shadows` on its node (`cast` `"off"`, `"on"` or `"only"`,
 //!   a shadow proxy that is not drawn; `receive` a boolean), and a material's or light's `cast_shadows` on the
@@ -55,8 +63,9 @@ use std::path::Path;
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    Component, ComponentJson, Entity, Instance, Light, LightKind, MaterialVariants, Mesh, MeshFile, Name,
-    Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
+    Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
+    Name, Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind,
+    World,
 };
 use primase_core::{LayeredMaterial, WeightMapping};
 use serde_json::{Map, Value, json};
@@ -147,6 +156,9 @@ pub struct WriteReport {
     pub placements_degenerate_skipped: u64,
     /// Placements whose prototype has no `core.mesh` (nothing to draw).
     pub placements_without_mesh: u64,
+    /// Placements (as `placements` counts them) not written because their prototype has levels of detail
+    /// (`core.lods` with other forms): the writer chooses no form (`select-lod` does).
+    pub placements_with_lods: u64,
     /// Prototypes nothing places (written at the origin only with `include_unplaced`).
     pub prototypes_unplaced: u64,
     /// Material entities without `pbr.material` (nor layered): not written, their primitives drawn with none.
@@ -168,6 +180,11 @@ pub struct WriteReport {
     pub streams_skipped: BTreeMap<String, u64>,
     /// Components with no JSON form, by name: not in the extras.
     pub extras_unencoded: BTreeMap<String, u64>,
+    /// Entities with components that are not written and not counted by any field above (markers, standalone
+    /// collision, ...; see the module docs). Never with a [`Selection`].
+    pub entities_unwritten: u64,
+    /// Their components, by name.
+    pub components_unwritten: BTreeMap<String, u64>,
     pub glb_bytes: u64,
 }
 
@@ -190,11 +207,13 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(
             f,
-            "placements {}: mirrored {}, degenerate skipped {}, without mesh {}; prototypes unplaced {}",
+            "placements {}: mirrored {}, degenerate skipped {}, without mesh {}, with levels of detail (not \
+             written) {}; prototypes unplaced {}",
             self.placements,
             self.placements_mirrored,
             self.placements_degenerate_skipped,
             self.placements_without_mesh,
+            self.placements_with_lods,
             self.prototypes_unplaced
         )?;
         writeln!(
@@ -212,7 +231,12 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
-        write!(f, "extras unencoded {:?}", self.extras_unencoded)
+        writeln!(f, "extras unencoded {:?}", self.extras_unencoded)?;
+        write!(
+            f,
+            "entities not written {}: components {:?}",
+            self.entities_unwritten, self.components_unwritten
+        )
     }
 }
 
@@ -250,12 +274,6 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
 /// [`write`] as a [`Document`], for a caller that changes it further before assembling the GLB once
 /// (`WriteReport::glb_bytes` is then 0).
 pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document, WriteReport)> {
-    if let Some((entity, _)) = world.iter::<primase_core::Lods>().next() {
-        return Err(Error::World {
-            entity,
-            detail: "levels of detail: choose one form per prototype first (select-lod)".into(),
-        });
-    }
     let mut w = Writer {
         world,
         options,
@@ -277,6 +295,8 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         emissive_strength_used: false,
         specular_used: false,
         layered_weights: BTreeMap::new(),
+        handled: BTreeSet::new(),
+        left_out: Vec::new(),
     };
     let json = w.document()?;
     Ok((Document::new(json, std::mem::take(&mut w.buffers.bin)), w.report))
@@ -364,6 +384,10 @@ struct Writer<'w> {
     specular_used: bool,
     /// Layered material entity -> the glTF attribute carrying its weights.
     layered_weights: BTreeMap<Entity, String>,
+    /// Entities whose components are written, or counted in the report as not written.
+    handled: BTreeSet<Entity>,
+    /// Entities left out whole under a counted cause, with what they reach.
+    left_out: Vec<Entity>,
 }
 
 impl Writer<'_> {
@@ -419,10 +443,12 @@ impl Writer<'_> {
                 node.insert("extras".into(), extras);
             }
             lights.push(self.light(e, l)?);
+            self.handled.insert(e);
             nodes.push(Value::Object(node));
             roots.push(nodes.len() - 1);
         }
         self.report.lights = lights.len() as u64;
+        self.count_unwritten();
         self.report.nodes = nodes.len() as u64;
         for (key, children) in groups {
             let name = match key {
@@ -516,6 +542,11 @@ impl Writer<'_> {
         let chosen = |e: Entity| selection.is_none_or(|s| s.placements.contains_key(&e));
         let mut places = Vec::new();
         let mut placed = BTreeSet::new();
+        // a prototype's other forms are not prototypes of their own
+        let forms: BTreeSet<Entity> = world
+            .iter::<Lods>()
+            .flat_map(|(_, l)| l.forms.iter().map(|f| f.form))
+            .collect();
         for (e, inst) in world.iter::<Instance>() {
             if !chosen(e) {
                 continue;
@@ -545,7 +576,7 @@ impl Writer<'_> {
                         transform,
                     });
                 }
-            } else if !placed.contains(&e) {
+            } else if !placed.contains(&e) && !forms.contains(&e) {
                 self.report.prototypes_unplaced += 1;
                 if self.options.include_unplaced && selection.is_none() {
                     places.push(Place {
@@ -554,6 +585,8 @@ impl Writer<'_> {
                         variant: 0,
                         transform: Transform::IDENTITY,
                     });
+                } else {
+                    self.left_out.push(e);
                 }
             }
         }
@@ -594,6 +627,15 @@ impl Writer<'_> {
     fn placement_node(&mut self, place: &Place) -> Result<Option<Value>> {
         let world = self.world;
         let options = self.options;
+        if world
+            .get::<Lods>(place.prototype)
+            .is_some_and(|l| !l.forms.is_empty())
+        {
+            // drawing any one form, or a piece cut from one, would be choosing it: select-lod's choice
+            self.report.placements_with_lods += 1;
+            self.left_out.push(place.entity);
+            return Ok(None);
+        }
         let selected = options
             .selection
             .as_ref()
@@ -614,6 +656,7 @@ impl Writer<'_> {
             None => {
                 let Some(mesh) = world.get::<Mesh>(place.prototype) else {
                     self.report.placements_without_mesh += 1;
+                    self.handled.insert(place.entity);
                     return Ok(None);
                 };
                 (
@@ -641,6 +684,7 @@ impl Writer<'_> {
         match kind {
             TransformKind::Degenerate => {
                 self.report.placements_degenerate_skipped += 1;
+                self.left_out.push(place.entity);
                 return Ok(None);
             }
             TransformKind::Sheared => {
@@ -708,6 +752,7 @@ impl Writer<'_> {
             node.insert("extras".into(), extras);
         }
         self.report.placements += 1;
+        self.handled.insert(place.entity);
         Ok(Some(Value::Object(node)))
     }
 
@@ -841,6 +886,8 @@ impl Writer<'_> {
             ExtrasOf::Prototype(e) => self.extras(*e, CONSUMED_PROTOTYPE)?,
             ExtrasOf::Piece { prototype, from } => self.piece_extras(*prototype, from, mesh)?,
         };
+        let (ExtrasOf::Prototype(prototype) | ExtrasOf::Piece { prototype, .. }) = extras_of;
+        self.handled.insert(*prototype);
         if let Some(extras) = extras {
             m.insert("extras".into(), extras);
         }
@@ -892,6 +939,7 @@ impl Writer<'_> {
         if let Some(m) = self.material_index.get(&e) {
             return Ok(m.clone());
         }
+        self.handled.insert(e);
         if let Some(layered) = self.world.get::<LayeredMaterial>(e) {
             return self.layered_material(e, &layered.clone()).map(Some);
         }
@@ -1257,6 +1305,7 @@ impl Writer<'_> {
         if let Some(&i) = self.image_of_entity.get(&e) {
             return Ok(i);
         }
+        self.handled.insert(e);
         let skip = |w: &mut Self, reason: &str| {
             *w.report.textures_skipped.entry(reason.to_owned()).or_default() += 1;
             w.image_of_entity.insert(e, None);
@@ -1332,6 +1381,31 @@ impl Writer<'_> {
             .components_json(prototype)
             .map_err(|err| failed(err.to_string()))?;
         Ok(self.primase_extras(shown, CONSUMED_PROTOTYPE))
+    }
+
+    /// Without a selection, count the components of every entity neither handled nor reached from one left out under a
+    /// counted cause: what the glTF does not hold and no other field of the report names.
+    fn count_unwritten(&mut self) {
+        if self.options.selection.is_some() {
+            return;
+        }
+        let world = self.world;
+        let mut accounted = world.closure(self.left_out.iter().copied());
+        accounted.extend(&self.handled);
+        let mut entities = BTreeSet::new();
+        for name in world.component_names() {
+            for e in world.entities_named(name) {
+                if !accounted.contains(&e) {
+                    *self
+                        .report
+                        .components_unwritten
+                        .entry(name.to_owned())
+                        .or_default() += 1;
+                    entities.insert(e);
+                }
+            }
+        }
+        self.report.entities_unwritten = entities.len() as u64;
     }
 
     fn primase_extras(&mut self, shown: Vec<ComponentJson<'_>>, consumed: &[&str]) -> Option<Value> {
