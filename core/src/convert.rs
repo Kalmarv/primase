@@ -934,8 +934,8 @@ pub struct Summarized<'a> {
 }
 
 /// [`convert_parts`] over the parts twice: first each part is loaded and its `summarized.summarize` passes make its
-/// summaries, which are merged over every part (refused when the merge in arrival order and in reverse differ); the
-/// `summarized.decide` passes make the decisions from them, once; then each part is loaded again, given the merged
+/// summaries, which are merged over every part (with the pass checks on, also in reverse, refused when the two
+/// differ); the `summarized.decide` passes make the decisions from them, once; then each part is loaded again, given the merged
 /// summaries and the decisions, and goes through `passes` and the writer as in [`convert_parts`]. The part source must
 /// give the same parts again ([`PartSource::restart`]).
 #[allow(clippy::too_many_arguments)]
@@ -1015,8 +1015,8 @@ impl std::fmt::Debug for Gathered<'_> {
 /// loaded again, handed the merged summaries and the decisions, run through `gathered.gather`, and the spool takes its
 /// contributions (nothing is written). Then each group the spool gives is handed them too, prepared by
 /// `gathered.group` (a whole run: the group is a whole of its own), checked against the writer's target and written.
-/// The summaries the gather traversal and the groups made are merged with the parts' (in either order, as the parts'
-/// are), the decisions kept, and `gathered.finalize` makes the decisions that need them, once. The write traversal
+/// The summaries the gather traversal and the groups made are merged with the parts' (as the parts' are: the order
+/// checked with the pass checks on), the decisions kept, and `gathered.finalize` makes the decisions that need them, once. The write traversal
 /// then runs as in [`convert_parts_summarized`], each part given every summary and decision. The part source gives the
 /// same parts three times.
 #[allow(clippy::too_many_arguments)]

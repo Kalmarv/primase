@@ -12,9 +12,11 @@
 //! parts arrive in or how they are grouped: the merge is commutative and associative, a contract its crate states and
 //! tests (shuffled orders, groupings, overlapping inputs). The conversion keeps every part's summaries until it merges
 //! them (metadata, each summary stating the bytes of the data it holds, [`Summary::retained_bytes`]: logical-data
-//! accounting, not a memory bound; the conversion reports their total, [`crate::convert::ConvertReport::summary_bytes`]), merges them in arrival order and in the
-//! reverse order, and refuses a summary whose two merges differ: a forward/reverse consistency check on every
-//! conversion, which catches many order dependencies but proves none absent (a merge that keeps only its first two
+//! accounting, not a memory bound; the conversion reports their total, [`crate::convert::ConvertReport::summary_bytes`]), merges them in arrival order,
+//! and, when its pass manager runs the pass checks (debug builds and the tests by default, or asked for:
+//! `PassManager::with_pass_checks`), also in the reverse order, refusing a summary whose two merges differ: a
+//! forward/reverse consistency check, opt-in in release builds, which catches many order dependencies but proves none
+//! absent (a merge that keeps only its first two
 //! arrivals can agree on A, B, A forward and backward and still differ on A, A, B). The crate that defines a summary
 //! or a decision registers it ([`SummaryRegistry`]), as it registers its passes.
 
