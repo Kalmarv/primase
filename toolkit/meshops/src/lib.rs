@@ -31,6 +31,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(PartitionGrid::from_options(o)?)),
         &[("cell", "100")],
     );
+    // what becomes of the variants nobody places is the program's: no default
+    reg.register_requiring(
+        "specialize-material-variants",
+        variants::specialize_material_variants,
+        &[("unused", "keep")],
+    );
 }
 mod materialless;
 pub use materialless::OmitMateriallessPrimitives;
@@ -38,6 +44,8 @@ mod partition;
 pub use partition::PartitionGrid;
 mod primitive;
 mod texcoords;
+mod variants;
+pub use variants::{SpecializeMaterialVariants, UnusedVariants, specialize_material_variants};
 pub mod vector;
 pub use hull::{convex_hull, hull_step};
 pub use primitive::{CompactedPrimitive, compact_primitive, subset_primitive};
