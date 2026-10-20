@@ -1,19 +1,13 @@
-//! `lower-reskate-unlit{as=matte|emission}`: unlit materials (`Shading::Unlit`: the colour drawn is the base colour,
-//! whatever lights the scene) as lit materials skate draws, before `raise-skate`, which draws every surface lit. The
-//! form is the program's choice:
-//! - `matte`: the base colour (factor and texture) as a fully rough dielectric (roughness 1, metallic 0): the colour
-//!   lit by the scene, never shiny;
-//! - `emission`: the base colour as emission (the factor's colour as the emissive factor at strength 1, the base
-//!   texture as the emission texture) over a black base colour (its alpha kept, and the base texture kept for that
-//!   alpha when the material is not opaque): the colour whatever lights the scene. skate-scene has no emission today
-//!   (`raise-skate` reports emission as not representable), so in a ReSkate map this draws black: `matte` is the form
-//!   skate draws.
-//!
-//! Either way the slots an unlit material does not draw (metallic-roughness, normal, occlusion, emission, specular) are
-//! dropped. Each material lowered is reported by name as an approximation.
+//! `lower-reskate-unlit{as=matte}`: unlit materials (`Shading::Unlit`: the colour drawn is the base colour, whatever
+//! lights the scene) as lit materials skate draws, before `raise-skate`, which draws every surface lit. The form is the
+//! program's choice, stated: `matte`, the base colour (factor and texture) as a fully rough dielectric (roughness 1,
+//! metallic 0), the colour lit by the scene and never shiny; the slots an unlit material does not draw
+//! (metallic-roughness, normal, occlusion, emission, specular) are dropped. `as=emission` (the colour drawn whatever
+//! the light) is refused: skate-scene has no emissive surface the writer can write, so it would draw black; it is a
+//! form to add when the writer maps one. Each material lowered is reported by name as an approximation.
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
+use primase_core::pbr::{PbrMaterial, Shading};
 use primase_core::{Entity, Name, World};
 
 /// The lit form [`LowerReskateUnlit`] gives an unlit material.
@@ -21,8 +15,6 @@ use primase_core::{Entity, Name, World};
 pub enum UnlitAs {
     /// The base colour, fully rough and dielectric.
     Matte,
-    /// The base colour as emission over black.
-    Emission,
 }
 
 /// See the module documentation. Made by [`LowerReskateUnlit::new`]; from options by the same call.
@@ -40,19 +32,19 @@ impl LowerReskateUnlit {
         self.form
     }
 
-    /// From its options: `as=matte|emission`, required.
+    /// From its options: `as=matte`, required (`emission` refused: module documentation).
     pub fn from_options(o: &Options) -> Result<LowerReskateUnlit, String> {
         if let Some(k) = o.keys().find(|k| k.as_str() != "as") {
             return Err(format!("unknown option {k}"));
         }
         match o.get("as").map(String::as_str) {
             Some("matte") => Ok(LowerReskateUnlit::new(UnlitAs::Matte)),
-            Some("emission") => Ok(LowerReskateUnlit::new(UnlitAs::Emission)),
-            Some(v) => Err(format!("as={v}: matte or emission")),
-            None => Err(
-                "as is required: matte (lit, fully rough) or emission (the colour as emission over black)"
+            Some("emission") => Err(
+                "as=emission: skate-scene has no emissive surface the writer can write (it would draw black); as=matte"
                     .into(),
             ),
+            Some(v) => Err(format!("as={v}: matte")),
+            None => Err("as is required: matte (the base colour lit, fully rough)".into()),
         }
     }
 }
@@ -71,7 +63,6 @@ impl Pass for LowerReskateUnlit {
             "as".to_owned(),
             match self.form {
                 UnlitAs::Matte => "matte",
-                UnlitAs::Emission => "emission",
             }
             .to_owned(),
         )])
@@ -83,7 +74,7 @@ impl Pass for LowerReskateUnlit {
         &["pbr.material"]
     }
     fn approximates(&self) -> &'static str {
-        "unlit materials drawn lit: fully rough (matte), or their colour as emission over black"
+        "unlit materials drawn lit, fully rough"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let unlit: Vec<Entity> = w
@@ -94,32 +85,21 @@ impl Pass for LowerReskateUnlit {
         for e in unlit {
             let name = w.get::<Name>(e).map_or_else(|| format!("{e:?}"), |n| n.0.clone());
             let m = w.get_mut::<PbrMaterial>(e).expect("listed");
-            m.shading = Shading::Lit;
-            m.metallic = 0.0;
-            m.roughness = 1.0;
-            m.metallic_roughness_texture = None;
-            m.normal_texture = None;
-            m.occlusion_texture = None;
-            m.specular = None;
-            m.emissive_texture = None;
-            m.emissive = [0.0; 3];
             match self.form {
                 UnlitAs::Matte => {
+                    m.shading = Shading::Lit;
+                    m.metallic = 0.0;
+                    m.roughness = 1.0;
+                    m.metallic_roughness_texture = None;
+                    m.normal_texture = None;
+                    m.occlusion_texture = None;
+                    m.specular = None;
+                    m.emissive_texture = None;
+                    m.emissive = [0.0; 3];
                     log.approximate(
                         &format!("unlit material drawn matte (lit, fully rough): {name}"),
                         1,
                     );
-                }
-                UnlitAs::Emission => {
-                    let [r, g, b, a] = m.base_color;
-                    m.emissive = [r, g, b];
-                    m.emissive_strength = 1.0;
-                    m.emissive_texture = m.base_color_texture;
-                    m.base_color = [0.0, 0.0, 0.0, a];
-                    if m.alpha_mode == AlphaMode::Opaque {
-                        m.base_color_texture = None;
-                    }
-                    log.approximate(&format!("unlit material drawn as emission over black: {name}"), 1);
                 }
             }
         }
@@ -132,12 +112,16 @@ mod tests {
     use super::*;
     use primase_core::pbr::TextureRef;
 
-    fn unlit(w: &mut World, name: &str, alpha: AlphaMode) -> (Entity, Entity) {
+    /// matte: lit, roughness 1, metallic 0, the base colour kept, the other slots dropped, reported; a lit material
+    /// is left as it is.
+    #[test]
+    fn matte_keeps_the_base_colour_fully_rough() {
+        let mut w = World::new();
         let tex = w.spawn();
-        let e = w.spawn();
-        w.insert(e, Name(name.into()));
+        let sign = w.spawn();
+        w.insert(sign, Name("sign".into()));
         w.insert(
-            e,
+            sign,
             PbrMaterial {
                 shading: Shading::Unlit,
                 base_color: [0.2, 0.4, 0.6, 0.5],
@@ -145,19 +129,9 @@ mod tests {
                 normal_texture: Some(TextureRef::new(tex)),
                 metallic: 1.0,
                 roughness: 0.1,
-                alpha_mode: alpha,
                 ..PbrMaterial::default()
             },
         );
-        (e, tex)
-    }
-
-    /// matte: lit, roughness 1, metallic 0, the base colour kept, the other slots dropped, reported; a lit material
-    /// is left as it is.
-    #[test]
-    fn matte_keeps_the_base_colour_fully_rough() {
-        let mut w = World::new();
-        let (sign, tex) = unlit(&mut w, "sign", AlphaMode::Opaque);
         let lit = w.spawn();
         w.insert(lit, PbrMaterial::default());
         let mut log = PassLog::default();
@@ -177,29 +151,15 @@ mod tests {
         );
     }
 
-    /// emission: the base colour as emission over black, the base texture the emission texture; an opaque material
-    /// drops the base texture, a masked one keeps it for its alpha.
+    /// The form is required and printed; emission is refused, naming why.
     #[test]
-    fn emission_draws_the_colour_over_black() {
-        let mut w = World::new();
-        let (sign, tex) = unlit(&mut w, "sign", AlphaMode::Opaque);
-        let (leaf, _) = unlit(&mut w, "leaf", AlphaMode::Mask { cutoff: 0.5 });
-        LowerReskateUnlit::new(UnlitAs::Emission)
-            .run(&mut w, &mut PassLog::default())
-            .unwrap();
-        let m = w.get::<PbrMaterial>(sign).unwrap();
-        assert_eq!((m.emissive, m.emissive_strength), ([0.2, 0.4, 0.6], 1.0));
-        assert_eq!(m.emissive_texture.map(|r| r.texture), Some(tex));
-        assert_eq!(m.base_color, [0.0, 0.0, 0.0, 0.5]);
-        assert!(m.base_color_texture.is_none());
-        assert!(w.get::<PbrMaterial>(leaf).unwrap().base_color_texture.is_some());
-    }
-
-    #[test]
-    fn the_form_is_required_and_printed() {
+    fn the_form_is_required_and_emission_refused() {
         assert!(LowerReskateUnlit::from_options(&Options::new()).is_err());
         assert!(LowerReskateUnlit::from_options(&Options::from([("as".into(), "glow".into())])).is_err());
-        let p = LowerReskateUnlit::from_options(&Options::from([("as".into(), "emission".into())])).unwrap();
+        let e =
+            LowerReskateUnlit::from_options(&Options::from([("as".into(), "emission".into())])).unwrap_err();
+        assert!(e.contains("no emissive surface"), "{e}");
+        let p = LowerReskateUnlit::from_options(&Options::from([("as".into(), "matte".into())])).unwrap();
         assert_eq!(LowerReskateUnlit::from_options(&p.options()).unwrap(), p);
     }
 }

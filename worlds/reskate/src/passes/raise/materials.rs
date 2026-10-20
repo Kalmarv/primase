@@ -191,7 +191,7 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
         if m.shading == Shading::Unlit {
             plan.log.approximate(
                 &format!(
-                    "unlit material drawn lit (lower-reskate-unlit lowers it first): {}",
+                    "unlit material drawn lit (lower-reskate-unlit{{as=matte}} lowers it first): {}",
                     label()
                 ),
                 1,
