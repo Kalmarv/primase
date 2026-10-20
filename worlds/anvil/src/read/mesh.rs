@@ -12,12 +12,15 @@
 //! - a tail, kept as stored.
 //!
 //! The indices are in ranges, one per record: a range runs from its first index to the next record's (the last to the
-//! buffer's end), and its stored indices count from its vertex base. On seven Mesh resources (Riders Republic build
-//! 25394987: one, two, three, five and six records, strides 24) the ranges tile both buffers exactly: the first starts
-//! at index and vertex 0, each at a whole triangle, and each range's vertices run from its base to the next's, every
-//! one of them used. A header without the marker at 61, another stride, record id or version, a buffer past the body,
-//! an index buffer not of whole triangles, or ranges that don't tile the buffers so is refused, naming it. The records'
-//! 8 extra bytes and the 8 bytes before the indices are not established and are kept as stored.
+//! buffer's end), and its stored indices count from its vertex base; its vertices run from its base to the next
+//! record's (the last to the buffer's end). Refused, naming it: a header without the marker at 61, another stride,
+//! record id or version, a buffer past the body, an index buffer not of whole triangles, and ranges that don't
+//! partition the buffers in order (the first at index and vertex 0, each range at a whole triangle and at or after the
+//! one before, none past either buffer) or an index outside its range's vertices. An empty range (no indices, or no
+//! vertices) and vertices no triangle names are read, not refused: nothing establishes that they can't be stored.
+//! Observed, not required: on seven Mesh resources (Riders Republic build 25394987: one, two, three, five and six
+//! records, strides 24) no range is empty and every vertex is named. The records' 8 extra bytes and the 8 bytes
+//! before the indices are not established and are kept as stored.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -400,5 +403,106 @@ impl StoredMesh {
             }
         }
         Ok(out.as_chunks::<3>().0.to_vec())
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test fixtures built by hand"
+)]
+mod tests {
+    use super::*;
+
+    /// A mesh of `vertices` vertices and these indices, its records these (first index, vertex base).
+    fn mesh(vertices: usize, indices: &[u16], records: &[(u32, u32)]) -> StoredMesh {
+        let vertex = StoredVertex {
+            position: [0; 3],
+            scale: 1,
+            direction_a: [0; 4],
+            direction_b: [0; 4],
+            unknown: [0xFFFF; 2],
+            uv: [0; 2],
+        };
+        StoredMesh {
+            header: vec![0; HEADER],
+            bounds: [[0.0; 3]; 2],
+            compiled_head: vec![0; 75],
+            stride: STRIDE,
+            records: records
+                .iter()
+                .enumerate()
+                .map(|(k, &(first_index, vertex_base))| RangeRecord {
+                    pad: [0; 3],
+                    first_index,
+                    vertex_base,
+                    extension: (k + 1 < records.len()).then_some([0, 0]),
+                })
+                .collect(),
+            vertices: vec![vertex; vertices],
+            gap: [0; 8],
+            indices: indices.to_vec(),
+            tail: Vec::new(),
+        }
+    }
+
+    fn refused(m: &StoredMesh) -> usize {
+        match m.triangles() {
+            Err(Error::Record { index, .. }) => index,
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_range_counts_from_its_base() {
+        let m = mesh(6, &[0, 1, 2, 0, 2, 1, 1, 0, 2], &[(0, 0), (3, 3)]);
+        assert_eq!(m.triangles().expect("read"), [[0, 1, 2], [3, 5, 4], [4, 3, 5]]);
+    }
+
+    #[test]
+    fn a_first_range_not_at_zero_is_refused() {
+        assert_eq!(refused(&mesh(3, &[0, 1, 2, 0, 1, 2], &[(3, 0)])), 0);
+        assert_eq!(refused(&mesh(6, &[0, 1, 2], &[(0, 3)])), 0);
+    }
+
+    #[test]
+    fn a_range_not_at_a_whole_triangle_is_refused() {
+        assert_eq!(refused(&mesh(6, &[0, 1, 2, 0, 1, 2], &[(0, 0), (4, 3)])), 1);
+    }
+
+    #[test]
+    fn ranges_out_of_order_or_past_the_buffers_are_refused() {
+        // indices descending, vertices descending, indices past the buffer, vertices past the buffer
+        let i = [0, 1, 2, 0, 1, 2, 0, 1, 2];
+        assert_eq!(refused(&mesh(9, &i, &[(0, 0), (6, 3), (3, 6)])), 1);
+        assert_eq!(refused(&mesh(9, &i, &[(0, 0), (3, 6), (6, 3)])), 1);
+        assert_eq!(refused(&mesh(9, &i, &[(0, 0), (12, 3)])), 0);
+        assert_eq!(refused(&mesh(9, &i, &[(0, 0), (3, 12)])), 0);
+    }
+
+    #[test]
+    fn an_index_outside_its_ranges_vertices_is_refused() {
+        // range 0 owns vertices 0..3; its index 3 would be range 1's
+        assert_eq!(refused(&mesh(6, &[0, 1, 3, 0, 1, 2], &[(0, 0), (3, 3)])), 0);
+        // the last range owns 3..6; 3 + 3 is past it
+        assert_eq!(refused(&mesh(6, &[0, 1, 2, 0, 1, 3], &[(0, 0), (3, 3)])), 1);
+    }
+
+    #[test]
+    fn empty_ranges_and_unnamed_vertices_are_read() {
+        // an empty middle range (no indices, vertices 3..4), and vertex 4 named by no triangle
+        let m = mesh(7, &[0, 1, 2, 0, 1, 2], &[(0, 0), (3, 3), (3, 4)]);
+        assert_eq!(m.triangles().expect("read"), [[0, 1, 2], [4, 5, 6]]);
+        let ranges = m.ranges().expect("ranges");
+        assert_eq!(
+            ranges[1],
+            MeshRange {
+                indices: 3..3,
+                vertices: 3..4
+            }
+        );
+        // a range with indices but no vertices of its own names none, so any index is outside it
+        assert_eq!(refused(&mesh(3, &[0, 1, 2, 0, 1, 2], &[(0, 0), (3, 3)])), 1);
     }
 }

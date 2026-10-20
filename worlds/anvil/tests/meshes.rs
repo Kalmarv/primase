@@ -132,7 +132,8 @@ fn stand_reads_its_two_ranges() {
 }
 
 /// Every range's triangles name only its own vertices, from its base up to the next range's, and together they name
-/// every vertex.
+/// every vertex: observed on every fixture, not a format requirement (the reader reads unnamed vertices and empty
+/// ranges).
 fn ranges_tile(m: &AnvilMesh) {
     let mut used = vec![false; m.positions.len()];
     for t in m.triangles.iter().flatten() {
