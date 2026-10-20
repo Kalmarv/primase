@@ -172,6 +172,14 @@ impl LowerFromSoftCollision {
         }
         Ok(self)
     }
+    /// [`Self::with_class`] for each of `classes`.
+    pub fn with_classes(
+        self,
+        classes: impl IntoIterator<Item = HitClass>,
+        choice: ClassChoice,
+    ) -> std::result::Result<Self, String> {
+        classes.into_iter().try_fold(self, |p, c| p.with_class(c, choice))
+    }
     /// The triangles whose centre lies more than `reach` outside the read region left out.
     pub fn with_reach(mut self, reach: Metres) -> Self {
         self.reach = Some(reach);
