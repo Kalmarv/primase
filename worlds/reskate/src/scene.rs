@@ -88,14 +88,14 @@ impl SurfaceTable {
 
 /// A texture of the scene.
 #[derive(Debug)]
-pub struct TexDef {
+pub struct TexDef<'a> {
     pub key: String,
     pub name: String,
     pub stem: Option<String>,
     pub linear: bool,
     pub green_down: bool,
     pub z_rebuild: bool,
-    pub src: Arc<TexSource>,
+    pub src: Arc<TexSource<'a>>,
 }
 
 /// A part of a prototype.
@@ -398,7 +398,7 @@ impl WaterQuad {
 
 /// The scene as the writer reads it.
 #[derive(Debug)]
-pub struct Scene {
+pub struct Scene<'a> {
     pub dir: PathBuf,
     pub name: String,
     pub display_name: Option<String>,
@@ -407,7 +407,7 @@ pub struct Scene {
     pub region: Option<[f64; 4]>,
     pub surfaces: SurfaceTable,
     surf_map: Vec<usize>,
-    pub textures: BTreeMap<String, TexDef>,
+    pub textures: BTreeMap<String, TexDef<'a>>,
     /// Material keys in the scene's order, with their entity's component.
     pub materials: HashMap<String, SkateMaterial>,
     /// The materials with `reskate.vertex_blend` (their parts carry a weight per vertex), by key.
@@ -640,10 +640,10 @@ pub struct ScenePlacement {
     pub parts_off: Option<Vec<bool>>,
 }
 
-impl Scene {
+impl<'a> Scene<'a> {
     /// The scene a skate-scene reader attached to `w`, read from `dir`. Refused: a world its own components or
     /// resources refuse (non-finite geometry, a transform that is not finite, ...), naming the first failure.
-    pub fn from_world(world: &World, dir: &std::path::Path) -> Result<Scene> {
+    pub fn from_world(world: &'a World, dir: &std::path::Path) -> Result<Scene<'a>> {
         if let Some((name, entity, message)) = world.verify_components().into_iter().next() {
             return Err(Error::Scene(format!(
                 "{name} of {entity:?}: {message} (the writer takes a world its components accept: the reader or pass \
@@ -1162,13 +1162,13 @@ impl ProtoDef {
 
 /// Materials of the scene made on first use (the reference's Materializer).
 #[derive(Debug)]
-pub struct Materializer {
-    refs: HashMap<String, Arc<TexRef>>,
+pub struct Materializer<'a> {
+    refs: HashMap<String, Arc<TexRef<'a>>>,
     ids: HashMap<String, usize>,
     derived: HashMap<String, i32>,
 }
 
-impl Default for Materializer {
+impl Default for Materializer<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -1181,7 +1181,7 @@ fn respec(cls: VClass, alpha: i32) -> MaterialSpec<'static> {
     s
 }
 
-impl Materializer {
+impl<'a> Materializer<'a> {
     pub fn new() -> Self {
         Materializer {
             refs: HashMap::new(),
@@ -1190,7 +1190,7 @@ impl Materializer {
         }
     }
 
-    fn tex_ref(&mut self, t: &TexDef) -> Arc<TexRef> {
+    fn tex_ref(&mut self, t: &TexDef<'a>) -> Arc<TexRef<'a>> {
         self.refs
             .entry(t.key.clone())
             .or_insert_with(|| {
@@ -1205,7 +1205,7 @@ impl Materializer {
             .clone()
     }
 
-    pub fn id(&mut self, scene: &Scene, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
+    pub fn id(&mut self, scene: &Scene<'a>, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
         if let Some(&id) = self.ids.get(key) {
             return Ok(id);
         }
@@ -1214,7 +1214,7 @@ impl Materializer {
         Ok(id)
     }
 
-    fn make(&mut self, scene: &Scene, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
+    fn make(&mut self, scene: &Scene<'a>, mats: &mut MatLib, tex: &mut TexLib, key: &str) -> Result<usize> {
         let e = &scene.materials[key];
         let cls = class(e.class);
         let mut alpha = MaterialSpec::derived(cls, true).alpha;
@@ -1281,7 +1281,7 @@ impl Materializer {
 
     /// A normal or mask texture as prepared, in Studio's convention (a normal map's green flipped up and its Z stored
     /// when the scene says otherwise: exact re-encodings).
-    fn derived(&mut self, scene: &Scene, tex: &mut TexLib, key: &str, tag: u32) -> Result<i32> {
+    fn derived(&mut self, scene: &Scene<'a>, tex: &mut TexLib, key: &str, tag: u32) -> Result<i32> {
         let t = &scene.textures[key];
         if let Some(&id) = self.derived.get(key) {
             return Ok(id);
@@ -1345,10 +1345,10 @@ pub(crate) fn cut_at_repeats(m: &SkateMaterial) -> (bool, bool) {
 
 /// Builds a prototype from its geometry (the reference's Meshes.Build): [`build_geometry`], then each part's
 /// material.
-pub fn build_mesh(
-    scene: &Scene,
+pub fn build_mesh<'w>(
+    scene: &Scene<'w>,
     p: &ProtoDef,
-    mat: &mut Materializer,
+    mat: &mut Materializer<'w>,
     mats: &mut MatLib,
     tex: &mut TexLib,
 ) -> Result<Option<SrcMesh>> {
@@ -1496,11 +1496,11 @@ pub struct MeshCounters {
 }
 
 /// The material of a part for a placement's variant row (the reference's MaterialOf).
-pub fn material_of(
-    scene: &Scene,
+pub fn material_of<'w>(
+    scene: &Scene<'w>,
     part: &SrcPart,
     row: u32,
-    mat: &mut Materializer,
+    mat: &mut Materializer<'w>,
     mats: &mut MatLib,
     tex: &mut TexLib,
 ) -> Result<usize> {

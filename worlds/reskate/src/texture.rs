@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::Mutex;
 
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_hash::{content_bytes, content_finish, content_string, content_word};
@@ -63,23 +62,25 @@ enum Kind {
     Rgbx,
     Bgra,
     Bgrx,
+    /// A world texture of another format, decoded to RGBA8 level by level as a level is read.
+    Coded(TexFormat),
 }
 
 /// Where a [`TexSource`]'s stored levels are.
 #[derive(Debug)]
-enum Origin {
+enum Origin<'a> {
     /// A texture file's bytes (its levels from `data_offset` on), labelled by `name`.
     File { name: String, bytes: Vec<u8> },
-    /// A texture of the world: its levels as stored, labelled by `name`.
-    Memory { name: String, levels: Vec<Vec<u8>> },
+    /// A texture of the world: its levels as the world stores them, borrowed (never copied whole), labelled by `name`.
+    Memory { name: String, levels: &'a [Vec<u8>] },
 }
 
 /// A source texture: a texture file's bytes ([`TexSource::from_file_bytes`]: a PNG, one level, or a DDS: DXT1/3/5
 /// passed through, BC5 and 32-bit RGBA/BGRA decoded) or a texture of the world (`core.texture`, [`TexSource::from_texture`]), the chain of smaller
 /// levels completed with the 2 x 2 box filter where the source does not hold them.
 #[derive(Debug)]
-pub struct TexSource {
-    origin: Origin,
+pub struct TexSource<'a> {
+    origin: Origin<'a>,
     pub width: u32,
     pub height: u32,
     /// The full chain down to 1 x 1.
@@ -92,7 +93,6 @@ pub struct TexSource {
     kind: Kind,
     file_levels: u32,
     data_offset: usize,
-    made: Mutex<HashMap<u32, Vec<u8>>>,
 }
 
 fn u32le(b: &[u8], o: usize) -> u32 {
@@ -103,14 +103,14 @@ fn level_bytes(w: u32, h: u32, block: u64) -> u64 {
     u64::from(w.div_ceil(4).max(1)) * u64::from(h.div_ceil(4).max(1)) * block
 }
 
-impl TexSource {
+impl<'a> TexSource<'a> {
     /// A texture file's `bytes` (a PNG or a DDS), labelled by `name` (its path, in messages).
     pub fn from_file_bytes(
         name: &str,
         bytes: Vec<u8>,
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
-    ) -> Result<TexSource> {
+    ) -> Result<TexSource<'a>> {
         let bad = |m: String| Error::Texture(format!("{name}: {m}"));
         let h = &bytes[..bytes.len().min(148)];
         let (width, height, kind, fourcc, file_levels, data_offset);
@@ -238,16 +238,16 @@ impl TexSource {
         ))
     }
 
-    /// A texture of the world, its levels as stored: BC1/2/3 passed through as DXT1/3/5, BC5 and 8-bit RGBA/BGRA
-    /// decoded as a DDS file's are, any other format decoded to RGBA8 level by level. `name` labels its errors.
+    /// A texture of the world, its levels borrowed as the world stores them (no copy): BC1/2/3 passed through as
+    /// DXT1/3/5, BC5 and 8-bit RGBA/BGRA read as a DDS file's are, any other format decoded to RGBA8 level by level as
+    /// a level is read. `name` labels its errors.
     pub fn from_texture(
         name: &str,
-        t: &Texture,
+        t: &'a Texture,
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
-    ) -> Result<TexSource> {
-        let stored =
-            |kind, fourcc, format_name: &str| (kind, fourcc, format_name.to_owned(), t.levels.clone());
+    ) -> Result<TexSource<'a>> {
+        let stored = |kind, fourcc, format_name: &str| (kind, fourcc, format_name.to_owned(), &t.levels[..]);
         let (kind, fourcc, format_name, levels) = match t.format {
             TexFormat::Bc1 => stored(Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1"),
             TexFormat::Bc2 => stored(Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3"),
@@ -256,20 +256,7 @@ impl TexSource {
             TexFormat::Rgba8Unorm => stored(Kind::Rgba, None, "R8G8B8A8"),
             TexFormat::Bgra8Unorm => stored(Kind::Bgra, None, "B8G8R8A8"),
             TexFormat::Bgrx8Unorm => stored(Kind::Bgrx, None, "X8R8G8B8"),
-            other => {
-                let dec = Decoder::default();
-                let (mut w, mut h) = (t.width, t.height);
-                let mut levels = Vec::with_capacity(t.levels.len());
-                for level in &t.levels {
-                    levels.push(
-                        dec.decode_rgba8(other, w, h, level)
-                            .map_err(|e| Error::Texture(format!("{name}: {e}")))?,
-                    );
-                    w = (w >> 1).max(1);
-                    h = (h >> 1).max(1);
-                }
-                (Kind::Rgba, None, format!("{other:?}"), levels)
-            }
+            other => (Kind::Coded(other), None, format!("{other:?}"), &t.levels[..]),
         };
         let file_levels = levels.len() as u32;
         Ok(Self::finish(
@@ -289,6 +276,15 @@ impl TexSource {
         ))
     }
 
+    /// A world texture's levels, as the world holds them (borrowed); `None` for a texture file's.
+    #[cfg(test)]
+    pub(crate) fn world_levels(&self) -> Option<&'a [Vec<u8>]> {
+        match &self.origin {
+            Origin::Memory { levels, .. } => Some(levels),
+            Origin::File { .. } => None,
+        }
+    }
+
     /// The source's name in messages: its file, or its name in the world.
     pub fn label(&self) -> String {
         match &self.origin {
@@ -298,7 +294,7 @@ impl TexSource {
 
     #[allow(clippy::too_many_arguments)]
     fn finish(
-        origin: Origin,
+        origin: Origin<'a>,
         width: u32,
         height: u32,
         kind: Kind,
@@ -308,7 +304,7 @@ impl TexSource {
         data_offset: usize,
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
-    ) -> TexSource {
+    ) -> TexSource<'a> {
         let mut levels = 1;
         let (mut w, mut h) = (width, height);
         while w > 1 || h > 1 {
@@ -328,7 +324,6 @@ impl TexSource {
             kind,
             file_levels,
             data_offset,
-            made: Mutex::new(HashMap::new()),
         }
     }
 
@@ -367,6 +362,10 @@ impl TexSource {
         }
         let len = self.level_size(w, h);
         let (name, b) = match &self.origin {
+            // a coded level is the decoder's to check
+            Origin::Memory { levels, .. } if matches!(self.kind, Kind::Coded(_)) => {
+                return Ok(levels.get(mip as usize).cloned());
+            }
             Origin::Memory { levels, .. } => {
                 return Ok(levels
                     .get(mip as usize)
@@ -423,6 +422,7 @@ impl TexSource {
                 px
             }
             Kind::Rgba => d,
+            Kind::Coded(f) => dec.decode_rgba8(f, w, h, &d).map_err(err)?,
             Kind::Rgbx => {
                 for p in d.as_chunks_mut::<4>().0 {
                     p[3] = 255;
@@ -442,16 +442,14 @@ impl TexSource {
         }))
     }
 
-    /// Level `mip` (`w` x `h`) as RGBA8; levels the file lacks are box-filtered from the one above.
+    /// Level `mip` (`w` x `h`) as RGBA8; levels the file lacks are box-filtered from the one above, made as asked and
+    /// not kept (a source holds no pixels of its own: the world's, or its file's).
     pub fn decode(&self, mip: u32, w: u32, h: u32) -> Result<Option<Vec<u8>>> {
         if let Some(px) = self.file_level(mip, w, h)? {
             return Ok(Some(px));
         }
         if mip == 0 {
             return Ok(None);
-        }
-        if let Some(m) = self.made.lock().expect("lock").get(&mip) {
-            return Ok(Some(m.clone()));
         }
         let (mut pw, mut ph) = (self.width, self.height);
         for _ in 0..mip - 1 {
@@ -461,9 +459,7 @@ impl TexSource {
         let Some(prev) = self.decode(mip - 1, pw, ph)? else {
             return Ok(None);
         };
-        let half = half(pw, ph, prev);
-        self.made.lock().expect("lock").insert(mip, half.clone());
-        Ok(Some(half))
+        Ok(Some(half(pw, ph, prev)))
     }
 }
 
@@ -482,8 +478,8 @@ pub fn half(w: u32, h: u32, rgba: Vec<u8>) -> Vec<u8> {
 
 /// A source texture with what the writer needs to know about it.
 #[derive(Debug)]
-pub struct TexRef {
-    pub src: std::sync::Arc<TexSource>,
+pub struct TexRef<'a> {
+    pub src: std::sync::Arc<TexSource<'a>>,
     /// Identity of the source texture (the scene's texture key).
     pub key: u64,
     /// Output file stem and caps key (lower case).
@@ -655,12 +651,12 @@ impl TexLib {
     }
 
     /// The texture as prepared (its first level), as RGBA8 (`None` counts as unsupported).
-    pub fn decode(&mut self, tex: &TexSource) -> Result<Option<Pixels>> {
+    pub fn decode(&mut self, tex: &TexSource<'_>) -> Result<Option<Pixels>> {
         self.decode_within(tex, u32::MAX)
     }
 
     /// The texture's level whose larger side is at most `cap`, as RGBA8 (`None` counts as unsupported).
-    fn decode_within(&mut self, tex: &TexSource, cap: u32) -> Result<Option<Pixels>> {
+    fn decode_within(&mut self, tex: &TexSource<'_>, cap: u32) -> Result<Option<Pixels>> {
         let (mip, w, h) = mip_for(tex.width, tex.height, tex.levels, cap);
         let px = tex.decode(mip, w, h).unwrap_or(None);
         match px {
@@ -721,7 +717,7 @@ impl TexLib {
         w: u32,
         h: u32,
         rgba: &[u8],
-        src: &TexSource,
+        src: &TexSource<'_>,
         mean: u32,
     ) -> i32 {
         let mut hh = Hash64::new();
@@ -756,7 +752,7 @@ impl TexLib {
         alpha: bool,
         content: u64,
         format: &str,
-        src: Option<&TexSource>,
+        src: Option<&TexSource<'_>>,
         data: Vec<u8>,
         ext: &str,
         mean: u32,

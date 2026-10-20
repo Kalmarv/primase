@@ -55,7 +55,7 @@ pub struct Material {
 #[derive(Clone, Debug)]
 pub struct MaterialSpec<'a> {
     pub class: VClass,
-    pub base: Option<&'a TexRef>,
+    pub base: Option<&'a TexRef<'a>>,
     pub flat: u32,
     pub flat_alpha: u8,
     pub label: Option<String>,

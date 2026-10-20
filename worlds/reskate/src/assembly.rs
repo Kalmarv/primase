@@ -343,15 +343,15 @@ pub(crate) fn hulls_numbered(
 }
 
 /// The scene's prototypes, built when a band needs them.
-struct Meshes<'a> {
-    scene: &'a Scene,
+struct Meshes<'s, 'w> {
+    scene: &'s Scene<'w>,
     by_key: HashMap<u32, usize>,
     tried: HashSet<u32>,
-    mat: Materializer,
+    mat: Materializer<'w>,
     counters: MeshCounters,
 }
 
-impl MeshSource for Meshes<'_> {
+impl MeshSource for Meshes<'_, '_> {
     fn load(&mut self, band: &[Placement], meshes: &mut HashMap<u32, SrcMesh>, ctx: &mut Ctx) -> Result<()> {
         let mut want: Vec<u32> = band
             .iter()
@@ -677,13 +677,13 @@ impl SceneWarnings {
 
 /// What the writer lays out of a prepared world before it emits anything (what a pass asks of the writer's layout):
 /// the scene in its frame, the writer with its tiles and prototypes assembled and the world soups given it, the hulls.
-pub(crate) struct Laid {
-    pub scene: Scene,
+pub(crate) struct Laid<'w> {
+    pub scene: Scene<'w>,
     pub writer: MapWriter,
     pub hulls: Vec<Hull>,
 }
 
-impl Laid {
+impl Laid<'_> {
     /// What the writer finishes the map with, beside its tiles.
     pub(crate) fn extras(&mut self) -> (&mut MapWriter, Extras) {
         (
@@ -703,7 +703,7 @@ impl Laid {
 /// textures encoded or only identified (`encode`): the scene read, the preparation records checked against this
 /// encoding (marker snaps, overlay stack, blend chains), the tiles and prototypes assembled. What [`crate::write_map`]
 /// emits and `summarize-reskate-map` counts.
-pub(crate) fn lay(world: &World, a: &EncodingOptions, layout: Layout) -> Result<Laid> {
+pub(crate) fn lay<'w>(world: &'w World, a: &EncodingOptions, layout: Layout) -> Result<Laid<'w>> {
     let PartRead {
         scene: mut s,
         o,
@@ -732,8 +732,8 @@ pub(crate) fn lay(world: &World, a: &EncodingOptions, layout: Layout) -> Result<
 
 /// A prepared world (a part of a map, or the whole) as the map writer reads it for the encoding `a` (`dir`: where its
 /// scene came from; `encode`: its textures encoded, else only identified): what [`read_part`] gives.
-pub(crate) struct PartRead {
-    pub scene: Scene,
+pub(crate) struct PartRead<'w> {
+    pub scene: Scene<'w>,
     /// The writer's options: the region stated, else the content's (a part of a map in parts: the map's, merged over
     /// every part, `skate.content_bounds`).
     pub o: WriterOptions,
@@ -749,7 +749,12 @@ pub(crate) struct PartRead {
 
 /// `world` as the map writer reads it for the encoding `a`: the one reading of a prepared part that the map sink, the
 /// dry layouts the passes count and plan from ([`lay`]), and the collision a part shares ([`cell_shares`]) all make.
-pub(crate) fn read_part(world: &World, dir: &Path, a: &EncodingOptions, encode: bool) -> Result<PartRead> {
+pub(crate) fn read_part<'w>(
+    world: &'w World,
+    dir: &Path,
+    a: &EncodingOptions,
+    encode: bool,
+) -> Result<PartRead<'w>> {
     let scene = Scene::from_world(world, dir)?;
     let mut o = part_options(world, &scene, a, encode)?;
     let cut = scene.region;
@@ -1311,6 +1316,124 @@ mod tests {
         )
         .unwrap();
         w
+    }
+
+    /// A raised map of three slabs, each drawn with a texture of its own format: RGBA8 (passed through), BC1 (passed
+    /// through as DXT1) and R8 (decoded to RGBA8 as it is read).
+    fn textured() -> primase_core::World {
+        use primase_core::pbr::{PbrMaterial, TextureRef};
+        use primase_core::{
+            ColorSpace, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
+            Topology, Transform,
+        };
+        let mut w = primase_core::World::new();
+        let formats = [
+            (
+                TexFormat::Rgba8Unorm,
+                (0..64).map(|i| (i * 7) as u8).collect::<Vec<u8>>(),
+            ),
+            (
+                TexFormat::Bc1,
+                vec![0x1f, 0x00, 0xe0, 0x07, 0x55, 0xaa, 0x55, 0xaa],
+            ),
+            (TexFormat::R8Unorm, (0..16).map(|i| (i * 13) as u8).collect()),
+        ];
+        for (k, (format, level)) in formats.into_iter().enumerate() {
+            let tex = w.spawn();
+            w.insert(tex, Name(format!("t{k}")));
+            w.insert(
+                tex,
+                Texture {
+                    width: 4,
+                    height: 4,
+                    format,
+                    levels: vec![level],
+                    color_space: ColorSpace::Srgb,
+                    role: TexRole::Color,
+                    normal: None,
+                },
+            );
+            let material = w.spawn();
+            w.insert(material, Name(format!("m{k}")));
+            w.insert(
+                material,
+                PbrMaterial {
+                    base_color_texture: Some(TextureRef::new(tex)),
+                    ..PbrMaterial::default()
+                },
+            );
+            let proto = w.spawn();
+            w.insert(proto, Name(format!("slab{k}")));
+            w.insert(
+                proto,
+                Mesh::new(vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams: std::collections::BTreeMap::from([
+                        (
+                            Semantic::Position,
+                            Stream::F32x3(vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 0.0, -4.0]]),
+                        ),
+                        (
+                            Semantic::TexCoord(0),
+                            Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                        ),
+                    ]),
+                    indices: None,
+                    material: Some(material),
+                }]),
+            );
+            let p = w.spawn();
+            w.insert(
+                p,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            let mut t = Transform::IDENTITY;
+            t.cols[3] = [10.0 * k as f32, 0.0, 0.0];
+            w.insert(p, t);
+        }
+        crate::passes::raise_skate(
+            &mut w,
+            &crate::passes::RaiseOptions::new("textured", crate::passes::LightCalibration::Standard).unwrap(),
+        )
+        .unwrap();
+        w
+    }
+
+    /// The scene a layout reads holds the world's texture levels, not a copy of them (every format, an R8 texture
+    /// decoded only as a level is read); and a dry layout identifies every texture as the written map does: the same
+    /// content keys, names and formats as the Write layout's, which encodes them.
+    #[test]
+    fn a_layout_borrows_the_worlds_textures_and_identifies_them_as_the_written_map() {
+        use crate::map::Layout;
+        let w = textured();
+        let s = crate::scene::Scene::from_world(&w, std::path::Path::new("")).unwrap();
+        assert_eq!(s.textures.len(), 3);
+        for (e, key) in &s.texture_keys_by_entity {
+            let held = s.textures[key].src.world_levels().unwrap();
+            let world = &w.get::<primase_core::Texture>(*e).unwrap().levels;
+            assert!(
+                std::ptr::eq(held, &world[..]),
+                "{key}: the scene holds a copy of the levels"
+            );
+        }
+        let a = super::EncodingOptions::default();
+        let ids = |layout| -> Vec<(u64, String, String)> {
+            let l = super::lay(&w, &a, layout).unwrap();
+            l.writer
+                .ctx
+                .tex
+                .all()
+                .iter()
+                .map(|t| (t.content, t.name.clone(), t.format.clone()))
+                .collect()
+        };
+        let written = ids(Layout::Write);
+        assert_eq!(written.len(), 3, "{written:?}");
+        assert_eq!(ids(Layout::Count), written);
+        assert_eq!(ids(Layout::Render), written);
     }
 
     /// Each layout makes only what its caller reads: a dry one encodes no mesh; a collision layout builds no render
