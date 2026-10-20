@@ -1,5 +1,5 @@
 //! A Mesh resource's body: its compiled mesh's vertex and index buffers, read as stored. Nothing about a vertex's
-//! fields is decided here beyond their layout; [`StoredVertex::position`] is the one decode, its evidence the bounds.
+//! fields is decided here beyond their layout; [`StoredVertices::positions`] is the one decode, its evidence the bounds.
 //!
 //! The body (little-endian; offsets from the body's start, after the resource's class id and extension) starts with a
 //! 61-byte header, kept as stored, whose bounds (two f32 triples at 20 and 36) are read, then as many 81-byte records
@@ -63,8 +63,8 @@ pub const RANGED: u32 = 0xC351_EE43;
 pub const HEADER: usize = 61;
 /// A range record's id.
 pub const RANGE_RECORD: u32 = 0x07B1_9A87;
-/// The one vertex stride read.
-pub const STRIDE: u32 = 24;
+/// The vertex strides read: the ranged layout's u32s at marker+22, +26 and +30 are one of these, then 0 and 0.
+pub const STRIDES: [u32; 3] = [16, 24, 28];
 /// Equals the CRC-32 of `MeshData` (the name a label): the inline layout's id at marker+13, and in the ranged
 /// layout's tail.
 pub const MESH_DATA: u32 = 0x0645_ABB5;
@@ -92,8 +92,8 @@ pub enum Error {
          0x0645ABB5 with 3 (inline) are read"
     )]
     Layout { id: u32, flags: u8 },
-    #[error("Mesh u32 at marker+22: {0}, only 24 is read")]
-    Stride(u32),
+    #[error("Mesh u32s at marker+22, +26 and +30: {0:?}, only 16, 24 or 28 then 0 and 0 are read")]
+    Stride([u32; 3]),
     #[error("Mesh range record {index}: {why}")]
     Record { index: usize, why: String },
     #[error("Mesh {what}: {why}")]
@@ -115,33 +115,72 @@ pub struct RangeRecord {
     pub extension: Option<[u32; 2]>,
 }
 
-/// One 24-byte vertex, every byte as stored. Only bytes 0..8 are decoded ([`StoredVertex::position`]); what bytes
-/// 8..24 hold is not established.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StoredVertex {
-    /// Bytes 0..6: three i16.
-    pub xyz: [i16; 3],
-    /// Bytes 6..8: an i16.
-    pub w: i16,
-    pub bytes_8: [u8; 4],
-    pub bytes_12: [u8; 4],
-    pub bytes_16: [u8; 4],
-    pub bytes_20: [u8; 4],
+/// A vertex buffer as stored: whole vertices of `stride` bytes (16, 24 or 28 in the ranged layout, 24 inline). Only
+/// each vertex's first 8 bytes are decoded ([`StoredVertices::positions`]); what the rest hold is not established.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredVertices {
+    pub stride: usize,
+    pub bytes: Vec<u8>,
 }
 
-impl StoredVertex {
-    /// `xyz` times `w` over 32768. Its evidence is the extrema alone: on every fixture in tests/meshes.rs each axis's
-    /// least and greatest decoded value differs from the header's stored bound by at most one step (`|w| / 32768`; the
-    /// differences measured there, largest 1.14e-4). No stored value checks a vertex between them.
-    pub fn position(&self) -> [f32; 3] {
-        let s = f32::from(self.w) / 32768.0;
-        self.xyz.map(|v| f32::from(v) * s)
+impl StoredVertices {
+    /// The vertex count.
+    pub fn len(&self) -> usize {
+        self.bytes.len().checked_div(self.stride).unwrap_or(0)
     }
 
-    /// Bytes 20..24 as two little-endian u16 (a layout reading; their meaning is not established).
-    pub fn words_20(&self) -> [u16; 2] {
-        let [a, b, c, d] = self.bytes_20;
-        [u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d])]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Each vertex's bytes.
+    pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        self.bytes.chunks_exact(self.stride.max(1))
+    }
+
+    /// Each vertex's first 8 bytes: three i16 and an i16 `w`.
+    fn heads(&self) -> impl Iterator<Item = ([i16; 3], i16)> {
+        self.iter().map(|v| {
+            let [p0, p1, p2, p3, p4, p5, w0, w1] = v.first_chunk::<8>().copied().unwrap_or([0; 8]);
+            (
+                [
+                    i16::from_le_bytes([p0, p1]),
+                    i16::from_le_bytes([p2, p3]),
+                    i16::from_le_bytes([p4, p5]),
+                ],
+                i16::from_le_bytes([w0, w1]),
+            )
+        })
+    }
+
+    /// Each vertex's position: its first three i16 times its fourth over 32768. Evidence is the extrema alone: on
+    /// every fixture in tests/meshes.rs each axis's least and greatest differs from the header's stored bound by at
+    /// most one step (`|w| / 32768`; largest 1.14e-4), and the census measures the same on every mesh of strides 16
+    /// (2,036) and 28 (86) in Riders Republic. No stored value checks a vertex between them.
+    pub fn positions(&self) -> impl Iterator<Item = [f32; 3]> {
+        self.heads().map(|(xyz, w)| {
+            let s = f32::from(w) / 32768.0;
+            xyz.map(|v| f32::from(v) * s)
+        })
+    }
+
+    /// Each vertex's `w`, the i16 at 6.
+    pub fn ws(&self) -> impl Iterator<Item = i16> {
+        self.heads().map(|(_, w)| w)
+    }
+
+    /// Each vertex's bytes 20..24 as two little-endian u16, for stride 24 (a layout reading; their meaning is not
+    /// established); none for another stride.
+    pub fn words_20(&self) -> Vec<[u16; 2]> {
+        if self.stride != 24 {
+            return Vec::new();
+        }
+        self.iter()
+            .map(|v| {
+                let [a, b, c, d] = v.get(20..24).and_then(|w| w.try_into().ok()).unwrap_or([0; 4]);
+                [u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d])]
+            })
+            .collect()
     }
 }
 
@@ -240,7 +279,7 @@ pub struct StoredMesh {
     /// The 8 bytes after the compiled mesh's layout byte (marker+5).
     pub compiled_flags: [u8; 8],
     pub layout: Layout,
-    pub vertices: Vec<StoredVertex>,
+    pub vertices: StoredVertices,
     /// The 8 bytes between the vertices and the index buffer's length.
     pub gap: [u8; 8],
     /// The indices (u16 in the ranged layout, u32 in the inline).
@@ -347,16 +386,18 @@ impl<'a> Cursor<'a> {
             },
         })
     }
-    /// `vertex_bytes` of stride-24 vertices.
-    fn vertices(&mut self, vertex_bytes: usize) -> Result<Vec<StoredVertex>, Error> {
-        if vertex_bytes.checked_rem(24) != Some(0) {
+    /// `vertex_bytes` of `stride`-byte vertices.
+    fn vertices(&mut self, vertex_bytes: usize, stride: usize) -> Result<StoredVertices, Error> {
+        if vertex_bytes.checked_rem(stride) != Some(0) {
             return Err(Error::Buffer {
                 what: "vertex buffer",
-                why: format!("{vertex_bytes} bytes, not whole 24-byte vertices"),
+                why: format!("{vertex_bytes} bytes, not whole {stride}-byte vertices"),
             });
         }
-        let raw = self.take(vertex_bytes, "vertex buffer")?;
-        Ok(raw.as_chunks::<24>().0.iter().map(vertex).collect())
+        Ok(StoredVertices {
+            stride,
+            bytes: self.take(vertex_bytes, "vertex buffer")?.to_vec(),
+        })
     }
     /// The index buffer: its byte length, then indices of `width` bytes (2 or 4) in whole triangles.
     fn indices(&mut self, width: usize) -> Result<Vec<u32>, Error> {
@@ -461,47 +502,6 @@ fn index_width(mesh_data: &[u8; 18]) -> Result<usize, Error> {
     }
 }
 
-fn vertex(v: &[u8; 24]) -> StoredVertex {
-    let [
-        p0,
-        p1,
-        p2,
-        p3,
-        p4,
-        p5,
-        s0,
-        s1,
-        a0,
-        a1,
-        a2,
-        a3,
-        b0,
-        b1,
-        b2,
-        b3,
-        u0,
-        u1,
-        u2,
-        u3,
-        t0,
-        t1,
-        t2,
-        t3,
-    ] = *v;
-    StoredVertex {
-        xyz: [
-            i16::from_le_bytes([p0, p1]),
-            i16::from_le_bytes([p2, p3]),
-            i16::from_le_bytes([p4, p5]),
-        ],
-        w: i16::from_le_bytes([s0, s1]),
-        bytes_8: [a0, a1, a2, a3],
-        bytes_12: [b0, b1, b2, b3],
-        bytes_16: [u0, u1, u2, u3],
-        bytes_20: [t0, t1, t2, t3],
-    }
-}
-
 fn f32s(b: &[u8; 12]) -> [f32; 3] {
     let [x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3] = *b;
     [
@@ -586,10 +586,14 @@ impl StoredMesh {
                 .and_then(|w| w.try_into().ok())
                 .map_or(0, u32::from_le_bytes)
         };
-        let stride = word(22);
-        if stride != STRIDE {
-            return Err(Error::Stride(stride));
+        let strides = [word(22), word(26), word(30)];
+        let [stride, 0, 0] = strides else {
+            return Err(Error::Stride(strides));
+        };
+        if !STRIDES.contains(&stride) {
+            return Err(Error::Stride(strides));
         }
+        let stride = usize::try_from(stride).map_err(|_| Error::Stride(strides))?;
         let count = word(63);
         let n = usize::try_from(count).map_err(|_| Error::Record {
             index: 0,
@@ -632,7 +636,7 @@ impl StoredMesh {
             });
         }
         let vertex_bytes = c.length("vertex buffer length")?;
-        let vertices = c.vertices(vertex_bytes)?;
+        let vertices = c.vertices(vertex_bytes, stride)?;
         let gap = c.array::<8>("bytes before the index buffer")?;
         let indices = c.indices(2)?;
         let block_bytes = c.u32("block length")?;
@@ -687,7 +691,7 @@ impl StoredMesh {
                 why: format!("{vertex_bytes} bytes, not 24 for each of its MeshPrimitive's {count} vertices"),
             });
         }
-        let vertices = c.vertices(vertex_bytes)?;
+        let vertices = c.vertices(vertex_bytes, 24)?;
         let gap = c.array::<8>("bytes before the index buffer")?;
         let indices = c.indices(index_width(&mesh_data)?)?;
         let materials = c.material_list(1)?;
@@ -914,7 +918,7 @@ mod tests {
         let n = records.len();
         let mut b = head(0, RANGED);
         let mut rest = vec![0; 75 - 17];
-        rest[22 - 17..26 - 17].copy_from_slice(&STRIDE.to_le_bytes());
+        rest[22 - 17..26 - 17].copy_from_slice(&24u32.to_le_bytes());
         rest[63 - 17..67 - 17].copy_from_slice(&(n as u32).to_le_bytes());
         b.extend(rest);
         for (k, (first, base)) in records.iter().enumerate() {
@@ -977,7 +981,10 @@ mod tests {
     fn mesh(vertices: usize, indices: &[u16], records: &[(u32, u32)]) -> StoredMesh {
         let mut m = StoredMesh::parse(&ranged(vertices, &[], &[(0, 0)], &[1])).expect("parse");
         m.indices = indices.iter().map(|&i| u32::from(i)).collect();
-        m.vertices = vec![m.vertices.first().copied().unwrap_or(vertex(&[0; 24])); vertices];
+        m.vertices = StoredVertices {
+            stride: 24,
+            bytes: vec![0; 24 * vertices],
+        };
         if let Layout::Ranged(r) = &mut m.layout {
             r.records = records
                 .iter()

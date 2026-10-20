@@ -17,7 +17,7 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::AnvilMesh;
 use crate::read::data::{Resource, read_entry};
 use crate::read::forge::Forge;
-use crate::read::mesh::{MESH, StoredMesh, StoredVertex};
+use crate::read::mesh::{MESH, StoredMesh};
 use crate::read::shapes::MAX_RECORD;
 
 /// Why the meshes can't be read.
@@ -96,14 +96,17 @@ pub fn read_meshes(
                 entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
                 index_id: index.id,
                 frame,
-                positions: v.iter().map(|x| frame.point(x.position())).collect(),
+                positions: v.positions().map(|p| frame.point(p)).collect(),
                 triangles,
                 ranges,
                 materials,
-                bytes_8: v.iter().map(|x| x.bytes_8).collect(),
-                bytes_12: v.iter().map(|x| x.bytes_12).collect(),
-                bytes_16: v.iter().map(|x| x.bytes_16).collect(),
-                words_20: v.iter().map(StoredVertex::words_20).collect(),
+                stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
+                attributes: v
+                    .iter()
+                    .flat_map(|x| x.get(8..).unwrap_or_default())
+                    .copied()
+                    .collect(),
+                words_20: v.words_20(),
             },
         );
         let placement = w.spawn();

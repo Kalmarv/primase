@@ -58,7 +58,11 @@ fn extrema(positions: &[[f32; 3]]) -> [[f32; 3]; 2] {
 /// It checks vertex indexing, not a normal reading: with the wrong indices of an earlier reader (c1f82990), Prada's
 /// middle range measured mixed.
 fn facing(m: &AnvilMesh) -> (usize, usize) {
-    let n = |i: u32| m.bytes_8[i as usize].map(|b| f32::from(b) / 127.5 - 1.0);
+    let rest = m.stride as usize - 8;
+    let n = |i: u32| {
+        let b = &m.attributes[i as usize * rest..];
+        [b[0], b[1], b[2]].map(|b| f32::from(b) / 127.5 - 1.0)
+    };
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let mut agree = (0, 0);
     for &[a, b, c] in &m.triangles {
@@ -316,7 +320,7 @@ fn decoded_extrema_meet_the_stored_bounds() {
             continue;
         };
         let mesh = stored(&path, entry);
-        let positions: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| v.position()).collect();
+        let positions: Vec<[f32; 3]> = mesh.vertices.positions().collect();
         let found = extrema(&positions);
         let off = (0..2)
             .flat_map(|k| (0..3).map(move |i| (k, i)))
@@ -325,8 +329,8 @@ fn decoded_extrema_meet_the_stored_bounds() {
         // one quantization step: the largest scale over 32768
         let step = mesh
             .vertices
-            .iter()
-            .map(|v| f32::from(v.w).abs() / 32768.0)
+            .ws()
+            .map(|w| f32::from(w).abs() / 32768.0)
             .fold(0.0f32, f32::max);
         assert!(off <= step, "{input} {entry}: off by {off}, a step {step}");
     }

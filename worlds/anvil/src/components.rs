@@ -37,12 +37,13 @@ impl Component for AnvilMeshShape {
 }
 
 /// A Mesh's compiled buffers ([`crate::read::mesh::StoredMesh`]) on its prototype: positions decoded
-/// ([`crate::read::mesh::StoredVertex::position`]) and converted into core's frame through the frame the reader was
+/// ([`crate::read::mesh::StoredVertices::positions`]) and converted into core's frame through the frame the reader was
 /// given (`frame`, stated by the program); triangles as vertex indices (each stored range counted from its vertex base,
 /// reversed when that frame mirrors); `ranges` each stored range's first triangle; `materials` descriptor *k*'s
 /// Material ClassID for range *k* (in order; descriptor *k*'s vertex count equals range *k*'s low 16 bits; how the
-/// engine binds them is not established); each vertex's bytes 8..20 as stored and bytes 20..24 as two little-endian
-/// u16, their meaning not established. `entry` and `index_id` name the forge entry it came from.
+/// engine binds them is not established); `stride`, and each vertex's bytes after its first 8 as stored (`attributes`,
+/// stride minus 8 bytes per vertex), their meaning not established; and for stride 24 bytes 20..24 as two
+/// little-endian u16 (`words_20`, empty for another stride). `entry` and `index_id` name the forge entry it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMesh {
     pub entry: u32,
@@ -52,10 +53,8 @@ pub struct AnvilMesh {
     pub triangles: Vec<[u32; 3]>,
     pub ranges: Vec<u32>,
     pub materials: Vec<u64>,
-    pub bytes_8: Vec<[u8; 4]>,
-    pub bytes_12: Vec<[u8; 4]>,
-    pub bytes_16: Vec<[u8; 4]>,
-    /// Bytes 20..24 as two little-endian u16.
+    pub stride: u32,
+    pub attributes: Vec<u8>,
     pub words_20: Vec<[u16; 2]>,
 }
 
@@ -63,14 +62,19 @@ impl Component for AnvilMesh {
     const NAME: &'static str = "anvil.mesh";
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let n = self.positions.len();
-        if [
-            self.bytes_8.len(),
-            self.bytes_12.len(),
-            self.bytes_16.len(),
-            self.words_20.len(),
-        ] != [n; 4]
-        {
-            return Err(format!("{n} positions, streams of other lengths"));
+        let rest = usize::try_from(self.stride).unwrap_or(0).saturating_sub(8);
+        if self.stride < 8 || self.attributes.len() != n.saturating_mul(rest) {
+            return Err(format!(
+                "{n} positions of stride {}, {} attribute bytes",
+                self.stride,
+                self.attributes.len()
+            ));
+        }
+        if !self.words_20.is_empty() && self.words_20.len() != n {
+            return Err(format!(
+                "{n} positions, {} texture-coordinate words",
+                self.words_20.len()
+            ));
         }
         let starts_in_order = self.ranges.first().is_none_or(|&s| s == 0)
             && self.ranges.is_sorted()

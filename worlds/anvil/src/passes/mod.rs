@@ -225,45 +225,64 @@ impl Pass for LowerAnvilMesh {
                 continue;
             };
             let mut streams = BTreeMap::new();
-            let uv = m
-                .words_20
-                .iter()
-                .map(|&[u, v]| {
-                    let word = |x: u16| match self.uv_words {
-                        UvWords::Unsigned => f32::from(x),
-                        UvWords::Signed => f32::from(x.cast_signed()),
-                    };
-                    let (u, v) = (word(u) / self.uv_divisor, word(v) / self.uv_divisor);
-                    [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
-                })
-                .collect();
-            streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
-            log.approximate(
-                &format!(
-                    "texture coordinates: bytes 20..24 as two {:?} words over {} (a stated reading), v {:?}",
-                    self.uv_words, self.uv_divisor, self.uv_v
-                ),
-                1,
-            );
-            if self.normals == MeshNormals::Packed {
-                let normals = m
-                    .bytes_8
+            if m.words_20.len() == m.positions.len() {
+                let uv = m
+                    .words_20
                     .iter()
-                    .map(|b| {
-                        let d = [b[0], b[1], b[2]].map(|x| f32::from(x) / 127.5 - 1.0);
-                        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                        let d = if len > 0.0 {
-                            d.map(|x| x / len)
-                        } else {
-                            [0.0, 1.0, 0.0]
+                    .map(|&[u, v]| {
+                        let word = |x: u16| match self.uv_words {
+                            UvWords::Unsigned => f32::from(x),
+                            UvWords::Signed => f32::from(x.cast_signed()),
                         };
-                        m.frame.direction(d)
+                        let (u, v) = (word(u) / self.uv_divisor, word(v) / self.uv_divisor);
+                        [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
                     })
                     .collect();
-                streams.insert(Semantic::Normal, Stream::F32x3(normals));
-                log.approximate("normals: bytes 8..11 read as a normal (stated)", 1);
+                streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
+                log.approximate(
+                    &format!(
+                        "texture coordinates: bytes 20..24 as two {:?} words over {} (a stated reading), v {:?}",
+                        self.uv_words, self.uv_divisor, self.uv_v
+                    ),
+                    1,
+                );
             } else {
-                log.count("meshes lowered without normals (stated)", 1);
+                log.omit(
+                    &format!(
+                        "texture coordinates: not read for stride {} (where they are isn't established)",
+                        m.stride
+                    ),
+                    1,
+                );
+            }
+            match self.normals {
+                MeshNormals::Packed if m.stride == 24 => {
+                    let rest = usize::try_from(m.stride).unwrap_or(24).saturating_sub(8);
+                    let normals = m
+                        .attributes
+                        .chunks_exact(rest.max(1))
+                        .map(|b| {
+                            let d = [b[0], b[1], b[2]].map(|x| f32::from(x) / 127.5 - 1.0);
+                            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                            let d = if len > 0.0 {
+                                d.map(|x| x / len)
+                            } else {
+                                [0.0, 1.0, 0.0]
+                            };
+                            m.frame.direction(d)
+                        })
+                        .collect();
+                    streams.insert(Semantic::Normal, Stream::F32x3(normals));
+                    log.approximate("normals: bytes 8..11 read as a normal (stated)", 1);
+                }
+                MeshNormals::Packed => log.omit(
+                    &format!(
+                        "normals: not read for stride {} (where they are isn't established)",
+                        m.stride
+                    ),
+                    1,
+                ),
+                MeshNormals::Omit => log.count("meshes lowered without normals (stated)", 1),
             }
             let triangles = m.triangles.len() as u64;
             streams.insert(Semantic::Position, Stream::F32x3(m.positions));
