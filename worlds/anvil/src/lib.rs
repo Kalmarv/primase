@@ -4,4 +4,8 @@
 //! body kept as stored).
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod components;
+pub mod passes;
 pub mod read;
+
+pub use passes::register;

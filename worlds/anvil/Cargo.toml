@@ -10,11 +10,13 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+primase-core.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
+primase-meshops.workspace = true
 
 [lints]
 workspace = true

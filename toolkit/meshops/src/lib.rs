@@ -15,6 +15,8 @@ mod layered_plan;
 pub use layered_plan::{
     LayeredMeshSource, LayeredPartSource, LayeredPbrPlan, lower_layered_pbr, plan_layered_pbr,
 };
+mod draw_collision;
+pub use draw_collision::DrawCollision;
 mod hull;
 mod omit_placements;
 pub use omit_placements::{OmitPlacements, PlacementCollision};
@@ -27,6 +29,11 @@ pub use parametric::{FlattenCurves, TessellateColliders};
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
+    // a diagnostic with no choices: what collides drawn, to inspect it
+    reg.register("draw-collision", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(DrawCollision)),
+    });
     reg.register("omit-materialless-primitives", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(OmitMateriallessPrimitives)),

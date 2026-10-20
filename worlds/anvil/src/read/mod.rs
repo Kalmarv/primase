@@ -3,3 +3,4 @@
 pub mod data;
 pub mod forge;
 pub mod mesh_shape;
+pub mod shapes;
