@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use primase_core::layered::{Channel, LayeredMaterial, Source};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
+use primase_core::{Component, Entity, MaterialVariants, Mesh, Semantic, Stream, World};
 
 /// A factor from 0 to 1.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -159,8 +159,10 @@ pub fn sampled_texcoords(w: &World, material: Entity) -> BTreeSet<u8> {
 }
 
 /// `fill-missing-texcoords`: a primitive drawn with a material that samples a texture coordinate set it lacks gets
-/// that set as zeros (every vertex samples the texture's corner), counted per primitive as an approximation. glTF
-/// requires the set and states no default; the writer refuses a primitive without it.
+/// that set as zeros (every vertex samples the texture's corner), counted per primitive as an approximation. The
+/// materials a primitive is drawn with are its own and its per-placement variants' (`core.material_variants`): a set
+/// only a variant samples is filled too. glTF requires the set and states no default; the writer refuses a primitive
+/// without it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FillMissingTexcoords;
 
@@ -179,12 +181,24 @@ impl Pass for FillMissingTexcoords {
         let meshes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
         log.count("meshes looked at", meshes.len() as u64);
         for e in meshes {
+            let variants = w.get::<MaterialVariants>(e);
             let wanted: Vec<BTreeSet<u8>> = w
                 .get::<Mesh>(e)
                 .expect("listed")
                 .primitives()
                 .iter()
-                .map(|p| p.material.map(|m| sampled_texcoords(w, m)).unwrap_or_default())
+                .enumerate()
+                .map(|(i, p)| {
+                    let by_variant = variants
+                        .and_then(|v| v.0.get(i))
+                        .into_iter()
+                        .flat_map(|m| m.values());
+                    p.material
+                        .iter()
+                        .chain(by_variant)
+                        .flat_map(|&m| sampled_texcoords(w, m))
+                        .collect()
+                })
                 .collect();
             let mesh = w.get_mut::<Mesh>(e).expect("listed");
             for (mut p, sets) in mesh.primitives_mut().zip(wanted) {
@@ -222,4 +236,65 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(FillMissingTexcoords)),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+    use primase_core::pbr::TextureRef;
+    use primase_core::{Primitive, Topology};
+    use std::collections::BTreeMap;
+
+    /// A set only a placement's variant material samples is filled: the primitive is drawn with that material too.
+    #[test]
+    fn a_set_only_a_variant_samples_is_filled() {
+        let mut w = World::new();
+        let plain = w.spawn();
+        w.insert(plain, PbrMaterial::default());
+        let texture = w.spawn();
+        let variant = w.spawn();
+        w.insert(
+            variant,
+            PbrMaterial {
+                base_color_texture: Some(TextureRef {
+                    texcoord: 1,
+                    ..TextureRef::new(texture)
+                }),
+                ..PbrMaterial::default()
+            },
+        );
+        let mesh = w.spawn();
+        w.insert(
+            mesh,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.; 3]; 3]))]),
+                indices: None,
+                material: Some(plain),
+            }]),
+        );
+        w.insert(mesh, MaterialVariants(vec![BTreeMap::from([(1, variant)])]));
+        let mut run = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut w,
+                &Pipeline {
+                    passes: vec![Box::new(FillMissingTexcoords)],
+                },
+                &mut run,
+            )
+            .unwrap();
+        let streams = &w.get::<Mesh>(mesh).unwrap().primitives()[0].streams;
+        assert_eq!(
+            streams.get(&Semantic::TexCoord(1)),
+            Some(&Stream::F32x2(vec![[0.; 2]; 3]))
+        );
+        // the primitive's own material samples no set: nothing else is added
+        assert!(!streams.contains_key(&Semantic::TexCoord(0)));
+        assert_eq!(
+            run.steps[0].log.approximations["primitives given zero texture coordinates"],
+            1
+        );
+    }
 }
