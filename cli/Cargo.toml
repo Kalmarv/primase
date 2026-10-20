@@ -20,6 +20,7 @@ primase-cache = { workspace = true, optional = true }
 primase-gltf.workspace = true
 primase-gta.workspace = true
 primase-image.workspace = true
+primase-lighting.workspace = true
 primase-meshops.workspace = true
 primase-reskate.workspace = true
 primase-unity.workspace = true

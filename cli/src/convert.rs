@@ -73,6 +73,8 @@ pub fn registry() -> PassRegistry {
     // cap-textures, bake-layer-channels, normalize-normals and bake-normal-scale
     primase_image::register(&mut r);
     primase_meshops::register(&mut r);
+    // fill-ambient-lights
+    primase_lighting::register(&mut r);
     primase_gta::register(&mut r);
     primase_reskate::register(&mut r);
     primase_unity::register(&mut r);
