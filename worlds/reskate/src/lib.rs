@@ -24,6 +24,7 @@ pub mod model;
 pub mod overlay;
 pub mod passes;
 pub mod pausemap;
+pub mod compile;
 pub mod postcompile;
 pub mod read;
 pub mod records;
