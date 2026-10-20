@@ -1334,8 +1334,27 @@ fn lowering_to_pbr() {
 
     let glass = w.get::<PbrMaterial>(key(&w, "glass")).unwrap();
     assert_eq!((glass.roughness, glass.alpha_mode), (0.15, AlphaMode::Blend));
-    assert_eq!(glass.cast_shadows, Some(false), "a stated false is kept");
-    assert_eq!(wall.cast_shadows, None, "unknown stays unknown");
+    // skate states shadow casting per material, core per drawn entity: the dialect keeps the material's, and the
+    // placement drawing only the glass (the shared prototype) casts none; the wall placed with the glass variant
+    // draws both kinds and keeps casting, counted
+    assert_eq!(
+        w.get::<SkateMaterial>(key(&w, "glass")).unwrap().cast_shadows,
+        Some(false)
+    );
+    let counts = &report.steps[0].log.counts;
+    assert!(
+        counts
+            .get("placements casting no shadow: every material they draw casts none")
+            .is_some_and(|&n| n >= 1),
+        "{counts:?}"
+    );
+    assert!(
+        counts
+            .get("placements drawing materials that cast shadows and materials that cast none (casting)")
+            .is_some_and(|&n| n >= 1),
+        "{counts:?}"
+    );
+    let _ = wall;
     assert_eq!(glass.base_color_texture, None);
     let _ = Wrap::Clamp;
     // lower and keep

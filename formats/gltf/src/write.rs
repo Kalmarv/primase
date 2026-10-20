@@ -50,10 +50,16 @@
 //!   the glTF; its components are counted by name (`components_unwritten`). An entity left out whole under a counted
 //!   cause (an unplaced prototype, a degenerate placement, one with levels of detail) takes what it reaches with it.
 //!   A selection is the caller's choice of what to write, so what it leaves out is not counted.
-//! - **Shadows**: what is known of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ..., "receive":
-//!   ...}`, each key only when known: a placement's `core.shadows` on its node (`cast` `"off"`, `"on"` or `"only"`,
-//!   a shadow proxy that is not drawn; `receive` a boolean), and a material's or light's `cast_shadows` on the
-//!   material or the light's node (`"off"` or `"on"`). A node's value overrides its materials'.
+//! - **Shadows**: what is stated of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ...,
+//!   "receive": ...}`, each key only when stated: a placement's `core.shadows` on its node, each field its own else
+//!   its prototype's (`cast` `"off"`, `"on"` or `"only"`, a shadow proxy that is not drawn; absent casts; `receive` a
+//!   boolean), and a light's `cast_shadows` on the light's node (`"off"` or `"on"`). Materials state none.
+//! - **Unlit materials** (`Shading::Unlit`) carry `KHR_materials_unlit` (in `extensionsUsed`, not required), their
+//!   other slots written as glTF's fallback for a viewer without it.
+//! - **Samplers**: a texture's wrap and its stated filters (`magFilter`; `minFilter` from the minification and mip
+//!   filters together). A data texture with no filter stated is sampled nearest without mips (it is read exactly).
+//!   glTF's `minFilter` names both filters at once: a texture stating only one of the two has no `minFilter`
+//!   written, counted (`filters_unexpressed`).
 //!
 //! The output is a function of the world: every list is built in entity order or first-use order over entities in
 //! order, so the same world gives the same bytes (`tests::output_is_deterministic`).
@@ -63,7 +69,9 @@ use std::fmt;
 use std::path::Path;
 
 use primase_core::layered::{Channel, Composition, Source};
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
+use primase_core::pbr::{
+    AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap,
+};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
     Name, Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind,
@@ -178,6 +186,9 @@ pub struct WriteReport {
     pub textures_skipped: BTreeMap<String, u64>,
     /// Material texture slots left empty because their texture was skipped.
     pub texture_slots_dropped: u64,
+    /// Texture slots stating a minification filter without a mip filter, or the reverse: glTF's `minFilter` names
+    /// both, so neither is written.
+    pub filters_unexpressed: u64,
     /// Vertex streams not written, by glTF attribute name (skin attributes without a skeleton).
     pub streams_skipped: BTreeMap<String, u64>,
     /// Components with no JSON form, by name: not in the extras.
@@ -235,6 +246,11 @@ impl fmt::Display for WriteReport {
             self.texture_slots_dropped
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
+        writeln!(
+            f,
+            "texture filters glTF cannot express (min without mip, or mip without min) {}",
+            self.filters_unexpressed
+        )?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
         writeln!(f, "extras unencoded {:?}", self.extras_unencoded)?;
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
@@ -251,6 +267,7 @@ impl fmt::Display for WriteReport {
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 const SPECULAR: &str = "KHR_materials_specular";
+const UNLIT: &str = "KHR_materials_unlit";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
@@ -300,6 +317,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         texture_transform_used: false,
         emissive_strength_used: false,
         specular_used: false,
+        unlit_used: false,
         layered_weights: BTreeMap::new(),
         handled: BTreeSet::new(),
         left_out: Vec::new(),
@@ -378,16 +396,17 @@ struct Writer<'w> {
     /// Material entity -> glTF index and the texture coordinate sets its written texture slots sample.
     /// Each material entity's glTF material and the sets it samples; `None` for one without `pbr.material`.
     material_index: BTreeMap<Entity, Option<(usize, BTreeSet<u8>)>>,
-    texture_index: BTreeMap<(Entity, [Wrap; 2]), usize>,
+    texture_index: BTreeMap<(Entity, [Wrap; 2], Filters), usize>,
     image_of_entity: BTreeMap<Entity, Option<usize>>,
     image_by_hash: BTreeMap<[u8; 32], usize>,
     /// By wrap and whether the texture is data (sampled nearest, without mips).
-    sampler_index: BTreeMap<([Wrap; 2], bool), usize>,
+    sampler_index: BTreeMap<([Wrap; 2], Filters, bool), usize>,
     /// A written texture slot has a transform (`KHR_texture_transform` is used).
     texture_transform_used: bool,
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
     emissive_strength_used: bool,
     specular_used: bool,
+    unlit_used: bool,
     /// Layered material entity -> the glTF attribute carrying its weights.
     layered_weights: BTreeMap<Entity, String>,
     /// Entities whose components are written, or counted in the report as not written.
@@ -513,6 +532,9 @@ impl Writer<'_> {
         }
         if self.specular_used {
             used.push(SPECULAR);
+        }
+        if self.unlit_used {
+            used.push(UNLIT);
         }
         if !self.layered_weights.is_empty() {
             used.push(LAYERED);
@@ -751,11 +773,21 @@ impl Writer<'_> {
                 self.primase_extras(shown, CONSUMED_PLACEMENT)
             }
         };
-        let shadows = self
+        // the placement's own, else its prototype's
+        let own = self
             .world
             .get::<Shadows>(place.entity)
             .copied()
             .unwrap_or_default();
+        let inherited = self
+            .world
+            .get::<Shadows>(place.prototype)
+            .copied()
+            .unwrap_or_default();
+        let shadows = Shadows {
+            cast: own.cast.or(inherited.cast),
+            receive: own.receive.or(inherited.receive),
+        };
         let cast = shadows.cast.map(|c| match c {
             ShadowCast::Off => "off",
             ShadowCast::On => "on",
@@ -1034,6 +1066,10 @@ impl Writer<'_> {
             extensions.insert(SPECULAR.into(), Value::Object(k));
             self.specular_used = true;
         }
+        if pbr.shading == Shading::Unlit {
+            extensions.insert(UNLIT.into(), json!({}));
+            self.unlit_used = true;
+        }
         if !extensions.is_empty() {
             m.insert("extensions".into(), Value::Object(extensions));
         }
@@ -1052,8 +1088,7 @@ impl Writer<'_> {
         if pbr.double_sided {
             m.insert("doubleSided".into(), json!(true));
         }
-        let extras = self.extras(e, CONSUMED_MATERIAL)?;
-        if let Some(extras) = with_shadows(extras, pbr.cast_shadows.map(cast_on), None) {
+        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
             m.insert("extras".into(), extras);
         }
         self.materials.push(Value::Object(m));
@@ -1271,7 +1306,7 @@ impl Writer<'_> {
     }
 
     fn texture(&mut self, r: TextureRef) -> Result<Option<usize>> {
-        let key = (r.texture, r.wrap);
+        let key = (r.texture, r.wrap, r.filters);
         if let Some(&i) = self.texture_index.get(&key) {
             return Ok(Some(i));
         }
@@ -1283,17 +1318,34 @@ impl Writer<'_> {
             .get::<Texture>(r.texture)
             .is_some_and(|t| t.role == primase_core::TexRole::Data);
         let mut t = Map::new();
-        if r.wrap != [Wrap::Repeat; 2] || data {
+        // data is read exactly: with no filter stated, nearest without mips
+        let filters = if data && r.filters == Filters::default() {
+            Filters {
+                mag: Some(Filter::Nearest),
+                min: Some(Filter::Nearest),
+                mip: Some(MipFilter::None),
+            }
+        } else {
+            r.filters
+        };
+        if r.wrap != [Wrap::Repeat; 2] || filters != Filters::default() {
             let next = self.samplers.len();
-            let sampler = *self.sampler_index.entry((r.wrap, data)).or_insert(next);
+            let sampler = *self.sampler_index.entry((r.wrap, filters, data)).or_insert(next);
             if sampler == next {
-                let mut s = json!({"wrapS": wrap_code(r.wrap[0]), "wrapT": wrap_code(r.wrap[1])});
-                if data {
-                    // data is read exactly: nearest, no mips (9728 NEAREST)
-                    s["magFilter"] = json!(9728);
-                    s["minFilter"] = json!(9728);
+                let mut s = Map::new();
+                if let Some(mag) = filters.mag {
+                    s.insert("magFilter".into(), json!(filter_code(mag)));
                 }
-                self.samplers.push(s);
+                match (filters.min, filters.mip) {
+                    (Some(min), Some(mip)) => {
+                        s.insert("minFilter".into(), json!(min_filter_code(min, mip)));
+                    }
+                    (None, None) => {}
+                    _ => self.report.filters_unexpressed += 1,
+                }
+                s.insert("wrapS".into(), json!(wrap_code(r.wrap[0])));
+                s.insert("wrapT".into(), json!(wrap_code(r.wrap[1])));
+                self.samplers.push(Value::Object(s));
             }
             t.insert("sampler".into(), json!(sampler));
         }
@@ -1461,6 +1513,25 @@ fn with_shadows(extras: Option<Value>, cast: Option<&str>, receive: Option<bool>
         .expect("extras are an object")
         .insert(SHADOWS.into(), Value::Object(shadows));
     Some(extras)
+}
+
+/// glTF's `magFilter` (and a `minFilter` without mips): 9728 NEAREST, 9729 LINEAR.
+fn filter_code(f: Filter) -> u32 {
+    match f {
+        Filter::Nearest => 9728,
+        Filter::Linear => 9729,
+    }
+}
+
+/// glTF's `minFilter`, which names the filter within a level and across levels together.
+fn min_filter_code(min: Filter, mip: MipFilter) -> u32 {
+    match (min, mip) {
+        (min, MipFilter::None) => filter_code(min),
+        (Filter::Nearest, MipFilter::Nearest) => 9984,
+        (Filter::Linear, MipFilter::Nearest) => 9985,
+        (Filter::Nearest, MipFilter::Linear) => 9986,
+        (Filter::Linear, MipFilter::Linear) => 9987,
+    }
 }
 
 fn wrap_code(w: Wrap) -> u32 {

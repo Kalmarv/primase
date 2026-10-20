@@ -68,6 +68,37 @@ impl UvTransform {
     }
 }
 
+/// How texels are filtered when a texture is magnified or minified (glTF's sampler filters).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum Filter {
+    /// The nearest texel: crisp texels.
+    Nearest,
+    /// Bilinear between the four nearest texels.
+    Linear,
+}
+
+/// How mip levels are used when a texture is minified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum MipFilter {
+    /// No mip levels: the base level only (glTF's `NEAREST` or `LINEAR` minification filter).
+    None,
+    /// The nearest mip level.
+    Nearest,
+    /// Between the two nearest mip levels (trilinear with a linear `min`).
+    Linear,
+}
+
+/// A sampler's filters as the source states them: each `None` where it states none (the renderer's default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct Filters {
+    /// Magnification.
+    pub mag: Option<Filter>,
+    /// Minification within a level.
+    pub min: Option<Filter>,
+    /// Minification across mip levels.
+    pub mip: Option<MipFilter>,
+}
+
 /// A texture used by a material slot.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct TextureRef {
@@ -79,18 +110,33 @@ pub struct TextureRef {
     pub wrap: [Wrap; 2],
     /// Applied to the coordinates before sampling; `None` is the identity.
     pub transform: Option<UvTransform>,
+    /// The sampler's filters, as the source states them.
+    pub filters: Filters,
 }
 
 impl TextureRef {
-    /// Sampling `TexCoord(0)` with repeat wrapping, untransformed.
+    /// Sampling `TexCoord(0)` with repeat wrapping, untransformed, no filter stated.
     pub fn new(texture: Entity) -> Self {
         TextureRef {
             texture,
             texcoord: 0,
             wrap: [Wrap::Repeat; 2],
             transform: None,
+            filters: Filters::default(),
         }
     }
+}
+
+/// Whether a material is lit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+pub enum Shading {
+    /// Lit by the scene's lights (glTF's metal-rough model).
+    #[default]
+    Lit,
+    /// Not lit, exactly `KHR_materials_unlit`: the colour drawn is `base_color` x `base_color_texture` x the vertex
+    /// colour (`COLOR_0`), whatever lights the scene. Its other slots stay as the source stated them (a writer may
+    /// emit them as the fallback glTF prescribes); a renderer draws none of them.
+    Unlit,
 }
 
 /// How the base colour's alpha is used.
@@ -164,17 +210,18 @@ pub struct PbrMaterial {
     pub alpha_mode: AlphaMode,
     /// Back faces drawn too (and lit with the flipped normal).
     pub double_sided: bool,
-    /// Surfaces drawn with it cast shadows; `None`: unknown (the renderer's default). A placement's
-    /// [`crate::Shadows`] `cast` overrides it.
-    pub cast_shadows: Option<bool>,
     /// The source's specular reflectance; `None`: it says nothing (glTF's default, the extension not written).
     pub specular: Option<Specular>,
+    /// Lit or not. Whether what it draws casts shadows is the drawing entity's ([`crate::Shadows`]), not the
+    /// material's.
+    pub shading: Shading,
 }
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
-    /// 2: `emissive_strength`; 3: `cast_shadows`; 4: `specular`.
-    const VERSION: u32 = 4;
+    /// 2: `emissive_strength`; 3: `cast_shadows`; 4: `specular`; 5: `shading` and each texture's `filters`,
+    /// `cast_shadows` gone (shadow casting is [`crate::Shadows`]', per drawn entity).
+    const VERSION: u32 = 5;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -201,7 +248,7 @@ impl Component for PbrMaterial {
 }
 
 impl Default for PbrMaterial {
-    /// glTF's default material: white, fully metallic and rough, opaque, single-sided.
+    /// glTF's default material: white, fully metallic and rough, opaque, single-sided, lit.
     fn default() -> Self {
         PbrMaterial {
             base_color: [1.0; 4],
@@ -218,8 +265,8 @@ impl Default for PbrMaterial {
             emissive_strength: 1.0,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
-            cast_shadows: None,
             specular: None,
+            shading: Shading::Lit,
         }
     }
 }

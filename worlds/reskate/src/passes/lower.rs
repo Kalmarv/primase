@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, TextureRef, Wrap as PbrWrap};
 use primase_core::{
-    ColorSpace, Entity, Light, LightKind, Name, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
-    TexRole, Texture, Transform, World,
+    ColorSpace, Entity, Instance, Light, LightKind, Name, NormalConvention, NormalGreen, NormalX, NormalZ,
+    ShadowCast, Shadows, TexFormat, TexRole, Texture, Transform, World,
 };
 
 use crate::components::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkateTexture, Wrap};
@@ -35,7 +35,10 @@ pub(crate) fn register(reg: &mut PassRegistry) {
     });
 }
 
-/// `skate.material` -> `pbr.material` with skate-scene v1's class defaults (see [`lower_material`]). Also sets what
+/// `skate.material` -> `pbr.material` with skate-scene v1's class defaults (see [`lower_material`]). A material that
+/// casts no shadow (`cast_shadows` false) states it per material, core per drawn entity: a placement drawing only such
+/// materials gets `core.shadows` `cast` off (unless it states its own), one drawing both kinds keeps casting
+/// (counted). Also sets what
 /// the scene says about each loaded `core.texture` its materials use: role (colour, normal, mask), colour space
 /// (`color_space`, default sRGB; normal and mask textures linear) and a normal map's convention (`green`, `z`), so a
 /// normal-conversion pass and the glTF writer see them.
@@ -66,10 +69,11 @@ impl Pass for LowerSkatePbr {
     }
     fn provides(&self) -> &[&'static str] {
         // an MSK mask's ORM texture is a new entity, named after the mask
-        &["pbr.material", "core.texture", "core.name"]
+        // and a placement drawing only materials that cast no shadow, its core.shadows
+        &["pbr.material", "core.texture", "core.name", "core.shadows"]
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.texture"]
+        &["core.texture", "core.shadows"]
     }
     /// It lowers skate materials and keeps them.
     fn legalizes(&self) -> &[&'static str] {
@@ -154,6 +158,41 @@ impl Pass for LowerSkatePbr {
             .collect();
         for (e, p) in lowered {
             w.insert(e, p);
+        }
+        // skate states shadow casting per material, core per drawn entity: a placement drawing only materials that
+        // cast none casts none; one drawing both kinds keeps casting, counted
+        let shadowless: BTreeSet<Entity> = w
+            .iter::<SkateMaterial>()
+            .filter(|(_, m)| m.cast_shadows == Some(false))
+            .map(|(e, _)| e)
+            .collect();
+        if !shadowless.is_empty() {
+            let placements: Vec<(Entity, Instance)> = w.iter::<Instance>().map(|(e, i)| (e, *i)).collect();
+            for (e, i) in placements {
+                let drawn = super::shadows::drawn(w, i.prototype, i.variant);
+                let off = drawn.iter().filter(|m| shadowless.contains(m)).count();
+                if off == 0 {
+                    continue;
+                }
+                if off < drawn.len() {
+                    log.count(
+                        "placements drawing materials that cast shadows and materials that cast none (casting)",
+                        1,
+                    );
+                    continue;
+                }
+                let mut s = w.get::<Shadows>(e).copied().unwrap_or_default();
+                if s.cast.is_some() {
+                    log.count("placements whose own shadow casting is kept", 1);
+                    continue;
+                }
+                s.cast = Some(ShadowCast::Off);
+                w.insert(e, s);
+                log.count(
+                    "placements casting no shadow: every material they draw casts none",
+                    1,
+                );
+            }
         }
         Ok(())
     }
@@ -283,10 +322,8 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
     let mut base_color = [1.0f32; 4];
     let base_color_texture = match m.base {
         Some(t) => Some(TextureRef {
-            texture: t,
-            texcoord: 0,
             wrap: [wrap; 2],
-            transform: None,
+            ..TextureRef::new(t)
         }),
         None => {
             let c = m.base_color.unwrap_or([128, 128, 128, 255]);
@@ -323,10 +360,8 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
         );
     }
     let orm_ref = orm.map(|t| TextureRef {
-        texture: t,
-        texcoord: 0,
         wrap: [wrap; 2],
-        transform: None,
+        ..TextureRef::new(t)
     });
     PbrMaterial {
         base_color,
@@ -351,7 +386,6 @@ pub fn lower_material(m: &SkateMaterial, orm: Option<Entity>, w: &World, log: &m
             AlphaMode::Opaque => PbrAlpha::Opaque,
         },
         double_sided: m.two_sided.unwrap_or(matches!(m.class, C::Cutout | C::Leaves)),
-        cast_shadows: m.cast_shadows,
         ..PbrMaterial::default()
     }
 }

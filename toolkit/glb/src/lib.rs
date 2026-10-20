@@ -3,6 +3,7 @@
 //! - [`parse`] / [`assemble`] / [`Document`]: the container (glTF 2.0 §4.4).
 //! - [`Gltf`]: the strict reader of a GLB, or of a `.gltf` whose buffers the caller supplies, meshes into
 //!   [`primase_core::Mesh`].
+//! - [`sampler_filters`] / [`material_shading`]: a sampler's filters and wrap, a material's shading, in core's terms.
 //! - [`load_mesh_files`]: a reader's load step, `core.mesh_file` prototypes into `core.mesh`; [`mesh_file_box`]: a
 //!   mesh file's box from its JSON alone.
 //! - [`Buffers`]: a primitive's vertex streams and indices as accessors in one binary buffer, the encoding every
@@ -15,6 +16,7 @@ mod container;
 mod encode;
 mod json;
 mod load;
+mod material;
 mod read;
 
 use std::path::{Path, PathBuf};
@@ -24,6 +26,7 @@ use primase_core::Entity;
 pub use container::{Chunks, Document, assemble, parse};
 pub use encode::{Buffers, PrimitiveAccessors, encode_mesh};
 pub use load::{LoadReport, load_mesh_files, mesh_file_box};
+pub use material::{material_shading, sampler_filters};
 pub use read::{AccessorData, ComponentType, ElementType, Gltf, ReadMesh, ReadPrimitive};
 
 #[derive(Debug, thiserror::Error)]

@@ -202,8 +202,8 @@ impl LayeredMaterial {
 
 impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
-    /// 2: per-pixel `channels` and the `composition`.
-    const VERSION: u32 = 2;
+    /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`.
+    const VERSION: u32 = 3;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.layers.iter().flatten().map(|layer| layer.material));
         out.extend(self.mask_textures().map(|t| t.texture));

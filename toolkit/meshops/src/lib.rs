@@ -42,6 +42,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("cell", "100")],
     );
     // what becomes of the variants nobody places is the program's: no default
+    // which entities cast is the program's choice: both options required
+    reg.register_requiring(
+        "set-shadow-casting",
+        shadow_casting::set_shadow_casting,
+        &[("placements", "level"), ("cast", "off")],
+    );
     // the grouping is the program's: every option required
     reg.register_requiring(
         "split-by-collision",
@@ -64,6 +70,8 @@ pub use materialless::OmitMateriallessPrimitives;
 mod partition;
 pub use partition::PartitionGrid;
 mod primitive;
+mod shadow_casting;
+pub use shadow_casting::{SetShadowCasting, set_shadow_casting};
 mod split;
 pub use split::{SplitByCollision, split_by_collision};
 mod texcoords;

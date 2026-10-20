@@ -117,7 +117,7 @@ fn name_of(w: &World, e: Entity) -> String {
 }
 
 /// The materials prototype `p` draws for `variant`: each part's override, else its own (its mesh's, else its file's).
-fn drawn(w: &World, p: Entity, variant: u32) -> Vec<Entity> {
+pub(crate) fn drawn(w: &World, p: Entity, variant: u32) -> Vec<Entity> {
     let own: Vec<Option<Entity>> = match (w.get::<Mesh>(p), w.get::<MeshFile>(p)) {
         (Some(m), _) => m.primitives().iter().map(|p| p.material).collect(),
         (None, Some(f)) => f.materials.clone(),

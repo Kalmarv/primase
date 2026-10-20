@@ -681,7 +681,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 }),
                 wrap: w.map(|w| wrap(w[0])),
                 ocean: water.then_some(true),
-                cast_shadows: m.cast_shadows,
+                // stated per drawn entity in core (core.shadows): not a material's
+                cast_shadows: None,
                 emissive: None,
                 vertex_alpha: None,
                 other: Other::new(),

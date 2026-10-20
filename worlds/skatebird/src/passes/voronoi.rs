@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform, Wrap};
+use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
 use primase_shader::{Input, Lane, PixelShader};
@@ -241,13 +241,11 @@ fn slot(texture: Entity, m: &UnityMaterial, property: &str, cells: u32) -> Textu
     let (scale, offset) = tiling(m, property);
     let k = cells as f32;
     TextureRef {
-        texture,
-        texcoord: 0,
-        wrap: [Wrap::Repeat; 2],
         transform: Some(UvTransform::from_bottom_left(
             scale.map(|s| s / k),
             offset.map(|o| o / k),
         )),
+        ..TextureRef::new(texture)
     }
 }
 

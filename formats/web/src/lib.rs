@@ -1800,6 +1800,12 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
             "material texture slots left empty: their texture was skipped".into(),
             report.texture_slots_dropped,
         ),
+        (
+            NoticeKind::Unsupported,
+            "texture filters glTF cannot express (a minification filter stated without a mip filter, or the              reverse): no minFilter written, the renderer's default"
+                .into(),
+            report.filters_unexpressed,
+        ),
     ];
     for (name, &n) in &report.streams_skipped {
         out.push((

@@ -316,9 +316,11 @@ pub enum ShadowCast {
     Only,
 }
 
-/// The shadows of a placed entity (a placement, or an entity drawing its own mesh). `None` is unknown (the renderer's
-/// default); a stated `Off` or `false` is a fact and is kept. `cast` overrides the `cast_shadows` of the materials it
-/// draws with. Renderer settings (map sizes, bias, cascades) are not facts of the scene and stay out of core.
+/// The shadows of a drawn entity: a placement, a prototype (for each of its placements that states none of its own:
+/// a placement's own overrides it), or an entity drawing its own mesh. The one place shadow casting is stated: a
+/// source's fact where it has one (a reader), else the program's choice (`set-shadow-casting`). `cast: None` casts
+/// (the default); `receive: None` is the renderer's default. Renderer settings (map sizes, bias, cascades) are not
+/// facts of the scene and stay out of core.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 pub struct Shadows {
     pub cast: Option<ShadowCast>,
@@ -326,6 +328,8 @@ pub struct Shadows {
 }
 impl Component for Shadows {
     const NAME: &'static str = "core.shadows";
+    /// 2: `cast: None` casts (it was the renderer's default); materials no longer state casting.
+    const VERSION: u32 = 2;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant

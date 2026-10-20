@@ -214,7 +214,6 @@ pub fn build(dir: &Path) -> Built {
             metallic: 0.0,
             roughness: 0.6,
             normal_texture: Some(TextureRef {
-                texture: tex_normal,
                 texcoord: 1,
                 wrap: [Wrap::Clamp, Wrap::Mirror],
                 transform: Some(UvTransform {
@@ -222,6 +221,7 @@ pub fn build(dir: &Path) -> Built {
                     scale: [2.0, 4.0],
                     rotation: 0.0,
                 }),
+                ..TextureRef::new(tex_normal)
             }),
             normal_scale: 0.5,
             emissive: [0.1, 0.0, 0.0],

@@ -128,8 +128,14 @@ glTF 2.0 and the declared extensions. Supported output extensions include
 `KHR_texture_transform`, `KHR_texture_basisu`, `KHR_materials_emissive_strength`
 (emission brighter than 1: a factor within 0-1 times its strength; used, never required) and
 `KHR_materials_specular` (the source's specular reflectance, written only when the source states it, also at the
-extension's defaults; used, never required: a consumer that ignores it draws glTF's default specular). Read
+extension's defaults; used, never required: a consumer that ignores it draws glTF's default specular) and
+`KHR_materials_unlit` (a material drawn without lighting: base colour times vertex colour; used, never required: a
+consumer that ignores it draws the material lit, its other slots as written). Read
 `extensionsRequired`; never silently ignore an unsupported required extension.
+
+Samplers carry a texture's wrap and the filters its source states (`magFilter`, and `minFilter` naming the filter
+within a level and across mip levels together); a filter not stated is absent, the consumer's default. A source
+stating only one of the two minification filters has no `minFilter` (the writer reports it).
 
 Render primitives are triangles (mode 4), line segments (mode 1) or points (mode 0), as the scene has them.
 GPU instancing applies only to compatible placements: those of a mesh drawn with triangles alone (a mesh with
@@ -305,16 +311,16 @@ consumer needs nothing for it; the extra says why a source mesh's colours are ab
 
 ## Shadows
 
-What the source states about shadows is carried as glTF extras, `extras["primase.shadows"]`, an object with
-`"version": 1` and these keys, each present only when known (absent: unknown, use the renderer's default; a stated
-`"off"` or `false` is a fact):
+What the scene states about shadows (a source's fact or the program's choice) is carried as glTF extras,
+`extras["primase.shadows"]`, an object with `"version": 1` and these keys, each present only when stated (absent:
+`cast` casts, `receive` is the renderer's default):
 
 - on a placement's node: `cast`, `"off"`, `"on"` or `"only"` (casts a shadow but is not drawn: a shadow proxy), and
-  `receive`, a boolean;
-- on a material: `cast`, `"off"` or `"on"`, for the surfaces drawn with it;
+  `receive`, a boolean; each the placement's own, else its prototype's;
 - on a scene light's node: `cast`, `"off"` or `"on"`.
 
-A node's value overrides its materials'. An instanced node (`EXT_mesh_gpu_instancing`) only groups placements with the
+Materials carry none. (Tiles written before this may carry a material's `cast`, `"off"` or `"on"`, for the surfaces
+drawn with it; a node's value overrides it.) An instanced node (`EXT_mesh_gpu_instancing`) only groups placements with the
 same shadow extras, and carries them itself. Shadow map sizes, bias and cascades are renderer settings, not scene
 data, and are not carried.
 

@@ -497,10 +497,9 @@ impl Lowering {
             _ => {}
         }
         Some(TextureRef {
-            texture: e,
-            texcoord: 0,
             wrap,
             transform: tiling,
+            ..TextureRef::new(e)
         })
     }
 

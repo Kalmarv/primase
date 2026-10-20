@@ -1,5 +1,6 @@
-//! What is known of shadows is written as `extras["primase.shadows"]` (version 1): a placement's `core.shadows` on
-//! its node, a material's and a light's `cast_shadows` on the material and the light's node; unknown is absent.
+//! What is stated of shadows is written as `extras["primase.shadows"]` (version 1): a placement's `core.shadows` on
+//! its node, each field its own else its prototype's, and a light's `cast_shadows` on the light's node; what is not
+//! stated is absent. Materials state none.
 
 #![allow(clippy::unwrap_used)]
 
@@ -15,20 +16,21 @@ fn document(w: &World) -> Value {
     serde_json::from_slice(chunks.json).unwrap()
 }
 
-/// A prototype drawn with a material that does not cast, placed twice: once as a shadow proxy that does not receive,
-/// once with nothing known; and a light that casts.
+/// A prototype that casts no shadow, placed twice: once as a shadow proxy that does not receive (its own), once
+/// stating nothing (the prototype's); and a light that casts.
 fn world() -> World {
     let mut w = World::new();
     let m = w.spawn();
-    w.insert(
-        m,
-        PbrMaterial {
-            cast_shadows: Some(false),
-            ..PbrMaterial::default()
-        },
-    );
+    w.insert(m, PbrMaterial::default());
     let proto = w.spawn();
     w.insert(proto, Mesh::new(vec![common::rich_primitive(Some(m), 0.0)]));
+    w.insert(
+        proto,
+        Shadows {
+            cast: Some(ShadowCast::Off),
+            receive: None,
+        },
+    );
     for (x, shadows) in [
         (
             0.0,
@@ -70,7 +72,7 @@ fn world() -> World {
 }
 
 #[test]
-fn shadows_are_node_and_material_extras() {
+fn shadows_are_node_extras_the_placements_else_the_prototypes() {
     let doc = document(&world());
     let nodes = doc["nodes"].as_array().unwrap();
     let placed: Vec<&Value> = nodes.iter().filter(|n| n.get("mesh").is_some()).collect();
@@ -79,17 +81,18 @@ fn shadows_are_node_and_material_extras() {
         placed[0]["extras"]["primase.shadows"],
         json!({"version": 1, "cast": "only", "receive": false})
     );
-    assert!(
-        placed[1]
-            .get("extras")
-            .is_none_or(|x| x.get("primase.shadows").is_none()),
-        "unknown is absent"
+    // stating nothing of its own: the prototype's
+    assert_eq!(
+        placed[1]["extras"]["primase.shadows"],
+        json!({"version": 1, "cast": "off"})
     );
     // consumed: not also a generic component in the extras
     assert!(placed[0]["extras"]["primase"].get("core.shadows").is_none());
-    assert_eq!(
-        doc["materials"][0]["extras"]["primase.shadows"],
-        json!({"version": 1, "cast": "off"})
+    assert!(
+        doc["materials"][0]
+            .get("extras")
+            .is_none_or(|x| x.get("primase.shadows").is_none()),
+        "materials state none"
     );
     let light = nodes
         .iter()
@@ -107,10 +110,6 @@ fn nothing_known_writes_nothing() {
     let ids: Vec<_> = w.iter::<Shadows>().map(|(e, _)| e).collect();
     for e in ids {
         w.remove::<Shadows>(e);
-    }
-    let materials: Vec<_> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
-    for e in materials {
-        w.get_mut::<PbrMaterial>(e).unwrap().cast_shadows = None;
     }
     let lights: Vec<_> = w.iter::<Light>().map(|(e, _)| e).collect();
     for e in lights {
