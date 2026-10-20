@@ -141,6 +141,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::select_reskate_lights,
         &[("per_cell", "1"), ("cell", "200")],
     );
+    // which blended surfaces a map draws as cutouts, and at what alpha, is the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-blended-surfaces",
+        passes::prepare_reskate_blended_surfaces,
+        &[("cutoff", "0.5"), ("materials", "all")],
+    );
     // what a map does with triangles over more texture repeats than Studio draws is the program's: no default
     reg.register_requiring(
         "prepare-reskate-uv-repeats",
