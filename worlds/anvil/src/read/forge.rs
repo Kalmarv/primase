@@ -297,6 +297,24 @@ impl Forge {
     pub fn entries(&self) -> impl Iterator<Item = (&IndexRecord, &NameRecord)> {
         self.index.iter().zip(&self.names)
     }
+
+    /// Entry `k`'s payload bytes as stored (its index record's offset and size), from the forge `r` this index was
+    /// read from; [`crate::read::data::read_entry`] reads its blocks.
+    pub fn payload<R: Read + Seek>(&self, r: &mut R, k: usize) -> Result<Vec<u8>, Error> {
+        let e = self.index.get(k).ok_or(Error::Count {
+            what: "the entry",
+            value: i64::try_from(k).unwrap_or(i64::MAX),
+            why: format!("past the {} entries", self.index.len()),
+        })?;
+        let file = r.seek(SeekFrom::End(0))?;
+        let size = u64::try_from(e.size).map_err(|_| Error::Entry {
+            index: k,
+            offset: e.offset,
+            size: e.size,
+            why: "negative size",
+        })?;
+        at(r, file, "the entry's payload", e.offset, size)
+    }
 }
 
 /// The entry count, checked against the index count, `MaxFilesForThisIndex`, the index range and the FileSet link.

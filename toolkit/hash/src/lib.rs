@@ -12,6 +12,18 @@ pub fn crc32(bytes: &[u8]) -> u32 {
     }
     !h
 }
+/// Adler-32 (RFC 1950) started from `init` instead of the standard 1: the low half is the byte sum plus `init`'s low
+/// half, the high half the sum of those running sums plus `init`'s high half, each modulo 65521. Some archives
+/// store it started from 0.
+pub fn adler32(init: u32, bytes: &[u8]) -> u32 {
+    const MOD: u32 = 65521;
+    let (mut a, mut b) = (init & 0xffff, init >> 16);
+    for &x in bytes {
+        a = (a + u32::from(x)) % MOD;
+        b = (b + a) % MOD;
+    }
+    (b << 16) | a
+}
 /// Jenkins one-at-a-time over bytes, with ASCII uppercase folded to lowercase,
 /// wrapping u32 at every step (CodeWalker JenkHash ASCII path convention).
 pub fn joaat(bytes: &[u8]) -> u32 {
@@ -135,6 +147,15 @@ pub fn prototype_key(s: &str) -> u32 {
 #[cfg(test)]
 mod byte_tests {
     use super::*;
+    /// Standard Adler-32 (start 1) of "Wikipedia" is 0x11E60398 (RFC 1950's worked example); from 0, each running
+    /// sum loses the 1: a = 920 - 1, b = 4582 - 9.
+    #[test]
+    fn adler32_standard_and_from_zero() {
+        assert_eq!(adler32(1, b"Wikipedia"), 0x11E6_0398);
+        assert_eq!(adler32(0, b"Wikipedia"), (4573 << 16) | 919);
+        assert_eq!(adler32(1, b""), 1);
+        assert_eq!(adler32(0, b""), 0);
+    }
     #[test]
     fn common_cs_addbytes_oracle() {
         for (n, want) in [

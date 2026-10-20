@@ -53,6 +53,7 @@ num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] 
 primase-fromsoft = { path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "hash"] }
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.5", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }

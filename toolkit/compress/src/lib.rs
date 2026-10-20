@@ -76,6 +76,81 @@ impl Compressor for Lz4 {
     }
 }
 
+/// One zstd frame (RFC 8878), decoded exactly: no skippable frame, no dictionary, a stated content size (where the
+/// frame states one) equal to the expected size, every input byte consumed, a stated content checksum verified, and
+/// never more than the expected output (decoded a block at a time, refused as soon as it would exceed it).
+#[derive(Debug, Clone, Copy)]
+pub struct Zstd;
+impl Decompressor for Zstd {
+    fn decompress(&self, input: &[u8], expected: usize) -> Result<Vec<u8>> {
+        use ruzstd::{BlockDecodingStrategy, FrameDecoder};
+        use std::io::Read;
+        let (frame, _) = ruzstd::frame::read_frame_header(input).map_err(|e| invalid("zstd", 0, e))?;
+        if let Some(id) = frame.header.dictionary_id() {
+            return Err(invalid("zstd", 0, format!("frame needs dictionary {id}")));
+        }
+        let descriptor = &frame.header.descriptor;
+        let states_size = descriptor.single_segment_flag()
+            || descriptor
+                .frame_content_size_bytes()
+                .map_err(|e| invalid("zstd", 0, e))?
+                > 0;
+        if states_size {
+            let stated = usize::try_from(frame.header.frame_content_size()).map_err(|_| Error::Limit)?;
+            check_size(stated, expected)?;
+        }
+        let mut d = FrameDecoder::new();
+        let mut src = input;
+        d.init(&mut src).map_err(|e| invalid("zstd", 0, e))?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(expected).map_err(|_| Error::Limit)?;
+        loop {
+            let before = src.len();
+            d.decode_blocks(&mut src, BlockDecodingStrategy::UptoBlocks(1))
+                .map_err(|e| invalid("zstd", input.len() - before, e))?;
+            let ready = d.can_collect();
+            let total = out.len().checked_add(ready).ok_or(Error::Limit)?;
+            if total > expected {
+                return Err(Error::Size {
+                    expected,
+                    actual: total,
+                });
+            }
+            let at = out.len();
+            out.resize(total, 0);
+            d.read_exact(&mut out[at..])?;
+            if d.is_finished() && d.can_collect() == 0 {
+                break;
+            }
+            if src.len() == before && ready == 0 {
+                return Err(invalid(
+                    "zstd",
+                    input.len() - src.len(),
+                    "frame ends before its last block",
+                ));
+            }
+        }
+        if !src.is_empty() {
+            return Err(invalid(
+                "zstd",
+                input.len() - src.len(),
+                "trailing input after the frame",
+            ));
+        }
+        if let (Some(stored), Some(computed)) = (d.get_checksum_from_data(), d.get_calculated_checksum())
+            && stored != computed
+        {
+            return Err(invalid(
+                "zstd",
+                input.len(),
+                format!("content checksum {stored:08x}, computed {computed:08x}"),
+            ));
+        }
+        check_size(out.len(), expected)?;
+        Ok(out)
+    }
+}
+
 /// RFC1951 raw DEFLATE. Requires the final block marker and exact input consumption.
 #[derive(Debug, Clone, Copy)]
 pub struct Deflate;

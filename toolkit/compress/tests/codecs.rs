@@ -96,3 +96,46 @@ fn cas_zlib_fixture() -> Result<()> {
     assert_eq!(Cas::default().decompress(&b, 5)?, b"hello");
     Ok(())
 }
+
+/// One zstd frame laid out by hand (RFC 8878): single segment with a one-byte content size, then `blocks`, each
+/// (last, kind, body): kind 0 raw (body is the bytes), 1 RLE (body is one byte repeated `size` times).
+fn zstd_frame(content: u8, dict: bool, blocks: &[(bool, u8, &[u8], u32)]) -> Vec<u8> {
+    let mut f = vec![0x28, 0xB5, 0x2F, 0xFD];
+    // descriptor: single segment (0x20), dictionary id flag 1 (one byte) when asked
+    f.push(if dict { 0x21 } else { 0x20 });
+    if dict {
+        f.push(7);
+    }
+    f.push(content);
+    for &(last, kind, body, size) in blocks {
+        let header = u32::from(last) | (u32::from(kind) << 1) | (size << 3);
+        f.extend_from_slice(&header.to_le_bytes()[..3]);
+        f.extend_from_slice(body);
+    }
+    f
+}
+
+/// zstd: raw and RLE blocks decode exactly; a wrong expected size, a stated content size that differs, trailing
+/// input, a missing last block, a dictionary and an over-long output are refused.
+#[test]
+fn zstd_one_exact_frame() -> Result<()> {
+    let raw = zstd_frame(5, false, &[(true, 0, b"hello", 5)]);
+    assert_eq!(Zstd.decompress(&raw, 5)?, b"hello");
+    let two = zstd_frame(8, false, &[(false, 0, b"ab", 2), (true, 1, b"z", 6)]);
+    assert_eq!(Zstd.decompress(&two, 8)?, b"abzzzzzz");
+    // the frame states 5 bytes
+    assert!(Zstd.decompress(&raw, 4).is_err());
+    assert!(Zstd.decompress(&raw, 6).is_err());
+    let mut trailing = raw.clone();
+    trailing.push(0);
+    assert!(Zstd.decompress(&trailing, 5).is_err());
+    let unfinished = zstd_frame(5, false, &[(false, 0, b"hello", 5)]);
+    assert!(Zstd.decompress(&unfinished, 5).is_err());
+    let dict = zstd_frame(5, true, &[(true, 0, b"hello", 5)]);
+    assert!(Zstd.decompress(&dict, 5).is_err());
+    // states 5 but holds 6
+    let long = zstd_frame(5, false, &[(true, 0, b"hello!", 6)]);
+    assert!(Zstd.decompress(&long, 5).is_err());
+    assert!(Zstd.decompress(&raw[..raw.len() - 1], 5).is_err());
+    Ok(())
+}

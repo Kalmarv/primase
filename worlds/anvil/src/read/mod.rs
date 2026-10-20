@@ -1,3 +1,4 @@
-//! The reader: forge archives on disk.
+//! The reader: forge archives on disk and the data blocks of their entries.
 
+pub mod data;
 pub mod forge;

@@ -1,6 +1,6 @@
 [package]
 name = "primase-anvil"
-description = "Anvil engine containers: the forge archive's (scimitar version 27) header and index"
+description = "Anvil engine containers: the forge archive's (scimitar version 27) index and its entries' data blocks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+primase-compress.workspace = true
+primase-hash.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true

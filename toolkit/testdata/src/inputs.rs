@@ -256,6 +256,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install; rows hand-checked against a separate read-only census of the file",
     },
     Variable {
+        name: "PRIMASE_ANVIL_FORGE_BASE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"the base forge of PRIMASE_ANVIL_FORGE's patch (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom.forge`, 8,951,822 bytes, 388 entries); worlds/anvil/tests/data.rs"#,
+        status: Status::Live,
+        source: "the user's own install; two resource blocks' sizes, checksums, names and class ids hand-checked in a separate read-only decode (games/riders-republic docs/recon/archive-reader-fit.md, a9f4959)",
+    },
+    Variable {
         name: "PRIMASE_UNITY_SCAN",
         kind: Kind::Input,
         gate: true,

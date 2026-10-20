@@ -1,6 +1,6 @@
 [package]
 name = "primase-compress"
-description = "Compression codecs: LZ4, deflate/zlib, Frostbite CAS block streams, Oodle via the game's own DLL"
+description = "Compression codecs: LZ4, deflate/zlib, zstd, Frostbite CAS block streams, Oodle via the game's own DLL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 thiserror.workspace = true
 lz4_flex.workspace = true
 flate2.workspace = true
+ruzstd.workspace = true
 libloading.workspace = true
 
 [dev-dependencies]
