@@ -122,11 +122,12 @@ fn members() -> Vec<Member> {
                     kind.as_deref() != Some("engine") || engine.is_none(),
                     "{path}: an engine crate names no engine of its own"
                 );
-                assert!(
-                    kind.as_deref() == Some("game") || source_names.is_empty(),
-                    "{path}: only a game crate declares source names"
-                );
             }
+            // any crate: only a game crate's source names are exempt
+            assert!(
+                kind.as_deref() == Some("game") || source_names.is_empty(),
+                "{path}: only a game crate declares source names"
+            );
             Member {
                 path,
                 name,
