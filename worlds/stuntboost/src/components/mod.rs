@@ -37,30 +37,19 @@ impl Component for StuntboostPart {
     }
 }
 
-/// The hide prefix of a node name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StuntboostHide {
-    None,
-    /// `/`: hidden in Blender before exporting.
-    BeforeExport,
-    /// `//`: excluded from bake and export.
-    Excluded,
-}
-
-/// How a node takes part in the lighting bake.
+/// How a node takes part in the lighting bake (the game's `NameBakeShadows`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StuntboostBake {
-    /// Visible in the bake and baked to (the default).
+    /// Visible in the bake and baked to (the default; `CastAndReceive`).
     Baked,
-    /// `*`: visible in the bake but not baked to.
+    /// `*`: visible in the bake but not baked to (`Cast`).
     NotBakedTo,
-    /// `°`: invisible in the bake.
+    /// `°`, or an invisible node: invisible in the bake (`None`).
     HiddenInBake,
 }
 
-/// How a node collides in game.
+/// How a node collides in game (the game's `Aggregate`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StuntboostCollision {
@@ -78,20 +67,21 @@ pub struct StuntboostCall {
     pub args: Option<Vec<String>>,
 }
 
-/// A node name parsed by the exporter's grammar ([`crate::read::names`]): `raw` as stored, its parts, its class
-/// (`None`: `Entity()`) and the calls after it.
+/// A node name parsed by the game's rules ([`crate::read::names`]): `raw` as stored, the name and its type characters,
+/// the code as the game keeps it (from the `=` on), its class (`None`: `Entity()`) and the calls after it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StuntboostName {
     pub raw: String,
-    pub hide: StuntboostHide,
     pub name: String,
     /// `_`: invisible in game and in the bake.
     pub invisible: bool,
     pub bake: StuntboostBake,
     pub collision: StuntboostCollision,
+    /// The code from its `=` on, whole (empty when there is none).
+    pub code: String,
     pub class: Option<StuntboostCall>,
     pub methods: Vec<StuntboostCall>,
-    /// Blender's `.NNN` duplicate suffix, ignored by the game.
+    /// Blender's `.NNN` duplicate suffix: what the game drops after a name without code, or what ends a code.
     pub duplicate: Option<u32>,
 }
 
@@ -328,5 +318,121 @@ impl Component for StuntboostDirectLight {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.push(self.texture.texture);
+    }
+}
+
+/// One part of a node's collision in the game's own collision model: its triangles (world corners) and, for a solid
+/// mesh, each triangle's grippable-edge bits (which edges the board's trucks can lock onto) and ramp (an index into the
+/// part file's ramps, -1 none); both empty for a trigger.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostGameCollisionPart {
+    pub triangles: Vec<[[f32; 3]; 3]>,
+    pub grippable: Vec<u8>,
+    pub ramps: Vec<i32>,
+}
+
+/// A node's collision as the game's pipeline derived it (`Level_<L>_<N>Collision.xnb`, its collision processor run
+/// over the part's glTF): its aggregate (solid or trigger) and its parts. The source of truth for what the game
+/// collides with and how its board grips; `lower-stuntboost-collision` derives core collision from the glTF instead.
+/// On the node's entity.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostGameCollision {
+    pub aggregate: StuntboostCollision,
+    pub parts: Vec<StuntboostGameCollisionPart>,
+}
+
+impl Component for StuntboostGameCollision {
+    const NAME: &'static str = "stuntboost.game_collision";
+    /// Counts, not the triangles.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "aggregate": self.aggregate,
+            "triangles": self.parts.iter().map(|p| p.triangles.len()).collect::<Vec<_>>(),
+        })))
+    }
+}
+
+/// A grind ledge's kind, as the game names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StuntboostLedgeKind {
+    /// A grindable edge of the geometry (`core.curve` kind `ledge`).
+    Edge,
+    /// A rail (`core.curve` kind `rail`), without and with the boost it gives.
+    RailNoBoost,
+    RailBoost,
+}
+
+/// A grind ledge as the game's pipeline derived it: its kind, its two corners (indices into its part's
+/// [`StuntboostLedgeGraph`]), its frame (normal, tangent, and the binormal the game derives from them), the angles
+/// between which the board may grind it (radians), its length and its recursive lengths in each direction (metres),
+/// its group, and its lerp cut-offs as stored. Its entity carries the segment as `core.curve`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostLedge {
+    pub part: Entity,
+    pub kind: StuntboostLedgeKind,
+    pub corners: [u32; 2],
+    pub normal: [f32; 3],
+    pub tangent: [f32; 3],
+    pub binormal: [f32; 3],
+    pub min_angle: f32,
+    pub max_angle: f32,
+    pub length: f32,
+    pub length_recursive: [f32; 2],
+    pub group: i32,
+    pub lerp_cut_off: [f32; 2],
+}
+
+impl Component for StuntboostLedge {
+    const NAME: &'static str = "stuntboost.ledge";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.part);
+    }
+}
+
+/// A ledge corner: its position, the corners near it (indices) and the ledges leaving it (entity, forward).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostLedgeCorner {
+    pub position: [f32; 3],
+    pub near: Vec<u32>,
+    pub ledges: Vec<(Entity, bool)>,
+}
+
+/// A part's grind ledge graph as the game's pipeline derived it (how ledges join at corners), and its collision grid's
+/// cell sizes for solids and triggers (metres). On the part's entity.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostLedgeGraph {
+    pub solids_cell: [f32; 3],
+    pub triggers_cell: [f32; 3],
+    pub corners: Vec<StuntboostLedgeCorner>,
+}
+
+impl Component for StuntboostLedgeGraph {
+    const NAME: &'static str = "stuntboost.ledge_graph";
+    /// Counts, not the corners.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "solids_cell": self.solids_cell,
+            "triggers_cell": self.triggers_cell,
+            "corners": self.corners.len(),
+        })))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.corners.iter().flat_map(|c| c.ledges.iter().map(|(e, _)| *e)));
+    }
+}
+
+/// A part's shortcuts as the game's pipeline stored them (`Level_<L>_<N>Cuts.xnb`): per key (a level's id), its
+/// integers as stored (`None`: a null array). On the part's entity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StuntboostShortcuts(pub BTreeMap<u32, Option<Vec<i32>>>);
+
+impl Component for StuntboostShortcuts {
+    const NAME: &'static str = "stuntboost.shortcuts";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
     }
 }

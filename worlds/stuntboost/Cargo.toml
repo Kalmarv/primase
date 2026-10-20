@@ -17,6 +17,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+primase-testdata.workspace = true
+
 [lints]
 workspace = true
 

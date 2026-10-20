@@ -1050,6 +1050,7 @@ dependencies = [
  "primase-glb",
  "primase-image",
  "primase-monogame",
+ "primase-testdata",
  "serde",
  "serde_json",
  "thiserror",

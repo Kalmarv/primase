@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{
-    ColorSpace, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
+    ColorSpace, Curve, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
     Transform, World,
 };
 use primase_glb::Gltf;
@@ -26,10 +26,12 @@ use primase_monogame::xnb::Xnb;
 use serde_json::Value;
 
 use crate::components::{
-    StuntboostAttribute, StuntboostAttributes, StuntboostDirectLight, StuntboostMaterial, StuntboostNode,
-    StuntboostPart, StuntboostRole, StuntboostTextureRef,
+    StuntboostAttribute, StuntboostAttributes, StuntboostCollision, StuntboostDirectLight,
+    StuntboostGameCollision, StuntboostGameCollisionPart, StuntboostLedge, StuntboostLedgeCorner,
+    StuntboostLedgeGraph, StuntboostLedgeKind, StuntboostMaterial, StuntboostNode, StuntboostPart,
+    StuntboostRole, StuntboostShortcuts, StuntboostTextureRef,
 };
-use crate::read::names;
+use crate::read::{derived, names};
 use crate::{Error, Result};
 
 /// What [`read_level`] read.
@@ -47,6 +49,14 @@ pub struct LevelReport {
     pub textures_missing: Vec<String>,
     /// Application-specific vertex attributes (`_COLOR_SHIFT`, ...) kept by primitive, by name.
     pub custom_attributes: BTreeMap<String, usize>,
+    /// From the game's derived files: nodes with collision, their triangles, the grind ledges and their corners, the
+    /// shortcut entries; and the derived files a part lacks, by path.
+    pub game_collision_nodes: usize,
+    pub game_collision_triangles: usize,
+    pub ledges: usize,
+    pub ledge_corners: usize,
+    pub shortcut_entries: usize,
+    pub derived_missing: Vec<String>,
 }
 
 /// A glTF texture: its image's entity and its sampler's magnification and minification filters.
@@ -180,6 +190,10 @@ fn transform(m: &[f64; 16]) -> Transform {
 ///   [`names`], its extras), and an `Instance` of its mesh's prototype when it has one;
 /// - each mesh a prototype with `core.mesh` (positions scaled; its primitives' materials the material entities) and
 ///   `core.source`, and its application-specific vertex attributes as [`StuntboostAttributes`] (as stored, unscaled);
+/// - from the game's own derived files, when shipped: each node's collision as the game derived it
+///   ([`StuntboostGameCollision`]), each grind ledge an entity with its segment as `core.curve` (kind `ledge` for an
+///   edge, `rail` for a rail) and [`StuntboostLedge`], the part's [`StuntboostLedgeGraph`] and
+///   [`StuntboostShortcuts`] (positions and lengths in metres; a missing file counted);
 /// - each material an entity with [`StuntboostMaterial`] and `core.name`, and a bake material's direct-light mask as
 ///   [`StuntboostDirectLight`]; each image a texture entity with
 ///   `core.texture` (the QOI decoded to RGBA8, sRGB; role other), `core.name` and `core.source`. An image the install
@@ -452,6 +466,7 @@ fn read_part(
     };
     let mut stack: Vec<(usize, [f64; 16])> = roots.into_iter().rev().map(|r| (r, identity)).collect();
     let mut visited = vec![false; nodes.len()];
+    let mut node_entities: Vec<Option<Entity>> = vec![None; nodes.len()];
     while let Some((i, parent)) = stack.pop() {
         let (Some(node), Some(name)) = (nodes.get(i), parsed.get(i)) else {
             return Err(format(
@@ -464,6 +479,9 @@ fn read_part(
         }
         let world = mul(&parent, &local(node));
         let e = w.spawn();
+        if let Some(slot) = node_entities.get_mut(i) {
+            *slot = Some(e);
+        }
         w.insert(e, frame.transform(&transform(&world)));
         w.insert(e, Name(name.raw.clone()));
         w.insert(e, Source(format!("{file}#node {i}")));
@@ -500,6 +518,140 @@ fn read_part(
         {
             stack.push((c as usize, world));
         }
+    }
+    read_derived(w, report, export, level, index, part, &node_entities, frame)
+}
+
+/// The part's derived files, when the install ships them: the game's collision model onto the node entities, its
+/// ledges as entities, its ledge graph and shortcuts onto the part (see [`derived`]).
+#[allow(clippy::too_many_arguments)]
+fn read_derived(
+    w: &mut World,
+    report: &mut LevelReport,
+    export: &Path,
+    level: &str,
+    index: u32,
+    part: Entity,
+    node_entities: &[Option<Entity>],
+    frame: &SourceFrame,
+) -> Result<()> {
+    let length = |v: f32| (f64::from(v) * frame.metres_per_unit()) as f32;
+    let collision_path = export.join(format!("Level_{level}_{index}Collision.xnb"));
+    if collision_path.is_file() {
+        let file = collision_path.display().to_string();
+        let model = derived::collision_model(&content(&collision_path)?).map_err(|e| format(&file, e))?;
+        if model.meshes.len() != node_entities.len() {
+            return Err(format(
+                &file,
+                format!(
+                    "{} collision meshes for {} nodes",
+                    model.meshes.len(),
+                    node_entities.len()
+                ),
+            ));
+        }
+        for (mesh, entity) in model.meshes.iter().zip(node_entities) {
+            let (Some(mesh), Some(e)) = (mesh, entity) else {
+                continue;
+            };
+            let parts: Vec<StuntboostGameCollisionPart> = (mesh.parts.iter())
+                .map(|p| StuntboostGameCollisionPart {
+                    triangles: p.triangles.iter().map(|t| t.map(|v| frame.point(v))).collect(),
+                    grippable: p.grippable.clone(),
+                    ramps: p.ramps.clone(),
+                })
+                .collect();
+            report.game_collision_nodes += 1;
+            report.game_collision_triangles += parts.iter().map(|p| p.triangles.len()).sum::<usize>();
+            let aggregate = match mesh.aggregate {
+                0 => StuntboostCollision::Solid,
+                1 => StuntboostCollision::Trigger,
+                _ => StuntboostCollision::None,
+            };
+            w.insert(*e, StuntboostGameCollision { aggregate, parts });
+        }
+        // the ledges, each its own entity with its segment as a core curve
+        let ledges: Vec<Entity> = (model.ledges.iter().enumerate())
+            .map(|(i, l)| {
+                let at = |c: u32| {
+                    model
+                        .corners
+                        .get(c as usize)
+                        .map_or([0.0; 3], |c| frame.point(c.position))
+                };
+                let kind = match l.kind {
+                    0 => StuntboostLedgeKind::Edge,
+                    1 => StuntboostLedgeKind::RailNoBoost,
+                    _ => StuntboostLedgeKind::RailBoost,
+                };
+                let e = w.spawn();
+                w.insert(
+                    e,
+                    Curve {
+                        kind: if kind == StuntboostLedgeKind::Edge {
+                            "ledge"
+                        } else {
+                            "rail"
+                        }
+                        .into(),
+                        points: vec![at(l.corners[0]), at(l.corners[1])],
+                        closed: false,
+                        tangents: None,
+                        up: None,
+                    },
+                );
+                w.insert(e, Name(format!("Level_{level}_{index} ledge {i}")));
+                w.insert(e, Source(format!("{file}#ledge {i}")));
+                w.insert(
+                    e,
+                    StuntboostLedge {
+                        part,
+                        kind,
+                        corners: l.corners,
+                        normal: frame.direction(l.normal),
+                        tangent: frame.direction(l.tangent),
+                        binormal: frame.direction(l.binormal),
+                        min_angle: l.min_angle,
+                        max_angle: l.max_angle,
+                        length: length(l.length),
+                        length_recursive: l.length_recursive.map(length),
+                        group: l.group,
+                        lerp_cut_off: l.lerp_cut_off,
+                    },
+                );
+                e
+            })
+            .collect();
+        report.ledges += ledges.len();
+        report.ledge_corners += model.corners.len();
+        let corners = (model.corners.iter())
+            .map(|c| StuntboostLedgeCorner {
+                position: frame.point(c.position),
+                near: c.near.clone(),
+                ledges: (c.ledges.iter())
+                    .filter_map(|&(l, forward)| Some((*ledges.get(l as usize)?, forward)))
+                    .collect(),
+            })
+            .collect();
+        w.insert(
+            part,
+            StuntboostLedgeGraph {
+                solids_cell: model.solids_cell.map(length),
+                triggers_cell: model.triggers_cell.map(length),
+                corners,
+            },
+        );
+    } else {
+        report.derived_missing.push(collision_path.display().to_string());
+    }
+    let cuts_path = export.join(format!("Level_{level}_{index}Cuts.xnb"));
+    if cuts_path.is_file() {
+        let file = cuts_path.display().to_string();
+        let cuts = derived::shortcuts(&content(&cuts_path)?).map_err(|e| format(&file, e))?;
+        report.shortcut_entries += cuts.len();
+        w.insert(part, StuntboostShortcuts(cuts));
+    } else {
+        report.derived_missing.push(cuts_path.display().to_string());
     }
     Ok(())
 }

@@ -232,6 +232,22 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install",
     },
     Variable {
+        name: "PRIMASE_STUNTBOOST_DIR",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export` levels and their derived `Collision`/`Cuts` files); worlds/stuntboost/tests/oracle.rs"#,
+        status: Status::Live,
+        source: "the user's own install",
+    },
+    Variable {
+        name: "PRIMASE_STUNTBOOST_ORACLE",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"the game's own parsers run over that install: per level part `<L>_<N>.json` (node names as its `ParsedName` reads them; its collision model as `SE.CollisionModel` loads it: meshes, grippable bits, ramps, ledges) and `<L>_<N>.tris.bin` (every collision triangle); worlds/stuntboost/tests/oracle.rs"#,
+        status: Status::Live,
+        source: "independent: the game's own code via reflection, the oracle tool kept with the game's private tools",
+    },
+    Variable {
         name: "PRIMASE_UNITY_SCAN",
         kind: Kind::Input,
         gate: true,
