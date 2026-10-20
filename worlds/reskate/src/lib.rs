@@ -154,6 +154,17 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_blended_surfaces,
         &[("cutoff", "0.5"), ("materials", "all")],
     );
+    // which slot a material's textures sample as, and what becomes of a slot that differs, are the program's: no default
+    reg.register_requiring(
+        "prepare-reskate-uv-transforms",
+        passes::prepare_reskate_uv_transforms,
+        &[("anchor", "base-colour"), ("conflicts", "adopt")],
+    );
+    reg.register_requiring(
+        "prepare-reskate-wrap",
+        passes::prepare_reskate_wrap,
+        &[("anchor", "base-colour"), ("axis", "u")],
+    );
     // what a map does with triangles over more texture repeats than Studio draws is the program's: no default
     reg.register_requiring(
         "prepare-reskate-uv-repeats",

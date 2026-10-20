@@ -18,6 +18,7 @@ pub mod overlays;
 pub mod pause_map;
 pub mod raise;
 pub mod region;
+pub mod sampling;
 pub mod snap;
 pub mod spawn;
 pub mod summarize;
@@ -61,6 +62,10 @@ pub use raise::{
     raise_skate_pass, studio_watts,
 };
 pub use region::{ClipReskateRegion, clip_reskate_region};
+pub use sampling::{
+    PrepareReskateUvTransforms, PrepareReskateWrap, SamplingConflicts, prepare_reskate_uv_transforms,
+    prepare_reskate_wrap,
+};
 pub use snap::{
     SnapReskateMarkers, SummarizeReskateInstances, SummarizeReskateWater, snap_reskate_markers,
     summarize_reskate_instances, summarize_reskate_water,
