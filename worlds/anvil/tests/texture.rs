@@ -117,3 +117,132 @@ fn texture_maps_read_their_levels_and_decode() {
         assert_eq!(sha(&mip.image), image, "level {level}");
     }
 }
+
+/// One real sample of each further format code two third-party tools agree on (AnvilToolkit 1.3.7, RRAssetStudio v3;
+/// samples and RRAssetStudio's decodes from the Riders Republic texture-format report, 2026-10-20): its top level
+/// decoded by primase-texcodec equals the third-party bcdec's on every byte. Where RRAssetStudio's decode (Pillow,
+/// in its own pixel mode) is equal too, its SHA-256 is asserted; otherwise the measured difference is stated: every
+/// differing channel by exactly 1 (code 3: 8,847 of 76,800 RGBA; 5: 8,946 of 65,536 RGBA; 6: 28,062 of 4,194,304 L;
+/// 7: 487,547 of 3,145,728 RGB, red and green only; Pillow's hash equal to RRAssetStudio's in each).
+#[test]
+fn agreed_format_codes_decode_as_a_third_party_decoder_does() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    // forge, entry, code, format, width, height, external levels, top level's SHA-256, RGBA8 decode's SHA-256
+    let samples = [
+        (
+            "DataPC.forge",
+            352,
+            3,
+            TexFormat::Bc1,
+            160,
+            120,
+            0,
+            "29b1c7babc058217182c75ecb3b6e15af9cd2a2134e43f5c2e2f94379e975cfc",
+            None,
+        ),
+        (
+            "DataPC.forge",
+            40268,
+            4,
+            TexFormat::Bc2,
+            16,
+            16,
+            0,
+            "1269ac263eec26a7e498a3861621402d71afa9d507fb2a81aba95d4992456f37",
+            Some("5f4ecdb7b71c3e403983fe405cddcdc2f2576b655fdb3e80d94a6f7c32e58bc2"),
+        ),
+        (
+            "DataPC.forge",
+            22849,
+            5,
+            TexFormat::Bc3,
+            128,
+            128,
+            0,
+            "cf98c02bdc419b1527ee81a006e2217c347b6bbc59b8dd3b38b789d3bf8a216b",
+            None,
+        ),
+        (
+            "DataPC.forge",
+            50647,
+            6,
+            TexFormat::Bc4Unorm,
+            2048,
+            2048,
+            2,
+            "41a054d506fa1ea70cf6c8fd158a70da8cf67fd38e0a4023377e1e90511103dc",
+            None,
+        ),
+        (
+            "DataPC_MAD_USNAT.forge",
+            16691,
+            7,
+            TexFormat::Bc5Unorm,
+            1024,
+            1024,
+            2,
+            "2b584861fe1274689c10b99915d0d440478d032672e707fab8b795c7bd42f266",
+            None,
+        ),
+        // RRAssetStudio's L decode is the stored bytes: its SHA-256 is the level's
+        (
+            "DataPC_MAD_USNAT.forge",
+            112,
+            12,
+            TexFormat::R8Unorm,
+            2048,
+            2048,
+            0,
+            "1affd5f130b616ad69f3c302a0a6758a86c0d844f1ae1692d6ef75d95f23b21e",
+            None,
+        ),
+        // RRAssetStudio's clamped, rounded RGBA8 preview of RGBA16F
+        (
+            "DataPC_MAD_USNAT.forge",
+            165221,
+            20,
+            TexFormat::Rgba16Float,
+            256,
+            256,
+            1,
+            "a19dc2b56598523b9b7084882739d82bc7fde1e0d6a426d841b0d77d8dda766c",
+            Some("7eecd54cd3c32c786badde69cad31e4255641e537e466aa3a71c76e7955b0364"),
+        ),
+    ];
+    for (forge_name, entry, code, format, w, h, external, top, rgba) in samples {
+        let path = dir.join(forge_name);
+        let forge = Forge::open(&path).expect("forge");
+        let mut file = File::open(&path).expect("open");
+        let mut resource = |entry: usize| {
+            let payload = forge.payload(&mut file, entry).expect("payload");
+            let block = read_entry(&payload, MAX_RECORD).expect("entry");
+            Resource::parse(&block.resource.data).expect("resource")
+        };
+        let t = StoredTextureMap::parse(&resource(entry).body).expect("texture map");
+        assert_eq!(
+            (t.format, t.width, t.height, t.references.len()),
+            (code, w, h, external),
+            "code {code}"
+        );
+        assert_eq!(texture::format(code), Some(format));
+        let level0 = match t.references.first() {
+            Some(m) => {
+                StoredMip::parse(&resource(forge.find(m.id).expect("in this forge")).body)
+                    .expect("mip")
+                    .image
+            }
+            None => t.levels().expect("levels")[0].to_vec(),
+        };
+        assert_eq!(sha(&level0), top, "code {code}");
+        let ours = Decoder::default()
+            .decode_rgba8(format, w, h, &level0)
+            .expect("decode");
+        let bcdec = Bcdec.decode_rgba8(format, w, h, &level0).expect("decode");
+        assert!(ours == bcdec, "code {code}: texcodec and bcdec differ");
+        if let Some(rgba) = rgba {
+            assert_eq!(sha(&ours), rgba, "code {code}: RRAssetStudio's decode");
+        }
+    }
+}

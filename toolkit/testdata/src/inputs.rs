@@ -275,7 +275,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_ANVIL_DIR",
         kind: Kind::Input,
         gate: false,
-        about: r#"an Anvil game's folder of forge archives (Riders Republic, Steam build 25394987: its six `.forge` files, about 24 GB); worlds/anvil/tests/census.rs, run by hand (ignored)"#,
+        about: r#"an Anvil game's folder of forge archives (Riders Republic, Steam build 25394987: its six `.forge` files, about 24 GB); worlds/anvil/tests/census.rs (run by hand) and texture.rs"#,
         status: Status::Live,
         source: "the user's own install; the census reads every entry of the readers' kinds and reports what each reader refuses",
     },

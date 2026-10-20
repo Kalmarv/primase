@@ -23,7 +23,7 @@
 //! it: another first byte, u32 at 9, 13 or 21, reference tag or compiled header marker, a compiled header
 //! disagreeing with the first, or pixels not ending the body. [`StoredTextureMap::levels`] slices the levels for
 //! the format codes whose storage the census establishes ([`storage`]), refusing another code or pixels the levels
-//! don't fill; [`format`] names the codec only for the codes fixtures establish one for (2 BC1, 10 BC7).
+//! don't fill; [`format`] names the codec only for the codes whose codec is established.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -37,14 +37,23 @@ pub use crate::read::material::TEXTURE_MAP;
 /// The compiled header's marker: equals the CRC-32 of `CompiledTextureMap` (the name a label).
 pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 
-/// The texture format a TextureMap's engine format code names, for the codes established on fixtures: 2 (BC1: map
-/// 217, every level's bytes and its top level decoded equal to the third-party bcdec's) and 10 (BC7: maps 218 and 31,
-/// 218's top level decoded equal to the independent texture2ddecoder's). Another code is `None`: not refused as
-/// stored, but its layout isn't known.
+/// The texture format a TextureMap's engine format code names, for the codes established by two third-party tools
+/// agreeing (AnvilToolkit 1.3.7's Breakpoint table and RRAssetStudio v3's) with the census's storage, and by a real
+/// sample decoding by primase-texcodec equal to the third-party bcdec's on every byte (worlds/anvil/tests/texture.rs):
+/// 2 and 3 BC1, 4 BC2, 5 BC3, 6 BC4, 7 BC5, 10 BC7, 12 R8, 20 RGBA16F (BC7 also equal to texture2ddecoder's; BC2, R8
+/// and RGBA16F also to RRAssetStudio's). Not codes the two tools disagree on (0: BGRA8 or RGBA8; 11: A8 or R8) or
+/// only one names. Colour space and role are not read: neither tool's table holds an sRGB format. Another code is
+/// `None`: not refused as stored, but its codec isn't established.
 pub fn format(code: u32) -> Option<TexFormat> {
     match code {
-        2 => Some(TexFormat::Bc1),
+        2 | 3 => Some(TexFormat::Bc1),
+        4 => Some(TexFormat::Bc2),
+        5 => Some(TexFormat::Bc3),
+        6 => Some(TexFormat::Bc4Unorm),
+        7 => Some(TexFormat::Bc5Unorm),
         10 => Some(TexFormat::Bc7),
+        12 => Some(TexFormat::R8Unorm),
+        20 => Some(TexFormat::Rgba16Float),
         _ => None,
     }
 }
