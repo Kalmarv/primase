@@ -19,7 +19,8 @@ enum Asked {
     Cell((i32, i32)),
 }
 
-/// What the part source and the writer share: each tile set's options, folder and plan.
+/// What the part source and the writer share: each tile set's options, folder and plan ([`tiles`]: at least one set, all
+/// planned alike).
 struct Tiles {
     /// Each tile set's options and folder: the first is the viewer's.
     sets: Vec<(Options, PathBuf)>,
@@ -59,8 +60,31 @@ impl std::fmt::Debug for TileParts {
     }
 }
 
-/// The part source and the writer of tile sets, each its options and folder.
-pub fn tiles(sets: Vec<(Options, PathBuf)>) -> (TileParts, TileWriter) {
+/// The part source and the writer of tile sets, each its options and folder. The sets share one plan, made from the
+/// first set's options and traversed once (each cell's world written into every set), so they must plan alike: at
+/// least one set, and every set with the first's tile size, placements filed by element centre and given viewer
+/// records. They may differ in what does not change the plan: instancing, compression, textures, the byte budget
+/// (each set divides its own cells) and the camera.
+pub fn tiles(sets: Vec<(Options, PathBuf)>) -> crate::Result<(TileParts, TileWriter)> {
+    let Some((first, _)) = sets.first() else {
+        return Err(crate::Error::Invalid("no tile set to write".into()));
+    };
+    let records = serde_json::to_value(&first.viewer_items)?;
+    for (o, out) in &sets[1..] {
+        let unlike = if o.tile_size != first.tile_size {
+            "its tile size"
+        } else if o.split_by_tile != first.split_by_tile {
+            "the placements it files by element centre"
+        } else if serde_json::to_value(&o.viewer_items)? != records {
+            "its viewer records"
+        } else {
+            continue;
+        };
+        return Err(crate::Error::Invalid(format!(
+            "tile set {}: {unlike} differs from the first set's; the sets share one plan",
+            out.display()
+        )));
+    }
     let bytes = vec![0; sets.len()];
     let tiles = Rc::new(RefCell::new(Tiles {
         sets,
@@ -68,14 +92,14 @@ pub fn tiles(sets: Vec<(Options, PathBuf)>) -> (TileParts, TileWriter) {
         asked: None,
         report: Report::new(),
     }));
-    (
+    Ok((
         TileParts {
             tiles: tiles.clone(),
             unsplit: Vec::new(),
             cells: None,
         },
         TileWriter { tiles, bytes },
-    )
+    ))
 }
 
 impl PartSource for TileParts {

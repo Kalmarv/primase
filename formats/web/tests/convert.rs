@@ -134,7 +134,7 @@ fn convert(
     out: &Path,
     passes: Vec<Box<dyn Pass>>,
 ) -> primase_core::convert::ConvertReport {
-    let (mut parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]);
+    let (mut parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]).unwrap();
     convert_parts(
         &mut Given(world),
         &mut parts,
@@ -294,4 +294,72 @@ fn a_material_without_pbr_is_reported_as_unsupported() {
     );
     assert_eq!(notice.examples, files);
     let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn tile_sets_must_be_given_and_planned_alike() {
+    let options = Options::new(TileSize::new(200.).unwrap());
+    let err = primase_web::convert::tiles(Vec::new()).unwrap_err();
+    assert!(err.to_string().contains("no tile set"), "{err}");
+    // 100 m and 200 m cells are two plans: one traversal cannot write both
+    let finer = Options::new(TileSize::new(100.).unwrap());
+    let err =
+        primase_web::convert::tiles(vec![(options.clone(), "a".into()), (finer, "b".into())]).unwrap_err();
+    assert!(err.to_string().contains("tile size"), "{err}");
+    let recorded = Options {
+        viewer_items: vec![primase_web::ViewerItem {
+            name: "own".into(),
+            kind: "marker".into(),
+            anchor: [450., 0., 0.],
+            data: serde_json::Value::Null,
+        }],
+        ..options.clone()
+    };
+    let err =
+        primase_web::convert::tiles(vec![(options.clone(), "a".into()), (recorded, "b".into())]).unwrap_err();
+    assert!(err.to_string().contains("viewer records"), "{err}");
+}
+
+#[test]
+fn tile_sets_differing_in_encoding_alone_share_the_plan() {
+    let (w, _) = world(&[10., 20., 450.]);
+    let (a, b) = (folder("set-a"), folder("set-b"));
+    let compressed = Options::new(TileSize::new(200.).unwrap());
+    let plain = Options {
+        compress: false,
+        gpu_instancing: false,
+        tile_byte_budget: Some(1),
+        ..compressed.clone()
+    };
+    let (mut parts, writer) =
+        primase_web::convert::tiles(vec![(compressed, a.clone()), (plain, b.clone())]).unwrap();
+    convert_parts(
+        &mut Given(w),
+        &mut parts,
+        Box::new(writer),
+        &PassManager::new(PassRegistry::new()),
+        &Pipeline { passes: Vec::new() },
+        &Pipeline { passes: Vec::new() },
+    )
+    .unwrap();
+    let cells = |out: &Path| -> Vec<(i64, i64, u64)> {
+        let (index, _) = tiles(out);
+        index["tiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["col"].as_i64().unwrap(),
+                    t["row"].as_i64().unwrap(),
+                    t["placements"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    // the same cells; the plain set divides its first cell under its own budget
+    assert_eq!(cells(&a), [(0, 0, 2), (2, 0, 1)]);
+    assert_eq!(cells(&b), [(0, 0, 1), (0, 0, 1), (2, 0, 1)]);
+    let _ = std::fs::remove_dir_all(&a);
+    let _ = std::fs::remove_dir_all(&b);
 }

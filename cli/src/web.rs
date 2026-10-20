@@ -85,7 +85,7 @@ pub fn writer(out: &Path, args: &[String]) -> Result<crate::convert::Destination
         options.compress = false;
         options.gpu_instancing = false;
     }
-    let (parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]);
+    let (parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())])?;
     Ok(crate::convert::Destination {
         parts: Box::new(parts),
         writer: Box::new(writer),
