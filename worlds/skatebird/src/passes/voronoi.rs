@@ -255,13 +255,14 @@ fn slot(texture: Entity, m: &UnityMaterial, property: &str, cells: u32) -> Textu
 type Omitted = String;
 
 /// The `Bumped Specular Voronoi` materials baked (module documentation), with the program's stated variant (`keywords`,
-/// `tier`), block (`cells`) and resolution (`max_texels`).
+/// `tier`), block (`cells`) and resolution (`max_texels`). Made only by [`LowerSkatebirdVoronoi::new`] or
+/// [`LowerSkatebirdVoronoi::from_options`], which check them: its fields are private, read through its accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerSkatebirdVoronoi {
-    pub keywords: Vec<String>,
-    pub tier: usize,
-    pub cells: u32,
-    pub max_texels: u32,
+    keywords: Vec<String>,
+    tier: usize,
+    cells: u32,
+    max_texels: u32,
 }
 
 impl LowerSkatebirdVoronoi {
@@ -273,7 +274,11 @@ impl LowerSkatebirdVoronoi {
         if max_texels == 0 {
             return Err("max-texels=0: at least one texel per cell".into());
         }
-        if (cells + 1).saturating_mul(max_texels) > GRID {
+        if cells
+            .checked_add(1)
+            .and_then(|c| c.checked_mul(max_texels))
+            .is_none_or(|grid| grid > GRID)
+        {
             return Err(format!(
                 "cells={cells}, max-texels={max_texels}: the evaluation grid, (cells + 1) x max-texels, is at most {GRID}"
             ));
@@ -284,6 +289,26 @@ impl LowerSkatebirdVoronoi {
             cells,
             max_texels,
         })
+    }
+
+    /// The renderer's keywords the variant is stated with.
+    pub fn keywords(&self) -> &[String] {
+        &self.keywords
+    }
+
+    /// The hardware tier the variant is stated in.
+    pub fn tier(&self) -> usize {
+        self.tier
+    }
+
+    /// K: cells a side of the baked block.
+    pub fn cells(&self) -> u32 {
+        self.cells
+    }
+
+    /// The most texels per cell.
+    pub fn max_texels(&self) -> u32 {
+        self.max_texels
     }
 
     /// From options `keywords` (`;`-separated, possibly empty), `tier`, `cells` and `max-texels`, all required.
@@ -668,12 +693,11 @@ mod tests {
         let pass = LowerSkatebirdVoronoi::from_options(&o(&all)).unwrap();
         assert_eq!(
             pass,
-            LowerSkatebirdVoronoi {
-                keywords: vec!["DIRECTIONAL".into()],
-                tier: 3,
-                cells: 2,
-                max_texels: 1024
-            }
+            LowerSkatebirdVoronoi::new(vec!["DIRECTIONAL".into()], 3, 2, 1024).unwrap()
+        );
+        assert_eq!(
+            (pass.keywords(), pass.tier(), pass.cells(), pass.max_texels()),
+            (&["DIRECTIONAL".to_owned()][..], 3, 2, 1024)
         );
         assert_eq!(
             LowerSkatebirdVoronoi::from_options(&pass.options()).unwrap(),
@@ -693,8 +717,11 @@ mod tests {
         assert!(with("cells", "1").is_err());
         assert!(with("max-texels", "0").is_err());
         assert!(with("max-texels", "2048").is_err());
+        // no overflow on the grid check: refused, not wrapped or panicking
+        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, u32::MAX, 1).is_err());
+        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, 2, u32::MAX).is_err());
         assert!(with("tier", "x").is_err());
         assert!(with("extra", "1").is_err());
-        assert_eq!(with("keywords", "").unwrap().keywords, Vec::<String>::new());
+        assert!(with("keywords", "").unwrap().keywords().is_empty());
     }
 }
