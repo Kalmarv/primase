@@ -72,6 +72,227 @@ impl StoredReferences {
     }
 }
 
+/// A Material's body read whole: a byte (1), two references, 102 bytes kept as stored, a u32 count, and that many
+/// property records ending the body. A record is a 16-byte header (a u32 key, a u32 class, a zero u16, a u32 type,
+/// a zero u16) and a payload whose length its (class, type) gives ([`Payload`]); another (class, type), a nonzero u16,
+/// a class echo unlike the class or a body not ended by the last record is refused. Established by the census on
+/// every Material of Riders Republic (13,579) and by RRAssetStudio reading the same framing; the names key, class and
+/// type, and what a payload's fields mean, are RRAssetStudio's labels, not read here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredMaterial {
+    pub references: [Option<Reference>; 2],
+    /// The 102 bytes after the references.
+    pub unread: Vec<u8>,
+    pub properties: Vec<Property>,
+}
+
+/// One property record.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Property {
+    pub key: u32,
+    pub class: u32,
+    pub kind: u32,
+    pub payload: Payload,
+}
+
+/// A property's payload by its (class, type), as stored. The `head` bytes and those named by offset are kept,
+/// not interpreted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Payload {
+    /// (0, 7): 4 bytes as an i32.
+    Int(i32),
+    /// (0, 10): 4 bytes as an f32.
+    Float(f32),
+    /// (0, 13): 16 bytes as four f32.
+    Float4([f32; 4]),
+    /// (0x7D08460D, 19), 45 bytes: 8 bytes, the class again, a byte, three u32, two references (the second a
+    /// TextureMap on the fixtures).
+    Texture {
+        head: [u8; 8],
+        byte: u8,
+        words: [u32; 3],
+        references: [Option<Reference>; 2],
+    },
+    /// (0xC52E2125, 19), 47 bytes: 8 bytes, the class again, eight f32, three bytes.
+    Floats8 {
+        head: [u8; 8],
+        floats: [f32; 8],
+        bytes: [u8; 3],
+    },
+    /// (0xECE5D96C, 19), 36 bytes: 8 bytes, the class again, six f32.
+    Floats6 { head: [u8; 8], floats: [f32; 6] },
+    /// (0xBC0F16F5, 19), 45 bytes: 8 bytes, the class again, 33 bytes kept.
+    Raw45 { head: [u8; 8], rest: Vec<u8> },
+}
+
+/// Why a Material body can't be read whole.
+#[derive(Debug, thiserror::Error)]
+pub enum MaterialError {
+    #[error("Material body: {have} bytes, shorter than its {what}")]
+    Short { what: &'static str, have: usize },
+    #[error("Material prefix: {0}")]
+    Prefix(#[from] Error),
+    #[error("Material property {index}: {why}")]
+    Property { index: usize, why: String },
+    #[error("Material body: {0} bytes after its last property")]
+    Trailing(usize),
+}
+
+/// Little-endian fields read in order, each bounded.
+struct Cursor<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl Cursor<'_> {
+    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], MaterialError> {
+        let short = MaterialError::Short {
+            what,
+            have: self.b.len(),
+        };
+        let end = self.at.checked_add(N).ok_or(MaterialError::Short {
+            what,
+            have: self.b.len(),
+        })?;
+        let s: [u8; N] = self
+            .b
+            .get(self.at..end)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(short)?;
+        self.at = end;
+        Ok(s)
+    }
+    fn u32(&mut self, what: &'static str) -> Result<u32, MaterialError> {
+        Ok(u32::from_le_bytes(self.array(what)?))
+    }
+    fn f32(&mut self, what: &'static str) -> Result<f32, MaterialError> {
+        Ok(f32::from_le_bytes(self.array(what)?))
+    }
+    fn reference(&mut self, index: usize) -> Result<Option<Reference>, MaterialError> {
+        reference::parse(self.array::<{ reference::LENGTH }>("reference")?).map_err(|e| {
+            MaterialError::Property {
+                index,
+                why: e.to_string(),
+            }
+        })
+    }
+}
+
+impl StoredMaterial {
+    /// The body parsed.
+    pub fn parse(body: &[u8]) -> Result<StoredMaterial, MaterialError> {
+        let prefix = StoredReferences::parse(body)?;
+        let mut c = Cursor { b: body, at: 21 };
+        let unread = c.array::<102>("102 bytes after the references")?.to_vec();
+        let count = usize::try_from(c.u32("property count")?).unwrap_or(usize::MAX);
+        if count > body.len() / 16 {
+            return Err(MaterialError::Short {
+                what: "property records",
+                have: body.len(),
+            });
+        }
+        let mut properties = Vec::with_capacity(count);
+        for index in 0..count {
+            let key = c.u32("property key")?;
+            let class = c.u32("property class")?;
+            let [z0, z1] = c.array::<2>("property")?;
+            let kind = c.u32("property type")?;
+            let [z2, z3] = c.array::<2>("property")?;
+            if [z0, z1, z2, z3] != [0; 4] {
+                return Err(MaterialError::Property {
+                    index,
+                    why: "a nonzero u16 in its header".into(),
+                });
+            }
+            let echo = |c: &mut Cursor<'_>| -> Result<[u8; 8], MaterialError> {
+                let head = c.array::<8>("property payload")?;
+                let again = c.u32("property class again")?;
+                if again != class {
+                    return Err(MaterialError::Property {
+                        index,
+                        why: format!("class {class:#010x}, {again:#010x} in its payload"),
+                    });
+                }
+                Ok(head)
+            };
+            let payload = match (class, kind) {
+                (0, 7) => Payload::Int(i32::from_le_bytes(c.array::<4>("property payload")?)),
+                (0, 10) => Payload::Float(c.f32("property payload")?),
+                (0, 13) => Payload::Float4([
+                    c.f32("property payload")?,
+                    c.f32("property payload")?,
+                    c.f32("property payload")?,
+                    c.f32("property payload")?,
+                ]),
+                (0x7D08_460D, 19) => {
+                    let head = echo(&mut c)?;
+                    let [byte] = c.array::<1>("property payload")?;
+                    let words = [
+                        c.u32("property payload")?,
+                        c.u32("property payload")?,
+                        c.u32("property payload")?,
+                    ];
+                    let references = [c.reference(index)?, c.reference(index)?];
+                    Payload::Texture {
+                        head,
+                        byte,
+                        words,
+                        references,
+                    }
+                }
+                (0xC52E_2125, 19) => {
+                    let head = echo(&mut c)?;
+                    let mut floats = [0.0; 8];
+                    for f in &mut floats {
+                        *f = c.f32("property payload")?;
+                    }
+                    Payload::Floats8 {
+                        head,
+                        floats,
+                        bytes: c.array::<3>("property payload")?,
+                    }
+                }
+                (0xECE5_D96C, 19) => {
+                    let head = echo(&mut c)?;
+                    let mut floats = [0.0; 6];
+                    for f in &mut floats {
+                        *f = c.f32("property payload")?;
+                    }
+                    Payload::Floats6 { head, floats }
+                }
+                (0xBC0F_16F5, 19) => {
+                    let head = echo(&mut c)?;
+                    Payload::Raw45 {
+                        head,
+                        rest: c.array::<33>("property payload")?.to_vec(),
+                    }
+                }
+                _ => {
+                    return Err(MaterialError::Property {
+                        index,
+                        why: format!("class {class:#010x}, type {kind}: not read"),
+                    });
+                }
+            };
+            properties.push(Property {
+                key,
+                class,
+                kind,
+                payload,
+            });
+        }
+        let left = body.len().saturating_sub(c.at);
+        if left != 0 {
+            return Err(MaterialError::Trailing(left));
+        }
+        Ok(StoredMaterial {
+            references: prefix.references,
+            unread,
+            properties,
+        })
+    }
+}
+
 /// A TextureSet's body as stored: a byte (1), 19 references ([`crate::read::reference`]), a zero byte, 8 bytes and a
 /// u32, 204 bytes in all. Established by the census: every TextureSet of Riders Republic (10,027) is exactly that,
 /// ending the body (RRAssetStudio reads the same). Which reference is which texture's role is not read.

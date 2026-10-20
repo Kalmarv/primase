@@ -90,3 +90,51 @@ fn a_texture_set_reads_all_19_references() {
     let ids: Vec<Option<u64>> = t.references.iter().map(|x| x.map(|x| x.id)).collect();
     assert_eq!(ids[..2], [Some(0x01D3_970D_C221), Some(0x01D3_970D_C22A)]);
 }
+
+/// Material 26 (base WhiteRoom) read whole: its ten property records' keys and (class, type) as RRAssetStudio reads
+/// them (the Riders Republic material report, 2026-10-20), and each texture record's second reference a TextureMap
+/// of the same forge.
+#[test]
+fn a_material_reads_its_property_records() {
+    use primase_anvil::read::material::{Payload, StoredMaterial};
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+        return;
+    };
+    let forge = Forge::open(&path).expect("forge");
+    let mut file = File::open(&path).expect("open");
+    let mut resource = |entry: usize| {
+        let payload = forge.payload(&mut file, entry).expect("payload");
+        let block = read_entry(&payload, MAX_RECORD).expect("entry");
+        Resource::parse(&block.resource.data).expect("resource")
+    };
+    let m = StoredMaterial::parse(&resource(26).body).expect("material");
+    let records: Vec<(u32, u32, u32)> = m.properties.iter().map(|p| (p.key, p.class, p.kind)).collect();
+    assert_eq!(
+        records,
+        [
+            (0x6338_B6C4, 0, 10),
+            (0x7091_389B, 0xC52E_2125, 19),
+            (0x89D1_84DE, 0, 10),
+            (0x6577_AE58, 0, 10),
+            (0xEE58_1D0E, 0, 10),
+            (0xC7C3_A6D7, 0, 10),
+            (0xFD62_B19F, 0, 10),
+            (0x443B_F980, 0x7D08_460D, 19),
+            (0xE4B6_CC48, 0x7D08_460D, 19),
+            (0x95DD_8185, 0, 10),
+        ]
+    );
+    let maps: Vec<u64> = m
+        .properties
+        .iter()
+        .filter_map(|p| match &p.payload {
+            Payload::Texture { references, .. } => references[1].map(|r| r.id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(maps.len(), 2);
+    for id in maps {
+        let t = resource(forge.find(id).expect("in this forge"));
+        assert_eq!((t.type_id, t.class_id), (TEXTURE_MAP, id));
+    }
+}

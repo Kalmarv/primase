@@ -104,7 +104,7 @@ use std::path::Path;
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use primase_anvil::read::material::{MATERIAL, StoredReferences, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET};
+use primase_anvil::read::material::{MATERIAL, StoredMaterial, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET};
 use primase_anvil::read::mesh::{Layout, MESH, StoredMesh};
 use primase_anvil::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
@@ -308,7 +308,7 @@ fn census_forge(
             TEXTURE_SET => StoredTextureSet::parse(&r.body)
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
-            MATERIAL => StoredReferences::parse(&r.body)
+            MATERIAL => StoredMaterial::parse(&r.body)
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
             LOD_SELECTOR => StoredLodSelector::parse(&r.body)
