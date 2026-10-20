@@ -41,7 +41,7 @@ pub enum SkatePausePicture {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PauseLeaveOut {
     /// Those whose material casts no shadow (`skate.material` `cast_shadows` false: a room's shell, its ceiling
-    /// included, selected by `set-reskate-shadow-casting`), counted.
+    /// included, as `lower-reskate-shadows` lowered `core.shadows`), counted.
     Shadowless,
     /// Those of the placements whose name starts with one of these prefixes (a room's shell named by its path, while
     /// other structures that cast no shadow stay in the picture), counted.

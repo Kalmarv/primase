@@ -9,7 +9,7 @@
 //!   (`region`; an error without one), the map's own content bounds as the writer measures them (`content`), or a
 //!   ground rectangle; padded by 10% and at least 50 m high. Two more choices, both required:
 //!   - `leave-out=shadowless` leaves out the triangles whose material casts no shadow (`skate.material`
-//!     `cast_shadows` false: an indoor level's shell and ceiling, as `set-reskate-shadow-casting` selected them), so
+//!     `cast_shadows` false: an indoor level's shell and ceiling, as `lower-reskate-shadows` lowered them), so
 //!     the picture shows the room from above, counted in the writer's report. `leave-out=placements` with
 //!     `prefixes` leaves out the triangles of the placements whose name starts with one of the prefixes (names as
 //!     their reader wrote them, path separators included): the ceiling and walls only, while the floor and other

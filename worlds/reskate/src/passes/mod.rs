@@ -71,7 +71,7 @@ pub use sampling::{
     PrepareReskateUvTransforms, PrepareReskateWrap, SamplingConflicts, prepare_reskate_uv_transforms,
     prepare_reskate_wrap,
 };
-pub use shadows::{SetReskateShadowCasting, SharedMaterials, set_reskate_shadow_casting};
+pub use shadows::LowerReskateShadows;
 pub use snap::{
     SnapReskateMarkers, SummarizeReskateInstances, SummarizeReskateWater, snap_reskate_markers,
     summarize_reskate_instances, summarize_reskate_water,

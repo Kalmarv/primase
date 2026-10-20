@@ -1,113 +1,28 @@
-//! `set-reskate-shadow-casting{materials=<name>;...,placements=<prefix>;...,shared=copy|refuse}`: materials that cast
-//! no shadow (`skate.material` `cast_shadows` false, which the writer honours), after `raise-skate`. An indoor level's
-//! room shell (SkateBIRD's `Level Elements/Bounds/`) shadows the whole room from the sun and sky; drawn without casting,
-//! the sun and sky light the inside. The selection is the program's, at least one of:
+//! `lower-reskate-shadows`: shadow casting as core states it (`core.shadows` on a placement, on a prototype for its
+//! placements stating none, a placement's own winning) lowered to what skate draws, after `raise-skate`. skate states
+//! casting per material only (`skate.material` `cast_shadows`; a map object has no flag), so a placement that casts
+//! none (`cast: Off`, whether a reader's fact or the program's choice, `set-shadow-casting`) draws materials that cast
+//! none: a material only such placements draw stops casting where it is; one that casting placements draw too is
+//! copied (`<key>~noshadow`) for the placements casting none, their prototype drawing the copy in place when only they
+//! place it, else through a copy of the prototype (`<id>~noshadow`) they place instead. Each copy is declared as made
+//! from its source ([`PassLog::place_from`]) and counted; a prototype to copy that has levels of detail is refused.
+//! Each material changed and each copy is reported by name.
 //!
-//! - `materials`: the materials of these names (a material's `core.name`, else its key), wherever they are drawn;
-//! - `placements`: the materials drawn by the placements whose name starts with one of these prefixes (a placement's
-//!   prototype's materials, its variant's where it has one). A placement's name is its reader's: the Unity reader's is
-//!   the GameObject path joined by a bare `/` (`Level Elements/Bounds/Walls`), so a prefix ending in `/` selects a
-//!   subtree.
-//!
-//! A name that matches no material, or a prefix that matches no placement, is an error naming it: a selection that
-//! selects nothing is a mistake, not an empty change.
-//!
-//! A material the selected placements draw that a placement outside the selection draws too (and no name selects) is
-//! the required `shared` choice: `refuse` is an error naming it; `copy` gives the selected placements a copy that casts
-//! no shadow (`<key>~noshadow`), leaving the others casting. Their prototype draws the copy: in place when only
-//! selected placements place it, else through a copy of the prototype (`<id>~noshadow`) that the selected placements
-//! place instead. Each copy is declared as made from its source ([`PassLog::place_from`]) and counted; a prototype to
-//! copy that has levels of detail is refused. Each material changed and each copy is reported by name.
+//! skate has no shadow proxy: a placement that only casts (`cast: Only`, drawn nowhere) is drawn and casts, reported
+//! as an approximation; nor a per-object receive flag: a stated `receive` is reported, not drawn. `core.shadows` is
+//! then removed (it is lowered).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::components::{SkateMaterial, SkatePrototype};
-use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, World};
+use primase_core::pass::{Pass, PassLog};
+use primase_core::{
+    Component, Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, ShadowCast, Shadows, World,
+};
 
-/// What becomes of a selected placement's material that other placements draw too.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SharedMaterials {
-    /// The selected placements draw a copy that casts no shadow.
-    Copy,
-    /// An error naming it.
-    Refuse,
-}
-
-/// See the module documentation. Made by [`SetReskateShadowCasting::new`]; from options by the same call.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SetReskateShadowCasting {
-    materials: BTreeSet<String>,
-    placements: BTreeSet<String>,
-    shared: SharedMaterials,
-}
-
-impl SetReskateShadowCasting {
-    /// The materials named `materials` and those drawn by placements named with a prefix in `placements` (at least one
-    /// of the two non-empty, no empty name or prefix) cast no shadow; `shared` as the module documentation says.
-    pub fn new(
-        materials: BTreeSet<String>,
-        placements: BTreeSet<String>,
-        shared: SharedMaterials,
-    ) -> Result<SetReskateShadowCasting, String> {
-        if materials.is_empty() && placements.is_empty() {
-            return Err("no selection: name materials, placements (by name prefix), or both".into());
-        }
-        if materials.iter().chain(&placements).any(String::is_empty) {
-            return Err("an empty material name or placement prefix".into());
-        }
-        Ok(SetReskateShadowCasting {
-            materials,
-            placements,
-            shared,
-        })
-    }
-
-    pub fn materials(&self) -> &BTreeSet<String> {
-        &self.materials
-    }
-
-    pub fn placements(&self) -> &BTreeSet<String> {
-        &self.placements
-    }
-
-    pub fn shared(&self) -> SharedMaterials {
-        self.shared
-    }
-
-    /// From its options: `materials` (names separated by `;`) and/or `placements` (name prefixes separated by `;`),
-    /// and `shared=copy|refuse`, required.
-    pub fn from_options(o: &Options) -> Result<SetReskateShadowCasting, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !matches!(k.as_str(), "materials" | "placements" | "shared"))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let list = |k: &str| -> BTreeSet<String> {
-            o.get(k)
-                .map(|v| v.split(';').map(str::to_owned).collect())
-                .unwrap_or_default()
-        };
-        let shared = match o.get("shared").map(String::as_str) {
-            Some("copy") => SharedMaterials::Copy,
-            Some("refuse") => SharedMaterials::Refuse,
-            Some(v) => return Err(format!("shared={v}: copy or refuse")),
-            None => {
-                return Err(
-                    "shared is required: copy or refuse (a selected placement's material other placements draw)"
-                        .into(),
-                );
-            }
-        };
-        SetReskateShadowCasting::new(list("materials"), list("placements"), shared)
-    }
-}
-
-/// [`SetReskateShadowCasting::from_options`] as a pass factory.
-pub fn set_reskate_shadow_casting(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SetReskateShadowCasting::from_options(o)?))
-}
+/// See the module documentation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LowerReskateShadows;
 
 fn name_of(w: &World, e: Entity) -> String {
     w.get::<Name>(e).map(|n| n.0.clone()).unwrap_or_else(|| {
@@ -164,25 +79,130 @@ fn redraw(w: &mut World, p: Entity, copies: &BTreeMap<Entity, Entity>) {
     }
 }
 
-impl Pass for SetReskateShadowCasting {
-    fn name(&self) -> &'static str {
-        "set-reskate-shadow-casting"
-    }
-    fn options(&self) -> Options {
-        let mut o = Options::from([(
-            "shared".to_owned(),
-            match self.shared {
-                SharedMaterials::Copy => "copy",
-                SharedMaterials::Refuse => "refuse",
-            }
-            .to_owned(),
-        )]);
-        for (k, set) in [("materials", &self.materials), ("placements", &self.placements)] {
-            if !set.is_empty() {
-                o.insert(k.to_owned(), set.iter().cloned().collect::<Vec<_>>().join(";"));
-            }
+/// What placement `e` (of prototype `p`) casts: its own statement, else its prototype's; `None`: not stated (casts).
+fn cast_of(w: &World, e: Entity, p: Entity) -> Option<ShadowCast> {
+    w.get::<Shadows>(e)
+        .and_then(|s| s.cast)
+        .or_else(|| w.get::<Shadows>(p).and_then(|s| s.cast))
+}
+
+/// The materials the placements `quiet` draw made to cast no shadow for them: in place where only they draw a
+/// material, else through copies (module documentation).
+fn cast_none(w: &mut World, quiet: &BTreeSet<Entity>, log: &mut PassLog) -> Result<(), String> {
+    let materials: BTreeSet<Entity> = w.iter::<SkateMaterial>().map(|(e, _)| e).collect();
+    // each prototype's placements casting none and the others, and the materials each kind draws
+    let mut by_proto: BTreeMap<Entity, (Vec<Entity>, Vec<Entity>)> = BTreeMap::new();
+    let (mut inside, mut outside) = (BTreeSet::new(), BTreeSet::new());
+    for (e, i) in w.iter::<Instance>() {
+        let drawing = drawn(w, i.prototype, i.variant)
+            .into_iter()
+            .filter(|m| materials.contains(m));
+        let entry = by_proto.entry(i.prototype).or_default();
+        if quiet.contains(&e) {
+            inside.extend(drawing);
+            entry.0.push(e);
+        } else {
+            outside.extend(drawing);
+            entry.1.push(e);
         }
-        o
+    }
+    let shared: BTreeSet<Entity> = inside.intersection(&outside).copied().collect();
+    // every material that stops casting where it is
+    for &m in inside.difference(&shared) {
+        let name = name_of(w, m);
+        let s = w.get_mut::<SkateMaterial>(m).expect("a material");
+        if s.cast_shadows == Some(false) {
+            log.count("materials already casting no shadow", 1);
+            continue;
+        }
+        s.cast_shadows = Some(false);
+        log.count(&format!("material made to cast no shadow: {name}"), 1);
+    }
+    if shared.is_empty() {
+        return Ok(());
+    }
+    // the shared ones: a copy casting no shadow, which the quiet placements' prototypes draw
+    let keys: BTreeSet<String> = w
+        .iter::<SkateMaterial>()
+        .map(|(_, m)| m.key.to_lowercase())
+        .collect();
+    let mut copies = BTreeMap::new();
+    for &m in &shared {
+        let mut s = w.get::<SkateMaterial>(m).expect("a material").clone();
+        s.key = format!("{}~noshadow", s.key);
+        if keys.contains(&s.key.to_lowercase()) {
+            return Err(format!("lower-reskate-shadows: material key {} is taken", s.key));
+        }
+        s.cast_shadows = Some(false);
+        let c = w.spawn();
+        w.copy_components(m, c);
+        w.insert(c, s);
+        log.place_from(c, m);
+        log.count(
+            &format!(
+                "material copy casting no shadow, for the placements casting none: {}",
+                name_of(w, m)
+            ),
+            1,
+        );
+        copies.insert(m, c);
+    }
+    let ids: BTreeSet<String> = w.iter::<SkatePrototype>().map(|(_, p)| p.id.clone()).collect();
+    for (proto, (selected, others)) in by_proto {
+        let draws_shared = selected.iter().any(|&e| {
+            let i = w.get::<Instance>(e).expect("a placement");
+            drawn(w, i.prototype, i.variant)
+                .iter()
+                .any(|m| copies.contains_key(m))
+        });
+        if !draws_shared {
+            continue;
+        }
+        if others.is_empty() {
+            redraw(w, proto, &copies);
+            log.count("prototypes drawing the copies in place", 1);
+            continue;
+        }
+        if w.has::<Lods>(proto) {
+            return Err(format!(
+                "lower-reskate-shadows: prototype {} has levels of detail and would need a copy drawing materials \
+                 that cast no shadow: select a level first",
+                name_of(w, proto)
+            ));
+        }
+        let copy = w.spawn();
+        w.copy_components(proto, copy);
+        if let Some(mut p) = w.get::<SkatePrototype>(proto).cloned() {
+            p.id = format!("{}~noshadow", p.id);
+            if ids.contains(&p.id) {
+                return Err(format!("lower-reskate-shadows: prototype id {} is taken", p.id));
+            }
+            p.key = None;
+            w.insert(copy, p);
+        }
+        if let Some(n) = w.get::<Name>(proto).map(|n| n.0.clone()) {
+            w.insert(copy, Name(format!("{n} (casting no shadow)")));
+        }
+        redraw(w, copy, &copies);
+        log.place_from(copy, proto);
+        log.count("prototype copies drawing materials that cast no shadow", 1);
+        for e in selected {
+            let variant = w.get::<Instance>(e).expect("a placement").variant;
+            w.insert(
+                e,
+                Instance {
+                    prototype: copy,
+                    variant,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+impl Pass for LowerReskateShadows {
+    fn name(&self) -> &'static str {
+        "lower-reskate-shadows"
     }
     fn requires(&self) -> &[&'static str] {
         &["skate.material"]
@@ -198,169 +218,34 @@ impl Pass for SetReskateShadowCasting {
             "skate.prototype",
         ]
     }
+    fn removes(&self) -> &[&'static str] {
+        &[Shadows::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "shadow-only placements drawn and casting; stated shadow receiving not drawn"
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let materials: BTreeSet<Entity> = w.iter::<SkateMaterial>().map(|(e, _)| e).collect();
-        // the named materials, wherever they are drawn
-        let named: BTreeSet<Entity> = materials
-            .iter()
-            .copied()
-            .filter(|&e| self.materials.contains(&name_of(w, e)))
-            .collect();
-        let found: BTreeSet<String> = named.iter().map(|&e| name_of(w, e)).collect();
-        if let Some(missing) = self.materials.difference(&found).next() {
-            return Err(format!(
-                "set-reskate-shadow-casting: no material is named {missing}"
-            ));
-        }
-        // a prefix no placement's name starts with
-        let names: Vec<&str> = w
-            .iter::<Instance>()
-            .filter_map(|(e, _)| w.get::<Name>(e).map(|n| n.0.as_str()))
-            .collect();
-        if let Some(p) = self
-            .placements
-            .iter()
-            .find(|p| !names.iter().any(|n| n.starts_with(p.as_str())))
-        {
-            return Err(format!(
-                "set-reskate-shadow-casting: no placement's name starts with {p} (a name is matched as its reader wrote it, path separators included)"
-            ));
-        }
-        // the placements selected and the others, each prototype's of each
-        let selects = |e: Entity| {
-            w.get::<Name>(e)
-                .is_some_and(|n| self.placements.iter().any(|p| n.0.starts_with(p.as_str())))
-        };
-        let mut by_proto: BTreeMap<Entity, (Vec<Entity>, Vec<Entity>)> = BTreeMap::new();
-        let (mut inside, mut outside) = (BTreeSet::new(), BTreeSet::new());
+        let mut quiet = BTreeSet::new();
         for (e, i) in w.iter::<Instance>() {
-            let drawing = drawn(w, i.prototype, i.variant)
-                .into_iter()
-                .filter(|m| materials.contains(m));
-            let entry = by_proto.entry(i.prototype).or_default();
-            if selects(e) {
-                inside.extend(drawing);
-                entry.0.push(e);
-            } else {
-                outside.extend(drawing);
-                entry.1.push(e);
-            }
-        }
-        let placed = by_proto.values().map(|(s, _)| s.len() as u64).sum::<u64>();
-        log.count("placements selected", placed);
-        let shared: BTreeSet<Entity> = inside
-            .intersection(&outside)
-            .copied()
-            .filter(|m| !named.contains(m))
-            .collect();
-        if self.shared == SharedMaterials::Refuse
-            && let Some(&m) = shared.first()
-        {
-            return Err(format!(
-                "set-reskate-shadow-casting: material {} is drawn by selected placements and by others (shared=refuse)",
-                name_of(w, m)
-            ));
-        }
-        // every material that stops casting where it is
-        let whole: BTreeSet<Entity> = named
-            .iter()
-            .copied()
-            .chain(inside.difference(&shared).copied())
-            .collect();
-        for &m in &whole {
-            let name = name_of(w, m);
-            let s = w.get_mut::<SkateMaterial>(m).expect("a material");
-            if s.cast_shadows == Some(false) {
-                log.count("selected materials already casting no shadow", 1);
-                continue;
-            }
-            s.cast_shadows = Some(false);
-            log.count(&format!("material made to cast no shadow: {name}"), 1);
-        }
-        if shared.is_empty() {
-            return Ok(());
-        }
-        // the shared ones: a copy casting no shadow, which the selected placements' prototypes draw
-        let keys: BTreeSet<String> = w
-            .iter::<SkateMaterial>()
-            .map(|(_, m)| m.key.to_lowercase())
-            .collect();
-        let mut copies = BTreeMap::new();
-        for &m in &shared {
-            let mut s = w.get::<SkateMaterial>(m).expect("a material").clone();
-            s.key = format!("{}~noshadow", s.key);
-            if keys.contains(&s.key.to_lowercase()) {
-                return Err(format!(
-                    "set-reskate-shadow-casting: material key {} is taken",
-                    s.key
-                ));
-            }
-            s.cast_shadows = Some(false);
-            let c = w.spawn();
-            w.copy_components(m, c);
-            w.insert(c, s);
-            log.place_from(c, m);
-            log.count(
-                &format!(
-                    "material copy casting no shadow, for the selected placements: {}",
-                    name_of(w, m)
-                ),
-                1,
-            );
-            copies.insert(m, c);
-        }
-        let ids: BTreeSet<String> = w.iter::<SkatePrototype>().map(|(_, p)| p.id.clone()).collect();
-        for (proto, (selected, others)) in by_proto {
-            let draws_shared = selected.iter().any(|&e| {
-                let i = w.get::<Instance>(e).expect("a placement");
-                drawn(w, i.prototype, i.variant)
-                    .iter()
-                    .any(|m| copies.contains_key(m))
-            });
-            if !draws_shared {
-                continue;
-            }
-            if others.is_empty() {
-                redraw(w, proto, &copies);
-                log.count("prototypes drawing the copies in place", 1);
-                continue;
-            }
-            if w.has::<Lods>(proto) {
-                return Err(format!(
-                    "set-reskate-shadow-casting: prototype {} has levels of detail and would need a copy drawing \
-                     materials that cast no shadow: select a level first",
-                    name_of(w, proto)
-                ));
-            }
-            let copy = w.spawn();
-            w.copy_components(proto, copy);
-            if let Some(mut p) = w.get::<SkatePrototype>(proto).cloned() {
-                p.id = format!("{}~noshadow", p.id);
-                if ids.contains(&p.id) {
-                    return Err(format!(
-                        "set-reskate-shadow-casting: prototype id {} is taken",
-                        p.id
-                    ));
+            match cast_of(w, e, i.prototype) {
+                Some(ShadowCast::Off) => {
+                    quiet.insert(e);
                 }
-                p.key = None;
-                w.insert(copy, p);
+                Some(ShadowCast::Only) => log.approximate(
+                    "placements casting shadows only, drawn and casting (skate has no shadow proxy)",
+                    1,
+                ),
+                Some(ShadowCast::On) | None => {}
             }
-            if let Some(n) = w.get::<Name>(proto).map(|n| n.0.clone()) {
-                w.insert(copy, Name(format!("{n} (casting no shadow)")));
+        }
+        log.count("placements casting no shadow", quiet.len() as u64);
+        cast_none(w, &quiet, log)?;
+        let stated: Vec<Entity> = w.iter::<Shadows>().map(|(e, _)| e).collect();
+        for e in stated {
+            if w.get::<Shadows>(e).is_some_and(|s| s.receive.is_some()) {
+                log.approximate("stated shadow receiving not drawn (skate has no receive flag)", 1);
             }
-            redraw(w, copy, &copies);
-            log.place_from(copy, proto);
-            log.count("prototype copies drawing materials that cast no shadow", 1);
-            for e in selected {
-                let variant = w.get::<Instance>(e).expect("a placement").variant;
-                w.insert(
-                    e,
-                    Instance {
-                        prototype: copy,
-                        variant,
-                    },
-                );
-            }
+            w.remove::<Shadows>(e);
         }
         Ok(())
     }
@@ -449,14 +334,14 @@ mod tests {
         e
     }
 
-    fn run(w: &mut World, pass: SetReskateShadowCasting) -> Result<PassLog, String> {
+    fn run(w: &mut World) -> Result<PassLog, String> {
         let mut report = RunReport::default();
         PassManager::new(PassRegistry::new())
             .with_conservation(Conservation::Enforce)
             .run(
                 w,
                 &Pipeline {
-                    passes: vec![Box::new(pass)],
+                    passes: vec![Box::new(LowerReskateShadows)],
                 },
                 &mut report,
             )
@@ -464,16 +349,22 @@ mod tests {
         Ok(report.steps[0].log.clone())
     }
 
-    fn pass(materials: &[&str], placements: &[&str], shared: SharedMaterials) -> SetReskateShadowCasting {
-        let set = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect();
-        SetReskateShadowCasting::new(set(materials), set(placements), shared).unwrap()
-    }
-
     fn casts(w: &World, m: Entity) -> Option<bool> {
         w.get::<SkateMaterial>(m).unwrap().cast_shadows
     }
 
-    /// A room shell: its wall material drawn by the shell only, its floor material shared with a table outside it.
+    fn off(w: &mut World, e: Entity) {
+        w.insert(
+            e,
+            Shadows {
+                cast: Some(ShadowCast::Off),
+                receive: None,
+            },
+        );
+    }
+
+    /// A room shell casting no shadow: its wall material drawn by the shell only, its floor material shared with a
+    /// table that casts.
     struct Room {
         w: World,
         wall: Entity,
@@ -488,9 +379,11 @@ mod tests {
         let (wall, floor) = (material(&mut w, "wall"), material(&mut w, "floor"));
         let walls = prototype(&mut w, "walls", wall);
         let slab = prototype(&mut w, "slab", floor);
-        place(&mut w, "Level Elements/Bounds/Walls", walls);
+        let walls_at = place(&mut w, "Level Elements/Bounds/Walls", walls);
         let shell = place(&mut w, "Level Elements/Bounds/Floor", slab);
         let table = place(&mut w, "Level Elements/Thin Table", slab);
+        off(&mut w, walls_at);
+        off(&mut w, shell);
         Room {
             w,
             wall,
@@ -501,51 +394,11 @@ mod tests {
         }
     }
 
-    /// Named materials cast no shadow wherever they are drawn, each reported; a name matching no material, and a
-    /// prefix matching no placement (a path written with spaced slashes), are refused with nothing changed.
+    /// The shell's own material stops casting; the shared one is copied for the shell, whose prototype (placed by the
+    /// table too) is copied to draw it, both declared, the shell placement moved to the copy; the table keeps the
+    /// casting original; core.shadows is lowered away.
     #[test]
-    fn named_materials_cast_no_shadow() {
-        let Room {
-            mut w, wall, floor, ..
-        } = room();
-        let e = run(&mut w, pass(&["floor", "ceiling"], &[], SharedMaterials::Refuse)).unwrap_err();
-        assert!(e.contains("no material is named ceiling"), "{e}");
-        let e = run(
-            &mut w,
-            pass(&[], &["Level Elements / Bounds"], SharedMaterials::Copy),
-        )
-        .unwrap_err();
-        assert!(
-            e.contains("no placement's name starts with Level Elements / Bounds"),
-            "{e}"
-        );
-        assert_eq!((casts(&w, wall), casts(&w, floor)), (None, None));
-        let log = run(&mut w, pass(&["floor"], &[], SharedMaterials::Refuse)).unwrap();
-        assert_eq!((casts(&w, wall), casts(&w, floor)), (None, Some(false)));
-        assert_eq!(log.counts["material made to cast no shadow: floor"], 1);
-    }
-
-    /// By placements: a material drawn outside the selection too is refused under shared=refuse, and nothing changes.
-    #[test]
-    fn a_shared_material_is_refused() {
-        let Room { mut w, wall, .. } = room();
-        let e = run(
-            &mut w,
-            pass(&[], &["Level Elements/Bounds/"], SharedMaterials::Refuse),
-        )
-        .unwrap_err();
-        assert!(
-            e.contains("material floor is drawn by selected placements and by others"),
-            "{e}"
-        );
-        assert_eq!(casts(&w, wall), None);
-    }
-
-    /// shared=copy: the shell's own material stops casting; the shared one is copied for the shell, whose prototype
-    /// (placed outside the shell too) is copied to draw it, both declared, and the shell placement moved to the copy;
-    /// the table keeps the casting original.
-    #[test]
-    fn a_shared_material_is_copied_for_the_selection() {
+    fn placements_casting_none_draw_materials_casting_none() {
         let Room {
             mut w,
             wall,
@@ -554,17 +407,12 @@ mod tests {
             slab,
             table,
         } = room();
-        let log = run(
-            &mut w,
-            pass(&[], &["Level Elements/Bounds/"], SharedMaterials::Copy),
-        )
-        .unwrap();
+        let log = run(&mut w).unwrap();
         assert_eq!((casts(&w, wall), casts(&w, floor)), (Some(false), None));
         assert_eq!(w.get::<Instance>(table).unwrap().prototype, slab);
         let copy = w.get::<Instance>(shell).unwrap().prototype;
         assert_ne!(copy, slab);
         let drawn = w.get::<Mesh>(copy).unwrap().primitives()[0].material.unwrap();
-        assert_ne!(drawn, floor);
         let m = w.get::<SkateMaterial>(drawn).unwrap();
         assert_eq!((m.key.as_str(), m.cast_shadows), ("floor~noshadow", Some(false)));
         let p = w.get::<SkatePrototype>(copy).unwrap();
@@ -572,26 +420,52 @@ mod tests {
         assert_eq!(log.placed_from.get(&copy), Some(&slab));
         assert_eq!(log.placed_from.get(&drawn), Some(&floor));
         assert_eq!(log.counts["material made to cast no shadow: wall"], 1);
-        assert_eq!(
-            log.counts["material copy casting no shadow, for the selected placements: floor"],
-            1
-        );
-        assert_eq!(
-            log.counts["prototype copies drawing materials that cast no shadow"],
-            1
-        );
+        assert_eq!(log.counts["placements casting no shadow"], 2);
+        assert_eq!(w.iter::<Shadows>().count(), 0);
     }
 
-    /// A prototype placed by selected placements only draws the copy in place.
+    /// A prototype's statement holds for its placements stating none; a placement's own wins.
     #[test]
-    fn a_prototype_only_the_selection_places_draws_the_copy_in_place() {
+    fn a_placements_own_statement_wins_over_its_prototypes() {
+        let mut w = World::new();
+        let floor = material(&mut w, "floor");
+        let slab = prototype(&mut w, "slab", floor);
+        off(&mut w, slab);
+        let quiet = place(&mut w, "a", slab);
+        let loud = place(&mut w, "b", slab);
+        w.insert(
+            loud,
+            Shadows {
+                cast: Some(ShadowCast::On),
+                receive: None,
+            },
+        );
+        let log = run(&mut w).unwrap();
+        assert_eq!(log.counts["placements casting no shadow"], 1);
+        assert_eq!(w.get::<Instance>(loud).unwrap().prototype, slab);
+        assert_ne!(w.get::<Instance>(quiet).unwrap().prototype, slab);
+        assert_eq!(casts(&w, floor), None);
+    }
+
+    /// A prototype only placements casting none place draws the copy in place; a shadow-only placement is reported,
+    /// drawn and casting.
+    #[test]
+    fn in_place_and_shadow_only() {
         let mut w = World::new();
         let floor = material(&mut w, "floor");
         let shell_slab = prototype(&mut w, "shell slab", floor);
         let table_slab = prototype(&mut w, "table slab", floor);
         let shell = place(&mut w, "Bounds/Floor", shell_slab);
-        place(&mut w, "Table", table_slab);
-        let log = run(&mut w, pass(&[], &["Bounds"], SharedMaterials::Copy)).unwrap();
+        off(&mut w, shell);
+        let table = place(&mut w, "Table", table_slab);
+        w.insert(
+            table,
+            Shadows {
+                cast: Some(ShadowCast::Only),
+                receive: Some(false),
+            },
+        );
+        let log = run(&mut w).unwrap();
         assert_eq!(w.get::<Instance>(shell).unwrap().prototype, shell_slab);
         let drawn = w.get::<Mesh>(shell_slab).unwrap().primitives()[0]
             .material
@@ -602,26 +476,13 @@ mod tests {
             Some(floor)
         );
         assert_eq!(log.counts["prototypes drawing the copies in place"], 1);
-    }
-
-    /// A selection is required, with no empty name, and shared is required; the options print the pass again.
-    #[test]
-    fn the_choices_are_required_and_printed() {
-        let o =
-            |kv: &[(&str, &str)]| -> Options { kv.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect() };
-        assert!(SetReskateShadowCasting::from_options(&o(&[("shared", "copy")])).is_err());
-        assert!(SetReskateShadowCasting::from_options(&o(&[("materials", "wall")])).is_err());
-        assert!(
-            SetReskateShadowCasting::from_options(&o(&[("materials", "wall;"), ("shared", "copy")])).is_err()
+        assert_eq!(
+            log.approximations["placements casting shadows only, drawn and casting (skate has no shadow proxy)"],
+            1
         );
-        assert!(
-            SetReskateShadowCasting::from_options(&o(&[("placements", "a"), ("shared", "some")])).is_err()
+        assert_eq!(
+            log.approximations["stated shadow receiving not drawn (skate has no receive flag)"],
+            1
         );
-        let p = SetReskateShadowCasting::from_options(&o(&[
-            ("placements", "Level Elements/Bounds/"),
-            ("shared", "copy"),
-        ]))
-        .unwrap();
-        assert_eq!(SetReskateShadowCasting::from_options(&p.options()).unwrap(), p);
     }
 }
