@@ -86,6 +86,7 @@ pub fn read_meshes(
             .into_iter()
             .map(|r| u32::try_from(r.indices.start / 3).map_err(|_| Error::Entry(entry)))
             .collect::<Result<_, _>>()?;
+        let materials = stored.materials().map_err(mesh_err)?;
         let v = &stored.vertices;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
@@ -98,6 +99,7 @@ pub fn read_meshes(
                 positions: v.iter().map(|x| frame.point(x.position())).collect(),
                 triangles,
                 ranges,
+                materials,
                 direction_a: v.iter().map(|x| x.direction_a).collect(),
                 direction_b: v.iter().map(|x| x.direction_b).collect(),
                 uv: v.iter().map(|x| x.uv).collect(),

@@ -88,6 +88,10 @@ fn black_box_and_reversed_sphere_read_and_lower() {
             (entry, vertices, triangles)
         );
         assert_eq!(m.ranges, [0]);
+        assert_eq!(m.materials.len(), 1);
+        if entry == 161 {
+            assert_eq!(m.materials, [2_008_283_988_509]);
+        }
         ranges_tile(&m);
         let prototype = w.iter::<AnvilMesh>().map(|(e, _)| e).next().expect("one");
         lower(&mut w, MeshNormals::Packed);
@@ -123,6 +127,7 @@ fn stand_reads_its_two_ranges() {
     assert_eq!((m.positions.len(), m.triangles.len()), (1154, 864));
     // the second range (indices from 2016) counted from vertex 904
     assert_eq!(m.ranges, [0, 672]);
+    assert_eq!(m.materials, [1_885_111_592_920, 1_797_334_957_893]);
     ranges_tile(&m);
     assert!(m.triangles[672..].iter().flatten().all(|&i| i >= 904));
     assert_eq!(facing(&m), (864, 0));
@@ -163,6 +168,10 @@ fn prada_barrier_reads_three_ranges() {
     // ranges from indices 0, 12 and 120, counted from vertices 0, 8 and 70; read with only the last record's base,
     // the middle range named the wrong vertices and its normals seemed to disagree with its triangles
     assert_eq!(m.ranges, [0, 4, 40]);
+    assert_eq!(
+        m.materials,
+        [1_885_111_687_947, 1_797_334_957_893, 2_022_154_151_195]
+    );
     ranges_tile(&m);
     assert_eq!(facing(&m), (60, 0));
 }
@@ -193,6 +202,30 @@ fn bowls_read_every_range() {
         w.get::<AnvilMesh>(bowl).expect("buffers").triangles[6490],
         [22_128, 22_127, 24_197]
     );
+    let materials: [&[u64]; 3] = [
+        &[
+            2_151_033_353_301,
+            2_151_033_348_977,
+            2_151_033_446_414,
+            2_151_033_349_440,
+            2_151_033_348_398,
+        ],
+        &[
+            1_973_853_693_640,
+            2_022_154_269_566,
+            2_022_154_269_555,
+            2_022_154_274_721,
+            2_022_154_273_024,
+            2_022_154_269_303,
+        ],
+        &[1_957_570_587_744],
+    ];
+    for (p, materials) in placed.iter().zip(materials) {
+        let m = w
+            .get::<AnvilMesh>(w.get::<Instance>(*p).expect("placed").prototype)
+            .expect("buffers");
+        assert_eq!(m.materials, materials);
+    }
     for (p, (vertices, triangles, ranges, faces)) in placed.into_iter().zip(fixtures) {
         let m = w
             .get::<AnvilMesh>(w.get::<Instance>(p).expect("placed").prototype)
@@ -305,5 +338,30 @@ fn another_compiled_layout_is_refused() {
                 },
         }) => {}
         other => panic!("{other:?}"),
+    }
+}
+
+/// The materials the bowls' tails name are Material resources of the same forge: each ClassID finds an entry whose
+/// record's type (read from the record, not the name) is Material's.
+#[test]
+fn the_bowls_materials_resolve_to_materials() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+        return;
+    };
+    let mut w = World::new();
+    let placed = read_meshes(&path, &[652_571, 644_520], SourceFrame::WORLD, &mut w).expect("read");
+    let forge = Forge::open(&path).expect("forge");
+    let mut file = File::open(&path).expect("open");
+    for p in placed {
+        let m = w
+            .get::<AnvilMesh>(w.get::<Instance>(p).expect("placed").prototype)
+            .expect("buffers");
+        for &id in &m.materials {
+            let entry = forge.find(id).expect("in this forge");
+            let payload = forge.payload(&mut file, entry).expect("payload");
+            let block = read_entry(&payload, MAX_RECORD).expect("entry");
+            let resource = Resource::parse(&block.resource.data).expect("resource");
+            assert_eq!((resource.type_id, resource.class_id), (mesh::MATERIAL, id));
+        }
     }
 }

@@ -39,7 +39,8 @@ impl Component for AnvilMeshShape {
 /// A Mesh's compiled buffers ([`crate::read::mesh::StoredMesh`]) on its prototype: positions decoded (each
 /// component times its scale over 32768) and converted into core's frame through the frame the reader was given
 /// (`frame`, stated by the program); triangles as vertex indices (each stored range counted from its vertex base,
-/// reversed when that frame mirrors), and `ranges` each stored range's first triangle; the two packed direction groups
+/// reversed when that frame mirrors), `ranges` each stored range's first triangle and `materials` its stored Material
+/// ClassID (a reference, unresolved; bound to its range by the tail's order); the two packed direction groups
 /// and the texture coordinates as stored, with `frame` kept to convert directions once a pass decodes them. `entry` and
 /// `index_id` name the forge entry it came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +51,7 @@ pub struct AnvilMesh {
     pub positions: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,
     pub ranges: Vec<u32>,
+    pub materials: Vec<u64>,
     pub direction_a: Vec<[u8; 4]>,
     pub direction_b: Vec<[u8; 4]>,
     pub uv: Vec<[u16; 2]>,
@@ -68,6 +70,13 @@ impl Component for AnvilMesh {
                 .ranges
                 .last()
                 .is_none_or(|&s| usize::try_from(s).is_ok_and(|s| s <= self.triangles.len()));
+        if self.materials.len() != self.ranges.len() {
+            return Err(format!(
+                "{} materials for {} ranges",
+                self.materials.len(),
+                self.ranges.len()
+            ));
+        }
         if !starts_in_order {
             return Err(format!(
                 "range starts {:?}: not from 0 in order within {} triangles",
