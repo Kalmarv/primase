@@ -10,19 +10,8 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
+use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Entity, MaterialVariants, Mesh, MeshFile, Semantic, Stream, World};
-
-/// The texture slots of `m` in glTF's order, mutably.
-fn slots(m: &mut PbrMaterial) -> [&mut Option<TextureRef>; 5] {
-    [
-        &mut m.base_color_texture,
-        &mut m.metallic_roughness_texture,
-        &mut m.normal_texture,
-        &mut m.occlusion_texture,
-        &mut m.emissive_texture,
-    ]
-}
 
 /// What material `m` does to coordinate set `n`: `Ok(None)` when no slot samples it, `Ok(Some(t))` when every slot
 /// that does has transform `t` (identity for none), `Err(())` when they differ.
@@ -176,7 +165,7 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
             }
             for &m in ms {
                 let mat = world.get_mut::<PbrMaterial>(m).expect("material");
-                for s in slots(mat).into_iter().flatten() {
+                for s in mat.textures_mut() {
                     if s.texcoord == n && s.transform.is_some() {
                         s.transform = None;
                         log.count("slot transforms cleared", 1);

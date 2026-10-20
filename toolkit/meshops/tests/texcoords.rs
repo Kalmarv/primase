@@ -104,6 +104,32 @@ fn a_shared_material_bakes_into_every_primitive_using_it() {
     assert_eq!(log.counts["slot transforms cleared"], 2);
 }
 
+/// Every slot the material has is the material's sampling of the set, the specular extension's two included: baking
+/// clears them all, so none is applied a second time.
+#[test]
+fn a_specular_transform_is_baked_and_cleared_with_the_others() {
+    use primase_core::pbr::Specular;
+    let mut w = World::new();
+    let m = material(&mut w, Some(T), None);
+    let tex = w.spawn();
+    let transformed = TextureRef {
+        transform: Some(T),
+        ..TextureRef::new(tex)
+    };
+    w.get_mut::<PbrMaterial>(m).unwrap().specular = Some(Specular {
+        factor: 1.0,
+        texture: Some(transformed),
+        color: [1.0; 3],
+        color_texture: Some(transformed),
+    });
+    let a = prototype(&mut w, vec![primitive(m, true)]);
+    let log = bake_texture_transforms(&mut w);
+    assert_eq!(uv(&w, a, 0), T_UV);
+    let p = w.get::<PbrMaterial>(m).unwrap();
+    assert!(p.textures().all(|r| r.transform.is_none()), "{p:?}");
+    assert_eq!(log.counts["slot transforms cleared"], 3);
+}
+
 #[test]
 fn variants_must_agree() {
     for (variant, baked) in [(T, true), (U, false)] {

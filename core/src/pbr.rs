@@ -224,27 +224,129 @@ impl Default for PbrMaterial {
     }
 }
 
-impl PbrMaterial {
-    /// Every texture slot that is set, in glTF's order: base colour, metallic-roughness, normal, occlusion, emissive,
-    /// then the specular extension's strength and colour.
-    pub fn textures(&self) -> impl Iterator<Item = TextureRef> {
+/// A texture slot of a [`PbrMaterial`], in glTF's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TextureSlot {
+    BaseColor,
+    MetallicRoughness,
+    Normal,
+    Occlusion,
+    Emissive,
+    /// The specular extension's strength (`specularTexture`).
+    Specular,
+    /// The specular extension's colour (`specularColorTexture`).
+    SpecularColor,
+}
+
+impl TextureSlot {
+    /// Its name in a report.
+    pub fn name(self) -> &'static str {
+        match self {
+            TextureSlot::BaseColor => "base colour",
+            TextureSlot::MetallicRoughness => "metallic-roughness",
+            TextureSlot::Normal => "normal",
+            TextureSlot::Occlusion => "occlusion",
+            TextureSlot::Emissive => "emissive",
+            TextureSlot::Specular => "specular",
+            TextureSlot::SpecularColor => "specular colour",
+        }
+    }
+}
+
+/// Every texture slot of material `$m` with each slot's field borrowed as `$b` (nothing: by value; `&mut`: mutably),
+/// in glTF's order: the one list [`PbrMaterial::slots`] and [`PbrMaterial::slots_mut`] both read.
+macro_rules! texture_slots {
+    ($m:expr, $($b:tt)*) => {{
+        let m = $m;
+        let (specular, color) = match $($b)* m.specular {
+            Some(s) => (Some($($b)* s.texture), Some($($b)* s.color_texture)),
+            None => (None, None),
+        };
         [
-            self.base_color_texture,
-            self.metallic_roughness_texture,
-            self.normal_texture,
-            self.occlusion_texture,
-            self.emissive_texture,
-            self.specular.and_then(|s| s.texture),
-            self.specular.and_then(|s| s.color_texture),
+            (TextureSlot::BaseColor, Some($($b)* m.base_color_texture)),
+            (TextureSlot::MetallicRoughness, Some($($b)* m.metallic_roughness_texture)),
+            (TextureSlot::Normal, Some($($b)* m.normal_texture)),
+            (TextureSlot::Occlusion, Some($($b)* m.occlusion_texture)),
+            (TextureSlot::Emissive, Some($($b)* m.emissive_texture)),
+            (TextureSlot::Specular, specular),
+            (TextureSlot::SpecularColor, color),
         ]
-        .into_iter()
-        .flatten()
+    }};
+}
+
+impl PbrMaterial {
+    /// Every texture slot that is set, with its slot, in glTF's order: base colour, metallic-roughness, normal,
+    /// occlusion, emissive, then the specular extension's strength and colour.
+    pub fn slots(&self) -> impl Iterator<Item = (TextureSlot, TextureRef)> {
+        texture_slots!(self,)
+            .into_iter()
+            .filter_map(|(slot, r)| r.flatten().map(|r| (slot, r)))
+    }
+    /// [`PbrMaterial::slots`], each mutably.
+    pub fn slots_mut(&mut self) -> impl Iterator<Item = (TextureSlot, &mut TextureRef)> {
+        texture_slots!(self, &mut)
+            .into_iter()
+            .filter_map(|(slot, r)| r.and_then(Option::as_mut).map(|r| (slot, r)))
+    }
+    /// Every texture slot that is set ([`PbrMaterial::slots`] without the slots).
+    pub fn textures(&self) -> impl Iterator<Item = TextureRef> {
+        self.slots().map(|(_, r)| r)
+    }
+    /// Every texture slot that is set, mutably ([`PbrMaterial::slots_mut`] without the slots).
+    pub fn textures_mut(&mut self) -> impl Iterator<Item = &mut TextureRef> {
+        self.slots_mut().map(|(_, r)| r)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{PbrMaterial, UvTransform};
+
+    /// Every slot, the specular extension's two included, by value and mutably, in one order.
+    #[test]
+    fn every_slot_is_listed_by_value_and_mutably_in_gltf_order() {
+        use super::{Entity, Specular, TextureRef, TextureSlot};
+        let r = |i: u32| TextureRef::new(Entity::from_index(i));
+        let mut m = PbrMaterial {
+            base_color_texture: Some(r(1)),
+            metallic_roughness_texture: Some(r(2)),
+            normal_texture: Some(r(3)),
+            occlusion_texture: Some(r(4)),
+            emissive_texture: Some(r(5)),
+            specular: Some(Specular {
+                factor: 1.0,
+                texture: Some(r(6)),
+                color: [1.0; 3],
+                color_texture: Some(r(7)),
+            }),
+            ..PbrMaterial::default()
+        };
+        let slots: Vec<TextureSlot> = m.slots().map(|(s, _)| s).collect();
+        assert_eq!(
+            slots,
+            [
+                TextureSlot::BaseColor,
+                TextureSlot::MetallicRoughness,
+                TextureSlot::Normal,
+                TextureSlot::Occlusion,
+                TextureSlot::Emissive,
+                TextureSlot::Specular,
+                TextureSlot::SpecularColor
+            ]
+        );
+        assert_eq!(
+            m.textures().map(|t| t.texture.index()).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6, 7]
+        );
+        for t in m.textures_mut() {
+            t.texcoord = 1;
+        }
+        assert!(m.textures().all(|t| t.texcoord == 1));
+        // an unset slot is not listed
+        m.specular = None;
+        m.normal_texture = None;
+        assert_eq!(m.textures_mut().count(), 4);
+    }
 
     #[test]
     fn bottom_left_tiling_samples_the_same_texels() {

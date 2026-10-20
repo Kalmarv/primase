@@ -192,16 +192,7 @@ pub fn plan_layered_pbr(world: &World, policy: SelectionPolicy) -> Result<Layere
                             primase_core::Stream::F32x2(uv),
                         );
                     }
-                    for texture in [
-                        &mut pbr.base_color_texture,
-                        &mut pbr.normal_texture,
-                        &mut pbr.metallic_roughness_texture,
-                        &mut pbr.occlusion_texture,
-                        &mut pbr.emissive_texture,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
+                    for texture in pbr.textures_mut() {
                         // The layer transform precedes each ordinary slot's
                         // transform. A separate stream preserves both even
                         // when their composition cannot be expressed as TRS.

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use primase_core::layered::{Channel, LayeredMaterial, Source};
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{PbrMaterial, TextureRef};
+use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
 
 /// A factor from 0 to 1.
@@ -139,25 +139,8 @@ impl Pass for PrepareGltfMaterials {
 /// material's layers' (their own slots, and the set each layer is sampled with) and its weight masks'.
 pub fn sampled_texcoords(w: &World, material: Entity) -> BTreeSet<u8> {
     let mut sets = BTreeSet::new();
-    let mut slot = |r: &Option<TextureRef>| {
-        if let Some(r) = r {
-            sets.insert(r.texcoord);
-        }
-    };
     if let Some(p) = w.get::<PbrMaterial>(material) {
-        for r in [
-            &p.base_color_texture,
-            &p.metallic_roughness_texture,
-            &p.occlusion_texture,
-            &p.normal_texture,
-            &p.emissive_texture,
-        ] {
-            slot(r);
-        }
-        if let Some(s) = &p.specular {
-            slot(&s.texture);
-            slot(&s.color_texture);
-        }
+        sets.extend(p.textures().map(|r| r.texcoord));
     }
     if let Some(l) = w.get::<LayeredMaterial>(material) {
         for layer in l.layers.iter().flatten() {

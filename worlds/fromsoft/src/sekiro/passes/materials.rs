@@ -157,26 +157,14 @@ impl Pass for DropFromSoftTextureTransforms {
             let Some(m) = world.get_mut::<PbrMaterial>(e) else {
                 continue;
             };
-            let specular = m.specular.as_mut();
-            let (specular, specular_colour) = match specular {
-                Some(s) => (&mut s.texture, &mut s.color_texture),
-                None => (&mut None, &mut None),
-            };
-            for (slot, r) in [
-                ("base colour", &mut m.base_color_texture),
-                ("metallic-roughness", &mut m.metallic_roughness_texture),
-                ("normal", &mut m.normal_texture),
-                ("occlusion", &mut m.occlusion_texture),
-                ("emissive", &mut m.emissive_texture),
-                ("specular", specular),
-                ("specular colour", specular_colour),
-            ] {
-                if let Some(t) = r.as_mut().and_then(|r| r.transform.take())
+            for (slot, r) in m.slots_mut() {
+                if let Some(t) = r.transform.take()
                     && t != UvTransform::IDENTITY
                 {
                     log.approximate(
                         &format!(
-                            "{slot} textures sampled at the albedo's tiling, their own transform left out"
+                            "{} textures sampled at the albedo's tiling, their own transform left out",
+                            slot.name()
                         ),
                         1,
                     );
