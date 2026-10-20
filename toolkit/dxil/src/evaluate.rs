@@ -859,6 +859,7 @@ impl Shader {
                         texture,
                         sampler: s,
                         uv,
+                        gradients: None,
                     })
                     .map_err(|e| error(at, e))?;
                 V::Aggregate(rgba.iter().map(|&x| fv(x)).chain([V::Bits(0)]).collect())

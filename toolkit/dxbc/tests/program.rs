@@ -63,7 +63,7 @@ fn arithmetic_and_conversion_edges() {
 }
 #[test]
 fn reject_before_execution() {
-    for (op, name) in [(31, "if"), (48, "loop"), (72, "sample_l"), (73, "sample_d")] {
+    for (op, name) in [(13, "discard"), (72, "sample_l"), (76, "switch")] {
         let words = program(op, &[]);
         assert!(
             Program::from_words(&words)
@@ -261,7 +261,7 @@ fn sample_callback_uses_coordinates_and_return_swizzle() {
     assert_eq!((calls, r.samples, r.instructions), (1, 1, 2));
 }
 
-/// Optional directory of independent ps_5_0 binaries and matching disassembler
+/// Optional directory of independent ps_4_0, ps_4_1 and ps_5_0 binaries and matching disassembler
 /// text (.asm appended). Counts executable instructions including final ret.
 #[test]
 fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
@@ -284,7 +284,7 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
         let p = Program::parse(&std::fs::read(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
         let instructions: Vec<_> = asm
             .lines()
-            .skip_while(|l| l.trim() != "ps_5_0")
+            .skip_while(|l| !matches!(l.trim(), "ps_4_0" | "ps_4_1" | "ps_5_0"))
             .skip(1)
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with("dcl_"))
@@ -296,6 +296,13 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
                 "sample"
             } else {
                 name.strip_suffix("_sat").unwrap_or(name)
+            };
+            // a conditional's test is its control, not its name
+            let name = match name {
+                "if_nz" | "if_z" => "if",
+                "breakc_nz" | "breakc_z" => "breakc",
+                "continuec_nz" | "continuec_z" => "continuec",
+                _ => name,
             };
             assert_eq!(a.name(), name, "{} word {}", path.display(), a.word);
         }
@@ -359,18 +366,9 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn control_flow_and_opcodes_outside_the_subset_are_refused_by_name() {
-    // The evaluator runs straight-line programs only: loops, switches, continue, umul, uge and the SM5 rcp are
-    // refused when the program is read, never evaluated approximately.
-    for (op, name) in [
-        (48, "loop"),
-        (7, "continue"),
-        (8, "continuec"),
-        (76, "switch"),
-        (80, "uge"),
-        (81, "umul"),
-        (129, "rcp"),
-    ] {
+fn opcodes_outside_the_subset_are_refused_by_name() {
+    // Switches, umul and the SM5 rcp are refused when the program is read, never evaluated approximately.
+    for (op, name) in [(76, "switch"), (81, "umul"), (129, "rcp")] {
         let mut words = vec![0x50, 0];
         words.extend(instruction(op, &[]));
         words.extend(instruction(62, &[]));
@@ -378,4 +376,276 @@ fn control_flow_and_opcodes_outside_the_subset_are_refused_by_name() {
         let error = Program::from_words(&words).unwrap_err().to_string();
         assert!(error.contains(&format!("unsupported {name} ({op})")), "{error}");
     }
+}
+
+fn temp(index: u32) -> [u32; 2] {
+    dest(0, index)
+}
+/// A temp's component `c` as a scalar source.
+fn scalar(kind: u32, index: u32, c: u32) -> [u32; 2] {
+    [2 | 2 << 2 | c << 4 | kind << 12 | 1 << 20, index]
+}
+/// A register as an xyzw source.
+fn whole(kind: u32, index: u32) -> [u32; 2] {
+    [2 | 1 << 2 | 0xe4 << 4 | kind << 12 | 1 << 20, index]
+}
+fn op(code: u32, parts: &[&[u32]]) -> Vec<u32> {
+    instruction(code, &parts.concat())
+}
+/// A ps_5_0 program of `temps` temporaries and `inputs` inputs writing o0 and o1, around `body`.
+fn shader(temps: u32, inputs: u32, body: &[Vec<u32>]) -> Vec<u32> {
+    let mut v = vec![0x50, 0];
+    v.extend(instruction(104, &[temps]));
+    for i in 0..inputs {
+        v.extend(instruction(98 | 2 << 11, &dest(1, i)));
+    }
+    v.extend(instruction(101, &dest(2, 0)));
+    v.extend(instruction(101, &dest(2, 1)));
+    for b in body {
+        v.extend(b);
+    }
+    v.extend(instruction(62, &[]));
+    v[1] = v.len() as u32;
+    v
+}
+fn no_sample(_: Sample) -> Result<[f32; 4], String> {
+    panic!("unexpected sample")
+}
+
+#[test]
+fn every_new_alu_opcode_has_an_analytic_control() {
+    let f = |x: [f32; 4]| x.map(f32::to_bits);
+    let i = |x: [i32; 4]| x.map(|v| v as u32);
+    const T: u32 = u32::MAX;
+    let (a, b) = (f([1., 2., -3., f32::NAN]), f([1., 3., -4., 1.]));
+    assert_eq!(run(24, &[a, b]), [T, 0, 0, 0]);
+    assert_eq!(run(29, &[a, b]), [T, 0, T, 0]);
+    assert_eq!(run(49, &[a, b]), [0, T, 0, 0]);
+    assert_eq!(run(26, &[f([1.25, -1.25, 3., -0.5])]), f([0.25, 0.75, 0., 0.5]));
+    assert_eq!(
+        run(27, &[f([-1.9, 2.9, f32::NAN, 3e10])]),
+        i([-1, 2, 0, i32::MAX])
+    );
+    assert_eq!(run(30, &[[u32::MAX, 1, 2, 3], [1, 1, 1, 1]]), [0, 2, 3, 4]);
+    let (x, y) = (i([-1, 2, 3, 4]), i([1, 2, -5, 4]));
+    assert_eq!(run(32, &[x, y]), [0, T, 0, T]);
+    assert_eq!(run(33, &[x, y]), [0, T, T, T]);
+    assert_eq!(run(34, &[x, y]), [T, 0, 0, 0]);
+    assert_eq!(run(36, &[x, y]), i([1, 2, 3, 4]));
+    assert_eq!(run(37, &[x, y]), i([-1, 2, -5, 4]));
+    assert_eq!(run(39, &[x, y]), [T, 0, T, 0]);
+    assert_eq!(run(40, &[i([1, -2, i32::MIN, 0])]), i([-1, 2, i32::MIN, 0]));
+    assert_eq!(run(41, &[[1, 1, 1, 3], [0, 4, 33, 31]]), [1, 16, 2, 0x8000_0000]);
+    assert_eq!(run(42, &[i([-16, 16, -1, 8]), [2, 2, 31, 35]]), i([-4, 4, -1, 1]));
+    assert_eq!(
+        run(43, &[i([-3, 0, 16_777_217, i32::MIN])]),
+        f([-3., 0., 16_777_216., -2147483648.])
+    );
+    assert_eq!(run(52, &[a, b]), f([1., 3., -3., 1.]));
+    assert_eq!(run(59, &[[0, T, 0xf0f0_f0f0, 1]]), [T, 0, 0x0f0f_0f0f, !1]);
+    assert_eq!(run(60, &[[0xf0, 0, 1, 2], [0x0f, 0, 2, 2]]), [0xff, 0, 3, 2]);
+    let r = f([1.5, -1.5, -0.5, 2.]);
+    assert_eq!(run(65, &[r]), f([1., -2., -1., 2.]));
+    assert_eq!(run(66, &[r]), f([2., -1., -0., 2.]));
+    assert_eq!(run(67, &[r]), f([1., -1., -0., 2.]));
+    let (x, y) = ([1, T, 3, 0], [2, 1, 3, T]);
+    assert_eq!(run(79, &[x, y]), [T, 0, 0, T]);
+    assert_eq!(run(80, &[x, y]), [0, T, T, 0]);
+    assert_eq!(run(83, &[x, y]), [2, T, 3, T]);
+    assert_eq!(run(84, &[x, y]), [1, 1, 3, 0]);
+    assert_eq!(run(85, &[[0x8000_0000, 16, 1, 7], [31, 2, 32, 1]]), [1, 4, 1, 3]);
+    assert_eq!(run(87, &[[0xff, 0, T, 5], [0x0f, 0, T, 3]]), [0xf0, 0, 0, 6]);
+}
+
+#[test]
+fn sincos_writes_sine_and_cosine_and_either_may_be_null() {
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let source = lit([0f32.to_bits(), quarter.to_bits(), 0, 0]);
+    let p = shader(0, 0, &[op(77, &[&dest(2, 0), &dest(2, 1), &source])]);
+    let r = Program::from_words(&p)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap();
+    let (sin, cos) = (r.outputs[0].map(f32::from_bits), r.outputs[1].map(f32::from_bits));
+    assert_eq!((sin[0], cos[0]), (0., 1.));
+    assert_eq!(
+        (sin[1], cos[1]),
+        ((quarter as f64).sin() as f32, (quarter as f64).cos() as f32)
+    );
+    // the cosine alone, the sine to null
+    let null = [13 << 12];
+    let p = shader(0, 0, &[op(77, &[&null, &dest(2, 1), &source])]);
+    let r = Program::from_words(&p)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap();
+    assert_eq!((r.output_masks[0], f32::from_bits(r.outputs[1][0])), (0, 1.));
+}
+
+/// if/else/endif on a nonzero or zero test, and a loop counting to three by breakc, as structured flow.
+#[test]
+fn structured_flow_takes_its_branches_and_loops() {
+    let one = lit([1f32.to_bits(); 4]);
+    let two = lit([2f32.to_bits(); 4]);
+    let branch = |condition: u32, nonzero: bool| {
+        let test = if nonzero { 1 << 18 } else { 0 };
+        shader(
+            1,
+            0,
+            &[
+                op(54, &[&temp(0), &lit([condition; 4])]),
+                op(31 | test, &[&scalar(0, 0, 0)]),
+                op(54, &[&dest(2, 0), &one]),
+                op(18, &[]),
+                op(54, &[&dest(2, 0), &two]),
+                op(21, &[]),
+            ],
+        )
+    };
+    let out = |words: Vec<u32>| {
+        let r = Program::from_words(&words)
+            .unwrap()
+            .execute(&[], &[], &mut no_sample)
+            .unwrap();
+        (f32::from_bits(r.outputs[0][0]), r.instructions)
+    };
+    assert_eq!(out(branch(7, true)).0, 1.);
+    assert_eq!(out(branch(0, true)).0, 2.);
+    assert_eq!(out(branch(0, false)).0, 1.);
+    // r0.x accumulates 1.5 while the integer counter r1.x is below 3
+    let counted = shader(
+        2,
+        0,
+        &[
+            op(54, &[&temp(0), &lit([0; 4])]),
+            op(54, &[&temp(1), &lit([0; 4])]),
+            op(48, &[]),
+            op(33, &[&[2 | 2 << 4 | 1 << 20, 1], &scalar(0, 1, 0), &lit([3; 4])]),
+            op(3 | 1 << 18, &[&scalar(0, 1, 1)]),
+            op(0, &[&temp(0), &whole(0, 0), &lit([1.5f32.to_bits(); 4])]),
+            op(30, &[&temp(1), &whole(0, 1), &lit([1; 4])]),
+            op(22, &[]),
+            op(54, &[&dest(2, 0), &whole(0, 0)]),
+        ],
+    );
+    let (value, executed) = out(counted);
+    assert_eq!(value, 4.5);
+    // two movs, loop once (endloop returns past it), per pass ige/breakc/add/iadd/endloop (5 x 3), the last
+    // ige/breakc, mov, ret
+    assert_eq!(executed, 2 + 1 + 15 + 2 + 2);
+}
+
+#[test]
+fn unstructured_flow_and_unending_loops_are_refused() {
+    for (body, message) in [
+        (vec![op(18, &[])], "else without its if"),
+        (vec![op(21, &[])], "endif without its if"),
+        (vec![op(22, &[])], "endloop without its loop"),
+        (vec![op(2, &[])], "break or continue outside a loop"),
+        (vec![op(48, &[])], "ret inside an if or loop"),
+    ] {
+        let error = Program::from_words(&shader(0, 0, &body)).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+    }
+    let forever = shader(0, 0, &[op(48, &[]), op(22, &[])]);
+    let error = Program::from_words(&forever)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("instruction budget"), "{error}");
+}
+
+/// deriv_rtx/rty read the caller's derivatives of an input register, swizzled; none given is an error; a derivative
+/// of a computed value is refused when the program is read.
+#[test]
+fn derivatives_are_the_callers_for_inputs_only() {
+    let words = shader(
+        0,
+        1,
+        &[
+            op(
+                11,
+                &[&dest(2, 0), &[2 | 1 << 2 | 0x1b << 4 | 1 << 12 | 1 << 20, 0]],
+            ),
+            op(125, &[&dest(2, 1), &whole(1, 0)]),
+        ],
+    );
+    let p = Program::from_words(&words).unwrap();
+    let d = [
+        [1f32, 2., 3., 4.].map(f32::to_bits),
+        [5f32, 6., 7., 8.].map(f32::to_bits),
+    ];
+    let r = p
+        .execute_with_derivatives(&[[0; 4]], &[d], &[], &mut no_sample)
+        .unwrap();
+    // wzyx of d/dx; d/dy as it is
+    assert_eq!(r.outputs[0].map(f32::from_bits), [4., 3., 2., 1.]);
+    assert_eq!(r.outputs[1].map(f32::from_bits), [5., 6., 7., 8.]);
+    let error = p.execute(&[[0; 4]], &[], &mut no_sample).unwrap_err().to_string();
+    assert!(error.contains("no derivatives given for v0"), "{error}");
+    let computed = shader(
+        1,
+        0,
+        &[
+            op(54, &[&temp(0), &lit([0; 4])]),
+            op(12, &[&dest(2, 0), &whole(0, 0)]),
+        ],
+    );
+    let error = Program::from_words(&computed).unwrap_err().to_string();
+    assert!(
+        error.contains("derivatives are of input registers only"),
+        "{error}"
+    );
+}
+
+/// sample_d hands its gradients to the sampler; a texture3d is declared but sampling it is refused; a ps_4_0 program
+/// reads as ps_5_0 does.
+#[test]
+fn gradient_samples_volumes_and_shader_model_4() {
+    let texture = |slot: u32, dimension: u32| {
+        instruction(
+            88 | dimension << 11,
+            &[2 | 15 << 4 | 7 << 12 | 1 << 20, slot, 0x5555],
+        )
+    };
+    let resource = |slot: u32| {
+        [
+            2 | 1 << 2 | 0xe4 << 4 | 7 << 12 | 1 << 20,
+            slot,
+            6 << 12 | 1 << 20,
+            0,
+        ]
+    };
+    let uv = lit([0.25f32.to_bits(), 0.5f32.to_bits(), 0, 0]);
+    let program = |version: u32, slot: u32| {
+        let mut v = vec![version, 0];
+        v.extend(texture(1, 3));
+        v.extend(texture(2, 5));
+        v.extend(instruction(90, &[6 << 12 | 1 << 20, 0]));
+        v.extend(instruction(101, &dest(2, 0)));
+        let dx = lit([0.125f32.to_bits(), 0, 0, 0]);
+        let dy = lit([0, 0.0625f32.to_bits(), 0, 0]);
+        v.extend(op(73, &[&dest(2, 0), &uv, &resource(slot), &dx, &dy]));
+        v.extend(instruction(62, &[]));
+        v[1] = v.len() as u32;
+        v
+    };
+    let p = Program::from_words(&program(0x40, 1)).unwrap();
+    assert_eq!((p.textures(), p.volumes()), (&[1][..], &[2][..]));
+    let r = p
+        .execute(&[], &[], &mut |s: Sample| {
+            assert_eq!((s.texture, s.uv), (1, [0.25, 0.5]));
+            assert_eq!(s.gradients, Some([[0.125, 0.], [0., 0.0625]]));
+            Ok([1., 2., 3., 4.])
+        })
+        .unwrap();
+    assert_eq!(r.outputs[0].map(f32::from_bits), [1., 2., 3., 4.]);
+    let error = Program::from_words(&program(0x50, 2))
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("t2 is a 3D texture"), "{error}");
+    assert!(Program::from_words(&program(0x30, 1)).is_err());
 }

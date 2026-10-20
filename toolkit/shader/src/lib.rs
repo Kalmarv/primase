@@ -12,7 +12,7 @@
 mod evaluate;
 pub use evaluate::{Constants, Evaluation, Field, Grid, Image, Input, Lane, Layout, Texture, evaluate};
 
-/// An implicit-LOD sample request of a 2D texture.
+/// A sample request of a 2D texture: implicit LOD, or with the program's own gradients.
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
     /// Texture bind slot (`t<n>`).
@@ -20,6 +20,9 @@ pub struct Sample {
     /// Sampler bind slot (`s<n>`).
     pub sampler: u32,
     pub uv: [f32; 2],
+    /// The UV's screen derivatives the program states (`sample_d`: d/dx, then d/dy); `None` for an implicit-LOD
+    /// sample, whose footprint a scalar evaluation leaves to the sampler.
+    pub gradients: Option<[[f32; 2]; 2]>,
 }
 /// Answers sample requests; an error stops the evaluation.
 pub trait Sampler {
@@ -157,4 +160,16 @@ pub trait PixelShader: std::fmt::Debug {
         buffers: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
     ) -> std::result::Result<Execution, Error>;
+    /// Evaluate once with the inputs' screen derivatives: per input register, its d/dx then d/dy lanes (f32 bits),
+    /// for programs that read derivatives. A bytecode that reads none evaluates as [`PixelShader::execute`].
+    fn execute_with_derivatives(
+        &self,
+        inputs: &[[u32; 4]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<Execution, Error> {
+        let _ = derivatives;
+        self.execute(inputs, buffers, sampler)
+    }
 }

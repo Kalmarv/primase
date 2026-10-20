@@ -104,26 +104,41 @@ fn signature(bytes: &[u8]) -> Result<Vec<Semantic>> {
     }
     Ok(result)
 }
+/// A container's one chunk of kind `tag`.
+fn chunk<'a>(directory: &[crate::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
+    let mut matching = directory.iter().filter(|c| &c.kind == tag);
+    let data = matching
+        .next()
+        .ok_or_else(|| {
+            error(
+                0,
+                format!("missing reflection chunk {}", String::from_utf8_lossy(tag)),
+            )
+        })?
+        .data;
+    if matching.next().is_some() {
+        return Err(error(0, "duplicate reflection chunk"));
+    }
+    Ok(data)
+}
+
+/// Read a container's ISGN/OSGN signatures alone, for a container whose RDEF was stripped (as some engines ship
+/// them): no buffers or resources, so the caller states the constant layout from its own records.
+pub fn signatures(bytes: &[u8]) -> Result<Reflection> {
+    let directory = chunks(bytes)?;
+    Ok(Reflection {
+        buffers: Vec::new(),
+        resources: Vec::new(),
+        inputs: signature(chunk(&directory, b"ISGN")?)?,
+        outputs: signature(chunk(&directory, b"OSGN")?)?,
+    })
+}
+
 /// Read a container's RDEF resource and constant-buffer metadata and its ISGN/OSGN signatures.
 pub fn reflection(bytes: &[u8]) -> Result<Reflection> {
     {
         let directory = chunks(bytes)?;
-        let get = |tag: &[u8; 4]| -> Result<&[u8]> {
-            let mut matching = directory.iter().filter(|c| &c.kind == tag);
-            let data = matching
-                .next()
-                .ok_or_else(|| {
-                    error(
-                        0,
-                        format!("missing reflection chunk {}", String::from_utf8_lossy(tag)),
-                    )
-                })?
-                .data;
-            if matching.next().is_some() {
-                return Err(error(0, "duplicate reflection chunk"));
-            }
-            Ok(data)
-        };
+        let get = |tag: &[u8; 4]| chunk(&directory, tag);
         let v = View(get(b"RDEF")?);
         // SM5.0 pixel shader and RD11 record-size directory.
         if v.u32(16)? != 0xffff0500 || v.bytes(28, 4)? != b"RD11" {

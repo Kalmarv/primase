@@ -1,5 +1,5 @@
-//! Checked, bounded Shader Model 5 pixel-program evaluation.
-//! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives.
+//! Checked, bounded Shader Model 4 and 5 pixel-program evaluation.
+//! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives, so the caller states its inputs'.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod evaluate;
@@ -11,7 +11,7 @@ pub use primase_shader::{
     Buffer, Execution, Member, PixelShader, Reflection, Resource, Sample, Sampler, Semantic, Type, Variable,
 };
 pub use program::{Instruction, Operand, Program, Register, Selection};
-pub use reflection::reflection;
+pub use reflection::{reflection, signatures};
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXBC at word {word}: {detail}")]
@@ -41,6 +41,21 @@ impl Shader {
             reflection: reflection(bytes)?,
         })
     }
+    /// Parse a container whose RDEF was stripped: the program and its signatures ([`signatures`]); the caller
+    /// builds the constant layout from its own records.
+    pub fn parse_stripped(bytes: &[u8]) -> Result<Self> {
+        Ok(Self {
+            program: Program::parse(bytes)?,
+            reflection: signatures(bytes)?,
+        })
+    }
+}
+fn shader_error(e: Error) -> primase_shader::Error {
+    primase_shader::Error {
+        bytecode: "DXBC",
+        at: e.word,
+        detail: e.detail,
+    }
 }
 impl PixelShader for Shader {
     fn reflection(&self) -> &Reflection {
@@ -66,11 +81,18 @@ impl PixelShader for Shader {
     ) -> std::result::Result<Execution, primase_shader::Error> {
         self.program
             .execute(inputs, buffers, sampler)
-            .map_err(|e| primase_shader::Error {
-                bytecode: "DXBC",
-                at: e.word,
-                detail: e.detail,
-            })
+            .map_err(shader_error)
+    }
+    fn execute_with_derivatives(
+        &self,
+        inputs: &[[u32; 4]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<Execution, primase_shader::Error> {
+        self.program
+            .execute_with_derivatives(inputs, derivatives, buffers, sampler)
+            .map_err(shader_error)
     }
 }
 

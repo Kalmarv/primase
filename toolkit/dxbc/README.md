@@ -1,25 +1,45 @@
 # Bounded DXBC evaluation
 
 `Program::parse` reads a checked DXBC container; `Program::from_words` accepts
-a complete `ps_5_0` token stream. Compilation rejects unsupported instructions
-by name before evaluation, including flow control, explicit-LOD/gradient samples,
-non-2D resources, non-float texture views, nonzero sample offsets, reduced
-precision and dynamic addressing outside constant-buffer elements. A final
-`ret` is required. Word count, register counts, index recursion and accesses
-are bounded. Duplicate code chunks and overlapping container chunks are errors.
-The container digest is not verified; this parser does not authenticate shaders.
+a complete `ps_4_0`, `ps_4_1` or `ps_5_0` token stream. Compilation rejects
+unsupported instructions by name before evaluation, including switch, discard,
+explicit-LOD/bias/comparison samples, resources other than 2D and 3D textures,
+non-float texture views, nonzero sample offsets, reduced precision and dynamic
+addressing outside constant-buffer elements. A final `ret` is required, outside
+any `if` or `loop`. Word count, register counts, index recursion and accesses
+are bounded, and so are the instructions one evaluation executes (2^22: a loop
+whose exit depends on values cannot run forever). Duplicate code chunks and
+overlapping container chunks are errors. The container digest is not verified;
+this parser does not authenticate shaders.
 
-Supported base instructions: add, and, div, dp2/3/4, exp, ftou, imad, imul,
-log, mad, min, mov, movc, mul, ne, ret, round_ne, rsq, sample, sqrt, utof.
-Float destinations support saturation. Registers preserve raw u32 lanes;
+Supported base instructions: add, and, div, dp2/3/4, eq, exp, frc, ftoi, ftou,
+ge, iadd, ieq, ige, ilt, imad, imax, imin, imul, ine, ineg, ishl, ishr, itof,
+log, lt, mad, max, min, mov, movc, mul, ne, not, or, ret, round_ne, round_ni,
+round_pi, round_z, rsq, sample, sample_d, sincos, sqrt, uge, ult, umax, umin,
+ushr, utof, xor; the screen derivatives deriv_rtx and deriv_rty (and their SM5
+coarse and fine forms); and structured flow control: if/else/endif, loop/endloop,
+break, breakc, continue, continuec (a conditional takes its `_nz` or `_z` test
+of all 32 bits). Flow is matched when the program is read: an else, endif or
+endloop without its opener, a break or continue outside a loop, or an unclosed
+block is an error. Float destinations support saturation. Registers preserve raw u32 lanes;
 source modifiers and swizzles are applied before any destination write.
 An unwritten temporary component, missing binding or out-of-bounds dynamic
 buffer access is an error rather than a fabricated value. Unwritten output
 lanes are identified by `Execution::output_masks` and are not shader results.
 
-Sampling is a caller callback receiving texture/sampler registers and UVs.
-There is no implicit derivative calculation in a scalar execution. The caller
-must state its footprint/LOD, addressing, filtering and transfer policy.
+Sampling is a caller callback receiving texture/sampler registers and UVs, and
+`sample_d`'s gradients as the program states them. There is no implicit
+derivative calculation in a scalar execution: `execute_with_derivatives` takes
+each input register's screen derivatives (d/dx, d/dy), which the derivative
+instructions read; they are refused at compilation on anything but an unmodified
+input register, and an evaluation without the derivatives they read is an error.
+The caller must state its footprint/LOD, addressing, filtering and transfer
+policy. A 3D texture may be declared (a branch the caller's constants never take
+may sample one), but sampling one at run time is an error.
+
+`reflection` reads RDEF with the signatures; a container whose RDEF was stripped
+(as some engines ship them) is read with `signatures` and `Shader::parse_stripped`,
+leaving the constant layout to the caller's own records.
 The interpreter has no texture cache, image decoder or material defaults.
 No output is returned on error, but callbacks may have run before a runtime
 binding error. Unsupported bytecode cannot invoke a callback.
@@ -42,7 +62,14 @@ claim of bit identity with every GPU:
 | log, exp | host f64 log2/exp2 rounded to f32; domain and infinity behavior retained |
 | floating denormals | signed-zero-preserving flush at instruction inputs/results and intermediate unfused arithmetic boundaries |
 | mov, movc, integer/bit operations | preserve bits, including denormals and NaN payloads |
-| min | one NaN selects the non-NaN operand |
+| min, max | one NaN selects the non-NaN operand |
+| frc | x - floor(x), in f32 |
+| round_ni, round_pi, round_z | floor, ceiling, truncation; signed zero retained |
+| ftoi | truncate toward zero; saturate to the i32 range; NaN becomes 0 |
+| itof | i32 to f32 rounded nearest-even |
+| sincos | host f64 sine and cosine rounded to f32 |
+| eq, ne, ge, lt | IEEE comparisons (NaN unordered: only ne holds) as all-ones or zero masks |
+| integer comparisons, iadd, ineg, shifts | wrapping two's complement; shift counts masked to 0..31 |
 | saturation | clamp to [0,1]; NaN becomes zero |
 
 Host transcendental libraries can differ in their final bits; cross-platform

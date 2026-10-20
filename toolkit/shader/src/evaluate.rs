@@ -185,9 +185,10 @@ impl Constants {
     }
 }
 
-/// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy).
+/// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy). A
+/// program's `sample_d` states its gradients (d/dx, d/dy of the UV); an implicit-LOD sample has none.
 pub trait Image: Send + Sync + std::fmt::Debug {
-    fn sample(&self, uv: [f32; 2]) -> Result<[f32; 4], String>;
+    fn sample(&self, uv: [f32; 2], gradients: Option<[[f32; 2]; 2]>) -> Result<[f32; 4], String>;
 }
 /// What a texture slot samples.
 #[derive(Clone, Debug)]
@@ -225,7 +226,8 @@ impl Input {
 }
 
 /// Pixel (x, y) of a size x size grid is evaluated at U = (x + 0.5) / size * period[0], V likewise with y and
-/// period[1], in f32.
+/// period[1], in f32. The grid is the screen: an input lane taking U steps by period[0] / size along x (its d/dx) and
+/// not along y; V likewise along y; other lanes are constant.
 #[derive(Clone, Copy, Debug)]
 pub struct Grid {
     pub size: u32,
@@ -296,6 +298,16 @@ pub fn evaluate(
             }
         }
     }
+    // the inputs' screen derivatives, the grid's steps (lanes not placed are constant)
+    let mut derivatives = vec![[[0u32; 4]; 2]; shader.input_count()];
+    for &(register, component, lane) in &placed {
+        let (axis, step) = if lane == Lane::U {
+            (0, grid.period[0] / grid.size as f32)
+        } else {
+            (1, grid.period[1] / grid.size as f32)
+        };
+        derivatives[register][axis][component] = step.to_bits();
+    }
     let refs: Vec<(u32, &[[u32; 4]])> = constants
         .buffers
         .iter()
@@ -306,7 +318,7 @@ pub fn evaluate(
     let mut values: Vec<Vec<[f32; 4]>> = targets.iter().map(|_| Vec::with_capacity(pixels)).collect();
     let (mut instructions, mut samples) = (0u64, 0u64);
     let mut sampler = |s: Sample| match textures.get(&s.texture) {
-        Some(Texture::Image(image)) => image.sample(s.uv),
+        Some(Texture::Image(image)) => image.sample(s.uv, s.gradients),
         Some(Texture::Constant(c)) => Ok(*c),
         None => Err(format!("t{} has no texture", s.texture)),
     };
@@ -318,10 +330,12 @@ pub fn evaluate(
                 registers[register][lane] = if source == Lane::U { u } else { v }.to_bits();
             }
             let pixel = (y * grid.size + x) as usize;
-            let result = shader.execute(&registers, &refs, &mut sampler).map_err(|mut e| {
-                e.detail = format!("pixel {pixel}: {}", e.detail);
-                e
-            })?;
+            let result = shader
+                .execute_with_derivatives(&registers, &derivatives, &refs, &mut sampler)
+                .map_err(|mut e| {
+                    e.detail = format!("pixel {pixel}: {}", e.detail);
+                    e
+                })?;
             instructions += result.instructions as u64;
             samples += result.samples as u64;
             for (t, &(register, mask)) in targets.iter().enumerate() {

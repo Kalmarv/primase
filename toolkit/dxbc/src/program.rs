@@ -36,6 +36,8 @@ pub struct Instruction {
     pub word: usize,
     pub opcode: u16,
     pub saturate: bool,
+    /// A conditional (`if`, `breakc`, `continuec`) taken when its operand is nonzero (`_nz`), else when zero (`_z`).
+    pub nonzero: bool,
     pub operands: Vec<Operand>,
 }
 impl Instruction {
@@ -51,7 +53,37 @@ pub struct Program {
     pub(crate) outputs: usize,
     pub(crate) constant_buffers: Vec<(u32, u32)>,
     pub(crate) textures: Vec<u32>,
+    /// 3D texture slots: declared, refused when a sample reaches one.
+    pub(crate) volumes: Vec<u32>,
     pub(crate) samplers: Vec<u32>,
+    /// Per instruction, its structured flow target: `if` its `else` or `endif`; `else` its `endif`; `loop` its
+    /// `endloop` and `endloop` its `loop`; `break(c)` and `continue(c)` their innermost `loop`. `usize::MAX` otherwise.
+    pub(crate) jumps: Vec<usize>,
+}
+
+/// Instructions without destination operands: flow control and `ret`.
+fn flow(opcode: u16) -> bool {
+    matches!(opcode, 2 | 3 | 7 | 8 | 18 | 21 | 22 | 31 | 48 | 62)
+}
+
+/// Instructions whose result is not a float (integer, bitwise, comparison masks, conversions to integers) or that
+/// have none: saturation is invalid on them.
+fn non_float(opcode: u16) -> bool {
+    flow(opcode)
+        || matches!(
+            opcode,
+            1 | 24 | 27..=30 | 32..=42 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87
+        )
+}
+
+/// Instructions reading integer sources (and the flow conditions, which test bits): source modifiers are refused.
+fn integer_sources(opcode: u16) -> bool {
+    matches!(opcode, 1 | 3 | 8 | 30..=43 | 59 | 60 | 79 | 80 | 83..=87)
+}
+
+/// The screen-derivative instructions (`deriv_rtx`, `deriv_rty` and their SM5 coarse and fine forms).
+pub(crate) fn derivative(opcode: u16) -> bool {
+    matches!(opcode, 11 | 12 | 122..=125)
 }
 struct Cursor<'a> {
     words: &'a [u32],
@@ -187,6 +219,10 @@ impl Program {
     pub fn textures(&self) -> &[u32] {
         &self.textures
     }
+    /// 3D texture slots the program declares; sampling one at run time is an error.
+    pub fn volumes(&self) -> &[u32] {
+        &self.volumes
+    }
     pub fn samplers(&self) -> &[u32] {
         &self.samplers
     }
@@ -211,10 +247,12 @@ impl Program {
             .collect();
         Self::from_words(&words)
     }
-    /// Compile a complete ps_5_0 token stream before permitting evaluation.
+    /// Compile a complete ps_4_0, ps_4_1 or ps_5_0 token stream before permitting evaluation.
     pub fn from_words(words: &[u32]) -> Result<Self> {
-        if words.first() != Some(&0x50) || words.get(1).copied() != Some(words.len() as u32) {
-            return Err(error(0, "expected complete ps_5_0 program"));
+        if !matches!(words.first(), Some(0x40 | 0x41 | 0x50))
+            || words.get(1).copied() != Some(words.len() as u32)
+        {
+            return Err(error(0, "expected complete ps_4_0, ps_4_1 or ps_5_0 program"));
         }
         if words.len() > 1_048_576 {
             return Err(error(1, "program exceeds word budget"));
@@ -226,7 +264,9 @@ impl Program {
             outputs: 0,
             constant_buffers: Vec::new(),
             textures: Vec::new(),
+            volumes: Vec::new(),
             samplers: Vec::new(),
+            jumps: Vec::new(),
         };
         let mut at = 2;
         let mut ended = false;
@@ -236,10 +276,36 @@ impl Program {
             let opcode = (t & 0x7ff) as u16;
             let name = NAMES.get(opcode as usize).copied().unwrap_or("unknown opcode");
             let count = match opcode {
-                0 | 1 | 14..=17 | 51 | 56 | 57 => 3,
-                25 | 28 | 47 | 54 | 64 | 68 | 75 | 86 => 2,
+                // break, continue, else, endif, endloop, loop, ret; and the declarations, read on their own
+                2 | 7 | 18 | 21 | 22 | 48 | 62 | 88..=90 | 98..=101 | 104 | 106 => 0,
+                // breakc, continuec, if
+                3 | 8 | 31 => 1,
+                11 | 12 | 25..=28 | 40 | 43 | 47 | 54 | 59 | 64..=68 | 75 | 86 | 122..=125 => 2,
+                0
+                | 1
+                | 14..=17
+                | 24
+                | 29
+                | 30
+                | 32..=34
+                | 36
+                | 37
+                | 39
+                | 41
+                | 42
+                | 49
+                | 51
+                | 52
+                | 56
+                | 57
+                | 60
+                | 77
+                | 79
+                | 80
+                | 83..=85
+                | 87 => 3,
                 35 | 38 | 50 | 55 | 69 => 4,
-                62 | 88..=90 | 98..=100 | 101 | 104 | 106 => 0,
+                73 => 6,
                 _ => return Err(error(at, format!("unsupported {name} ({opcode})"))),
             };
             if ended {
@@ -259,7 +325,7 @@ impl Program {
             while extended {
                 let ext = c.take()?;
                 let kind = ext & 63;
-                if opcode != 69 || kind > 3 || kind == 0 || seen & (1 << kind) != 0 {
+                if !matches!(opcode, 69 | 73) || kind > 3 || kind == 0 || seen & (1 << kind) != 0 {
                     return Err(error(at, "unsupported or repeated opcode extension"));
                 }
                 seen |= 1 << kind;
@@ -276,14 +342,16 @@ impl Program {
                 }
                 extended = ext >> 31 != 0;
             }
-            if opcode >= 88 {
+            if (88..=106).contains(&opcode) {
                 if execution {
                     return Err(error(at, "declaration after executable instruction"));
                 }
                 p.declaration(opcode, t, &mut c)?;
             } else {
                 execution = true;
-                if t & 0x00ff_d800 != 0 {
+                // the conditionals' test (bit 18: nonzero) is their only control besides saturation
+                let test = if matches!(opcode, 3 | 8 | 31) { 0x4_0000 } else { 0 };
+                if t & 0x00ff_d800 & !test != 0 {
                     return Err(error(at, "unsupported instruction controls"));
                 }
                 let mut operands = Vec::new();
@@ -294,6 +362,7 @@ impl Program {
                     word: at,
                     opcode,
                     saturate: t & 0x2000 != 0,
+                    nonzero: t & 0x4_0000 != 0,
                     operands,
                 };
                 p.validate(&ins)?;
@@ -308,7 +377,57 @@ impl Program {
         if !ended {
             return Err(error(at, "missing final ret"));
         }
+        p.jumps = p.structure()?;
         Ok(p)
+    }
+    /// Match the structured flow control (see [`Program::jumps`]): every `if` closed by its `endif` (at most one
+    /// `else` between), every `loop` by its `endloop`, `break` and `continue` inside a loop, nothing open at `ret`.
+    fn structure(&self) -> Result<Vec<usize>> {
+        enum Open {
+            If(usize),
+            Else(usize),
+            Loop(usize),
+        }
+        let mut jumps = vec![usize::MAX; self.code.len()];
+        let mut open: Vec<Open> = Vec::new();
+        for (i, ins) in self.code.iter().enumerate() {
+            let fail = |detail: &str| error(ins.word, detail.to_owned());
+            match ins.opcode {
+                31 => open.push(Open::If(i)),
+                18 => match open.pop() {
+                    Some(Open::If(at)) => {
+                        jumps[at] = i;
+                        open.push(Open::Else(i));
+                    }
+                    _ => return Err(fail("else without its if")),
+                },
+                21 => match open.pop() {
+                    Some(Open::If(at) | Open::Else(at)) => jumps[at] = i,
+                    _ => return Err(fail("endif without its if")),
+                },
+                48 => open.push(Open::Loop(i)),
+                22 => match open.pop() {
+                    Some(Open::Loop(at)) => {
+                        jumps[at] = i;
+                        jumps[i] = at;
+                    }
+                    _ => return Err(fail("endloop without its loop")),
+                },
+                2 | 3 | 7 | 8 => {
+                    jumps[i] = open
+                        .iter()
+                        .rev()
+                        .find_map(|o| match o {
+                            Open::Loop(at) => Some(*at),
+                            _ => None,
+                        })
+                        .ok_or_else(|| fail("break or continue outside a loop"))?;
+                }
+                62 if !open.is_empty() => return Err(fail("ret inside an if or loop")),
+                _ => {}
+            }
+        }
+        Ok(jumps)
     }
     fn declaration(&mut self, opcode: u16, token: u32, c: &mut Cursor<'_>) -> Result<()> {
         let pos = c.origin - 1;
@@ -345,13 +464,22 @@ impl Program {
                     .base;
                 match opcode {
                     88 if o.register == Register::Texture => {
-                        if (token >> 11) & 31 != 3 || c.take()? != 0x5555 {
-                            return Err(error(pos, "only float4 texture2d resources supported"));
+                        // texture2d (3) or texture3d (5), float4
+                        let dimension = (token >> 11) & 31;
+                        if !matches!(dimension, 3 | 5) || c.take()? != 0x5555 {
+                            return Err(error(
+                                pos,
+                                "only float4 texture2d and texture3d resources supported",
+                            ));
                         }
-                        if i >= 128 || self.textures.contains(&i) {
+                        if i >= 128 || self.textures.contains(&i) || self.volumes.contains(&i) {
                             return Err(error(pos, "invalid/duplicate texture"));
                         }
-                        self.textures.push(i);
+                        if dimension == 3 {
+                            self.textures.push(i);
+                        } else {
+                            self.volumes.push(i);
+                        }
                     }
                     89 if o.register == Register::Constant => {
                         let size = o.indices[1].base;
@@ -389,22 +517,29 @@ impl Program {
     }
     fn validate(&self, ins: &Instruction) -> Result<()> {
         let fail = |detail| error(ins.word, detail);
-        let dests = if ins.opcode == 38 {
+        let sampling = matches!(ins.opcode, 69 | 73);
+        let dests = if matches!(ins.opcode, 38 | 77) {
             2
-        } else if ins.opcode == 62 {
+        } else if flow(ins.opcode) {
             0
         } else {
             1
         };
-        if ins.saturate && matches!(ins.opcode, 1 | 28 | 35 | 38 | 57 | 62) {
+        if ins.saturate && non_float(ins.opcode) {
             return Err(fail("saturation on non-float result"));
         }
         for (n, o) in ins.operands.iter().enumerate() {
-            if o.register == Register::Null && !(ins.opcode == 38 && n < 2) {
-                return Err(fail("null is supported only as an imul destination"));
+            if o.register == Register::Null && !(matches!(ins.opcode, 38 | 77) && n < 2) {
+                return Err(fail("null is supported only as an imul or sincos destination"));
             }
-            if matches!(ins.opcode, 1 | 35 | 38 | 86) && o.modifier != 0 {
+            if integer_sources(ins.opcode) && o.modifier != 0 {
                 return Err(fail("unsupported integer source modifier"));
+            }
+            // a scalar evaluation has the derivatives the caller states for its inputs, of nothing computed
+            if derivative(ins.opcode) && n == 1 && (o.register != Register::Input || o.modifier != 0) {
+                return Err(fail(
+                    "derivatives are of input registers only, unmodified (a scalar evaluation computes no others)",
+                ));
             }
             if n < dests {
                 if o.modifier != 0
@@ -426,16 +561,18 @@ impl Program {
             if matches!(o.register, Register::Texture | Register::Sampler) && o.modifier != 0 {
                 return Err(fail("resource operand modifier"));
             }
-            if ins.opcode == 69 && n == 2 && !matches!(o.selection, Selection::Swizzle(_)) {
+            if sampling && n == 2 && !matches!(o.selection, Selection::Swizzle(_)) {
                 return Err(fail("resource requires return swizzle"));
             }
-            if ins.opcode == 69
+            if sampling
                 && ((n == 2 && o.register != Register::Texture)
                     || (n == 3 && o.register != Register::Sampler))
             {
                 return Err(fail("sample requires texture and sampler operands"));
             }
-            if matches!(o.register, Register::Texture | Register::Sampler) && !(ins.opcode == 69 && n >= 2) {
+            if matches!(o.register, Register::Texture | Register::Sampler)
+                && !(sampling && (n == 2 || n == 3))
+            {
                 return Err(fail("resource used as numeric operand"));
             }
             self.validate_operand(o, ins.word)?;
@@ -448,7 +585,7 @@ impl Program {
             Register::Temp => (i as usize) < self.temps,
             Register::Input => (i as usize) < self.inputs,
             Register::Output => (i as usize) < self.outputs,
-            Register::Texture => self.textures.contains(&i),
+            Register::Texture => self.textures.contains(&i) || self.volumes.contains(&i),
             Register::Sampler => self.samplers.contains(&i),
             Register::Constant => self
                 .constant_buffers

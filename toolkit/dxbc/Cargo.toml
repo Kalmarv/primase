@@ -1,6 +1,6 @@
 [package]
 name = "primase-dxbc"
-description = "Bounded Shader Model 5 pixel-program evaluation"
+description = "Bounded Shader Model 4 and 5 pixel-program evaluation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
