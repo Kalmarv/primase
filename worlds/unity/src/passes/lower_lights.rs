@@ -109,7 +109,13 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
         1,
     );
     if let Some(sun) = sun(w, &mut log) {
-        w.insert_resource(primase_core::Environment { sun: Some(sun) });
+        // the environment's other facts (its ambient, `lower-unity-ambient`'s) stay as they are
+        let mut env = w
+            .resource::<primase_core::Environment>()
+            .cloned()
+            .unwrap_or_default();
+        env.sun = Some(sun);
+        w.insert_resource(env);
     }
     Ok(log)
 }

@@ -1446,7 +1446,10 @@ fn the_sun_is_indexed_scene_wide_and_bumps_the_minor_version() {
             .get("environment")
             .is_none()
     );
-    w.insert_resource(Environment { sun: Some(sun) });
+    w.insert_resource(Environment {
+        sun: Some(sun),
+        ambient: None,
+    });
     let set = write(&w, &plain()).unwrap();
     assert_eq!(set.index.format_version, "2.1");
     let index = serde_json::to_value(&set.index).unwrap();

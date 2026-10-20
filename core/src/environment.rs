@@ -7,26 +7,87 @@ use crate::{Entity, JsonError, Light, LightKind, Resource, World};
 
 /// The scene's environment as the source authored it. `sun`: the entity whose directional `core.light` the source
 /// names as its sun (a scene setting naming one light, not the brightest light a writer picks); `None` when the source
-/// names none, or in a part of a world that does not hold the sun (a subset or a cell). Ambient light, sky and fog are
+/// names none, or in a part of a world that does not hold the sun (a subset or a cell). `ambient`: the scene's ambient
+/// light ([`Ambient`]); `None` when the source states none or a lowering has not stated its meaning. Sky and fog are
 /// not here until their meaning and units are established for a source.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Environment {
     pub sun: Option<Entity>,
+    pub ambient: Option<Ambient>,
+}
+
+/// Ambient light: light every surface receives from no particular place, by the direction it faces alone, unshadowed.
+/// Its colours are linear RGB, each scaled by `intensity`: a colour of 1 at intensity 1 lights a surface as a
+/// directional `core.light` of intensity 1 (lux) shining straight onto it does. A source whose ambient is relative (to
+/// its sun, say) states it at that scale and reports the approximation; this is not a measured illuminance.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Ambient {
+    pub intensity: f32,
+    pub light: AmbientLight,
+}
+
+/// How [`Ambient`]'s light varies with the direction a surface faces.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum AmbientLight {
+    /// The same colour whatever a surface faces.
+    Flat([f32; 3]),
+    /// A gradient over the direction a surface faces: `sky` facing up (+Y), `equator` facing sideways, `ground` facing
+    /// down.
+    Gradient {
+        sky: [f32; 3],
+        equator: [f32; 3],
+        ground: [f32; 3],
+    },
+}
+
+impl AmbientLight {
+    /// Its colours: the flat one, or the gradient's sky, equator and ground.
+    pub fn colours(&self) -> Vec<[f32; 3]> {
+        match self {
+            AmbientLight::Flat(c) => vec![*c],
+            AmbientLight::Gradient { sky, equator, ground } => vec![*sky, *equator, *ground],
+        }
+    }
+}
+
+impl Ambient {
+    /// Finite and not negative, its intensity and every colour.
+    fn verify(&self) -> Result<(), String> {
+        let ok = |x: f32| x.is_finite() && x >= 0.0;
+        if !ok(self.intensity) {
+            return Err(format!(
+                "ambient intensity {} is not finite and at least 0",
+                self.intensity
+            ));
+        }
+        match self
+            .light
+            .colours()
+            .into_iter()
+            .find(|c| !c.iter().all(|&x| ok(x)))
+        {
+            Some(c) => Err(format!("ambient colour {c:?} is not finite and at least 0")),
+            None => Ok(()),
+        }
+    }
 }
 
 impl Resource for Environment {
     const NAME: &'static str = "core.environment";
+    /// 2: `ambient`.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// The sun is a directional light.
+    /// The sun is a directional light; the ambient is finite and not negative.
     fn verify(&self, w: &World) -> Result<(), String> {
         match self.sun {
             Some(e) if !matches!(w.get::<Light>(e), Some(l) if l.kind == LightKind::Directional) => {
-                Err(format!("sun {e:?} is not a directional core.light"))
+                return Err(format!("sun {e:?} is not a directional core.light"));
             }
-            _ => Ok(()),
+            _ => {}
         }
+        self.ambient.as_ref().map_or(Ok(()), Ambient::verify)
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.sun);
@@ -70,7 +131,10 @@ mod tests {
                 cast_shadows: None,
             },
         );
-        w.insert_resource(Environment { sun: Some(sun) });
+        w.insert_resource(Environment {
+            sun: Some(sun),
+            ambient: None,
+        });
         (w, sun, lamp)
     }
 
@@ -117,7 +181,10 @@ mod tests {
     #[test]
     fn the_sun_must_be_a_directional_light() {
         let (mut w, _, lamp) = world();
-        w.insert_resource(Environment { sun: Some(lamp) });
+        w.insert_resource(Environment {
+            sun: Some(lamp),
+            ambient: None,
+        });
         assert_eq!(
             w.verify_resources(),
             [(
@@ -126,8 +193,78 @@ mod tests {
             )]
         );
         assert_eq!(
-            Environment { sun: Some(lamp) }.to_json().unwrap(),
-            Some(serde_json::json!({"sun": lamp.index()}))
+            Environment {
+                sun: Some(lamp),
+                ambient: None
+            }
+            .to_json()
+            .unwrap(),
+            Some(serde_json::json!({"sun": lamp.index(), "ambient": null}))
         );
+    }
+
+    #[test]
+    fn the_ambient_is_kept_by_every_part_and_must_be_finite_and_not_negative() {
+        let (mut w, sun, lamp) = world();
+        let gradient = Ambient {
+            intensity: 1.0,
+            light: AmbientLight::Gradient {
+                sky: [0.3, 0.3, 0.4],
+                equator: [0.5; 3],
+                ground: [0.25; 3],
+            },
+        };
+        w.insert_resource(Environment {
+            sun: Some(sun),
+            ambient: Some(gradient.clone()),
+        });
+        assert!(w.verify_resources().is_empty());
+        // a scene-wide fact: a part without the sun keeps it
+        let part = w.subset(&BTreeSet::from([lamp]));
+        assert_eq!(
+            part.resource::<Environment>().unwrap().ambient,
+            Some(gradient.clone())
+        );
+        assert_eq!(gradient.light.colours(), [[0.3, 0.3, 0.4], [0.5; 3], [0.25; 3]]);
+        assert_eq!(AmbientLight::Flat([0.2; 3]).colours(), [[0.2; 3]]);
+        assert_eq!(
+            w.resource::<Environment>().unwrap().to_json().unwrap(),
+            Some(
+                serde_json::json!({"sun": sun.index(), "ambient": {"intensity": 1.0, "light": {"Gradient": {
+                "sky": [0.30000001192092896, 0.30000001192092896, 0.4000000059604645],
+                "equator": [0.5, 0.5, 0.5], "ground": [0.25, 0.25, 0.25]}}}})
+            )
+        );
+        for (intensity, colour, bad) in [
+            (
+                -1.0,
+                [0.5; 3],
+                "ambient intensity -1 is not finite and at least 0",
+            ),
+            (
+                f32::NAN,
+                [0.5; 3],
+                "ambient intensity NaN is not finite and at least 0",
+            ),
+            (
+                1.0,
+                [0.5, -0.1, 0.5],
+                "ambient colour [0.5, -0.1, 0.5] is not finite and at least 0",
+            ),
+            (
+                1.0,
+                [f32::INFINITY; 3],
+                "ambient colour [inf, inf, inf] is not finite and at least 0",
+            ),
+        ] {
+            w.insert_resource(Environment {
+                sun: None,
+                ambient: Some(Ambient {
+                    intensity,
+                    light: AmbientLight::Flat(colour),
+                }),
+            });
+            assert_eq!(w.verify_resources(), [("core.environment", bad.to_owned())]);
+        }
     }
 }

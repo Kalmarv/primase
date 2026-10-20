@@ -26,6 +26,7 @@
 //! - [`lower_terrain`]: terrains lowered to geometry and a base colour image.
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 //! - [`lower_lights`]: lights lowered to `core.light`.
+//! - [`lower_ambient`]: the scene's ambient lighting lowered to `core.environment`'s ambient.
 //! - [`register`]: the passes by name.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -34,7 +35,7 @@ pub mod passes;
 mod read;
 pub mod shader;
 
-pub use passes::{drawn, lower, lower_collision, lower_lights, lower_terrain};
+pub use passes::{drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain};
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;
 pub use read::typetree::TypeTree;
@@ -46,8 +47,9 @@ pub use read::{
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
-/// `lower-unity-collision` and `lower-unity-lights`. None takes an option: each lowers by Unity's own rules (its
-/// module says which), not by a choice a program makes; an option is refused.
+/// `lower-unity-collision`, `lower-unity-lights` and `lower-unity-ambient`. All but the last take no option: each
+/// lowers by Unity's own rules (its module says which), not by a choice a program makes; an option is refused.
+/// `lower-unity-ambient` requires the program's choice for an ambient whose probe is not read (`probe`, no default).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
     fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
@@ -65,6 +67,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         none(o, lower_collision::LowerUnityCollision)
     });
     reg.register("lower-unity-lights", |o| none(o, lower_lights::LowerUnityLights));
+    reg.register_requiring(
+        "lower-unity-ambient",
+        |o| Ok(Box::new(lower_ambient::LowerUnityAmbient::from_options(o)?)),
+        &[("probe", "omit")],
+    );
 }
 
 #[derive(Debug, thiserror::Error)]

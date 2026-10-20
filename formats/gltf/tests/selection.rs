@@ -107,7 +107,10 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
             e
         })
         .collect();
-    w.insert_resource(Environment { sun: Some(lights[1]) });
+    w.insert_resource(Environment {
+        sun: Some(lights[1]),
+        ambient: None,
+    });
 
     // everything
     let all = document(&w, None);

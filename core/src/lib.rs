@@ -6,7 +6,7 @@
 pub mod components;
 pub mod convert;
 mod environment;
-pub use environment::Environment;
+pub use environment::{Ambient, AmbientLight, Environment};
 pub mod frame;
 pub mod gate;
 pub mod json;
