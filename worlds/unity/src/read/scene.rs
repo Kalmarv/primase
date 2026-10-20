@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::components::UnityAmbient;
+use crate::components::{UnityAmbient, UnityBehaviour, UnityObject};
 use crate::read::player::{ObjRef, Player};
 use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
@@ -308,6 +308,59 @@ impl Scene {
             transform_of,
             world: std::sync::Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// The MonoBehaviours of GameObject `go`, in its component order: the script (`namespace.class`, empty when it
+    /// can't be resolved), `m_Enabled`, and the script's serialized fields as bytes (a stripped build has no type tree
+    /// for them).
+    pub fn behaviours_of(&self, player: &Player, go: i64) -> Result<Vec<UnityBehaviour>> {
+        let mut out = Vec::new();
+        for &c in self.game_objects.get(&go).map_or(&[][..], |g| &g.components) {
+            let r = ObjRef {
+                file: self.file.clone(),
+                path_id: c,
+            };
+            if player.class_name(&r) != Some("MonoBehaviour") {
+                continue;
+            }
+            let (base, data) = player.behaviour(&r)?;
+            let script = match base.get("m_Script") {
+                Some(p) => match player.resolve(&r.file, p)? {
+                    Some(s) => {
+                        let s = player.decode(&s)?;
+                        let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                        let (ns, class) = (field("m_Namespace"), field("m_ClassName"));
+                        if ns.is_empty() {
+                            class
+                        } else {
+                            format!("{ns}.{class}")
+                        }
+                    }
+                    None => String::new(),
+                },
+                None => String::new(),
+            };
+            out.push(UnityBehaviour {
+                behaviour: UnityObject::from(&r),
+                script,
+                enabled: base
+                    .get("m_Enabled")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|x| x != 0)
+                    || base.get("m_Enabled").and_then(Value::as_bool) == Some(true),
+                data,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Every MonoBehaviour of the scene, by GameObject (in path id order), as [`Scene::behaviours_of`] gives them.
+    pub fn behaviours(&self, player: &Player) -> Result<Vec<(i64, UnityBehaviour)>> {
+        let mut out = Vec::new();
+        for &go in self.game_objects.keys() {
+            out.extend(self.behaviours_of(player, go)?.into_iter().map(|b| (go, b)));
+        }
+        Ok(out)
     }
 
     /// A Transform's world matrix (Unity frame).

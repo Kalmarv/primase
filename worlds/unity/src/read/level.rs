@@ -41,10 +41,10 @@ use primase_core::{
 
 use crate::Result;
 use crate::components::{
-    ColliderMesh, UNITY, UnityBehaviour, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape,
-    UnityLight, UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings,
-    UnityRenderer, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
-    UnityTree, UnityTreeInstance,
+    ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
+    UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
+    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
+    UnityTreeInstance,
 };
 use crate::read::material::{ShaderData, UnityMaterialData};
 use crate::read::mesh::UnityMeshData;
@@ -299,6 +299,80 @@ fn lod_roles(
     roles
 }
 
+/// The state axes of stored "off" flags (a GameObject stored inactive, a component stored disabled): one Bool axis per
+/// flag (`unity.active.<file>.<GameObject>` or `unity.enabled.<file>.<component>`, default off, global), found by its
+/// key. The level read makes them; a reader that adds objects to the same world later ([`OffAxes::of`]) conditions
+/// them on the same axes, so one state choice holds for all of them.
+#[derive(Clone, Debug, Default)]
+pub struct OffAxes {
+    by_key: BTreeMap<String, Entity>,
+}
+
+impl OffAxes {
+    /// The off-flag axes `w` already has (a level read's).
+    pub fn of(w: &World) -> OffAxes {
+        OffAxes {
+            by_key: w
+                .iter::<StateAxis>()
+                .filter(|(_, a)| a.key.starts_with("unity.active.") || a.key.starts_with("unity.enabled."))
+                .map(|(e, a)| (a.key.clone(), e))
+                .collect(),
+        }
+    }
+
+    /// The literal "on" of off flag `flag` of `scene`, and the axis's class when this call made it; `path` names the
+    /// object the flag is on (the axis's source).
+    pub fn literal(
+        &mut self,
+        w: &mut World,
+        scene: &Scene,
+        flag: OffFlag,
+        path: &str,
+    ) -> (Literal, Option<&'static str>) {
+        let (class, pid) = match flag {
+            OffFlag::Inactive(go) => ("active", go),
+            OffFlag::Disabled(c) => ("enabled", c),
+        };
+        let key = format!("unity.{class}.{}.{pid}", scene.file);
+        if let Some(&axis) = self.by_key.get(&key) {
+            return (Literal { axis, values: 0b10 }, None);
+        }
+        let source = match flag {
+            OffFlag::Inactive(go) => format!(
+                "{} (GameObject stored inactive)",
+                scene.transform_of(go).map(|t| scene.path(t)).unwrap_or_default()
+            ),
+            OffFlag::Disabled(c) => format!("{path} (component {c} stored disabled)"),
+        };
+        let axis = w.spawn();
+        w.insert(
+            axis,
+            StateAxis {
+                key: key.clone(),
+                domain: Domain::Bool,
+                default: Some(0),
+                scope: Scope::Global,
+                class: class.into(),
+                source,
+            },
+        );
+        self.by_key.insert(key, axis);
+        (Literal { axis, values: 0b10 }, Some(class))
+    }
+
+    /// The condition of an object with off flags `off` (each "on"), `None` without flags.
+    pub fn condition(
+        &mut self,
+        w: &mut World,
+        scene: &Scene,
+        off: &[OffFlag],
+        path: &str,
+    ) -> Option<Condition> {
+        let literals: Vec<Literal> = off.iter().map(|&f| self.literal(w, scene, f, path).0).collect();
+        (!literals.is_empty()).then(|| Condition(vec![Clause(literals)]))
+    }
+}
+
 struct Builder<'a> {
     player: &'a Player,
     textures: BTreeMap<ObjRef, Entity>,
@@ -307,53 +381,23 @@ struct Builder<'a> {
     collider_meshes: BTreeMap<ObjRef, std::sync::Arc<ColliderMesh>>,
     physic_materials: BTreeMap<ObjRef, UnityPhysicMaterial>,
     shaders: BTreeMap<ObjRef, ShaderData>,
-    /// State axes by scene file and flag, and LOD axes by group (and tree instance).
-    axes: BTreeMap<(String, OffFlag), Entity>,
+    /// The off flags' state axes, and LOD axes by group (and tree instance).
+    axes: OffAxes,
     lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
     report: LevelReport,
 }
 
 impl Builder<'_> {
-    /// The literals of off flags of `scene`'s (each "on"), their axes made the first time; `path` names the object
-    /// the flags are on.
+    /// The literals of off flags of `scene`'s (each "on"), their axes made the first time (counted); `path` names the
+    /// object the flags are on.
     fn literals(&mut self, w: &mut World, scene: &Scene, off: &[OffFlag], path: &str) -> Vec<Literal> {
         off.iter()
             .map(|&flag| {
-                let key = (scene.file.clone(), flag);
-                let axis = match self.axes.get(&key) {
-                    Some(&e) => e,
-                    None => {
-                        let (class, pid, source) = match flag {
-                            OffFlag::Inactive(go) => (
-                                "active",
-                                go,
-                                format!(
-                                    "{} (GameObject stored inactive)",
-                                    scene.transform_of(go).map(|t| scene.path(t)).unwrap_or_default()
-                                ),
-                            ),
-                            OffFlag::Disabled(c) => {
-                                ("enabled", c, format!("{path} (component {c} stored disabled)"))
-                            }
-                        };
-                        let e = w.spawn();
-                        w.insert(
-                            e,
-                            StateAxis {
-                                key: format!("unity.{class}.{}.{pid}", scene.file),
-                                domain: Domain::Bool,
-                                default: Some(0),
-                                scope: Scope::Global,
-                                class: class.into(),
-                                source,
-                            },
-                        );
-                        *self.report.axes.entry(class).or_default() += 1;
-                        self.axes.insert(key, e);
-                        e
-                    }
-                };
-                Literal { axis, values: 0b10 }
+                let (literal, made) = self.axes.literal(w, scene, flag, path);
+                if let Some(class) = made {
+                    *self.report.axes.entry(class).or_default() += 1;
+                }
+                literal
             })
             .collect()
     }
@@ -413,48 +457,6 @@ impl Builder<'_> {
         if n > 0 {
             *self.report.not_reproduced.entry(what.into()).or_default() += n;
         }
-    }
-
-    /// The MonoBehaviours of GameObject `go` of `scene`, their script fields as bytes.
-    fn behaviours(&self, scene: &Scene, go: i64) -> Result<Vec<UnityBehaviour>> {
-        let mut out = Vec::new();
-        for &c in scene.game_objects.get(&go).map_or(&[][..], |g| &g.components) {
-            let r = ObjRef {
-                file: scene.file.clone(),
-                path_id: c,
-            };
-            if self.player.class_name(&r) != Some("MonoBehaviour") {
-                continue;
-            }
-            let (base, data) = self.player.behaviour(&r)?;
-            let script = match base.get("m_Script") {
-                Some(p) => match self.player.resolve(&r.file, p)? {
-                    Some(s) => {
-                        let s = self.player.decode(&s)?;
-                        let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
-                        let (ns, class) = (field("m_Namespace"), field("m_ClassName"));
-                        if ns.is_empty() {
-                            class
-                        } else {
-                            format!("{ns}.{class}")
-                        }
-                    }
-                    None => String::new(),
-                },
-                None => String::new(),
-            };
-            out.push(UnityBehaviour {
-                behaviour: UnityObject::from(&r),
-                script,
-                enabled: base
-                    .get("m_Enabled")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|x| x != 0)
-                    || base.get("m_Enabled").and_then(Value::as_bool) == Some(true),
-                data,
-            });
-        }
-        Ok(out)
     }
 
     fn texture(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
@@ -817,7 +819,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         collider_meshes: BTreeMap::new(),
         physic_materials: BTreeMap::new(),
         shaders: BTreeMap::new(),
-        axes: BTreeMap::new(),
+        axes: OffAxes::default(),
         lod_axes: BTreeMap::new(),
         report: LevelReport {
             skipped,
@@ -965,7 +967,7 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 .filter_map(|&m| w.get::<UnityMaterial>(m).and_then(|u| u.shader.as_deref()))
                 .any(procedural);
             let behaviours = if procedural_shape && tree.is_none() {
-                b.behaviours(&scene, r.game_object)?
+                scene.behaviours_of(player, r.game_object)?
             } else {
                 Vec::new()
             };
