@@ -58,3 +58,9 @@ scalar counts. No private source code or external assets are included.
 then 19 u32 float bit patterns per record (a[3], b[3], t, followed by length,
 length squared, normalized a[3], a/t[3] or a when t=0, dot(a,b), cross(a,b)[3]).
 The gate checks all 400 records against the shared vector operations with the stated bound.
+
+`omit-materialless-primitives` (`OmitMateriallessPrimitives`, no options) leaves out every primitive with no
+material, neither its own nor any placement variant's: recorded as dropped primitives (`PassLog::dropped`; their
+triangles go with them, as the ledger counts), the triangles also counted. A mesh left with no primitive is removed
+with its per-primitive components (`World::remove_mesh`), the names it took recorded; the entity stays. Running it
+is a program's choice for a target that refuses primitives without a material; another recipe may give them one.

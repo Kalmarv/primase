@@ -22,12 +22,18 @@ pub use parametric::{FlattenCurves, TessellateColliders};
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
+    reg.register("omit-materialless-primitives", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(OmitMateriallessPrimitives)),
+    });
     reg.register_requiring(
         "partition-grid",
         |o| Ok(Box::new(PartitionGrid::from_options(o)?)),
         &[("cell", "100")],
     );
 }
+mod materialless;
+pub use materialless::OmitMateriallessPrimitives;
 mod partition;
 pub use partition::PartitionGrid;
 mod primitive;

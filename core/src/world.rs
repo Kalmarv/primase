@@ -724,6 +724,46 @@ impl World {
         Ok(())
     }
 
+    /// Take `e`'s mesh away with every per-primitive component it has (each typed component that follows its
+    /// primitives, [`Component::remap_primitives`]): for an entity left drawing nothing, whose per-primitive data
+    /// would describe no primitive. Returns the names taken, the mesh's first; none when `e` has no mesh. Refused,
+    /// changing nothing, while `e` has an opaque component, as [`World::remap_primitives`] refuses a change to the
+    /// primitives then (whether it describes primitives can't be known).
+    pub fn remove_mesh(&mut self, e: Entity) -> Result<Vec<&'static str>, String> {
+        if !self.has::<crate::Mesh>(e) {
+            return Ok(Vec::new());
+        }
+        let mut opaque: Vec<&String> = self
+            .opaque
+            .iter()
+            .filter(|(_, values)| values.contains_key(&e))
+            .map(|(name, _)| name)
+            .collect();
+        if !opaque.is_empty() {
+            opaque.sort();
+            return Err(format!(
+                "{e:?}: opaque components can't follow its mesh's removal: {opaque:?} (remove them, or give them a \
+                 typed form, before the pass)"
+            ));
+        }
+        let mut names = vec![crate::Mesh::NAME];
+        let mut per_primitive: Vec<(&'static str, TypeId)> = self
+            .columns
+            .iter()
+            .filter(|(_, c)| c.remapped(e, &[]).is_some())
+            .map(|(k, c)| (c.name(), *k))
+            .collect();
+        per_primitive.sort();
+        for (name, k) in per_primitive {
+            if let Some(c) = self.columns.get_mut(&k) {
+                c.remove_entity(e);
+            }
+            names.push(name);
+        }
+        self.remove::<crate::Mesh>(e);
+        Ok(names)
+    }
+
     /// Every component of `from`, typed and opaque, copied onto `to`, replacing `to`'s of the same name (`to` keeps
     /// the others): for a pass that makes another entity like one it knows only partly (a prototype per tint row,
     /// keeping whatever dialect data the reader attached). References are copied as they are. False, and nothing
@@ -1573,6 +1613,34 @@ mod tests {
         }
         let got: Vec<u32> = w.iter::<A>().map(|(_, a)| a.0).collect();
         assert_eq!(got, [0, 10, 20, 30, 40]);
+    }
+
+    /// A mesh taken away goes with what follows its primitives; with an opaque component (which can't be known to
+    /// describe primitives or not) nothing changes.
+    #[test]
+    fn remove_mesh_takes_its_per_primitive_components_and_refuses_with_opaque_data() {
+        use crate::{MaterialVariants, Mesh};
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Mesh::new(Vec::new()));
+        w.insert(e, MaterialVariants(Vec::new()));
+        w.insert(e, A(1));
+        w.insert_opaque(
+            e,
+            "game.thing",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Bytes(vec![1]),
+            },
+        );
+        assert!(w.remove_mesh(e).unwrap_err().contains("game.thing"));
+        assert!(w.has::<Mesh>(e) && w.has::<MaterialVariants>(e));
+        w.remove_opaque(e, "game.thing");
+        assert_eq!(w.remove_mesh(e).unwrap(), ["core.mesh", "core.material_variants"]);
+        assert!(!w.has::<Mesh>(e) && !w.has::<MaterialVariants>(e));
+        // what does not follow primitives stays
+        assert!(w.has::<A>(e));
+        assert!(w.remove_mesh(e).unwrap().is_empty());
     }
 
     #[test]
