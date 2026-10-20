@@ -1810,3 +1810,74 @@ fn an_environment_only_world_still_reports_its_ambient() {
         [(primase_core::convert::NoticeKind::Unsupported, 1)]
     );
 }
+
+/// Planned with an ambient, written from parts whose passes consumed it (`fill-ambient-lights` takes it out of the
+/// environment, its lights standing for it): the written cells decide, so nothing is reported; written with the
+/// ambient kept, it is reported once.
+#[test]
+fn an_ambient_consumed_after_planning_is_not_reported() {
+    use primase_core::{Ambient, AmbientLight, Environment};
+    let mut w = World::new();
+    for x in [0.0, 500.0] {
+        let proto = w.spawn();
+        w.insert(proto, mesh());
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(
+            placement,
+            Transform {
+                cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [x, 0., 0.]],
+            },
+        );
+    }
+    w.insert_resource(Environment {
+        sun: None,
+        ambient: Some(Ambient {
+            intensity: 1.0,
+            light: AmbientLight::Flat([0.2; 3]),
+        }),
+    });
+    let ambient_notices = |plan: &primase_web::TilePlan| {
+        plan.notices()
+            .iter()
+            .filter(|n| {
+                n.reason
+                    .starts_with("the environment's ambient light, not written")
+            })
+            .map(|n| (n.kind, n.count))
+            .collect::<Vec<_>>()
+    };
+    // each part as its passes leave it: `consumed`, the ambient taken out (the program's choice of fill lights)
+    let write_parts = |consumed: bool| {
+        let mut plan = primase_web::plan(&w, &plain()).unwrap();
+        for e in plan.unsplit() {
+            plan.split(&w, e).unwrap();
+        }
+        // before any cell is written, the planning world's ambient is what there is to report
+        assert_eq!(ambient_notices(&plan).len(), 1);
+        let mut part = w.clone();
+        if consumed {
+            part.insert_resource(Environment {
+                sun: None,
+                ambient: None,
+            });
+        }
+        assert!(plan.cells().len() > 1);
+        for cell in plan.cells() {
+            let cw = part.subset(&part.closure(plan.roots(cell).into_iter().chain(plan.shared(cell))));
+            plan.write_cell(cell, &cw).unwrap();
+        }
+        plan
+    };
+    assert!(ambient_notices(&write_parts(true)).is_empty());
+    assert_eq!(
+        ambient_notices(&write_parts(false)),
+        [(primase_core::convert::NoticeKind::Unsupported, 1)]
+    );
+}

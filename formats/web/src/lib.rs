@@ -482,10 +482,14 @@ pub struct TilePlan {
     /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
-    /// Whether the planning world or a cell's world held `core.environment`'s ambient: the viewer has no ambient light,
-    /// the index carries only the sun and the tiles leave the environment out, so it is not written
-    /// ([`TilePlan::notices`], once). Seen at planning too, so a world with no cells to write still reports it.
-    ambient_left_out: bool,
+    /// Whether the planning world held `core.environment`'s ambient: what is reported when no cell is written (a world
+    /// with nothing to tile). The viewer has no ambient light, the index carries only the sun and the tiles leave the
+    /// environment out, so an ambient is not written ([`TilePlan::notices`], once).
+    ambient_planned: bool,
+    /// Whether a written cell's world held it, as that cell's passes left it: once a cell is written, this alone is
+    /// reported (a pass may have consumed the planning world's ambient, as `fill-ambient-lights` does, or lowered one
+    /// after planning).
+    ambient_written: bool,
     /// What the published tiles' documents and the records left out or drew approximately: by kind and reason, the
     /// count and a few examples ([`TilePlan::notices`]).
     omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
@@ -685,11 +689,10 @@ pub fn plan_with_geometry(
         sun_entity,
         shapes: BTreeMap::new(),
         ground_markers: 0,
-        // an ambient already in the planning world (a prepared world written whole); a part's lowered one is seen
-        // when its cell is written
-        ambient_left_out: world
+        ambient_planned: world
             .resource::<primase_core::Environment>()
             .is_some_and(|env| env.ambient.is_some()),
+        ambient_written: false,
         omitted: BTreeMap::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         cells: BTreeMap::new(),
@@ -989,12 +992,12 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
-        // the cell's world as its passes left it: in a conversion in parts the ambient is lowered there, after planning
+        // the cell's world as its passes left it: the ambient may be lowered there after planning, or consumed
         if world
             .resource::<primase_core::Environment>()
             .is_some_and(|env| env.ambient.is_some())
         {
-            self.ambient_left_out = true;
+            self.ambient_written = true;
         }
         let mut cw = CellWorld {
             world,
@@ -1168,7 +1171,8 @@ impl TilePlan {
     /// glTF documents did not write (counted once per published tile, as each document counts it; a tile written to
     /// measure it and then split counts nothing), viewer records' components without a JSON form, placements skipped
     /// for a degenerate transform, markers anchored at height 0, and the environment's ambient light (once, when a
-    /// cell's world held one: the viewer has no ambient, the index carries only the sun).
+    /// written cell's world held one, or the planning world when no cell is written: the viewer has no ambient, the
+    /// index carries only the sun).
     pub fn notices(&self) -> Vec<Notice> {
         let mut out: Vec<Notice> = self
             .omitted
@@ -1197,7 +1201,8 @@ impl TilePlan {
                 self.ground_markers,
             ));
         }
-        if self.ambient_left_out {
+        // the written cells' worlds decide; the planning world's only when nothing was written
+        if self.ambient_written || (self.written.is_empty() && self.ambient_planned) {
             out.push(Notice::new(
                 "web",
                 NoticeKind::Unsupported,
