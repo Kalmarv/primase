@@ -35,3 +35,43 @@ impl Component for AnvilMeshShape {
         u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
+
+/// A Mesh's compiled buffers ([`crate::read::mesh::StoredMesh`]) on its prototype: positions decoded (each
+/// component times its scale over 32768) and converted into core's frame through the frame the reader was given
+/// (`frame`, stated by the program); triangles as vertex indices (the stored split applied, reversed when that frame
+/// mirrors); the two packed direction groups and the texture coordinates as stored, with `frame` kept to convert
+/// directions once a pass decodes them. `entry` and `index_id` name the forge entry it came from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilMesh {
+    pub entry: u32,
+    pub index_id: u64,
+    pub frame: primase_core::frame::SourceFrame,
+    pub positions: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub direction_a: Vec<[u8; 4]>,
+    pub direction_b: Vec<[u8; 4]>,
+    pub uv: Vec<[u16; 2]>,
+}
+
+impl Component for AnvilMesh {
+    const NAME: &'static str = "anvil.mesh";
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        let n = self.positions.len();
+        if [self.direction_a.len(), self.direction_b.len(), self.uv.len()] != [n; 3] {
+            return Err(format!("{n} positions, streams of other lengths"));
+        }
+        match self
+            .triangles
+            .iter()
+            .flatten()
+            .find(|&&i| usize::try_from(i).map_or(true, |i| i >= n))
+        {
+            Some(i) => Err(format!("a triangle names vertex {i} of {n}")),
+            None => Ok(()),
+        }
+    }
+    fn payload_bytes(&self) -> u64 {
+        let bytes = self.positions.len() * 24 + self.triangles.len() * 12;
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
+}

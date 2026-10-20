@@ -272,6 +272,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install; two MeshShape bodies' prefixes, section runs and tails hand-checked in a separate read-only decode (games/riders-republic docs/recon/meshshape-second-fixture.md, c068d20)",
     },
     Variable {
+        name: "PRIMASE_ANVIL_FORGE_USNAT_PATCH",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"the patch forge of PRIMASE_ANVIL_FORGE_USNAT (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT_patch_01.forge`, 1,331,014,794 bytes, 320,777 entries); worlds/anvil/tests/meshes.rs"#,
+        status: Status::Live,
+        source: "the user's own install; four Mesh bodies' descriptors, buffers and splits hand-checked in a separate read-only decode (games/riders-republic docs/recon/mesh-second-fixture.md, a03c970)",
+    },
+    Variable {
         name: "PRIMASE_UNITY_SCAN",
         kind: Kind::Input,
         gate: true,
