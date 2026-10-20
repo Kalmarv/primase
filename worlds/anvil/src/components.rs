@@ -113,3 +113,50 @@ impl Component for AnvilMesh {
         u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
+
+/// A LODSelector's mesh levels on the prototype placed for it (`anvil.lods`): the prototype's own [`AnvilMesh`] is the
+/// level `detail` (the finest level with a mesh), `forms` the other levels with a mesh (each `(level, entity)`, the
+/// entity holding its [`AnvilMesh`], not placed). Levels referring to an Impostor or to nothing aren't forms.
+/// `lower-anvil-lods` makes `core.lods` of it once the meshes are core meshes; which level the game draws when isn't
+/// read (it chooses by distance), so no default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnvilLods {
+    pub detail: u8,
+    pub forms: Vec<(u8, Entity)>,
+}
+
+impl Component for AnvilLods {
+    const NAME: &'static str = "anvil.lods";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.forms.iter().map(|(_, e)| *e));
+    }
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        for (level, form) in &self.forms {
+            if *form == e || !w.is_alive(*form) {
+                return Err(format!("level {level}'s form isn't another alive entity"));
+            }
+        }
+        Ok(())
+    }
+    fn payload_bytes(&self) -> u64 {
+        u64::try_from(self.forms.len() * 16).unwrap_or(u64::MAX)
+    }
+}
+
+/// A placement's material overrides as its MeshInstanceData store them (`anvil.material_overrides`): per LOD level
+/// (its LODSelectorInstance slot), the pairs of a source Material and the Material that replaces it (an identity pair
+/// where none is replaced), by ClassID, in stored order. That a level's mesh range draws with the replacement of its
+/// own Material is the Riders Republic notes' reading (975 of 975 sampled sources one of their slot mesh's range
+/// Materials), not applied here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnvilMaterialOverrides {
+    pub levels: Vec<(u8, Vec<(u64, u64)>)>,
+}
+
+impl Component for AnvilMaterialOverrides {
+    const NAME: &'static str = "anvil.material_overrides";
+    fn payload_bytes(&self) -> u64 {
+        let pairs: usize = self.levels.iter().map(|(_, p)| p.len()).sum();
+        u64::try_from(pairs * 16).unwrap_or(u64::MAX)
+    }
+}

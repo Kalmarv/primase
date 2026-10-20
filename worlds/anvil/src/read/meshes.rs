@@ -71,46 +71,10 @@ pub fn read_meshes(
                 type_id: resource.type_id,
             });
         }
-        let mesh_err = |source| Error::Mesh { entry, source };
-        let stored = StoredMesh::parse(&resource.body).map_err(mesh_err)?;
-        let flip = frame.flips_winding();
-        let triangles = stored
-            .triangles()
-            .map_err(mesh_err)?
-            .into_iter()
-            .map(|[a, b, c]| if flip { [a, c, b] } else { [a, b, c] })
-            .collect();
-        let ranges = stored
-            .ranges()
-            .map_err(mesh_err)?
-            .into_iter()
-            .map(|r| u32::try_from(r.indices.start / 3).map_err(|_| Error::Entry(entry)))
-            .collect::<Result<_, _>>()?;
-        let materials = stored.materials().map_err(mesh_err)?;
-        let v = &stored.vertices;
-        let positions = stored.positions().map_err(mesh_err)?;
+        let stored = StoredMesh::parse(&resource.body).map_err(|source| Error::Mesh { entry, source })?;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
-        w.insert(
-            prototype,
-            AnvilMesh {
-                entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
-                index_id: index.id,
-                frame,
-                positions: positions.into_iter().map(|p| frame.point(p)).collect(),
-                triangles,
-                ranges,
-                materials,
-                kind: stored.kind,
-                stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
-                vertex_records: v.bytes.clone(),
-                words_20: if stored.kind == 2 {
-                    v.words_20()
-                } else {
-                    Vec::new()
-                },
-            },
-        );
+        w.insert(prototype, anvil_mesh(&stored, entry, index.id, frame)?);
         let placement = w.spawn();
         w.insert(placement, Name(name));
         w.insert(
@@ -124,4 +88,49 @@ pub fn read_meshes(
         placements.push(placement);
     }
     Ok(placements)
+}
+
+/// A Mesh body's buffers as an [`AnvilMesh`], its numbers converted through `frame`: positions decoded
+/// ([`StoredMesh::positions`]), triangles counted from their ranges (reversed when `frame` mirrors), each range's first
+/// triangle and Material, and the vertex records as stored.
+pub fn anvil_mesh(
+    stored: &StoredMesh,
+    entry: usize,
+    index_id: u64,
+    frame: SourceFrame,
+) -> Result<AnvilMesh, Error> {
+    let mesh_err = |source| Error::Mesh { entry, source };
+    let flip = frame.flips_winding();
+    let triangles = stored
+        .triangles()
+        .map_err(mesh_err)?
+        .into_iter()
+        .map(|[a, b, c]| if flip { [a, c, b] } else { [a, b, c] })
+        .collect();
+    let ranges = stored
+        .ranges()
+        .map_err(mesh_err)?
+        .into_iter()
+        .map(|r| u32::try_from(r.indices.start / 3).map_err(|_| Error::Entry(entry)))
+        .collect::<Result<_, _>>()?;
+    let materials = stored.materials().map_err(mesh_err)?;
+    let v = &stored.vertices;
+    let positions = stored.positions().map_err(mesh_err)?;
+    Ok(AnvilMesh {
+        entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
+        index_id,
+        frame,
+        positions: positions.into_iter().map(|p| frame.point(p)).collect(),
+        triangles,
+        ranges,
+        materials,
+        kind: stored.kind,
+        stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
+        vertex_records: v.bytes.clone(),
+        words_20: if stored.kind == 2 {
+            v.words_20()
+        } else {
+            Vec::new()
+        },
+    })
 }

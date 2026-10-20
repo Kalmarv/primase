@@ -339,16 +339,24 @@ fn census_forge(
                 .map(|e| {
                     for v in e.visuals() {
                         tally.outcome(match &v.instance {
-                            Instance::Lod { slots, .. } => {
+                            // a slot holding instance matrices in lower case
+                            Instance::Lod { instances, slots, .. } => {
                                 let slots: String = slots
                                     .iter()
                                     .map(|s| match s {
                                         Slot::None => '-',
-                                        Slot::Mesh(_) => 'M',
-                                        Slot::Impostor(_) => 'I',
+                                        Slot::Mesh(m) if m.instances.is_empty() => 'M',
+                                        Slot::Mesh(_) => 'm',
+                                        Slot::Impostor(i) if i.instances.is_empty() => 'I',
+                                        Slot::Impostor(_) => 'i',
                                     })
                                     .collect();
-                                format!("Visual LODSelectorInstance, slots {slots}")
+                                let own = if instances.is_empty() {
+                                    ""
+                                } else {
+                                    ", instanced itself"
+                                };
+                                format!("Visual LODSelectorInstance, slots {slots}{own}")
                             }
                             Instance::Mesh(_) => "Visual MeshInstanceData".into(),
                             Instance::Raw { kind, .. } => format!("Visual instance {kind:08X} kept"),
@@ -362,6 +370,10 @@ fn census_forge(
                         Instance::Raw { .. } => false,
                     });
                     tally.outcome(if instanced { "instanced" } else { "not instanced" });
+                    // refused by the placement reader: whether the scale applies to instances isn't established
+                    if instanced && e.scale != 1.0 {
+                        tally.outcome("instanced, scale not 1");
+                    }
                 })
                 .map_err(|e| e.to_string()),
             MATERIAL_TEMPLATE => template::descriptors(&r.body)

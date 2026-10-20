@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::world::Resource;
 use primase_core::{
-    Collision, Component, Entity, Mesh, Primitive, Semantic, Stream, Surfaces, Topology, World,
+    Collision, Component, Entity, LodForm, Lods, Mesh, Primitive, Semantic, Stream, Surfaces, Topology, World,
 };
 
-use crate::components::{AnvilMesh, AnvilMeshShape};
+use crate::components::{AnvilLods, AnvilMesh, AnvilMeshShape};
 
 /// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
 /// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
@@ -321,6 +321,54 @@ impl Pass for LowerAnvilMesh {
     }
 }
 
+/// `lower-anvil-lods`: every prototype's mesh levels ([`AnvilLods`]) become `core.lods`: its own mesh at its level,
+/// each other level a form, no default (the game chooses a level by distance, which isn't read). Run after
+/// `lower-anvil-mesh`, so every form holds a core mesh. The levels are consumed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LowerAnvilLods;
+
+impl Pass for LowerAnvilLods {
+    fn name(&self) -> &'static str {
+        "lower-anvil-lods"
+    }
+    fn options(&self) -> Options {
+        Options::new()
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[AnvilLods::NAME, Mesh::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Lods::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[AnvilLods::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let prototypes: Vec<Entity> = w.iter::<AnvilLods>().map(|(e, _)| e).collect();
+        for e in prototypes {
+            let Some(l) = w.remove::<AnvilLods>(e) else {
+                continue;
+            };
+            let forms = l
+                .forms
+                .iter()
+                .map(|&(detail, form)| LodForm { detail, form })
+                .collect::<Vec<_>>();
+            log.count("prototypes given levels of detail", 1);
+            log.count("level-of-detail forms", forms.len() as u64);
+            w.insert(
+                e,
+                Lods {
+                    detail: l.detail,
+                    forms,
+                    default: None,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Register Anvil's passes by name.
 pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
@@ -328,6 +376,7 @@ pub fn register(reg: &mut PassRegistry) {
         |o| Ok(Box::new(LowerAnvilCollision::from_options(o)?)),
         &[("surface", "rr-diagnostic-unknown")],
     );
+    reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
     reg.register_requiring(
         "lower-anvil-mesh",
         |o| Ok(Box::new(LowerAnvilMesh::from_options(o)?)),
