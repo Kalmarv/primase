@@ -1,6 +1,7 @@
 //! The reader: forge archives on disk and the data blocks of their entries.
 
 pub mod data;
+pub mod entity;
 pub mod forge;
 pub mod lod;
 pub mod material;

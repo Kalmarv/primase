@@ -107,6 +107,7 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::read::data::{Resource, read_entry};
+use primase_anvil::read::entity::{ENTITY, Instance, Slot, StoredEntity};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::material::{
@@ -124,7 +125,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
-const KINDS: [(u32, &str); 8] = [
+const KINDS: [(u32, &str); 9] = [
+    (ENTITY, "Entity"),
     (MATERIAL_TEMPLATE, "MaterialTemplate"),
     (MESH, "Mesh"),
     (TEXTURE_MAP, "TextureMap"),
@@ -331,6 +333,35 @@ fn census_forge(
                         .map(|p| p.key)
                         .collect::<Vec<_>>();
                     textured.push((template, keys));
+                })
+                .map_err(|e| e.to_string()),
+            ENTITY => StoredEntity::parse(&r.body)
+                .map(|e| {
+                    for v in e.visuals() {
+                        tally.outcome(match &v.instance {
+                            Instance::Lod { slots, .. } => {
+                                let slots: String = slots
+                                    .iter()
+                                    .map(|s| match s {
+                                        Slot::None => '-',
+                                        Slot::Mesh(_) => 'M',
+                                        Slot::Impostor(_) => 'I',
+                                    })
+                                    .collect();
+                                format!("Visual LODSelectorInstance, slots {slots}")
+                            }
+                            Instance::Mesh(_) => "Visual MeshInstanceData".into(),
+                            Instance::Raw { kind, .. } => format!("Visual instance {kind:08X} kept"),
+                        });
+                    }
+                    let instanced = e.visuals().any(|v| match &v.instance {
+                        Instance::Lod { slots, .. } => slots
+                            .iter()
+                            .any(|s| matches!(s, Slot::Mesh(m) if !m.instances.is_empty())),
+                        Instance::Mesh(m) => !m.instances.is_empty(),
+                        Instance::Raw { .. } => false,
+                    });
+                    tally.outcome(if instanced { "instanced" } else { "not instanced" });
                 })
                 .map_err(|e| e.to_string()),
             MATERIAL_TEMPLATE => template::descriptors(&r.body)
