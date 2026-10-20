@@ -11,6 +11,7 @@ pub mod assembly;
 pub mod blend_order;
 pub mod collision;
 mod collision_pack;
+pub mod compile;
 pub mod components;
 pub mod decal;
 pub mod exact_sum;
@@ -24,7 +25,6 @@ pub mod model;
 pub mod overlay;
 pub mod passes;
 pub mod pausemap;
-pub mod compile;
 pub mod postcompile;
 pub mod read;
 pub mod records;
@@ -115,6 +115,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         "place-reskate-spawn",
         passes::place_reskate_spawn,
         &[("at", "centre")],
+    );
+    // which markers and how far above them the search starts are the program's: no default
+    reg.register_requiring(
+        "ground-reskate-markers",
+        |o| Ok(Box::new(passes::GroundReskateMarkers::from_options(o)?)),
+        &[("kinds", "spawn+travel"), ("above", "1")],
     );
     reg.register("snap-reskate-markers", passes::snap_reskate_markers);
     reg.register("prepare-reskate-grinds", passes::prepare_reskate_grinds);

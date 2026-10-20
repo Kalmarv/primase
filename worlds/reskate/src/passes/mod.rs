@@ -8,6 +8,7 @@ pub mod budget;
 pub mod collision;
 pub mod floor;
 pub mod grinds;
+pub mod ground_markers;
 pub mod layered;
 mod layered_lower;
 pub mod layout;
@@ -44,6 +45,7 @@ pub use floor::{
     prepare_reskate_floor, summarize_reskate_floor,
 };
 pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
+pub use ground_markers::GroundReskateMarkers;
 pub use layered_lower::LowerLayeredPbr;
 pub use layout::{SummarizeReskateLayout, summarize_reskate_layout};
 pub use lights::{
