@@ -1,5 +1,6 @@
 //! One STUNTBOOST level from the install into the world ([`read_level`]), faithfully: every part, node, mesh,
-//! material and baked atlas as stored, the node names parsed, in the game's units.
+//! material and baked atlas as stored, the node names parsed, in the core frame in metres at the scale the caller
+//! states ([Frame](crate#frame)).
 //!
 //! Files (all uncompressed XNB v5 under `Content/Models`): `Export/Level_<Name>_.xnb` (a `StringReader` JSON sidecar:
 //! `modelCount`), per part `Export/Level_<Name>_<N>.xnb` (`BytingPipeline.GLTFReader`: the Blender exporter's glTF
@@ -15,8 +16,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{
-    ColorSpace, Entity, Instance, Mesh, Name, Source, TexFormat, TexRole, Texture, Transform, World,
+    ColorSpace, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
+    Transform, World,
 };
 use primase_glb::Gltf;
 use primase_monogame::xnb::Xnb;
@@ -167,19 +170,22 @@ fn transform(m: &[f64; 16]) -> Transform {
     }
 }
 
-/// Level `level` (`Skatepark` for `Level_Skatepark`) of the install at `install` into `w`:
+/// Level `level` (`Skatepark` for `Level_Skatepark`) of the install at `install` into `w`, a STUNTBOOST unit taken as
+/// `metres_per_unit` metres (finite and positive; no default: see [Frame](crate#frame)):
 ///
 /// - each part an entity with [`StuntboostPart`] (its role: the part with a `Spawn` node is the level, one with a
 ///   `Skybox` node the sky, any other a room) and `core.name`;
-/// - each node an entity with its world `core.transform` (glTF's frame, which is the core frame; the game's units),
+/// - each node an entity with its world `core.transform` (glTF's axes are the core frame's; translations scaled),
 ///   `core.name` (the name as stored), `core.source` (`<file>#node <i>`) and [`StuntboostNode`] (its name parsed by
 ///   [`names`], its extras), and an `Instance` of its mesh's prototype when it has one;
-/// - each mesh a prototype with `core.mesh` (its primitives' materials the material entities) and `core.source`, and
-///   its application-specific vertex attributes as [`StuntboostAttributes`];
+/// - each mesh a prototype with `core.mesh` (positions scaled; its primitives' materials the material entities) and
+///   `core.source`, and its application-specific vertex attributes as [`StuntboostAttributes`] (as stored, unscaled);
 /// - each material an entity with [`StuntboostMaterial`] and `core.name`; each image a texture entity with
 ///   `core.texture` (the QOI decoded to RGBA8, sRGB; role other), `core.name` and `core.source`. An image the install
 ///   does not ship is counted and left unbound.
-pub fn read_level(install: &Path, level: &str, w: &mut World) -> Result<LevelReport> {
+pub fn read_level(install: &Path, level: &str, metres_per_unit: f64, w: &mut World) -> Result<LevelReport> {
+    let frame = SourceFrame::try_new([Axis::PosX, Axis::PosY, Axis::PosZ], metres_per_unit)
+        .map_err(|e| Error::Format(format!("metres per unit: {e}")))?;
     let export = install.join("Content").join("Models").join("Export");
     let mut report = LevelReport::default();
     let sidecar = export.join(format!("Level_{level}_.xnb"));
@@ -198,7 +204,17 @@ pub fn read_level(install: &Path, level: &str, w: &mut World) -> Result<LevelRep
         let gltf = Gltf::from_gltf(text.as_bytes(), |_, uri| {
             bytes_of(&export.join(format!("{uri}.xnb")), None).map_err(|e| e.to_string())
         })?;
-        read_part(w, &mut report, &export, level, index, &file, &gltf, &mut images)?;
+        read_part(
+            w,
+            &mut report,
+            &export,
+            level,
+            index,
+            &file,
+            &gltf,
+            &frame,
+            &mut images,
+        )?;
     }
     Ok(report)
 }
@@ -212,6 +228,7 @@ fn read_part(
     index: u32,
     file: &str,
     gltf: &Gltf,
+    frame: &SourceFrame,
     images: &mut BTreeMap<PathBuf, Option<Entity>>,
 ) -> Result<()> {
     let json = gltf.json();
@@ -391,6 +408,9 @@ fn read_part(
         for p in &read.primitives {
             let mut primitive = p.primitive.clone();
             primitive.material = p.material.and_then(|m| materials.get(m).copied());
+            if let Some(Stream::F32x3(positions)) = primitive.streams.get_mut(&Semantic::Position) {
+                positions.iter_mut().for_each(|v| *v = frame.point(*v));
+            }
             mesh_primitives.push(primitive);
             let mut custom = BTreeMap::new();
             for (name, data) in &p.custom {
@@ -441,7 +461,7 @@ fn read_part(
         }
         let world = mul(&parent, &local(node));
         let e = w.spawn();
-        w.insert(e, transform(&world));
+        w.insert(e, frame.transform(&transform(&world)));
         w.insert(e, Name(name.raw.clone()));
         w.insert(e, Source(format!("{file}#node {i}")));
         w.insert(
@@ -543,7 +563,7 @@ mod tests {
         .unwrap();
         // one triangle: positions (36 bytes) then u16 indices (6 bytes)
         let mut bin = Vec::new();
-        for v in [[0f32, 0., 0.], [1., 0., 0.], [0., 0., 1.]] {
+        for v in [[0f32, 0., 0.], [100., 0., 0.], [0., 0., 100.]] {
             for c in v {
                 bin.extend_from_slice(&c.to_le_bytes());
             }
@@ -556,9 +576,9 @@ mod tests {
             "scene": 0,
             "scenes": [{"nodes": [0, 2]}],
             "nodes": [
-                {"name": "group", "translation": [0.0, 2.0, 0.0], "children": [1]},
+                {"name": "group", "translation": [0.0, 200.0, 0.0], "children": [1]},
                 {"name": "floor_<.001", "mesh": 0},
-                {"name": "=Spawn(start)", "translation": [3.0, 0.0, 0.0]}
+                {"name": "=Spawn(start)", "translation": [100.0, 0.0, 0.0]}
             ],
             "meshes": [{"name": "floor", "primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
             "materials": [{"name": "C_Default_Wood", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
@@ -566,7 +586,7 @@ mod tests {
             "images": [{"uri": "../Resources/T.export/Bake0_Denoised.png"}],
             "accessors": [
                 {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
-                 "min": [0.0, 0.0, 0.0], "max": [1.0, 0.0, 1.0]},
+                 "min": [0.0, 0.0, 0.0], "max": [100.0, 0.0, 100.0]},
                 {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}
             ],
             "bufferViews": [
@@ -590,8 +610,8 @@ mod tests {
         std::fs::write(export.join("Level_T_0.bin.xnb"), xnb(byte_array, &array)).unwrap();
 
         let mut w = World::new();
-        let r = read_level(&dir, "T", &mut w).unwrap();
-        std::fs::remove_dir_all(&dir).ok();
+        // a unit as a centimetre
+        let r = read_level(&dir, "T", 0.01, &mut w).unwrap();
         assert_eq!(r.parts, [(0, StuntboostRole::Level)]);
         assert_eq!(
             (r.nodes, r.placements, r.meshes, r.materials, r.textures),
@@ -604,13 +624,26 @@ mod tests {
             .map(|(e, n)| (e, n.name.collision))
             .unwrap();
         assert_eq!(floor.1, StuntboostCollision::Solid);
-        // under its parent: 2 units up
+        // under its parent: 200 units up, 2 m
         assert_eq!(w.get::<Transform>(floor.0).unwrap().cols[3], [0.0, 2.0, 0.0]);
+        // the spawn 100 units along x: 1 m
+        let spawn = (w.iter::<StuntboostNode>())
+            .find(|(_, n)| n.name.class_name() == "Spawn")
+            .map(|(e, _)| e)
+            .unwrap();
+        assert_eq!(w.get::<Transform>(spawn).unwrap().cols[3], [1.0, 0.0, 0.0]);
         let prototype = w.get::<Instance>(floor.0).unwrap().prototype;
         let mesh = w.get::<Mesh>(prototype).unwrap();
+        // the vertices in metres too
+        assert_eq!(
+            mesh.primitives()[0].positions().unwrap(),
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        );
+        assert!(read_level(&dir, "T", 0.0, &mut World::new()).is_err());
         let material = mesh.primitives()[0].material.unwrap();
         let m = w.get::<StuntboostMaterial>(material).unwrap();
         assert_eq!(m.name, "C_Default_Wood");
         assert!(m.base_color_texture.is_none(), "the image is not shipped");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

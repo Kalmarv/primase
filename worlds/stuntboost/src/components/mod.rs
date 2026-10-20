@@ -1,6 +1,5 @@
-//! The `stuntboost.*` dialect: what a STUNTBOOST level states, as stored. Positions are in the game's own units (props
-//! are real-world centimetres; the board's deck is 0.967 units long), in glTF's frame (+Y up), which is the core frame;
-//! scaling to metres is a program's choice.
+//! The `stuntboost.*` dialect: what a STUNTBOOST level states, as stored. Positions are in the core frame in metres, at
+//! the scale the program read the level with ([Frame](crate#frame)).
 use std::collections::BTreeMap;
 
 use primase_core::{Component, Entity, JsonError};

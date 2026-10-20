@@ -1,8 +1,19 @@
 //! STUNTBOOST read over the MonoGame reader (`primase-monogame`): a level's parts (level, room, sky), every node with
-//! its name parsed by the game's Blender exporter grammar, the meshes, materials and baked atlases, as stored and in
-//! the game's units ([`read::read_level`]); then lowerings whose every choice is the program's ([`passes`]): collision
-//! with surfaces from the physics materials, the spawns as markers, the materials with the baked lighting as base
-//! colour or emission, and what the game never draws or a static map has no use for (triggers, editor nodes) left out.
+//! its name parsed by the game's Blender exporter grammar, the meshes, materials and baked atlases, as stored, in the
+//! core frame in metres at a scale the program states ([`read::read_level`], [Frame](crate#frame)); then lowerings
+//! whose every choice is the program's ([`passes`]): collision with surfaces from the physics materials, the spawns
+//! as markers, the materials with the baked lighting as base colour or emission, and what the game never draws or a
+//! static map has no use for (triggers, editor nodes) left out.
+//!
+//! # Frame
+//!
+//! glTF's axes as the Blender exporter writes them are the core frame's (+Y up, right-handed), so a level
+//! converts by its unit alone, and a STUNTBOOST unit has no one true length. Its props are modelled at real size in
+//! centimetres (an AA battery 5.15 units, a door 204), while its fingerboard's deck is 0.967 units long. So the scale
+//! is the program's, a required argument of [`read::read_level`]: `0.01` reads the props at their real size (the
+//! board then 1 cm long, a fingerboard); about `0.83` reads the board as a 0.80 m skateboard deck (Caleb's choice for
+//! skate., the room giant around it). Positions, translations and everything derived from them (collision) are in
+//! metres; the application-specific vertex attributes stay as stored.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
