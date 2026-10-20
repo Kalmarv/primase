@@ -3,6 +3,10 @@
 //! (`MissionGiver`), each as an entity with its world transform, its state (the Unity level read's own `unity.active`
 //! and `unity.enabled` axes) and its `skatebird.*` component ([`read::read_markers`]).
 //!
+//! What lies under a mission's collectibles, random-pick groups, mission givers and birds' dressing, and the grind rails
+//! as curves, come from [`read::read_scripted`]; `omit-skatebird-mission-props` ([`passes::mission`]) leaves the
+//! mission props out.
+//!
 //! The reader states facts only: which point a program spawns at, which givers become travel points and what they
 //! are called are the program's choices, made in its own passes before it raises the world for a destination.
 //!
@@ -15,11 +19,19 @@ pub mod components;
 pub mod passes;
 pub mod read;
 
-pub use read::{MarkersReport, read_markers, read_voronoi_programs};
+pub use read::{MarkersReport, ScriptedReport, read_markers, read_scripted, read_voronoi_programs};
 
 /// Registers SkateBIRD's passes by name: `lower-skatebird-voronoi`, whose options (`keywords`, `tier`, `cells`,
-/// `max-texels`) are the program's choices, without defaults.
+/// `max-texels`) are the program's choices, without defaults; `omit-skatebird-mission-props`, whose `roles` are too.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.register_requiring(
+        "omit-skatebird-mission-props",
+        |o| Ok(Box::new(passes::OmitSkatebirdMissionProps::from_options(o)?)),
+        &[(
+            "roles",
+            "collectible+mission_giver+birb_decorator+unlocking_collectible+player_board+camera",
+        )],
+    );
     reg.register_requiring(
         "lower-skatebird-voronoi",
         |o| Ok(Box::new(passes::voronoi::LowerSkatebirdVoronoi::from_options(o)?)),

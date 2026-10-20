@@ -453,6 +453,26 @@ impl Scene {
         self.transform_of.get(&game_object).copied()
     }
 
+    /// A GameObject and the GameObjects above it on its Transform chain, itself first, the root last; a GameObject
+    /// without a Transform is alone.
+    pub fn ancestors(&self, game_object: i64) -> Vec<i64> {
+        let mut out = vec![game_object];
+        let Some(mut t) = self.transform_of(game_object) else {
+            return out;
+        };
+        while let Some(n) = self.nodes.get(&t) {
+            if n.father == 0 || out.len() > self.nodes.len() {
+                break;
+            }
+            t = n.father;
+            match self.nodes.get(&t) {
+                Some(p) => out.push(p.game_object),
+                None => break,
+            }
+        }
+        out
+    }
+
     /// A Transform's local matrix.
     pub fn local_of(&self, tp: i64) -> Option<Matrix> {
         self.nodes.get(&tp).map(|n| n.local)

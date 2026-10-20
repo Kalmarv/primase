@@ -1,5 +1,8 @@
 //! SkateBIRD's reader: its scripts' facts on top of the Unity level read ([`read_markers`]).
+pub mod scripted;
 pub mod scripts;
+
+pub use scripted::{ScriptedReport, read_scripted};
 
 use primase_core::{Name, Source, World};
 use primase_unity::components::{UNITY, UnityBehaviour};

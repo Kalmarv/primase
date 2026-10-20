@@ -77,9 +77,108 @@ pub fn mission_giver_title(version: &str, data: &[u8]) -> Result<Option<String>>
     Ok((!title.is_empty()).then(|| title.to_owned()))
 }
 
+/// An object reference as stored: the file (0: this one, else an index into its externals) and the path id; `None`
+/// when null (path id 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PPtr {
+    pub file_id: i32,
+    pub path_id: i64,
+}
+
+/// A `GrindableRail`'s fields as stored: the previous and next node of its chain, two more references (meaning not
+/// known) and eight flag bytes (meaning not known).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrindableRail {
+    pub prev: Option<PPtr>,
+    pub next: Option<PPtr>,
+    pub third: Option<PPtr>,
+    pub fourth: Option<PPtr>,
+    pub flags: [u8; 8],
+}
+
+/// `GrindableRail`, from its script bytes: on Unity [`MEASURED`] four object references (a 32-bit file id and a 64-bit
+/// path id each: `prev`, `next`, two more) and eight flag bytes, each 0 or 1: 56 bytes (measured over level1's 540).
+pub fn grindable_rail(version: &str, data: &[u8]) -> Result<GrindableRail> {
+    const WHAT: &str = "GrindableRail";
+    if version != MEASURED {
+        return Err(refuse(WHAT, version, "another Unity version".into()));
+    }
+    let (Ok(refs), Ok(flags)) = (
+        <[u8; 48]>::try_from(data.get(..48).unwrap_or_default()),
+        <[u8; 8]>::try_from(data.get(48..).unwrap_or_default()),
+    ) else {
+        return Err(refuse(
+            WHAT,
+            version,
+            format!("{} script bytes, not 56", data.len()),
+        ));
+    };
+    if let Some(b) = flags.iter().find(|&&b| b > 1) {
+        return Err(refuse(WHAT, version, format!("flag byte {b:#04x}, not 0 or 1")));
+    }
+    let pptr = |i: usize| -> Option<PPtr> {
+        let at = i * 12;
+        let file_id = i32::from_le_bytes(refs.get(at..at + 4)?.try_into().ok()?);
+        let path_id = i64::from_le_bytes(refs.get(at + 4..at + 12)?.try_into().ok()?);
+        (path_id != 0).then_some(PPtr { file_id, path_id })
+    };
+    Ok(GrindableRail {
+        prev: pptr(0),
+        next: pptr(1),
+        third: pptr(2),
+        fourth: pptr(3),
+        flags,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Four references and eight flag bytes read; a null reference is none; another length or a flag that is not 0
+    /// or 1 is refused.
+    #[test]
+    fn a_grindable_rail_is_four_references_and_eight_flags() {
+        let mut data = Vec::new();
+        for (file, path) in [(0i32, 0i64), (0, 1234), (0, 0), (1, -77)] {
+            data.extend_from_slice(&file.to_le_bytes());
+            data.extend_from_slice(&path.to_le_bytes());
+        }
+        data.extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]);
+        let r = grindable_rail(MEASURED, &data).unwrap();
+        assert_eq!(r.prev, None);
+        assert_eq!(
+            r.next,
+            Some(PPtr {
+                file_id: 0,
+                path_id: 1234
+            })
+        );
+        assert_eq!(r.third, None);
+        assert_eq!(
+            r.fourth,
+            Some(PPtr {
+                file_id: 1,
+                path_id: -77
+            })
+        );
+        assert_eq!(r.flags, [1, 0, 0, 0, 1, 0, 0, 0]);
+        assert!(
+            grindable_rail(MEASURED, &data[..52])
+                .unwrap_err()
+                .to_string()
+                .contains("52 script bytes")
+        );
+        let mut bad = data.clone();
+        bad[50] = 2;
+        assert!(
+            grindable_rail(MEASURED, &bad)
+                .unwrap_err()
+                .to_string()
+                .contains("flag byte 0x02")
+        );
+        assert!(grindable_rail("2021.3.1f1", &data).is_err());
+    }
 
     /// The measured layout reads; another length, a bad bool, nonzero padding or another version is refused, naming
     /// what was found.
