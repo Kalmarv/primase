@@ -798,11 +798,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-cli"
+name = "primase-checks"
 version = "0.1.0"
 dependencies = [
  "meshopt",
- "primase-cache",
  "primase-compress",
  "primase-core",
  "primase-fromsoft",
@@ -872,6 +871,17 @@ dependencies = [
  "primase-testdata",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "primase-examples"
+version = "0.1.0"
+dependencies = [
+ "primase-compress",
+ "primase-core",
+ "primase-fromsoft",
+ "primase-image",
+ "primase-reskate",
 ]
 
 [[package]]

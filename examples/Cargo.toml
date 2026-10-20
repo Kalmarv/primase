@@ -1,0 +1,19 @@
+[package]
+name = "primase-examples"
+description = "Programs showing primase used as a library (the README quotes them); no library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+primase-core.workspace = true
+primase-compress.workspace = true
+primase-fromsoft.workspace = true
+primase-image.workspace = true
+primase-reskate.workspace = true
+
+[lints]
+workspace = true

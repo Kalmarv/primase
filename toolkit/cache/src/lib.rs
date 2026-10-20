@@ -1,6 +1,6 @@
 //! A content-addressed disk cache for heavy, pure steps (texture encoding, shader bakes): the key is a hash of
 //! everything the output depends on, the value is the output's bytes. Opt-in: a caller opens a [`Cache`] only on a
-//! folder it names (a command's `--cache` option, or what it reads from `PRIMASE_CACHE`); the library has no default
+//! folder it names (the program's choice); the library has no default
 //! location and reads no environment. Only [`Cache`] (module `disk`) touches files: the steps it serves are handed
 //! one by their caller.
 //!

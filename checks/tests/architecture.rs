@@ -6,7 +6,7 @@
 //! breaks, and fails on what is left; it also fails on a break that no longer occurs. The breaks only go:
 //! `breaks_only_go` holds the identity of every one there was, so a new or replaced break fails.
 //!
-//! - `dependencies`: crate edges per layer (`core`, `toolkit`, `formats`, `worlds`, `cli`). A `worlds` crate depends
+//! - `dependencies`: crate edges per layer (`core`, `toolkit`, `formats`, `worlds`; `checks` and `examples` hold no library). A `worlds` crate depends
 //!   on the toolkit and core, and a game or destination crate also on the engine crate it names; an engine crate on
 //!   no game, destination or recipe.
 //! - `io_follows_roles`: every library crate denies `clippy::disallowed_methods`/`disallowed_types` (file,
@@ -23,8 +23,7 @@
 //!   aside); a `worlds` crate uses only its own (`[package.metadata.primase] names`). A game crate's source names
 //!   that hold another crate's word (SkateBIRD's script class `SkateCollectible`) are declared in its manifest
 //!   (`source-names`), each matched as a whole string literal and each used.
-//! - `entry_points`: examples, bins and the cli compose library entry points; no world data or format handling of
-//!   their own.
+//! - `entry_points`: examples and bins compose library entry points; no world data or format handling of their own.
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
@@ -80,7 +79,7 @@ impl Member {
     fn layer(&self) -> &str {
         self.path.split('/').next().unwrap()
     }
-    /// A library crate: holds readers, passes, writers or mechanisms (everything below the cli but the dev-only
+    /// A library crate: holds readers, passes, writers or mechanisms (not `checks` or `examples`, nor the dev-only
     /// test-data crate).
     fn library(&self) -> bool {
         matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds") && self.path != "toolkit/testdata"
@@ -415,7 +414,8 @@ fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
             matches!(to_layer, "core" | "toolkit")
                 || (to.kind.as_deref() == Some("engine") && from.engine.as_deref() == Some(to.name.as_str()))
         }
-        "cli" => true,
+        // they hold no library: tests and example programs may compose anything
+        "checks" | "examples" => true,
         other => panic!("{}: unknown layer {other}", from.path),
     };
     normal || (dev && from.layer() != "core" && to_layer == "formats")
@@ -1271,7 +1271,7 @@ fn game_names() {
     assert_reconciled("game and engine names in shared code", found, excused);
 }
 
-// ---- entry points only in examples, bins and the cli ----
+// ---- entry points only in examples and bins ----
 
 /// What composition code may not do, as token patterns, and how to say it.
 fn data_logic(t: &[Tok]) -> BTreeSet<&'static str> {
@@ -1347,9 +1347,6 @@ fn entry_points() {
         let dir = root().join(&m.path);
         files.extend(rust_files(&dir.join("examples")));
         files.extend(rust_files(&dir.join("src").join("bin")));
-        if m.layer() == "cli" {
-            files.extend(rust_files(&dir.join("src")));
-        }
     }
     let mut found = BTreeSet::new();
     for file in files {

@@ -159,14 +159,14 @@ may be cached immutably.
 The example omits collision soups with no triangles; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
-A skate-scene folder's tiles are a conversion like any other (`primase convert --from skate-scene --scene <folder>
---select "select-lod{form=finest}, lower-skate-lights" --passes "lower-skate-pbr, normalize-normals,
-fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}" --to web
-<output>`; `--features ktx2` and `--ktx2` with `prepare-web-textures{...,memo-mib=512}` after those passes for KTX2
+A skate-scene folder's tiles are a conversion like any other: a program runs `convert` with the skate-scene reader,
+the selection `select-lod{form=finest}, lower-skate-lights`, the passes `lower-skate-pbr, normalize-normals,
+fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}` and the web
+writer; with `--features ktx2`, KTX2 encoding on and `prepare-web-textures{...,memo-mib=512}` after those passes for KTX2
 tiles, the memo keeping each texture's preparation, in memory, for the parts that share it (the pass does no
 I/O: a later item could keep budget-fit encodings across runs, stored and restored at the program or writer
 boundary, not by the pass); the
-plain comparison set is a second conversion with `--plain` and without `prepare-web-textures`), one cell at a time,
+plain comparison set is a second conversion, plain and without `prepare-web-textures`), one cell at a time,
 so memory holds one cell's closure. The tile parts file a placement by element centre (`split_by_tile`) when its
 pivot does not locate its geometry: its world-space box, from its prototype GLB's POSITION bounds (the reader's
 prototype box), is wider than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with a model

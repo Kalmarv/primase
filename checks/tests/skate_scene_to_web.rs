@@ -1,4 +1,4 @@
-//! `primase convert --from skate-scene --to web` end to end on a synthetic skate scene (a core world raised and written
+//! A skate-scene folder converted to web tiles end to end on a synthetic skate scene (a core world raised and written
 //! as one): every scene light reaches its cell's tile, in the compressed set and in the plain set (a conversion of its
 //! own), and no light is left unlowered.
 
@@ -9,7 +9,7 @@ use primase_core::{
     Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World,
 };
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn tmp(name: &str) -> PathBuf {
     let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -102,32 +102,56 @@ fn scene(name: &str) -> PathBuf {
     dir
 }
 
-/// The skate scene's web tiles, as the command line converts them (`--plain` for the plain set): the selection and
-/// passes the CLI's usage gives for a skate scene. Returns what it printed.
-fn convert(scene: &PathBuf, out: &PathBuf, plain: bool) -> String {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_primase"));
-    cmd.args(["convert", "--from", "skate-scene", "--scene"])
-        .arg(scene)
-        .args([
-            "--select",
-            "select-lod{form=finest}, lower-skate-lights",
-            "--passes",
-            "lower-skate-pbr, normalize-normals, fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}",
-            "--to",
-            "web",
-        ])
-        .arg(out);
+/// Every crate's passes this conversion names, registered as a program registers them.
+fn registry() -> primase_core::pass::PassRegistry {
+    let mut r = primase_core::pass::PassRegistry::new();
+    primase_core::register(&mut r);
+    primase_image::register(&mut r);
+    primase_meshops::register(&mut r);
+    primase_reskate::register(&mut r);
+    primase_gltf::register(&mut r);
+    r
+}
+
+/// The skate scene's web tiles, as a program converts them (`plain`: the plain comparison set): the skate-scene
+/// reader, a selection and passes, the web writer. Returns the conversion's notices as text.
+fn convert(scene: &Path, out: &Path, plain: bool) -> String {
+    let mut options = primase_web::Options::new(primase_web::TileSize::new(200.0).unwrap());
+    options.tile_byte_budget = Some(96 << 20);
     if plain {
-        cmd.arg("--plain");
+        options.compress = false;
+        options.gpu_instancing = false;
     }
-    let run = cmd.output().unwrap();
-    let printed = String::from_utf8_lossy(&run.stdout).into_owned();
-    assert!(
-        run.status.success(),
-        "{printed}\n{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    printed
+    let (mut parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]).unwrap();
+    let registry = registry();
+    let select = registry
+        .parse("select-lod{form=finest}, lower-skate-lights")
+        .unwrap();
+    let passes = registry
+        .parse(
+            "lower-skate-pbr, normalize-normals, fill-missing-texcoords,              prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}",
+        )
+        .unwrap();
+    let mut reader = primase_reskate::SceneReader::new(scene.to_path_buf());
+    let report = primase_core::convert::convert_parts(
+        &mut reader,
+        &mut parts,
+        Box::new(writer),
+        &primase_core::pass::PassManager::new(registry),
+        &select,
+        &passes,
+    )
+    .unwrap();
+    report
+        .notices()
+        .iter()
+        .map(|n| {
+            format!(
+                "{n:?}
+"
+            )
+        })
+        .collect()
 }
 
 fn tiles(set: &std::path::Path) -> serde_json::Value {

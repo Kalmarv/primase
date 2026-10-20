@@ -3,7 +3,7 @@ allow-expect-in-tests = true
 
 # File, environment and process access. Library crates deny these (`#![deny(clippy::disallowed_methods,
 # clippy::disallowed_types)]` in each lib.rs); a reader's or writer's I/O module opts back in with its role, checked by
-# cli/tests/architecture.rs. Passes, core and the toolkit's pure mechanisms never touch files (CONTRIBUTING.md, "Roles").
+# checks/tests/architecture.rs. Passes, core and the toolkit's pure mechanisms never touch files (CONTRIBUTING.md, "Roles").
 disallowed-methods = [
     { path = "std::fs::read", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
     { path = "std::fs::read_to_string", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },

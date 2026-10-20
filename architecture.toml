@@ -1,4 +1,4 @@
-# Breaks of the role and layer rules (CONTRIBUTING.md, "Roles", "Layout"), checked by cli/tests/architecture.rs.
+# Breaks of the role and layer rules (CONTRIBUTING.md, "Roles", "Layout"), checked by checks/tests/architecture.rs.
 #
 # Readers read, writers write, and everything listed here is a break to remove: each gives its reason and what
 # removes it (`removed_when`). The test fails on a violation not listed here, on an entry that no longer occurs, and on
@@ -14,7 +14,7 @@
 # A migration status per module, counted like a break: the check fails on a module that breaks the layout and isn't
 # listed, and on a listed one that follows it now. Each entry goes with the commit that arranges its module.
 
-# ---- composition without data logic (examples, bins, cli) ----
+# ---- composition without data logic (examples, bins) ----
 
 # ---- passes registered, lowerings run as passes ----
 

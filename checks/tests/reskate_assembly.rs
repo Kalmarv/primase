@@ -1,6 +1,6 @@
 //! The writer's assembly of a prepared GTA Legion tile assigns the same material ids, names and texture ids whether
 //! its textures are encoded (`write_map`) or only identified (`prepare-reskate-overlays`, which stacks over the writer's
-//! meshes without encoding a texture): the conversion `primase convert --from gta --region legion --to reskate` runs,
+//! meshes without encoding a texture): a GTA region converted to a ReSkate map runs,
 //! up to the writer, with the ReSkate passes its documented recipe gives.
 
 use std::sync::{Arc, Mutex};
@@ -14,13 +14,10 @@ use primase_testdata::real_data;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-/// The cli's registry (`convert::registry`).
+/// Every crate's passes by name, as a program registers them.
 fn registry() -> PassRegistry {
     let mut r = PassRegistry::new();
-    r.register("select-lod", primase_core::select_lod);
-    r.register("drop-optional", primase_core::drop_optional);
-    r.register("place-spawn", primase_core::place_spawn);
-    r.register("resolve-state", primase_core::state::resolve_state);
+    primase_core::register(&mut r);
     primase_image::register(&mut r);
     primase_meshops::register(&mut r);
     primase_gta::register(&mut r);

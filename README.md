@@ -19,7 +19,8 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`toolkit`](toolkit/) | Reusable mechanisms such as compression, texture processing and mesh operations, independent of a particular game or destination. |
 | [`formats`](formats/) | Interchange formats and their readers, passes and writers. |
 | [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
-| [`cli`](cli/) | A small command line for trying readers, passes and writers together. |
+| [`examples`](examples/) | Programs using primase as a library (the one below). primase has no command line: a program composes readers, passes and writers itself. |
+| [`checks`](checks/) | The architecture rules' tests and tests spanning crates. |
 
 A game crate may depend on its engine's crate, never the reverse. Each worlds crate names only its own game,
 engine or destination. Reusable destination preparation belongs alongside that destination's writer, as separately
@@ -88,7 +89,7 @@ against what the writer writes, and writes it. This region is one part; a larger
 (`convert_parts`) and written as the whole map would be. Every choice is a typed value, an enum or a checked number, so a choice that is not valid fails while the pipeline is built, before
 anything is read.
 
-<!-- quoted from cli/examples/sekiro_to_reskate.rs: keep the two the same -->
+<!-- quoted from examples/examples/sekiro_to_reskate.rs: keep the two the same -->
 ```rust
 fn main() -> Result<()> {
     // Ashina Castle (m11_01), the part within [west, south, east, north] metres, and placements reaching 30 m into it
@@ -172,11 +173,11 @@ fn main() -> Result<()> {
 }
 ```
 
-This is [`cli/examples/sekiro_to_reskate.rs`](cli/examples/sekiro_to_reskate.rs) without its imports and Oodle
+This is [`examples/examples/sekiro_to_reskate.rs`](examples/examples/sekiro_to_reskate.rs) without its imports and Oodle
 loader; `cargo test --workspace` builds it. With the game, ReSkate Studio and skate. installed at the paths in it:
 
 ```text
-cargo run --release -p primase-cli --example sekiro_to_reskate
+cargo run --release -p primase-examples --example sekiro_to_reskate
 ```
 
 The screenshot is a complete program's output: these passes and the program's own, for what it chooses beyond the

@@ -20,7 +20,8 @@ members = [
     "toolkit/cache",
     "formats/gltf",
     "formats/web",
-    "cli",
+    "checks",
+    "examples",
     "worlds/fromsoft",
     "worlds/reskate",
     "worlds/unity",
@@ -107,7 +108,7 @@ float_cmp = "allow"
 dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
-# Denied in each library crate's lib.rs, so tests, examples and the cli keep file access (clippy.toml lists them).
+# Denied in each library crate's lib.rs, so tests and examples keep file access (clippy.toml lists them).
 disallowed_methods = "allow"
 disallowed_types = "allow"
 

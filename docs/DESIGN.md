@@ -150,7 +150,8 @@ worlds/       one crate per game or engine: reskate (Frostbite CAS/TOC/EBX, map 
               forza, unity, insomniac, ...
 formats/      gltf, web, usd, stl/3mf, obj, ... (skate-scene interchange v1: worlds/reskate)
 bindings/     python (pyo3) and C# (csbindgen), so existing tools can call the toolkit
-cli/          thin compositions: `primase extract sekiro --game <dir> --area m11_01 --to gltf out/`
+checks/       the architecture rules' tests and tests spanning crates
+examples/     programs using the library (primase has no command line; programs live in their own repos)
 ```
 
 **The crate rule.** Each game becomes its own crate (`worlds/sekiro`, `worlds/gta`, ...), and patterns that recur
@@ -158,7 +159,7 @@ across games become core or toolkit functions: the second time a game crate need
 (a codec, a container walk, a vertex decode, a transform convention, a hash), it moves to the toolkit with a gate and
 both games call it. A game crate ends up mostly composition: format specifics plus calls into the toolkit. Likewise a
 CLI is a few dozen lines of reader + passes + writer; if it needs more than piping, the missing piece belongs in a
-crate. Dependencies point down only (`cli -> worlds/formats -> toolkit -> core`); world crates never
+crate. Dependencies point down only (`worlds/formats -> toolkit -> core`); world crates never
 depend on each other or on formats, and formats depend on no format but `formats/gltf` (CONTRIBUTING.md). `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
 two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or go to Blender.
 

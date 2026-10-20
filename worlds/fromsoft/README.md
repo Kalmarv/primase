@@ -375,7 +375,7 @@ with its model, translation exact and basis within 1e-5; after the geometry
 composition every
 lowered vertex is a vertex of its FLVER in model space within 0.2 mm; four
 material fixtures worked out by hand from the dump keep their class, base and
-normal texture. `cli/tests/fromsoft_collision_scene.rs` compares the map collision,
+normal texture. `fromsoft_collision_scene.rs` (retired) compared the map collision,
 lowered with the composition's options, with the scene our earlier C# exporter wrote (`PRIMASE_FROMSOFT_SCENE`, a regression
 baseline, read through the ReSkate interchange tables): all non-roof triangles and
 the water table agree exactly. The light, ledge and marker passes are checked by

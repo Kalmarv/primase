@@ -47,3 +47,12 @@ pub use world::{
     Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Linearity, Opaque, OpaqueData,
     Resource, World, remap_list,
 };
+
+/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `resolve-state`), as every
+/// crate registers its own: a program builds its registry from these.
+pub fn register(reg: &mut pass::PassRegistry) {
+    reg.register("select-lod", select_lod);
+    reg.register("drop-optional", drop_optional);
+    reg.register("place-spawn", place_spawn);
+    reg.register("resolve-state", state::resolve_state);
+}
