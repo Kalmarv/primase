@@ -457,14 +457,14 @@ pub(crate) fn grouping(s: &Scene, a: &EncodingOptions) -> crate::components::Ove
 
 /// The writer's assembly of the prepared world `world` for the encoding `a`: its tiles and prototypes only, no mesh
 /// encoded and no collision laid out ([`Layout::Render`]), with the overlay stack `stack` and textures encoded or only
-/// identified (`encode`).
+/// identified (`encode`); and the writer settings its meshes are grouped by ([`grouping`]), from the same reading.
 fn assembly(
     world: &World,
     a: &EncodingOptions,
     stack: Stack,
     chains: Chains,
     encode: bool,
-) -> Result<MapWriter> {
+) -> Result<(MapWriter, crate::components::OverlayGrouping)> {
     let PartRead {
         scene: s,
         o,
@@ -472,6 +472,7 @@ fn assembly(
         counts,
         ..
     } = read_part(world, Path::new(""), a, false)?;
+    let grouping = grouping(&s, a);
     let mut writer = MapWriter::new(o, s.surfaces.clone())?
         .with_stack(stack)
         .with_chains(chains)
@@ -481,54 +482,56 @@ fn assembly(
         writer = writer.without_encoding();
     }
     assemble(&s, &placements, &mut writer)?;
-    Ok(writer)
+    Ok((writer, grouping))
 }
 
 /// The overlay stack of the prepared world `world` (`prepare-reskate-overlays`'s): the writer's own assembly of its
 /// meshes for the encoding `a`, textures identified but not encoded, each mesh's overlays stacked by `step` and
-/// recorded by piece.
+/// recorded by piece, for the grouping the assembly read.
 pub(crate) fn overlay_stack(
     world: &World,
     a: &EncodingOptions,
     step: f32,
 ) -> Result<crate::components::SkateOverlayStack> {
-    let s = Scene::from_world(world, Path::new(""))?;
     let rec = crate::components::SkateOverlayStack {
         step,
-        grouping: Some(grouping(&s, a)),
         ..Default::default()
     };
-    match assembly(
+    let (mut writer, grouping) = assembly(
         world,
         a,
         Stack::Compute(Box::new(rec)),
         Chains::Off { left: 0 },
         false,
-    )?
-    .take_stack()
-    {
-        Stack::Compute(rec) => Ok(*rec),
+    )?;
+    match writer.take_stack() {
+        Stack::Compute(rec) => Ok(crate::components::SkateOverlayStack {
+            grouping: Some(grouping),
+            ..*rec
+        }),
         _ => unreachable!("the stack it was given"),
     }
 }
 
 /// The blend chains of the prepared world `world` (`prepare-reskate-blend-order`'s): the writer's own assembly of its
 /// tiles for the encoding `a`, textures identified but not encoded, each tile's chain overlays cut on a `grid`-metre
-/// grid and lifted by rank, recorded by tile.
+/// grid and lifted by rank, recorded by tile, for the grouping the assembly read.
 pub(crate) fn blend_chains(
     world: &World,
     a: &EncodingOptions,
     grid: f32,
 ) -> Result<crate::components::SkateBlendChains> {
-    let s = Scene::from_world(world, Path::new(""))?;
     let rec = crate::components::SkateBlendChains {
         grid,
-        grouping: Some(grouping(&s, a)),
         ..Default::default()
     };
     let chains = Chains::Record(Box::new(rec));
-    match assembly(world, a, Stack::Off { unstacked: 0 }, chains, false)?.take_chains() {
-        Chains::Record(rec) => Ok(*rec),
+    let (mut writer, grouping) = assembly(world, a, Stack::Off { unstacked: 0 }, chains, false)?;
+    match writer.take_chains() {
+        Chains::Record(rec) => Ok(crate::components::SkateBlendChains {
+            grouping: Some(grouping),
+            ..*rec
+        }),
         _ => unreachable!("the chains it was given"),
     }
 }
@@ -549,7 +552,7 @@ pub fn assembled_materials(
     a: &EncodingOptions,
     encode: bool,
 ) -> Result<Vec<AssembledMaterial>> {
-    let writer = assembly(
+    let (writer, _) = assembly(
         world,
         a,
         Stack::Off { unstacked: 0 },
