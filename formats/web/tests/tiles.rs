@@ -607,7 +607,14 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
         }],
         ..Options::new(primase_web::TileSize::new(200.).unwrap())
     };
-    assert_eq!(primase_web::plan(&w, &options).unwrap().ground_markers(), 1);
+    // counted as the records are written, from each cell's world
+    let mut plan = primase_web::plan(&w, &options).unwrap();
+    assert_eq!(plan.ground_markers(), 0);
+    for cell in plan.cells() {
+        plan.write_cell(cell, &w.subset(&w.closure(plan.roots(cell))))
+            .unwrap();
+    }
+    assert_eq!(plan.ground_markers(), 1);
     let set = write(&w, &options).unwrap();
     let mut records = Vec::new();
     for tile in &set.index.tiles {

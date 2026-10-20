@@ -70,7 +70,10 @@ JSON numbers must be finite; counts are nonnegative integers.
 accessor gives its triangle count. Bounds of geometry tiles cover render
 geometry, with record anchors included; metadata-only bounds cover anchors.
 They do not promise to contain every collision vertex. Cells are streaming
-ownership, not clipping boxes: whole meshes or triangles can extend outside.
+ownership, not clipping boxes: whole meshes or triangles can extend outside, and
+content a converter moved after the cells were planned stays in its cell, its
+tile's bounds covering where it is. A placement's collision records are in the
+tile of the placement.
 Empty cells are omitted. Records without render geometry retain a metadata GLB.
 
 Asset filenames contain the full lowercase SHA256 of their own bytes:

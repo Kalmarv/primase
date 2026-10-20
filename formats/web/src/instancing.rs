@@ -112,14 +112,40 @@ fn accessor(
 /// The glTF writer's shadow extras key.
 const SHADOWS: &str = "primase.shadows";
 
+/// A node's transform as the glTF writer wrote it: its `matrix`, its `translation` alone, or none (identity).
+fn node_transform(node: &Value) -> Result<Transform> {
+    let numbers = |v: &Value, n: usize| -> Result<Vec<f32>> {
+        let a = v
+            .as_array()
+            .filter(|a| a.len() == n)
+            .ok_or_else(|| Error::Invalid(format!("node transform {v} is not {n} numbers")))?;
+        a.iter()
+            .map(|x| {
+                x.as_f64()
+                    .map(|x| x as f32)
+                    .ok_or_else(|| Error::Invalid(format!("node transform {v} is not {n} numbers")))
+            })
+            .collect()
+    };
+    let mut t = Transform::IDENTITY;
+    if let Some(m) = node.get("matrix") {
+        let m = numbers(m, 16)?;
+        t.cols = std::array::from_fn(|c| std::array::from_fn(|r| m[4 * c + r]));
+    } else if let Some(v) = node.get("translation") {
+        let v = numbers(v, 3)?;
+        t.cols[3] = [v[0], v[1], v[2]];
+    }
+    if node.get("rotation").is_some() || node.get("scale").is_some() {
+        return Err(Error::Invalid("writer node with rotation or scale".into()));
+    }
+    Ok(t)
+}
+
 /// Consume the private placement key emitted by the tile writer and instance only
 /// positive, non-sheared TRS groups sharing the same resolved glTF mesh and the same
-/// `primase.shadows` (an instanced node has one shadow setting, kept on it).
-pub(super) fn apply(
-    input: Document,
-    transforms: &BTreeMap<u32, Transform>,
-    enabled: bool,
-) -> Result<(Document, u64)> {
+/// `primase.shadows` (an instanced node has one shadow setting, kept on it), each instance's
+/// transform the one its node holds.
+pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
     let Document {
         json: mut doc,
         mut bin,
@@ -138,7 +164,7 @@ pub(super) fn apply(
         if let Some(extras) = node["extras"]["primase"].as_object_mut() {
             extras.remove("web.placement_key");
         }
-        if enabled && let Some(trs) = transforms.get(&marker).copied().and_then(decompose) {
+        if enabled && let Some(trs) = decompose(node_transform(node)?) {
             let mesh = node["mesh"]
                 .as_u64()
                 .ok_or_else(|| Error::Invalid("mesh node lacks mesh index".into()))?;

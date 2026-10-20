@@ -5,17 +5,20 @@
 materials to PBR before export.
 
 A scene too large to hold loaded at once goes through the same writer one cell at
-a time. `plan(&World, &Options)` assigns placements, viewer records and the
-world's collision to cells without loading anything; collision is filed by its
-anchor and held only by reference (the holder is one of the cell's roots, and its
-soup is made from the cell's world when the cell is written), so the plan holds no
-geometry. With KTX2, encodings are held in memory between tiles up to
+a time. `plan(&World, &Options)` decides which cell owns what, without loading
+anything: placements by pivot, lights, curves, markers and standalone collision by
+position, a placement's collision with the placement. The plan holds ownership,
+not content: each cell is written from its world as prepared (after a converter's
+passes for that cell), which is authoritative. Transforms, lights, records and
+collision are read from it, an entity stays with the cell that owns it wherever a
+pass moved it (the tile's bounds follow it), and what the cell's world holds that
+the planning world did not (made by its load or passes) is the cell's. With KTX2, encodings are held in memory between tiles up to
 `Options::encoding_memory` (least recently used dropped, then read from the disk
 cache or encoded again); the bytes are the same at any bound. `TilePlan::split` files the
 triangles of each `split_by_tile` placement from a world holding its prototype
 loaded. Then, per cell, the driver takes the world's `World::closure` of
 `TilePlan::roots(cell)` as a `World::subset`, loads its meshes and textures,
-lowers its materials, calls `TilePlan::write_cell` and stores each `WrittenTile`
+lowers its materials (and keeps what its passes made for it), calls `TilePlan::write_cell` and stores each `WrittenTile`
 (`WrittenTile::write_to`) before dropping that world. `TilePlan::finish` returns
 the index, and `Index::write_to` publishes `tiles.json` once every file it names
 is in place. `write` is that pipeline over an already prepared world. Each tile is
