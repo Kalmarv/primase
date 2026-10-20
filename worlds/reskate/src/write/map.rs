@@ -37,6 +37,9 @@ pub struct BuildReport {
     /// laid them out already), are these, cell by cell.
     pub cells: usize,
     pub cell_triangles: usize,
+    /// The bytes the sink kept of the loaded content it wrote, to compare a later part's copy with (a map in parts): a
+    /// digest and a part tag per record, however big the record.
+    pub identity_bytes: usize,
     pub tiles: usize,
     pub merged_entities: i64,
     pub merged_tris: i64,
@@ -317,28 +320,29 @@ struct Content {
 /// the layout summary's: one id in every part) is written once, however many parts reach it; content a part made, and
 /// everything of a map written whole (`first_made` none), is its own.
 ///
-/// A later part's copy of loaded content must be the first's: one prepared differently by two parts (a light of
-/// another energy) is refused, naming both parts by their tags (`part`: this one's; `None`: it holds none of its roots).
-/// Content of different identities stays apart, whatever its values.
+/// A later part's copy of loaded content must be the first's, equal or refused by the SHA-256 of its canonical
+/// identity ([`Written::digest`]): one prepared differently by two parts (a light of another energy) is refused, naming
+/// both parts by their tags (`part`: this one's; `None`: it holds none of its roots). Content of different identities
+/// stays apart, whatever its values. The sink keeps the digest and the tag of the part that wrote it, not the record
+/// (written and dropped with its part), so what it holds is fixed per record however big the record is.
 fn fresh(
-    written: &mut BTreeMap<(Kind, u32), (Option<u64>, Written)>,
+    written: &mut Identities,
     first_made: Option<u32>,
     part: Option<u64>,
     e: primase_core::Entity,
-    payload: Written,
+    payload: Written<'_>,
 ) -> Result<bool> {
     let loaded = first_made.is_some_and(|f| e.index() < f);
     if !loaded {
         return Ok(true);
     }
+    let digest = payload.digest();
     match written.entry((payload.kind(), e.index())) {
         std::collections::btree_map::Entry::Vacant(v) => {
-            v.insert((part, payload));
+            v.insert((part, digest));
             Ok(true)
         }
-        std::collections::btree_map::Entry::Occupied(o) if o.get().1.identity() == payload.identity() => {
-            Ok(false)
-        }
+        std::collections::btree_map::Entry::Occupied(o) if o.get().1 == digest => Ok(false),
         std::collections::btree_map::Entry::Occupied(o) => {
             let name = |p: Option<u64>| {
                 p.map_or_else(
@@ -357,56 +361,72 @@ fn fresh(
     }
 }
 
-/// Loaded content a map in parts writes once, as the first part that holds it gave it.
-#[derive(Clone, Debug)]
-enum Written {
-    Light(PlacedLight),
-    Marker(bool, Marker),
-    Water(WaterQuad),
-    Grind(GrindCurve),
-    Soup(SoupFacts),
-    Hull(crate::model::Hull),
+/// Loaded content a map in parts writes once, as the part that holds it gives it (borrowed: compared by its digest).
+#[derive(Clone, Copy, Debug)]
+enum Written<'a> {
+    Light(&'a PlacedLight),
+    Marker(bool, &'a Marker),
+    Water(&'a WaterQuad),
+    Grind(&'a GrindCurve),
+    Soup(&'a SoupFacts),
+    Hull(&'a crate::model::Hull),
 }
 
-/// A record's exact identity: its numbers (every float by its bits: -0.0 and 0.0 apart, a NaN equal to itself) and
-/// its text, in field order.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Identity {
-    numbers: Vec<u64>,
-    text: Vec<String>,
-}
+/// A record's canonical identity, streamed into SHA-256 as it is read (nothing copied): the record's kind first, then
+/// each field after a one-byte tag naming its type, numbers little-endian (every float by its bits: -0.0 and 0.0
+/// apart, a NaN equal to itself), text and lists after their length; the fields in a fixed order per kind. Two
+/// different records never stream the same bytes.
+struct Identity(sha2::Sha256);
 
 impl Identity {
-    fn f32(&mut self, v: f32) -> &mut Identity {
-        self.numbers.push(u64::from(v.to_bits()));
+    fn new(kind: Kind) -> Identity {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update([b'R', kind as u8]);
+        Identity(h)
+    }
+    fn put(&mut self, tag: u8, bytes: &[u8]) -> &mut Identity {
+        use sha2::Digest;
+        self.0.update([tag]);
+        self.0.update(bytes);
         self
+    }
+    fn f32(&mut self, v: f32) -> &mut Identity {
+        self.put(b'f', &v.to_bits().to_le_bytes())
     }
     fn f64(&mut self, v: f64) -> &mut Identity {
-        self.numbers.push(v.to_bits());
-        self
+        self.put(b'd', &v.to_bits().to_le_bytes())
     }
     fn int(&mut self, v: i64) -> &mut Identity {
-        self.numbers.push(v as u64);
-        self
+        self.put(b'i', &v.to_le_bytes())
+    }
+    /// A list's (or a text's) length, before its items.
+    fn len(&mut self, n: usize) -> &mut Identity {
+        self.put(b'n', &(n as u64).to_le_bytes())
     }
     fn vec3(&mut self, v: primase_meshops::vector::Vec3) -> &mut Identity {
         self.f32(v.x).f32(v.y).f32(v.z)
     }
     fn text(&mut self, s: &str) -> &mut Identity {
-        self.text.push(s.to_owned());
-        self
+        self.len(s.len());
+        self.put(b't', s.as_bytes())
     }
     fn option(&mut self, present: bool) -> &mut Identity {
-        self.int(i64::from(present))
+        self.put(b'o', &[u8::from(present)])
+    }
+    fn finish(self) -> [u8; 32] {
+        use sha2::Digest;
+        self.0.finalize().into()
     }
 }
 
-impl Written {
-    /// Its exact identity, compared between the parts that hold it. A marker without a name of its own is compared
-    /// without the name its part numbered it by (the map numbers markers over every part).
-    fn identity(&self) -> Identity {
-        let mut i = Identity::default();
-        match self {
+impl Written<'_> {
+    /// The SHA-256 of its canonical identity ([`Identity`]), compared between the parts that hold it. A marker without
+    /// a name of its own is compared without the name its part numbered it by (the map numbers markers over every
+    /// part).
+    fn digest(&self) -> [u8; 32] {
+        let mut i = Identity::new(self.kind());
+        match *self {
             Written::Light(l) => {
                 i.int(l.entity.index().into()).int(l.spot.into());
                 i.vec3(l.pos).vec3(l.dir).vec3(l.tan);
@@ -423,7 +443,7 @@ impl Written {
                 i.f32(l.priority).text(&l.group).text(&l.source);
             }
             Written::Marker(named, m) => {
-                i.int((*named).into()).text(m.kind);
+                i.int(named.into()).text(m.kind);
                 match (&m.name, named) {
                     (Some(n), true) => {
                         i.option(true).text(n);
@@ -438,14 +458,16 @@ impl Written {
                     .f32(s.above)
                     .int(s.from_all.into())
                     .f32(s.min_up);
-                i.int(s.rings.len() as i64);
+                i.len(s.rings.len());
                 for &r in &s.rings {
                     i.f32(r);
                 }
                 i.int(s.directions.into()).f32(s.max_above_ground).f32(s.headroom);
                 i.f64(m.lift).int(m.shelter.into()).int(m.trainer.into());
-                i.option(m.blueprint.is_some())
-                    .text(m.blueprint.as_deref().unwrap_or(""));
+                i.option(m.blueprint.is_some());
+                if let Some(b) = &m.blueprint {
+                    i.text(b);
+                }
                 i.option(m.transform.is_some());
                 for &v in m.transform.iter().flatten() {
                     i.f32(v);
@@ -457,7 +479,7 @@ impl Written {
                     .f32(q.x1)
                     .f32(q.y1)
                     .f32(q.z)
-                    .int(q.corners.len() as i64);
+                    .len(q.corners.len());
                 for &(x, y) in &q.corners {
                     i.f32(x).f32(y);
                 }
@@ -467,11 +489,11 @@ impl Written {
                     .int(g.surface as i64)
                     .option(g.prism.is_some());
                 if let Some(p) = &g.prism {
-                    i.int(p.positions.len() as i64);
+                    i.len(p.positions.len());
                     for &v in &p.positions {
                         i.vec3(v);
                     }
-                    i.int(p.indices.len() as i64);
+                    i.len(p.indices.len());
                     for &x in &p.indices {
                         i.int(x.into());
                     }
@@ -492,17 +514,17 @@ impl Written {
                     .text(&h.name)
                     .int(h.surface as i64)
                     .int(h.ground.into());
-                i.int(h.pos.len() as i64);
+                i.len(h.pos.len());
                 for &v in &h.pos {
                     i.f32(v);
                 }
-                i.int(h.idx.len() as i64);
+                i.len(h.idx.len());
                 for &x in &h.idx {
                     i.int(x.into());
                 }
             }
         }
-        i
+        i.finish()
     }
 
     fn kind(&self) -> Kind {
@@ -516,6 +538,12 @@ impl Written {
         }
     }
 }
+
+/// The SHA-256 of a record's canonical identity ([`Written::digest`]).
+type Digest = [u8; 32];
+
+/// The loaded content a map in parts wrote, by kind and planning id: the tag of the part that wrote it and its digest.
+type Identities = BTreeMap<(Kind, u32), (Option<u64>, Digest)>;
 
 /// What standalone content of a map in parts the sink writes once ([`Taken::written`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -584,9 +612,10 @@ struct Taken {
     unsupported_names: BTreeMap<String, u64>,
     layout: Option<Layout>,
     parts: usize,
-    /// The loaded content written so far, by kind and planning id: a light, marker, water surface, grind curve or soup
-    /// two parts both reach is written once.
-    written: BTreeMap<(Kind, u32), (Option<u64>, Written)>,
+    /// The loaded content written so far, by kind and planning id, as the tag of the part that wrote it and the
+    /// SHA-256 of its identity: a light, marker, water surface, grind curve, soup or hull soup two parts both reach is
+    /// written once, equal or refused ([`fresh`]); a fixed size per record.
+    written: Identities,
     /// The bytes of each mesh file written (the map's mesh bytes; a file a later decision removed taken out).
     mesh_sizes: BTreeMap<String, u64>,
     /// Every stacked mesh's overlay totals, and the stacked prototypes' pieces, over every part (a prototype once).
@@ -839,13 +868,7 @@ impl MapSink {
         };
         let mut hulls = Vec::with_capacity(world_hulls.len());
         for h in world_hulls {
-            if fresh(
-                &mut t.written,
-                first_made,
-                tag,
-                h.entity,
-                Written::Hull(h.clone()),
-            )? {
+            if fresh(&mut t.written, first_made, tag, h.entity, Written::Hull(&h))? {
                 hulls.push(h);
             }
         }
@@ -913,7 +936,7 @@ impl MapSink {
                 cut: sd.cut,
                 kept: sd.kept,
             };
-            if fresh(w, first_made, tag, sd.entity, Written::Soup(f.clone()))? {
+            if fresh(w, first_made, tag, sd.entity, Written::Soup(&f))? {
                 t.scene.soups.push(f);
             }
         }
@@ -924,7 +947,7 @@ impl MapSink {
             .zip(std::mem::take(&mut s.markers));
         for ((e, named), m) in markers {
             // an unnamed marker's name is the part's numbering, renamed over the map at the end: not compared
-            if fresh(w, first_made, tag, e, Written::Marker(named, m.clone()))? {
+            if fresh(w, first_made, tag, e, Written::Marker(named, &m))? {
                 c.markers.push((e, named, m));
             }
         }
@@ -933,17 +956,17 @@ impl MapSink {
             .map(|(e, _)| e)
             .zip(std::mem::take(&mut s.water));
         for (e, q) in water {
-            if fresh(w, first_made, tag, e, Written::Water(q.clone()))? {
+            if fresh(w, first_made, tag, e, Written::Water(&q))? {
                 c.water.push((e, q));
             }
         }
         for l in std::mem::take(&mut s.lights) {
-            if fresh(w, first_made, tag, l.entity, Written::Light(l.clone()))? {
+            if fresh(w, first_made, tag, l.entity, Written::Light(&l))? {
                 c.lights.push(l);
             }
         }
         for g in std::mem::take(&mut s.curves) {
-            if fresh(w, first_made, tag, g.entity, Written::Grind(g.clone()))? {
+            if fresh(w, first_made, tag, g.entity, Written::Grind(&g))? {
                 c.grind.push(g);
             }
         }
@@ -1019,6 +1042,7 @@ impl MapSink {
             unsupported_names,
             parts,
             mut mesh_sizes,
+            written,
             records,
             stack_meshes,
             ..
@@ -1150,6 +1174,7 @@ impl MapSink {
             parts,
             cells: cells.len(),
             cell_triangles: cell_triangles.values().sum(),
+            identity_bytes: written.len() * std::mem::size_of::<((Kind, u32), (Option<u64>, Digest))>(),
             tiles: r.tiles.len(),
             merged_entities: r.merged_entities,
             merged_tris: r.merged_tris,

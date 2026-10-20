@@ -1541,3 +1541,62 @@ fn shared_content_prepared_differently_is_refused() {
         "{e}"
     );
 }
+
+/// [`shared_map`] with a hull soup of `n` triangles (a fan of thin slivers, its own part: no transform), loaded and
+/// written once.
+fn with_hull(n: u32) -> World {
+    let mut w = shared_map();
+    let mut positions = vec![[700.0, 0.5, -20.0]];
+    let mut triangles = Vec::new();
+    for k in 0..=n {
+        positions.push([710.0, 0.5 + k as f32 * 0.01, -20.0 - k as f32 * 0.01]);
+        if k > 0 {
+            triangles.push([0, k, k + 1]);
+        }
+    }
+    let surfaces = vec![0; triangles.len()];
+    let h = w.spawn();
+    w.insert(
+        h,
+        Collision {
+            positions,
+            triangles,
+            surfaces,
+        },
+    );
+    w.insert(
+        h,
+        primase_reskate::components::SkateCollision(primase_reskate::components::SoupRef {
+            table: primase_reskate::components::TableRef::single("collision/hull.bin"),
+            mode: Some(primase_reskate::components::CollisionMode::Hull),
+            ground: None,
+            region_cut: None,
+            other: Default::default(),
+        }),
+    );
+    w
+}
+
+/// What the sink keeps of the loaded content it writes, to compare a later part's copy with, is a digest per record:
+/// a hull soup of 2,000 triangles leaves it holding what one of 2 does.
+#[test]
+fn the_sink_keeps_a_digest_per_shared_record_not_the_record() {
+    let mut kept = Vec::new();
+    for n in [2u32, 2000] {
+        let r = in_parts_of(
+            with_hull(n),
+            &encoding(&tmp(&format!("hull-{n}"))),
+            &aligned(),
+            None,
+            Stages::default().planned(),
+            200.0,
+        )
+        .unwrap();
+        kept.push(r.built.identity_bytes);
+    }
+    assert!(kept[0] > 0, "{kept:?}");
+    assert_eq!(
+        kept[0], kept[1],
+        "the sink's records grow with the hull: {kept:?}"
+    );
+}
