@@ -775,6 +775,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-anvil"
+version = "0.1.0"
+dependencies = [
+ "primase-testdata",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-bytes"
 version = "0.1.0"
 

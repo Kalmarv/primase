@@ -248,6 +248,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "independent: the game's own code via reflection, the oracle tool kept with the game's private tools",
     },
     Variable {
+        name: "PRIMASE_ANVIL_FORGE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"one Anvil forge archive of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom_patch_01.forge`, 1,021,872 bytes, 337 entries); worlds/anvil/tests/forge.rs"#,
+        status: Status::Live,
+        source: "the user's own install; rows hand-checked against a separate read-only census of the file",
+    },
+    Variable {
         name: "PRIMASE_UNITY_SCAN",
         kind: Kind::Input,
         gate: true,
