@@ -9,6 +9,25 @@ use primase_unity::scene::Scene;
 
 use crate::Result;
 use crate::components::{SkatebirdMissionGiver, SkatebirdResetPosition};
+use primase_unity::components::UnityRenderSettings;
+use primase_unity::program::{ProgramsReport, read_programs};
+
+/// The compiled programs of the materials of `w` drawn with `Bumped Specular Voronoi`, which
+/// `lower-skatebird-voronoi` bakes ([`crate::passes::voronoi`]): [`read_programs`] for that shader under the player's
+/// render pipeline (`unity.render_settings`, which the level read stores), after
+/// [`primase_unity::level::read_level`].
+pub fn read_voronoi_programs(player: &Player, w: &mut World) -> Result<ProgramsReport> {
+    let pipeline = w
+        .resource::<UnityRenderSettings>()
+        .and_then(|s| s.pipeline.clone())
+        .ok_or_else(|| crate::Error::Layout("no render pipeline read: read the level first".into()))?;
+    Ok(read_programs(
+        player,
+        w,
+        &[crate::passes::voronoi::VORONOI],
+        &pipeline,
+    )?)
+}
 
 /// What [`read_markers`] read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

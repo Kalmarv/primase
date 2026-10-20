@@ -1025,6 +1025,8 @@ name = "primase-skatebird"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-image",
+ "primase-shader",
  "primase-testdata",
  "primase-unity",
  "serde",
