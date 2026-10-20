@@ -725,10 +725,11 @@ impl World {
     }
 
     /// Take `e`'s mesh away with every per-primitive component it has (each typed component that follows its
-    /// primitives, [`Component::remap_primitives`]): for an entity left drawing nothing, whose per-primitive data
-    /// would describe no primitive. Returns the names taken, the mesh's first; none when `e` has no mesh. Refused,
-    /// changing nothing, while `e` has an opaque component, as [`World::remap_primitives`] refuses a change to the
-    /// primitives then (whether it describes primitives can't be known).
+    /// primitives, [`Component::remap_primitives`]) and its file link (`core.mesh_file`, which a load would restore it
+    /// from): for an entity left drawing nothing, whose per-primitive data would describe no primitive. Returns the
+    /// names taken, the mesh's first; none when `e` has no mesh. Refused, changing nothing, while `e` has an opaque
+    /// component, as [`World::remap_primitives`] refuses a change to the primitives then (whether it describes
+    /// primitives can't be known).
     pub fn remove_mesh(&mut self, e: Entity) -> Result<Vec<&'static str>, String> {
         if !self.has::<crate::Mesh>(e) {
             return Ok(Vec::new());
@@ -761,6 +762,9 @@ impl World {
             names.push(name);
         }
         self.remove::<crate::Mesh>(e);
+        if self.remove::<crate::MeshFile>(e).is_some() {
+            names.push(crate::MeshFile::NAME);
+        }
         Ok(names)
     }
 
@@ -1619,11 +1623,19 @@ mod tests {
     /// describe primitives or not) nothing changes.
     #[test]
     fn remove_mesh_takes_its_per_primitive_components_and_refuses_with_opaque_data() {
-        use crate::{MaterialVariants, Mesh};
+        use crate::{MaterialVariants, Mesh, MeshFile};
         let mut w = World::new();
         let e = w.spawn();
         w.insert(e, Mesh::new(Vec::new()));
         w.insert(e, MaterialVariants(Vec::new()));
+        w.insert(
+            e,
+            MeshFile {
+                path: "a.glb".into(),
+                mesh: 0,
+                materials: Vec::new(),
+            },
+        );
         w.insert(e, A(1));
         w.insert_opaque(
             e,
@@ -1636,8 +1648,12 @@ mod tests {
         assert!(w.remove_mesh(e).unwrap_err().contains("game.thing"));
         assert!(w.has::<Mesh>(e) && w.has::<MaterialVariants>(e));
         w.remove_opaque(e, "game.thing");
-        assert_eq!(w.remove_mesh(e).unwrap(), ["core.mesh", "core.material_variants"]);
-        assert!(!w.has::<Mesh>(e) && !w.has::<MaterialVariants>(e));
+        assert_eq!(
+            w.remove_mesh(e).unwrap(),
+            ["core.mesh", "core.material_variants", "core.mesh_file"]
+        );
+        // nothing left to restore the mesh from
+        assert!(!w.has::<Mesh>(e) && !w.has::<MaterialVariants>(e) && !w.has::<MeshFile>(e));
         // what does not follow primitives stays
         assert!(w.has::<A>(e));
         assert!(w.remove_mesh(e).unwrap().is_empty());

@@ -229,8 +229,11 @@ impl Pass for PackOrm {
             world.iter::<PbrMaterial>().map(|(e, m)| (e, m.clone())).collect();
         // (metallic-roughness texture, occlusion texture) -> packed texture
         let mut packed: BTreeMap<(Entity, Entity), Entity> = BTreeMap::new();
-        let mut tally = Tally::default();
-        let mut materials_packed = 0;
+        // recorded as each image is made and each material rebound: a later refusal keeps what was done before it
+        const MATERIALS: &str = "materials given a packed occlusion-roughness-metallic image";
+        const IMAGES: &str = "packed occlusion-roughness-metallic images";
+        log.count(MATERIALS, 0);
+        log.count(IMAGES, 0);
         for (e, m) in materials {
             let (Some(mr), Some(ao)) = (m.metallic_roughness_texture, m.occlusion_texture) else {
                 continue;
@@ -252,6 +255,7 @@ impl Pass for PackOrm {
                             .get::<Texture>(t)
                             .ok_or_else(|| format!("material {e:?}: its {what} map has no pixels loaded"))
                     };
+                    let mut tally = Tally::default();
                     let image = self
                         .pack(
                             source(mr.texture, "metallic-roughness")?,
@@ -266,6 +270,16 @@ impl Pass for PackOrm {
                         world.insert(t, Name(name));
                     }
                     packed.insert((mr.texture, ao.texture), t);
+                    log.count(IMAGES, 1);
+                    if tally.resampled > 0 {
+                        log.approximate("map levels resampled nearest to the packed size", tally.resampled);
+                    }
+                    if tally.generated > 0 {
+                        log.approximate(
+                            "map levels not stored, box-filtered from the map's full level",
+                            tally.generated,
+                        );
+                    }
                     t
                 }
             };
@@ -276,21 +290,7 @@ impl Pass for PackOrm {
             {
                 r.texture = texture;
             }
-            materials_packed += 1;
-        }
-        log.count(
-            "materials given a packed occlusion-roughness-metallic image",
-            materials_packed,
-        );
-        log.count("packed occlusion-roughness-metallic images", packed.len() as u64);
-        if tally.resampled > 0 {
-            log.approximate("map levels resampled nearest to the packed size", tally.resampled);
-        }
-        if tally.generated > 0 {
-            log.approximate(
-                "map levels not stored, box-filtered from the map's full level",
-                tally.generated,
-            );
+            log.count(MATERIALS, 1);
         }
         Ok(())
     }
@@ -493,6 +493,43 @@ mod tests {
         assert_eq!(
             w.get::<Texture>(t).unwrap().levels,
             [vec![100, 10, 20, 255, 200, 10, 20, 255]]
+        );
+    }
+
+    /// A pair packed before a refused one stays packed, and its records with it.
+    #[test]
+    fn what_was_packed_before_a_refusal_is_recorded() {
+        // the first material's maps differ in size (resampled, counted); the second samples differently (refused)
+        let (mut w, ms) = world(
+            map(1, 1, vec![vec![[0, 10, 20, 255]]]),
+            map(2, 1, vec![vec![[100, 0, 0, 255], [200, 0, 0, 255]]]),
+            2,
+        );
+        w.get_mut::<PbrMaterial>(ms[1])
+            .unwrap()
+            .occlusion_texture
+            .as_mut()
+            .unwrap()
+            .texcoord = 1;
+        let mut log = PassLog::default();
+        assert!(
+            MR.run(&mut w, &mut log)
+                .unwrap_err()
+                .contains("sample differently")
+        );
+        let first = w.get::<PbrMaterial>(ms[0]).unwrap();
+        assert_eq!(
+            first.metallic_roughness_texture.unwrap().texture,
+            first.occlusion_texture.unwrap().texture
+        );
+        assert_eq!(log.counts["packed occlusion-roughness-metallic images"], 1);
+        assert_eq!(
+            log.counts["materials given a packed occlusion-roughness-metallic image"],
+            1
+        );
+        assert_eq!(
+            log.approximations["map levels resampled nearest to the packed size"],
+            1
         );
     }
 
