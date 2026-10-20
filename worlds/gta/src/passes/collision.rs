@@ -5,8 +5,9 @@
 //! `gta-select-collision{detail}`: the map bounds of the details asked for kept (`plain`, `hi`, `ma`, `;` between;
 //! `plain` unless given), the others despawned, counted per detail.
 //!
-//! `lower-gta-collision{x0,y0,x1,y1,foliage,river}`: every [`GtaBounds`] entity becomes an entity with an identity
-//! `core.transform` and a `core.collision` triangle soup in the core frame: geometry triangles as stored, box polygons
+//! `lower-gta-collision{x0,y0,x1,y1,foliage,river}`: every [`GtaBounds`] entity (placed at the origin by the reader:
+//! a map bound is world space) becomes an entity with an identity `core.transform` and a `core.collision` triangle
+//! soup in the core frame: geometry triangles as stored, box polygons
 //! and box bounds as their twelve triangles (exact, counted); approximated, each counted by what it became: spheres
 //! (bounds and polygons) as 32-triangle spheres (an octahedron subdivided once), capsule polygons as 8-sided tubes with
 //! such sphere ends, cylinder polygons as closed 8-sided tubes, and capsule, disc and cylinder bounds as their bounding
