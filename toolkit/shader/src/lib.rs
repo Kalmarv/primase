@@ -11,6 +11,8 @@
 
 mod evaluate;
 pub use evaluate::{Constants, Evaluation, Field, Grid, Image, Input, Lane, Layout, Texture, evaluate};
+mod periodic;
+pub use periodic::evaluate_periodic;
 
 /// A sample request of a 2D texture: implicit LOD, or with the program's own gradients.
 #[derive(Clone, Copy, Debug)]
