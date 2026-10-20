@@ -8,8 +8,8 @@ use primase_core::ledger::Conservation;
 use primase_core::pass::{Options, Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Collision, Entity, Instance, Mesh, MeshFile, Name, Primitive, Semantic, Stream, Surface, Surfaces,
-    Topology, Transform, World,
+    Collision, Component, Entity, Instance, Mesh, MeshFile, Name, Primitive, Semantic, Stream, Surface,
+    Surfaces, Topology, Transform, World, remap_list,
 };
 use primase_meshops::SplitByCollision;
 
@@ -332,4 +332,104 @@ fn the_options_are_required_and_round_trip() {
     let mut o = full;
     o.insert("rest".into(), "a=b".into());
     assert!(SplitByCollision::from_options(&o).is_err());
+}
+
+/// A dialect's value per vertex of each primitive, following both remaps (as a reader's per-vertex attributes do).
+#[derive(Clone, Debug, PartialEq)]
+struct Attributes(Vec<Vec<u32>>);
+impl Component for Attributes {
+    const NAME: &'static str = "test.attributes";
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(remap_list(&self.0, from).map(Attributes))
+    }
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        let mut out = self.0.clone();
+        let list = self.0.get(primitive)?;
+        out[primitive] = from.iter().map(|&i| list[i as usize]).collect();
+        Some(Ok(Attributes(out)))
+    }
+}
+
+/// Per-primitive and per-vertex data follow the pieces: the prototype draws the far triangle as primitive 0 and the
+/// floor and wall triangles as primitive 1; the floor's copy keeps primitive 1 only, its first three vertices; the
+/// wall's (the rest group's too) keeps primitive 0 whole and primitive 1's last three vertices.
+#[test]
+fn per_primitive_and_per_vertex_data_follow_the_pieces() {
+    let Scene {
+        mut w,
+        prototype,
+        material,
+        ..
+    } = scene();
+    w.insert(
+        prototype,
+        Mesh::new(vec![
+            primitive(&[FAR], material),
+            primitive(&[FLOOR, WALL], material),
+        ]),
+    );
+    w.insert(
+        prototype,
+        MeshFile {
+            path: "level.gltf".into(),
+            mesh: 0,
+            materials: vec![Some(material); 2],
+        },
+    );
+    w.insert(
+        prototype,
+        Attributes(vec![vec![0, 1, 2], vec![10, 11, 12, 13, 14, 15]]),
+    );
+    run(&mut w, pass(&[("Floor_", "park"), ("Wall_", "room")], 0.01)).unwrap();
+    let attributes = |name: &str| {
+        let (e, _) = drawn(&w, name)[0];
+        let p = w.get::<Instance>(e).unwrap().prototype;
+        w.get::<Attributes>(p).unwrap().clone()
+    };
+    assert_eq!(
+        attributes("bake_0_object~park"),
+        Attributes(vec![vec![10, 11, 12]])
+    );
+    assert_eq!(
+        attributes("bake_0_object~room"),
+        Attributes(vec![vec![0, 1, 2], vec![13, 14, 15]])
+    );
+}
+
+/// A component that can't follow (opaque: whether it describes primitives or vertices can't be known) fails the pass,
+/// naming it.
+#[test]
+fn a_component_that_cannot_follow_is_refused_by_name() {
+    use primase_core::world::{Opaque, OpaqueData};
+    let Scene { mut w, prototype, .. } = scene();
+    w.insert_opaque(
+        prototype,
+        "game.parts",
+        Opaque {
+            version: 1,
+            data: OpaqueData::Bytes(vec![1]),
+        },
+    );
+    let e = run(&mut w, pass(&[("Floor_", "park"), ("Wall_", "room")], 0.01)).unwrap_err();
+    assert!(e.contains("game.parts"), "{e}");
+}
+
+/// A placement's own collision collides once: it stays on the first group's placement, a copy has none, counted.
+#[test]
+fn a_placements_own_collision_stays_on_one_copy() {
+    let Scene { mut w, placement, .. } = scene();
+    // the placement's own soup, far from both surfaces (its name matches no group: counted as no group's)
+    w.insert(placement, soup(&[at(FAR, 100.0)]));
+    let report = run(&mut w, pass(&[("Floor_", "park"), ("Wall_", "room")], 0.01)).unwrap();
+    let park = drawn(&w, "bake_0_object~park");
+    let room = drawn(&w, "bake_0_object~room");
+    assert_eq!(park[0].0, placement);
+    assert!(w.has::<Collision>(placement));
+    assert!(!w.has::<Collision>(room[0].0), "a copy collides no second time");
+    let log = &report.steps[0].log;
+    assert_eq!(
+        log.counts["placements' own collision kept on the first group's placement only (left off a copy)"],
+        1
+    );
+    assert_eq!(log.counts["collision placements in no group"], 1);
 }

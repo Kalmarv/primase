@@ -151,8 +151,13 @@ pub fn cluster(features: &[Features], weights: &[f64]) -> Result<Groups> {
 }
 
 /// Split indexed triangles by their assigned level, preserving every vertex
-/// stream through the shared compactor. A level with no triangles is omitted.
-pub fn split(primitive: &Primitive, assignments: &[usize], levels: usize) -> Result<Vec<(usize, Primitive)>> {
+/// stream through the shared compactor. A level with no triangles is omitted. Each part comes with its vertex map
+/// (part vertex -> source vertex), for per-vertex components to follow ([`primase_core::World::remap_vertices`]).
+pub fn split(
+    primitive: &Primitive,
+    assignments: &[usize],
+    levels: usize,
+) -> Result<Vec<(usize, Primitive, Vec<u32>)>> {
     if primitive.topology != Topology::Triangles {
         return Err(invalid("layer split", 0, "triangle topology required"));
     }
@@ -183,7 +188,7 @@ pub fn split(primitive: &Primitive, assignments: &[usize], levels: usize) -> Res
         part.indices = Some(selected);
         let compacted =
             primase_meshops::compact_primitive(&part).map_err(|e| invalid("layer split", 0, e))?;
-        result.push((level, compacted.primitive));
+        result.push((level, compacted.primitive, compacted.gather));
     }
     Ok(result)
 }

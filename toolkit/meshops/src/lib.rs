@@ -80,7 +80,7 @@ mod variants;
 pub use variants::{SpecializeMaterialVariants, UnusedVariants, specialize_material_variants};
 pub mod vector;
 pub use hull::{convex_hull, hull_step};
-pub use primitive::{CompactedPrimitive, compact_primitive, subset_primitive};
+pub use primitive::{CompactedPrimitive, compact_primitive, subset_primitive, subset_primitive_gathered};
 use std::collections::BTreeMap;
 pub use texcoords::{BakeTextureTransforms, bake_texture_transforms};
 #[derive(Debug, thiserror::Error)]

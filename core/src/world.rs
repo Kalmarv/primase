@@ -82,6 +82,17 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
         None
     }
 
+    /// The component after the vertices of its entity's mesh primitive `primitive` were compacted or reordered, for a
+    /// component that holds something per vertex: new vertex `i` of that primitive is old vertex `from[i]` (a source
+    /// may repeat or be absent). `None`: the component holds nothing per vertex of that primitive (the default). An
+    /// index the component does not have is an error. [`World::remap_vertices`] calls it; every pass that compacts or
+    /// reorders a primitive's vertices calls that. After a rebuild of the primitive list
+    /// ([`World::rebuild_primitives`], [`Component::remap_primitives`]) a primitive's per-vertex data is its source
+    /// primitive's, and the vertex map is relative to that source.
+    fn remap_vertices(&self, _primitive: usize, _from: &[u32]) -> Option<Result<Self, String>> {
+        None
+    }
+
     /// The component after its entity's local space was mapped by `l` (a pass that bakes a placement's mirror or
     /// shear into a copy of its geometry, so transforms stay rigid). [`World::apply_linear`] calls it for every
     /// component of the entity. The default is [`Linearity::Unsupported`]: a component that holds local-space
@@ -265,7 +276,15 @@ trait AnyColumn: Any + Send + Sync {
     /// `e`'s value remapped to rebuilt primitives ([`Component::remap_primitives`]), not stored yet; `None` when `e`
     /// has none or it does not follow primitives.
     fn remapped(&self, e: Entity, from: &[usize]) -> Option<Result<Box<dyn Any + Send>, String>>;
-    /// Store a value [`AnyColumn::remapped`] or [`AnyColumn::linear`] made.
+    /// `e`'s value with primitive `primitive`'s vertices remapped ([`Component::remap_vertices`]), not stored yet;
+    /// `None` when `e` has none or it holds nothing per vertex of that primitive.
+    fn vertices_remapped(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[u32],
+    ) -> Option<Result<Box<dyn Any + Send>, String>>;
+    /// Store a value [`AnyColumn::remapped`], [`AnyColumn::vertices_remapped`] or [`AnyColumn::linear`] made.
     fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>);
     /// A copy of `from`'s value, if it has one, onto `to`.
     fn copy_entity(&mut self, from: Entity, to: Entity);
@@ -358,6 +377,15 @@ impl<T: Component> AnyColumn for Column<T> {
     }
     fn remapped(&self, e: Entity, from: &[usize]) -> Option<Result<Box<dyn Any + Send>, String>> {
         let r = self.values.get(&e)?.remap_primitives(from)?;
+        Some(r.map(|v| Box::new(v) as Box<dyn Any + Send>))
+    }
+    fn vertices_remapped(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[u32],
+    ) -> Option<Result<Box<dyn Any + Send>, String>> {
+        let r = self.values.get(&e)?.remap_vertices(primitive, from)?;
         Some(r.map(|v| Box::new(v) as Box<dyn Any + Send>))
     }
     fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>) {
@@ -711,6 +739,45 @@ impl World {
         columns.sort_by_key(|(_, c)| c.name());
         for (name, c) in columns {
             match c.remapped(e, from) {
+                None => {}
+                Some(Ok(v)) => done.push((*name, v)),
+                Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
+            }
+        }
+        for (name, v) in done {
+            if let Some(c) = self.columns.get_mut(&name) {
+                c.put_remapped(e, v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Remap every per-vertex component of `e` ([`Component::remap_vertices`]) for its mesh primitive `primitive`,
+    /// whose vertices a pass compacted or reordered: new vertex `i` is old vertex `from[i]`. The pass changes the
+    /// primitive itself and calls this for every other component, so it need not know the dialects' components; it
+    /// calls it only when the vertices changed. All or nothing: an error (an index a component does not have, or a
+    /// component refusing the mapping) names the component and changes nothing. Refused, changing nothing, while `e`
+    /// has an opaque component, as [`World::remap_primitives`] refuses then (whether it describes vertices can't be
+    /// known).
+    pub fn remap_vertices(&mut self, e: Entity, primitive: usize, from: &[u32]) -> Result<(), String> {
+        let mut opaque: Vec<&String> = self
+            .opaque
+            .iter()
+            .filter(|(_, values)| values.contains_key(&e))
+            .map(|(name, _)| name)
+            .collect();
+        if !opaque.is_empty() {
+            opaque.sort();
+            return Err(format!(
+                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them,                  or give them a typed form, before the pass)"
+            ));
+        }
+        let mut done = Vec::new();
+        // by name, so the error reported is always the same one
+        let mut columns: Vec<_> = self.columns.iter().collect();
+        columns.sort_by_key(|(_, c)| c.name());
+        for (name, c) in columns {
+            match c.vertices_remapped(e, primitive, from) {
                 None => {}
                 Some(Ok(v)) => done.push((*name, v)),
                 Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
@@ -1617,6 +1684,67 @@ mod tests {
         }
         let got: Vec<u32> = w.iter::<A>().map(|(_, a)| a.0).collect();
         assert_eq!(got, [0, 10, 20, 30, 40]);
+    }
+
+    /// One value per vertex of each primitive: follows primitives and vertices.
+    #[derive(Clone, Debug, PartialEq)]
+    struct PerVertex(Vec<Vec<u8>>);
+    impl Component for PerVertex {
+        const NAME: &'static str = "test.per_vertex";
+        fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+            Some(remap_list(&self.0, from).map(PerVertex))
+        }
+        fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+            let mut out = self.0.clone();
+            let Some(list) = self.0.get(primitive) else {
+                return Some(Err(format!("primitive {primitive} of {}", self.0.len())));
+            };
+            out[primitive] = match from
+                .iter()
+                .map(|&i| {
+                    list.get(i as usize)
+                        .copied()
+                        .ok_or(format!("vertex {i} of {}", list.len()))
+                })
+                .collect()
+            {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            Some(Ok(PerVertex(out)))
+        }
+    }
+
+    /// A primitive's vertices compacted: a per-vertex component follows them (after a rebuild that kept only
+    /// primitive 1, from its source primitive's values); one that holds nothing per vertex is kept; an index the
+    /// component lacks fails naming it, and an opaque component refuses, each changing nothing.
+    #[test]
+    fn per_vertex_components_follow_a_compaction() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, PerVertex(vec![vec![10, 11], vec![20, 21, 22, 23]]));
+        w.insert(e, A(7));
+        // keep primitive 1 only, then its vertices 3 and 1
+        w.remap_primitives(e, &[1]).unwrap();
+        w.remap_vertices(e, 0, &[3, 1]).unwrap();
+        assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![23, 21]])));
+        assert_eq!(w.get::<A>(e), Some(&A(7)));
+        let err = w.remap_vertices(e, 0, &[5]).unwrap_err();
+        assert!(
+            err.contains("test.per_vertex") && err.contains("vertex 5 of 2"),
+            "{err}"
+        );
+        assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![23, 21]])));
+        w.insert_opaque(
+            e,
+            "game.thing",
+            Opaque {
+                version: 1,
+                data: OpaqueData::Bytes(vec![1]),
+            },
+        );
+        assert!(w.remap_vertices(e, 0, &[1]).unwrap_err().contains("game.thing"));
+        assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![23, 21]])));
     }
 
     /// A mesh taken away goes with what follows its primitives; with an opaque component (which can't be known to

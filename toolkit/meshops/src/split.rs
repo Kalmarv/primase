@@ -23,9 +23,12 @@
 //! places a prototype of its own, named the same, made from the placement's prototype ([`World::copy_components`],
 //! declared with [`PassLog::place_from`]): per primitive of the source, the triangles of that group (vertices
 //! compacted, every stream kept, [`crate::subset_primitive`]), its material unchanged; per-primitive components follow
-//! ([`World::remap_primitives`]); the file link (`core.mesh_file`) does not (the mesh is no longer the file's). A
-//! prototype no placement places any longer is despawned: its primitives all stand in the copies. Triangles are counted
-//! per group, and those near no group's collision apart.
+//! ([`World::remap_primitives`]), then per-vertex ones the compacted vertices ([`World::remap_vertices`]), and one
+//! that can't follow (an opaque component) fails the pass naming it; the file link (`core.mesh_file`) does not follow
+//! (the mesh is no longer the file's). A placement's own collision (`core.collision` on the placement) stays on the
+//! first group's placement only, counted: copies of it would collide again. A prototype no placement places any
+//! longer is despawned: its primitives all stand in the copies. Triangles are counted per group, and those near no
+//! group's collision apart.
 //!
 //! Refused, before anything changes: a prefix that matches nothing (a placement prefix no placement's name starts
 //! with, a group prefix no collision placement's), a selected placement without a transform or whose prototype has no
@@ -40,7 +43,7 @@ use primase_core::{
     Collision, Component, Entity, Instance, Lods, Mesh, MeshFile, Name, Primitive, Topology, Transform, World,
 };
 
-use crate::{Triangle, TriangleGrid, subset_primitive};
+use crate::{Triangle, TriangleGrid, subset_primitive_gathered};
 
 /// See the module documentation. Made by [`SplitByCollision::new`]; from options by the same call.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,8 +168,9 @@ fn corners(p: &Primitive) -> Vec<u32> {
     }
 }
 
-/// One group's share of a placement's prototype: per source primitive, the primitive drawn.
-type Share = Vec<(usize, Primitive)>;
+/// One group's share of a placement's prototype: per source primitive, the primitive drawn and, when its vertices
+/// were compacted, which source vertex each of its vertices is.
+type Share = Vec<(usize, Primitive, Option<Vec<u32>>)>;
 
 impl Pass for SplitByCollision {
     fn name(&self) -> &'static str {
@@ -380,18 +384,26 @@ impl Pass for SplitByCollision {
             let mut by_group: BTreeMap<usize, Share> = BTreeMap::new();
             for (g, prims) in shares {
                 for (pi, ix) in prims {
-                    let piece = subset_primitive(&mesh.primitives()[pi], &ix).map_err(|e| e.to_string())?;
-                    by_group.entry(g).or_default().push((pi, piece));
+                    let source = &mesh.primitives()[pi];
+                    let (piece, gather) =
+                        subset_primitive_gathered(source, &ix).map_err(|e| e.to_string())?;
+                    // every vertex in its own order: nothing for a per-vertex component to follow
+                    let moved = !(gather.len() == source.vertex_count()
+                        && gather.iter().enumerate().all(|(i, &v)| v as usize == i));
+                    by_group
+                        .entry(g)
+                        .or_default()
+                        .push((pi, piece, moved.then_some(gather)));
                 }
             }
             for pi in whole {
                 by_group
                     .entry(rest)
                     .or_default()
-                    .push((pi, mesh.primitives()[pi].clone()));
+                    .push((pi, mesh.primitives()[pi].clone(), None));
             }
             for share in by_group.values_mut() {
-                share.sort_by_key(|(pi, _)| *pi);
+                share.sort_by_key(|(pi, ..)| *pi);
             }
             splits.push((e, inst, pname.to_owned(), by_group));
         }
@@ -403,9 +415,25 @@ impl Pass for SplitByCollision {
                 let label = format!("{pname}~{}", group_names[g]);
                 let proto = w.spawn();
                 w.copy_components(inst.prototype, proto);
-                let (from, prims): (Vec<usize>, Vec<Primitive>) = share.into_iter().unzip();
-                w.remap_primitives(proto, &from)?;
+                let mut from = Vec::new();
+                let mut prims = Vec::new();
+                let mut gathers = Vec::new();
+                for (pi, p, gather) in share {
+                    from.push(pi);
+                    prims.push(p);
+                    gathers.push(gather);
+                }
+                // per-primitive components follow the pieces, then per-vertex ones each piece's vertices; one that
+                // can't follow fails the pass naming it
+                w.remap_primitives(proto, &from)
+                    .map_err(|e| format!("split-by-collision: placement {pname}: {e}"))?;
                 w.insert(proto, Mesh::new(prims));
+                for (k, gather) in gathers.iter().enumerate() {
+                    if let Some(g) = gather {
+                        w.remap_vertices(proto, k, g)
+                            .map_err(|e| format!("split-by-collision: placement {pname}: {e}"))?;
+                    }
+                }
                 w.remove::<MeshFile>(proto);
                 w.insert(proto, Name(label.clone()));
                 log.place_from(proto, inst.prototype);
@@ -414,6 +442,13 @@ impl Pass for SplitByCollision {
                     e
                 } else {
                     let copy = w.duplicate(e).expect("alive");
+                    // the placement's own collision stays on the first group's placement: once in the world
+                    if w.remove::<Collision>(copy).is_some() {
+                        log.count(
+                            "placements' own collision kept on the first group's placement only (left off a copy)",
+                            1,
+                        );
+                    }
                     log.place_from(copy, e);
                     log.count("placements added for the other groups of a split placement", 1);
                     copy

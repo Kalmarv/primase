@@ -46,7 +46,10 @@ fn splitting_preserves_triangle_order_and_vertex_payloads() {
         parts[1].1.streams[&Semantic::Color(0)],
         Stream::U8x4(vec![[2; 4], [0; 4], [1; 4], [3; 4]])
     );
-    for (_, p) in &parts {
+    // each part's vertex map: part vertex -> source vertex
+    assert_eq!(parts[0].2, [3, 2, 1]);
+    assert_eq!(parts[1].2, [2, 0, 1, 3]);
+    for (_, p, _) in &parts {
         assert_eq!(
             p.streams[&Semantic::Tangent],
             Stream::F32x4(vec![[1., 0., 0., -1.]; p.positions().unwrap().len()])

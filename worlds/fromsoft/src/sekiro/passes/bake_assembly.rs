@@ -132,7 +132,8 @@ pub(super) fn assemble(
     world: &mut World,
 ) -> Result<(BakeReport, BTreeSet<(Entity, usize)>)> {
     let mut report = BakeReport::default();
-    let mut replacements = BTreeMap::<(Entity, usize), Vec<Primitive>>::new();
+    // each baked part, with its vertex map when its vertices were compacted
+    let mut replacements = BTreeMap::<(Entity, usize), Vec<(Primitive, Option<Vec<u32>>)>>::new();
     let mut replaced_materials = BTreeSet::new();
     let mut variants = BTreeMap::new();
     for (group_index, group) in bake.groups.iter().enumerate() {
@@ -249,7 +250,9 @@ pub(super) fn assemble(
     let candidates = world.closure(replaced_materials);
     let mut baked = BTreeSet::new();
     for &entity in prototypes.values() {
-        // the baked parts replace their source part; every per-primitive component follows
+        // the baked parts replace their source part; every per-primitive component follows, then every per-vertex
+        // one each compacted part's vertices
+        let mut gathers = Vec::new();
         world
             .rebuild_primitives(entity, |original| {
                 let mut primitives = Vec::new();
@@ -261,7 +264,12 @@ pub(super) fn assemble(
                                 (primitives.len()..primitives.len() + parts.len()).map(|i| (entity, i)),
                             );
                             from.extend(std::iter::repeat_n(index, parts.len()));
-                            primitives.extend(parts);
+                            for (part, gather) in parts {
+                                if let Some(g) = gather {
+                                    gathers.push((primitives.len(), g));
+                                }
+                                primitives.push(part);
+                            }
                         }
                         None => {
                             from.push(index);
@@ -272,6 +280,11 @@ pub(super) fn assemble(
                 Ok((primitives, from))
             })
             .map_err(|e| invalid("area bake", 0, e))?;
+        for (primitive, gather) in gathers {
+            world
+                .remap_vertices(entity, primitive, &gather)
+                .map_err(|e| invalid("area bake", primitive, e))?;
+        }
     }
     let retained = world.closure(world.entities().filter(|e| !candidates.contains(e)));
     for entity in candidates.difference(&retained) {
@@ -286,20 +299,23 @@ fn split(
     materials: &[Entity],
     scale: [f32; 2],
     period: [f32; 2],
-) -> Result<Vec<Primitive>> {
+) -> Result<Vec<(Primitive, Option<Vec<u32>>)>> {
     let denominator: [f32; 2] = std::array::from_fn(|i| scale[i] * period[i]);
     if denominator.iter().any(|x| !x.is_finite() || *x == 0.) {
         return Err(invalid("area bake", 0, "invalid bake UV scale"));
     }
-    let mut split = grouping::split(source, assignments, materials.len())?;
+    let split = grouping::split(source, assignments, materials.len())?;
     // Preserve authored ordering whenever this primitive uses only one level,
-    // even if other primitives sharing its material use additional levels.
-    if split.len() == 1 {
-        split[0].1 = source.clone();
-    }
+    // even if other primitives sharing its material use additional levels: its vertices then stay as they are.
+    let whole = split.len() == 1;
     split
         .into_iter()
-        .map(|(level, mut part)| {
+        .map(|(level, part, gather)| {
+            let (mut part, gather) = if whole {
+                (source.clone(), None)
+            } else {
+                (part, Some(gather))
+            };
             let Some(Stream::F32x2(uv)) = part.streams.get_mut(&Semantic::TexCoord(0)) else {
                 return Err(invalid("area bake", 0, "missing main UV stream"));
             };
@@ -309,7 +325,7 @@ fn split(
                 }
             }
             part.material = Some(materials[level]);
-            Ok(part)
+            Ok((part, gather))
         })
         .collect()
 }
@@ -763,6 +779,9 @@ mod tests {
             material: None,
         };
         let one = split(&source, &[0, 0], &materials[..1], [2., 3.], [2., 2.]).unwrap();
+        // one level: the source's vertices as they are, nothing for a per-vertex component to follow
+        assert_eq!(one[0].1, None);
+        let one: Vec<Primitive> = one.into_iter().map(|(p, _)| p).collect();
         assert_eq!(one[0].indices, source.indices);
         assert_eq!(
             one[0].streams[&Semantic::Color(1)],
@@ -774,12 +793,20 @@ mod tests {
         );
         // Other primitives can use level zero while this one uses only level one.
         // Preserve its unused vertex and authored order, not just its triangles.
-        let nonzero = split(&source, &[1, 1], &materials, [2., 3.], [2., 2.]).unwrap();
+        let nonzero: Vec<Primitive> = split(&source, &[1, 1], &materials, [2., 3.], [2., 2.])
+            .unwrap()
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
         assert_eq!(nonzero.len(), 1);
         assert_eq!(nonzero[0].material, Some(materials[1]));
         assert_eq!(nonzero[0].indices, source.indices);
         assert_eq!(nonzero[0].streams, one[0].streams);
         let two = split(&source, &[1, 0], &materials, [2., 3.], [2., 2.]).unwrap();
+        // two levels: each part's vertices compacted, their source vertices stated
+        assert_eq!(two[0].1, Some(vec![1, 3, 2]));
+        assert_eq!(two[1].1, Some(vec![2, 0, 1]));
+        let two: Vec<Primitive> = two.into_iter().map(|(p, _)| p).collect();
         assert_eq!(two.len(), 2);
         for (level, expected) in [[1., 3., 2.], [2., 0., 1.]].iter().enumerate() {
             assert_eq!(two[level].material, Some(materials[level]));

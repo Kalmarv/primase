@@ -116,6 +116,13 @@ fn gather_streams(source: &Primitive, gather: &[u32]) -> BTreeMap<Semantic, Stre
 /// do not affect this subset. Work and temporary storage scale with the selection,
 /// not the source vertex count, so repeated per-cell subsets do not rescan large meshes.
 pub fn subset_primitive(source: &Primitive, indices: &[u32]) -> Result<Primitive> {
+    subset_primitive_gathered(source, indices).map(|(p, _)| p)
+}
+
+/// [`subset_primitive`], with the vertex map it made: compacted vertex -> source vertex, in first index-use order. A
+/// pass that subsets an entity's primitive hands it to [`primase_core::World::remap_vertices`] so per-vertex
+/// components follow.
+pub fn subset_primitive_gathered(source: &Primitive, indices: &[u32]) -> Result<(Primitive, Vec<u32>)> {
     let n = source
         .positions()
         .ok_or_else(|| Error("missing float3 positions".into()))?
@@ -170,10 +177,13 @@ pub fn subset_primitive(source: &Primitive, indices: &[u32]) -> Result<Primitive
             Stream::U8x4(_) | Stream::U16x4(_) => {}
         }
     }
-    Ok(Primitive {
-        topology: source.topology,
-        streams,
-        indices: Some(indices),
-        material: source.material,
-    })
+    Ok((
+        Primitive {
+            topology: source.topology,
+            streams,
+            indices: Some(indices),
+            material: source.material,
+        },
+        gather,
+    ))
 }
