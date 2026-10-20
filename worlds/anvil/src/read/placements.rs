@@ -1,20 +1,21 @@
-//! Entities placed into a world: each Entity's Visuals resolved through an [`Archive`] to the meshes of their
-//! LODSelector (or a Mesh directly), converted through the program's stated frame. Nothing here chooses a level of
-//! detail or applies a material override: placements keep their overrides per level as stored.
+//! Entities placed into a world: each Entity's (or EntityGroup's own) Visuals resolved through an [`Archive`] to the
+//! meshes of their LODSelector (or a Mesh directly), converted through the program's stated frame. Nothing here
+//! chooses a level of detail, applies a material override or selects by DataLayer: placements keep their overrides
+//! per level and their Entity's DataLayerActions as stored.
 //!
 //! A LODSelectorInstance's five slots line up one to one with its LODSelector's levels (the Riders Republic notes:
 //! 2,839 of 2,839), a slot holding a MeshInstanceData where its level is a Mesh. What a Visual places depends on
 //! where its instance matrices are:
 //!
-//! - In no slot: the object's every mesh level, at the Entity's T R s (column-major matrix, rotation R, translation
+//! - In no slot: the object's every mesh level, at the owner's T R s (column-major matrix, rotation R, translation
 //!   T, scale s): one placement of a prototype whose own [`AnvilMesh`] is the finest mesh level and whose
 //!   [`AnvilLods`] holds the others.
-//! - In one slot: that slot's level, once per instance matrix I, at T + R (I v) (the instances in the Entity's frame:
-//!   per-instance bounds contain the instance's mesh bounds under R I on 38,839 of 38,877 group instances). Whether
-//!   s applies to instances isn't established (one family of 32 fits without it; the census finds no instanced Entity
-//!   with s other than 1), so one is refused. In the six Riders Republic forges the matrices are in slot 0 and every
-//!   other mesh slot holds none (the census: 349,009 instanced Visuals of the 576,844 Entities read); whether those
-//!   levels show at the instances isn't established, so they aren't placed: [`Placed::levels_unplaced`] counts them.
+//! - In one slot: once per instance matrix I, at T + R (I v) (the instances in the owner's frame: per-instance bounds
+//!   contain the instance's mesh bounds under R I on 38,839 of 38,877 group instances). Whether s applies to
+//!   instances isn't established (one family of 32 fits without it; the census finds no instanced Entity with s
+//!   other than 1), so an instanced owner with s other than 1 is refused. In the six Riders Republic forges the
+//!   matrices are in slot 0 and every other mesh slot holds none (the census: 349,009 instanced Visuals of the 576,844
+//!   Entities read). What each instance places is the caller's stated [`InstancedLevels`].
 //! - In more than one slot, in the LODSelectorInstance itself or in an ImpostorInstanceData: not seen, refused.
 //!
 //! Levels referring to an Impostor are counted, not placed.
@@ -24,9 +25,11 @@ use std::collections::HashMap;
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::{AnvilLods, AnvilMaterialOverrides, AnvilMesh};
+use crate::components::{AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh};
 use crate::read::archive::{Archive, At};
-use crate::read::entity::{ENTITY, Instance as Shown, MeshInstance, Slot, StoredEntity, Visual};
+use crate::read::entity::{
+    ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity, StoredEntityGroup, Visual,
+};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::mesh::{MESH, StoredMesh};
 use crate::read::meshes::anvil_mesh;
@@ -66,6 +69,23 @@ pub enum Error {
     Slot(At, u8),
 }
 
+/// What an instanced Visual places at each instance: the caller's stated choice, as whether the game draws an
+/// object's other levels at its instances isn't read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstancedLevels {
+    /// The level whose slot holds the matrices; the object's other mesh levels aren't placed
+    /// ([`Placed::levels_unplaced`]).
+    Slot,
+    /// For an Entity, every mesh level, as for a Visual without instances. The census finds each Entity
+    /// instance's stored bounds equal to its matrix (then the Entity's rotation) applied to the
+    /// LODSelectorInstance's bounds within 1e-3 on all 6,422,618 (2 bit-equal), and applied to the slot's
+    /// MeshInstanceData bounds (its finest level's, by the notes) off by more than 0.1, up to 10, on 2,842,279;
+    /// the LODSelectorInstance's bounds are the union of every level's mesh bounds (the notes: 400 of 400). An
+    /// EntityGroup's instance bounds don't fit its LODSelectorInstance's bounds (off by more than 0.1, up to 1,000,
+    /// on all 241,747), so a group's instanced Visual places as for [`InstancedLevels::Slot`].
+    Selector,
+}
+
 /// What placing the Entities did, beyond the placements.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Placed {
@@ -74,8 +94,11 @@ pub struct Placed {
     pub visuals_skipped: u64,
     /// LODSelector levels referring to an Impostor (not placed), once per LODSelector.
     pub impostor_levels: u64,
-    /// Mesh levels of instanced Visuals whose slot holds no instance matrices (not placed), once per Visual.
+    /// Mesh levels of instanced Visuals not placed at their instances (see [`InstancedLevels`]), once per Visual.
     pub levels_unplaced: u64,
+    /// The member references of the EntityGroups placed, in order. Members aren't placed through their group: each is
+    /// an Entity or EntityGroup of its own, which the caller places where it lists it.
+    pub members: Vec<u64>,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -102,17 +125,14 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
 /// An object's mesh levels, each `(level, the entity holding its AnvilMesh)`, finest first (a Mesh: its level 0).
 type Levels = Vec<(u8, Entity)>;
 
-/// What a Visual's slots place.
-enum Shows {
-    /// Every mesh level at the Entity's transform; the overrides of each slot holding any.
-    Whole(Vec<(u8, Vec<(u64, u64)>)>),
-    /// One level at each instance matrix, with its slot's overrides; `others` mesh slots holding none.
-    Instanced {
-        level: u8,
-        instances: Vec<[f32; 16]>,
-        overrides: Vec<(u64, u64)>,
-        others: u64,
-    },
+/// A Visual's slots as placing reads them.
+struct Shows {
+    /// The slot holding instance matrices, and them.
+    instances: Option<(u8, Vec<[f32; 16]>)>,
+    /// Each mesh slot's material-info entries as (source, replacement) pairs, where it holds any.
+    overrides: Vec<(u8, Vec<(u64, u64)>)>,
+    /// Its mesh slots.
+    mesh_slots: u64,
 }
 
 /// A MeshInstanceData's material-info entries as (source, replacement) pairs, in stored order.
@@ -123,7 +143,7 @@ fn pairs(m: &MeshInstance) -> Vec<(u64, u64)> {
         .collect()
 }
 
-/// What `v` places, by where its instance matrices are.
+/// `v`'s slots: where its instance matrices are, and its overrides.
 fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
     let slots: Vec<(u8, &MeshInstance)> = match &v.instance {
         Shown::Lod { instances, slots, .. } => {
@@ -146,22 +166,20 @@ fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
         Shown::Raw { .. } => Vec::new(),
     };
     let mut holding = slots.iter().filter(|(_, m)| !m.instances.is_empty());
-    match (holding.next(), holding.next()) {
-        (None, _) => Ok(Shows::Whole(
-            slots
-                .iter()
-                .filter(|(_, m)| !m.material_infos.is_empty())
-                .map(|&(level, m)| (level, pairs(m)))
-                .collect(),
-        )),
-        (Some(&(level, m)), None) => Ok(Shows::Instanced {
-            level,
-            instances: m.instances.clone(),
-            overrides: pairs(m),
-            others: u64::try_from(slots.len().saturating_sub(1)).unwrap_or(u64::MAX),
-        }),
-        (Some(_), Some(_)) => Err(Error::Instances(at, "in more than one slot")),
-    }
+    let instances = match (holding.next(), holding.next()) {
+        (None, _) => None,
+        (Some(&(level, m)), None) => Some((level, m.instances.clone())),
+        (Some(_), Some(_)) => return Err(Error::Instances(at, "in more than one slot")),
+    };
+    Ok(Shows {
+        instances,
+        overrides: slots
+            .iter()
+            .filter(|(_, m)| !m.material_infos.is_empty())
+            .map(|&(level, m)| (level, pairs(m)))
+            .collect(),
+        mesh_slots: u64::try_from(slots.len()).unwrap_or(u64::MAX),
+    })
 }
 
 /// Places Entities, keeping each object's meshes and prototypes for every Entity that shows it.
@@ -169,6 +187,7 @@ fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
 pub struct Placer<'a> {
     archive: &'a mut Archive,
     frame: SourceFrame,
+    instanced: InstancedLevels,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: the prototype placing every mesh level.
@@ -176,10 +195,11 @@ pub struct Placer<'a> {
 }
 
 impl<'a> Placer<'a> {
-    pub fn new(archive: &'a mut Archive, frame: SourceFrame) -> Placer<'a> {
+    pub fn new(archive: &'a mut Archive, frame: SourceFrame, instanced: InstancedLevels) -> Placer<'a> {
         Placer {
             archive,
             frame,
+            instanced,
             objects: HashMap::new(),
             wholes: HashMap::new(),
         }
@@ -274,18 +294,32 @@ impl<'a> Placer<'a> {
         Some(p)
     }
 
-    /// The Entity at `at` placed into `w`: one placement per Visual with something to show, or per instance.
+    /// The Entity or EntityGroup at `at` placed into `w`: one placement per Visual with something to show, or per
+    /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
     pub fn place(&mut self, w: &mut World, at: At, placed: &mut Placed) -> Result<(), Error> {
         let r = self.archive.resource(at)?;
-        if r.type_id != ENTITY {
-            return Err(Error::Type {
-                at,
-                found: r.type_id,
-                what: "an Entity",
-            });
-        }
-        let e = StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?;
+        let (e, group) = match r.type_id {
+            ENTITY => (
+                StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
+                false,
+            ),
+            ENTITY_GROUP => {
+                let g = StoredEntityGroup::parse(&r.body).map_err(|source| Error::Entity { at, source })?;
+                placed.members.extend(g.members.iter().map(|m| m.id));
+                (g.entity, true)
+            }
+            found => {
+                return Err(Error::Type {
+                    at,
+                    found,
+                    what: "an Entity or EntityGroup",
+                });
+            }
+        };
         let name = self.name(at).unwrap_or_default();
+        let layers = (!e.data_layers.is_empty()).then(|| AnvilDataLayers {
+            actions: e.data_layers.clone(),
+        });
         for v in e.visuals() {
             let shows = shows(v, at)?;
             let found = match v.object {
@@ -296,38 +330,45 @@ impl<'a> Placer<'a> {
                 placed.visuals_skipped = placed.visuals_skipped.saturating_add(1);
                 continue;
             };
-            let (prototype, transforms, overrides) = match shows {
-                Shows::Whole(overrides) => {
+            let (prototype, transforms, overrides) = match shows.instances {
+                None => {
                     let Some(p) = self.whole(w, object, &levels) else {
                         placed.visuals_skipped = placed.visuals_skipped.saturating_add(1);
                         continue;
                     };
-                    (p, vec![transform(&e.matrix, e.scale)], overrides)
+                    (p, vec![transform(&e.matrix, e.scale)], shows.overrides)
                 }
-                Shows::Instanced {
-                    level,
-                    instances,
-                    overrides,
-                    others,
-                } => {
+                Some((level, instances)) => {
                     if e.scale != 1.0 {
                         return Err(Error::InstancedScale(at, e.scale));
                     }
                     let Some(&(_, mesh)) = levels.iter().find(|(l, _)| *l == level) else {
                         return Err(Error::Slot(at, level));
                     };
-                    placed.levels_unplaced = placed.levels_unplaced.saturating_add(others);
+                    let every = self.instanced == InstancedLevels::Selector && !group;
+                    let (prototype, overrides) = match (every, levels.first()) {
+                        (true, Some(&(finest, _))) if finest == level => {
+                            (self.whole(w, object, &levels).unwrap_or(mesh), shows.overrides)
+                        }
+                        (true, _) => {
+                            return Err(Error::Instances(
+                                at,
+                                "in a slot other than its finest mesh level's",
+                            ));
+                        }
+                        (false, _) => {
+                            let others = shows.mesh_slots.saturating_sub(1);
+                            placed.levels_unplaced = placed.levels_unplaced.saturating_add(others);
+                            let own = shows.overrides.into_iter().filter(|(l, _)| *l == level).collect();
+                            (mesh, own)
+                        }
+                    };
                     let entity = transform(&e.matrix, 1.0);
                     let transforms = instances
                         .iter()
                         .map(|i| compose(&entity, &transform(i, 1.0)))
                         .collect();
-                    let overrides = if overrides.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![(level, overrides)]
-                    };
-                    (mesh, transforms, overrides)
+                    (prototype, transforms, overrides)
                 }
             };
             for t in transforms {
@@ -348,6 +389,9 @@ impl<'a> Placer<'a> {
                             levels: overrides.clone(),
                         },
                     );
+                }
+                if let Some(layers) = &layers {
+                    w.insert(p, layers.clone());
                 }
                 placed.placements.push(p);
             }

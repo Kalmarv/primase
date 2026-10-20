@@ -107,8 +107,13 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::read::data::{Resource, read_entry};
-use primase_anvil::read::entity::{ENTITY, Instance, Slot, StoredEntity};
+use primase_anvil::read::entity::{
+    BoundingVolume, ENTITY, ENTITY_GROUP, Instance, Slot, StoredEntity, StoredEntityGroup, Visual,
+};
 use primase_anvil::read::forge::Forge;
+use primase_anvil::read::grid::{
+    self, GRID_CELL_DATA_BLOCK, GRID_PARTITION, StoredGridCellDataBlock, StoredGridPartition, WORLD,
+};
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::material::{
     MATERIAL, Payload, StoredMaterial, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET,
@@ -125,8 +130,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
-const KINDS: [(u32, &str); 9] = [
+const KINDS: [(u32, &str); 13] = [
     (ENTITY, "Entity"),
+    (ENTITY_GROUP, "EntityGroup"),
+    (GRID_PARTITION, "GridPartition"),
+    (GRID_CELL_DATA_BLOCK, "GridCellDataBlock"),
+    (WORLD, "World"),
     (MATERIAL_TEMPLATE, "MaterialTemplate"),
     (MESH, "Mesh"),
     (TEXTURE_MAP, "TextureMap"),
@@ -173,6 +182,9 @@ impl Tally {
     fn outcome(&mut self, what: impl Into<String>) {
         *self.outcomes.entry(what.into()).or_default() += 1;
     }
+    fn count_by(&mut self, what: &str, n: usize) {
+        *self.outcomes.entry(what.to_owned()).or_default() += u64::try_from(n).unwrap_or(u64::MAX);
+    }
     fn refuse(&mut self, reason: &str, example: &str) {
         let key = mask(reason);
         let (n, examples) = self.refused.entry(key).or_default();
@@ -188,6 +200,114 @@ fn resource(forge: &Forge, file: &mut File, k: usize) -> Result<Resource, String
     let payload = forge.payload(file, k).map_err(|e| format!("payload: {e}"))?;
     let entry = read_entry(&payload, MAX_RECORD).map_err(|e| format!("data: {e}"))?;
     Resource::parse(&entry.resource.data).map_err(|e| format!("resource: {e}"))
+}
+
+/// An Entity's (or a group's own) Visuals tallied: each's instance data and slots, a slot holding instance matrices
+/// in lower case; whether any is instanced, and whether the placement reader would refuse it for its scale.
+/// The axis-aligned box, in f64, around the box `min`..`max`'s 8 corners under the column-major affine `inner`, then
+/// the rotation (upper 3x3) of the column-major `outer`, without its translation.
+fn transformed_box(
+    outer: &[f32; 16],
+    inner: &[f32; 16],
+    (min, max): ([f32; 3], [f32; 3]),
+) -> ([f64; 3], [f64; 3]) {
+    let (o, i) = (outer.map(f64::from), inner.map(f64::from));
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for corner in 0..8 {
+        let p = [0, 1, 2].map(|a| f64::from(if corner >> a & 1 == 0 { min[a] } else { max[a] }));
+        let q = [0, 1, 2].map(|r| i[r] * p[0] + i[4 + r] * p[1] + i[8 + r] * p[2] + i[12 + r]);
+        for r in 0..3 {
+            let v = o[r] * q[0] + o[4 + r] * q[1] + o[8 + r] * q[2];
+            lo[r] = lo[r].min(v);
+            hi[r] = hi[r].max(v);
+        }
+    }
+    (lo, hi)
+}
+
+/// The largest absolute difference, over a stored bounding volume's 6 coordinates, from a box computed in f64, as a
+/// bucket: "0" where every coordinate equals the computed one rounded to f32, else its power of ten.
+fn bound_fit(stored: &BoundingVolume, (lo, hi): ([f64; 3], [f64; 3])) -> String {
+    let pairs: Vec<(f32, f64)> = stored
+        .min
+        .iter()
+        .copied()
+        .zip(lo)
+        .chain(stored.max.iter().copied().zip(hi))
+        .collect();
+    if pairs.iter().all(|&(s, c)| s == c as f32) {
+        return "0".into();
+    }
+    let worst = pairs
+        .iter()
+        .map(|&(s, c)| (f64::from(s) - c).abs())
+        .fold(0.0, f64::max);
+    format!("at most 1e{}", worst.log10().ceil() as i32)
+}
+
+/// Each instanced Visual's per-instance bounds against its instance matrix, then its owner's rotation, applied to the
+/// LODSelectorInstance's bounds and to its slot's MeshInstanceData bounds.
+fn instance_bound_outcomes(tally: &mut Tally, v: &Visual, owner: &[f32; 16]) {
+    let Instance::Lod { bounds, slots, .. } = &v.instance else {
+        return;
+    };
+    for s in slots {
+        let Slot::Mesh(m) = s else { continue };
+        for (i, b) in m.instances.iter().zip(&m.instance_bounds) {
+            // in the owner's rotated frame, not translated (the Riders Republic notes, docs/world.md §7)
+            for (what, of) in [("LSI", bounds), ("MID", &m.bounds)] {
+                let fit = bound_fit(b, transformed_box(owner, i, (of.min, of.max)));
+                tally.outcome(format!("instance bounds vs R I ({what} bounds): {fit}"));
+            }
+        }
+        if m.instances.len() != m.instance_bounds.len() {
+            tally.outcome("instance matrices and bounds counts differ");
+        }
+    }
+}
+
+fn entity_outcomes(tally: &mut Tally, e: &StoredEntity) {
+    for v in e.visuals() {
+        instance_bound_outcomes(tally, v, &e.matrix);
+    }
+    for v in e.visuals() {
+        tally.outcome(match &v.instance {
+            // a slot holding instance matrices in lower case
+            Instance::Lod { instances, slots, .. } => {
+                let slots: String = slots
+                    .iter()
+                    .map(|s| match s {
+                        Slot::None => '-',
+                        Slot::Mesh(m) if m.instances.is_empty() => 'M',
+                        Slot::Mesh(_) => 'm',
+                        Slot::Impostor(i) if i.instances.is_empty() => 'I',
+                        Slot::Impostor(_) => 'i',
+                    })
+                    .collect();
+                let own = if instances.is_empty() {
+                    ""
+                } else {
+                    ", instanced itself"
+                };
+                format!("Visual LODSelectorInstance, slots {slots}{own}")
+            }
+            Instance::Mesh(_) => "Visual MeshInstanceData".into(),
+            Instance::Raw { kind, .. } => format!("Visual instance {kind:08X} kept"),
+        });
+    }
+    let instanced = e.visuals().any(|v| match &v.instance {
+        Instance::Lod { slots, .. } => slots
+            .iter()
+            .any(|s| matches!(s, Slot::Mesh(m) if !m.instances.is_empty())),
+        Instance::Mesh(m) => !m.instances.is_empty(),
+        Instance::Raw { .. } => false,
+    });
+    tally.outcome(if instanced { "instanced" } else { "not instanced" });
+    // refused by the placement reader: whether the scale applies to instances isn't established
+    if instanced && e.scale != 1.0 {
+        tally.outcome("instanced, scale not 1");
+    }
 }
 
 fn census_forge(
@@ -336,46 +456,67 @@ fn census_forge(
                 })
                 .map_err(|e| e.to_string()),
             ENTITY => StoredEntity::parse(&r.body)
-                .map(|e| {
-                    for v in e.visuals() {
-                        tally.outcome(match &v.instance {
-                            // a slot holding instance matrices in lower case
-                            Instance::Lod { instances, slots, .. } => {
-                                let slots: String = slots
-                                    .iter()
-                                    .map(|s| match s {
-                                        Slot::None => '-',
-                                        Slot::Mesh(m) if m.instances.is_empty() => 'M',
-                                        Slot::Mesh(_) => 'm',
-                                        Slot::Impostor(i) if i.instances.is_empty() => 'I',
-                                        Slot::Impostor(_) => 'i',
-                                    })
-                                    .collect();
-                                let own = if instances.is_empty() {
-                                    ""
-                                } else {
-                                    ", instanced itself"
-                                };
-                                format!("Visual LODSelectorInstance, slots {slots}{own}")
-                            }
-                            Instance::Mesh(_) => "Visual MeshInstanceData".into(),
-                            Instance::Raw { kind, .. } => format!("Visual instance {kind:08X} kept"),
-                        });
-                    }
-                    let instanced = e.visuals().any(|v| match &v.instance {
-                        Instance::Lod { slots, .. } => slots
-                            .iter()
-                            .any(|s| matches!(s, Slot::Mesh(m) if !m.instances.is_empty())),
-                        Instance::Mesh(m) => !m.instances.is_empty(),
-                        Instance::Raw { .. } => false,
-                    });
-                    tally.outcome(if instanced { "instanced" } else { "not instanced" });
-                    // refused by the placement reader: whether the scale applies to instances isn't established
-                    if instanced && e.scale != 1.0 {
-                        tally.outcome("instanced, scale not 1");
+                .map(|e| entity_outcomes(tally, &e))
+                .map_err(|e| e.to_string()),
+            ENTITY_GROUP => StoredEntityGroup::parse(&r.body)
+                .map(|g| {
+                    entity_outcomes(tally, &g.entity);
+                    tally.outcome(format!(
+                        "{} members, last word {}",
+                        if g.members.is_empty() { "no" } else { "with" },
+                        g.word
+                    ));
+                    for v in g.entity.visuals() {
+                        tally.outcome(format!("Visual head {:02x?}", v.head));
                     }
                 })
                 .map_err(|e| e.to_string()),
+            GRID_PARTITION => StoredGridPartition::parse(&r.body)
+                .map(|p| {
+                    let blocks = p.cells.iter().filter(|&&c| c != 0).count();
+                    tally.outcome(format!("{} levels, {} cells", p.levels, p.cells.len()));
+                    tally.count_by("cells holding a block", blocks);
+                })
+                .map_err(|e| e.to_string()),
+            GRID_CELL_DATA_BLOCK => StoredGridCellDataBlock::parse(&r.body)
+                .map(|b| {
+                    tally.count_by("listed references", b.objects.len());
+                    if usize::try_from(b.word).is_ok_and(|w| w <= b.objects.len()) {
+                        tally.outcome("word at most the reference count");
+                    }
+                })
+                .map_err(|e| e.to_string()),
+            // the GridLayout run's length is the program's stated choice: 5 u16 in a base forge, 4 in a patch
+            WORLD => grid::grid_descriptions(&r.body, if label.contains("_patch_") { 4 } else { 5 })
+                .map_err(|e| e.to_string())
+                .and_then(|grids| {
+                    for g in &grids {
+                        let l = &g.layout;
+                        tally.outcome(format!(
+                            "GridLayout {} {:?} {}, after {:02x?}",
+                            l.cell_size, l.bottom_left, l.dimension, l.after
+                        ));
+                        let Some(partition) = g.partition else {
+                            tally.outcome("GridDescription without a partition");
+                            continue;
+                        };
+                        let Some(k) = forge.find(partition.id) else {
+                            tally.outcome("GridPartition in another forge");
+                            continue;
+                        };
+                        let p = resource(&forge, &mut file, k)
+                            .and_then(|r| StoredGridPartition::parse(&r.body).map_err(|e| e.to_string()))?;
+                        if l.cell_count(p.levels) != Some(p.cells.len()) {
+                            return Err(format!(
+                                "GridPartition of {} cells, not its layout's at {} levels",
+                                p.cells.len(),
+                                p.levels
+                            ));
+                        }
+                        tally.outcome("GridPartition cells = its layout's squared dimensions summed");
+                    }
+                    Ok(())
+                }),
             MATERIAL_TEMPLATE => template::descriptors(&r.body)
                 .map(|d| {
                     labels.insert(r.class_id, d.iter().map(template::Descriptor::key).collect());

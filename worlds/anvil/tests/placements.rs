@@ -4,7 +4,7 @@
 use primase_anvil::components::{AnvilLods, AnvilMaterialOverrides, AnvilMesh};
 use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, MeshNormals, UvV, UvWords};
 use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::placements::{Placed, Placer};
+use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Lods, Mesh, Transform, World};
@@ -29,8 +29,8 @@ fn fixtures_place_and_lower() {
     let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
     let mut w = World::new();
     let mut placed = Placed::default();
-    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD);
-    // an instanced aspen, 10 instances, slots MMMI-
+    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Slot);
+    // an instanced aspen, 10 instances, slots MMMI-: under Slot, level 0 at each
     placer
         .place(&mut w, At { forge: 1, entry: 2 }, &mut placed)
         .expect("place");
@@ -115,4 +115,46 @@ fn fixtures_place_and_lower() {
     assert!(w.has::<Mesh>(whole) && !w.has::<AnvilLods>(whole));
     let lods = w.get::<Lods>(whole).expect("core levels");
     assert_eq!((lods.detail, lods.forms.len(), lods.default), (0, 2, None));
+
+    // under Selector, the aspen's every mesh level at each instance
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Selector);
+    placer
+        .place(&mut w, At { forge: 1, entry: 2 }, &mut placed)
+        .expect("place");
+    assert_eq!((placed.placements.len(), placed.levels_unplaced), (10, 0));
+    let prototype = w.get::<Instance>(placed.placements[0]).expect("placed").prototype;
+    let lods = w.get::<AnvilLods>(prototype).expect("levels");
+    assert_eq!(lods.forms.iter().map(|f| f.0).collect::<Vec<_>>(), vec![1, 2]);
+}
+
+/// The entry named `name` in the archive's forge `forge`.
+fn named(archive: &Archive, forge: usize, name: &str) -> At {
+    let names = &archive.forge(forge).expect("forge").names;
+    let entry = names.iter().position(|n| n.name == name).expect(name);
+    At { forge, entry }
+}
+
+#[test]
+fn groups_place_their_own_visuals_and_report_members() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    // a USNAT group of instanced signs: Sign_NoEntry x 2 and Sign_Parkingtime_B x 1, no members (docs/world.md §7)
+    let order = ["DataPC_MAD_USNAT.forge", "DataPC.forge"];
+    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
+    let at = named(&archive, 0, "MAD_GRP_CITYSCHOOL_Parking_Campus_A_016_Short");
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Selector);
+    placer.place(&mut w, at, &mut placed).expect("place");
+    assert_eq!((placed.placements.len(), placed.members.len()), (3, 0));
+    // WhiteRoom's light group: no components, three member Entities listed by no cell (docs/placement.md §5)
+    let mut archive = Archive::open(&[dir.join("DataPC_MAD_WhiteRoom.forge")]).expect("archive");
+    let at = named(&archive, 0, "Light_Spot_CharaGroup");
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Selector);
+    placer.place(&mut w, at, &mut placed).expect("place");
+    assert_eq!((placed.placements.len(), placed.members.len()), (0, 3));
 }

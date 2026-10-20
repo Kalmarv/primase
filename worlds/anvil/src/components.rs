@@ -160,3 +160,18 @@ impl Component for AnvilMaterialOverrides {
         u64::try_from(pairs * 16).unwrap_or(u64::MAX)
     }
 }
+
+/// A placement's DataLayerActions as its Entity stores them (`anvil.data_layers`): each a DataLayer's ClassID and the
+/// u32 after it, in stored order. Which layers a world has active, and what the u32 selects, aren't read (the Riders
+/// Republic notes' lead: 0 present while the layer is active, 1 removed while it is; docs/world.md §9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnvilDataLayers {
+    pub actions: Vec<(u64, u32)>,
+}
+
+impl Component for AnvilDataLayers {
+    const NAME: &'static str = "anvil.data_layers";
+    fn payload_bytes(&self) -> u64 {
+        u64::try_from(self.actions.len() * 12).unwrap_or(u64::MAX)
+    }
+}

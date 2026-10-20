@@ -11,6 +11,10 @@
 //! u32); then `03` ending the body, or `00`, a u64, GameStateData 0x7313743E, a u32, and two length-prefixed byte runs
 //! ending the body.
 //!
+//! An EntityGroup's body is an Entity's, then a u32 count c, c references to its members, a u32 0 and a u32 (the
+//! Riders Republic notes: docs/world.md §7, from the end on 48,755 of 48,803 USNAT groups; the census measures it
+//! read from the start). What a member is to its group is not read.
+//!
 //! The grammar is from the Riders Republic placement notes (docs/entity-grammar.md, consumed to the last byte on 8 of
 //! 8 fixtures and 97% of 5,200 sampled USNAT Entities); the census (worlds/anvil/tests/census.rs) measures it on every
 //! Entity of the game. Fixed component sizes and the 125-byte Visual tail are observations on every body measured,
@@ -25,6 +29,8 @@ use crate::read::reference::{self, Reference};
 
 /// A record type: equals the CRC-32 of the ASCII string `Entity` (the name a label).
 pub const ENTITY: u32 = 0x0984_415E;
+/// A record type: the CRC-32 of `EntityGroup`.
+pub const ENTITY_GROUP: u32 = 0x3F74_2D26;
 /// A Visual component's type.
 pub const VISUAL: u32 = 0xEC65_8D29;
 /// A bounding volume's type.
@@ -267,6 +273,13 @@ impl Cursor<'_> {
                 found,
                 read: "the grammar's value",
             })
+        }
+    }
+    /// Nothing left after the grammar.
+    fn end(&self) -> Result<(), Error> {
+        match self.b.len().saturating_sub(self.at) {
+            0 => Ok(()),
+            left => Err(Error::Trailing(left)),
         }
     }
     /// An embedded object's header: a u64 id and its type, which must be `kind`.
@@ -543,78 +556,9 @@ impl StoredEntity {
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredEntity, Error> {
         let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        c.expect("second byte", 3, 1)?;
-        let matrix = c.matrix()?;
-        let n = c.count("component count", 13)?;
-        let mut components = Vec::with_capacity(n);
-        for index in 0..n {
-            c.expect("component tag", 4, 1)?;
-            let id = c.u64("component")?;
-            let kind = c.u32("component type")?;
-            let body = if kind == VISUAL {
-                ComponentBody::Visual(c.visual()?)
-            } else {
-                ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?)
-            };
-            components.push(Component { id, kind, body });
-        }
-        let run = c.array::<43>("run")?;
-        let word = c.u32("word before the scale")?;
-        let scale = c.f32("scale")?;
-        let bounds = c.bounds()?;
-        c.object("EntityDescriptor", 0x6012_1A9E)?;
-        let descriptor = c.array::<13>("EntityDescriptor")?;
-        c.object("DataLayerFilter", 0xDB1D_406E)?;
-        let k = c.count("DataLayerAction count", 25)?;
-        let mut data_layers = Vec::with_capacity(k);
-        for _ in 0..k {
-            c.object("DataLayerAction", 0xE315_93E1)?;
-            c.expect("DataLayerAction", 0, 1)?;
-            data_layers.push((c.u64("DataLayerAction")?, c.u32("DataLayerAction")?));
-        }
-        let filter_word = c.u32("DataLayerFilter")?;
-        let tail = match c.u8("tail")? {
-            3 => Tail::End,
-            0 => {
-                let id = c.object("GameStateData", 0x7313_743E)?;
-                let word = c.u32("GameStateData")?;
-                let l1 = c.count("GameStateData first run", 1)?;
-                let first = c.take(l1, "GameStateData first run")?.to_vec();
-                let l2 = c.count("GameStateData second run", 1)?;
-                let second = c.take(l2, "GameStateData second run")?.to_vec();
-                Tail::GameState {
-                    id,
-                    word,
-                    first,
-                    second,
-                }
-            }
-            found => {
-                return Err(Error::Value {
-                    what: "tail",
-                    at: c.at.saturating_sub(1),
-                    found: u64::from(found),
-                    read: "3 or 0",
-                });
-            }
-        };
-        let left = body.len().saturating_sub(c.at);
-        if left != 0 {
-            return Err(Error::Trailing(left));
-        }
-        Ok(StoredEntity {
-            matrix,
-            components,
-            run,
-            word,
-            scale,
-            bounds,
-            descriptor,
-            data_layers,
-            filter_word,
-            tail,
-        })
+        let e = entity(&mut c)?;
+        c.end()?;
+        Ok(e)
     }
 
     /// The Visual components.
@@ -624,4 +568,113 @@ impl StoredEntity {
             ComponentBody::Raw(_) => None,
         })
     }
+}
+
+/// An EntityGroup body as stored: an Entity, then its members.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredEntityGroup {
+    pub entity: StoredEntity,
+    /// Its member references, in stored order.
+    pub members: Vec<Reference>,
+    /// The u32 ending the body, as stored.
+    pub word: u32,
+}
+
+impl StoredEntityGroup {
+    /// The body parsed: the Entity grammar, a u32 count c, c references (none of them `03`), a u32 0 and a u32.
+    pub fn parse(body: &[u8]) -> Result<StoredEntityGroup, Error> {
+        let mut c = Cursor { b: body, at: 0 };
+        let entity = entity(&mut c)?;
+        let n = c.count("member count", reference::LENGTH)?;
+        let mut members = Vec::with_capacity(n);
+        for _ in 0..n {
+            let at = c.at;
+            members.push(c.reference()?.ok_or(Error::Value {
+                what: "member reference",
+                at,
+                found: 3,
+                read: "a reference (tag 1)",
+            })?);
+        }
+        c.expect("word after the members", 0, 4)?;
+        let word = c.u32("last word")?;
+        c.end()?;
+        Ok(StoredEntityGroup {
+            entity,
+            members,
+            word,
+        })
+    }
+}
+
+/// An Entity's grammar from its first byte through its tail.
+fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
+    c.expect("first byte", 1, 1)?;
+    c.expect("second byte", 3, 1)?;
+    let matrix = c.matrix()?;
+    let n = c.count("component count", 13)?;
+    let mut components = Vec::with_capacity(n);
+    for index in 0..n {
+        c.expect("component tag", 4, 1)?;
+        let id = c.u64("component")?;
+        let kind = c.u32("component type")?;
+        let body = if kind == VISUAL {
+            ComponentBody::Visual(c.visual()?)
+        } else {
+            ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?)
+        };
+        components.push(Component { id, kind, body });
+    }
+    let run = c.array::<43>("run")?;
+    let word = c.u32("word before the scale")?;
+    let scale = c.f32("scale")?;
+    let bounds = c.bounds()?;
+    c.object("EntityDescriptor", 0x6012_1A9E)?;
+    let descriptor = c.array::<13>("EntityDescriptor")?;
+    c.object("DataLayerFilter", 0xDB1D_406E)?;
+    let k = c.count("DataLayerAction count", 25)?;
+    let mut data_layers = Vec::with_capacity(k);
+    for _ in 0..k {
+        c.object("DataLayerAction", 0xE315_93E1)?;
+        c.expect("DataLayerAction", 0, 1)?;
+        data_layers.push((c.u64("DataLayerAction")?, c.u32("DataLayerAction")?));
+    }
+    let filter_word = c.u32("DataLayerFilter")?;
+    let tail = match c.u8("tail")? {
+        3 => Tail::End,
+        0 => {
+            let id = c.object("GameStateData", 0x7313_743E)?;
+            let word = c.u32("GameStateData")?;
+            let l1 = c.count("GameStateData first run", 1)?;
+            let first = c.take(l1, "GameStateData first run")?.to_vec();
+            let l2 = c.count("GameStateData second run", 1)?;
+            let second = c.take(l2, "GameStateData second run")?.to_vec();
+            Tail::GameState {
+                id,
+                word,
+                first,
+                second,
+            }
+        }
+        found => {
+            return Err(Error::Value {
+                what: "tail",
+                at: c.at.saturating_sub(1),
+                found: u64::from(found),
+                read: "3 or 0",
+            });
+        }
+    };
+    Ok(StoredEntity {
+        matrix,
+        components,
+        run,
+        word,
+        scale,
+        bounds,
+        descriptor,
+        data_layers,
+        filter_word,
+        tail,
+    })
 }

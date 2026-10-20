@@ -4,6 +4,7 @@ pub mod archive;
 pub mod data;
 pub mod entity;
 pub mod forge;
+pub mod grid;
 pub mod lod;
 pub mod material;
 pub mod mesh;
