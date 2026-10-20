@@ -4,7 +4,9 @@ use std::fs::File;
 
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
-use primase_anvil::read::mesh_shape::{Error, MESH_SHAPE, MeshShape};
+use primase_anvil::read::mesh_shape::{
+    COUNTS, EDGE_FACES, Error, FACE_EDGES, FACES, MESH_SHAPE, MeshShape, NO_FACE, POSITIONS,
+};
 use primase_testdata::real_data;
 
 /// A body: the prefix (version, byte, run length), the sections (type, marker, payload; size = 8 + payload), a tail.
@@ -132,5 +134,115 @@ fn two_real_mesh_shapes_read_as_their_sections() {
         let want: Vec<(u16, u32)> = kinds.iter().copied().zip(sizes).collect();
         assert_eq!(got, want, "entry {k}");
         assert_eq!(m.tail.len(), tail, "entry {k}");
+    }
+}
+
+/// Two triangles sharing an edge, as the five geometry sections store them: 4 positions, 2 faces, 5 edges (one
+/// shared, four on the boundary). Other sections are left as they are.
+fn two_triangles() -> Vec<(u16, Vec<u8>)> {
+    let le = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let le16 = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let positions: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+        .iter()
+        .flat_map(|x| x.to_le_bytes())
+        .collect();
+    vec![
+        (0x0201, b"name\0".to_vec()),
+        (COUNTS, le(&[4, 2, 5])),
+        (POSITIONS, positions),
+        (FACES, le16(&[0, 1, 2, 2, 1, 3])),
+        (FACE_EDGES, le(&[0, 1, 2, 1, 3, 4])),
+        (
+            EDGE_FACES,
+            le16(&[0, NO_FACE, 0, 1, 0, NO_FACE, 1, NO_FACE, 1, NO_FACE]),
+        ),
+    ]
+}
+
+fn shape(sections: &[(u16, Vec<u8>)]) -> MeshShape {
+    let s: Vec<(u16, u16, &[u8])> = sections.iter().map(|(k, b)| (*k, 0xECD7, b.as_slice())).collect();
+    MeshShape::parse(&body(1, 0, None, &s, b"")).expect("a laid-out body")
+}
+
+/// The geometry reads as stored: positions, faces, each face's edges, each edge's faces, the boundary counted.
+#[test]
+fn the_geometry_reads_as_its_sections_store_it() {
+    let g = shape(&two_triangles()).geometry().unwrap();
+    assert_eq!(g.positions[3], [1.0, 1.0, 0.0]);
+    assert_eq!(g.faces, [[0, 1, 2], [2, 1, 3]]);
+    assert_eq!(g.face_edges, [[0, 1, 2], [1, 3, 4]]);
+    assert_eq!(g.edge_faces[1], [0, 1]);
+    assert_eq!(g.boundary_edges(), 4);
+}
+
+/// A section missing, repeated or of the wrong length, an index out of range, or an edge whose stored faces aren't
+/// the faces naming it, is refused.
+#[test]
+fn inconsistent_geometry_is_refused() {
+    let with = |kind: u16, bytes: Vec<u8>| {
+        let mut s = two_triangles();
+        for (k, b) in &mut s {
+            if *k == kind {
+                *b = bytes.clone();
+            }
+        }
+        shape(&s).geometry()
+    };
+    let le16 = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    // a position index past the 4
+    assert!(with(FACES, le16(&[0, 1, 4, 2, 1, 3])).is_err());
+    // positions one short
+    assert!(with(POSITIONS, vec![0; 36]).is_err());
+    // edge 0 claims face 1, which doesn't name it
+    assert!(
+        with(
+            EDGE_FACES,
+            le16(&[0, 1, 0, 1, 0, NO_FACE, 1, NO_FACE, 1, NO_FACE])
+        )
+        .is_err()
+    );
+    // a face id past the 2
+    assert!(
+        with(
+            EDGE_FACES,
+            le16(&[0, 2, 0, 1, 0, NO_FACE, 1, NO_FACE, 1, NO_FACE])
+        )
+        .is_err()
+    );
+    let mut missing = two_triangles();
+    missing.retain(|(k, _)| *k != FACE_EDGES);
+    assert!(shape(&missing).geometry().is_err());
+    let mut twice = two_triangles();
+    twice.push((COUNTS, vec![0; 12]));
+    assert!(shape(&twice).geometry().is_err());
+}
+
+/// The two real shapes' geometry (Riders Republic build 25394987; counts and boundary hand-checked in a separate
+/// read-only decode, games/riders-republic docs/recon/collision-geometry.md, 39c645b).
+#[test]
+fn two_real_shapes_read_their_geometry() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+        return;
+    };
+    let f = Forge::open(&path).unwrap();
+    let mut file = File::open(&path).unwrap();
+    for (k, (v, faces, x, boundary)) in [
+        (53_612usize, (25usize, 46usize, 69usize, 0usize)),
+        (21_435, (388, 534, 894, 186)),
+    ] {
+        let e = read_entry(&f.payload(&mut file, k).unwrap(), 1 << 20).unwrap();
+        let r = Resource::parse(&e.resource.data).unwrap();
+        let g = MeshShape::parse(&r.body).unwrap().geometry().unwrap();
+        assert_eq!(
+            (
+                g.positions.len(),
+                g.faces.len(),
+                g.edge_faces.len(),
+                g.boundary_edges()
+            ),
+            (v, faces, x, boundary),
+            "entry {k}"
+        );
+        assert!(g.positions.iter().flatten().all(|c| c.is_finite()), "entry {k}");
     }
 }
