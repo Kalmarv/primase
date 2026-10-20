@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 primase-core.workspace = true
 primase-unity.workspace = true
+primase-meshops.workspace = true
 primase-shader.workspace = true
 primase-image.workspace = true
 serde.workspace = true

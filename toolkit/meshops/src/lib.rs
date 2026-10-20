@@ -1,6 +1,7 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod collision_query;
 mod curves;
 mod distance;
 pub mod frames;

@@ -1,4 +1,4 @@
-//! `prepare-reskate-pause-map{from=image | from=geometry,height=H,extent=region|content|x0,y0,x1,y1,
+//! `prepare-reskate-pause-map{from=image | from=geometry,height=H,extent=region|content|collision|x0,y0,x1,y1,
 //! leave-out=shadowless|placements|nothing[,prefixes=<prefix>;...],colour=mean|texture}`: the pause-menu map picture a map writer writes
 //! (`ui/map_image.png`, `ui/map_image.json`, `ui/map_clouds.png`), chosen explicitly.
 //!
@@ -6,8 +6,11 @@
 //!   [`SkatePauseImage`], and the ground bounds it covers). An error when the scene names none or it was not loaded.
 //! - `from=geometry`: a top-down picture of the map's drawn geometry (highest surface on top, shaded by slope; decals,
 //!   glass and blended surfaces left out), `height` pixels high and 16:9, over `extent`: the scene's stated region
-//!   (`region`; an error without one), the map's own content bounds as the writer measures them (`content`), or a
-//!   ground rectangle; padded by 10% and at least 50 m high. Two more choices, both required:
+//!   (`region`; an error without one), the map's own content bounds as the writer measures them (`content`), the
+//!   play space (`collision` with `max-extent=M`: the box of every placed collision soup no wider than M metres on any
+//!   axis, [`primase_meshops::collision_query::collision_box`], so a level's skyline backdrops stay out of the
+//!   picture; a map converted whole only, the scene's region left alone), or a ground rectangle; padded by 10% and at
+//!   least 50 m high. Two more choices, both required:
 //!   - `leave-out=shadowless` leaves out the triangles whose material casts no shadow (`skate.material`
 //!     `cast_shadows` false: an indoor level's shell and ceiling, as `lower-reskate-shadows` lowered them), so
 //!     the picture shows the room from above, counted in the writer's report. `leave-out=placements` with
@@ -48,6 +51,8 @@ pub enum PauseExtent {
     Content,
     /// A ground rectangle `[east0, north0, east1, north1]`.
     Rect([f32; 4]),
+    /// The play space: the box of every placed collision soup no wider than `max_extent` metres on any axis.
+    Collision { max_extent: f32 },
 }
 
 /// Where [`PrepareReskatePauseMap`] takes the picture from.
@@ -105,13 +110,14 @@ impl PrepareReskatePauseMap {
     }
 
     /// From its options, through [`PrepareReskatePauseMap::new`]: `from=image`, or `from=geometry` with `height`,
-    /// `extent=region|content` or `x0,y0,x1,y1`, `leave-out=shadowless|nothing|placements` (`placements` with
+    /// `extent=region|content` (or `extent=collision` with `max-extent`) or `x0,y0,x1,y1`, `leave-out=shadowless|nothing|placements` (`placements` with
     /// `prefixes`, separated by `;`) and `colour=mean|texture`.
     pub fn from_options(o: &Options) -> Result<PrepareReskatePauseMap, String> {
-        const KEYS: [&str; 10] = [
+        const KEYS: [&str; 11] = [
             "from",
             "height",
             "extent",
+            "max-extent",
             "x0",
             "y0",
             "x1",
@@ -143,13 +149,22 @@ impl PrepareReskatePauseMap {
                         .transpose()
                 };
                 let rect = [num("x0")?, num("y0")?, num("x1")?, num("y1")?];
+                let max_extent = num("max-extent")?;
+                if max_extent.is_some() && o.get("extent").map(String::as_str) != Some("collision") {
+                    return Err("max-extent goes with extent=collision".into());
+                }
                 let extent = match (o.get("extent").map(String::as_str), rect) {
+                    (Some("collision"), [None, None, None, None]) => PauseExtent::Collision {
+                        max_extent: max_extent
+                            .filter(|m| m.is_finite() && *m > 0.0)
+                            .ok_or("extent=collision requires max-extent (metres, above 0)")?,
+                    },
                     (Some("region"), [None, None, None, None]) => PauseExtent::Region,
                     (Some("content"), [None, None, None, None]) => PauseExtent::Content,
                     (None, [Some(x0), Some(y0), Some(x1), Some(y1)]) => PauseExtent::Rect([x0, y0, x1, y1]),
                     _ => {
                         return Err(
-                            "the extent is required with from=geometry: extent=region, extent=content or x0, y0, x1, y1"
+                            "the extent is required with from=geometry: extent=region, extent=content, extent=collision with max-extent, or x0, y0, x1, y1"
                                 .into(),
                         );
                     }
@@ -245,6 +260,10 @@ impl Pass for PrepareReskatePauseMap {
                     PauseExtent::Content => {
                         o.insert("extent".into(), "content".into());
                     }
+                    PauseExtent::Collision { max_extent } => {
+                        o.insert("extent".into(), "collision".into());
+                        o.insert("max-extent".into(), max_extent.to_string());
+                    }
                     PauseExtent::Rect(r) => {
                         for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(r) {
                             o.insert(k.into(), v.to_string());
@@ -330,6 +349,21 @@ impl Pass for PrepareReskatePauseMap {
                         }
                     }
                     PauseExtent::Rect(r) => Some(r),
+                    // the play space: a part's soups are not the map's, so a map converted whole only
+                    PauseExtent::Collision { max_extent } => {
+                        super::require_whole_map(w, self.name()).map_err(|e| {
+                            format!("{e}: extent=collision measures the whole map's collision")
+                        })?;
+                        let [lo, hi] = primase_meshops::collision_query::collision_box(
+                            w,
+                            f64::from(max_extent),
+                        )
+                        .ok_or_else(|| {
+                            format!("extent=collision: no collision soup within {max_extent} m on every axis")
+                        })?;
+                        // ground frame (east, north) = core (x, -z)
+                        Some([lo[0] as f32, (-hi[2]) as f32, hi[0] as f32, (-lo[2]) as f32])
+                    }
                 };
                 log.count("pause-map pictures: drawn from the geometry", 1);
                 SkatePausePicture::Geometry {
@@ -502,6 +536,46 @@ mod tests {
             Some(SkatePausePicture::Geometry { drawing, .. })
                 if drawing.leave_out == PauseLeaveOut::Placements(["Level Bounds/".to_owned()].into())
         ));
+    }
+
+    /// extent=collision: the box of the soups no wider than max-extent (a 300 m backdrop left out), in the ground frame
+    /// (east, north = -z); the scene's region untouched; the options read back and max-extent is required.
+    #[test]
+    fn the_play_space_extent_leaves_out_backdrops() {
+        let mut w = World::new();
+        for corners in [
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 0.0, 20.0]],
+            [[-150.0, 0.0, -50.0], [150.0, 0.0, -50.0], [0.0, 80.0, -50.0]],
+        ] {
+            let e = w.spawn();
+            w.insert(
+                e,
+                primase_core::Collision {
+                    positions: corners.to_vec(),
+                    triangles: vec![[0, 1, 2]],
+                    surfaces: vec![0],
+                },
+            );
+        }
+        let opts = o(&[
+            ("from", "geometry"),
+            ("height", "720"),
+            ("extent", "collision"),
+            ("max-extent", "100"),
+            ("leave-out", "nothing"),
+            ("colour", "mean"),
+        ]);
+        let pass = PrepareReskatePauseMap::from_options(&opts).unwrap();
+        assert_eq!(pass.options(), opts);
+        pass.run(&mut w, &mut PassLog::default()).unwrap();
+        assert!(matches!(
+            w.resource::<SkatePausePicture>(),
+            Some(SkatePausePicture::Geometry { extent: Some(r), .. }) if *r == [0.0, -20.0, 10.0, 0.0]
+        ));
+        assert!(w.resource::<SkateScene>().is_none_or(|s| s.region.is_none()));
+        let mut missing = opts.clone();
+        missing.remove("max-extent");
+        assert!(PrepareReskatePauseMap::from_options(&missing).is_err());
     }
 
     /// From the geometry over the scene's region, its content or a rectangle; from the scene's own image, which must be
