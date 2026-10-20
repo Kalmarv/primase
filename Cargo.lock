@@ -987,6 +987,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-monogame"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-reskate"
 version = "0.1.0"
 dependencies = [

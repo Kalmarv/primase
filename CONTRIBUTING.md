@@ -123,7 +123,7 @@ with its role (`allow(clippy::disallowed_*, reason = "<role>: ...")`).
 core/                 primase-core: world store, core components, TexFormat, frame, pass manager, conversion helper
 toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, glb, hash, image, meshops, ...)
 worlds/<name>/        primase-<name>: one crate per game (or game family), engine family or destination (fromsoft,
-                      gta, unity, frostbite, reskate, ...): its reader, its passes, and for a destination its
+                      gta, unity, frostbite, monogame, reskate, ...): its reader, its passes, and for a destination its
                       preparation passes and writer
 formats/<name>/       primase-<name>: file formats that are not one game's or destination's (gltf, web, ...)
 cli/                  primase: a small command line over the library, for trying it; not where recipes live

@@ -28,3 +28,7 @@
 path = "worlds/gta"
 reason = "the GTA reader reads untrusted archive and resource bytes"
 
+[[parse_crate]]
+path = "worlds/monogame"
+reason = "the XNB reader reads untrusted content files"
+
