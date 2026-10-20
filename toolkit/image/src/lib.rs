@@ -1,4 +1,4 @@
-//! PNG to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
+//! PNG and QOI ([`read_qoi`]) to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -13,6 +13,8 @@ pub use layers::{BakeLayerChannels, register};
 mod normals;
 mod orm;
 pub use orm::{MissingLevels, OrmSize, PackOrm};
+mod qoi;
+pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 mod texture;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use std::io::Cursor;
@@ -33,6 +35,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/lib.rs", include_bytes!("lib.rs")),
     ("image/normals.rs", include_bytes!("normals.rs")),
     ("image/orm.rs", include_bytes!("orm.rs")),
+    ("image/qoi.rs", include_bytes!("qoi.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
 ];
 
