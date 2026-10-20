@@ -13,6 +13,8 @@ pub use layered_plan::{
     LayeredMeshSource, LayeredPartSource, LayeredPbrPlan, lower_layered_pbr, plan_layered_pbr,
 };
 mod hull;
+mod omit_placements;
+pub use omit_placements::{OmitPlacements, PlacementCollision};
 mod nonrigid;
 pub use nonrigid::{BakeNonrigid, Mirrors, bake_nonrigid};
 mod parametric;
@@ -26,6 +28,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(OmitMateriallessPrimitives)),
     });
+    // which placements stop drawing and whether they keep colliding are the program's: no default
+    reg.register_requiring(
+        "omit-placements",
+        |o| Ok(Box::new(OmitPlacements::from_options(o)?)),
+        &[("prefixes", "Level/Ceiling"), ("collision", "keep")],
+    );
     reg.register_requiring(
         "partition-grid",
         |o| Ok(Box::new(PartitionGrid::from_options(o)?)),
