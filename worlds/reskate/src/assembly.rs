@@ -332,7 +332,7 @@ pub(crate) fn hulls_numbered(
             entity: sd.entity,
             name: format!("hull_{number:04}"),
             pos,
-            idx: sd.idx.clone(),
+            idx: sd.idx.to_vec(),
             surface: sd.surf.first().map_or(0, |b| (b & 0x7F) as usize),
             ground: sd.ground,
         });
@@ -1437,6 +1437,53 @@ mod tests {
         assert_eq!(written.len(), 3, "{written:?}");
         assert_eq!(ids(Layout::Count), written);
         assert_eq!(ids(Layout::Render), written);
+    }
+
+    /// The scene a layout reads holds the world's geometry, not a copy of it: each prototype's positions and indices
+    /// (its `core.mesh`), its collision's positions and triangles, and a world soup's (one no transform places).
+    #[test]
+    fn a_layout_borrows_the_worlds_geometry() {
+        use std::borrow::Cow;
+        let w = slabs();
+        let s = crate::scene::Scene::from_world(&w, std::path::Path::new("")).unwrap();
+        let same = |a: &[f32], b: &[[f32; 3]]| std::ptr::eq(a, b.as_flattened());
+        assert_eq!(s.protos.len(), 1);
+        for p in &s.protos {
+            let mesh = w.get::<primase_core::Mesh>(p.entity).unwrap();
+            let prims = p.prims().unwrap();
+            assert_eq!(prims.len(), mesh.primitives().len());
+            for (g, pr) in prims.iter().zip(mesh.primitives()) {
+                assert!(same(g.pos, pr.positions().unwrap()), "{}: positions copied", p.id);
+                let idx = pr.indices.as_deref().unwrap();
+                assert!(
+                    matches!(&g.idx, Cow::Borrowed(i) if std::ptr::eq(*i, idx)),
+                    "{}: indices copied",
+                    p.id
+                );
+            }
+            let c = w.get::<primase_core::Collision>(p.entity).unwrap();
+            let (pos, idx, _) = p.collision.as_ref().unwrap();
+            assert!(same(pos, &c.positions), "{}: collision positions copied", p.id);
+            assert!(
+                std::ptr::eq(*idx, c.triangles.as_flattened()),
+                "{}: triangles copied",
+                p.id
+            );
+        }
+        assert!(!s.soups.is_empty());
+        for sd in &s.soups {
+            let c = w.get::<primase_core::Collision>(sd.entity).unwrap();
+            assert!(
+                matches!(&sd.pos, Cow::Borrowed(v) if same(v, &c.positions)),
+                "soup {:?}: positions copied",
+                sd.entity
+            );
+            assert!(
+                matches!(&sd.idx, Cow::Borrowed(i) if std::ptr::eq(*i, c.triangles.as_flattened())),
+                "soup {:?}: triangles copied",
+                sd.entity
+            );
+        }
     }
 
     /// Each layout makes only what its caller reads: a dry one encodes no mesh; a collision layout builds no render

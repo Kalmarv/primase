@@ -5,6 +5,8 @@
 //! surface by its name in `core.surfaces`) and, when any triangle is rock, [`SkateRock`]; the writers turn it back,
 //! each core surface onto the first scene surface of its name.
 
+use std::borrow::Cow;
+
 use primase_core::{Collision, Entity, Surfaces, World};
 
 use crate::components::{STANDARD_SURFACES, SkateRock, SkateScene, SkateSoup};
@@ -54,8 +56,44 @@ pub fn insert_soup(
 /// core surface the first scene surface of its name; a name the scene has no surface for is an error), or a legacy
 /// [`SkateSoup`] (worlds that still build one), or `None`.
 pub fn soup(w: &World, e: Entity, scene: Option<&SkateScene>) -> Result<Option<SkateSoup>, String> {
+    Ok(soup_view(w, e, scene)?.map(|s| s.to_soup()))
+}
+
+/// A soup as v1 writes it ([`soup`]), its positions and triangles the world's own (borrowed, not copied).
+#[derive(Debug)]
+pub struct SoupView<'w> {
+    pub positions: &'w [[f32; 3]],
+    /// Counter-clockwise fronts.
+    pub triangles: &'w [[u32; 3]],
+    /// Per triangle: bits 0-6 index the scene's surfaces, bit 7 natural rock (made from `core.collision`'s surfaces,
+    /// or a legacy soup's own).
+    pub surfaces: Cow<'w, [u8]>,
+}
+
+impl SoupView<'_> {
+    /// The soup, copied out of the world.
+    pub fn to_soup(&self) -> SkateSoup {
+        SkateSoup {
+            positions: self.positions.to_vec(),
+            triangles: self.triangles.to_vec(),
+            surfaces: self.surfaces.to_vec(),
+        }
+    }
+}
+
+/// Entity `e`'s collision as [`soup`] gives it, borrowed from the world: only the surface bytes of a `core.collision`
+/// are made.
+pub fn soup_view<'w>(
+    w: &'w World,
+    e: Entity,
+    scene: Option<&SkateScene>,
+) -> Result<Option<SoupView<'w>>, String> {
     let Some(c) = w.get::<Collision>(e) else {
-        return Ok(w.get::<SkateSoup>(e).cloned());
+        return Ok(w.get::<SkateSoup>(e).map(|s| SoupView {
+            positions: &s.positions,
+            triangles: &s.triangles,
+            surfaces: Cow::Borrowed(&s.surfaces),
+        }));
     };
     let names = scene_surfaces(scene.and_then(|s| s.surfaces.as_deref()));
     let world = w.resource::<Surfaces>();
@@ -75,9 +113,9 @@ pub fn soup(w: &World, e: Entity, scene: Option<&SkateScene>) -> Result<Option<S
         let rock = rock.is_some_and(|r| r.0.get(i) == Some(&true));
         bytes.push(at as u8 | if rock { 0x80 } else { 0 });
     }
-    Ok(Some(SkateSoup {
-        positions: c.positions.clone(),
-        triangles: c.triangles.clone(),
-        surfaces: bytes,
+    Ok(Some(SoupView {
+        positions: &c.positions,
+        triangles: &c.triangles,
+        surfaces: Cow::Owned(bytes),
     }))
 }

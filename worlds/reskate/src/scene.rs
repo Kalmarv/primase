@@ -2,6 +2,7 @@
 //! space: textures, materials made on first use, prototypes built from their GLBs, placements, collision soups,
 //! lights, grind curves, water and markers.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use crate::components::{
     AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
-    SkateScene, SkateSoup, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
+    SkateScene, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
 };
 use crate::hash::skate_fnv_string;
 use primase_core::{
@@ -109,22 +110,23 @@ pub struct PartDef {
     pub geom: i32,
 }
 
-/// A prototype of the scene.
+/// A prototype of the scene, its geometry and collision the world's own (borrowed).
 #[derive(Debug)]
-pub struct ProtoDef {
+pub struct ProtoDef<'a> {
     pub index: usize,
     /// Its entity in the world.
     pub entity: primase_core::Entity,
     pub id: String,
     /// The prototype's `core.mesh` primitives, the writer's input (a prototype's GLB is loaded before:
     /// `interchange::load`); `None`: no geometry.
-    pub prims: Option<Vec<GlbPrim>>,
+    pub prims: Option<Vec<ProtoPrim<'a>>>,
     pub name: String,
     pub col_mode: CollisionMode,
     pub key: u32,
     pub foliage: bool,
     pub ground: bool,
-    pub collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)>,
+    /// Its collision: positions and triangle indices (the world's), surface bytes for the scene's surfaces.
+    pub collision: Option<(&'a [f32], &'a [u32], Vec<u8>)>,
     pub parts: Vec<PartDef>,
     /// Local box (glTF space): the `core.mesh` positions, else (a prototype that collides without drawing) its
     /// collision's; `None`: neither.
@@ -132,9 +134,9 @@ pub struct ProtoDef {
     pub max: Option<[f32; 3]>,
 }
 
-/// A world collision soup.
+/// A world collision soup: its positions and triangles the world's own (borrowed), unless placed by a transform.
 #[derive(Debug)]
-pub struct SoupDef {
+pub struct SoupDef<'a> {
     /// Its entity in the world.
     pub entity: primase_core::Entity,
     /// Placed by an entity of its own (a reader's `core.collision` not raised into a soup): the scene lists these after
@@ -145,8 +147,8 @@ pub struct SoupDef {
     pub mode: CollisionMode,
     pub ground: bool,
     pub region_cut: bool,
-    pub pos: Vec<f32>,
-    pub idx: Vec<u32>,
+    pub pos: Cow<'a, [f32]>,
+    pub idx: Cow<'a, [u32]>,
     pub surf: Vec<u8>,
     pub read: i64,
     pub cut: i64,
@@ -414,9 +416,9 @@ pub struct Scene<'a> {
     pub vertex_blend: BTreeMap<String, VertexBlend>,
     /// Materials' base colour factors (`skate.base_factor`), by material key.
     pub base_factors: BTreeMap<String, [f32; 4]>,
-    pub protos: Vec<ProtoDef>,
+    pub protos: Vec<ProtoDef<'a>>,
     pub placements: Vec<ScenePlacement>,
-    pub soups: Vec<SoupDef>,
+    pub soups: Vec<SoupDef<'a>>,
     pub lights: Vec<PlacedLight>,
     pub curves: Vec<GrindCurve>,
     pub water: Vec<WaterQuad>,
@@ -801,12 +803,12 @@ impl<'a> Scene<'a> {
                     }
                 })
                 .collect();
-            let soup = crate::interchange::soup::soup(world, e, Some(sc))
+            let soup = crate::interchange::soup::soup_view(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("prototype {} collision: {m}", p.id)))?;
-            let collision: Option<(Vec<f32>, Vec<u32>, Vec<u8>)> = match (soup.as_ref(), &p.collision) {
+            let collision = match (soup.as_ref(), &p.collision) {
                 (Some(s), Some(_)) => Some((
-                    s.positions.iter().flatten().copied().collect(),
-                    s.triangles.iter().flatten().copied().collect(),
+                    s.positions.as_flattened(),
+                    s.triangles.as_flattened(),
                     s.surfaces
                         .iter()
                         .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
@@ -831,9 +833,9 @@ impl<'a> Scene<'a> {
                     m.primitives()
                         .iter()
                         .enumerate()
-                        .map(|(i, p)| GlbPrim {
-                            blend: opacity.and_then(|o| o.0.get(i).cloned().flatten()),
-                            ..glb_prim(p)
+                        .map(|(i, p)| ProtoPrim {
+                            blend: opacity.and_then(|o| o.0.get(i)?.as_deref()),
+                            ..proto_prim(p)
                         })
                         .collect()
                 }),
@@ -888,7 +890,7 @@ impl<'a> Scene<'a> {
                     .map(|p| p.0.clone()),
             });
         }
-        let soup_def = |entity, file: String, c: Option<&SoupRef>, s: &SkateSoup| SoupDef {
+        let soup_def = |entity, file: String, c: Option<&SoupRef>, pos, idx, surfaces: &[u8]| SoupDef {
             entity,
             raw: c.is_none(),
             file,
@@ -896,10 +898,9 @@ impl<'a> Scene<'a> {
             ground: c.and_then(|c| c.ground).unwrap_or(true),
             // cut at the region as the soup says (clip-reskate-region cuts and marks them); the writer decides none
             region_cut: c.and_then(|c| c.region_cut).unwrap_or(false),
-            pos: s.positions.iter().flatten().copied().collect(),
-            idx: s.triangles.iter().flatten().copied().collect(),
-            surf: s
-                .surfaces
+            pos,
+            idx,
+            surf: surfaces
                 .iter()
                 .map(|&b| (surf_map[(b & 0x7F) as usize] as u8) | (b & 0x80))
                 .collect(),
@@ -909,7 +910,7 @@ impl<'a> Scene<'a> {
         };
         let mut soups = Vec::new();
         for (e, c) in world.iter::<SkateCollision>() {
-            let s = crate::interchange::soup::soup(world, e, Some(sc))
+            let s = crate::interchange::soup::soup_view(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .ok_or_else(|| Error::Scene(format!("collision {e:?} has no soup")))?;
             let file =
@@ -918,7 +919,14 @@ impl<'a> Scene<'a> {
                     .first()
                     .map(|f| f.path.clone())
                     .unwrap_or_default();
-            soups.push(soup_def(e, file, Some(&c.0), &s));
+            soups.push(soup_def(
+                e,
+                file,
+                Some(&c.0),
+                Cow::Borrowed(s.positions.as_flattened()),
+                Cow::Borrowed(s.triangles.as_flattened()),
+                &s.surfaces,
+            ));
         }
         // collision placed by an entity of its own (a reader's world collision, not raised into a soup): a world
         // soup in scene space through its transform, as the scene writer files it
@@ -935,25 +943,27 @@ impl<'a> Scene<'a> {
                 notes.unplaced_collision.insert(e);
                 continue;
             }
-            let mut s = crate::interchange::soup::soup(world, e, Some(sc))
+            let s = crate::interchange::soup::soup_view(world, e, Some(sc))
                 .map_err(|m| Error::Scene(format!("collision {e:?}: {m}")))?
                 .expect("core.collision");
+            let (mut pos, mut idx) = (
+                Cow::Borrowed(s.positions.as_flattened()),
+                Cow::Borrowed(s.triangles.as_flattened()),
+            );
             if let Some(t) = world.get::<Transform>(e) {
-                for p in &mut s.positions {
-                    *p = t.apply(*p);
-                }
+                pos = Cow::Owned(s.positions.iter().flat_map(|&p| t.apply(p)).collect());
                 // a mirroring transform reverses winding: flip so fronts stay counter-clockwise
                 if t.determinant() < 0.0 {
-                    for tri in &mut s.triangles {
-                        tri.swap(1, 2);
-                    }
+                    idx = Cow::Owned(s.triangles.iter().flat_map(|&[a, b, c]| [a, c, b]).collect());
                 }
             }
             soups.push(soup_def(
                 e,
                 format!("collision/world_{}.bin", soups.len()),
                 None,
-                &s,
+                pos,
+                idx,
+                &s.surfaces,
             ));
         }
         let lights = world
@@ -1092,36 +1102,35 @@ impl<'a> Scene<'a> {
     }
 }
 
-/// The prototype's primitives as the reference reads them: positions, normals (None: absent), uv (None: absent),
-/// indices (absent: sequential, whole triangles).
+/// A prototype's primitive as the reference reads it, the world's own streams (borrowed): positions, normals (None:
+/// absent), uv (None: absent), indices (absent: sequential, whole triangles, made).
 #[derive(Clone, Debug)]
-pub struct GlbPrim {
-    pub pos: Vec<f32>,
-    pub nrm: Option<Vec<f32>>,
-    pub uv: Option<Vec<f32>>,
-    pub idx: Vec<u32>,
-    /// Per-vertex blend weight (`reskate.blend_opacity`; only from `core.mesh`).
-    pub blend: Option<Vec<f32>>,
+pub struct ProtoPrim<'a> {
+    pub pos: &'a [f32],
+    pub nrm: Option<&'a [f32]>,
+    pub uv: Option<&'a [f32]>,
+    pub idx: Cow<'a, [u32]>,
+    /// Per-vertex blend weight (`reskate.blend_opacity`).
+    pub blend: Option<&'a [f32]>,
 }
 
-/// The writer's view of a primitive (positions, normals, first texture coordinates, triangle indices); the GLB file
-/// path and the `core.mesh` path both go through it.
-pub fn glb_prim(pr: &primase_core::Primitive) -> GlbPrim {
-    let pos: Vec<f32> = pr.positions().unwrap_or(&[]).iter().flatten().copied().collect();
+/// The writer's view of a `core.mesh` primitive (positions, normals, first texture coordinates, triangle indices).
+pub fn proto_prim(pr: &primase_core::Primitive) -> ProtoPrim<'_> {
+    let pos = pr.positions().unwrap_or(&[]).as_flattened();
     let nv = pos.len() / 3;
     let nrm = match pr.streams.get(&Semantic::Normal) {
-        Some(Stream::F32x3(v)) => Some(v.iter().flatten().copied().collect()),
+        Some(Stream::F32x3(v)) => Some(v.as_flattened()),
         _ => None,
     };
     let uv = match pr.streams.get(&Semantic::TexCoord(0)) {
-        Some(Stream::F32x2(v)) => Some(v.iter().flatten().copied().collect()),
+        Some(Stream::F32x2(v)) => Some(v.as_flattened()),
         _ => None,
     };
-    let idx = pr
-        .indices
-        .clone()
-        .unwrap_or_else(|| (0..(nv - nv % 3) as u32).collect());
-    GlbPrim {
+    let idx = match &pr.indices {
+        Some(idx) => Cow::Borrowed(&idx[..]),
+        None => Cow::Owned((0..(nv - nv % 3) as u32).collect()),
+    };
+    ProtoPrim {
         pos,
         nrm,
         uv,
@@ -1153,9 +1162,9 @@ fn box_of<'a>(positions: impl IntoIterator<Item = &'a [f32; 3]>) -> Option<([f32
     Some((lo, hi))
 }
 
-impl ProtoDef {
+impl<'a> ProtoDef<'a> {
     /// The prototype's primitives (its `core.mesh`); `None`: no geometry.
-    pub fn prims(&self) -> Option<&[GlbPrim]> {
+    pub fn prims(&self) -> Option<&[ProtoPrim<'a>]> {
         self.prims.as_deref()
     }
 }
@@ -1402,11 +1411,11 @@ pub fn build_geometry(p: &ProtoDef) -> Result<Option<SrcMesh>> {
         };
         part.pos = vec![0.0; nv * 3];
         part.nrm = vec![0.0; nv * 3];
-        part.uv = g.uv.clone().unwrap_or_else(|| vec![0.0; nv * 2]);
-        part.blend = g.blend.clone().unwrap_or_default();
-        part.idx = g.idx.clone();
+        part.uv = g.uv.map_or_else(|| vec![0.0; nv * 2], <[f32]>::to_vec);
+        part.blend = g.blend.map(<[f32]>::to_vec).unwrap_or_default();
+        part.idx = g.idx.to_vec();
         for v in 0..nv {
-            let q = w_at(&g.pos, v * 3);
+            let q = w_at(g.pos, v * 3);
             part.pos[v * 3] = q.x;
             part.pos[v * 3 + 1] = q.y;
             part.pos[v * 3 + 2] = q.z;
@@ -1445,7 +1454,7 @@ pub fn build_geometry(p: &ProtoDef) -> Result<Option<SrcMesh>> {
             cp[v + 2] = q.z;
         }
         mesh.col_pos = Some(cp);
-        mesh.col_idx = if idx.is_empty() { None } else { Some(idx.clone()) };
+        mesh.col_idx = if idx.is_empty() { None } else { Some(idx.to_vec()) };
         mesh.col_surf = surf.clone();
         mesh.col_mode = p.col_mode;
         mesh.col_ground = p.ground;
