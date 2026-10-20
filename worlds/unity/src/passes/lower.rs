@@ -65,7 +65,9 @@
 //! legacy surface shaders differ: each map is sampled through its own tiling. A texture's wrap mode becomes its
 //! slot's wrap. Slots whose texture has no pixels (not decoded) are left out and counted. Re-encoded maps are new
 //! texture entities, RGBA8, every level: metallic-roughness, occlusion and emission as above, and colour textures
-//! Unity samples as linear encoded as sRGB.
+//! Unity samples as linear encoded as sRGB. Two maps combined into one (Self-Illumin's, Autodesk Interactive's) are
+//! sampled as the first is: a second of another size is read at its nearest texel, and one with another sampler
+//! (wrap, filter) is counted.
 //!
 //! Each material also gets its draw order (Unity's render queue, the layer its alpha mode is) and, where its shader
 //! states it, its usage (`core.material_usage`, the named table [`SHADER_USAGE`]) and whether it ignores the vertex
@@ -546,6 +548,15 @@ impl Lowering {
                 if !beside.matches(t.width, t.height, t.levels.len()) {
                     self.log.approximate(
                         "maps combined at another size: the second read at its nearest texel",
+                        1,
+                    );
+                }
+                // the combined map is sampled as the first is: a second sampled otherwise (wrap, filter) differs
+                // outside UV 0-1 or in its filtering
+                let sampler = |e: Entity| w.get::<UnityTexture>(e).map(|u| (u.wrap, u.filter));
+                if sampler(source) != sampler(o) {
+                    self.log.approximate(
+                        "maps combined with another sampler (wrap or filter): the second sampled as the first",
                         1,
                     );
                 }
@@ -1941,6 +1952,44 @@ mod tests {
                 .get("self-illumination map on another tiling than the base map: emission from the base map")
                 .copied(),
             Some(1)
+        );
+    }
+
+    /// Two maps combined into one texture are sampled as the first: a second with another wrap (here clamped beside a
+    /// repeating base) is reported, for Self-Illumin's emission and Autodesk Interactive's metallic-roughness alike;
+    /// maps sampled alike are not.
+    #[test]
+    fn maps_combined_with_another_sampler_are_reported() {
+        let mut w = World::new();
+        let main = pixel(&mut w, [255, 255, 255, 255], ColorSpace::Srgb);
+        let clamped = pixel(&mut w, [128, 0, 0, 128], ColorSpace::Linear);
+        w.get_mut::<UnityTexture>(clamped).unwrap().wrap = [1, 1];
+        let repeating = pixel(&mut w, [64, 0, 0, 255], ColorSpace::Linear);
+        let mut lit = material(1, Some("Legacy Shaders/Self-Illumin/Diffuse"), &[]);
+        lit.textures = vec![
+            env("_MainTex", Some(main), 1.0),
+            env("_Illum", Some(clamped), 1.0),
+        ];
+        let autodesk = |id: i64, roughness: Entity| {
+            let mut m = stated(
+                "Autodesk Interactive",
+                vec![fixture::standard()],
+                &[("_SrcBlend", 1.0), ("_DstBlend", 0.0)],
+                &["_METALLICGLOSSMAP", "_SPECGLOSSMAP"],
+            );
+            m.material.path_id = id;
+            m.textures = vec![
+                env("_MetallicGlossMap", Some(repeating), 1.0),
+                env("_SpecGlossMap", Some(roughness), 1.0),
+            ];
+            m
+        };
+        let (_, log) = lowered(&mut w, vec![lit, autodesk(2, clamped), autodesk(3, main)]);
+        assert_eq!(
+            log.approximations
+                .get("maps combined with another sampler (wrap or filter): the second sampled as the first")
+                .copied(),
+            Some(2)
         );
     }
 
