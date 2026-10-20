@@ -26,13 +26,14 @@ use primase_glb::Gltf;
 use primase_monogame::xnb::Xnb;
 use serde_json::Value;
 
+use crate::components::names;
 use crate::components::{
     StuntboostAttribute, StuntboostAttributes, StuntboostCollision, StuntboostDirectLight,
     StuntboostGameCollision, StuntboostGameCollisionPart, StuntboostLedge, StuntboostLedgeCorner,
     StuntboostLedgeGraph, StuntboostLedgeKind, StuntboostMaterial, StuntboostNode, StuntboostPart,
     StuntboostRole, StuntboostShortcuts, StuntboostTextureRef,
 };
-use crate::read::{derived, names};
+use crate::read::derived;
 use crate::{Error, Result};
 
 /// What [`read_level`] read.

@@ -2,6 +2,8 @@
 //! the scale the program read the level with ([Frame](crate#frame)).
 use std::collections::BTreeMap;
 
+pub mod names;
+
 use primase_core::pbr::{Filters, Shading, Wrap};
 use primase_core::{Component, Entity, JsonError};
 use serde::Serialize;
@@ -68,7 +70,7 @@ pub struct StuntboostCall {
     pub args: Option<Vec<String>>,
 }
 
-/// A node name parsed by the game's rules ([`crate::read::names`]): `raw` as stored, the name and its type characters,
+/// A node name parsed by the game's rules ([`names`], [`StuntboostName::parse`]): `raw` as stored, the name and its type characters,
 /// the code as the game keeps it (from the `=` on), its class (`None`: `Entity()`) and the calls after it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StuntboostName {
@@ -102,6 +104,11 @@ pub enum StuntboostDraw {
 }
 
 impl StuntboostName {
+    /// `raw` parsed by the game's rules ([`names::parse`]).
+    pub fn parse(raw: &str) -> StuntboostName {
+        names::parse(raw)
+    }
+
     /// The class name, `Entity` when none is written.
     pub fn class_name(&self) -> &str {
         self.class.as_ref().map_or("Entity", |c| c.name.as_str())

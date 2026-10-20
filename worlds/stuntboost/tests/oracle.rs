@@ -16,9 +16,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use primase_stuntboost::components::names::parse;
 use primase_stuntboost::components::{StuntboostBake, StuntboostCollision};
 use primase_stuntboost::read::derived;
-use primase_stuntboost::read::names::parse;
 use primase_testdata::real_data;
 use serde_json::Value;
 

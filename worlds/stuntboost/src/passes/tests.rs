@@ -11,10 +11,10 @@ use primase_core::{
 };
 
 use super::*;
+use crate::components::names::parse;
 use crate::components::{
     StuntboostMaterial, StuntboostNode, StuntboostPart, StuntboostRole, StuntboostTextureRef,
 };
-use crate::read::names::parse;
 
 fn material(w: &mut World, name: &str, texture: Option<Entity>) -> Entity {
     let e = w.spawn();
@@ -131,7 +131,7 @@ fn level() -> Level {
         prototype(&mut w, glass),
     );
     Level {
-        ramp: node(&mut w, part, "ramp_<", Some(p_wood)),
+        ramp: node(&mut w, part, "ramp<", Some(p_wood)),
         kill: node(&mut w, part, "lava_<", Some(p_kill)),
         wall: node(&mut w, part, "Skatepark_<", Some(p_plain)),
         start: node(&mut w, part, "=Spawn(start).005", None),

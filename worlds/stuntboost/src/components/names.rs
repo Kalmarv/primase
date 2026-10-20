@@ -14,7 +14,7 @@
 //!
 //! Parsing never fails: a name is what it says; what a game makes of an unknown class is the program's.
 
-use crate::components::{StuntboostBake, StuntboostCall, StuntboostCollision, StuntboostName};
+use super::{StuntboostBake, StuntboostCall, StuntboostCollision, StuntboostName};
 
 /// The text up to the first `c`, or all of it.
 fn before(s: &str, c: char) -> &str {
