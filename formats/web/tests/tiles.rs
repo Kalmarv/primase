@@ -1681,30 +1681,90 @@ fn omissions_are_counted_once_per_published_tile_not_per_budget_retry() {
     assert_eq!(counts, [(NoticeKind::Unsupported, 2)]);
 }
 
-/// The index carries the environment's sun, not its ambient (the viewer has no ambient light): an ambient is reported
-/// as a part of `core.environment` the writer leaves out.
+/// The viewer has no ambient light: the index carries only the environment's sun and the tiles leave the environment
+/// out, so an ambient is reported once per tile set as not written, with a named sun and without one (where nothing of
+/// the environment is written at all), and nothing is reported without an ambient.
 #[test]
-fn the_environments_ambient_is_reported_unwritten() {
+fn the_environments_ambient_is_reported_once_as_not_written() {
+    use primase_core::{Ambient, AmbientLight, Environment, Light, LightKind};
+    let ambient_notice = |set: &primase_web::TileSet| {
+        set.notices
+            .iter()
+            .filter(|n| {
+                n.reason
+                    .starts_with("the environment's ambient light, not written")
+            })
+            .map(|n| n.count)
+            .collect::<Vec<_>>()
+    };
     let mut w = World::new();
-    w.insert_resource(primase_core::Environment {
-        sun: None,
+    // placements in two cells, so the tile set has more than one tile
+    for x in [0.0, 500.0] {
+        let proto = w.spawn();
+        w.insert(proto, mesh());
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        w.insert(
+            placement,
+            Transform {
+                cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [x, 0., 0.]],
+            },
+        );
+    }
+    let sun = w.spawn();
+    w.insert(
+        sun,
+        Light {
+            kind: LightKind::Directional,
+            color: [1.0; 3],
+            intensity: 2.0,
+            range: None,
+            cast_shadows: Some(true),
+        },
+    );
+    w.insert(sun, Transform::IDENTITY);
+    let ambient = Ambient {
+        intensity: 1.0,
+        light: AmbientLight::Flat([0.2, 0.25, 0.3]),
+    };
+    // no ambient: nothing to report
+    w.insert_resource(Environment {
+        sun: Some(sun),
         ambient: None,
     });
-    assert!(
-        primase_web::target()
-            .check_prepared(&w)
-            .unsupported_resources
-            .is_empty()
-    );
-    w.insert_resource(primase_core::Environment {
-        sun: None,
-        ambient: Some(primase_core::Ambient {
-            intensity: 1.0,
-            light: primase_core::AmbientLight::Flat([0.2; 3]),
-        }),
+    let set = write(&w, &plain()).unwrap();
+    assert!(set.index.tiles.len() > 1);
+    assert!(ambient_notice(&set).is_empty());
+    // an ambient beside a named sun: the sun is indexed, the ambient reported once
+    w.insert_resource(Environment {
+        sun: Some(sun),
+        ambient: Some(ambient.clone()),
     });
-    assert_eq!(
-        primase_web::target().check_prepared(&w).unsupported_resources,
-        ["core.environment ambient"]
-    );
+    let set = write(&w, &plain()).unwrap();
+    assert!(set.index.environment.is_some());
+    assert_eq!(ambient_notice(&set), [1]);
+    let n = set
+        .notices
+        .iter()
+        .find(|n| n.reason.starts_with("the environment's ambient light"))
+        .unwrap();
+    assert_eq!(n.kind, primase_core::convert::NoticeKind::Unsupported);
+    // an ambient alone: no environment in the index, the ambient reported once, and no tile carries it
+    w.insert_resource(Environment {
+        sun: None,
+        ambient: Some(ambient),
+    });
+    let set = write(&w, &plain()).unwrap();
+    assert!(set.index.environment.is_none());
+    assert_eq!(ambient_notice(&set), [1]);
+    for bytes in set.files.values() {
+        let doc: serde_json::Value = serde_json::from_slice(primase_glb::parse(bytes).unwrap().json).unwrap();
+        assert!(!doc.to_string().contains("core.environment"));
+    }
 }

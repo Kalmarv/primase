@@ -482,6 +482,9 @@ pub struct TilePlan {
     /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
+    /// Whether a cell's world held `core.environment`'s ambient: the viewer has no ambient light, the index carries
+    /// only the sun and the tiles leave the environment out, so it is not written ([`TilePlan::notices`], once).
+    ambient_left_out: bool,
     /// What the published tiles' documents and the records left out or drew approximately: by kind and reason, the
     /// count and a few examples ([`TilePlan::notices`]).
     omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
@@ -569,8 +572,6 @@ pub fn target() -> primase_core::pass::Target {
         .dynamic_typed::<Curve>(|c| c.tangents.is_none())
         .illegal(Lods::NAME)
         .illegal(primase_core::Collider::NAME)
-        // the index carries the environment's sun; the viewer has no ambient light
-        .unwritten_part::<primase_core::Environment>("ambient", |e| e.ambient.is_some())
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files: each cell's content is read from its world when it is
@@ -683,6 +684,7 @@ pub fn plan_with_geometry(
         sun_entity,
         shapes: BTreeMap::new(),
         ground_markers: 0,
+        ambient_left_out: false,
         omitted: BTreeMap::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         cells: BTreeMap::new(),
@@ -982,6 +984,13 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
+        // the cell's world as its passes left it: the ambient is lowered there, not in the planning world
+        if world
+            .resource::<primase_core::Environment>()
+            .is_some_and(|env| env.ambient.is_some())
+        {
+            self.ambient_left_out = true;
+        }
         let mut cw = CellWorld {
             world,
             records: BTreeMap::new(),
@@ -1153,7 +1162,8 @@ impl TilePlan {
     /// What the tiles published so far left out, chose or drew approximately, as notices (stage `web`): what their
     /// glTF documents did not write (counted once per published tile, as each document counts it; a tile written to
     /// measure it and then split counts nothing), viewer records' components without a JSON form, placements skipped
-    /// for a degenerate transform, and markers anchored at height 0.
+    /// for a degenerate transform, markers anchored at height 0, and the environment's ambient light (once, when a
+    /// cell's world held one: the viewer has no ambient, the index carries only the sun).
     pub fn notices(&self) -> Vec<Notice> {
         let mut out: Vec<Notice> = self
             .omitted
@@ -1180,6 +1190,15 @@ impl TilePlan {
                 NoticeKind::Approximation,
                 "markers with a ground position only, anchored at height 0",
                 self.ground_markers,
+            ));
+        }
+        if self.ambient_left_out {
+            out.push(Notice::new(
+                "web",
+                NoticeKind::Unsupported,
+                "the environment's ambient light, not written: the viewer has no ambient light (the index carries \
+                 only the sun; the tiles leave the environment out)",
+                1,
             ));
         }
         out
