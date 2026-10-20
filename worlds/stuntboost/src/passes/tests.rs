@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{
-    Collision, Entity, Instance, Marker, Mesh, Primitive, Semantic, Stream, SurfaceClass, Surfaces, Topology,
-    Transform, World,
+    Collision, Entity, Instance, Marker, MaterialVariants, Mesh, Primitive, Semantic, Stream, SurfaceClass,
+    Surfaces, Topology, Transform, World,
 };
 
 use super::*;
@@ -222,8 +222,18 @@ fn the_baked_atlas_lowers_as_stated() {
     let bake = l.w.get::<PbrMaterial>(l.bake).unwrap();
     assert!(bake.base_color_texture.is_none() && bake.emissive_texture.is_some());
     assert_eq!(bake.base_color, [0.0, 0.0, 0.0, 1.0]);
-    let glass = l.w.get::<PbrMaterial>(l.glass).unwrap();
-    assert_eq!((glass.alpha_mode, glass.base_color[3]), (AlphaMode::Blend, 0.5));
+    // the window's own material is unchanged; its placement takes a blended copy through a variant
+    assert_eq!(
+        l.w.get::<PbrMaterial>(l.glass).unwrap().alpha_mode,
+        AlphaMode::Opaque
+    );
+    let i = l.w.get::<Instance>(l.window).unwrap();
+    let copy = l.w.get::<MaterialVariants>(i.prototype).unwrap().0[0][&i.variant];
+    let blended = l.w.get::<PbrMaterial>(copy).unwrap();
+    assert_eq!(
+        (blended.alpha_mode, blended.base_color[3]),
+        (AlphaMode::Blend, 0.5)
+    );
 
     let mut l = level();
     LowerStuntboostMaterials {
@@ -237,6 +247,41 @@ fn the_baked_atlas_lowers_as_stated() {
     assert_eq!(
         l.w.get::<PbrMaterial>(l.glass).unwrap().alpha_mode,
         AlphaMode::Opaque
+    );
+}
+
+/// Two nodes drawing one mesh and material, one of them `Transparent(0.5)`: the opaque node keeps the material, the
+/// transparent one draws a blended copy (STUNTBOOST's glass shares the level's bake material).
+#[test]
+fn a_transparent_node_blends_a_copy_not_the_shared_material() {
+    let mut w = World::new();
+    let part = w.spawn();
+    let atlas = w.spawn();
+    let bake = material(&mut w, "bake_mat_0", Some(atlas));
+    let mesh = prototype(&mut w, bake);
+    let floor = node(&mut w, part, "bake_0_object", Some(mesh));
+    let glass = node(&mut w, part, "window_glass=Transparent(0.5)", Some(mesh));
+    let mut log = PassLog::default();
+    LowerStuntboostMaterials {
+        baked: Baked::BaseColour,
+        transparent: Transparent::Blend,
+    }
+    .run(&mut w, &mut log)
+    .unwrap();
+    assert_eq!(w.get::<PbrMaterial>(bake).unwrap().alpha_mode, AlphaMode::Opaque);
+    assert_eq!(w.get::<Instance>(floor).unwrap().variant, 0);
+    let i = w.get::<Instance>(glass).unwrap();
+    assert_ne!(i.variant, 0);
+    let copy = w.get::<MaterialVariants>(mesh).unwrap().0[0][&i.variant];
+    let blended = w.get::<PbrMaterial>(copy).unwrap();
+    assert_eq!(
+        (blended.alpha_mode, blended.base_color[3]),
+        (AlphaMode::Blend, 0.5)
+    );
+    assert_eq!(
+        log.counts
+            .get("blended material copies made for transparent nodes"),
+        Some(&1)
     );
 }
 
