@@ -3,3 +3,4 @@
 
 pub mod interchange;
 pub(crate) mod scene;
+pub use scene::EMITTED_NAMES;

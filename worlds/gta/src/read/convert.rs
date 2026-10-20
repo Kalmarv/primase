@@ -9,6 +9,35 @@ use primase_core::{Entity, World};
 
 use crate::read::source::{GtaSource, prototype_box};
 
+/// Every component and resource a region's read and load put in a world, by name (the names in the namespaces
+/// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
+/// `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`) reads a corner of Legion Square and checks that its world holds no other name.
+pub const EMITTED_NAMES: &[&str] = &[
+    "core.condition",
+    "core.instance",
+    "core.lods",
+    "core.mesh",
+    "core.name",
+    "core.provenance",
+    "core.source",
+    "core.state_axis",
+    "core.texture",
+    "core.transform",
+    "gta.archetype",
+    "gta.bones",
+    "gta.bounds",
+    "gta.drawable",
+    "gta.embedded_bounds",
+    "gta.entity",
+    "gta.lights",
+    "gta.materials",
+    "gta.resolved_in",
+    "gta.shader",
+    "gta.skeleton",
+    "gta.sources",
+    "gta.water",
+    "gta.water_surface",
+];
 /// What to read: the install and its key folder, the region, and how far beyond it entities are read. Both maps'
 /// entities are read, with `gta.map` conditions, each prototype's drawables and textures from the state it is resolved
 /// in.

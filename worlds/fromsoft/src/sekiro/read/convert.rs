@@ -20,6 +20,32 @@ use crate::dcx::Decoder;
 use crate::materials::Material;
 use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
 
+/// Every component and resource an area's read and load put in a world, by name (the names in the namespaces
+/// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
+/// `PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6`) reads slice A of m11_01 and checks that its world holds no other name.
+pub const EMITTED_NAMES: &[&str] = &[
+    "core.condition",
+    "core.instance",
+    "core.name",
+    "core.shadows",
+    "core.source",
+    "core.state_axis",
+    "core.transform",
+    "fromsoft.area_extras",
+    "fromsoft.flver",
+    "fromsoft.layered_material",
+    "fromsoft.light",
+    "fromsoft.map_collision",
+    "fromsoft.material",
+    "fromsoft.material_slots",
+    "fromsoft.object_collision",
+    "fromsoft.prototype",
+    "fromsoft.read_scope",
+    "fromsoft.shader_programs",
+    "fromsoft.shadow_flags",
+    "fromsoft.texture_payloads",
+];
+
 /// See the module documentation.
 #[derive(Debug)]
 pub struct AreaReader<'a> {

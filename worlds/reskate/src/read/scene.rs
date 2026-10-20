@@ -6,11 +6,51 @@ use std::path::PathBuf;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, MeshFile, World};
 
+/// Every component and resource a skate scene's read and load put in a world, by name (the names in the namespaces
+/// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test reads a scene that
+/// holds each kind and checks that its world holds no other name.
+pub const EMITTED_NAMES: &[&str] = &[
+    "core.collision",
+    "core.curve",
+    "core.instance",
+    "core.layered",
+    "core.lods",
+    "core.marker",
+    "core.material_variants",
+    "core.mesh",
+    "core.mesh_file",
+    "core.name",
+    "core.priority",
+    "core.source",
+    "core.surfaces",
+    "core.texture",
+    "core.texture_file",
+    "core.tile",
+    "core.transform",
+    "skate.collision",
+    "skate.form",
+    "skate.grind_curve",
+    "skate.layered_syntax",
+    "skate.light",
+    "skate.loaded_file",
+    "skate.marker",
+    "skate.material",
+    "skate.parts",
+    "skate.pause_image",
+    "skate.placement",
+    "skate.prototype",
+    "skate.rock",
+    "skate.scene",
+    "skate.texture",
+    "skate.water",
+];
+
 /// A skate-scene folder read for a conversion: [`super::interchange::read`] gives the world to plan from (its GLBs and
 /// textures as file references), and each part's closure is loaded with [`super::interchange::load`] (the meshes, the
 /// textures and the pause-map picture its entities reference). Its components are `core` and the `skate` dialect; a
 /// prototype's box before loading is its GLB's, from the file's header ([`primase_glb::mesh_file_box`]).
 #[derive(Debug)]
+
 pub struct SceneReader {
     dir: PathBuf,
     /// What it noticed since it was last asked: a prototype whose GLB header could not be read for its box.

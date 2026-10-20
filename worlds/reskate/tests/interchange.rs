@@ -305,6 +305,39 @@ fn read_loaded(dir: &Path) -> (World, read::interchange::ReadReport) {
     (w, rep)
 }
 
+/// The reader declares every name its read and load put in a world (`read::EMITTED_NAMES`, what a coverage
+/// report lists): the fixture scenes, read and loaded, hold no other name. Declared names the fixtures don't hold are
+/// listed here with why, so the declaration grows on purpose.
+#[test]
+fn the_reader_declares_every_name_it_emits() {
+    let declared: std::collections::BTreeSet<&str> = read::EMITTED_NAMES.iter().copied().collect();
+    let mut seen = std::collections::BTreeSet::new();
+    for dir in [fixture("emits"), fixture_with_pause("emits-pause")] {
+        let (w, _) = read_loaded(&dir);
+        for n in w.component_names().into_iter().chain(w.resource_names()) {
+            seen.insert(n.to_owned());
+        }
+    }
+    let undeclared: Vec<&String> = seen.iter().filter(|n| !declared.contains(n.as_str())).collect();
+    assert!(undeclared.is_empty(), "emitted but not declared: {undeclared:?}");
+    // declared, held by scenes the fixtures are not: a layered material's syntax and blend, natural rock, LOD forms
+    let not_in_fixtures = [
+        "core.layered",
+        "skate.layered_syntax",
+        "skate.rock",
+        "core.lods",
+        "skate.form",
+    ];
+    let unseen: Vec<&&str> = declared
+        .iter()
+        .filter(|n| !seen.contains(**n) && !not_in_fixtures.contains(n))
+        .collect();
+    assert!(
+        unseen.is_empty(),
+        "declared, emitted by no fixture and not listed why: {unseen:?}"
+    );
+}
+
 fn read_err(dir: &Path) -> String {
     let mut w = World::new();
     match read::interchange::read(dir, &mut w) {
