@@ -2,6 +2,7 @@
 
 pub mod data;
 pub mod forge;
+pub mod lod;
 pub mod material;
 pub mod mesh;
 pub mod mesh_shape;
