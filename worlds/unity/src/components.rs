@@ -96,6 +96,34 @@ impl Component for UnityTexture {
     }
 }
 
+/// The compiled fragment program a material draws with, as the player stores it ([`crate::program::read_programs`]):
+/// its shader's name, the pass (subshader and pass index in the shader's parsed form), the variant's keywords, its
+/// parameters (constant-buffer fields with their offsets, texture and sampler slots) and its D3D11 code, a DXBC
+/// container (Unity's record header before it removed). What the program means is the evaluating pass's.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityProgram {
+    pub shader: String,
+    pub subshader: usize,
+    pub pass: usize,
+    pub keywords: Vec<String>,
+    pub parameters: crate::program::Parameters,
+    #[serde(skip)]
+    pub code: Vec<u8>,
+}
+
+impl Component for UnityProgram {
+    const NAME: &'static str = "unity.program";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn payload_bytes(&self) -> u64 {
+        self.code.len() as u64
+    }
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+}
+
 /// A number a material stores, in the dialect's JSON view: a JSON number, or `"inf"`, `"-inf"` or `"nan"` for the
 /// non-finite values a shader property may store as a sentinel (JSON has none; the dialect keeps what was stored).
 struct Stored(f32);

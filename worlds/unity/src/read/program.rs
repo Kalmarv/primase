@@ -509,10 +509,170 @@ impl ShaderPrograms {
     }
 }
 
+/// The DXBC container in a D3D11 program record's code: Unity stores a short header before it. `None` when the code
+/// holds no container (the first `DXBC` within its first 64 bytes, whole as its own header sizes it).
+pub fn dxbc(code: &[u8]) -> Option<&[u8]> {
+    (0..code.len().min(64)).find_map(|at| {
+        let c = code.get(at..)?;
+        if c.get(..4)? != b"DXBC" {
+            return None;
+        }
+        let size = u32::from_le_bytes(c.get(24..28)?.try_into().ok()?) as usize;
+        c.get(..size)
+    })
+}
+
+/// The variant of `pass` a material with keywords `material` draws with under one directional light and nothing else
+/// (no shadows, lightmaps or light probes): of those whose keywords are all `DIRECTIONAL` or the material's, the one
+/// with the most, then the lowest group (tier). `None` when no variant qualifies.
+pub fn forward_variant<'a>(pass: &'a PassProgram, material: &[String]) -> Option<&'a Variant> {
+    let wanted = |k: &String| k == "DIRECTIONAL" || material.contains(k);
+    pass.variants
+        .iter()
+        .filter(|v| v.keywords.iter().all(wanted))
+        .min_by_key(|v| (std::cmp::Reverse(v.keywords.len()), v.group, v.blob_index))
+}
+
+/// What [`read_programs`] attached.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgramsReport {
+    /// Materials given their program.
+    pub attached: usize,
+    /// Materials of the shaders without one, by reason.
+    pub left_out: std::collections::BTreeMap<String, usize>,
+}
+
+/// For every `unity.material` of `w` whose shader is one of `shaders`, the D3D11 code of the fragment variant its
+/// draw pass under `pipeline` ([`UnityMaterial::draw_pass`]) takes with one directional light ([`forward_variant`]),
+/// as `unity.program` on the material's entity. A material without a shader object, draw pass, qualifying variant or
+/// D3D11 code is left out, counted by reason.
+pub fn read_programs(
+    player: &Player,
+    w: &mut primase_core::World,
+    shaders: &[&str],
+    pipeline: &crate::components::RenderPipeline,
+) -> Result<ProgramsReport> {
+    use crate::components::{UnityMaterial, UnityProgram};
+    let mut report = ProgramsReport::default();
+    let mut read: std::collections::BTreeMap<(String, i64), ShaderPrograms> =
+        std::collections::BTreeMap::new();
+    let materials: Vec<(primase_core::Entity, UnityMaterial)> = w
+        .iter::<UnityMaterial>()
+        .filter(|(_, m)| m.shader.as_deref().is_some_and(|s| shaders.contains(&s)))
+        .map(|(e, m)| (e, m.clone()))
+        .collect();
+    for (e, m) in materials {
+        let mut leave = |why: &str| *report.left_out.entry(why.to_owned()).or_default() += 1;
+        let data = crate::material::UnityMaterialData::read(
+            player,
+            &ObjRef {
+                file: m.material.file.clone(),
+                path_id: m.material.path_id,
+            },
+        )?;
+        let Some(shader) = data.shader else {
+            leave("no shader object");
+            continue;
+        };
+        // the draw pass's place in the shader's parsed form, which `shader_state` mirrors
+        let place = m.subshader(pipeline).and_then(|sub| {
+            let i = m.shader_state.iter().position(|s| std::ptr::eq(s, sub))?;
+            let pass = m.draw_pass(pipeline)?;
+            let j = sub.passes.iter().position(|p| std::ptr::eq(p, pass))?;
+            Some((i, j))
+        });
+        let Some((i, j)) = place else {
+            leave("no draw pass");
+            continue;
+        };
+        let key = (shader.file.clone(), shader.path_id);
+        if !read.contains_key(&key) {
+            read.insert(key.clone(), ShaderPrograms::read(player, &shader)?);
+        }
+        let programs = &read[&key];
+        let Some(variant) = programs
+            .passes
+            .get(i)
+            .and_then(|sub| sub.get(j))
+            .and_then(|pass| forward_variant(pass, &m.keywords).map(|v| (pass, v)))
+        else {
+            leave("no variant for one directional light");
+            continue;
+        };
+        let (pass, variant) = variant;
+        if !programs.platforms.contains(&4) {
+            leave("no D3D11 code");
+            continue;
+        }
+        let code = programs.code(4, variant.blob_index)?;
+        let Some(code) = dxbc(&code) else {
+            leave("D3D11 code without a DXBC container");
+            continue;
+        };
+        w.insert(
+            e,
+            UnityProgram {
+                shader: programs.name.clone(),
+                subshader: i,
+                pass: j,
+                keywords: variant.keywords.clone(),
+                parameters: pass.parameters_of(variant).clone(),
+                code: code.to_vec(),
+            },
+        );
+        report.attached += 1;
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn the_dxbc_container_is_found_past_unitys_header() {
+        let mut container = b"DXBC".to_vec();
+        container.extend([0; 20]);
+        container.extend(32u32.to_le_bytes());
+        container.extend([0; 4]);
+        let mut code = vec![7, 0, 0, 0, 1, 2];
+        code.extend(&container);
+        code.extend([9, 9]);
+        assert_eq!(dxbc(&code), Some(&container[..]));
+        assert_eq!(dxbc(&code[..20]), None);
+    }
+
+    #[test]
+    fn the_forward_variant_has_the_most_wanted_keywords_and_no_other() {
+        let variant = |group: usize, blob_index: u32, keywords: &[&str]| Variant {
+            group,
+            blob_index,
+            keywords: keywords.iter().map(|k| k.to_string()).collect(),
+            gpu_program_type: 17,
+            requirements: 0,
+            parameters: None,
+        };
+        let pass = PassProgram {
+            variants: vec![
+                variant(1, 0, &["DIRECTIONAL"]),
+                variant(0, 1, &["DIRECTIONAL"]),
+                variant(0, 2, &["DIRECTIONAL", "SHADOWS_SCREEN"]),
+                variant(0, 3, &["DIRECTIONAL", "_NORMALMAP"]),
+                variant(0, 4, &[]),
+            ],
+            parameters: Parameters::default(),
+        };
+        let chosen = |keywords: &[&str]| {
+            let keywords: Vec<String> = keywords.iter().map(|k| k.to_string()).collect();
+            forward_variant(&pass, &keywords).map(|v| v.blob_index)
+        };
+        // the lowest tier of the plain directional variant; the material's keyword when a variant has it; never
+        // a shadowed one
+        assert_eq!(chosen(&[]), Some(1));
+        assert_eq!(chosen(&["_NORMALMAP"]), Some(3));
+        assert_eq!(chosen(&["SHADOWS_SCREEN_OFF"]), Some(1));
+    }
 
     fn obj(fields: Vec<(&str, Value)>) -> Value {
         Value::Struct(fields.into_iter().map(|(k, v)| (Arc::from(k), v)).collect())
