@@ -3,17 +3,18 @@
 //! levels without a reference, which no byte here establishes.
 //!
 //! The body (little-endian, after the resource's class id and extension): a byte (1), a u32, 7 bytes; five levels of
-//! 48 bytes, each a u64, 0xA360319A (equal to the CRC-32 of `LODDescriptor`, the name a label), a 10-byte reference
-//! (`01`, a byte, a u64 ClassID; or `03` and nine zero bytes, none), three f32, 5 bytes, a u32, a u32 count (0) and a
-//! byte; the dependency count d (u32) and d dependencies (a byte 0 and a u64 ClassID); d again (u32) and d u32; 6
+//! 48 + 4n bytes, each a u64, 0xA360319A (equal to the CRC-32 of `LODDescriptor`, the name a label), a 10-byte reference
+//! (`01`, a byte, a u64 ClassID; or `03` and nine zero bytes, none), three f32, 5 bytes, a u32, a u32 count n, n u32
+//! and a byte; the dependency count d (u32) and d dependencies (a byte 0 and a u64 ClassID); d again (u32) and d u32; 6
 //! bytes, ending the body.
 //!
 //! Established on two LODSelectors of the base WhiteRoom forge (Riders Republic build 25394987: entries 24 and 159,
 //! one direct reference and none, two direct references and two dependencies; every byte consumed to the body's end,
 //! and every reference and dependency resolving to a Mesh record; games/riders-republic
 //! docs/recon/placement-darkroom-handoff.md, b8dae7b). Refused, naming it: another first byte or level marker, a
-//! reference [`crate::read::reference`] refuses, a level count other than 0 (what follows a nonzero count is
-//! not established here), a dependency byte other than 0, a second count other than d, or bytes after the last 6.
+//! reference [`crate::read::reference`] refuses, a dependency byte other than 0, a second count other than d, or
+//! bytes after the last 6. A level's count at +43 counts u32s kept as stored before its last byte (48 + 4n bytes):
+//! every LODSelector of Riders Republic (48,862) reads so to its body's end in the census; RRAssetStudio reads the same.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -47,7 +48,7 @@ pub enum Error {
 }
 
 /// One level as stored.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoredLevel {
     /// Its first u64 (on both fixtures the selector's ClassID + 13 + the level's index; meaning not established).
     pub head: u64,
@@ -58,6 +59,9 @@ pub struct StoredLevel {
     pub bytes_34: [u8; 5],
     /// The u32 after those (0, 1 and 2 seen).
     pub u32_39: u32,
+    /// The level's last byte.
+    /// The u32s the count at +43 counts, as stored (RRAssetStudio calls them bone hashes: its claim).
+    pub words: Vec<u32>,
     /// The level's last byte.
     pub last: u8,
 }
@@ -148,19 +152,23 @@ impl StoredLodSelector {
             let bytes_34 = c.array::<5>("level")?;
             let u32_39 = c.u32("level")?;
             let count = c.u32("level count")?;
-            if count != 0 {
-                return Err(Error::Value {
-                    what: "level count",
-                    found: u64::from(count),
-                    read: "0",
+            let count = usize::try_from(count).unwrap_or(usize::MAX);
+            if count > body.len() / 4 {
+                return Err(Error::Short {
+                    what: "level's counted u32s",
+                    have: body.len(),
                 });
             }
+            let words = (0..count)
+                .map(|_| c.u32("level's counted u32"))
+                .collect::<Result<_, _>>()?;
             levels.push(StoredLevel {
                 head: level_head,
                 reference,
                 floats,
                 bytes_34,
                 u32_39,
+                words,
                 last: c.u8("level")?,
             });
         }
@@ -228,7 +236,11 @@ mod tests {
             }
             b.extend([0, 0, 0, 0, 1]);
             b.extend(0u32.to_le_bytes());
-            b.extend((if k == 0 { count } else { 0 }).to_le_bytes());
+            let n = if k == 0 { count } else { 0 };
+            b.extend(n.to_le_bytes());
+            for _ in 0..n {
+                b.extend(7u32.to_le_bytes());
+            }
             b.push(0);
         }
         let d = u32::try_from(dependencies.len()).expect("few");
@@ -275,13 +287,13 @@ mod tests {
         let mut b = good.clone();
         b[60 + 13] = 1;
         assert!(matches!(StoredLodSelector::parse(&b), Err(Error::Reference(_))));
-        assert!(matches!(
-            StoredLodSelector::parse(&body([Some(5), None, None, None, None], &[], 1)),
-            Err(Error::Value {
-                what: "level count",
-                ..
-            })
-        ));
+        // a level's counted u32s are read; a count past the body is refused
+        let s = StoredLodSelector::parse(&body([Some(5), None, None, None, None], &[], 2)).expect("parse");
+        assert_eq!(s.levels[0].words, [7, 7]);
+        let mut b = good.clone();
+        b[12 + 43] = 0xFF;
+        b[12 + 44] = 0xFF;
+        assert!(StoredLodSelector::parse(&b).is_err());
         let mut b = good.clone();
         b.push(0);
         assert!(matches!(StoredLodSelector::parse(&b), Err(Error::Trailing(1))));
