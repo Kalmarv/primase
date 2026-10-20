@@ -1,5 +1,8 @@
 //! Prototypes' drawables and textures into the world, for the prototypes placements still use.
 //!
+//! - Each prototype's files are looked up in the archive set and texture parents of a map state it is resolved in
+//!   ([`Lookups::of`], [`GtaResolvedIn`]): a prototype is one resolved payload ([`Payload`]), so Story's and GTA
+//!   Online's files never stand in for each other.
 //! - A prototype whose archetype is a drawable (asset type 2: the live ydr), a fragment (1: the live yft's main
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
@@ -37,6 +40,7 @@ use primase_core::{
 use primase_core::{LodForm, Lods, Origin, Provenance};
 
 use crate::components::GTA;
+use crate::components::GtaResolvedIn;
 use crate::components::collision::GtaEmbeddedBounds;
 use crate::components::{
     GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
@@ -45,8 +49,9 @@ use crate::rage::drawable::{
     Bones, Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights,
 };
 use crate::rage::le;
+use crate::rage::map::ArchetypeDef;
 use crate::rage::texture::{Texture, TextureDictionary};
-use crate::read::archive::archive_set::ArchiveSet;
+use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install};
 use crate::read::archive::keys::Keys;
 use crate::read::gtxd::TextureParents;
 use crate::{Result, invalid};
@@ -55,6 +60,145 @@ use crate::{Result, invalid};
 /// maps (`env_*`) are bound by name and no parent chain reaches it. In Legion it is the only dictionary holding all four
 /// detail textures the chains missed (188 others hold scattered copies); CodeWalker also keeps it resident.
 const RESIDENT: &str = "mapdetail";
+
+/// One map state's asset lookup: its archive set (the live files) and its texture dictionary parents.
+#[derive(Clone, Copy, Debug)]
+pub struct Lookup<'a> {
+    pub set: &'a ArchiveSet,
+    pub parents: &'a TextureParents,
+}
+
+/// What of an archetype names its payload: its asset type and name, drawable dictionary and texture dictionary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssetNames {
+    pub asset_type: i32,
+    pub asset_name: u32,
+    pub drawable_dictionary: u32,
+    pub texture_dictionary: u32,
+}
+
+impl From<&ArchetypeDef> for AssetNames {
+    fn from(a: &ArchetypeDef) -> AssetNames {
+        AssetNames {
+            asset_type: a.asset_type,
+            asset_name: a.asset_name,
+            drawable_dictionary: a.drawable_dictionary,
+            texture_dictionary: a.texture_dictionary,
+        }
+    }
+}
+
+impl From<&GtaArchetype> for AssetNames {
+    fn from(a: &GtaArchetype) -> AssetNames {
+        AssetNames {
+            asset_type: a.asset_type,
+            asset_name: a.asset_name,
+            drawable_dictionary: a.drawable_dictionary,
+            texture_dictionary: a.texture_dictionary,
+        }
+    }
+}
+
+/// The files a map state resolves an archetype's payload to: its drawable's ([`Lookup::drawable`]; `None`: no live
+/// file, or an asset type without one) and each texture dictionary's of its lookup ([`Lookup::texture_dictionaries`],
+/// in lookup order; `None`: no live ytd of that name). Its light records are its drawable's. Two states load the same
+/// payload exactly when these are equal.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Payload {
+    pub drawable: Option<FileRef>,
+    pub textures: Vec<Option<FileRef>>,
+}
+
+impl Lookup<'_> {
+    fn live(&self, ext: &str, hash: u32) -> Option<FileRef> {
+        self.set.tables.get(ext).and_then(|t| t.get(&hash)).copied()
+    }
+
+    /// The live file holding an archetype's drawable, and its extension: a drawable's ydr (asset type 2), a fragment's
+    /// yft (1), the ydd holding a dictionary entry (3); `None` for no live file or another asset type.
+    pub fn drawable(&self, a: AssetNames) -> Option<(&'static str, FileRef)> {
+        let (ext, hash) = match a.asset_type {
+            2 => ("ydr", a.asset_name),
+            1 => ("yft", a.asset_name),
+            3 => ("ydd", a.drawable_dictionary),
+            _ => return None,
+        };
+        self.live(ext, hash).map(|f| (ext, f))
+    }
+
+    /// The texture dictionaries the game searches after a drawable's own, by name hash: the archetype's, that
+    /// dictionary's parents ([`TextureParents::chain`]), then the resident detail dictionary ([`RESIDENT`]).
+    pub fn texture_dictionaries(&self, txd: u32) -> Vec<u32> {
+        std::iter::once(txd)
+            .chain(self.parents.chain(txd))
+            .chain(std::iter::once(primase_hash::joaat(RESIDENT.as_bytes())))
+            .collect()
+    }
+
+    /// The files this state resolves an archetype's payload to.
+    pub fn payload(&self, a: AssetNames) -> Payload {
+        Payload {
+            drawable: self.drawable(a).map(|(_, f)| f),
+            textures: (self.texture_dictionaries(a.texture_dictionary).into_iter())
+                .map(|d| self.live("ytd", d))
+                .collect(),
+        }
+    }
+}
+
+/// Both map states' lookups, over one install: a prototype's payload is loaded through the lookup of a state it is
+/// resolved in ([`GtaResolvedIn`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Lookups<'a> {
+    story: Lookup<'a>,
+    online: Option<Lookup<'a>>,
+}
+
+impl<'a> Lookups<'a> {
+    /// Story's lookup and, when read, GTA Online's; both archive sets must be over the same install (their file
+    /// references index its archives).
+    pub fn new(story: Lookup<'a>, online: Option<Lookup<'a>>) -> Result<Lookups<'a>> {
+        if let Some(o) = online {
+            let (s, o) = (&story.set.install, &o.set.install);
+            if s.dir != o.dir || s.archives.len() != o.archives.len() {
+                return Err(invalid(
+                    "archive sets",
+                    0,
+                    "Story's and GTA Online's are over different installs",
+                ));
+            }
+        }
+        Ok(Lookups { story, online })
+    }
+
+    /// A world read from one archive set: every prototype is loaded through it.
+    pub fn one(set: Lookup<'a>) -> Lookups<'a> {
+        Lookups {
+            story: set,
+            online: None,
+        }
+    }
+
+    /// The install both archive sets are over.
+    fn install(&self) -> &'a Install {
+        &self.story.set.install
+    }
+
+    /// The lookup prototype `proto`'s payload is loaded through: Story's when Story resolves it or nothing says (a
+    /// world read from one archive set), else GTA Online's.
+    pub fn of(&self, w: &World, proto: Entity) -> Result<Lookup<'a>> {
+        match w.get::<GtaResolvedIn>(proto) {
+            Some(r) if !r.story && r.online => self.online.ok_or_else(|| {
+                invalid(
+                    "prototype",
+                    0,
+                    format!("{proto:?} is resolved in GTA Online's archive set, which was not read"),
+                )
+            }),
+            _ => Ok(self.story),
+        }
+    }
+}
 
 /// What attaching counted.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,15 +226,14 @@ pub struct AssetReport {
 }
 
 struct Ctx<'a> {
-    set: &'a ArchiveSet,
+    install: &'a Install,
     keys: &'a Keys,
-    parents: &'a TextureParents,
-    /// Texture dictionaries by name hash (`None`: no live ytd of that name).
-    dicts: BTreeMap<u32, Option<(String, TextureDictionary)>>,
+    /// Texture dictionaries read, by file, with their paths.
+    dicts: BTreeMap<FileRef, (String, TextureDictionary)>,
     /// Texture entities by (dictionary key, texture name hash).
     textures: BTreeMap<(String, u32), Entity>,
-    /// Drawable dictionaries read, by name hash.
-    ydds: BTreeMap<u32, DrawableDictionary>,
+    /// Drawable dictionaries read, by file.
+    ydds: BTreeMap<FileRef, DrawableDictionary>,
     report: AssetReport,
 }
 
@@ -214,41 +357,33 @@ fn mesh(
     Ok(Mesh::new(primitives))
 }
 
-/// The archive a file reference names.
-fn archive(
-    set: &ArchiveSet,
-    f: crate::read::archive::archive_set::FileRef,
-) -> Result<&crate::read::archive::rpf::Archive> {
-    set.install.archives.get(f.archive).ok_or_else(|| {
+/// A resource file of the install, decoded.
+fn decode(install: &Install, keys: &Keys, f: FileRef) -> Result<crate::rage::resource::Resource> {
+    let a = install.archives.get(f.archive).ok_or_else(|| {
         invalid(
             "archive set",
             0,
-            format!("archive {} of {}", f.archive, set.install.archives.len()),
+            format!("archive {} of {}", f.archive, install.archives.len()),
         )
-    })
+    })?;
+    a.resource(&mut File::open(&a.file)?, f.entry, keys)
 }
 
 impl Ctx<'_> {
-    fn decode(
-        &self,
-        f: crate::read::archive::archive_set::FileRef,
-    ) -> Result<crate::rage::resource::Resource> {
-        let a = archive(self.set, f)?;
-        a.resource(&mut File::open(&a.file)?, f.entry, self.keys)
+    fn decode(&self, f: FileRef) -> Result<crate::rage::resource::Resource> {
+        decode(self.install, self.keys, f)
     }
 
-    fn dictionary(&mut self, txd: u32) -> Result<Option<&(String, TextureDictionary)>> {
-        if !self.dicts.contains_key(&txd) {
-            let d = match self.set.tables.get("ytd").and_then(|t| t.get(&txd)).copied() {
-                Some(f) => Some((
-                    self.set.path(f).to_string(),
-                    TextureDictionary::read_resource(&self.decode(f)?)?,
-                )),
-                None => None,
-            };
-            self.dicts.insert(txd, d);
+    /// The texture dictionary of this name `lookup` resolves, and its path; `None` when no live ytd has the name.
+    fn dictionary(&mut self, lookup: Lookup<'_>, txd: u32) -> Result<Option<&(String, TextureDictionary)>> {
+        let Some(f) = lookup.live("ytd", txd) else {
+            return Ok(None);
+        };
+        if !self.dicts.contains_key(&f) {
+            let d = TextureDictionary::read_resource(&self.decode(f)?)?;
+            self.dicts.insert(f, (lookup.set.path(f).to_string(), d));
         }
-        Ok(self.dicts.get(&txd).and_then(Option::as_ref))
+        Ok(self.dicts.get(&f))
     }
 
     fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
@@ -306,10 +441,11 @@ impl Ctx<'_> {
         Ok(e)
     }
 
-    /// The texture of this name the game finds for a drawable of this archetype.
+    /// The texture of this name the game finds for a drawable of this archetype, in `lookup`'s state.
     fn find_texture(
         &mut self,
         w: &mut World,
+        lookup: Lookup<'_>,
         drawable: &Drawable,
         ydr: &str,
         txd: u32,
@@ -326,12 +462,8 @@ impl Ctx<'_> {
         {
             return self.texture_entity(w, ydr, t).map(Some);
         }
-        let resident = primase_hash::joaat(RESIDENT.as_bytes());
-        for d in std::iter::once(txd)
-            .chain(self.parents.chain(txd))
-            .chain(std::iter::once(resident))
-        {
-            let found = self.dictionary(d)?.and_then(|(path, dict)| {
+        for d in lookup.texture_dictionaries(txd) {
+            let found = self.dictionary(lookup, d)?.and_then(|(path, dict)| {
                 let i = dict.hashes.iter().position(|&x| x == h)?;
                 dict.textures.get(i)?.clone().map(|t| (path.clone(), t))
             });
@@ -372,9 +504,17 @@ pub(crate) fn origin(path: &str, item: Option<&str>) -> Origin {
     Origin::new(archive, name, item.as_deref())
 }
 
-/// Loads drawables and textures for every prototype a placement uses.
+/// Loads drawables and textures for every prototype a placement uses, from one archive set ([`Lookups::one`]).
 pub fn attach_assets(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<AssetReport> {
-    attach(w, set, keys, &TextureParents::read(set, keys)?)
+    let parents = TextureParents::read(set, keys)?;
+    attach(
+        w,
+        Lookups::one(Lookup {
+            set,
+            parents: &parents,
+        }),
+        keys,
+    )
 }
 
 /// What [`attach_lights`] did.
@@ -390,44 +530,30 @@ pub struct LightsReport {
 }
 
 /// The light records ([`GtaLights`]) of every prototype in `w`, with the bones they are on ([`GtaSkeleton`], as stored),
-/// read from its live drawable, fragment or drawable dictionary entry without its geometry or textures. A writer that plans lights before it loads geometry (the web
+/// read from its live drawable, fragment or drawable dictionary entry in the state it is resolved in
+/// ([`Lookups::of`]), without its geometry or textures. A writer that plans lights before it loads geometry (the web
 /// writer plans scene-wide) has them from the read world.
-pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<LightsReport> {
+pub fn attach_lights(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<LightsReport> {
     let mut report = LightsReport::default();
-    let decode = |f: crate::read::archive::archive_set::FileRef| -> Result<crate::rage::resource::Resource> {
-        let a = archive(set, f)?;
-        a.resource(&mut File::open(&a.file)?, f.entry, keys)
-    };
-    let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
-    // per prototype the file to read and, for a dictionary entry, its name; dictionaries are read once, below
-    let mut files: Vec<(Entity, &'static str, crate::read::archive::archive_set::FileRef)> = Vec::new();
-    let mut entries: BTreeMap<u32, (crate::read::archive::archive_set::FileRef, Vec<(Entity, u32)>)> =
-        BTreeMap::new();
+    let install = lookups.install();
+    // per prototype the file to read and, for a dictionary entry, its name; each dictionary file is read once, below
+    let mut files: Vec<(Entity, &'static str, FileRef)> = Vec::new();
+    let mut entries: BTreeMap<FileRef, Vec<(Entity, u32)>> = BTreeMap::new();
     for (proto, a) in w.iter::<GtaArchetype>() {
-        match a.asset_type {
-            2 | 1 => {
-                let ext = if a.asset_type == 2 { "ydr" } else { "yft" };
-                match live(ext, a.asset_name) {
-                    Some(f) => files.push((proto, ext, f)),
-                    None => bump(&mut report.asset_missing),
-                }
-            }
-            3 => match live("ydd", a.drawable_dictionary) {
-                Some(f) => entries
-                    .entry(a.drawable_dictionary)
-                    .or_insert_with(|| (f, Vec::new()))
-                    .1
-                    .push((proto, a.asset_name)),
-                None => bump(&mut report.asset_missing),
-            },
-            _ => {}
+        if !matches!(a.asset_type, 1..=3) {
+            continue;
+        }
+        match lookups.of(w, proto)?.drawable(a.into()) {
+            Some(("ydd", f)) => entries.entry(f).or_default().push((proto, a.asset_name)),
+            Some((ext, f)) => files.push((proto, ext, f)),
+            None => bump(&mut report.asset_missing),
         }
     }
     // the reads are independent: spread them over the cores
     let jobs: Vec<Job> = files
         .into_iter()
         .map(|(p, ext, f)| Job::One(p, ext, f))
-        .chain(entries.into_values().map(|(f, e)| Job::Dictionary(f, e)))
+        .chain(entries.into_iter().map(|(f, e)| Job::Dictionary(f, e)))
         .collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -440,9 +566,11 @@ pub fn attach_lights(w: &mut World, set: &ArchiveSet, keys: &Keys) -> Result<Lig
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(job) = jobs.get(i) else { break };
                         match job {
-                            Job::One(p, ext, f) => out.push((*p, resource_lights(&decode(*f)?, ext, 0)?)),
+                            Job::One(p, ext, f) => {
+                                out.push((*p, resource_lights(&decode(install, keys, *f)?, ext, 0)?));
+                            }
                             Job::Dictionary(f, protos) => {
-                                let r = decode(*f)?;
+                                let r = decode(install, keys, *f)?;
                                 for (p, name) in protos {
                                     out.push((*p, resource_lights(&r, "ydd", *name)?));
                                 }
@@ -486,26 +614,21 @@ type ProtoLights = (Entity, (Vec<crate::rage::drawable::LightAttr>, Bones));
 
 /// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
 enum Job {
-    One(Entity, &'static str, crate::read::archive::archive_set::FileRef),
-    Dictionary(crate::read::archive::archive_set::FileRef, Vec<(Entity, u32)>),
+    One(Entity, &'static str, FileRef),
+    Dictionary(FileRef, Vec<(Entity, u32)>),
 }
 
-/// [`attach_assets`] with the texture dictionary parents already read ([`TextureParents::read`]): a driver that loads a
-/// large region cell by cell reads them once.
-pub fn attach_assets_with(
-    w: &mut World,
-    set: &ArchiveSet,
-    keys: &Keys,
-    parents: &TextureParents,
-) -> Result<AssetReport> {
-    attach(w, set, keys, parents)
+/// [`attach_assets`] through both map states' lookups (their texture dictionary parents already read,
+/// [`TextureParents::read`]: a driver that loads a large region cell by cell reads them once): each prototype's
+/// drawable and textures from the state it is resolved in ([`Lookups::of`]).
+pub fn attach_assets_with(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetReport> {
+    attach(w, lookups, keys)
 }
 
-fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents) -> Result<AssetReport> {
+fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetReport> {
     let mut ctx = Ctx {
-        set,
+        install: lookups.install(),
         keys,
-        parents,
         dicts: BTreeMap::new(),
         textures: BTreeMap::new(),
         ydds: BTreeMap::new(),
@@ -516,25 +639,23 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
         let Some(a) = w.get::<GtaArchetype>(proto).cloned() else {
             continue;
         };
-        let live = |ext: &str, hash: u32| set.tables.get(ext).and_then(|t| t.get(&hash)).copied();
+        if !matches!(a.asset_type, 1..=3) {
+            continue;
+        }
+        let lookup = lookups.of(w, proto)?;
+        let Some((_, f)) = lookup.drawable((&a).into()) else {
+            bump(&mut ctx.report.asset_missing);
+            continue;
+        };
+        let set = lookup.set;
         let mut fragment_pose = Vec::new();
         // a fragment's physics bound (what it collides with); a drawable's own otherwise
         let mut bound = None;
         let (path, d) = match a.asset_type {
             // a drawable
-            2 => {
-                let Some(f) = live("ydr", a.asset_name) else {
-                    bump(&mut ctx.report.asset_missing);
-                    continue;
-                };
-                (set.path(f).to_string(), Drawable::read_resource(&ctx.decode(f)?)?)
-            }
+            2 => (set.path(f).to_string(), Drawable::read_resource(&ctx.decode(f)?)?),
             // a fragment: its main drawable
             1 => {
-                let Some(f) = live("yft", a.asset_name) else {
-                    bump(&mut ctx.report.asset_missing);
-                    continue;
-                };
                 let mut frag = Fragment::read_resource(&ctx.decode(f)?)?;
                 bound = frag.physics.take();
                 let Some(d) = frag.drawable else {
@@ -547,20 +668,11 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
             }
             // an entry of a drawable dictionary
             3 => {
-                let Some(f) = live("ydd", a.drawable_dictionary) else {
-                    bump(&mut ctx.report.asset_missing);
-                    continue;
-                };
-                if !ctx.ydds.contains_key(&a.drawable_dictionary) {
+                if !ctx.ydds.contains_key(&f) {
                     let dict = DrawableDictionary::read_resource(&ctx.decode(f)?)?;
-                    ctx.ydds.insert(a.drawable_dictionary, dict);
+                    ctx.ydds.insert(f, dict);
                 }
-                let Some(d) = ctx
-                    .ydds
-                    .get(&a.drawable_dictionary)
-                    .and_then(|dict| dict.get(a.asset_name))
-                    .cloned()
-                else {
+                let Some(d) = ctx.ydds.get(&f).and_then(|dict| dict.get(a.asset_name)).cloned() else {
                     bump(&mut ctx.report.asset_missing);
                     continue;
                 };
@@ -590,7 +702,7 @@ fn attach(w: &mut World, set: &ArchiveSet, keys: &Keys, parents: &TextureParents
                     },
                     ParamValue::Texture(Some(n)) => GtaParam::Texture {
                         name: Some(n.clone()),
-                        texture: ctx.find_texture(w, &d, &path, a.texture_dictionary, n)?,
+                        texture: ctx.find_texture(w, lookup, &d, &path, a.texture_dictionary, n)?,
                     },
                     ParamValue::Floats(f) => GtaParam::Floats(f.clone()),
                     ParamValue::Sampler(x) => GtaParam::Sampler(*x),

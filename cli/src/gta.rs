@@ -2,8 +2,7 @@
 use std::path::PathBuf;
 
 use primase_core::convert::Reader;
-use primase_gta::convert::{GtaOptions, GtaReader, map_named};
-use primase_gta::pipeline::Map;
+use primase_gta::convert::{GtaOptions, GtaReader};
 
 /// Named regions, `[x0, y0, x1, y1]` in GTA ground coordinates (metres east, north): the areas every writer is checked
 /// on.
@@ -31,12 +30,12 @@ fn region_names() -> String {
     REGIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
 }
 
-/// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--map online|story] [--reach M]`: what to read
-/// and which map's assets to load (`--map online` and `--reach` 600 unless given). Which map state, hour, sizes and
-/// interiors the conversion keeps are its `--select` passes.
+/// `--gta <install> --keys <key folder> --region <name>|x0,y0,x1,y1 [--reach M]`: what to read (`--reach` 600 unless
+/// given). Both maps are read, each prototype's assets from the state it is resolved in; which map state, hour, sizes
+/// and interiors the conversion keeps are its `--select` passes.
 pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
     let mut reach = REACH;
-    let (mut dir, mut keys, mut region, mut map) = (None, None, None, Map::Online);
+    let (mut dir, mut keys, mut region) = (None, None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("gta: {a} needs a value"));
@@ -70,10 +69,6 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
                 }
                 region = Some(r);
             }
-            "--map" => {
-                let m = value()?;
-                map = map_named(m).ok_or_else(|| format!("gta: --map {m}: online or story"))?;
-            }
             "--reach" => {
                 reach = value()?
                     .parse::<f32>()
@@ -92,6 +87,5 @@ pub fn reader(args: &[String]) -> Result<Box<dyn Reader>> {
         keys,
         region,
         reach,
-        map,
     })?))
 }

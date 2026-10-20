@@ -15,11 +15,9 @@ pub mod read;
 // paths consumers use from before the crate was arranged by role
 pub use passes::{collision, lights, lower, pose, rect, select, surfaces, terrain, tint, water, winding};
 pub use read::convert;
-/// `pipeline::{Map, LeaveOutInteriors}`, as consumers name them: now [`read::source::Map`] and
-/// [`passes::interiors::LeaveOutInteriors`].
+/// `pipeline::LeaveOutInteriors`, as consumers name it: now [`passes::interiors::LeaveOutInteriors`].
 pub mod pipeline {
     pub use crate::passes::interiors::LeaveOutInteriors;
-    pub use crate::read::source::Map;
 }
 /// `region::hour_axis`, as consumers name it: now [`components::state::hour_axis`].
 pub mod region {

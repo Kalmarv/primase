@@ -36,7 +36,7 @@ budgets, so a part refuses all three).
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
 readers:
-  gta          --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--map online|story] [--reach M]
+  gta          --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--reach M]
   skate-scene  --scene <folder> (a skate scene's web tiles: --select \"select-lod{form=finest}, lower-skate-lights\"
                --passes \"lower-skate-pbr, normalize-normals, fill-missing-texcoords,
                prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}\", and for KTX2 tiles

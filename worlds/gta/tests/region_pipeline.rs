@@ -10,7 +10,7 @@
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
-use primase_gta::read::source::{GtaSource, Map};
+use primase_gta::read::source::GtaSource;
 
 /// The gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates: Legion Square, and Vespucci Beach from the
 /// skatepark along the boardwalk to Muscle Beach.
@@ -46,7 +46,7 @@ fn every_named_region_through_the_gta_passes() {
         return;
     };
     let only = primase_testdata::real_data_value("PRIMASE_GTA_REGION");
-    let source = GtaSource::open(&dir, &keys, Map::Online).expect("install");
+    let source = GtaSource::open(&dir, &keys).expect("install");
     let mut registry = PassRegistry::new();
     registry.register("select-lod", primase_core::select_lod);
     registry.register("resolve-state", primase_core::state::resolve_state);

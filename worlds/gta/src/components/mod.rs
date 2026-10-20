@@ -164,6 +164,23 @@ impl Component for GtaArchetype {
     }
 }
 
+/// The map states whose archive sets a prototype's payload is loaded from: each resolves the archetype's drawable
+/// (fragment, dictionary) and every texture dictionary of its lookup to the files the prototype is loaded from. A
+/// prototype is one payload: both states share it only when both resolve every one of those to the same file, and
+/// each state's other payload is a prototype of its own. Read from Story's archive set alone: Story.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaResolvedIn {
+    pub story: bool,
+    pub online: bool,
+}
+
+impl Component for GtaResolvedIn {
+    const NAME: &'static str = "gta.resolved_in";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
 /// A shader parameter's value; textures as the entity the lookup found (`None`: not found or none bound).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum GtaParam {

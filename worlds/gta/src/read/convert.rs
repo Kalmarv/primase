@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use crate::read::source::{GtaSource, Map, prototype_box};
+use crate::read::source::{GtaSource, prototype_box};
 
-/// What to read: the install and its key folder, the region, how far beyond it entities are read, and which map's
-/// archive set drawables and textures are loaded from (both maps' entities are read either way, with `gta.map`
-/// conditions).
+/// What to read: the install and its key folder, the region, and how far beyond it entities are read. Both maps'
+/// entities are read, with `gta.map` conditions, each prototype's drawables and textures from the state it is resolved
+/// in.
 #[derive(Clone, Debug)]
 pub struct GtaOptions {
     pub install: PathBuf,
@@ -20,7 +20,6 @@ pub struct GtaOptions {
     pub region: [f32; 4],
     /// Metres outside the region entities are read, so large pieces of the world that reach in are seen.
     pub reach: f32,
-    pub map: Map,
 }
 
 /// The GTA reader (see the module documentation).
@@ -102,10 +101,10 @@ impl std::fmt::Debug for GtaReader {
 }
 
 impl GtaReader {
-    /// Opens the install, its assets loaded from `o.map`'s archive set.
+    /// Opens the install.
     pub fn open(o: &GtaOptions) -> Result<GtaReader> {
         Ok(GtaReader {
-            source: GtaSource::open(&o.install, &o.keys, o.map)?,
+            source: GtaSource::open(&o.install, &o.keys)?,
             region: o.region,
             reach: o.reach,
             pending: Vec::new(),
@@ -158,15 +157,6 @@ impl Reader for GtaReader {
     /// What the last read or load couldn't find (each taken once).
     fn notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.pending)
-    }
-}
-
-/// The map a `--map` value names.
-pub fn map_named(name: &str) -> Option<Map> {
-    match name {
-        "online" => Some(Map::Online),
-        "story" => Some(Map::Story),
-        _ => None,
     }
 }
 

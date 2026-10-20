@@ -12,6 +12,10 @@
 //!   LOD parent chain reaches it, carry a condition on it. The axis has no default: whether the game's start scripts
 //!   load it is in those scripts, not read ([`crate::components::state`]).
 //! - Archetypes come from every live map types file; a name defined in more than one is counted and the first kept.
+//! - Each state resolves an archetype's payload (its drawable and the texture dictionaries of its lookup) in its own
+//!   archive set: a prototype is one archetype definition with one resolved payload ([`GtaResolvedIn`] names the
+//!   states it holds for). A placement live in both states is placed once when both define its archetype in the same
+//!   map types file and resolve its payload to the same files, and once per state otherwise.
 //! - Transforms: GTA's frame is east-north-up ([`crate::components::GTA`]); an entity's orientation is its stored quaternion inverted
 //!   (an interior instance's as stored), its scale `scaleXY, scaleXY, scaleZ`, computed in f64 and rounded once.
 //! - Which entities a scene finally draws (LOD stand-ins, priority, size) is for passes; the reader keeps them all.
@@ -29,11 +33,12 @@ use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
 use crate::components::state::hour_axis;
-use crate::components::{GTA, GtaArchetype, GtaEntity};
+use crate::components::{GTA, GtaArchetype, GtaEntity, GtaResolvedIn};
 use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
 use crate::rage::meta::Meta;
 use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::read::archive::keys::Keys;
+use crate::read::assets::{Lookup, Payload};
 use crate::{Result, invalid};
 
 /// Which map states to read.
@@ -79,9 +84,11 @@ pub struct RegionReport {
     pub duplicate_archetypes: usize,
     /// Entities whose archetype no live map types file of the states they are live in defines.
     pub missing_archetypes: usize,
-    /// Entities live in both states whose archetype the two states define in different files: placed once per state,
-    /// each with its state's definition and a `gta.map` condition.
+    /// Entities live in both states whose archetype the two states define in different files or resolve to different
+    /// payloads: placed once per state, each with its state's definition and payload and a `gta.map` condition.
     pub split_by_state: usize,
+    /// Of those, the ones whose archetype both states define in the same file (the payload alone differs).
+    pub split_by_payload: usize,
     /// Placements of time archetypes (each with an hour mask on the `gta.hour` axis).
     pub time_placements: usize,
     /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
@@ -183,43 +190,49 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
 /// Archetypes by name hash: the map types file defining them and the definition.
 type ArchetypeTable = BTreeMap<u32, (String, ArchetypeDef)>;
 
-/// One definition of an archetype for a placement: the map types file defining it, the definition, the archive set it
-/// is read from, and the states it holds for.
-struct Definition<'a, S = ArchiveSet> {
+/// One definition of an archetype for a placement: the map types file defining it, the definition, the lookup its
+/// payload is resolved through, that payload, and the states it holds for.
+struct Definition<'a, S, P> {
     ytyp: &'a String,
     def: &'a ArchetypeDef,
     set: &'a S,
+    payload: P,
     story: bool,
     online: bool,
 }
 
 /// The definitions of archetype `h` for a placement live in Story (`in_story`) and Online (`in_online`), from each
-/// state's own map types: one when only one state applies or both states' live file is the same, two (one per state)
-/// when the states define it in different files, none when no applicable state defines it.
-fn definitions<'a, S>(
+/// state's own map types, with the payload `payload` resolves for it in that state (called with whether the state is
+/// Online's): one when only one state applies or both states define it in the same file and resolve the same payload,
+/// two (one per state) when the file or the payload differs, none when no applicable state defines it.
+fn definitions<'a, S, P: PartialEq>(
     h: u32,
     in_story: bool,
     in_online: bool,
     story: (&'a ArchetypeTable, &'a S),
     online: Option<(&'a ArchetypeTable, &'a S)>,
-) -> Vec<Definition<'a, S>> {
-    let s = in_story.then(|| story.0.get(&h)).flatten();
-    let o = online
-        .filter(|_| in_online)
-        .and_then(|(t, set)| t.get(&h).map(|d| (d, set)));
-    let def = |(ytyp, def): &'a (String, ArchetypeDef), set, story, online| Definition {
-        ytyp,
-        def,
-        set,
-        story,
-        online,
-    };
+    payload: &mut impl FnMut(bool, &'a S, &'a ArchetypeDef) -> P,
+) -> Vec<Definition<'a, S, P>> {
+    let s =
+        (in_story.then(|| story.0.get(&h)).flatten()).map(|d| (d, story.1, payload(false, story.1, &d.1)));
+    let o = (online.filter(|_| in_online))
+        .and_then(|(t, set)| t.get(&h).map(|d| (d, set)))
+        .map(|(d, set)| (d, set, payload(true, set, &d.1)));
+    let def =
+        |((ytyp, def), set, payload): (&'a (String, ArchetypeDef), &'a S, P), story, online| Definition {
+            ytyp,
+            def,
+            set,
+            payload,
+            story,
+            online,
+        };
     match (s, o) {
-        (Some(sd), Some((od, set))) if sd.0 == od.0 => vec![def(od, set, true, true)],
+        (Some(sd), Some(od)) if sd.0.0 == od.0.0 && sd.2 == od.2 => vec![def(od, true, true)],
         (s, o) => s
-            .map(|sd| def(sd, story.1, true, false))
+            .map(|sd| def(sd, true, false))
             .into_iter()
-            .chain(o.map(|(od, set)| def(od, set, false, true)))
+            .chain(o.map(|od| def(od, false, true)))
             .collect(),
     }
 }
@@ -337,18 +350,19 @@ pub fn archive_sets(
     Ok((story, online))
 }
 
-/// Reads the region into a new world: placements and their prototypes (geometry and textures come with
-/// [`crate::read::assets::attach_assets`]). `online`, when given, adds GTA Online's map and the `gta.map` conditions.
+/// Reads the region into a new world: placements and their prototypes, each prototype's payload resolved through its
+/// state's lookup (geometry and textures come with [`crate::read::assets::attach_assets_with`]). `online`, when given,
+/// adds GTA Online's map and the `gta.map` conditions.
 pub fn read_region(
-    story: &ArchiveSet,
-    online: Option<&ArchiveSet>,
+    story: Lookup<'_>,
+    online: Option<Lookup<'_>>,
     keys: &Keys,
     region: &Region,
 ) -> Result<(World, RegionReport)> {
     let mut report = RegionReport::default();
     // by (map path, entity index): the entity, its LOD parent, the states it is live in
     let mut placed: BTreeMap<(String, u32), Placed> = BTreeMap::new();
-    for (set, is_story) in std::iter::once((story, true)).chain(online.map(|s| (s, false))) {
+    for (set, is_story) in std::iter::once((story.set, true)).chain(online.map(|s| (s.set, false))) {
         for m in region_maps(set, keys, region)? {
             report.maps += 1;
             for (i, e) in m.entities {
@@ -380,16 +394,42 @@ pub fn read_region(
             }
         }
     }
-    // each state's archetypes, from its own map types files: a placement takes the definition of the state it is live
-    // in, and a placement live in both whose states define its archetype in different files is placed once per state
-    let (story_types, story_duplicates) = archetypes(story, keys)?;
-    let online_types = online.map(|s| archetypes(s, keys)).transpose()?;
+    // each state's archetypes, from its own map types files
+    let (story_types, story_duplicates) = archetypes(story.set, keys)?;
+    let online_types = online.map(|s| archetypes(s.set, keys)).transpose()?;
     report.duplicate_archetypes = story_duplicates + online_types.as_ref().map_or(0, |(_, d)| *d);
-    let online_tables = online.zip(online_types.as_ref()).map(|(set, (t, _))| (t, set));
-    let story_tables = (&story_types, story);
+    let online_tables = online
+        .as_ref()
+        .zip(online_types.as_ref())
+        .map(|(set, (t, _))| (t, set));
+    let w = place(
+        placed.into_values().collect(),
+        (&story_types, &story),
+        online_tables,
+        &mut report,
+    )?;
+    Ok((w, report))
+}
 
+/// The placements read and their prototypes into a new world ([`read_region`]): a placement takes the definitions of
+/// the states it is live in ([`definitions`]), each state's payload resolved through its lookup; a placement live in
+/// both whose states define its archetype in different files or resolve different payloads is placed once per state.
+/// A prototype is one (archetype, map types file, payload), with the states resolving it ([`GtaResolvedIn`]).
+fn place<'a, 'l>(
+    placed: Vec<Placed>,
+    story_tables: (&'a ArchetypeTable, &'a Lookup<'l>),
+    online_tables: Option<(&'a ArchetypeTable, &'a Lookup<'l>)>,
+    report: &mut RegionReport,
+) -> Result<World> {
+    // each state's payload of an archetype, resolved once
+    let mut payloads: BTreeMap<(bool, u32), Payload> = BTreeMap::new();
+    let mut payload = |is_online: bool, l: &Lookup<'l>, d: &ArchetypeDef| {
+        (payloads.entry((is_online, d.name)))
+            .or_insert_with(|| l.payload(d.into()))
+            .clone()
+    };
     let mut w = World::new();
-    let axis = online.map(|_| {
+    let axis = online_tables.map(|_| {
         let e = w.spawn();
         w.insert(
             e,
@@ -406,7 +446,7 @@ pub fn read_region(
     });
     // every entity, and the entities placed in interiors
     let mut all: Vec<Placed> = Vec::new();
-    for p in placed.into_values() {
+    for p in placed {
         let (e, ymap, ipl, index, in_story, in_online) = (
             p.def.clone(),
             p.ymap.clone(),
@@ -427,7 +467,14 @@ pub fn read_region(
             ..e.clone()
         });
         // its entities by each applicable state's interior definition, live in the states that definition holds for
-        for d in definitions(e.archetype, in_story, in_online, story_tables, online_tables) {
+        for d in definitions(
+            e.archetype,
+            in_story,
+            in_online,
+            story_tables,
+            online_tables,
+            &mut payload,
+        ) {
             let Some(interior) = d.def.interior.as_ref() else {
                 continue;
             };
@@ -464,18 +511,36 @@ pub fn read_region(
         online: in_online,
     } in &all
     {
-        let defs = definitions(e.archetype, *in_story, *in_online, story_tables, online_tables);
+        let defs = definitions(
+            e.archetype,
+            *in_story,
+            *in_online,
+            story_tables,
+            online_tables,
+            &mut payload,
+        );
         if defs.is_empty() {
             report.missing_archetypes += 1;
             continue;
         }
-        report.split_by_state += usize::from(defs.len() > 1);
+        if let [s, o] = &defs[..] {
+            report.split_by_state += 1;
+            report.split_by_payload += usize::from(s.ytyp == o.ytyp);
+        }
         for d in defs {
-            let (ytyp, a, set) = (d.ytyp, d.def, d.set);
+            let (ytyp, a, set) = (d.ytyp, d.def, d.set.set);
             let (in_story, in_online) = (&d.story, &d.online);
-            let proto = *prototypes.entry((e.archetype, ytyp.clone())).or_insert_with(|| {
+            let key = (e.archetype, ytyp.clone(), d.payload);
+            let proto = *prototypes.entry(key).or_insert_with(|| {
                 let p = w.spawn();
                 w.insert(p, GtaArchetype::new(ytyp, a));
+                w.insert(
+                    p,
+                    GtaResolvedIn {
+                        story: false,
+                        online: false,
+                    },
+                );
                 w.insert(p, Source(ytyp.clone()));
                 let archetype = format!("archetype {:#010x}", a.name);
                 w.insert(
@@ -500,6 +565,11 @@ pub fn read_region(
                 w.insert(p, Name(name.unwrap_or_else(|| format!("{:#010x}", a.name))));
                 p
             });
+            // the states whose lookups resolve this payload: one prototype serves every placement it is resolved for
+            if let Some(r) = w.get_mut::<GtaResolvedIn>(proto) {
+                r.story |= *in_story;
+                r.online |= *in_online;
+            }
             let p = w.spawn();
             w.insert(p, GTA.transform(transform));
             w.insert(
@@ -581,7 +651,7 @@ pub fn read_region(
     if report.placements == 0 && !all.is_empty() {
         return Err(invalid("region", 0, "no entity had an archetype"));
     }
-    Ok((w, report))
+    Ok(w)
 }
 
 #[cfg(test)]
@@ -631,7 +701,7 @@ mod tests {
         let sets = ("story set", "online set");
         let tables = ((&story, &sets.0), Some((&online, &sets.1)));
         let seen = |h, in_story, in_online| -> Vec<(&str, u32, &str, bool, bool)> {
-            definitions(h, in_story, in_online, tables.0, tables.1)
+            definitions(h, in_story, in_online, tables.0, tables.1, &mut |_, _, _| ())
                 .into_iter()
                 .map(|d| (d.ytyp.as_str(), d.def.asset_name, *d.set, d.story, d.online))
                 .collect()
@@ -665,12 +735,166 @@ mod tests {
         );
         // no Online read: Story's table alone
         assert_eq!(
-            definitions(2, true, false, tables.0, None::<(&ArchetypeTable, &&str)>)
-                .into_iter()
-                .map(|d| d.def.asset_name)
-                .collect::<Vec<_>>(),
+            definitions(
+                2,
+                true,
+                false,
+                tables.0,
+                None::<(&ArchetypeTable, &&str)>,
+                &mut |_, _, _| (),
+            )
+            .into_iter()
+            .map(|d| d.def.asset_name)
+            .collect::<Vec<_>>(),
             [20]
         );
+    }
+
+    fn entity(archetype: u32) -> EntityDef {
+        EntityDef {
+            kind: EntityKind::Entity,
+            archetype,
+            flags: 0,
+            guid: 0,
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale_xy: 1.0,
+            scale_z: 1.0,
+            parent_index: -1,
+            lod_dist: 100.0,
+            child_lod_dist: 0.0,
+            lod_level: 0,
+            num_children: 0,
+            priority_level: 0,
+            ambient_occlusion_multiplier: 255,
+            artificial_ambient_occlusion: 255,
+            tint_value: 0,
+            extensions: 0,
+        }
+    }
+
+    /// Review R-B6, a synthetic two-map install: one map types file, shared by both states, defines archetypes H and
+    /// K. Story resolves H's drawable D to `story\d.ydr`, GTA Online to `online\d.ydr`; both resolve K's drawable and
+    /// texture dictionary to the same files. A placement of each, live in both states: H is placed once per state, each
+    /// placement with its state's `gta.map` condition and a prototype resolved in that state alone, whose drawable is
+    /// loaded from that state's file; K stays one prototype for both. When Online's texture parents give K's dictionary
+    /// a parent Story's don't, K's payload differs too and it is split the same way.
+    #[test]
+    fn each_state_s_resolved_payload_is_a_prototype_of_its_own() {
+        use crate::read::assets::Lookups;
+        use crate::read::gtxd::TextureParents;
+        const H: u32 = 1;
+        const K: u32 = 2;
+        const D: u32 = 10;
+        const E: u32 = 20;
+        const T: u32 = 30;
+        const P: u32 = 40;
+        let paths = [
+            "x\\story\\d.ydr",
+            "x\\online\\d.ydr",
+            "x\\common\\e.ydr",
+            "x\\common\\t.ytd",
+            "x\\online\\p.ytd",
+        ];
+        let story_set = ArchiveSet::made_up(&paths, &[("ydr", D, 0), ("ydr", E, 2), ("ytd", T, 3)]);
+        let online_set = ArchiveSet::made_up(
+            &paths,
+            &[("ydr", D, 1), ("ydr", E, 2), ("ytd", T, 3), ("ytd", P, 4)],
+        );
+        let no_parents = TextureParents::default();
+        let online_parents = TextureParents {
+            parents: BTreeMap::from([(T, P)]),
+            ..TextureParents::default()
+        };
+        let story = Lookup {
+            set: &story_set,
+            parents: &no_parents,
+        };
+        let shared = |h, asset| {
+            let def = ArchetypeDef {
+                texture_dictionary: T,
+                ..archetype(h, asset)
+            };
+            ("common\\shared.ytyp".to_owned(), def)
+        };
+        let table: ArchetypeTable = BTreeMap::from([(H, shared(H, D)), (K, shared(K, E))]);
+        let placed = |archetype, index| Placed {
+            ymap: "x\\common\\m.ymap".into(),
+            ipl: None,
+            index,
+            child: None,
+            lod_parent: None,
+            def: entity(archetype),
+            transform: Transform::IDENTITY,
+            story: true,
+            online: true,
+        };
+        // per prototype: its archetype, the states it is resolved in, the drawable file it is loaded from, and the
+        // gta.map values of its placements' conditions (none: no condition)
+        type Seen = (u32, (bool, bool), String, Vec<Option<u64>>);
+        let read = |online: Lookup<'_>| {
+            let mut report = RegionReport::default();
+            let w = place(
+                vec![placed(H, 0), placed(K, 1)],
+                (&table, &story),
+                Some((&table, &online)),
+                &mut report,
+            )
+            .unwrap();
+            let lookups = Lookups::new(story, Some(online)).unwrap();
+            let mut protos: Vec<Seen> = w
+                .iter::<GtaArchetype>()
+                .map(|(p, a)| {
+                    let r = w.get::<GtaResolvedIn>(p).expect("resolved in");
+                    let l = lookups.of(&w, p).unwrap();
+                    let (_, f) = l.drawable(a.into()).expect("a live drawable");
+                    let conditions = (w.iter::<Instance>())
+                        .filter(|(_, i)| i.prototype == p)
+                        .map(|(e, _)| w.get::<Condition>(e).map(|c| c.0[0].0[0].values))
+                        .collect();
+                    (a.name, (r.story, r.online), l.set.path(f).to_string(), conditions)
+                })
+                .collect();
+            protos.sort();
+            // an Online-only prototype needs Online's set to load
+            let online_only = (w.iter::<GtaResolvedIn>())
+                .find(|(_, r)| !r.story && r.online)
+                .map(|(p, _)| p)
+                .expect("an Online prototype");
+            assert!(Lookups::one(story).of(&w, online_only).is_err());
+            (protos, report)
+        };
+
+        let (protos, report) = read(Lookup {
+            set: &online_set,
+            parents: &no_parents,
+        });
+        assert_eq!(
+            protos,
+            [
+                (H, (false, true), "x\\online\\d.ydr".into(), vec![Some(0b10)]),
+                (H, (true, false), "x\\story\\d.ydr".into(), vec![Some(0b01)]),
+                (K, (true, true), "x\\common\\e.ydr".into(), vec![None]),
+            ]
+        );
+        assert_eq!((report.placements, report.prototypes), (3, 3), "{report:?}");
+        assert_eq!((report.split_by_state, report.split_by_payload), (1, 1));
+
+        // Online's gtxd parents K's dictionary T under P: its texture lookup differs, so K is split as well
+        let (protos, report) = read(Lookup {
+            set: &online_set,
+            parents: &online_parents,
+        });
+        assert_eq!(
+            protos.iter().map(|(h, r, _, _)| (*h, *r)).collect::<Vec<_>>(),
+            [
+                (H, (false, true)),
+                (H, (true, false)),
+                (K, (false, true)),
+                (K, (true, false))
+            ]
+        );
+        assert_eq!((report.placements, report.split_by_payload), (4, 2), "{report:?}");
     }
 
     #[test]

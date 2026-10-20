@@ -7,7 +7,7 @@
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Lods};
 use primase_gta::components::{GtaBones, GtaShader};
-use primase_gta::read::source::{GtaSource, Map};
+use primase_gta::read::source::GtaSource;
 
 #[test]
 fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
@@ -17,7 +17,7 @@ fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
     ) else {
         return;
     };
-    let source = GtaSource::open(&dir, &keys, Map::Online).expect("install");
+    let source = GtaSource::open(&dir, &keys).expect("install");
     let (read, _) = source.read([170.0, -970.0, 230.0, -910.0], 0.0).expect("region");
     let (w, _) = source.load_all(&read).expect("assets");
     let placements = w.iter::<Instance>().count();

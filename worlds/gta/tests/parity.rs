@@ -32,7 +32,7 @@ use primase_gta::rage::resource::Resource;
 use primase_gta::rage::texture::TextureDictionary;
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::read::archive::keys::Keys;
-use primase_gta::read::source::{GtaSource, Map};
+use primase_gta::read::source::GtaSource;
 use primase_testdata::real_data;
 use serde_json::Value;
 
@@ -252,7 +252,7 @@ fn parity_list() {
     ) else {
         return;
     };
-    let source = GtaSource::open(&dir, &key_dir, Map::Online).expect("install");
+    let source = GtaSource::open(&dir, &key_dir).expect("install");
     let (install, keys) = open(&dir, &key_dir);
     let set = ArchiveSet::build(install, &keys, MapState::Online).expect("archive set");
     let live = |ext: &str, hash: u32| {

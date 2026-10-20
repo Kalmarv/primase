@@ -642,3 +642,55 @@ impl ArchiveSet {
         &self.install.archives[f.archive].entries[f.entry].path
     }
 }
+
+#[cfg(test)]
+impl ArchiveSet {
+    /// A made-up archive set for tests: one archive (`test.rpf`, never opened) holding a file at each of `paths`, and
+    /// the live tables `live` naming them (extension, name hash, index into `paths`). Sets made from the same `paths`
+    /// are over one install.
+    pub(crate) fn made_up(paths: &[&str], live: &[(&str, u32, usize)]) -> ArchiveSet {
+        let entries: Vec<crate::read::archive::rpf::Entry> = paths
+            .iter()
+            .map(|p| crate::read::archive::rpf::Entry {
+                name: p.rsplit('\\').next().unwrap_or(p).to_string(),
+                path: p.to_string(),
+                kind: EntryKind::Binary {
+                    block: 0,
+                    stored: 0,
+                    size: 0,
+                    encrypted: false,
+                },
+            })
+            .collect();
+        let archive = Archive {
+            file: PathBuf::from("test.rpf"),
+            start: 0,
+            size: 0,
+            name: "test.rpf".into(),
+            path: "test.rpf".into(),
+            encryption: crate::read::archive::rpf::Encryption::None,
+            entries,
+        };
+        let mut tables: BTreeMap<String, BTreeMap<u32, FileRef>> = BTreeMap::new();
+        for &(ext, hash, entry) in live {
+            tables
+                .entry(ext.to_string())
+                .or_default()
+                .insert(hash, FileRef { archive: 0, entry });
+        }
+        ArchiveSet {
+            install: Install {
+                dir: PathBuf::from("install"),
+                archives: vec![archive],
+                by_path: BTreeMap::new(),
+                files: BTreeMap::new(),
+            },
+            packs: Vec::new(),
+            map_archives: IndexMap::new(),
+            mounted: vec![0],
+            overlay: BTreeSet::new(),
+            tables,
+            data_files: Vec::new(),
+        }
+    }
+}
