@@ -215,6 +215,11 @@ impl Writer for TileWriter {
                     format!("{}: {}", out.display(), plan.encodings_dropped()),
                 ));
             }
+            // what the published tiles left out or drew approximately, for this set
+            notices.extend(plan.notices().into_iter().map(|n| primase_core::convert::Notice {
+                reason: format!("{} ({})", n.reason, out.display()),
+                ..n
+            }));
             for o in plan.over_budget() {
                 report.push((
                     "over the budget".into(),

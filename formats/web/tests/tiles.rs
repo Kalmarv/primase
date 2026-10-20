@@ -1647,3 +1647,33 @@ fn lines_filed_by_element_centre_go_to_the_cells_of_their_segments() {
         assert_eq!(modes(&doc), [vec![1]]);
     }
 }
+
+#[test]
+fn omissions_are_counted_once_per_published_tile_not_per_budget_retry() {
+    use primase_core::convert::NoticeKind;
+    let mut w = World::new();
+    // a material of a source's own, not lowered to pbr.material, on a triangle placed twice in one cell
+    let material = w.spawn();
+    w.insert(material, primase_core::Name("unlowered".into()));
+    let proto = w.spawn();
+    let mut m = mesh();
+    *m.primitive_mut(0).unwrap().material_mut() = Some(material);
+    w.insert(proto, m);
+    place(&mut w, proto, 10.);
+    place(&mut w, proto, 150.);
+    // every file over the budget: the cell is written to measure it, split, and each subcell written and kept
+    let options = Options {
+        tile_byte_budget: Some(1),
+        ..plain()
+    };
+    let set = write(&w, &options).unwrap();
+    assert_eq!(set.splits.len(), 1);
+    assert_eq!(set.index.tiles.len(), 2);
+    let counts: Vec<(NoticeKind, u64)> = set
+        .notices
+        .iter()
+        .filter(|n| n.reason.starts_with("materials without pbr.material"))
+        .map(|n| (n.kind, n.count))
+        .collect();
+    assert_eq!(counts, [(NoticeKind::Unsupported, 2)]);
+}

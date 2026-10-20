@@ -1,6 +1,7 @@
 //! Web tile sets in the core frame (metres, +Y up). Tiles use east/north ground coordinates.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+use primase_core::convert::{Notice, NoticeKind};
 use primase_core::{
     Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Topology, Transform, TransformKind, World,
 };
@@ -236,6 +237,8 @@ pub struct TileSet {
     pub over_budget: Vec<OverBudget>,
     /// Cells and subcells split to fit the byte budget (see [`TilePlan::splits`]).
     pub splits: Vec<Split>,
+    /// What the tiles left out, chose or drew approximately (see [`TilePlan::notices`]).
+    pub notices: Vec<Notice>,
 }
 /// A cell or subcell split into its four children because a file of its tile was over [`Options::tile_byte_budget`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -477,6 +480,9 @@ pub struct TilePlan {
     /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
+    /// What the published tiles' documents and the records left out or drew approximately: by kind and reason, the
+    /// count and a few examples ([`TilePlan::notices`]).
+    omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
     sun: Option<IndexSun>,
     cells: BTreeMap<(i32, i32), Cell>,
     unsplit: Vec<Entity>,
@@ -506,7 +512,8 @@ impl CellWorld<'_> {
         &mut self,
         content: &mut Content,
         n: usize,
-        (item, components): (ViewerItem, serde_json::Map<String, serde_json::Value>),
+        item: ViewerItem,
+        components: serde_json::Map<String, serde_json::Value>,
     ) {
         self.records.insert(n, item);
         if !components.is_empty() {
@@ -672,6 +679,7 @@ pub fn plan_with_geometry(
         collided: BTreeSet::new(),
         shapes: BTreeMap::new(),
         ground_markers: 0,
+        omitted: BTreeMap::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         cells: BTreeMap::new(),
         unsplit: Vec::new(),
@@ -758,26 +766,29 @@ pub fn plan_with_geometry(
     }
     Ok(plan)
 }
+/// A viewer record of a world entity: the record, the entity's other shown components (by name, for the record's
+/// node), and the names of its components without a JSON form (not shown).
+struct Record {
+    item: ViewerItem,
+    components: serde_json::Map<String, serde_json::Value>,
+    unencoded: Vec<String>,
+}
 /// The viewer record of `e`'s core component `core` (kind `kind`, anchored at `anchor`): named by its `core.name`,
-/// with the component as its data; and the entity's other shown components, by name, for the record's node.
-fn core_record(
-    world: &World,
-    e: Entity,
-    kind: &str,
-    anchor: [f64; 3],
-    core: &str,
-) -> Result<(ViewerItem, serde_json::Map<String, serde_json::Value>)> {
+/// with the component as its data; and the entity's other shown components.
+fn core_record(world: &World, e: Entity, kind: &str, anchor: [f64; 3], core: &str) -> Result<Record> {
     use primase_core::Component;
     let json_error = |detail: String| Error::Invalid(format!("{e:?}: {detail}"));
     let mut data = None;
     let mut others = serde_json::Map::new();
+    let mut unencoded = Vec::new();
     for c in world
         .components_json(e)
         .map_err(|err| json_error(err.to_string()))?
     {
         match (c.name, c.value) {
             (name, Some(v)) if name == core => data = Some(v),
-            (Name::NAME | Transform::NAME, _) | (_, None) => {}
+            (Name::NAME | Transform::NAME, _) => {}
+            (name, None) => unencoded.push(name.to_owned()),
             (name, Some(v)) => {
                 others.insert(
                     name.to_owned(),
@@ -794,7 +805,11 @@ fn core_record(
         anchor,
         data: data.ok_or_else(|| json_error(format!("{core} has no JSON view")))?,
     };
-    Ok((item, others))
+    Ok(Record {
+        item,
+        components: others,
+        unencoded,
+    })
 }
 /// The index's record of the sun `e` (a directional `core.light`, checked by the resource's verify).
 fn sun(world: &World, e: Entity) -> Result<IndexSun> {
@@ -990,17 +1005,19 @@ impl TilePlan {
         }));
         for e in standalone {
             if let Some(c) = world.get::<Curve>(e) {
-                let item = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
+                let r = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
                 let n = self.number(e, Curve::NAME);
-                cw.put(&mut content, n, item);
+                self.unencoded(&r);
+                cw.put(&mut content, n, r.item, r.components);
             }
             if let Some(m) = world.get::<Marker>(e) {
                 let (anchor, ground) = marker_anchor(world, e, m)?;
                 self.ground_markers += u64::from(ground);
                 let kind = if m.kind == "spawn" { "spawn" } else { "marker" };
-                let item = core_record(world, e, kind, anchor, Marker::NAME)?;
+                let r = core_record(world, e, kind, anchor, Marker::NAME)?;
                 let n = self.number(e, Marker::NAME);
-                cw.put(&mut content, n, item);
+                self.unencoded(&r);
+                cw.put(&mut content, n, r.item, r.components);
             }
             if let Some(light) = world.get::<Light>(e)
                 && Some(e) != self.sun_entity
@@ -1023,7 +1040,7 @@ impl TilePlan {
                 let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
                 if let Some(item) = collision::record(world, e, c, t)? {
                     let n = self.number(e, Collision::NAME);
-                    cw.put(&mut content, n, (item, serde_json::Map::new()));
+                    cw.put(&mut content, n, item, serde_json::Map::new());
                 }
             }
         }
@@ -1060,7 +1077,7 @@ impl TilePlan {
                 && let Some(item) = collision::record(world, e, c, transform)?
             {
                 let n = self.number(e, Collision::NAME);
-                cw.put(&mut content, n, (item, serde_json::Map::new()));
+                cw.put(&mut content, n, item, serde_json::Map::new());
             }
             if meshless(world, prototype) {
                 // a prototype whose cell loaded no mesh (planned from a world that loads per cell)
@@ -1095,12 +1112,68 @@ impl TilePlan {
         self.emit(cell, None, &cw, content, false, &mut out)?;
         Ok(out)
     }
+    /// Count the components of record `r`'s entity that have no JSON form (not in the record's node).
+    fn unencoded(&mut self, r: &Record) {
+        for name in &r.unencoded {
+            self.omit(
+                NoticeKind::Unsupported,
+                format!("{name} components without a JSON form, not in a viewer record's extras"),
+                1,
+                &r.item.name,
+            );
+        }
+    }
     /// The number of `e`'s record of `core`: planned, or the next.
     fn number(&mut self, e: Entity, core: &'static str) -> usize {
         self.numbers.get(&(e, core)).copied().unwrap_or_else(|| {
             self.next_item += 1;
             self.next_item - 1
         })
+    }
+    /// Count `count` of `reason` (of `kind`), with `example` (a tile file or a record's name) among its examples.
+    fn omit(&mut self, kind: NoticeKind, reason: String, count: u64, example: &str) {
+        if count == 0 {
+            return;
+        }
+        let (n, examples) = self.omitted.entry((kind, reason)).or_default();
+        *n += count;
+        if examples.len() < primase_core::convert::NOTICE_EXAMPLES && !examples.iter().any(|e| e == example) {
+            examples.push(example.to_owned());
+        }
+    }
+    /// What the tiles published so far left out, chose or drew approximately, as notices (stage `web`): what their
+    /// glTF documents did not write (counted once per published tile, as each document counts it; a tile written to
+    /// measure it and then split counts nothing), viewer records' components without a JSON form, placements skipped
+    /// for a degenerate transform, and markers anchored at height 0.
+    pub fn notices(&self) -> Vec<Notice> {
+        let mut out: Vec<Notice> = self
+            .omitted
+            .iter()
+            .map(|((kind, reason), (count, examples))| {
+                examples
+                    .iter()
+                    .fold(Notice::new("web", *kind, reason.clone(), *count), |n, e| {
+                        n.example(e.clone())
+                    })
+            })
+            .collect();
+        if self.skipped > 0 {
+            out.push(Notice::new(
+                "web",
+                NoticeKind::Unsupported,
+                "placements with a degenerate transform, not written",
+                self.skipped,
+            ));
+        }
+        if self.ground_markers > 0 {
+            out.push(Notice::new(
+                "web",
+                NoticeKind::Approximation,
+                "markers with a ground position only, anchored at height 0",
+                self.ground_markers,
+            ));
+        }
+        out
     }
     /// Tiles left over the byte budget so far: a cell is split until each file fits, except where what remains is
     /// one placement or viewer record, which no cell boundary divides, or at [`MAX_SUBCELL_LEVEL`]. Such tiles are
@@ -1126,7 +1199,7 @@ impl TilePlan {
         let level = sub.map_or(0, |s| s.level);
         let mut measured = None;
         if !over {
-            let Some(tile) = self.tile(cell, sub, cw, &content)? else {
+            let Some((tile, omitted)) = self.tile(cell, sub, cw, &content)? else {
                 return Ok(());
             };
             let largest = tile
@@ -1134,7 +1207,7 @@ impl TilePlan {
                 .len()
                 .max(tile.collision.as_ref().map_or(0, |(_, b)| b.len())) as u64;
             if self.options.tile_byte_budget.is_none_or(|b| largest <= b) {
-                self.keep(tile, out);
+                self.keep(tile, omitted, out);
                 return Ok(());
             }
             measured = Some(largest);
@@ -1159,7 +1232,7 @@ impl TilePlan {
                         "the subdivision limit"
                     },
                 });
-                self.keep(tile, out);
+                self.keep(tile, omitted, out);
                 return Ok(());
             }
         }
@@ -1181,7 +1254,12 @@ impl TilePlan {
         }
         Ok(())
     }
-    fn keep(&mut self, tile: WrittenTile, out: &mut Vec<WrittenTile>) {
+    /// Publish `tile`: its images and index entry kept, and what its document left out (`omitted`) counted; a tile
+    /// written only to measure it, then split, counts nothing.
+    fn keep(&mut self, tile: WrittenTile, omitted: Vec<Omitted>, out: &mut Vec<WrittenTile>) {
+        for (kind, reason, count) in omitted {
+            self.omit(kind, reason, count, &tile.info.file);
+        }
         for (name, bytes) in &tile.images {
             self.images.insert(name.clone(), bytes.len() as u64);
         }
@@ -1255,7 +1333,7 @@ impl TilePlan {
         }
         Ok(out)
     }
-    /// One tile of `content` from `w`: the tile's placements written as a [`primase_gltf::Selection`] of the world
+    /// One tile of `content` from `w`, with what its glTF document left out, chose or drew approximately: the tile's placements written as a [`primase_gltf::Selection`] of the world
     /// (a placement filed by element centre as a piece of its own: those of its elements the tile holds), which
     /// leaves the world unchanged.
     fn tile(
@@ -1264,7 +1342,7 @@ impl TilePlan {
         sub: Option<Subcell>,
         cw: &CellWorld,
         content: &Content,
-    ) -> Result<Option<WrittenTile>> {
+    ) -> Result<Option<(WrittenTile, Vec<Omitted>)>> {
         let w = cw.world;
         let mut selection = primase_gltf::Selection {
             // the environment is the index's, scene-wide: a tile does not carry it
@@ -1341,7 +1419,7 @@ impl TilePlan {
         let render = if primitives == 0 {
             Ok(None)
         } else {
-            (|| -> Result<Option<(TileInfo, primase_glb::Document, ImageFiles)>> {
+            (|| -> Result<Option<Rendered>> {
                 if !min.iter().chain(&max).all(|v| v.is_finite()) {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
@@ -1395,12 +1473,17 @@ impl TilePlan {
                     bytes: 0,
                     images: files.iter().map(|(n, _)| n.clone()).collect(),
                 })
-                .map(|info| (info, doc, files)))
+                .map(|info| Rendered {
+                    info,
+                    doc,
+                    files,
+                    omitted: omitted(&report),
+                }))
             })()
         };
-        let (render, files) = match render? {
-            Some((info, bytes, files)) => (Some((info, bytes)), files),
-            None => (None, Vec::new()),
+        let (render, files, omitted) = match render? {
+            Some(r) => (Some((r.info, r.doc)), r.files, r.omitted),
+            None => (None, Vec::new(), Vec::new()),
         };
         let Some(mut tile) =
             self.attach_items((col, row), sub, render, cw, &content.items, &content.lights)?
@@ -1409,7 +1492,7 @@ impl TilePlan {
         };
         tile.info.file = asset_name("tile", col, row, sub, &tile.bytes);
         tile.images = files;
-        Ok(Some(tile))
+        Ok(Some((tile, omitted)))
     }
     /// The tile with viewer records `items` added as identity nodes (and their collision as a sidecar) and `lights`
     /// as `KHR_lights_punctual` nodes carrying their world transforms: a metadata-only tile without `render`; `None`
@@ -1627,6 +1710,83 @@ impl TilePlan {
         })
     }
 }
+/// One kind of thing a tile's document left out, chose or drew approximately: its kind, why, and how many.
+type Omitted = (NoticeKind, String, u64);
+/// A tile's render geometry as its glTF document: its index entry so far, the document, its image files and what it
+/// left out.
+struct Rendered {
+    info: TileInfo,
+    doc: primase_glb::Document,
+    files: ImageFiles,
+    omitted: Vec<Omitted>,
+}
+/// What the glTF writer's `report` of a tile's document says it left out, chose or drew approximately. Its textures
+/// skipped are an error before this (the writer is given loaded textures); placements it skips for a degenerate
+/// transform or a missing mesh are the tile writer's own (it never selects them).
+fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
+    let mut out: Vec<Omitted> = vec![
+        (
+            NoticeKind::Unsupported,
+            "placements whose prototype has levels of detail (core.lods), not written: select-lod chooses a form"
+                .into(),
+            report.placements_with_lods,
+        ),
+        (
+            NoticeKind::Unsupported,
+            "materials without pbr.material or core.layered, not written: their primitives drawn with no material \
+             (counted per tile)"
+                .into(),
+            report.materials_without_pbr,
+        ),
+        (
+            NoticeKind::Unsupported,
+            "layers of layered materials whose material has no pbr.material, written as empty slots (counted per tile)"
+                .into(),
+            report.layers_without_pbr,
+        ),
+        (
+            NoticeKind::Approximation,
+            "primitives drawn with a layered material but lacking its weight attribute: they render as its host \
+             material"
+                .into(),
+            report.primitives_layered_without_weights,
+        ),
+        (
+            NoticeKind::Selection,
+            "primitives drawn without their COLOR_0 stream: their material ignores vertex colour (core.vertex_color)"
+                .into(),
+            report.primitives_color0_ignored,
+        ),
+        (
+            NoticeKind::Unsupported,
+            "material texture slots left empty: their texture was skipped".into(),
+            report.texture_slots_dropped,
+        ),
+    ];
+    for (name, &n) in &report.streams_skipped {
+        out.push((
+            NoticeKind::Unsupported,
+            format!("{name} vertex streams not written: skin attributes, and tiles carry no skin"),
+            n,
+        ));
+    }
+    for (name, &n) in &report.extras_unencoded {
+        out.push((
+            NoticeKind::Unsupported,
+            format!("{name} components without a JSON form, not in the glTF extras (counted per tile)"),
+            n,
+        ));
+    }
+    for (name, &n) in &report.components_unwritten {
+        out.push((
+            NoticeKind::Unsupported,
+            format!("{name} components on entities a tile's document does not write"),
+            n,
+        ));
+    }
+    out.retain(|o| o.2 > 0);
+    out
+}
 /// `e`'s mesh, which must be loaded.
 fn loaded(w: &World, e: Entity) -> Result<&Mesh> {
     w.get::<Mesh>(e).ok_or_else(|| {
@@ -1665,6 +1825,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
         images: BTreeMap::new(),
         over_budget: Vec::new(),
         splits: Vec::new(),
+        notices: Vec::new(),
     };
     for cell in plan.cells() {
         let w = world.subset(&world.closure(plan.roots(cell)));
@@ -1678,6 +1839,7 @@ pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     }
     set.over_budget = plan.over_budget().to_vec();
     set.splits = plan.splits().to_vec();
+    set.notices = plan.notices();
     set.index = plan.finish()?;
     Ok(set)
 }

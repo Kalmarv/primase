@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use primase_core::convert::{Reader, Report, Result, convert_parts};
+use primase_core::convert::{NoticeKind, Reader, Report, Result, convert_parts};
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline};
 use primase_core::{
     Component, Entity, Instance, Marker, Mesh, Primitive, Semantic, Stream, Topology, Transform, World,
@@ -24,7 +24,7 @@ impl Reader for Given {
         Ok((world.subset(&world.closure(roots.iter().copied())), Report::new()))
     }
     fn emits(&self) -> &'static [&'static str] {
-        &["core"]
+        &["core", "test"]
     }
     fn prototype_box(&self, _world: &World, _prototype: Entity) -> Option<[[f64; 3]; 2]> {
         None
@@ -127,8 +127,13 @@ fn folder(name: &str) -> PathBuf {
     out
 }
 
-/// `world` converted to web tiles in `out` with `options`, `passes` run on each cell.
-fn convert(world: World, options: Options, out: &Path, passes: Vec<Box<dyn Pass>>) {
+/// `world` converted to web tiles in `out` with `options`, `passes` run on each cell; what was reported.
+fn convert(
+    world: World,
+    options: Options,
+    out: &Path,
+    passes: Vec<Box<dyn Pass>>,
+) -> primase_core::convert::ConvertReport {
     let (mut parts, writer) = primase_web::convert::tiles(vec![(options, out.to_path_buf())]);
     convert_parts(
         &mut Given(world),
@@ -138,7 +143,7 @@ fn convert(world: World, options: Options, out: &Path, passes: Vec<Box<dyn Pass>
         &Pipeline { passes: Vec::new() },
         &Pipeline { passes },
     )
-    .unwrap();
+    .unwrap()
 }
 
 /// The published index and each tile's glTF JSON and binary chunk.
@@ -241,5 +246,52 @@ fn placements_a_cells_pass_moves_are_instanced_where_they_were_moved_to() {
         vec3s(doc, bin, &attributes["TRANSLATION"]),
         [[11., 0., 0.], [21., 0., 0.]]
     );
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_material_without_pbr_is_reported_as_unsupported() {
+    use primase_core::{Opaque, OpaqueData};
+    let (mut w, _) = world(&[10., 450.]);
+    // the material is a source's own, not lowered to pbr.material: the tiles draw its primitives with none
+    let material = w.spawn();
+    w.insert_opaque(
+        material,
+        "test.shader",
+        Opaque {
+            version: 1,
+            data: OpaqueData::Json(serde_json::json!({"shader": "glass"})),
+        },
+    );
+    let proto = w.iter::<Mesh>().map(|(e, _)| e).next().unwrap();
+    *w.get_mut::<Mesh>(proto)
+        .unwrap()
+        .primitive_mut(0)
+        .unwrap()
+        .material_mut() = Some(material);
+    let out = folder("material");
+    let options = Options {
+        compress: false,
+        ..Options::new(TileSize::new(200.).unwrap())
+    };
+    let report = convert(w, options, &out, Vec::new());
+    let (index, _) = tiles(&out);
+    let files: Vec<String> = index["tiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["file"].as_str().unwrap().to_owned())
+        .collect();
+    let notice = report
+        .reported
+        .iter()
+        .find(|n| n.reason.starts_with("materials without pbr.material"))
+        .unwrap_or_else(|| panic!("no notice of the material: {:?}", report.reported));
+    // once in each of the two tiles that draw it
+    assert_eq!(
+        (notice.stage.as_str(), notice.kind, notice.count),
+        ("web", NoticeKind::Unsupported, 2)
+    );
+    assert_eq!(notice.examples, files);
     let _ = std::fs::remove_dir_all(&out);
 }

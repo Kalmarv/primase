@@ -24,6 +24,13 @@ the index, and `Index::write_to` publishes `tiles.json` once every file it names
 is in place. `write` is that pipeline over an already prepared world. Each tile is
 written as a `primase_gltf::Selection` of the cell's world, which stays unchanged,
 so one loaded cell can be written by several plans (the example's plain set).
+What the tiles leave out, choose or draw approximately (a material without
+`pbr.material`, a skin stream, a component without a JSON form, a degenerate
+placement, a marker anchored at height 0) is returned as notices:
+`TilePlan::notices`, `TileSet::notices`, and the conversion writer's finish.
+The glTF writer's report of each tile is counted once per published tile; a
+tile written only to measure it against the byte budget, then split, counts
+nothing.
 `target()` declares what a cell's world may hold when it is written (a converter
 checks it after the cell's passes): its files loaded, levels of detail chosen,
 transforms rigid. `plan` refuses a mirrored or sheared placement: `bake-nonrigid`
