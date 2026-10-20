@@ -77,8 +77,11 @@ pub struct RegionReport {
     pub by_state: BTreeMap<&'static str, usize>,
     /// Archetype names defined by more than one live map types file.
     pub duplicate_archetypes: usize,
-    /// Entities whose archetype no live map types file defines.
+    /// Entities whose archetype no live map types file of the states they are live in defines.
     pub missing_archetypes: usize,
+    /// Entities live in both states whose archetype the two states define in different files: placed once per state,
+    /// each with its state's definition and a `gta.map` condition.
+    pub split_by_state: usize,
     /// Placements of time archetypes (each with an hour mask on the `gta.hour` axis).
     pub time_placements: usize,
     /// Of those, the ones whose mask names no hour: kept, with the condition that never holds.
@@ -180,6 +183,47 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
 /// Archetypes by name hash: the map types file defining them and the definition.
 type ArchetypeTable = BTreeMap<u32, (String, ArchetypeDef)>;
 
+/// One definition of an archetype for a placement: the map types file defining it, the definition, the archive set it
+/// is read from, and the states it holds for.
+struct Definition<'a, S = ArchiveSet> {
+    ytyp: &'a String,
+    def: &'a ArchetypeDef,
+    set: &'a S,
+    story: bool,
+    online: bool,
+}
+
+/// The definitions of archetype `h` for a placement live in Story (`in_story`) and Online (`in_online`), from each
+/// state's own map types: one when only one state applies or both states' live file is the same, two (one per state)
+/// when the states define it in different files, none when no applicable state defines it.
+fn definitions<'a, S>(
+    h: u32,
+    in_story: bool,
+    in_online: bool,
+    story: (&'a ArchetypeTable, &'a S),
+    online: Option<(&'a ArchetypeTable, &'a S)>,
+) -> Vec<Definition<'a, S>> {
+    let s = in_story.then(|| story.0.get(&h)).flatten();
+    let o = online
+        .filter(|_| in_online)
+        .and_then(|(t, set)| t.get(&h).map(|d| (d, set)));
+    let def = |(ytyp, def): &'a (String, ArchetypeDef), set, story, online| Definition {
+        ytyp,
+        def,
+        set,
+        story,
+        online,
+    };
+    match (s, o) {
+        (Some(sd), Some((od, set))) if sd.0 == od.0 => vec![def(od, set, true, true)],
+        (s, o) => s
+            .map(|sd| def(sd, story.1, true, false))
+            .into_iter()
+            .chain(o.map(|(od, set)| def(od, set, false, true)))
+            .collect(),
+    }
+}
+
 fn archetypes(set: &ArchiveSet, keys: &Keys) -> Result<(ArchetypeTable, usize)> {
     let mut out = ArchetypeTable::new();
     let mut duplicates = 0;
@@ -239,6 +283,7 @@ pub fn entity_transform(e: &EntityDef) -> Transform {
 
 /// An entity to place: its map, its index there (for an interior's entity, the instance's index and its own),
 /// its definition, its transform in GTA's frame, and the map states it is live in.
+#[derive(Clone)]
 struct Placed {
     ymap: String,
     /// The script-managed map governing it ([`MapRead::ipl`]).
@@ -335,8 +380,13 @@ pub fn read_region(
             }
         }
     }
-    let (types, duplicates) = archetypes(online.unwrap_or(story), keys)?;
-    report.duplicate_archetypes = duplicates;
+    // each state's archetypes, from its own map types files: a placement takes the definition of the state it is live
+    // in, and a placement live in both whose states define its archetype in different files is placed once per state
+    let (story_types, story_duplicates) = archetypes(story, keys)?;
+    let online_types = online.map(|s| archetypes(s, keys)).transpose()?;
+    report.duplicate_archetypes = story_duplicates + online_types.as_ref().map_or(0, |(_, d)| *d);
+    let online_tables = online.zip(online_types.as_ref()).map(|(set, (t, _))| (t, set));
+    let story_tables = (&story_types, story);
 
     let mut w = World::new();
     let axis = online.map(|_| {
@@ -370,29 +420,32 @@ pub fn read_region(
             continue;
         }
         report.interiors += 1;
-        let Some(interior) = types.get(&e.archetype).and_then(|(_, a)| a.interior.as_ref()) else {
-            continue;
-        };
-        report.interior_entity_sets += interior.entity_sets;
         // the instance's rotation and position, without its scale
         let frame = entity_transform(&EntityDef {
             scale_xy: 1.0,
             scale_z: 1.0,
             ..e.clone()
         });
-        for (ci, ce) in interior.entities.iter().enumerate() {
-            let t = compose(&frame, &entity_transform(ce));
-            all.push(Placed {
-                ymap: ymap.clone(),
-                ipl: ipl.clone(),
-                index,
-                child: Some(ci as u32),
-                lod_parent: None,
-                def: ce.clone(),
-                transform: t,
-                story: in_story,
-                online: in_online,
-            });
+        // its entities by each applicable state's interior definition, live in the states that definition holds for
+        for d in definitions(e.archetype, in_story, in_online, story_tables, online_tables) {
+            let Some(interior) = d.def.interior.as_ref() else {
+                continue;
+            };
+            report.interior_entity_sets += interior.entity_sets;
+            for (ci, ce) in interior.entities.iter().enumerate() {
+                let t = compose(&frame, &entity_transform(ce));
+                all.push(Placed {
+                    ymap: ymap.clone(),
+                    ipl: ipl.clone(),
+                    index,
+                    child: Some(ci as u32),
+                    lod_parent: None,
+                    def: ce.clone(),
+                    transform: t,
+                    story: d.story,
+                    online: d.online,
+                });
+            }
         }
     }
     let mut prototypes = BTreeMap::new();
@@ -411,113 +464,118 @@ pub fn read_region(
         online: in_online,
     } in &all
     {
-        let Some((ytyp, a)) = types.get(&e.archetype) else {
+        let defs = definitions(e.archetype, *in_story, *in_online, story_tables, online_tables);
+        if defs.is_empty() {
             report.missing_archetypes += 1;
             continue;
-        };
-        let proto = *prototypes.entry(e.archetype).or_insert_with(|| {
+        }
+        report.split_by_state += usize::from(defs.len() > 1);
+        for d in defs {
+            let (ytyp, a, set) = (d.ytyp, d.def, d.set);
+            let (in_story, in_online) = (&d.story, &d.online);
+            let proto = *prototypes.entry((e.archetype, ytyp.clone())).or_insert_with(|| {
+                let p = w.spawn();
+                w.insert(p, GtaArchetype::new(ytyp, a));
+                w.insert(p, Source(ytyp.clone()));
+                let archetype = format!("archetype {:#010x}", a.name);
+                w.insert(
+                    p,
+                    Provenance::new(crate::read::assets::origin(ytyp, Some(&archetype))),
+                );
+                // its asset's file name, in the archive set its archetype is read from: a drawable's or a fragment's; a
+                // drawable dictionary's entry (stored by hash) or an asset with no live file keeps the archetype's hash
+                let ext = match a.asset_type {
+                    1 => Some("yft"),
+                    2 => Some("ydr"),
+                    _ => None,
+                };
+                let name = ext.and_then(|ext| {
+                    let path = set.path(*set.tables.get(ext)?.get(&a.asset_name)?);
+                    let file = path.rsplit('\\').next()?;
+                    Some(file.strip_suffix(ext)?.strip_suffix('.')?.to_string())
+                });
+                if name.is_none() {
+                    report.prototypes_named_by_hash += 1;
+                }
+                w.insert(p, Name(name.unwrap_or_else(|| format!("{:#010x}", a.name))));
+                p
+            });
             let p = w.spawn();
-            w.insert(p, GtaArchetype::new(ytyp, a));
-            w.insert(p, Source(ytyp.clone()));
-            let archetype = format!("archetype {:#010x}", a.name);
+            w.insert(p, GTA.transform(transform));
             w.insert(
                 p,
-                Provenance::new(crate::read::assets::origin(ytyp, Some(&archetype))),
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
             );
-            // its asset's file name, in the archive set its archetype is read from: a drawable's or a fragment's; a
-            // drawable dictionary's entry (stored by hash) or an asset with no live file keeps the archetype's hash
-            let ext = match a.asset_type {
-                1 => Some("yft"),
-                2 => Some("ydr"),
-                _ => None,
+            match child {
+                None => {
+                    w.insert(p, GtaEntity::new(ymap, *index, None, lod_parent.clone(), e));
+                    w.insert(p, Source(format!("{ymap}#{index}")));
+                    let item = format!("entity {index}");
+                    w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
+                }
+                Some(c) => {
+                    w.insert(p, GtaEntity::new(ymap, *c, Some(*index), None, e));
+                    w.insert(p, Source(format!("{ymap}#{index}/{c}")));
+                    let item = format!("entity {index} child {c}");
+                    w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
+                    report.interior_entities += 1;
+                }
+            }
+            let state = match (in_story, in_online) {
+                (true, true) => "both",
+                (true, false) => "story",
+                (false, true) => "online",
+                (false, false) => unreachable!(),
             };
-            let name = ext.and_then(|ext| {
-                let set = online.unwrap_or(story);
-                let path = set.path(*set.tables.get(ext)?.get(&a.asset_name)?);
-                let file = path.rsplit('\\').next()?;
-                Some(file.strip_suffix(ext)?.strip_suffix('.')?.to_string())
-            });
-            if name.is_none() {
-                report.prototypes_named_by_hash += 1;
+            *report.by_state.entry(state).or_default() += 1;
+            let mut literals = Vec::new();
+            if let (Some(axis), false) = (axis, state == "both") {
+                let value = if state == "story" { 0 } else { 1 };
+                literals.push(Literal {
+                    axis,
+                    values: 1u64 << value,
+                });
             }
-            w.insert(p, Name(name.unwrap_or_else(|| format!("{:#010x}", a.name))));
-            p
-        });
-        let p = w.spawn();
-        w.insert(p, GTA.transform(transform));
-        w.insert(
-            p,
-            Instance {
-                prototype: proto,
-                variant: 0,
-            },
-        );
-        match child {
-            None => {
-                w.insert(p, GtaEntity::new(ymap, *index, None, lod_parent.clone(), e));
-                w.insert(p, Source(format!("{ymap}#{index}")));
-                let item = format!("entity {index}");
-                w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
+            // a time archetype is shown in the hours its timeFlags' low 24 bits name (none: never)
+            if let Some(flags) = a.time_flags {
+                let axis = hour_axis;
+                let hours = u64::from(flags & 0x00FF_FFFF);
+                literals.push(Literal { axis, values: hours });
+                report.time_placements += 1;
+                report.time_placements_never_shown += usize::from(hours == 0);
             }
-            Some(c) => {
-                w.insert(p, GtaEntity::new(ymap, *c, Some(*index), None, e));
-                w.insert(p, Source(format!("{ymap}#{index}/{c}")));
-                let item = format!("entity {index} child {c}");
-                w.insert(p, Provenance::new(crate::read::assets::origin(ymap, Some(&item))));
-                report.interior_entities += 1;
+            // a script-managed map's placements exist while its IPL is loaded
+            if let Some(name) = ipl {
+                let axis = *ipl_axes.entry(name.clone()).or_insert_with(|| {
+                    report.ipl_axes += 1;
+                    let e = w.spawn();
+                    w.insert(
+                        e,
+                        StateAxis {
+                            key: format!("gta.ipl.{name}"),
+                            domain: Domain::Bool,
+                            default: None,
+                            scope: Scope::Global,
+                            class: "ipl".into(),
+                            source: format!(
+                                "script-managed map {name} (CMapData flags bit 0); its start state is in the game's \
+                                 scripts, not read: unknown"
+                            ),
+                        },
+                    );
+                    e
+                });
+                literals.push(Literal { axis, values: 0b10 });
+                report.ipl_placements += 1;
             }
+            if let Some(c) = condition(literals) {
+                w.insert(p, c);
+            }
+            report.placements += 1;
         }
-        let state = match (in_story, in_online) {
-            (true, true) => "both",
-            (true, false) => "story",
-            (false, true) => "online",
-            (false, false) => unreachable!(),
-        };
-        *report.by_state.entry(state).or_default() += 1;
-        let mut literals = Vec::new();
-        if let (Some(axis), false) = (axis, state == "both") {
-            let value = if state == "story" { 0 } else { 1 };
-            literals.push(Literal {
-                axis,
-                values: 1u64 << value,
-            });
-        }
-        // a time archetype is shown in the hours its timeFlags' low 24 bits name (none: never)
-        if let Some(flags) = a.time_flags {
-            let axis = hour_axis;
-            let hours = u64::from(flags & 0x00FF_FFFF);
-            literals.push(Literal { axis, values: hours });
-            report.time_placements += 1;
-            report.time_placements_never_shown += usize::from(hours == 0);
-        }
-        // a script-managed map's placements exist while its IPL is loaded
-        if let Some(name) = ipl {
-            let axis = *ipl_axes.entry(name.clone()).or_insert_with(|| {
-                report.ipl_axes += 1;
-                let e = w.spawn();
-                w.insert(
-                    e,
-                    StateAxis {
-                        key: format!("gta.ipl.{name}"),
-                        domain: Domain::Bool,
-                        default: None,
-                        scope: Scope::Global,
-                        class: "ipl".into(),
-                        source: format!(
-                            "script-managed map {name} (CMapData flags bit 0); its start state is in the game's \
-                             scripts, not read: unknown"
-                        ),
-                    },
-                );
-                e
-            });
-            literals.push(Literal { axis, values: 0b10 });
-            report.ipl_placements += 1;
-        }
-        if let Some(c) = condition(literals) {
-            w.insert(p, c);
-        }
-        report.placements += 1;
     }
     report.prototypes = prototypes.len();
     if report.placements == 0 && !all.is_empty() {
@@ -529,6 +587,91 @@ pub fn read_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn archetype(name: u32, asset_name: u32) -> ArchetypeDef {
+        ArchetypeDef {
+            kind: crate::rage::map::ArchetypeKind::Base,
+            name,
+            lod_dist: 100.0,
+            flags: 0,
+            special_attribute: 0,
+            bb_min: [0.0; 3],
+            bb_max: [1.0; 3],
+            bs_centre: [0.5; 3],
+            bs_radius: 1.0,
+            hd_texture_dist: 0.0,
+            texture_dictionary: 0,
+            clip_dictionary: 0,
+            drawable_dictionary: 0,
+            physics_dictionary: 0,
+            asset_type: 2,
+            asset_name,
+            time_flags: None,
+            extensions: 0,
+            interior: None,
+        }
+    }
+
+    /// Each state's own definition (review B6): archetype 1 is defined by the same file in both states, 2 by a
+    /// different file in each (another asset), 3 by Story only and 4 by Online only. A placement live in Story takes
+    /// Story's definition, one live in both is placed once when the file is the same and once per state when it
+    /// differs, and a definition only the other state has is none.
+    #[test]
+    fn a_placement_takes_the_definition_of_the_states_it_is_live_in() {
+        let story: ArchetypeTable = BTreeMap::from([
+            (1, ("common/a.ytyp".to_owned(), archetype(1, 10))),
+            (2, ("story/b.ytyp".to_owned(), archetype(2, 20))),
+            (3, ("story/c.ytyp".to_owned(), archetype(3, 30))),
+        ]);
+        let online: ArchetypeTable = BTreeMap::from([
+            (1, ("common/a.ytyp".to_owned(), archetype(1, 10))),
+            (2, ("online/b.ytyp".to_owned(), archetype(2, 21))),
+            (4, ("online/d.ytyp".to_owned(), archetype(4, 40))),
+        ]);
+        let sets = ("story set", "online set");
+        let tables = ((&story, &sets.0), Some((&online, &sets.1)));
+        let seen = |h, in_story, in_online| -> Vec<(&str, u32, &str, bool, bool)> {
+            definitions(h, in_story, in_online, tables.0, tables.1)
+                .into_iter()
+                .map(|d| (d.ytyp.as_str(), d.def.asset_name, *d.set, d.story, d.online))
+                .collect()
+        };
+        // the same file in both states: one placement for both
+        assert_eq!(
+            seen(1, true, true),
+            [("common/a.ytyp", 10, "online set", true, true)]
+        );
+        // different files: a Story placement takes Story's definition, a placement in both is split
+        assert_eq!(
+            seen(2, true, false),
+            [("story/b.ytyp", 20, "story set", true, false)]
+        );
+        assert_eq!(
+            seen(2, true, true),
+            [
+                ("story/b.ytyp", 20, "story set", true, false),
+                ("online/b.ytyp", 21, "online set", false, true)
+            ]
+        );
+        // a Story-only definition is kept for a Story placement; an Online-only one isn't Story's
+        assert_eq!(
+            seen(3, true, false),
+            [("story/c.ytyp", 30, "story set", true, false)]
+        );
+        assert!(seen(4, true, false).is_empty());
+        assert_eq!(
+            seen(4, true, true),
+            [("online/d.ytyp", 40, "online set", false, true)]
+        );
+        // no Online read: Story's table alone
+        assert_eq!(
+            definitions(2, true, false, tables.0, None::<(&ArchetypeTable, &&str)>)
+                .into_iter()
+                .map(|d| d.def.asset_name)
+                .collect::<Vec<_>>(),
+            [20]
+        );
+    }
 
     #[test]
     fn map_names_are_file_stems() {
