@@ -13,6 +13,7 @@ pub mod json;
 pub mod layered;
 pub mod ledger;
 mod lod;
+pub mod names;
 pub use lod::{LodChoice, LodForm, Lods, SelectLod, select_lod};
 mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};

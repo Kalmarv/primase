@@ -461,6 +461,23 @@ pub enum Legality {
     LowerAndCarry,
 }
 
+/// The kind of a target's rule for a name, without its checks ([`Target::rules`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Rule {
+    /// [`Legality::Legal`].
+    Legal,
+    /// [`Legality::Dynamic`]: legal on the entities a check accepts.
+    Dynamic,
+    /// [`Legality::Covered`]: written through another component on the entities a check accepts.
+    Covered,
+    /// [`Legality::Illegal`].
+    Illegal,
+    /// [`Legality::Carry`].
+    Carry,
+    /// [`Legality::LowerAndCarry`].
+    LowerAndCarry,
+}
+
 impl fmt::Debug for Legality {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -611,6 +628,35 @@ impl Target {
 
     pub fn legality(&self, name: &str) -> Option<&Legality> {
         self.rules.get(name)
+    }
+
+    /// Every name the target states a rule for, with the rule's kind (its checks left out): what a coverage report
+    /// lists of the writer.
+    pub fn rules(&self) -> Vec<(&str, Rule)> {
+        self.rules
+            .iter()
+            .map(|(name, legality)| {
+                let rule = match legality {
+                    Legality::Legal => Rule::Legal,
+                    Legality::Dynamic(_) => Rule::Dynamic,
+                    Legality::Covered(_) => Rule::Covered,
+                    Legality::Illegal => Rule::Illegal,
+                    Legality::Carry => Rule::Carry,
+                    Legality::LowerAndCarry => Rule::LowerAndCarry,
+                };
+                (name.as_str(), rule)
+            })
+            .collect()
+    }
+
+    /// Whether it passes every name it states no rule for through ([`Target::carry_unknown`]).
+    pub fn carries_unknown(&self) -> bool {
+        self.carry_unknown
+    }
+
+    /// The resources it checks the values of ([`Target::check_resource`]), by name.
+    pub fn checked_resources(&self) -> Vec<&str> {
+        self.resource_rules.keys().map(String::as_str).collect()
     }
 
     /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
@@ -2188,6 +2234,22 @@ mod tests {
 
     /// A pass taking in a function's log keeps everything it reported: counts, approximations, omissions and drops
     /// add up, removals, placed entities and their sources join.
+    /// A target's rules read back by kind, its checks left out; carrying unknown names and its checked resources too.
+    #[test]
+    fn a_targets_rules_read_back() {
+        let t = Target::new("t")
+            .legal("toy.pbr")
+            .illegal("toy.layered")
+            .carry_unknown();
+        assert_eq!(
+            t.rules(),
+            [("toy.layered", Rule::Illegal), ("toy.pbr", Rule::Legal)]
+        );
+        assert!(t.carries_unknown());
+        assert!(t.checked_resources().is_empty());
+        assert!(!Target::new("u").carries_unknown());
+    }
+
     #[test]
     fn absorb_keeps_every_part_of_the_log() {
         let mut w = World::new();

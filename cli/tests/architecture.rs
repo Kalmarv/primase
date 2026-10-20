@@ -1434,6 +1434,36 @@ fn lowerings(t: &[Tok]) -> Vec<String> {
     out
 }
 
+/// Core's list of its own names (`primase_core::names`) holds every component and resource core implements: the types
+/// named in `impl ... Component for T` and `impl ... Resource for T` in core's sources (tests left out) are exactly the
+/// types it lists.
+#[test]
+fn core_names_listed() {
+    let mut implemented = BTreeSet::new();
+    for f in rust_files(&root().join("core").join("src")) {
+        let t = code(&f);
+        for i in 1..t.len().saturating_sub(1) {
+            if ident(&t[i], "for")
+                && (ident(&t[i - 1], "Component") || ident(&t[i - 1], "Resource"))
+                && let Tok::Ident(ty) = &t[i + 1]
+            {
+                implemented.insert(ty.clone());
+            }
+        }
+    }
+    let listed: BTreeSet<String> = primase_core::names::LISTED
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let missing: Vec<&String> = implemented.difference(&listed).collect();
+    let extra: Vec<&String> = listed.difference(&implemented).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "core/src/names.rs lists other types than core implements as components and resources: not listed {missing:?}, \
+         listed but not implemented {extra:?}"
+    );
+}
+
 #[test]
 fn passes_registered() {
     let members = members();
