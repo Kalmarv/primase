@@ -779,6 +779,7 @@ impl Builder<'_> {
             };
             textures.push(UnityTexEnv {
                 name: name.clone(),
+                referenced: env.texture.is_some(),
                 texture,
                 scale: env.scale,
                 offset: env.offset,

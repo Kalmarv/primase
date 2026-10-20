@@ -1,5 +1,5 @@
-//! A material's compiled program ([`UnityProgram`]) bound for evaluation on the CPU ([`primase_shader`]): what Unity
-//! itself sets when it draws, as far as the material says it.
+//! A variant of a material's compiled programs ([`UnityProgramVariant`], from `unity.programs`) bound for evaluation
+//! on the CPU ([`primase_shader`]): what Unity itself sets when it draws, as far as the material says it.
 //!
 //! - [`bind`]: the program (its DXBC, whose reflection Unity strips) with the constant layout its parameters record
 //!   (field name, buffer slot, byte offset), and its texture slots by property name.
@@ -7,7 +7,8 @@
 //!   linear-space player) and texture tilings (`<property>_ST`: scale x and y, offset x and y) into that layout; the
 //!   fields no property sets stay zero, named in what it returns.
 //! - [`directional_light`]: the built-in renderer's forward globals for one directional light and nothing else (the
-//!   caller's choice of light; ambient, probes and shadows stated off).
+//!   caller's choice of light; ambient, probes and shadows stated off), returning the fields it set so the caller
+//!   reports the bindings it evaluates with.
 //! - [`UnityImage`]: a texture as a Unity shader samples it.
 //!
 //! Struct fields (instancing's per-draw arrays) are not laid out: a variant drawn without instancing reads none.
@@ -19,7 +20,7 @@ use primase_image::srgb_to_linear;
 use primase_shader::{Constants, Field, Layout};
 use primase_texcodec::TexDecoder;
 
-use crate::components::{Shape, UnityMaterial, UnityProgram};
+use crate::components::{Shape, UnityMaterial, UnityProgramVariant};
 use crate::{Result, invalid};
 
 /// A program bound to its layout.
@@ -44,11 +45,11 @@ fn words(shape: Shape, array_size: u32) -> u32 {
     }
 }
 
-/// Bind `p`: its program read without reflection, the layout of every field of a buffer the program reads, and its
-/// texture slots. A field named twice is an error.
-pub fn bind(p: &UnityProgram) -> Result<Bound> {
+/// Bind variant `p` of shader `name`: its program read without reflection, the layout of every field of a buffer the
+/// program reads, and its texture slots. A field named twice is an error.
+pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
     let shader = primase_dxbc::Shader::parse_stripped(&p.code)
-        .map_err(|e| invalid(format!("program of {}: {e}", p.shader)))?;
+        .map_err(|e| invalid(format!("program of {name}: {e}")))?;
     let read = shader.program.constant_buffers().to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),
@@ -66,8 +67,8 @@ pub fn bind(p: &UnityProgram) -> Result<Bound> {
             };
             if !f.offset.is_multiple_of(4) || layout.fields.insert(f.name.clone(), field).is_some() {
                 return Err(invalid(format!(
-                    "program of {}: field {} unaligned or named twice",
-                    p.shader, f.name
+                    "program of {name}: field {} unaligned or named twice",
+                    f.name
                 )));
             }
         }
@@ -135,19 +136,24 @@ pub fn constants(b: &Bound, m: &UnityMaterial) -> Result<MaterialConstants> {
 
 /// Unity's built-in forward globals for one directional light of linear colour `color` arriving from `towards` (the
 /// world direction to the light, `_WorldSpaceLightPos0` with w 0) and nothing else: spherical-harmonics ambient zero,
-/// no light probe volume (`unity_ProbeVolumeParams` x 0), and the light unshadowed (`unity_OcclusionMaskSelector`
-/// selecting the first channel of the attenuation the unshadowed branch fills with 1). Fields the program does not
-/// read are skipped.
-pub fn directional_light(c: &mut Constants, towards: [f32; 3], color: [f32; 3]) -> Result<()> {
-    let mut put = |name: &str, values: &[f32]| {
-        c.set(name, values)
-            .map(|_| ())
-            .map_err(|e| invalid(e.to_string()))
+/// no light probe volume (`unity_ProbeVolumeParams` x 0, its transform and bounds zero), and the light unshadowed
+/// (`unity_OcclusionMaskSelector` selecting the first channel of the attenuation the unshadowed branch fills with 1).
+/// Fields the program does not read are skipped; the names of those set, returned.
+pub fn directional_light(c: &mut Constants, towards: [f32; 3], color: [f32; 3]) -> Result<Vec<String>> {
+    let mut set = Vec::new();
+    let mut put = |name: &str, values: &[f32]| -> Result<()> {
+        if c.set(name, values).map_err(|e| invalid(e.to_string()))? {
+            set.push(name.to_owned());
+        }
+        Ok(())
     };
     put("_WorldSpaceLightPos0", &[towards[0], towards[1], towards[2], 0.0])?;
     put("_LightColor0", &[color[0], color[1], color[2], 1.0])?;
     put("unity_OcclusionMaskSelector", &[1.0, 0.0, 0.0, 0.0])?;
     put("unity_ProbeVolumeParams", &[0.0; 4])?;
+    put("unity_ProbeVolumeWorldToObject", &[0.0; 16])?;
+    put("unity_ProbeVolumeSizeInv", &[0.0; 3])?;
+    put("unity_ProbeVolumeMin", &[0.0; 3])?;
     for sh in [
         "unity_SHAr",
         "unity_SHAg",
@@ -159,7 +165,7 @@ pub fn directional_light(c: &mut Constants, towards: [f32; 3], color: [f32; 3]) 
     ] {
         put(sh, &[0.0; 4])?;
     }
-    Ok(())
+    Ok(set)
 }
 
 /// How a Unity texture addresses a coordinate outside 0-1 (`TextureWrapMode`).

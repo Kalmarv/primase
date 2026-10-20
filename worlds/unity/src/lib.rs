@@ -20,9 +20,9 @@
 //! [`shader`]: a Shader's render state as stored, which the reader decodes, `unity.material` carries and the passes
 //! choose by.
 //!
-//! [`bind`]: a material's compiled program (`unity.program`, [`program::read_programs`]) bound for evaluation on the
-//! CPU: its constant layout, the material's properties and Unity's built-in lighting globals in it, its textures as
-//! Unity samples them.
+//! [`bind`]: a variant of a material's compiled programs (`unity.programs`, [`program::read_programs`]) bound for
+//! evaluation on the CPU: its constant layout, the material's properties and Unity's built-in lighting globals in it,
+//! its textures as Unity samples them.
 //!
 //! The passes ([`passes`], each module re-exported here):
 //! - [`drawn`]: what a renderer other than Unity's can draw of the scene's renderers (pass `unity-drawn`).

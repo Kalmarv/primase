@@ -1491,6 +1491,7 @@ mod tests {
         let mut w = World::new();
         let env = |name: &str, texture: Option<Entity>, scale: f32, offset: [f32; 2]| UnityTexEnv {
             name: name.into(),
+            referenced: texture.is_some(),
             texture,
             scale: [scale; 2],
             offset,
@@ -1673,6 +1674,7 @@ mod tests {
     fn env(name: &str, texture: Option<Entity>, scale: f32) -> UnityTexEnv {
         UnityTexEnv {
             name: name.into(),
+            referenced: texture.is_some(),
             texture,
             scale: [scale; 2],
             offset: [0.0; 2],

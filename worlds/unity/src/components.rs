@@ -159,28 +159,62 @@ pub struct Parameters {
     pub samplers: Vec<(u32, u32)>,
 }
 
-/// The compiled fragment program a material draws with, as the player stores it ([`crate::program::read_programs`]):
-/// its shader's name, the pass (subshader and pass index in the shader's parsed form), the variant's keywords, its
-/// parameters (constant-buffer fields with their offsets, texture and sampler slots) and its D3D11 code, a DXBC
-/// container (Unity's record header before it removed). What the program means is the evaluating pass's.
+/// One stored variant of a fragment program: its hardware tier (the player's group), its keywords, its parameters
+/// (constant-buffer fields with their offsets, texture and sampler slots) and its D3D11 code, a DXBC container
+/// (Unity's record header before it removed).
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnityProgram {
-    pub shader: String,
-    pub subshader: usize,
-    pub pass: usize,
+pub struct UnityProgramVariant {
+    pub tier: usize,
     pub keywords: Vec<String>,
     pub parameters: Parameters,
     #[serde(skip)]
     pub code: Vec<u8>,
 }
 
-impl Component for UnityProgram {
-    const NAME: &'static str = "unity.program";
+/// The compiled fragment programs of the pass a material draws with, as the player stores them
+/// ([`crate::program::read_programs`]): its shader's name, the pass (subshader and pass index in the shader's parsed
+/// form, the draw pass under the player's pipeline), every stored variant with D3D11 code, and the default the shader
+/// declares for each texture property (`m_PropInfo`: Unity's built-in texture name, "white", "bump" and so on). Which
+/// variant a lowering evaluates is its caller's choice ([`UnityPrograms::variant`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityPrograms {
+    pub shader: String,
+    pub subshader: usize,
+    pub pass: usize,
+    pub texture_defaults: Vec<(String, String)>,
+    pub variants: Vec<UnityProgramVariant>,
+}
+
+impl UnityPrograms {
+    /// The variant a material with keywords `material` draws with under the renderer state the caller states: its
+    /// global keywords `global` (the light, shadow, lightmap and probe keywords Unity sets per draw) and hardware tier
+    /// `tier`. Its keywords are exactly `global` and those of the material's keywords the pass's variants use (a
+    /// keyword no variant uses is not compiled into any); `None` when the pass stores no such variant.
+    pub fn variant(
+        &self,
+        material: &[String],
+        global: &[String],
+        tier: usize,
+    ) -> Option<&UnityProgramVariant> {
+        let used = |k: &String| self.variants.iter().any(|v| v.keywords.contains(k));
+        let mut wanted: Vec<&String> = global.iter().chain(material.iter().filter(|k| used(k))).collect();
+        wanted.sort();
+        wanted.dedup();
+        self.variants.iter().find(|v| {
+            let mut have: Vec<&String> = v.keywords.iter().collect();
+            have.sort();
+            v.tier == tier && have == wanted
+        })
+    }
+}
+
+impl Component for UnityPrograms {
+    const NAME: &'static str = "unity.programs";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
     fn payload_bytes(&self) -> u64 {
-        self.code.len() as u64
+        self.variants.iter().map(|v| v.code.len() as u64).sum()
     }
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
         primase_core::Linearity::Invariant
@@ -214,11 +248,15 @@ fn stored_colors<S: Serializer>(v: &[(String, [f32; 4])], s: S) -> Result<S::Ok,
     s.collect_seq(v.iter().map(|(k, c)| (k, c.map(Stored))))
 }
 
-/// A texture property of a material: its texture entity (`None`: none set, or not in the player) and tiling (`_ST`,
-/// Unity's bottom-left origin), as stored (non-finite numbers included).
+/// A texture property of a material: whether it names an object (`referenced`: a texture is set), its texture entity
+/// (`None` when none is set, or what it names was not read as a texture: another class), and tiling (`_ST`, Unity's
+/// bottom-left origin), as stored (non-finite numbers included). An unset property (`referenced` false) samples the
+/// default its shader declares; a referenced one without a texture entity, or whose entity has no pixels, is a
+/// source the world does not hold.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityTexEnv {
     pub name: String,
+    pub referenced: bool,
     pub texture: Option<Entity>,
     #[serde(serialize_with = "stored_pair")]
     pub scale: [f32; 2],
@@ -421,8 +459,8 @@ impl UnityMaterial {
 
 impl Component for UnityMaterial {
     const NAME: &'static str = "unity.material";
-    /// 2: `shader_state`; 3: each shader pass's `kind`.
-    const VERSION: u32 = 3;
+    /// 2: `shader_state`; 3: each shader pass's `kind`; 4: each texture property's `referenced`.
+    const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -873,6 +911,7 @@ mod tests {
         m.colors = vec![("_CameraFadeParams".into(), [0.0, f32::INFINITY, 0.0, 1.0])];
         m.textures = vec![UnityTexEnv {
             name: "_MainTex".into(),
+            referenced: false,
             texture: None,
             scale: [f32::NAN, 1.0],
             offset: [0.0, 0.0],

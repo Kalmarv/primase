@@ -462,15 +462,31 @@ pub fn dxbc(code: &[u8]) -> Option<&[u8]> {
     })
 }
 
-/// The variant of `pass` a material with keywords `material` draws with under one directional light and nothing else
-/// (no shadows, lightmaps or light probes): of those whose keywords are all `DIRECTIONAL` or the material's, the one
-/// with the most, then the lowest group (tier). `None` when no variant qualifies.
-pub fn forward_variant<'a>(pass: &'a PassProgram, material: &[String]) -> Option<&'a Variant> {
-    let wanted = |k: &String| k == "DIRECTIONAL" || material.contains(k);
-    pass.variants
-        .iter()
-        .filter(|v| v.keywords.iter().all(wanted))
-        .min_by_key(|v| (std::cmp::Reverse(v.keywords.len()), v.group, v.blob_index))
+/// The default each texture property of shader `r` declares (`m_ParsedForm.m_PropInfo.m_Props`, type 4:
+/// `m_DefTexture.m_DefaultName`), by property.
+fn texture_defaults(player: &Player, r: &ObjRef) -> Result<Vec<(String, String)>> {
+    let s = player.decode(r)?;
+    let props = s
+        .get("m_ParsedForm")
+        .and_then(|f| f.get("m_PropInfo"))
+        .map(|p| items(p, "m_Props"))
+        .transpose()?
+        .unwrap_or(&[]);
+    let mut out = Vec::new();
+    for p in props {
+        if p.get("m_Type").and_then(Value::as_i64) != Some(4) {
+            continue;
+        }
+        let name = p.get("m_Name").and_then(Value::as_str);
+        let default = p
+            .get("m_DefTexture")
+            .and_then(|d| d.get("m_DefaultName"))
+            .and_then(Value::as_str);
+        if let (Some(name), Some(default)) = (name, default) {
+            out.push((name.to_owned(), default.to_owned()));
+        }
+    }
+    Ok(out)
 }
 
 /// What [`read_programs`] attached.
@@ -482,17 +498,18 @@ pub struct ProgramsReport {
     pub left_out: std::collections::BTreeMap<String, usize>,
 }
 
-/// For every `unity.material` of `w` whose shader is one of `shaders`, the D3D11 code of the fragment variant its
-/// draw pass under `pipeline` ([`UnityMaterial::draw_pass`]) takes with one directional light ([`forward_variant`]),
-/// as `unity.program` on the material's entity. A material without a shader object, draw pass, qualifying variant or
-/// D3D11 code is left out, counted by reason.
+/// For every `unity.material` of `w` whose shader is one of `shaders`, the fragment programs of its draw pass under
+/// `pipeline` ([`UnityMaterial::draw_pass`]) as stored: every variant with its D3D11 code, and the shader's declared
+/// texture defaults, as `unity.programs` on the material's entity (choosing a variant is the caller's,
+/// [`UnityPrograms::variant`]). A material without a shader object, draw pass or D3D11 code is left out, counted by
+/// reason; so are variants whose code holds no DXBC container.
 pub fn read_programs(
     player: &Player,
     w: &mut primase_core::World,
     shaders: &[&str],
     pipeline: &crate::components::RenderPipeline,
 ) -> Result<ProgramsReport> {
-    use crate::components::{UnityMaterial, UnityProgram};
+    use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms};
     let mut report = ProgramsReport::default();
     let mut read: std::collections::BTreeMap<(String, i64), ShaderPrograms> =
         std::collections::BTreeMap::new();
@@ -530,34 +547,40 @@ pub fn read_programs(
             read.insert(key.clone(), ShaderPrograms::read(player, &shader)?);
         }
         let programs = &read[&key];
-        let Some(variant) = programs
-            .passes
-            .get(i)
-            .and_then(|sub| sub.get(j))
-            .and_then(|pass| forward_variant(pass, &m.keywords).map(|v| (pass, v)))
-        else {
-            leave("no variant for one directional light");
+        let Some(pass) = programs.passes.get(i).and_then(|sub| sub.get(j)) else {
+            leave("no draw pass");
             continue;
         };
-        let (pass, variant) = variant;
         if !programs.platforms.contains(&4) {
             leave("no D3D11 code");
             continue;
         }
-        let code = programs.code(4, variant.blob_index)?;
-        let Some(code) = dxbc(&code) else {
-            leave("D3D11 code without a DXBC container");
-            continue;
-        };
+        let mut variants = Vec::new();
+        for v in &pass.variants {
+            let code = programs.code(4, v.blob_index)?;
+            let Some(code) = dxbc(&code) else {
+                *report
+                    .left_out
+                    .entry("variants whose D3D11 code holds no DXBC container".to_owned())
+                    .or_default() += 1;
+                continue;
+            };
+            variants.push(UnityProgramVariant {
+                tier: v.group,
+                keywords: v.keywords.clone(),
+                parameters: pass.parameters_of(v).clone(),
+                code: code.to_vec(),
+            });
+        }
+        let texture_defaults = texture_defaults(player, &shader)?;
         w.insert(
             e,
-            UnityProgram {
+            UnityPrograms {
                 shader: programs.name.clone(),
                 subshader: i,
                 pass: j,
-                keywords: variant.keywords.clone(),
-                parameters: pass.parameters_of(variant).clone(),
-                code: code.to_vec(),
+                texture_defaults,
+                variants,
             },
         );
         report.attached += 1;
@@ -583,35 +606,47 @@ mod tests {
         assert_eq!(dxbc(&code[..20]), None);
     }
 
+    /// The caller states the renderer's keywords and tier; the material adds the keywords the pass's variants use
+    /// (a stale one no variant has is not compiled in); the keywords must match exactly, in the stated tier.
     #[test]
-    fn the_forward_variant_has_the_most_wanted_keywords_and_no_other() {
-        let variant = |group: usize, blob_index: u32, keywords: &[&str]| Variant {
-            group,
-            blob_index,
+    fn a_variant_is_the_one_the_caller_states() {
+        use crate::components::{UnityProgramVariant, UnityPrograms};
+        let variant = |tier: usize, keywords: &[&str]| UnityProgramVariant {
+            tier,
             keywords: keywords.iter().map(|k| k.to_string()).collect(),
-            gpu_program_type: 17,
-            requirements: 0,
-            parameters: None,
-        };
-        let pass = PassProgram {
-            variants: vec![
-                variant(1, 0, &["DIRECTIONAL"]),
-                variant(0, 1, &["DIRECTIONAL"]),
-                variant(0, 2, &["DIRECTIONAL", "SHADOWS_SCREEN"]),
-                variant(0, 3, &["DIRECTIONAL", "_NORMALMAP"]),
-                variant(0, 4, &[]),
-            ],
             parameters: Parameters::default(),
+            code: vec![tier as u8, keywords.len() as u8],
         };
-        let chosen = |keywords: &[&str]| {
-            let keywords: Vec<String> = keywords.iter().map(|k| k.to_string()).collect();
-            forward_variant(&pass, &keywords).map(|v| v.blob_index)
+        let programs = UnityPrograms {
+            shader: "Test".into(),
+            subshader: 0,
+            pass: 0,
+            texture_defaults: Vec::new(),
+            variants: vec![
+                variant(1, &["DIRECTIONAL"]),
+                variant(0, &["DIRECTIONAL"]),
+                variant(0, &["DIRECTIONAL", "SHADOWS_SCREEN"]),
+                variant(0, &["_NORMALMAP", "DIRECTIONAL"]),
+            ],
         };
-        // the lowest tier of the plain directional variant; the material's keyword when a variant has it; never
-        // a shadowed one
-        assert_eq!(chosen(&[]), Some(1));
-        assert_eq!(chosen(&["_NORMALMAP"]), Some(3));
-        assert_eq!(chosen(&["SHADOWS_SCREEN_OFF"]), Some(1));
+        let s = |k: &[&str]| k.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        let chosen = |material: &[&str], global: &[&str], tier| {
+            programs
+                .variant(&s(material), &s(global), tier)
+                .map(|v| v.code.clone())
+        };
+        assert_eq!(chosen(&[], &["DIRECTIONAL"], 0), Some(vec![0, 1]));
+        assert_eq!(chosen(&[], &["DIRECTIONAL"], 1), Some(vec![1, 1]));
+        assert_eq!(
+            chosen(&["_NORMALMAP", "STALE"], &["DIRECTIONAL"], 0),
+            Some(vec![0, 2])
+        );
+        assert_eq!(
+            chosen(&[], &["DIRECTIONAL", "SHADOWS_SCREEN"], 0),
+            Some(vec![0, 2])
+        );
+        assert_eq!(chosen(&[], &["DIRECTIONAL", "LIGHTMAP_ON"], 0), None);
+        assert_eq!(chosen(&[], &["DIRECTIONAL"], 2), None);
     }
 
     fn obj(fields: Vec<(&str, Value)>) -> Value {
