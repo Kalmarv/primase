@@ -267,36 +267,41 @@ impl StoredTextureMap {
         (half(self.width), half(self.height))
     }
 
-    /// The levels this body holds (from `references.len()` to the mip count), each its bytes, refused unless the
-    /// format code's storage is established ([`storage`]) and they fill the pixels exactly.
+    /// The levels this body holds, each its bytes: from `references.len()` to the mip count; or, where those don't fill
+    /// the pixels and the whole chain to 1 x 1 does exactly, that chain (on two maps of Riders Republic the stored mip
+    /// count, 2, is less than the ten levels the pixels hold; RRAssetStudio reads them the same way). Refused unless
+    /// the format code's storage is established ([`storage`]) and one of the two fills the pixels exactly.
     pub fn levels(&self) -> Result<Vec<&[u8]>, Error> {
         let f = storage(self.format).ok_or_else(|| Error::Pixels {
             why: format!("format code {}: its storage isn't established", self.format),
         })?;
         let first = u32::try_from(self.references.len()).unwrap_or(u32::MAX);
+        let chain = self.width.max(self.height).max(1).ilog2().saturating_add(1);
+        for last in [self.mip_count, chain] {
+            if let Some(levels) = self.slice(f, first, last) {
+                return Ok(levels);
+            }
+        }
+        Err(Error::Pixels {
+            why: format!(
+                "neither levels {first} to {} nor the chain to 1 x 1 ({chain} levels) fill the {} pixel bytes",
+                self.mip_count,
+                self.pixels.len()
+            ),
+        })
+    }
+
+    /// Levels `first` to `last` (exclusive), if they fill the pixels exactly.
+    fn slice(&self, f: Storage, first: u32, last: u32) -> Option<Vec<&[u8]>> {
         let mut out = Vec::new();
         let mut at = 0usize;
-        for i in first..self.mip_count {
+        for i in first..last {
             let (w, h) = self.level_size(i);
-            let size = f.level_size(w, h).ok_or_else(|| Error::Pixels {
-                why: format!("level {i}: {w} x {h} past this machine"),
-            })?;
-            let end = at.saturating_add(size);
-            out.push(self.pixels.get(at..end).ok_or_else(|| Error::Pixels {
-                why: format!("level {i} ({w} x {h}) past the {} pixel bytes", self.pixels.len()),
-            })?);
+            let end = at.checked_add(f.level_size(w, h)?)?;
+            out.push(self.pixels.get(at..end)?);
             at = end;
         }
-        if at != self.pixels.len() {
-            return Err(Error::Pixels {
-                why: format!(
-                    "levels {first} to {} fill {at} of {} pixel bytes",
-                    self.mip_count,
-                    self.pixels.len()
-                ),
-            });
-        }
-        Ok(out)
+        (at == self.pixels.len()).then_some(out)
     }
 }
 
@@ -342,6 +347,13 @@ mod tests {
     }
 
     #[test]
+    fn a_stated_count_short_of_the_chain_held_reads_the_chain() {
+        // 8 x 4 BC1 stating 2 levels (1 external) but holding levels 1 to 3 (4 x 2, 2 x 1, 1 x 1)
+        let t = StoredTextureMap::parse(&body(8, 4, 2, 2, &[77], &[1; 24])).expect("parse");
+        assert_eq!(t.levels().expect("levels").len(), 3);
+    }
+
+    #[test]
     fn a_malformed_body_or_level_run_is_refused() {
         let good = body(8, 4, 2, 3, &[77], &[1; 16]);
         let mut b = good.clone();
@@ -365,7 +377,7 @@ mod tests {
         b.push(0);
         assert!(matches!(StoredTextureMap::parse(&b), Err(Error::Pixels { .. })));
         // pixels not filling the levels, and an unestablished format
-        let t = StoredTextureMap::parse(&body(8, 4, 2, 3, &[77], &[1; 24])).expect("parse");
+        let t = StoredTextureMap::parse(&body(8, 4, 2, 3, &[77], &[1; 20])).expect("parse");
         assert!(t.levels().is_err());
         let t = StoredTextureMap::parse(&body(8, 4, 9, 3, &[77], &[1; 32])).expect("parse");
         assert!(t.levels().is_err());
