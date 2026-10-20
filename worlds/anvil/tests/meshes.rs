@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::components::AnvilMesh;
-use primase_anvil::passes::{LowerAnvilMesh, MeshNormals, UvV};
+use primase_anvil::passes::{LowerAnvilMesh, MeshNormals, UvV, UvWords};
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mesh::{self, StoredMesh};
@@ -30,6 +30,7 @@ fn lower(w: &mut World, normals: MeshNormals) {
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let pipeline = Pipeline {
         passes: vec![Box::new(LowerAnvilMesh {
+            uv_words: UvWords::Signed,
             uv_divisor: 2048.0,
             uv_v: UvV::AsStored,
             normals,
@@ -248,6 +249,7 @@ fn the_lowering_states_every_choice() {
             .collect()
     };
     let all = [
+        ("uv-words", "signed"),
         ("uv-divisor", "2048"),
         ("uv-v", "one-minus"),
         ("normals", "packed"),
@@ -255,17 +257,23 @@ fn the_lowering_states_every_choice() {
     assert_eq!(
         LowerAnvilMesh::from_options(&o(&all)),
         Ok(LowerAnvilMesh {
+            uv_words: UvWords::Signed,
             uv_divisor: 2048.0,
             uv_v: UvV::OneMinus,
             normals: MeshNormals::Packed,
         })
     );
-    for missing in 0..3 {
+    for missing in 0..4 {
         let mut some = all.to_vec();
         some.remove(missing);
         assert!(LowerAnvilMesh::from_options(&o(&some)).is_err());
     }
-    for bad in [("uv-divisor", "0"), ("uv-v", "flip"), ("normals", "guess")] {
+    for bad in [
+        ("uv-words", "both"),
+        ("uv-divisor", "0"),
+        ("uv-v", "flip"),
+        ("normals", "guess"),
+    ] {
         let mut some = all.to_vec();
         some.retain(|(k, _)| *k != bad.0);
         some.push(bad);

@@ -93,6 +93,15 @@ pub enum MeshNormals {
     Packed,
 }
 
+/// How `lower-anvil-mesh` reads the two 16-bit words of each vertex's bytes 20..24.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UvWords {
+    /// Each as unsigned.
+    Unsigned,
+    /// Each as signed (two's complement).
+    Signed,
+}
+
 /// What `lower-anvil-mesh` makes of the second u16 of each vertex's bytes 20..24.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UvV {
@@ -102,14 +111,17 @@ pub enum UvV {
     OneMinus,
 }
 
-/// `lower-anvil-mesh{uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed}`: a diagnostic lowering. Every
-/// Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype, one triangle primitive, no material: positions
-/// and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as two u16 over `uv-divisor`, the
-/// second per `uv-v`; normals per `normals`. That bytes 20..24 are texture coordinates, their divisor and origin, and
+/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed}`: a
+/// diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype, one triangle
+/// primitive, no material: positions and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as
+/// two 16-bit words per `uv-words` over `uv-divisor`, the second per `uv-v`; normals per `normals`. (RRAssetStudio
+/// reads the words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from
+/// 10,773 to 650 against unsigned, by a separate count; neither proves what the game does.) That bytes 20..24 are texture coordinates, their divisor and origin, and
 /// that bytes 8..11 are a normal are not established: each reading is the program's stated choice, every lowered mesh
 /// reports it as an approximation, and the output is not evidence of the format. The buffers are consumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMesh {
+    pub uv_words: UvWords,
     pub uv_divisor: f32,
     pub uv_v: UvV,
     pub normals: MeshNormals,
@@ -120,14 +132,21 @@ impl LowerAnvilMesh {
     pub fn from_options(o: &Options) -> Result<LowerAnvilMesh, String> {
         if let Some(k) = o
             .keys()
-            .find(|k| !["uv-divisor", "uv-v", "normals"].contains(&k.as_str()))
+            .find(|k| !["uv-words", "uv-divisor", "uv-v", "normals"].contains(&k.as_str()))
         {
             return Err(format!("unknown option {k}"));
         }
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: uv-divisor=N, uv-v=as-stored|one-minus, normals=omit|packed")
+                format!(
+                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus,                      normals=omit|packed"
+                )
             })
+        };
+        let uv_words = match get("uv-words")? {
+            "unsigned" => UvWords::Unsigned,
+            "signed" => UvWords::Signed,
+            v => return Err(format!("uv-words={v} is not unsigned or signed")),
         };
         let uv_divisor: f32 = get("uv-divisor")?
             .parse()
@@ -146,6 +165,7 @@ impl LowerAnvilMesh {
             v => return Err(format!("normals={v} is not omit or packed")),
         };
         Ok(LowerAnvilMesh {
+            uv_words,
             uv_divisor,
             uv_v,
             normals,
@@ -159,6 +179,14 @@ impl Pass for LowerAnvilMesh {
     }
     fn options(&self) -> Options {
         Options::from([
+            (
+                "uv-words".to_owned(),
+                match self.uv_words {
+                    UvWords::Unsigned => "unsigned",
+                    UvWords::Signed => "signed",
+                }
+                .to_owned(),
+            ),
             ("uv-divisor".to_owned(), self.uv_divisor.to_string()),
             (
                 "uv-v".to_owned(),
@@ -201,15 +229,19 @@ impl Pass for LowerAnvilMesh {
                 .words_20
                 .iter()
                 .map(|&[u, v]| {
-                    let (u, v) = (f32::from(u) / self.uv_divisor, f32::from(v) / self.uv_divisor);
+                    let word = |x: u16| match self.uv_words {
+                        UvWords::Unsigned => f32::from(x),
+                        UvWords::Signed => f32::from(x.cast_signed()),
+                    };
+                    let (u, v) = (word(u) / self.uv_divisor, word(v) / self.uv_divisor);
                     [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
                 })
                 .collect();
             streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
             log.approximate(
                 &format!(
-                    "texture coordinates: bytes 20..24 as two u16 over {} (a stated reading), v {:?}",
-                    self.uv_divisor, self.uv_v
+                    "texture coordinates: bytes 20..24 as two {:?} words over {} (a stated reading), v {:?}",
+                    self.uv_words, self.uv_divisor, self.uv_v
                 ),
                 1,
             );
@@ -261,6 +293,11 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-anvil-mesh",
         |o| Ok(Box::new(LowerAnvilMesh::from_options(o)?)),
-        &[("uv-divisor", "2048"), ("uv-v", "as-stored"), ("normals", "omit")],
+        &[
+            ("uv-words", "signed"),
+            ("uv-divisor", "2048"),
+            ("uv-v", "as-stored"),
+            ("normals", "omit"),
+        ],
     );
 }
