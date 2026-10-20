@@ -267,7 +267,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_ANVIL_FORGE_USNAT",
         kind: Kind::Input,
         gate: false,
-        about: r#"a large Anvil forge of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT.forge`, 15,650,919,308 bytes, 767,463 entries; its tables are read, about 163 MB); worlds/anvil/tests/mesh_shape.rs"#,
+        about: r#"a large Anvil forge of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT.forge`, 15,650,919,308 bytes, 767,463 entries; its tables are read, about 163 MB); worlds/anvil/tests/mesh_shape.rs, shapes.rs, meshes.rs"#,
         status: Status::Live,
         source: "the user's own install; two MeshShape bodies' prefixes, section runs and tails hand-checked in a separate read-only decode (games/riders-republic docs/recon/meshshape-second-fixture.md, c068d20)",
     },

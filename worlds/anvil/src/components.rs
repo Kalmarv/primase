@@ -38,9 +38,10 @@ impl Component for AnvilMeshShape {
 
 /// A Mesh's compiled buffers ([`crate::read::mesh::StoredMesh`]) on its prototype: positions decoded (each
 /// component times its scale over 32768) and converted into core's frame through the frame the reader was given
-/// (`frame`, stated by the program); triangles as vertex indices (the stored split applied, reversed when that frame
-/// mirrors); the two packed direction groups and the texture coordinates as stored, with `frame` kept to convert
-/// directions once a pass decodes them. `entry` and `index_id` name the forge entry it came from.
+/// (`frame`, stated by the program); triangles as vertex indices (each stored range counted from its vertex base,
+/// reversed when that frame mirrors), and `ranges` each stored range's first triangle; the two packed direction groups
+/// and the texture coordinates as stored, with `frame` kept to convert directions once a pass decodes them. `entry` and
+/// `index_id` name the forge entry it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMesh {
     pub entry: u32,
@@ -48,6 +49,7 @@ pub struct AnvilMesh {
     pub frame: primase_core::frame::SourceFrame,
     pub positions: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,
+    pub ranges: Vec<u32>,
     pub direction_a: Vec<[u8; 4]>,
     pub direction_b: Vec<[u8; 4]>,
     pub uv: Vec<[u16; 2]>,
@@ -59,6 +61,19 @@ impl Component for AnvilMesh {
         let n = self.positions.len();
         if [self.direction_a.len(), self.direction_b.len(), self.uv.len()] != [n; 3] {
             return Err(format!("{n} positions, streams of other lengths"));
+        }
+        let starts_in_order = self.ranges.first().is_none_or(|&s| s == 0)
+            && self.ranges.is_sorted()
+            && self
+                .ranges
+                .last()
+                .is_none_or(|&s| usize::try_from(s).is_ok_and(|s| s <= self.triangles.len()));
+        if !starts_in_order {
+            return Err(format!(
+                "range starts {:?}: not from 0 in order within {} triangles",
+                self.ranges,
+                self.triangles.len()
+            ));
         }
         match self
             .triangles

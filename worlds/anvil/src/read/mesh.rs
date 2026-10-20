@@ -5,21 +5,26 @@
 //! - a 61-byte header, kept as stored; its bounds (two f32 triples at 20 and 36) are read;
 //! - at 61, the compiled mesh: its marker 0xFC9E1595 (u32), the vertex stride (u32 at marker+22), the range record
 //!   count N (u32 at marker+63), then from marker+75 N range records, each the record id 0x07B19A87 (u32), a version
-//!   byte (1), three bytes, and two u32 (the terminal record's: the index count of the first range and the second
-//!   range's vertex base); every record but the last carries 8 more bytes;
+//!   byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
+//!   carries 8 more bytes;
 //! - the vertex buffer's byte length (u32), then the vertices (stride bytes each);
 //! - 8 bytes, kept as stored; the index buffer's byte length (u32), then the indices (u16);
 //! - a tail, kept as stored.
 //!
-//! Established on four Mesh resources (Riders Republic build 25394987: one, two and three range records, strides 24).
-//! A header without the marker at 61, another stride, record id or version, a buffer past the body, or an index
-//! buffer not of whole triangles is refused, naming it. Which buffer ranges the non-terminal records describe, their 8
-//! extra bytes and the 8 bytes before the indices are not established and are kept as stored.
+//! The indices are in ranges, one per record: a range runs from its first index to the next record's (the last to the
+//! buffer's end), and its stored indices count from its vertex base. On seven Mesh resources (Riders Republic build
+//! 25394987: one, two, three, five and six records, strides 24) the ranges tile both buffers exactly: the first starts
+//! at index and vertex 0, each at a whole triangle, and each range's vertices run from its base to the next's, every
+//! one of them used. A header without the marker at 61, another stride, record id or version, a buffer past the body,
+//! an index buffer not of whole triangles, or ranges that don't tile the buffers so is refused, naming it. The records'
+//! 8 extra bytes and the 8 bytes before the indices are not established and are kept as stored.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
+
+use std::ops::Range;
 
 /// Mesh's type id (CRC-32 of its type name).
 pub const MESH: u32 = 0x415D_9568;
@@ -56,7 +61,10 @@ pub enum Error {
 pub struct RangeRecord {
     /// The three bytes after the version byte.
     pub pad: [u8; 3],
-    pub fields: [u32; 2],
+    /// Where the range starts in the index buffer.
+    pub first_index: u32,
+    /// What the range's stored indices count from in the vertex buffer.
+    pub vertex_base: u32,
     /// The 8 bytes every record but the last carries (meaning not established).
     pub extension: Option<[u32; 2]>,
 }
@@ -85,6 +93,13 @@ impl StoredVertex {
         let s = f32::from(self.scale) / 32768.0;
         self.position.map(|v| f32::from(v) * s)
     }
+}
+
+/// One range of a Mesh's buffers: its stored indices count from `vertices.start`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeshRange {
+    pub indices: Range<usize>,
+    pub vertices: Range<usize>,
 }
 
 /// A Mesh body's compiled buffers, as stored.
@@ -211,7 +226,8 @@ impl StoredMesh {
                     why: format!("version {version}, not 1"),
                 });
             }
-            let fields = [c.u32("range record field")?, c.u32("range record field")?];
+            let first_index = c.u32("range record first index")?;
+            let vertex_base = c.u32("range record vertex base")?;
             let last = index.checked_add(1) == Some(n);
             let extension = if last {
                 None
@@ -220,7 +236,8 @@ impl StoredMesh {
             };
             records.push(RangeRecord {
                 pad: [p0, p1, p2],
-                fields,
+                first_index,
+                vertex_base,
                 extension,
             });
         }
@@ -313,44 +330,74 @@ impl StoredMesh {
         })
     }
 
-    /// The terminal range record's fields: the first range's index count and the second range's vertex base
-    /// (`(0, 0)`: one range).
-    pub fn split(&self) -> [u32; 2] {
-        self.records.last().map_or([0, 0], |r| r.fields)
-    }
-
-    /// The indices as vertex indices: the first range's as stored, the rest rebased by the second range's vertex base
-    /// (the terminal record's split); refused where one falls past the vertices or the split past the indices.
-    pub fn triangles(&self) -> Result<Vec<[u32; 3]>, Error> {
-        let [first, base] = self.split();
-        let first = usize::try_from(first).map_err(|_| Error::Buffer {
-            what: "split",
-            why: "first range past this machine".into(),
-        })?;
-        if first > self.indices.len() {
-            return Err(Error::Buffer {
-                what: "split",
-                why: format!("first range of {first} indices, {} stored", self.indices.len()),
+    /// Each range's indices and vertices, refused unless they tile both
+    /// buffers (the first at 0, each at a whole triangle and at or after the one before, the last ending each buffer).
+    pub fn ranges(&self) -> Result<Vec<MeshRange>, Error> {
+        let at = |x: u32| usize::try_from(x).unwrap_or(usize::MAX);
+        let refuse = |index: usize, why: String| Error::Record { index, why };
+        let mut out = Vec::with_capacity(self.records.len());
+        for (index, r) in self.records.iter().enumerate() {
+            let (first, base) = (at(r.first_index), at(r.vertex_base));
+            let (end, vertices_end) = self
+                .records
+                .get(index.saturating_add(1))
+                .map_or((self.indices.len(), self.vertices.len()), |next| {
+                    (at(next.first_index), at(next.vertex_base))
+                });
+            if index == 0 && (first, base) != (0, 0) {
+                return Err(refuse(
+                    index,
+                    format!("the first range starts at index {first}, vertex {base}, not 0, 0"),
+                ));
+            }
+            if first.checked_rem(3) != Some(0) || first > end || end > self.indices.len() {
+                return Err(refuse(
+                    index,
+                    format!(
+                        "indices {first}..{end} of {}: not whole triangles in order",
+                        self.indices.len()
+                    ),
+                ));
+            }
+            if base > vertices_end || vertices_end > self.vertices.len() {
+                return Err(refuse(
+                    index,
+                    format!(
+                        "vertices {base}..{vertices_end} of {}: not in order",
+                        self.vertices.len()
+                    ),
+                ));
+            }
+            out.push(MeshRange {
+                indices: first..end,
+                vertices: base..vertices_end,
             });
         }
-        let n = self.vertices.len();
+        Ok(out)
+    }
+
+    /// The indices as vertex indices: each range's counted from its vertex base; refused where one falls outside its
+    /// range's vertices.
+    pub fn triangles(&self) -> Result<Vec<[u32; 3]>, Error> {
         let mut out = Vec::with_capacity(self.indices.len());
-        for (k, &i) in self.indices.iter().enumerate() {
-            let v = if k < first {
-                u32::from(i)
-            } else {
-                u32::from(i).checked_add(base).ok_or(Error::Buffer {
-                    what: "split",
-                    why: "rebased index overflows".into(),
-                })?
-            };
-            if usize::try_from(v).map_or(true, |v| v >= n) {
-                return Err(Error::Buffer {
+        for (index, MeshRange { indices, vertices }) in self.ranges()?.into_iter().enumerate() {
+            let stored = self.indices.get(indices.clone()).unwrap_or_default();
+            for (k, &i) in stored.iter().enumerate() {
+                let v = vertices.start.saturating_add(usize::from(i));
+                if !vertices.contains(&v) {
+                    return Err(Error::Record {
+                        index,
+                        why: format!(
+                            "index {} is vertex {v}, outside the range's {vertices:?}",
+                            indices.start.saturating_add(k)
+                        ),
+                    });
+                }
+                out.push(u32::try_from(v).map_err(|_| Error::Buffer {
                     what: "index buffer",
-                    why: format!("index {k} is vertex {v}, of {n}"),
-                });
+                    why: format!("vertex {v} past u32"),
+                })?);
             }
-            out.push(v);
         }
         Ok(out.as_chunks::<3>().0.to_vec())
     }

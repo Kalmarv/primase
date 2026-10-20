@@ -87,6 +87,8 @@ fn black_box_and_reversed_sphere_read_and_lower() {
             (m.entry as usize, m.positions.len(), m.triangles.len()),
             (entry, vertices, triangles)
         );
+        assert_eq!(m.ranges, [0]);
+        ranges_tile(&m);
         let prototype = w.iter::<AnvilMesh>().map(|(e, _)| e).next().expect("one");
         lower(&mut w, MeshNormals::Packed);
         assert!(!w.has::<AnvilMesh>(prototype));
@@ -113,13 +115,15 @@ fn black_box_and_reversed_sphere_read_and_lower() {
 }
 
 #[test]
-fn stand_reads_its_split() {
+fn stand_reads_its_two_ranges() {
     let Some(path) = real_data("PRIMASE_ANVIL_FORGE") else {
         return;
     };
     let (mut w, m) = read(&path, 2);
     assert_eq!((m.positions.len(), m.triangles.len()), (1154, 864));
-    // the second range (indices from 2016) rebased by 904
+    // the second range (indices from 2016) counted from vertex 904
+    assert_eq!(m.ranges, [0, 672]);
+    ranges_tile(&m);
     assert!(m.triangles[672..].iter().flatten().all(|&i| i >= 904));
     assert_eq!(facing(&m), (864, 0));
     lower(&mut w, MeshNormals::Omit);
@@ -127,26 +131,77 @@ fn stand_reads_its_split() {
     assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::Normal));
 }
 
+/// Every range's triangles name only its own vertices, from its base up to the next range's, and together they name
+/// every vertex.
+fn ranges_tile(m: &AnvilMesh) {
+    let mut used = vec![false; m.positions.len()];
+    for t in m.triangles.iter().flatten() {
+        used[*t as usize] = true;
+    }
+    assert!(used.iter().all(|&u| u), "a vertex no triangle names");
+    let mut ends = m.ranges.iter().skip(1).map(|&r| r as usize).collect::<Vec<_>>();
+    ends.push(m.triangles.len());
+    let mut start = 0;
+    let mut floor = 0;
+    for end in ends {
+        let range = &m.triangles[start..end];
+        let lo = range.iter().flatten().min().copied().unwrap_or(floor);
+        assert_eq!(lo, floor, "range from triangle {start} doesn't start at its base");
+        floor = range.iter().flatten().max().map_or(floor, |&hi| hi + 1);
+        start = end;
+    }
+}
+
 #[test]
-fn prada_barrier_reads_three_records_and_its_first_range_normals_diverge() {
+fn prada_barrier_reads_three_ranges() {
     let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT_PATCH") else {
         return;
     };
     let (_, m) = read(&path, 136_194);
     assert_eq!((m.positions.len(), m.triangles.len()), (110, 60));
-    assert!(m.triangles[40..].iter().flatten().all(|&i| i >= 70));
-    // the second range's normals face their triangles; the first range's don't all (the reason normals are stated)
-    let first = AnvilMesh {
-        triangles: m.triangles[..40].to_vec(),
-        ..m.clone()
+    // ranges from indices 0, 12 and 120, counted from vertices 0, 8 and 70; read with only the last record's base,
+    // the middle range named the wrong vertices and its normals seemed to disagree with its triangles
+    assert_eq!(m.ranges, [0, 4, 40]);
+    ranges_tile(&m);
+    assert_eq!(facing(&m), (60, 0));
+}
+
+/// Large meshes of five and six ranges, and one of one: the regression for a reader that applied only the last
+/// record's base (the bowls' middle ranges were drawn across the whole mesh).
+#[test]
+fn bowls_read_every_range() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+        return;
     };
-    let second = AnvilMesh {
-        triangles: m.triangles[40..].to_vec(),
-        ..m.clone()
-    };
-    assert_eq!(facing(&second), (20, 0));
-    let (agree, disagree) = facing(&first);
-    assert!(agree > 0 && disagree > 0, "{agree}/{disagree}");
+    let mut w = World::new();
+    let placed = read_meshes(&path, &[652_571, 644_520, 313_892], SourceFrame::WORLD, &mut w).expect("read");
+    let fixtures = [
+        (30_280, 35_229, vec![0, 6471, 29_915, 30_531, 31_835], (35_227, 2)),
+        (
+            25_347,
+            30_704,
+            vec![0, 7820, 26_083, 27_142, 30_226, 30_506],
+            (30_694, 10),
+        ),
+        (11_897, 18_554, vec![0], (18_484, 70)),
+    ];
+    let bowl = w.get::<Instance>(placed[0]).expect("placed").prototype;
+    // a witness from a separate decode: triangle 6490 (index 19470, in the range from 19413) stores 17265, 17264,
+    // 19334, which named a 15-unit sliver until counted from that range's base 4863
+    assert_eq!(
+        w.get::<AnvilMesh>(bowl).expect("buffers").triangles[6490],
+        [22_128, 22_127, 24_197]
+    );
+    for (p, (vertices, triangles, ranges, faces)) in placed.into_iter().zip(fixtures) {
+        let m = w
+            .get::<AnvilMesh>(w.get::<Instance>(p).expect("placed").prototype)
+            .expect("buffers");
+        assert_eq!((m.positions.len(), m.triangles.len()), (vertices, triangles));
+        assert_eq!(m.ranges, ranges);
+        ranges_tile(m);
+        // the first direction group read as a normal faces nearly every triangle once each range has its own base
+        assert_eq!(facing(m), faces);
+    }
 }
 
 #[test]
@@ -206,6 +261,9 @@ fn decoded_extrema_meet_the_stored_bounds() {
         ("PRIMASE_ANVIL_FORGE_BASE", 318),
         ("PRIMASE_ANVIL_FORGE", 2),
         ("PRIMASE_ANVIL_FORGE_USNAT_PATCH", 136_194),
+        ("PRIMASE_ANVIL_FORGE_USNAT", 652_571),
+        ("PRIMASE_ANVIL_FORGE_USNAT", 644_520),
+        ("PRIMASE_ANVIL_FORGE_USNAT", 313_892),
     ];
     for (input, entry) in fixtures {
         let Some(path) = real_data(input) else {

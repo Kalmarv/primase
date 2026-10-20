@@ -80,6 +80,12 @@ pub fn read_meshes(
             .into_iter()
             .map(|[a, b, c]| if flip { [a, c, b] } else { [a, b, c] })
             .collect();
+        let ranges = stored
+            .ranges()
+            .map_err(mesh_err)?
+            .into_iter()
+            .map(|r| u32::try_from(r.indices.start / 3).map_err(|_| Error::Entry(entry)))
+            .collect::<Result<_, _>>()?;
         let v = &stored.vertices;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
@@ -91,6 +97,7 @@ pub fn read_meshes(
                 frame,
                 positions: v.iter().map(|x| frame.point(x.position())).collect(),
                 triangles,
+                ranges,
                 direction_a: v.iter().map(|x| x.direction_a).collect(),
                 direction_b: v.iter().map(|x| x.direction_b).collect(),
                 uv: v.iter().map(|x| x.uv).collect(),
