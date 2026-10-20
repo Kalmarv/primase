@@ -185,8 +185,9 @@ fn lower(c: &UnityCollider, t: &Transform, log: &mut PassLog) -> Option<Lowered>
 }
 
 /// An entity of its own for a shape lowered apart from its collider `of`: named after it, at `at`, carrying its
-/// state condition.
-fn apart(w: &mut World, of: Entity, at: [f64; 3], collider: Collider) -> Entity {
+/// state condition, and declared in `log` as made from `of`, so a conversion in parts keeps it with the part that
+/// owns `of`.
+fn apart(w: &mut World, log: &mut PassLog, of: Entity, at: [f64; 3], collider: Collider) -> Entity {
     let e = w.spawn();
     if let Some(n) = w.get::<Name>(of).cloned() {
         w.insert(e, n);
@@ -199,6 +200,7 @@ fn apart(w: &mut World, of: Entity, at: [f64; 3], collider: Collider) -> Entity 
     w.insert(e, t);
     w.insert(e, collider);
     w.insert(e, UnityColliderOf(of));
+    log.place_from(e, of);
     e
 }
 
@@ -240,6 +242,7 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
         .filter(|(_, c)| c.collides())
         .map(|(e, c)| (e, c.clone()))
         .collect();
+    log.count("colliders that collide", colliders.len() as u64);
     for (e, c) in colliders {
         let t = *w
             .get::<Transform>(e)
@@ -259,7 +262,7 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
                 w.insert(e, Collider { shape, surface });
             }
             Lowered::Apart { at, shape } => {
-                apart(w, e, at, Collider { shape, surface });
+                apart(w, &mut log, e, at, Collider { shape, surface });
             }
             Lowered::Triangles(positions, tris) => {
                 let mut col = Collision::default();
@@ -274,6 +277,7 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
         .filter(|(_, t)| t.collider.as_ref().is_some_and(|c| c.enabled))
         .map(|(e, t)| (e, t.clone()))
         .collect();
+    log.count("terrain colliders", terrains.len() as u64);
     for (e, t) in terrains {
         let c = t.collider.as_ref().expect("filtered");
         if c.other_data.is_some() {
@@ -294,6 +298,7 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
             .map_err(|e| invalid(e.to_string()))?;
         let field = apart(
             w,
+            &mut log,
             e,
             [at[0], at[1], at[2] - far],
             Collider {
@@ -302,7 +307,6 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
             },
         );
         w.insert(field, heightfield(&t));
-        log.count("terrain colliders", 1);
         log.approximate("terrain collider cells split along one diagonal", 1);
     }
     w.insert_resource(surfaces);
@@ -317,8 +321,10 @@ impl Pass for LowerUnityCollision {
     fn name(&self) -> &'static str {
         "lower-unity-collision"
     }
+    /// Nothing: it lowers the colliders (`unity.collider`) and the terrain colliders (`unity.terrain`) a world has,
+    /// either, both or neither, each counted.
     fn requires(&self) -> &[&'static str] {
-        &["unity.collider"]
+        &[]
     }
     /// `core.collider` and `core.heightfield`, `core.collision` for concave mesh colliders, `unity.collider_of` on
     /// the entities of shapes lowered apart, and the `core.surfaces` resource they index.
@@ -593,13 +599,12 @@ mod tests {
     /// A 2 x 2 terrain (one cell) at (100, 0, 50), samples 1 m apart, heights 1, 2, 3, 4 m at Unity's (x, z) (0, 0),
     /// (1, 0), (0, 1), (1, 1). Unity draws the cell as (a, c, d) and (a, d, b) with a (0, 0), b (1, 0), c (0, 1),
     /// d (1, 1); in the world Unity's z is -z, so the corners are (100, 1, 50), (101, 2, 50), (100, 3, 49), (101, 4, 49).
-    #[test]
-    fn a_terrain_collides_with_unitys_cell_triangles_in_the_world() {
+    /// The one-cell terrain described above, with its collider enabled, in `w`.
+    fn one_cell_terrain(w: &mut World) -> Entity {
         let obj = |path_id| UnityObject {
             file: "level1".into(),
             path_id,
         };
-        let mut w = World::new();
         let terrain = w.spawn();
         w.insert(terrain, transform(I, [100.0, 0.0, 50.0]));
         w.insert(
@@ -628,6 +633,54 @@ mod tests {
                 trees: Vec::new(),
             },
         );
+        terrain
+    }
+
+    /// A world of one terrain and no collider: the pass requires neither, and lowers the terrain's heightfield.
+    #[test]
+    fn a_terrain_only_world_is_lowered_through_the_manager() {
+        use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+        let mut w = World::new();
+        let terrain = one_cell_terrain(&mut w);
+        let mut run = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut w,
+                &Pipeline {
+                    passes: vec![Box::new(LowerUnityCollision)],
+                },
+                &mut run,
+            )
+            .unwrap();
+        let (field, of) = w.iter::<UnityColliderOf>().next().unwrap();
+        assert_eq!(of.0, terrain);
+        assert!(w.has::<Heightfield>(field));
+        let counts = &run.steps[0].log.counts;
+        assert_eq!(counts["colliders that collide"], 0);
+        assert_eq!(counts["terrain colliders"], 1);
+        // and a world of neither: nothing lowered, both counted
+        let mut empty = World::new();
+        let mut run = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                &mut empty,
+                &Pipeline {
+                    passes: vec![Box::new(LowerUnityCollision)],
+                },
+                &mut run,
+            )
+            .unwrap();
+        let counts = &run.steps[0].log.counts;
+        assert_eq!(
+            (counts["colliders that collide"], counts["terrain colliders"]),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn a_terrain_collides_with_unitys_cell_triangles_in_the_world() {
+        let mut w = World::new();
+        let terrain = one_cell_terrain(&mut w);
         lower_unity_collision(&mut w).unwrap();
         primase_meshops::TessellateColliders
             .run(&mut w, &mut PassLog::default())
