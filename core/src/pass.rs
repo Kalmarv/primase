@@ -1247,21 +1247,31 @@ impl PassManager {
                 declared: g.declared,
             });
         }
-        // what it placed it made, and it is there, unless it was an intermediate: made, placed, something else placed
-        // from it, then consumed in the same pass (PartScope::declare still classifies what came from it)
+        // what it placed it made (allocated during the pass: indices are never reused), and it is there, unless it was
+        // an intermediate: made, placed, something else placed from it, then consumed in the same pass
+        // (PartScope::declare still classifies what came from it); every source was made by someone
+        let made = first_made..w.next_index();
         let consumed = |e: &Entity| log.placed_from.values().any(|s| s == e);
         if let Some(e) = log
             .placed
             .iter()
-            .find(|e| e.index() < first_made || (!w.is_alive(**e) && !consumed(e)))
+            .find(|e| !made.contains(&e.index()) || (!w.is_alive(**e) && !consumed(e)))
         {
             return Err(Error::Pass {
                 pass: text.to_owned(),
                 message: if e.index() < first_made {
                     format!("placed {e:?}, which it did not make")
+                } else if e.index() >= made.end {
+                    format!("placed {e:?}, which was never made")
                 } else {
                     format!("placed {e:?}, which is not alive after it, and nothing it placed came from it")
                 },
+            });
+        }
+        if let Some((e, s)) = log.placed_from.iter().find(|(_, s)| s.index() >= made.end) {
+            return Err(Error::Pass {
+                pass: text.to_owned(),
+                message: format!("placed {e:?} from {s:?}, which was never made"),
             });
         }
         let after: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();

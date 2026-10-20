@@ -1514,3 +1514,44 @@ fn output_from_a_consumed_intermediate_reaches_the_writer() {
     assert_eq!(with.len(), 2);
     assert_eq!(with, without.iter().map(|n| n + 1).collect::<Vec<_>>());
 }
+
+/// A pass that declares an entity it never made: placed with something placed from it (`forge_source` false), or as
+/// the source of something it placed (true).
+struct ToyForge {
+    forge_source: bool,
+}
+impl Pass for ToyForge {
+    fn name(&self) -> &'static str {
+        "toy-forge"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["core.name"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let b = w.spawn();
+        w.insert(b, Name("derived".into()));
+        let a = Entity::from_index(w.next_index());
+        if !self.forge_source {
+            log.place(a);
+        }
+        log.place_from(b, a);
+        Ok(())
+    }
+}
+
+/// The consumed-intermediate exception covers only what the pass made: an id past the pass's allocation is refused,
+/// declared or named as a source, so it can't become owned and later claim an entity allocated as context.
+#[test]
+fn ids_the_pass_never_made_are_refused() {
+    let (m, select, _) = manager("toy-select");
+    for forge_source in [false, true] {
+        let (w, written) = writer(target());
+        let passes = Pipeline {
+            passes: vec![Box::new(ToyPass), Box::new(ToyForge { forge_source })],
+        };
+        let e = convert_parts(&mut reader(2), &mut ToyParts::default(), w, &m, &select, &passes).unwrap_err();
+        assert!(e.to_string().contains("which was never made"), "{e}");
+        assert!(written.borrow().is_empty());
+        events();
+    }
+}
