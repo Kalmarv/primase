@@ -82,8 +82,13 @@ impl Pass for OmitStuntboostHidden {
             ),
         ])
     }
-    fn modifies(&self) -> &[&'static str] {
+    /// A collision-only node loses its placement (it keeps its entity and collision).
+    fn removes(&self) -> &[&'static str] {
         &[<Instance as primase_core::Component>::NAME]
+    }
+    /// It lowers nothing: what it takes away is left out, not made into another form.
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
     }
     fn despawns_entities(&self) -> bool {
         true

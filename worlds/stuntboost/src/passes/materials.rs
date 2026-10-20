@@ -104,8 +104,14 @@ impl Pass for LowerStuntboostMaterials {
             ),
         ])
     }
+    /// The materials' `pbr.material`; with `transparent=blend`, the blended copies (each with `core.name`) and the
+    /// prototypes' `core.material_variants`.
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME]
+        &[PbrMaterial::NAME, MaterialVariants::NAME, Name::NAME]
+    }
+    /// A transparent node's placement takes its variant; a prototype's variants gain the blended ones.
+    fn modifies(&self) -> &[&'static str] {
+        &[Instance::NAME, MaterialVariants::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<(Entity, StuntboostMaterial)> = w

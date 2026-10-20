@@ -285,6 +285,46 @@ fn a_transparent_node_blends_a_copy_not_the_shared_material() {
     );
 }
 
+/// The four lowerings in a pipeline through the pass manager with its checks on: every effect each has (collision
+/// added, spawns made markers and others left out, blended copies and variants, placements taken off and nodes
+/// despawned) is one it declares.
+#[test]
+fn the_lowerings_declare_their_effects_to_the_pass_manager() {
+    use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+    let mut l = level();
+    let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
+    let pipeline = Pipeline {
+        passes: vec![
+            Box::new(LowerStuntboostCollision {
+                plain: SurfaceClass::Concrete,
+                rails: SurfaceClass::Metal,
+                kill: KillSurface::LeaveOut,
+                unassigned: "C_Default".into(),
+            }),
+            Box::new(LowerStuntboostSpawns {
+                start: "start".into(),
+                others: OtherSpawns::LeaveOut,
+            }),
+            Box::new(LowerStuntboostMaterials {
+                baked: Baked::BaseColour,
+                transparent: Transparent::Blend,
+            }),
+            Box::new(OmitStuntboostHidden {
+                invisible: true,
+                shadow_only: true,
+                triggers: true,
+                classes: BTreeSet::from(["Sun".to_owned()]),
+            }),
+        ],
+    };
+    manager
+        .run(&mut l.w, &pipeline, &mut RunReport::default())
+        .unwrap();
+    assert!(l.w.has::<Collision>(l.wall) && !l.w.has::<Instance>(l.wall));
+    assert!(!l.w.is_alive(l.other) && l.w.has::<Marker>(l.start));
+    assert_ne!(l.w.get::<Instance>(l.window).unwrap().variant, 0);
+}
+
 /// Triggers, the shadow-only ceiling and the stated classes go; a collision-only wall keeps its collision without
 /// its mesh; the spawn marker and the window stay.
 #[test]
