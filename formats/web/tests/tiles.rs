@@ -1,7 +1,7 @@
 //! Web tiles: placement, pivots, instancing, compression and quantization.
 // helpers outside #[test] functions unwrap too
 #![allow(clippy::unwrap_used)]
-use primase_core::{Instance, Mesh, Primitive, Semantic, Stream, Topology, Transform, World};
+use primase_core::{Entity, Instance, Mesh, Primitive, Semantic, Stream, Topology, Transform, World};
 use primase_web::{Options, write};
 use std::collections::BTreeMap;
 fn plain() -> Options {
@@ -1528,5 +1528,122 @@ fn a_starting_camera_goes_to_the_index_as_2_2() {
     ] {
         let err = write(&World::new(), &with(Some(bad))).unwrap_err().to_string();
         assert!(err.contains("camera"), "{err}");
+    }
+}
+
+/// A line-list prototype through `points` (consecutive points joined), placed at each of `xs` (metres east).
+fn lines(w: &mut World, points: Vec<[f32; 3]>, xs: &[f32]) -> Entity {
+    let segments = (1..points.len() as u32).flat_map(|i| [i - 1, i]).collect();
+    let proto = w.spawn();
+    w.insert(
+        proto,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Lines,
+            streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(points))]),
+            indices: Some(segments),
+            material: None,
+        }]),
+    );
+    for &x in xs {
+        place(w, proto, x);
+    }
+    proto
+}
+fn place(w: &mut World, prototype: Entity, x: f32) -> Entity {
+    let e = w.spawn();
+    w.insert(
+        e,
+        Instance {
+            prototype,
+            variant: 0,
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [x, 0., 0.];
+    w.insert(e, t);
+    e
+}
+/// Each tile's glTF JSON.
+fn docs(set: &primase_web::TileSet) -> Vec<serde_json::Value> {
+    set.index
+        .tiles
+        .iter()
+        .map(|t| serde_json::from_slice(primase_glb::parse(&set.files[&t.file]).unwrap().json).unwrap())
+        .collect()
+}
+/// Each mesh node's primitive modes (absent: triangles, 4).
+fn modes(doc: &serde_json::Value) -> Vec<Vec<u64>> {
+    doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["mesh"].as_u64())
+        .map(|m| {
+            doc["meshes"][m as usize]["primitives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["mode"].as_u64().unwrap_or(4))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_tile_of_lines_alone_is_written_and_its_placements_are_not_instanced() {
+    let mut w = World::new();
+    lines(&mut w, vec![[0., 0., 0.], [1., 0., 0.]], &[10., 20.]);
+    // compressed and instancing on, as by default
+    let set = write(&w, &Options::new(primase_web::TileSize::new(200.).unwrap())).unwrap();
+    let [tile] = &set.index.tiles[..] else {
+        panic!("one tile: {:?}", set.index.tiles)
+    };
+    assert_eq!(tile.content, primase_web::TileContent::Geometry);
+    assert_eq!(
+        (tile.triangles, tile.placements, tile.instanced_placements),
+        (0, 2, 0)
+    );
+    assert_eq!((tile.min[0], tile.max[0]), (10., 21.));
+    // two line nodes: three.js instances triangle meshes alone
+    assert_eq!(modes(&docs(&set)[0]), [vec![1], vec![1]]);
+}
+
+#[test]
+fn lines_beside_triangles_are_written_with_them() {
+    let mut w = World::new();
+    let triangle = w.spawn();
+    w.insert(triangle, mesh());
+    place(&mut w, triangle, 10.);
+    lines(&mut w, vec![[0., 0., 0.], [1., 0., 0.]], &[20.]);
+    let set = write(&w, &plain()).unwrap();
+    let [tile] = &set.index.tiles[..] else {
+        panic!("one tile: {:?}", set.index.tiles)
+    };
+    assert_eq!((tile.triangles, tile.placements), (1, 2));
+    let mut modes = modes(&docs(&set)[0]);
+    modes.sort();
+    assert_eq!(modes, [vec![1], vec![4]]);
+}
+
+#[test]
+fn lines_filed_by_element_centre_go_to_the_cells_of_their_segments() {
+    let mut w = World::new();
+    // segments centred at 50 m and 200 m: cells 0 and 1
+    let proto = lines(&mut w, vec![[0., 0., 0.], [100., 0., 0.], [300., 0., 0.]], &[]);
+    let e = place(&mut w, proto, 0.);
+    let options = Options {
+        split_by_tile: [e].into(),
+        ..plain()
+    };
+    let set = write(&w, &options).unwrap();
+    let cells: Vec<_> = set
+        .index
+        .tiles
+        .iter()
+        .map(|t| (t.col, t.min[0], t.max[0]))
+        .collect();
+    assert_eq!(cells, [(0, 0., 100.), (1, 100., 300.)]);
+    for doc in docs(&set) {
+        assert_eq!(modes(&doc), [vec![1]]);
     }
 }

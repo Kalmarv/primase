@@ -1,4 +1,4 @@
-//! The rule that files a placement by triangle centre when its pivot does not locate its geometry, from prototype
+//! The rule that files a placement by element centre when its pivot does not locate its geometry, from prototype
 //! boxes a caller gives (a reader that loads geometry per cell knows them before loading).
 
 use std::collections::BTreeMap;
@@ -14,7 +14,7 @@ pub type LocalBox = [[f64; 3]; 2];
 /// where the geometry is.
 pub const PIVOT_MARGIN: f64 = 1.0;
 
-/// Placements whose pivot does not locate their geometry, to be filed by triangle centre, and the counts behind them.
+/// Placements whose pivot does not locate their geometry, to be filed by element centre, and the counts behind them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Spans {
     /// (a) or (b): the placements to split.

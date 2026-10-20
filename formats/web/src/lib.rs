@@ -61,7 +61,8 @@ pub struct Options {
     pub encoding_memory: usize,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
-    /// Placement entities to partition by transformed triangle centre, rather than pivot.
+    /// Placement entities to partition by transformed element centre (a triangle's, a line segment's, a point),
+    /// rather than pivot.
     pub split_by_tile: BTreeSet<Entity>,
     /// The largest file a tile may carry, its GLB and its collision sidecar alike: a cell with a larger one is split
     /// into quadtree [`Subcell`]s, recursively, until each file fits, each split reported. `None` (by default) keeps
@@ -318,6 +319,25 @@ fn indices(p: &Primitive) -> Vec<u32> {
         .clone()
         .unwrap_or_else(|| (0..p.vertex_count() as u32).collect())
 }
+/// How many indices an element of a primitive takes: a point 1, a line segment 2, a triangle 3.
+fn arity(t: Topology) -> usize {
+    match t {
+        Topology::Triangles => 3,
+        Topology::Lines => 2,
+        Topology::Points => 1,
+    }
+}
+/// The world-space centre of an element (its indices `element` into `pos`) through `t`: the mean of its points.
+fn element_centre(t: Transform, pos: &[[f32; 3]], element: &[u32]) -> [f64; 3] {
+    let mut c = [0.; 3];
+    for &i in element {
+        let q = point(t, pos[i as usize]);
+        for k in 0..3 {
+            c[k] += q[k];
+        }
+    }
+    c.map(|v| v / element.len() as f64)
+}
 fn validate_mesh(mesh: &Mesh) -> Result<()> {
     for p in mesh.primitives() {
         let positions = p
@@ -329,11 +349,7 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
         {
             return Err(Error::Invalid("empty or inconsistent vertex streams".into()));
         }
-        let size = match p.topology {
-            Topology::Triangles => 3,
-            Topology::Lines => 2,
-            Topology::Points => 1,
-        };
+        let size = arity(p.topology);
         let count = p.indices.as_ref().map_or(positions.len(), Vec::len);
         if count == 0
             || !count.is_multiple_of(size)
@@ -346,17 +362,18 @@ fn validate_mesh(mesh: &Mesh) -> Result<()> {
     }
     Ok(())
 }
-/// The triangles of each primitive of a placement a cell or tile holds: (primitive, triangle indices).
+/// The elements (triangles, line segments, points) of each primitive of a placement a cell or tile holds:
+/// (primitive, element indices).
 type Pieces = Vec<(usize, Vec<u32>)>;
-/// A placement a cell owns: whole, or (filed by triangle centre) the triangles of each of its primitives the cell
-/// holds, by index into that primitive's triangle list. Ownership only: what is drawn of it is read from the cell's
+/// A placement a cell owns: whole, or (filed by element centre) the elements of each of its primitives the cell
+/// holds, by index into that primitive's element list. Ownership only: what is drawn of it is read from the cell's
 /// world when the cell is written.
 #[derive(Clone, Debug)]
 struct Owned {
     entity: Entity,
     /// Its prototype in the planning world: loaded with it.
     prototype: Entity,
-    triangles: Option<Pieces>,
+    elements: Option<Pieces>,
 }
 /// A planned cell: what it owns. The entities' content (transforms, lights, records) is read from the cell's world.
 #[derive(Clone, Debug, Default)]
@@ -367,7 +384,7 @@ struct Cell {
     /// The given viewer records ([`Options::viewer_items`]) filed here, by number.
     records: Vec<usize>,
 }
-/// One placement as a tile draws it, read from the cell's world: the whole prototype, or the triangles of it the
+/// One placement as a tile draws it, read from the cell's world: the whole prototype, or the elements of it the
 /// tile holds.
 #[derive(Clone, Debug)]
 struct Placement {
@@ -375,7 +392,7 @@ struct Placement {
     prototype: Entity,
     variant: u32,
     transform: Transform,
-    triangles: Option<Pieces>,
+    elements: Option<Pieces>,
 }
 /// What a tile holds: its placements, and its records and lights by their number and index in the [`CellWorld`].
 #[derive(Clone, Debug, Default)]
@@ -427,21 +444,21 @@ impl WrittenTile {
     }
 }
 /// Which cell writes what, decided before any tile is written: placements by pivot (or, for
-/// [`Options::split_by_tile`], by transformed triangle centre), lights, curves, markers and standalone collision by
+/// [`Options::split_by_tile`], by transformed element centre), lights, curves, markers and standalone collision by
 /// position, given viewer records by anchor. A placement's collision goes with the placement.
 ///
 /// The plan holds ownership, not content: a cell is written from its world as prepared, which is authoritative.
 /// Transforms, lights, records and collision are read from it, so what the cell's passes changed is what is written.
 /// An entity is written by the cell that owns it, wherever a pass moved it (its tile's bounds follow it); what the
 /// cell's world holds that the planning world did not (made by its load or its passes, and kept by the conversion as
-/// the part's output) is that cell's. A placement filed by triangle centre is owned piecewise by every cell holding
-/// its triangles: their passes must prepare its mesh alike (the same primitives and triangle counts), and content
+/// the part's output) is that cell's. A placement filed by element centre is owned piecewise by every cell holding
+/// its elements: their passes must prepare its mesh alike (the same primitives and element counts), and content
 /// they make from it is made, and written, by each of those cells.
 ///
 /// A driver prepares one cell at a time: the world's [`World::closure`] of the cell's [`TilePlan::roots`] with what
 /// its passes made, as a [`World::subset`], with its meshes and textures loaded and lowered to PBR, then
 /// [`TilePlan::write_cell`]; then [`TilePlan::finish`]. The writer neither loads nor lowers: it fails, as before, on
-/// what is missing. Placements filed by triangle centre need their prototype's geometry to be planned:
+/// what is missing. Placements filed by element centre need their prototype's geometry to be planned:
 /// [`TilePlan::split`] each of [`TilePlan::unsplit`] first, from a world holding that prototype loaded.
 pub struct TilePlan {
     options: Options,
@@ -455,9 +472,9 @@ pub struct TilePlan {
     first_made: u32,
     /// The sun: indexed scene-wide, not written as a tile's light.
     sun_entity: Option<Entity>,
-    /// Placements filed by triangle centre whose collision has been written (with the first cell holding them).
+    /// Placements filed by element centre whose collision has been written (with the first cell holding them).
     collided: BTreeSet<Entity>,
-    /// Each placement filed by triangle centre: its primitives' triangle counts when it was split.
+    /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
     sun: Option<IndexSun>,
@@ -808,7 +825,7 @@ impl TilePlan {
     pub fn ground_markers(&self) -> u64 {
         self.ground_markers
     }
-    /// Placements filed by triangle centre that still wait for [`TilePlan::split`].
+    /// Placements filed by element centre that still wait for [`TilePlan::split`].
     pub fn unsplit(&self) -> Vec<Entity> {
         self.unsplit.clone()
     }
@@ -831,11 +848,12 @@ impl TilePlan {
         self.cells.entry(key).or_default().placements.push(Owned {
             entity: e,
             prototype,
-            triangles: None,
+            elements: None,
         });
         Ok(())
     }
-    /// File the triangles of placement `e` (one of [`TilePlan::unsplit`]) by their centres, through its transform in
+    /// File the elements (triangles, line segments, points) of placement `e` (one of [`TilePlan::unsplit`]) by
+    /// their centres, through its transform in
     /// `world`, which holds its prototype's mesh loaded and prepared as each cell holding them will. A placement that
     /// turned out to have no mesh (none loaded and no file) is owned whole, by its pivot (its collision written there,
     /// and it is counted as a placement without mesh); a degenerate one is counted as skipped.
@@ -870,33 +888,30 @@ impl TilePlan {
         let mut parts = BTreeMap::<(i32, i32), Vec<(usize, Vec<u32>)>>::new();
         let mut shape = Vec::new();
         for (part, prim) in mesh.primitives().iter().enumerate() {
-            if prim.topology != Topology::Triangles {
-                return Err(Error::Invalid("split-by-tile requires triangle lists".into()));
-            }
             let pos = prim
                 .positions()
                 .ok_or_else(|| Error::Invalid("missing positions".into()))?;
             let idx = indices(prim);
-            shape.push(idx.len() / 3);
+            let size = arity(prim.topology);
+            shape.push(idx.len() / size);
             let mut pieces = BTreeMap::<(i32, i32), Vec<u32>>::new();
-            for (t, tri) in idx.as_chunks::<3>().0.iter().enumerate() {
-                let points = tri.map(|i| point(transform, pos[i as usize]));
-                let centre = std::array::from_fn(|k| (points[0][k] + points[1][k] + points[2][k]) / 3.);
+            for (t, element) in idx.chunks_exact(size).enumerate() {
+                let centre = element_centre(transform, pos, element);
                 pieces
                     .entry(coordinate(centre, self.options.tile_size.get())?)
                     .or_default()
                     .push(t as u32);
             }
-            for (key, tris) in pieces {
-                parts.entry(key).or_default().push((part, tris));
+            for (key, elements) in pieces {
+                parts.entry(key).or_default().push((part, elements));
             }
         }
         self.shapes.insert(e, shape);
-        for (key, triangles) in parts {
+        for (key, elements) in parts {
             self.cells.entry(key).or_default().placements.push(Owned {
                 entity: e,
                 prototype,
-                triangles: Some(triangles),
+                elements: Some(elements),
             });
         }
         Ok(())
@@ -934,7 +949,7 @@ impl TilePlan {
         use primase_core::{Collision, Component, Curve, Light, Marker};
         if !self.unsplit.is_empty() {
             return Err(Error::Invalid(
-                "split every placement filed by triangle centre before writing".into(),
+                "split every placement filed by element centre before writing".into(),
             ));
         }
         if !self.written.insert(cell) {
@@ -1013,15 +1028,15 @@ impl TilePlan {
             }
         }
         // the cell's placements as its world holds them, then those made in it: each drawn, and its prototype's
-        // collision through its transform (a placement filed by triangle centre's with the first cell holding it)
+        // collision through its transform (a placement filed by element centre's with the first cell holding it)
         let mut held: Vec<(Entity, Option<Pieces>)> = owned
             .placements
             .iter()
             .filter(|p| world.is_alive(p.entity))
-            .map(|p| (p.entity, p.triangles.clone()))
+            .map(|p| (p.entity, p.elements.clone()))
             .collect();
         held.extend(placements.keys().filter(|&&e| made(e)).map(|&e| (e, None)));
-        for (e, triangles) in held {
+        for (e, elements) in held {
             // one a pass made no longer a placement (no instance, no mesh with a transform) has nothing to write
             let Some(&prototype) = placements.get(&e) else {
                 continue;
@@ -1040,7 +1055,7 @@ impl TilePlan {
                 }
                 TransformKind::Regular => {}
             }
-            if (triangles.is_none() || self.collided.insert(e))
+            if (elements.is_none() || self.collided.insert(e))
                 && let Some(c) = world.get::<Collision>(prototype)
                 && let Some(item) = collision::record(world, e, c, transform)?
             {
@@ -1052,13 +1067,17 @@ impl TilePlan {
                 self.without_mesh += 1;
                 continue;
             }
-            if triangles.is_some() {
+            if elements.is_some() {
                 let mesh = loaded(world, prototype)?;
-                let shape: Vec<usize> = mesh.primitives().iter().map(|p| indices(p).len() / 3).collect();
+                let shape: Vec<usize> = mesh
+                    .primitives()
+                    .iter()
+                    .map(|p| indices(p).len() / arity(p.topology))
+                    .collect();
                 if self.shapes.get(&e) != Some(&shape) {
                     return Err(Error::Invalid(format!(
-                        "placement {e:?}: its prepared mesh has triangle counts {shape:?} per primitive, its triangles \
-                         were filed from {:?}; a placement filed by triangle centre must be prepared alike in every \
+                        "placement {e:?}: its prepared mesh has element counts {shape:?} per primitive, its elements \
+                         were filed from {:?}; a placement filed by element centre must be prepared alike in every \
                          cell holding it",
                         self.shapes.get(&e)
                     )));
@@ -1069,7 +1088,7 @@ impl TilePlan {
                 prototype,
                 variant,
                 transform,
-                triangles,
+                elements,
             });
         }
         let mut out = Vec::new();
@@ -1125,7 +1144,7 @@ impl TilePlan {
                     .placements
                     .iter()
                     .map(|p| {
-                        p.triangles
+                        p.elements
                             .as_ref()
                             .map_or(1, |t| t.iter().map(|(_, t)| t.len()).sum())
                     })
@@ -1170,7 +1189,7 @@ impl TilePlan {
         out.push(tile);
     }
     /// `content` of `cell`'s subcell `sub`, divided among its four children by the cell rules: placements by pivot,
-    /// placements filed by triangle centre by their triangles' centres (their prototype loaded in `world`), viewer
+    /// placements filed by element centre by their elements' centres (their prototype loaded in `world`), viewer
     /// records by anchor, scene lights by position. Each child keeps the parent's order.
     fn children(
         &self,
@@ -1182,25 +1201,23 @@ impl TilePlan {
         let size = self.options.tile_size.get();
         let mut out = BTreeMap::<Subcell, Content>::new();
         for p in content.placements {
-            let Some(parts) = &p.triangles else {
+            let Some(parts) = &p.elements else {
                 let k = child(col, row, sub, ground(p.transform.cols[3].map(f64::from)), size);
                 out.entry(k).or_default().placements.push(p);
                 continue;
             };
             let mesh = loaded(cw.world, p.prototype)?;
             let mut by = BTreeMap::<Subcell, Vec<(usize, Vec<u32>)>>::new();
-            for (part, tris) in parts {
+            for (part, elements) in parts {
                 let prim = &mesh.primitives()[*part];
                 let pos = prim
                     .positions()
                     .ok_or_else(|| Error::Invalid("missing positions".into()))?;
                 let idx = indices(prim);
+                let n = arity(prim.topology);
                 let mut pieces = BTreeMap::<Subcell, Vec<u32>>::new();
-                for &t in tris {
-                    let tri = &idx[3 * t as usize..3 * t as usize + 3];
-                    let points: [[f64; 3]; 3] =
-                        std::array::from_fn(|c| point(p.transform, pos[tri[c] as usize]));
-                    let centre = std::array::from_fn(|k| (points[0][k] + points[1][k] + points[2][k]) / 3.);
+                for &t in elements {
+                    let centre = element_centre(p.transform, pos, &idx[n * t as usize..][..n]);
                     pieces
                         .entry(child(col, row, sub, ground(centre), size))
                         .or_default()
@@ -1210,9 +1227,9 @@ impl TilePlan {
                     by.entry(k).or_default().push((*part, v));
                 }
             }
-            for (k, triangles) in by {
+            for (k, elements) in by {
                 out.entry(k).or_default().placements.push(Placement {
-                    triangles: Some(triangles),
+                    elements: Some(elements),
                     ..p.clone()
                 });
             }
@@ -1239,7 +1256,7 @@ impl TilePlan {
         Ok(out)
     }
     /// One tile of `content` from `w`: the tile's placements written as a [`primase_gltf::Selection`] of the world
-    /// (a placement filed by triangle centre as a piece of its own: those of its triangles the tile holds), which
+    /// (a placement filed by element centre as a piece of its own: those of its elements the tile holds), which
     /// leaves the world unchanged.
     fn tile(
         &mut self,
@@ -1257,10 +1274,11 @@ impl TilePlan {
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];
         let mut triangles = 0;
+        let mut primitives = 0;
         for p in &content.placements {
             let mesh = loaded(w, p.prototype)?;
             validate_mesh(mesh)?;
-            let piece = match &p.triangles {
+            let piece = match &p.elements {
                 None => None,
                 Some(parts) => {
                     let variants = w.get::<MaterialVariants>(p.prototype);
@@ -1271,12 +1289,13 @@ impl TilePlan {
                     }
                     let mut chunk = Vec::new();
                     let mut from = Vec::with_capacity(parts.len());
-                    for (part, tris) in parts {
+                    for (part, elements) in parts {
                         let prim = &mesh.primitives()[*part];
                         let all = indices(prim);
-                        let idx: Vec<u32> = tris
+                        let size = arity(prim.topology);
+                        let idx: Vec<u32> = elements
                             .iter()
-                            .flat_map(|&t| all[3 * t as usize..3 * t as usize + 3].iter().copied())
+                            .flat_map(|&t| all[size * t as usize..][..size].iter().copied())
                             .collect();
                         let mut sub = primase_meshops::subset_primitive(prim, &idx)
                             .map_err(|e| Error::Invalid(e.to_string()))?;
@@ -1295,6 +1314,7 @@ impl TilePlan {
                     .positions()
                     .ok_or_else(|| Error::Invalid("missing positions".into()))?;
                 let idx = indices(prim);
+                primitives += 1;
                 if prim.topology == Topology::Triangles {
                     triangles += idx.len() as u64 / 3;
                 }
@@ -1317,7 +1337,8 @@ impl TilePlan {
                 },
             );
         }
-        let render = if triangles == 0 {
+        // a document when anything is drawn: triangles, line segments or points
+        let render = if primitives == 0 {
             Ok(None)
         } else {
             (|| -> Result<Option<(TileInfo, primase_glb::Document, ImageFiles)>> {
@@ -1618,8 +1639,8 @@ fn loaded(w: &World, e: Entity) -> Result<&Mesh> {
 }
 /// Every tile of an already prepared `world` (meshes and textures loaded, materials PBR): [`plan`], each cell
 /// written from the world's closure of it, [`TilePlan::finish`]. Placements are partitioned whole by pivot, or with
-/// [`Options::split_by_tile`] by triangle centre, assigning complete triangles (no clipping), so bounds may exceed
-/// the nominal cell; prototypes keep their sharing within a tile. Degenerate placements are counted and omitted, as
+/// [`Options::split_by_tile`] by element centre (a triangle's, a line segment's, a point), assigning complete
+/// elements (no clipping), so bounds may exceed the nominal cell; prototypes keep their sharing within a tile. Degenerate placements are counted and omitted, as
 /// in the glTF writer.
 pub fn write(world: &World, options: &Options) -> Result<TileSet> {
     let mut plan = plan(world, options)?;

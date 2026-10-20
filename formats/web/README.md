@@ -154,7 +154,7 @@ fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic
 <output>`; `--features ktx2` and `--ktx2` with `prepare-web-textures{...,memo-mib=512}` after those passes for KTX2
 tiles, the memo keeping each texture's preparation for the parts that share it; the
 plain comparison set is a second conversion with `--plain` and without `prepare-web-textures`), one cell at a time,
-so memory holds one cell's closure. The tile parts file a placement by triangle centre (`split_by_tile`) when its
+so memory holds one cell's closure. The tile parts file a placement by element centre (`split_by_tile`) when its
 pivot does not locate its geometry: its world-space box, from its prototype GLB's POSITION bounds (the reader's
 prototype box), is wider than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with a model
 placed at the origin with world-space vertices. A small prop across a cell edge keeps pivot filing and instancing.

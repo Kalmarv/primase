@@ -141,8 +141,17 @@ fn node_transform(node: &Value) -> Result<Transform> {
     Ok(t)
 }
 
+/// Whether every primitive of glTF mesh `mesh` draws triangles (mode 4, the default): three.js, the viewers'
+/// loader, instances no other (it draws one line or point node at the instanced node's own transform), so a mesh
+/// with line or point primitives keeps a node per placement.
+fn triangles_only(doc: &Value, mesh: u64) -> bool {
+    doc["meshes"][mesh as usize]["primitives"]
+        .as_array()
+        .is_some_and(|ps| ps.iter().all(|p| p.get("mode").is_none_or(|m| m == 4)))
+}
+
 /// Consume the private placement key emitted by the tile writer and instance only
-/// positive, non-sheared TRS groups sharing the same resolved glTF mesh and the same
+/// positive, non-sheared TRS groups sharing the same resolved triangle glTF mesh and the same
 /// `primase.shadows` (an instanced node has one shadow setting, kept on it), each instance's
 /// transform the one its node holds.
 pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
@@ -168,6 +177,9 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
             let mesh = node["mesh"]
                 .as_u64()
                 .ok_or_else(|| Error::Invalid("mesh node lacks mesh index".into()))?;
+            if !triangles_only(&doc, mesh) {
+                continue;
+            }
             let shadows = node["extras"]
                 .get(SHADOWS)
                 .map(Value::to_string)

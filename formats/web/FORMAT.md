@@ -55,9 +55,9 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `cell` (optional) | Object `{level, x, y}` for a subcell of the cell; absent for a whole cell |
 | `file` | Relative GLB filename, resolved against the index directory; the tile's identity |
 | `bytes` | Exact GLB byte length |
-| `content` | `"geometry"` or `"metadata_only"` |
+| `content` | `"geometry"` (it draws primitives: triangles, line segments or points) or `"metadata_only"` |
 | `min`, `max` | Three-number world-space bounds in XYZ order |
-| `triangles` | Placed render triangle count, including each instance |
+| `triangles` | Placed render triangle count, including each instance (line and point primitives are not counted) |
 | `placements` | Render placements drawn by this tile, not glTF mesh or primitive count. A placement whose triangles are filed by cell counts in every tile that draws part of it, so the sum over tiles can exceed the scene's placements |
 | `instanced_placements` | Placements represented by GPU instancing |
 | `viewer_items` | Number of viewer records in this tile |
@@ -103,7 +103,7 @@ uses 96 MiB). Image files are separate and not counted against a tile. A cell wi
 over the budget is split into a quadtree: halved along both ground axes into four
 subcells, and each subcell still over the budget again, down to level 8 at most.
 Content is divided by the same rules as cells: placements by pivot, placements
-partitioned by triangle centre by their triangles' centres, and viewer records,
+partitioned by element centre by their elements' centres, and viewer records,
 collision references included, by anchor, and scene lights by position. A
 subcell's collision sidecar holds
 the collision records anchored in it. Empty subcells are omitted, and a cell that
@@ -131,7 +131,9 @@ glTF 2.0 and the declared extensions. Supported output extensions include
 extension's defaults; used, never required: a consumer that ignores it draws glTF's default specular). Read
 `extensionsRequired`; never silently ignore an unsupported required extension.
 
-GPU instancing applies only to compatible placements. Every placement is rigid (a rotation, positive per-axis
+Render primitives are triangles (mode 4), line segments (mode 1) or points (mode 0), as the scene has them.
+GPU instancing applies only to compatible placements: those of a mesh drawn with triangles alone (a mesh with
+line or point primitives keeps a node per placement). Every placement is rigid (a rotation, positive per-axis
 scale and translation): the writer refuses mirrored and sheared ones, which `bake-nonrigid` moves into geometry
 first. Materials retain
 their alpha modes, cutoffs and double-sided flags. Texture transforms belong to

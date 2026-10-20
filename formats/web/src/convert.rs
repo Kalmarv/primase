@@ -14,7 +14,7 @@ use crate::{Options, TilePlan};
 
 /// The part [`TileParts::next_part`] last gave.
 enum Asked {
-    /// A placement filed by triangle centre, its prototype loaded.
+    /// A placement filed by element centre, its prototype loaded.
     Split(Entity),
     Cell((i32, i32)),
 }
@@ -29,10 +29,10 @@ struct Tiles {
 }
 
 /// The web tiles' part source: plans every tile set from the selected world, then asks for the placements filed by
-/// triangle centre first (each with its prototype, to file its triangles), then for each cell of the first set.
+/// element centre first (each with its prototype, to file its elements), then for each cell of the first set.
 pub struct TileParts {
     tiles: Rc<RefCell<Tiles>>,
-    /// The placements filed by triangle centre, with their prototypes, still to split.
+    /// The placements filed by element centre, with their prototypes, still to split.
     unsplit: Vec<(Entity, Entity)>,
     cells: Option<std::vec::IntoIter<(i32, i32)>>,
 }
@@ -99,7 +99,7 @@ impl PartSource for TileParts {
             .map(|e| (e, world.get::<Instance>(e).map_or(e, |i| i.prototype)))
             .collect();
         self.unsplit.reverse();
-        let line = format!("{spans:?}, filed by triangle centre {}", self.unsplit.len());
+        let line = format!("{spans:?}, filed by element centre {}", self.unsplit.len());
         tiles.report.push(("spanning".into(), line));
         Ok(())
     }
