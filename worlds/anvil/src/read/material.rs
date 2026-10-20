@@ -72,6 +72,76 @@ impl StoredReferences {
     }
 }
 
+/// A TextureSet's body as stored: a byte (1), 19 references ([`crate::read::reference`]), a zero byte, 8 bytes and a
+/// u32, 204 bytes in all. Established by the census: every TextureSet of Riders Republic (10,027) is exactly that,
+/// ending the body (RRAssetStudio reads the same). Which reference is which texture's role is not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredTextureSet {
+    /// The 19 references, in stored order (`None`: the stored form referring to nothing).
+    pub references: [Option<Reference>; 19],
+    /// The 8 bytes after the zero byte.
+    pub rest: [u8; 8],
+    /// The u32 ending the body (0, 19, 20, 21 and 27 seen; what it counts is not established).
+    pub last: u32,
+}
+
+/// Why a TextureSet body can't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum TextureSetError {
+    #[error("TextureSet body: {0} bytes, not 204")]
+    Length(usize),
+    #[error("TextureSet body: byte {found} at {at}, only {read} is read")]
+    Byte { at: usize, found: u8, read: u8 },
+    #[error("TextureSet reference {index}: {source}")]
+    Reference {
+        index: usize,
+        #[source]
+        source: crate::read::reference::Error,
+    },
+}
+
+impl StoredTextureSet {
+    /// The body parsed.
+    pub fn parse(body: &[u8]) -> Result<StoredTextureSet, TextureSetError> {
+        let body: &[u8; 204] = body.try_into().map_err(|_| TextureSetError::Length(body.len()))?;
+        let (first, rest) = body
+            .split_first_chunk::<1>()
+            .ok_or(TextureSetError::Length(204))?;
+        if first[0] != 1 {
+            return Err(TextureSetError::Byte {
+                at: 0,
+                found: first[0],
+                read: 1,
+            });
+        }
+        let (refs, tail) = rest.split_at(19 * reference::LENGTH);
+        let mut references = [None; 19];
+        for (index, (slot, bytes)) in references
+            .iter_mut()
+            .zip(refs.as_chunks::<{ reference::LENGTH }>().0)
+            .enumerate()
+        {
+            *slot =
+                reference::parse(*bytes).map_err(|source| TextureSetError::Reference { index, source })?;
+        }
+        let [zero, r0, r1, r2, r3, r4, r5, r6, r7, l0, l1, l2, l3] = tail else {
+            return Err(TextureSetError::Length(204));
+        };
+        if *zero != 0 {
+            return Err(TextureSetError::Byte {
+                at: 191,
+                found: *zero,
+                read: 0,
+            });
+        }
+        Ok(StoredTextureSet {
+            references,
+            rest: [*r0, *r1, *r2, *r3, *r4, *r5, *r6, *r7],
+            last: u32::from_le_bytes([*l0, *l1, *l2, *l3]),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +180,36 @@ mod tests {
         assert!(matches!(
             StoredReferences::parse(b.get(..20).expect("20")),
             Err(Error::Short { have: 20 })
+        ));
+    }
+
+    #[test]
+    fn a_texture_set_reads_its_19_references() {
+        let mut b = vec![1];
+        for k in 0..19u8 {
+            b.extend(if k % 2 == 0 {
+                [1, 1, k, 0, 0, 0, 0, 0, 0, 0]
+            } else {
+                NONE
+            });
+        }
+        b.push(0);
+        b.extend([0; 8]);
+        b.extend(19u32.to_le_bytes());
+        let t = StoredTextureSet::parse(&b).expect("read");
+        assert_eq!(t.references[2], Some(Reference { mode: 1, id: 2 }));
+        assert_eq!(t.references[1], None);
+        assert_eq!(t.last, 19);
+        let mut short = b.clone();
+        short.pop();
+        assert!(matches!(
+            StoredTextureSet::parse(&short),
+            Err(TextureSetError::Length(203))
+        ));
+        *b.get_mut(191).expect("204 bytes") = 1;
+        assert!(matches!(
+            StoredTextureSet::parse(&b),
+            Err(TextureSetError::Byte { at: 191, .. })
         ));
     }
 }

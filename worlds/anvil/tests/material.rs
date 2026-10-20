@@ -72,3 +72,21 @@ fn materials_and_a_texture_set_read_their_references() {
         }
     }
 }
+
+/// TextureSet 163 (base WhiteRoom) read whole: its first two of 19 references are maps 217 and 218, as its leading
+/// references read above; the census reads every TextureSet of the game the same way.
+#[test]
+fn a_texture_set_reads_all_19_references() {
+    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+        return;
+    };
+    let forge = Forge::open(&path).expect("forge");
+    let payload = forge
+        .payload(&mut File::open(&path).expect("open"), 163)
+        .expect("payload");
+    let block = read_entry(&payload, MAX_RECORD).expect("entry");
+    let r = Resource::parse(&block.resource.data).expect("resource");
+    let t = primase_anvil::read::material::StoredTextureSet::parse(&r.body).expect("texture set");
+    let ids: Vec<Option<u64>> = t.references.iter().map(|x| x.map(|x| x.id)).collect();
+    assert_eq!(ids[..2], [Some(0x01D3_970D_C221), Some(0x01D3_970D_C22A)]);
+}
