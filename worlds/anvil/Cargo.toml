@@ -17,6 +17,8 @@ primase-hash.workspace = true
 [dev-dependencies]
 primase-testdata.workspace = true
 primase-meshops.workspace = true
+primase-texcodec.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

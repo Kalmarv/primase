@@ -783,6 +783,8 @@ dependencies = [
  "primase-hash",
  "primase-meshops",
  "primase-testdata",
+ "primase-texcodec",
+ "sha2",
  "thiserror",
 ]
 

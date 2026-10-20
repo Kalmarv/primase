@@ -8,3 +8,4 @@ pub mod mesh_shape;
 pub mod meshes;
 pub mod mip;
 pub mod shapes;
+pub mod texture;
