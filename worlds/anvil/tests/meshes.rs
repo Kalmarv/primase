@@ -1,11 +1,16 @@
 //! Real Meshes read into a world through a stated frame and lowered to core meshes, under the pass manager with its
 //! checks on (Riders Republic build 25394987). Counts, splits and bounds as a separate read-only decode found them
 //! (games/riders-republic docs/recon/mesh-second-fixture.md).
+use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{LowerAnvilMesh, MeshNormals, UvV};
+use primase_anvil::read::data::{Resource, read_entry};
+use primase_anvil::read::forge::Forge;
+use primase_anvil::read::mesh::StoredMesh;
 use primase_anvil::read::meshes::{Error, read_meshes};
+use primase_anvil::read::shapes::MAX_RECORD;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
@@ -108,7 +113,7 @@ fn black_box_and_reversed_sphere_read_and_lower() {
 }
 
 #[test]
-fn stand_reads_its_split_and_its_bounds() {
+fn stand_reads_its_split() {
     let Some(path) = real_data("PRIMASE_ANVIL_FORGE") else {
         return;
     };
@@ -116,15 +121,6 @@ fn stand_reads_its_split_and_its_bounds() {
     assert_eq!((m.positions.len(), m.triangles.len()), (1154, 864));
     // the second range (indices from 2016) rebased by 904
     assert!(m.triangles[672..].iter().flatten().all(|&i| i >= 904));
-    let [lo, hi] = extrema(&m.positions);
-    let bounds = [
-        [-0.246_128, -0.145_569, 0.000_442],
-        [0.246_128, 0.282_392, 0.739_698],
-    ];
-    for i in 0..3 {
-        assert!((lo[i] - bounds[0][i]).abs() < 1e-3, "{lo:?}");
-        assert!((hi[i] - bounds[1][i]).abs() < 1e-3, "{hi:?}");
-    }
     assert_eq!(facing(&m), (864, 0));
     lower(&mut w, MeshNormals::Omit);
     let (_, mesh) = w.iter::<Mesh>().next().expect("lowered");
@@ -187,4 +183,47 @@ fn the_lowering_states_every_choice() {
     let mut extra = all.to_vec();
     extra.push(("scale", "1"));
     assert!(LowerAnvilMesh::from_options(&o(&extra)).is_err());
+}
+
+/// The entry's body parsed as stored.
+fn stored(path: &Path, entry: usize) -> StoredMesh {
+    let forge = Forge::open(path).expect("forge");
+    let payload = forge
+        .payload(&mut File::open(path).expect("open"), entry)
+        .expect("payload");
+    let block = read_entry(&payload, MAX_RECORD).expect("entry");
+    let resource = Resource::parse(&block.resource.data).expect("resource");
+    StoredMesh::parse(&resource.body).expect("mesh")
+}
+
+/// The decoded positions' extrema against the header's stored bounds, on every fixture: within one quantization step
+/// (measured: BlackBox 1.04e-4, ReversedSphere 1.14e-4, Stand 1.5e-5, PradaBarrier 9.7e-5). This is agreement of six
+/// numbers per mesh, evidence for the position decode's scale and sign; it says nothing of any one vertex between them.
+#[test]
+fn decoded_extrema_meet_the_stored_bounds() {
+    let fixtures = [
+        ("PRIMASE_ANVIL_FORGE_BASE", 161),
+        ("PRIMASE_ANVIL_FORGE_BASE", 318),
+        ("PRIMASE_ANVIL_FORGE", 2),
+        ("PRIMASE_ANVIL_FORGE_USNAT_PATCH", 136_194),
+    ];
+    for (input, entry) in fixtures {
+        let Some(path) = real_data(input) else {
+            continue;
+        };
+        let mesh = stored(&path, entry);
+        let positions: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| v.position()).collect();
+        let found = extrema(&positions);
+        let off = (0..2)
+            .flat_map(|k| (0..3).map(move |i| (k, i)))
+            .map(|(k, i)| (found[k][i] - mesh.bounds[k][i]).abs())
+            .fold(0.0f32, f32::max);
+        // one quantization step: the largest scale over 32768
+        let step = mesh
+            .vertices
+            .iter()
+            .map(|v| f32::from(v.scale).abs() / 32768.0)
+            .fold(0.0f32, f32::max);
+        assert!(off <= step, "{input} {entry}: off by {off}, a step {step}");
+    }
 }

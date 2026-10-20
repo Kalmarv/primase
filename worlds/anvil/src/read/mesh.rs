@@ -1,5 +1,5 @@
 //! A Mesh resource's body: its compiled mesh's vertex and index buffers, read as stored. Nothing about a vertex's
-//! fields is decided here beyond their layout; [`StoredVertex::position`] is the one decode established.
+//! fields is decided here beyond their layout; [`StoredVertex::position`] is the one decode, its evidence the bounds.
 //!
 //! The body (little-endian; offsets from the body's start, after the resource's class id and extension):
 //! - a 61-byte header, kept as stored; its bounds (two f32 triples at 20 and 36) are read;
@@ -78,8 +78,9 @@ pub struct StoredVertex {
 }
 
 impl StoredVertex {
-    /// The position: each component times the scale over 32768 (established: within 1e-4 of the header bounds on
-    /// every fixture).
+    /// The position: each component times the scale over 32768. The evidence is the extrema only: on the four
+    /// fixtures (tests/meshes.rs) the decoded positions' least and greatest coordinates lie within one quantization
+    /// step of the header's stored bounds. No single vertex between them is checked against anything.
     pub fn position(&self) -> [f32; 3] {
         let s = f32::from(self.scale) / 32768.0;
         self.position.map(|v| f32::from(v) * s)
