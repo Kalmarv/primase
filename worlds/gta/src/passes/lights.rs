@@ -4,7 +4,9 @@
 //! `core.condition` on the global `gta.hour` axis ([`crate::components::state::hour_axis`], made when the region has none; a light
 //! on every hour, or whose mask is 0 (always on, as GTA reads it), has none), and, given a region, those inside it (GTA ground
 //! coordinates; the light's own position decides, as the earlier exporter did). Runs on the read world after the selection (map state and hour
-//! resolved, region rules applied), so each light belongs to a placement that is drawn.
+//! resolved, region rules applied), so each light belongs to a placement that is drawn. Each light is declared as its
+//! placement's content ([`primase_core::pass::PassLog::place_from`]), so a conversion keeps it, with the part that owns
+//! the placement, whether the pass runs in the selection or in a part.
 //!
 //! Per light: an entity with `core.transform` (the placement's transform times the light's position, its local -Z along
 //! the light's direction, [`Transform::facing`]) and `core.light`. A record's position and direction are in the space
@@ -235,6 +237,7 @@ impl Pass for LowerGtaLights {
                 );
                 log.approximate("windowed falloff as a range", 1);
                 made.push((
+                    e,
                     transform,
                     light,
                     GtaLight(l.clone()),
@@ -247,8 +250,10 @@ impl Pass for LowerGtaLights {
         log.count("lights placed", made.len() as u64);
         // the hour as state: the axis (made when the region has none) and each light's hours on it
         let axis = (self.hours == LightHours::State).then(|| crate::components::state::hour_axis(w));
-        for (t, l, g, n, s, hours) in made {
+        for (placement, t, l, g, n, s, hours) in made {
             let e: Entity = w.spawn();
+            // the light is its placement's content: a conversion keeps it with the part that owns the placement
+            log.place_from(e, placement);
             w.insert(e, t);
             w.insert(e, l);
             w.insert(e, g);
