@@ -23,6 +23,7 @@ members = [
     "worlds/fromsoft",
     "worlds/reskate",
     "worlds/unity",
+    "worlds/skatebird",
     "worlds/frostbite",
     "worlds/gta",
 ]
@@ -71,6 +72,7 @@ primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }
 primase-unity = { path = "worlds/unity" }
+primase-skatebird = { path = "worlds/skatebird" }
 primase-gta = { path = "worlds/gta" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }

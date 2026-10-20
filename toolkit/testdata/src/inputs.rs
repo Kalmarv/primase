@@ -224,6 +224,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
     },
     Variable {
+        name: "PRIMASE_SKATEBIRD_DATA",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"SkateBIRD's data folder (`SkateBIRD_Data`, a Unity 2019.4.20f1 player), read with `PRIMASE_UNITY_TPK`; worlds/skatebird/tests/markers.rs"#,
+        status: Status::Live,
+        source: "the user's own install",
+    },
+    Variable {
         name: "PRIMASE_UNITY_SCAN",
         kind: Kind::Input,
         gate: true,

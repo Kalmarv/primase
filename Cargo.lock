@@ -1012,6 +1012,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-skatebird"
+version = "0.1.0"
+dependencies = [
+ "primase-core",
+ "primase-testdata",
+ "primase-unity",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-testdata"
 version = "0.1.0"
 dependencies = [
