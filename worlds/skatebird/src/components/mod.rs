@@ -76,17 +76,15 @@ impl SkatebirdRole {
         SkatebirdRole::Camera,
     ];
 
-    /// The role of a script class (its name without the namespace). Classes are compared in lowercase: the game's
-    /// classes differ in more than case, and the architecture check's word splitter reads the capitalised
-    /// `SkateCollectible` as the skate destination's name, which this crate may not use.
+    /// The role of a script class (its name without the namespace).
     pub fn of_class(class: &str) -> Option<SkatebirdRole> {
-        match class.to_ascii_lowercase().as_str() {
-            "skatecollectible" => Some(SkatebirdRole::Collectible),
-            "enableoneatrandom" => Some(SkatebirdRole::EnableOneAtRandom),
-            "missiongiver" => Some(SkatebirdRole::MissionGiver),
-            "birbdecorator" => Some(SkatebirdRole::BirbDecorator),
-            "permanentunlockingcollectible" => Some(SkatebirdRole::UnlockingCollectible),
-            "skateboardgateway" => Some(SkatebirdRole::PlayerBoard),
+        match class {
+            "SkateCollectible" => Some(SkatebirdRole::Collectible),
+            "EnableOneAtRandom" => Some(SkatebirdRole::EnableOneAtRandom),
+            "MissionGiver" => Some(SkatebirdRole::MissionGiver),
+            "BirbDecorator" => Some(SkatebirdRole::BirbDecorator),
+            "PermanentUnlockingCollectible" => Some(SkatebirdRole::UnlockingCollectible),
+            "SkateboardGateway" => Some(SkatebirdRole::PlayerBoard),
             _ => None,
         }
     }
