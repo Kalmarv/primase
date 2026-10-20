@@ -374,10 +374,15 @@ fn judge(
     let sizes: Vec<(u32, u32)> = levels.iter().map(|(lw, lh, _)| (*lw, *lh)).collect();
     let (covered, over) = match footprint(w, drawing, &r, &sizes) {
         Some(c) => (c, "the texels its primitives can sample"),
+        // every texel of every level the slot can sample: the base only when it states no mip levels
         None => (
             sizes
                 .iter()
-                .map(|&(lw, lh)| Some(vec![true; lw as usize * lh as usize]))
+                .enumerate()
+                .map(|(k, &(lw, lh))| {
+                    (k == 0 || r.filters.mip != Some(primase_core::pbr::MipFilter::None))
+                        .then(|| vec![true; lw as usize * lh as usize])
+                })
                 .collect(),
             "its whole base colour texture (no primitive's coordinates to sample it by)",
         ),
@@ -1043,6 +1048,53 @@ mod tests {
         assert!(mat.base_color_texture.is_some());
         assert_eq!(
             log.counts["blended materials judged varying over the texels its primitives can sample: strip"],
+            1
+        );
+    }
+
+    /// With no primitive to say (no loaded mesh), every texel of every level the slot can sample is judged, and a slot
+    /// stating the base level only samples no mip: a base of alpha 51 throughout over an unused level of alpha 0 is
+    /// uniform, so frost applies.
+    #[test]
+    fn a_base_only_slot_with_no_mesh_judges_the_base_only() {
+        use primase_core::pbr::{Filters, MipFilter, TextureRef};
+        let mut w = World::new();
+        let tex = w.spawn();
+        w.insert(
+            tex,
+            Texture {
+                width: 2,
+                height: 2,
+                format: primase_core::TexFormat::Rgba8Unorm,
+                levels: vec![[200, 200, 200, 51].repeat(4), vec![0, 0, 0, 0]],
+                color_space: primase_core::ColorSpace::Srgb,
+                role: primase_core::TexRole::Color,
+                normal: None,
+            },
+        );
+        let m = w.spawn();
+        w.insert(m, Name("veil".into()));
+        w.insert(
+            m,
+            PbrMaterial {
+                alpha_mode: AlphaMode::Blend,
+                base_color_texture: Some(TextureRef {
+                    filters: Filters {
+                        mag: None,
+                        min: None,
+                        mip: Some(MipFilter::None),
+                    },
+                    ..TextureRef::new(tex)
+                }),
+                ..PbrMaterial::default()
+            },
+        );
+        let mut log = PassLog::default();
+        frost().run(&mut w, &mut log).unwrap();
+        assert_eq!(w.get::<PbrMaterial>(m).unwrap().alpha_mode, AlphaMode::Opaque);
+        assert_eq!(
+            log.counts["blended materials judged uniform over its whole base colour texture (no primitive's \
+                         coordinates to sample it by): veil"],
             1
         );
     }
