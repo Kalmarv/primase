@@ -9,9 +9,10 @@
 //! is the same at every texel the material's primitives can sample, at every level they sample (an atlas transparent
 //! in its gutters is judged on its islands only): their triangles through the slot's coordinate set, transform and
 //! wrap; under nearest filtering (stated both ways) each texel whose square a triangle touches, else each texel a
-//! bilinear tap within a triangle weighs (its square grown by half a texel); every stored mip level too, unless the
-//! slot states the base level only, while a triangle covers one of the level's texels at least (smaller, it is under a
-//! pixel on screen there). Over every texel of every level when no loaded primitive's coordinates can say. Each material is reported
+//! bilinear tap within a triangle weighs (its square grown by half a texel); and every stored mip level the same way,
+//! unless the slot states the base level only (which level a pixel samples depends on its screen derivatives, which a
+//! long thin triangle can make coarse over many visible pixels, so no level is ruled out by the triangle's size). Over
+//! every texel of every level when no loaded primitive's coordinates can say. Each material is reported
 //! with how it was judged and over what. A uniform alpha at or above the cutoff draws whole: the material is drawn
 //! opaque (exactly what the mask draws, without an alpha texture). A uniform alpha below the cutoff would vanish
 //! whole as a mask, though it still collides (glass). What it becomes is the required `uniform` choice:
@@ -275,9 +276,8 @@ fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2
 
 /// Each stored level's texels (`sizes`, largest first) that the primitives `drawing` can sample through slot `r` (its
 /// coordinate set, transform, wrap and filters): `Some(covered)` for each level judged, `None` for a level not sampled
-/// (below the base when the slot states no mip levels, or where every triangle covers under one of its texels: it is
-/// then under a pixel on screen). `None` overall when no primitive can say (no loaded triangle list with those
-/// coordinates draws the material).
+/// (below the base when the slot states no mip levels). `None` overall when no primitive can say (no loaded triangle
+/// list with those coordinates draws the material).
 fn footprint(
     w: &World,
     drawing: &[(Entity, usize)],
@@ -315,14 +315,6 @@ fn footprint(
                 let Some(level) = level else { continue };
                 let (lw, lh) = sizes[k];
                 let s = t.map(|q| [q[0] * lw as f32, q[1] * lh as f32]);
-                // a coarser level samples this triangle only while it covers one of its texels at least
-                let area = ((s[1][0] - s[0][0]) * (s[2][1] - s[0][1])
-                    - (s[2][0] - s[0][0]) * (s[1][1] - s[0][1]))
-                    .abs()
-                    / 2.0;
-                if k > 0 && area < 1.0 {
-                    continue;
-                }
                 mark(level, (lw, lh), r.wrap, s, reach);
             }
             any = true;
@@ -975,6 +967,84 @@ mod tests {
             true,
         );
         assert!(c.iter().all(|x| *x));
+    }
+
+    /// A thin triangle whose base-level texels are all opaque, over a texture whose stored mip level 1 is half
+    /// transparent there (8 x 4, row 0 opaque and the rest transparent; level 1's row 0 alpha 128): however small the
+    /// triangle is at level 1, a pixel can sample that level (its screen derivatives decide), so the alpha varies and it
+    /// stays a mask.
+    #[test]
+    fn a_coarser_level_sampled_is_judged_whatever_the_triangles_size() {
+        use primase_core::pbr::{Filter, Filters, MipFilter, TextureRef};
+        let mut w = World::new();
+        let tex = w.spawn();
+        let base: Vec<u8> = (0..32)
+            .flat_map(|i| if i < 8 { [200, 200, 200, 255] } else { [0, 0, 0, 0] })
+            .collect();
+        let mip1: Vec<u8> = (0..8)
+            .flat_map(|i| if i < 4 { [100, 100, 100, 128] } else { [0, 0, 0, 0] })
+            .collect();
+        w.insert(
+            tex,
+            Texture {
+                width: 8,
+                height: 4,
+                format: primase_core::TexFormat::Rgba8Unorm,
+                levels: vec![base, mip1],
+                color_space: primase_core::ColorSpace::Srgb,
+                role: primase_core::TexRole::Color,
+                normal: None,
+            },
+        );
+        let m = w.spawn();
+        w.insert(m, Name("strip".into()));
+        w.insert(
+            m,
+            PbrMaterial {
+                alpha_mode: AlphaMode::Blend,
+                base_color_texture: Some(TextureRef {
+                    filters: Filters {
+                        mag: Some(Filter::Nearest),
+                        min: Some(Filter::Nearest),
+                        mip: Some(MipFilter::Nearest),
+                    },
+                    ..TextureRef::new(tex)
+                }),
+                ..PbrMaterial::default()
+            },
+        );
+        let p = w.spawn();
+        w.insert(
+            p,
+            Mesh::new(vec![primase_core::Primitive {
+                topology: Topology::Triangles,
+                streams: std::collections::BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                    ),
+                    (
+                        Semantic::TexCoord(0),
+                        // (0.1, 0.1), (7.1, 0.1), (0.1, 0.3) in base texels
+                        Stream::F32x2(vec![[0.0125, 0.025], [0.8875, 0.025], [0.0125, 0.075]]),
+                    ),
+                ]),
+                indices: None,
+                material: Some(m),
+            }]),
+        );
+        let mut log = PassLog::default();
+        PrepareReskateBlendedSurfaces::new(0.75, BlendedSelection::All, UniformAlpha::Cutout)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        let mat = w.get::<PbrMaterial>(m).unwrap();
+        assert_eq!(mat.alpha_mode, AlphaMode::Mask { cutoff: 0.75 });
+        assert!(mat.base_color_texture.is_some());
+        assert_eq!(
+            log.counts["blended materials judged varying over the texels its primitives can sample: strip"],
+            1
+        );
     }
 
     /// A thin triangle across a nearest-sampled 4 x 2 texture, (0.1, 0.1), (3.1, 0.1), (0.1, 0.2) in texels, whose

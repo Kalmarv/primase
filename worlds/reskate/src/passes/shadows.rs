@@ -105,7 +105,7 @@ fn shadowless_class(w: &World, m: Entity) -> bool {
 fn set_cast(w: &mut World, m: Entity, cast: bool, copy: bool, log: &mut PassLog) {
     let name = name_of(w, m);
     if cast && shadowless_class(w, m) {
-        log.count(
+        log.omit(
             &format!("decal or water materials asked to cast a shadow, drawn without (skate draws them shadowless): {name}"),
             1,
         );
@@ -633,7 +633,7 @@ mod tests {
         let log = run(&mut w).unwrap();
         assert_eq!(casts(&w, paint), None);
         assert_eq!(
-            log.counts["decal or water materials asked to cast a shadow, drawn without (skate draws them shadowless): paint"],
+            log.omitted["decal or water materials asked to cast a shadow, drawn without (skate draws them shadowless): paint"],
             1
         );
         assert!(
