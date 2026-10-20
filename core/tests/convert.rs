@@ -1460,3 +1460,57 @@ fn declared_output_from_declared_output_is_the_parts() {
     }
     assert!(!out.keep.contains(&ctx1) && !out.keep.contains(&ctx2));
 }
+
+/// Per root placement: makes A placed from it, B placed from A, then consumes A, in one pass.
+struct ToyChain;
+impl Pass for ToyChain {
+    fn name(&self) -> &'static str {
+        "toy-chain"
+    }
+    fn provides(&self) -> &[&'static str] {
+        &["core.name"]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let roots = w.resource::<PartScope>().ok_or("no part scope")?.roots.clone();
+        let placed: Vec<Entity> = roots.into_iter().filter(|&e| w.has::<Instance>(e)).collect();
+        for root in placed {
+            let a = w.spawn();
+            w.insert(a, Name("intermediate".into()));
+            log.place_from(a, root);
+            let b = w.spawn();
+            w.insert(b, Name("derived".into()));
+            log.place_from(b, a);
+            w.despawn(a);
+        }
+        Ok(())
+    }
+}
+
+/// Through the pass manager and a conversion in parts: output derived from an intermediate the same pass placed and
+/// consumed reaches the writer (one more named entity per part than without the pass).
+#[test]
+fn output_from_a_consumed_intermediate_reaches_the_writer() {
+    let (m, select, _) = manager("toy-select");
+    let named = |chain: bool| {
+        let mut passes: Vec<Box<dyn Pass>> = vec![Box::new(ToyPass)];
+        if chain {
+            passes.push(Box::new(ToyChain));
+        }
+        let (w, written) = writer(target());
+        convert_parts(
+            &mut reader(2),
+            &mut ToyParts::default(),
+            w,
+            &m,
+            &select,
+            &Pipeline { passes },
+        )
+        .unwrap();
+        events();
+        let n: Vec<usize> = written.borrow().iter().map(|g| g.named).collect();
+        n
+    };
+    let (without, with) = (named(false), named(true));
+    assert_eq!(with.len(), 2);
+    assert_eq!(with, without.iter().map(|n| n + 1).collect::<Vec<_>>());
+}

@@ -1247,18 +1247,20 @@ impl PassManager {
                 declared: g.declared,
             });
         }
-        // what it placed it made, and it is there
+        // what it placed it made, and it is there, unless it was an intermediate: made, placed, something else placed
+        // from it, then consumed in the same pass (PartScope::declare still classifies what came from it)
+        let consumed = |e: &Entity| log.placed_from.values().any(|s| s == e);
         if let Some(e) = log
             .placed
             .iter()
-            .find(|e| e.index() < first_made || !w.is_alive(**e))
+            .find(|e| e.index() < first_made || (!w.is_alive(**e) && !consumed(e)))
         {
             return Err(Error::Pass {
                 pass: text.to_owned(),
                 message: if e.index() < first_made {
                     format!("placed {e:?}, which it did not make")
                 } else {
-                    format!("placed {e:?}, which is not alive after it")
+                    format!("placed {e:?}, which is not alive after it, and nothing it placed came from it")
                 },
             });
         }
@@ -2449,6 +2451,12 @@ mod tests {
                 w.despawn(e);
             }
             log.place(e);
+            // an intermediate: something placed from it, then it is consumed
+            if self.which == "consumed" {
+                let derived = w.spawn();
+                log.place_from(derived, e);
+                w.despawn(e);
+            }
             Ok(())
         }
     }
@@ -2468,6 +2476,8 @@ mod tests {
         assert_eq!(run("new"), Ok(1));
         assert!(run("old").unwrap_err().contains("which it did not make"));
         assert!(run("gone").unwrap_err().contains("which is not alive after it"));
+        // a consumed intermediate with output placed from it passes; what came from it is placed
+        assert_eq!(run("consumed"), Ok(2));
     }
 
     /// One entity with toy.layered, toy.file and game.thing (culled), one with toy.mesh and toy.file (kept).
