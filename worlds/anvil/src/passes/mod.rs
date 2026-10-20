@@ -91,6 +91,11 @@ pub enum MeshNormals {
     Omit,
     /// Bytes 8, 9 and 10 each read as `b / 127.5 - 1`, normalized, converted through the reader's frame.
     Packed,
+    /// Bytes 8, 9 and 10 each read as `(b - 127) / 127`, normalized, converted through the reader's frame. (Against
+    /// area-weighted face normals of the positions, this reading's median angle is 0.45 to 0.50 degrees on static
+    /// 24-byte meshes of Riders Republic, against 0.72 to 0.79 for `Packed`, by a separate measurement; neither is
+    /// the game's own decode.)
+    Packed127,
 }
 
 /// How `lower-anvil-mesh` reads the two 16-bit words of each vertex's bytes 20..24.
@@ -111,7 +116,7 @@ pub enum UvV {
     OneMinus,
 }
 
-/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed}`: a
+/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed|packed-127}`: a
 /// diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype, one triangle
 /// primitive, no material: positions and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as
 /// two 16-bit words per `uv-words` over `uv-divisor`, the second per `uv-v`; normals per `normals`. (RRAssetStudio
@@ -139,7 +144,7 @@ impl LowerAnvilMesh {
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
-                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus,                      normals=omit|packed"
+                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, normals=omit|packed|packed-127"
                 )
             })
         };
@@ -162,7 +167,8 @@ impl LowerAnvilMesh {
         let normals = match get("normals")? {
             "omit" => MeshNormals::Omit,
             "packed" => MeshNormals::Packed,
-            v => return Err(format!("normals={v} is not omit or packed")),
+            "packed-127" => MeshNormals::Packed127,
+            v => return Err(format!("normals={v} is not omit, packed or packed-127")),
         };
         Ok(LowerAnvilMesh {
             uv_words,
@@ -201,6 +207,7 @@ impl Pass for LowerAnvilMesh {
                 match self.normals {
                     MeshNormals::Omit => "omit",
                     MeshNormals::Packed => "packed",
+                    MeshNormals::Packed127 => "packed-127",
                 }
                 .to_owned(),
             ),
@@ -256,13 +263,17 @@ impl Pass for LowerAnvilMesh {
                 );
             }
             match self.normals {
-                MeshNormals::Packed if m.stride == 24 => {
+                MeshNormals::Packed | MeshNormals::Packed127 if m.stride == 24 => {
+                    let decode = |x: u8| match self.normals {
+                        MeshNormals::Packed127 => (f32::from(x) - 127.0) / 127.0,
+                        _ => f32::from(x) / 127.5 - 1.0,
+                    };
                     let rest = usize::try_from(m.stride).unwrap_or(24).saturating_sub(8);
                     let normals = m
                         .attributes
                         .chunks_exact(rest.max(1))
                         .map(|b| {
-                            let d = [b[0], b[1], b[2]].map(|x| f32::from(x) / 127.5 - 1.0);
+                            let d = [b[0], b[1], b[2]].map(decode);
                             let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                             let d = if len > 0.0 {
                                 d.map(|x| x / len)
@@ -273,9 +284,15 @@ impl Pass for LowerAnvilMesh {
                         })
                         .collect();
                     streams.insert(Semantic::Normal, Stream::F32x3(normals));
-                    log.approximate("normals: bytes 8..11 read as a normal (stated)", 1);
+                    log.approximate(
+                        &format!(
+                            "normals: bytes 8..11 read as a normal, {:?} (stated)",
+                            self.normals
+                        ),
+                        1,
+                    );
                 }
-                MeshNormals::Packed => log.omit(
+                MeshNormals::Packed | MeshNormals::Packed127 => log.omit(
                     &format!(
                         "normals: not read for stride {} (where they are isn't established)",
                         m.stride

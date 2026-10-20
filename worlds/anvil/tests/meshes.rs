@@ -283,6 +283,13 @@ fn the_lowering_states_every_choice() {
         some.push(bad);
         assert!(LowerAnvilMesh::from_options(&o(&some)).is_err());
     }
+    let mut centred = all.to_vec();
+    centred.retain(|(k, _)| *k != "normals");
+    centred.push(("normals", "packed-127"));
+    assert_eq!(
+        LowerAnvilMesh::from_options(&o(&centred)).map(|l| l.normals),
+        Ok(MeshNormals::Packed127)
+    );
     let mut extra = all.to_vec();
     extra.push(("scale", "1"));
     assert!(LowerAnvilMesh::from_options(&o(&extra)).is_err());
