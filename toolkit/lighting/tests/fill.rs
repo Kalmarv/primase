@@ -131,6 +131,12 @@ fn lights_near_a_surface_are_left_out_and_the_rest_carry_the_ambient() {
         4
     );
     assert_eq!(log.placed.len(), 4);
+    // the ambient is consumed: the lights stand for it
+    assert_eq!(w.resource::<Environment>().unwrap().ambient, None);
+    assert_eq!(
+        log.counts["ambients consumed (the fill lights stand for them)"],
+        1
+    );
     assert_eq!(
         log.approximations.keys().collect::<Vec<_>>(),
         ["ambient light as shadowless point lights on a grid"],

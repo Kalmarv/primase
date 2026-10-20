@@ -16,7 +16,9 @@ Approximations that stand core lights in for light a destination cannot draw.
   lights placed and left out, and the approximation itself (a point light falls
   off and shines from a place; ambient does neither). The lights are in
   `core.light`'s units, so a destination's light calibration applies to them as
-  to the scene's own lights.
+  to the scene's own lights. The pass consumes the ambient (takes it out of
+  `core.environment`, the sun kept): the lights stand for it, so a writer does not
+  report it as light it leaves out.
 - `SurfaceGrid`: the world's placed triangles (`placed_triangles`) bucketed in
   cubic cells within a box of interest, for "is a surface nearer than `d`" queries,
   by meshops' point-triangle distance.

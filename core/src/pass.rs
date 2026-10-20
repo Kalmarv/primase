@@ -505,6 +505,8 @@ pub struct Target {
     rule_words: BTreeMap<String, String>,
     /// Value rules on resources ([`Target::check_resource`]), by resource name.
     resource_rules: BTreeMap<String, ResourceRule>,
+    /// Parts of resources it writes that it leaves out ([`Target::unwritten_part`]), by resource name.
+    resource_parts: BTreeMap<String, Vec<ResourceRule>>,
     carry_unknown: bool,
 }
 
@@ -515,6 +517,7 @@ impl Target {
             rules: BTreeMap::new(),
             rule_words: BTreeMap::new(),
             resource_rules: BTreeMap::new(),
+            resource_parts: BTreeMap::new(),
             carry_unknown: false,
         }
     }
@@ -585,6 +588,26 @@ impl Target {
         self
     }
 
+    /// A part of a resource the writer leaves out when it writes the rest (`ambient` of `core.environment`, for a
+    /// writer that writes its sun): while the resource is there and `held` finds the part in it, the part is reported
+    /// as unsupported ([`Prepared::unsupported_resources`], `<name> <part>`), whatever the resource's own rule (listed
+    /// or carried). A rule per resource name says whether the writer writes it at all; this says what of it it does not.
+    /// Not a refusal: the planner does not lower it (a pass that consumes the part is the program's choice).
+    pub fn unwritten_part<R: Resource>(
+        mut self,
+        part: &str,
+        held: impl Fn(&R) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.resource_parts
+            .entry(R::NAME.to_owned())
+            .or_default()
+            .push(ResourceRule {
+                what: part.to_owned(),
+                check: Arc::new(move |w: &World| w.resource::<R>().is_some_and(&held)),
+            });
+        self
+    }
+
     /// The words naming the value rule on `name` (a component's [`Target::check`], a covered name's cover
     /// ([`Target::covered`]) or a resource's [`Target::check_resource`]), if it has a named one.
     pub fn rule_words(&self, name: &str) -> Option<&str> {
@@ -616,7 +639,8 @@ impl Target {
     /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
     /// unless carried, an unlisted name, and a covered name's uncovered entities: [`Prepared::unsupported`], entity
     /// counts by name; a resource it neither
-    /// lists, rules on nor carries: [`Prepared::unsupported_resources`]; the conversion's own resources,
+    /// lists, rules on nor carries, and a part of one it writes that it leaves out ([`Target::unwritten_part`]):
+    /// [`Prepared::unsupported_resources`]; the conversion's own resources,
     /// [`crate::convert::OPERATIONAL_RESOURCES`], aside), and values of names it writes that its value rule refuses
     /// ([`Prepared::invalid`], by name with the rule's words) or resources it refuses ([`Prepared::invalid_resources`]).
     /// A resource is listed like a component ([`Target::legal`], [`Target::illegal`]).
@@ -656,6 +680,12 @@ impl Target {
                 };
             if !written {
                 out.unsupported_resources.push(name.to_owned());
+                continue;
+            }
+            for part in self.resource_parts.get(name).into_iter().flatten() {
+                if (part.check)(w) {
+                    out.unsupported_resources.push(format!("{name} {}", part.what));
+                }
             }
         }
         out
@@ -3440,6 +3470,35 @@ mod tests {
             "no pass lowers `toy.table` to anything `t` accepts"
         );
         assert_eq!(classified().rule_words("toy.table"), Some("every row classified"));
+    }
+
+    /// A part of a resource the writer writes, left out: reported while the resource holds it, listed or carried; a
+    /// resource not written at all is reported once, whole.
+    #[test]
+    fn an_unwritten_part_of_a_written_resource_is_reported() {
+        let part = |t: Target| t.unwritten_part::<Table>("unclassified rows", |t| t.0.contains(&None));
+        let mut held = table_world(vec![Some(1), None]);
+        let clean = table_world(vec![Some(1)]);
+        for t in [
+            part(Target::new("listed").legal("toy.table")),
+            part(Target::new("carried").carry_unknown()),
+        ] {
+            assert_eq!(
+                t.check_prepared(&held).unsupported_resources,
+                ["toy.table unclassified rows"]
+            );
+            assert!(t.check_prepared(&clean).unsupported_resources.is_empty());
+            assert!(t.check_prepared(&World::new()).unsupported_resources.is_empty());
+            // an omission, not a refusal: nothing to plan
+            assert!(t.check_prepared(&held).invalid_resources.is_empty());
+        }
+        let unlisted = part(Target::new("unlisted"));
+        assert_eq!(
+            unlisted.check_prepared(&held).unsupported_resources,
+            ["toy.table"]
+        );
+        held.remove_resource::<Table>();
+        assert!(unlisted.check_prepared(&held).unsupported_resources.is_empty());
     }
 
     /// A covered name is legal where its cover is: the uncovered entity is reported, by its cover's words and count,

@@ -190,3 +190,27 @@ fn geometry_that_is_not_finite_is_refused_naming_it() {
         .unwrap_err();
     assert!(e.contains("core.mesh") && e.contains("not finite"), "{e}");
 }
+
+/// The map has no form for `core.environment` (skate's sun and sky are its own): the environment is reported as not
+/// written, its ambient with it, unless a pass consumed the ambient (`fill-ambient-lights`) and nothing else is left.
+#[test]
+fn the_environment_and_its_ambient_are_reported_not_written() {
+    let mut w = primase_core::World::new();
+    assert!(
+        primase_reskate::target()
+            .check_prepared(&w)
+            .unsupported_resources
+            .is_empty()
+    );
+    w.insert_resource(primase_core::Environment {
+        sun: None,
+        ambient: Some(primase_core::Ambient {
+            intensity: 1.0,
+            light: primase_core::AmbientLight::Flat([0.2; 3]),
+        }),
+    });
+    assert_eq!(
+        primase_reskate::target().check_prepared(&w).unsupported_resources,
+        ["core.environment"]
+    );
+}

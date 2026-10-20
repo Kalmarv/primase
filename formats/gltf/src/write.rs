@@ -38,7 +38,9 @@
 //!   `extras.primase["<component name>"] = {"version": n, "value": ...}`: placement -> node, prototype -> mesh,
 //!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
 //!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
-//!   dropped silently; a component whose view would lose a value (a non-finite float) is an error.
+//!   dropped silently; a component whose view would lose a value (a non-finite float) is an error. The
+//!   environment's ambient light has no glTF form: it is data in the scene's extras, lighting nothing, counted
+//!   (`ambient_unlit`).
 //! - **Levels of detail**: glTF draws one mesh per node and the writer chooses no form, so a placement of a prototype
 //!   with other forms (`core.lods` listing any) is not written, counted (`placements_with_lods`); a pipeline that wants
 //!   it drawn chooses one form per prototype first (`select-lod`). The forms are not prototypes of their own. A
@@ -180,6 +182,9 @@ pub struct WriteReport {
     pub streams_skipped: BTreeMap<String, u64>,
     /// Components with no JSON form, by name: not in the extras.
     pub extras_unencoded: BTreeMap<String, u64>,
+    /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it
+    /// (the scene's extras still carry it as data, unless the selection omits the environment).
+    pub ambient_unlit: u64,
     /// Entities with components that are not written and not counted by any field above (markers, standalone
     /// collision, ...; see the module docs). Never with a [`Selection`].
     pub entities_unwritten: u64,
@@ -232,6 +237,7 @@ impl fmt::Display for WriteReport {
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
         writeln!(f, "extras unencoded {:?}", self.extras_unencoded)?;
+        writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
         write!(
             f,
             "entities not written {}: components {:?}",
@@ -475,6 +481,13 @@ impl Writer<'_> {
             scene.insert("name".into(), Value::String(name.clone()));
         }
         scene.insert("nodes".into(), json!(roots));
+        if self
+            .world
+            .resource::<primase_core::Environment>()
+            .is_some_and(|e| e.ambient.is_some())
+        {
+            self.report.ambient_unlit = 1;
+        }
         let mut resources = self.world.resources_json().map_err(|e| Error::Invalid {
             item: format!("resource {}", e.component),
             detail: e.message,

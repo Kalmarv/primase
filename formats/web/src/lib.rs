@@ -569,6 +569,8 @@ pub fn target() -> primase_core::pass::Target {
         .dynamic_typed::<Curve>(|c| c.tangents.is_none())
         .illegal(Lods::NAME)
         .illegal(primase_core::Collider::NAME)
+        // the index carries the environment's sun; the viewer has no ambient light
+        .unwritten_part::<primase_core::Environment>("ambient", |e| e.ambient.is_some())
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files: each cell's content is read from its world when it is

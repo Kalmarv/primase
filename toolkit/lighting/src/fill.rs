@@ -17,6 +17,10 @@
 //! interior's own box), which cells, the clearance and the reach. The lights' intensity is in `core.light`'s units,
 //! the ambient's scale, so a destination's calibration of lights applies to them as to the scene's own.
 //!
+//! The ambient is consumed: the pass takes it out of `core.environment` (the sun stays), since the lights now stand
+//! for it, so a writer does not report it as light it leaves out. A black ambient, which lights nothing, is consumed
+//! too.
+//!
 //! The clearance search reads every placed surface near a light: in a part of a map divided for conversion
 //! ([`primase_core::convert::PartScope`]) that is not the whole, the pass refuses (see the crate's README).
 
@@ -247,6 +251,10 @@ impl Pass for FillAmbientLights {
     fn provides(&self) -> &[&'static str] {
         &["core.name", "core.transform", "core.light"]
     }
+    /// `core.environment`: its ambient taken out, consumed.
+    fn modifies(&self) -> &[&'static str] {
+        &["core.environment"]
+    }
     fn approximates(&self) -> &'static str {
         "ambient light as shadowless point lights on a grid, of the ambient's mean colour"
     }
@@ -277,6 +285,7 @@ impl Pass for FillAmbientLights {
         let level = mean.iter().copied().fold(0.0f32, f32::max);
         if level <= 0.0 {
             log.count("scenes with a black ambient: no fill lights", 1);
+            consume(w, log);
             return Ok(());
         }
         let g = &self.grid;
@@ -323,6 +332,16 @@ impl Pass for FillAmbientLights {
             log.count("ambient fill lights", 1);
         }
         log.approximate("ambient light as shadowless point lights on a grid", 1);
+        consume(w, log);
         Ok(())
+    }
+}
+
+/// Takes the ambient out of the environment, the rest of it kept: the fill lights stand for it now.
+fn consume(w: &mut World, log: &mut PassLog) {
+    if let Some(mut env) = w.resource::<Environment>().cloned() {
+        env.ambient = None;
+        w.insert_resource(env);
+        log.count("ambients consumed (the fill lights stand for them)", 1);
     }
 }

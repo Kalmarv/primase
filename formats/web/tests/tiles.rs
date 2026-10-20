@@ -1680,3 +1680,31 @@ fn omissions_are_counted_once_per_published_tile_not_per_budget_retry() {
         .collect();
     assert_eq!(counts, [(NoticeKind::Unsupported, 2)]);
 }
+
+/// The index carries the environment's sun, not its ambient (the viewer has no ambient light): an ambient is reported
+/// as a part of `core.environment` the writer leaves out.
+#[test]
+fn the_environments_ambient_is_reported_unwritten() {
+    let mut w = World::new();
+    w.insert_resource(primase_core::Environment {
+        sun: None,
+        ambient: None,
+    });
+    assert!(
+        primase_web::target()
+            .check_prepared(&w)
+            .unsupported_resources
+            .is_empty()
+    );
+    w.insert_resource(primase_core::Environment {
+        sun: None,
+        ambient: Some(primase_core::Ambient {
+            intensity: 1.0,
+            light: primase_core::AmbientLight::Flat([0.2; 3]),
+        }),
+    });
+    assert_eq!(
+        primase_web::target().check_prepared(&w).unsupported_resources,
+        ["core.environment ambient"]
+    );
+}

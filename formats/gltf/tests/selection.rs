@@ -279,3 +279,29 @@ fn a_piece_keeps_its_prototypes_per_primitive_components_remapped() {
     .unwrap_err();
     assert!(err.to_string().contains("2 primitives with 1 sources"), "{err}");
 }
+
+/// The environment's ambient has no glTF light: it is counted as not lit, and stays in the scene's extras as data.
+#[test]
+fn an_ambient_is_counted_unlit_and_kept_in_the_scenes_extras() {
+    let mut w = World::new();
+    let options = WriteOptions {
+        group_by: GroupBy::None,
+        ..WriteOptions::default()
+    };
+    assert_eq!(primase_gltf::write(&w, &options).unwrap().1.ambient_unlit, 0);
+    w.insert_resource(Environment {
+        sun: None,
+        ambient: Some(primase_core::Ambient {
+            intensity: 1.0,
+            light: primase_core::AmbientLight::Flat([0.25, 0.5, 0.75]),
+        }),
+    });
+    let (bytes, report) = primase_gltf::write(&w, &options).unwrap();
+    assert_eq!(report.ambient_unlit, 1);
+    assert!(report.to_string().contains("ambient not lit (no glTF form) 1"));
+    let doc: Value = serde_json::from_slice(primase_glb::parse(&bytes).unwrap().json).unwrap();
+    assert_eq!(
+        doc["scenes"][0]["extras"]["primase"][Environment::NAME]["value"]["ambient"]["light"]["Flat"],
+        json!([0.25, 0.5, 0.75])
+    );
+}
