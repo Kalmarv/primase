@@ -482,8 +482,9 @@ pub struct TilePlan {
     /// Each placement filed by element centre: its primitives' triangle counts when it was split.
     shapes: BTreeMap<Entity, Vec<usize>>,
     ground_markers: u64,
-    /// Whether a cell's world held `core.environment`'s ambient: the viewer has no ambient light, the index carries
-    /// only the sun and the tiles leave the environment out, so it is not written ([`TilePlan::notices`], once).
+    /// Whether the planning world or a cell's world held `core.environment`'s ambient: the viewer has no ambient light,
+    /// the index carries only the sun and the tiles leave the environment out, so it is not written
+    /// ([`TilePlan::notices`], once). Seen at planning too, so a world with no cells to write still reports it.
     ambient_left_out: bool,
     /// What the published tiles' documents and the records left out or drew approximately: by kind and reason, the
     /// count and a few examples ([`TilePlan::notices`]).
@@ -684,7 +685,11 @@ pub fn plan_with_geometry(
         sun_entity,
         shapes: BTreeMap::new(),
         ground_markers: 0,
-        ambient_left_out: false,
+        // an ambient already in the planning world (a prepared world written whole); a part's lowered one is seen
+        // when its cell is written
+        ambient_left_out: world
+            .resource::<primase_core::Environment>()
+            .is_some_and(|env| env.ambient.is_some()),
         omitted: BTreeMap::new(),
         sun: sun_entity.map(|e| sun(world, e)).transpose()?,
         cells: BTreeMap::new(),
@@ -984,7 +989,7 @@ impl TilePlan {
         if let Some((name, e, detail)) = world.verify_components().into_iter().next() {
             return Err(Error::Invalid(format!("{name} on {e:?}: {detail}")));
         }
-        // the cell's world as its passes left it: the ambient is lowered there, not in the planning world
+        // the cell's world as its passes left it: in a conversion in parts the ambient is lowered there, after planning
         if world
             .resource::<primase_core::Environment>()
             .is_some_and(|env| env.ambient.is_some())

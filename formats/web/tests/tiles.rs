@@ -1768,3 +1768,45 @@ fn the_environments_ambient_is_reported_once_as_not_written() {
         assert!(!doc.to_string().contains("core.environment"));
     }
 }
+
+/// A world of only an environment with an ambient has no cell to write: the plan sees the ambient itself, so it is
+/// still reported once, before any cell is written and in the written set.
+#[test]
+fn an_environment_only_world_still_reports_its_ambient() {
+    use primase_core::{Ambient, AmbientLight, Environment};
+    let mut w = World::new();
+    w.insert_resource(Environment {
+        sun: None,
+        ambient: Some(Ambient {
+            intensity: 1.0,
+            light: AmbientLight::Gradient {
+                sky: [0.3; 3],
+                equator: [0.2; 3],
+                ground: [0.1; 3],
+            },
+        }),
+    });
+    let reported = |notices: &[primase_core::convert::Notice]| {
+        notices
+            .iter()
+            .filter(|n| {
+                n.reason
+                    .starts_with("the environment's ambient light, not written")
+            })
+            .map(|n| (n.kind, n.count))
+            .collect::<Vec<_>>()
+    };
+    let plan = primase_web::plan(&w, &plain()).unwrap();
+    assert_eq!(plan.cells().len(), 0);
+    assert_eq!(
+        reported(&plan.notices()),
+        [(primase_core::convert::NoticeKind::Unsupported, 1)]
+    );
+    let set = write(&w, &plain()).unwrap();
+    assert!(set.index.tiles.is_empty() && set.files.is_empty());
+    assert!(set.index.environment.is_none());
+    assert_eq!(
+        reported(&set.notices),
+        [(primase_core::convert::NoticeKind::Unsupported, 1)]
+    );
+}
