@@ -8,7 +8,8 @@
 //!   with its grippable bits and ramp (ramps compared by first appearance: the oracle numbers them across its whole
 //!   run, the file per part).
 //! - G3: the grind ledges (type, corners, normal, tangent, binormal, angles, length, group), the corner count and each
-//!   part's grippable-bit counts.
+//!   part's grippable-bit counts: a solid part's as read, a trigger part's none read and every one 0 in the game (its
+//!   file stores grippable bits for solid triangles only, and the game leaves the others at 0).
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -274,13 +275,30 @@ fn g3_ledges_and_grippable_edges_are_the_games() {
             let i = m["node"].as_u64().unwrap() as usize;
             let Some(mesh) = &model.meshes[i] else { continue };
             for (j, p) in m["parts"].as_array().unwrap().iter().enumerate() {
-                let mut ours: BTreeMap<String, u64> = BTreeMap::new();
-                for g in &mesh.parts[j].grippable {
-                    *ours.entry(g.to_string()).or_default() += 1;
-                }
+                let part = &mesh.parts[j];
                 let theirs: BTreeMap<String, u64> = (p["grippableBits"].as_object().unwrap().iter())
                     .map(|(k, v)| (k.clone(), v.as_u64().unwrap()))
                     .collect();
+                // the file stores grippable bits for solid triangles only; the game leaves the others' at 0
+                let ours: BTreeMap<String, u64> = if mesh.aggregate == 0 {
+                    let mut counts = BTreeMap::new();
+                    for g in &part.grippable {
+                        *counts.entry(g.to_string()).or_default() += 1;
+                    }
+                    counts
+                } else {
+                    if !part.grippable.is_empty() {
+                        mismatches.push(format!(
+                            "{tag} node {i} part {j}: grippable bits read for a trigger"
+                        ));
+                    }
+                    let n = part.triangles.len() as u64;
+                    if n == 0 {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([("0".to_owned(), n)])
+                    }
+                };
                 if ours != theirs {
                     mismatches.push(format!(
                         "{tag} node {i} part {j}: grippable {ours:?}, the game's {theirs:?}"
