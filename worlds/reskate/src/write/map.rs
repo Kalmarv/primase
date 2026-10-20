@@ -623,6 +623,8 @@ struct Taken {
     proto_pieces: BTreeMap<OverlayPiece, StackedPiece>,
     /// The tiles whose blend chains a part recorded, over every part (each tile's chains are one part's).
     chain_tiles: BTreeSet<String>,
+    /// The pause picture's placement prefixes (`leave-out=placements`) a part's placement matched, over every part.
+    pause_matched: BTreeSet<String>,
 }
 
 /// The folder `d` made afresh (empty).
@@ -744,6 +746,7 @@ impl MapSink {
                 stack_meshes: BTreeMap::new(),
                 proto_pieces: BTreeMap::new(),
                 chain_tiles: BTreeSet::new(),
+                pause_matched: BTreeSet::new(),
                 written: BTreeMap::new(),
             });
         }
@@ -773,7 +776,9 @@ impl MapSink {
         }
         t.parts += 1;
         t.writer.set_counts(counts);
-        t.writer.set_pause_left(crate::map::pause_left_of(world, &o));
+        let (left, matched) = crate::map::pause_left_of(world, &o);
+        t.writer.set_pause_left(left);
+        t.pause_matched.extend(matched);
         // the part's own overlay stack and blend chains, replayed on its meshes and tiles; a prototype stacked by
         // several parts must be stacked alike (counted once), a tile chained by one
         if let Some(st) = records.stack {
@@ -1046,6 +1051,8 @@ impl MapSink {
             written,
             records,
             stack_meshes,
+            first,
+            pause_matched,
             ..
         }) = self.taken
         else {
@@ -1053,6 +1060,17 @@ impl MapSink {
                 "the map sink was given no part: a map needs its whole".into(),
             ));
         };
+        // a pause picture's placement prefix no part's placement matched: a mistake over the whole map (a part only
+        // counts it, holding the placements it holds)
+        if let Some(crate::components::pause_map::PauseLeaveOut::Placements(prefixes)) =
+            first.pause_drawing().map(|d| &d.leave_out)
+            && let Some(p) = prefixes.iter().find(|p| !pause_matched.contains(*p))
+        {
+            return Err(Error::Scene(format!(
+                "leave-out=placements: no placement's name starts with {p} (names are matched as their reader wrote \
+                 them, path separators included)"
+            )));
+        }
         // the markers in the scene's order, those without a name of their own named as the scene names them
         let Content {
             mut markers,

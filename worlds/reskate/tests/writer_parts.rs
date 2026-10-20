@@ -688,6 +688,36 @@ fn a_part_left_without_its_roots_changes_nothing() {
     same_maps(&reference.join("parts"), &out.join("parts"), "dropped");
 }
 
+/// A pause picture leaving out placements by a prefix no part's placement matches: each part only counts it (it may
+/// hold none of them), and the sink, which sees every part, refuses it at the end.
+#[test]
+fn a_pause_prefix_no_part_matches_is_refused_by_the_sink() {
+    use primase_reskate::passes::{
+        PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut, PauseSource, PrepareReskatePauseMap,
+    };
+    let pause = || -> Vec<Box<dyn Pass>> {
+        vec![Box::new(
+            PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 90,
+                extent: PauseExtent::Content,
+                drawing: PauseDrawing {
+                    leave_out: PauseLeaveOut::Placements(["Level Bounds/Cieling".to_owned()].into()),
+                    colour: PauseColour::Mean,
+                },
+            })
+            .unwrap(),
+        )]
+    };
+    let e = in_parts(&tmp("pause-prefix"), &aligned(), None, pause)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        e.contains("no placement's name starts with Level Bounds/Cieling"),
+        "{e}"
+    );
+}
+
 #[test]
 fn a_misaligned_partition_and_collision_not_gathered_are_refused() {
     // 300 m cells, not aligned to the 200 m tile: a tile's placements in two parts

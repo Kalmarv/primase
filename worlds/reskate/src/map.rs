@@ -61,7 +61,7 @@ pub struct WriterOptions {
 
 impl WriterOptions {
     /// How the writer draws its geometry into the pause-map picture (`None`: it does not).
-    fn pause_drawing(&self) -> Option<&PauseDrawing> {
+    pub(crate) fn pause_drawing(&self) -> Option<&PauseDrawing> {
         match &self.pause {
             Some(SkatePausePicture::Geometry { drawing, .. }) => Some(drawing),
             _ => None,
@@ -70,23 +70,26 @@ impl WriterOptions {
 }
 
 /// The placements of `world` (a map, or one part of it) that a pause-map picture drawn as `o` says leaves out by name
-/// (`leave-out=placements`): those whose name starts with one of its prefixes; none for any other picture.
+/// (`leave-out=placements`): those whose name starts with one of its prefixes, and the prefixes that matched one; none
+/// for any other picture.
 pub(crate) fn pause_left_of(
     world: &primase_core::World,
     o: &WriterOptions,
-) -> std::collections::HashSet<primase_core::Entity> {
+) -> (std::collections::HashSet<primase_core::Entity>, BTreeSet<String>) {
+    let (mut left, mut matched) = (std::collections::HashSet::new(), BTreeSet::new());
     let Some(PauseLeaveOut::Placements(prefixes)) = o.pause_drawing().map(|d| &d.leave_out) else {
-        return std::collections::HashSet::new();
+        return (left, matched);
     };
-    world
-        .iter::<primase_core::Instance>()
-        .filter(|(e, _)| {
-            world
-                .get::<primase_core::Name>(*e)
-                .is_some_and(|n| prefixes.iter().any(|p| n.0.starts_with(p.as_str())))
-        })
-        .map(|(e, _)| e)
-        .collect()
+    for (e, _) in world.iter::<primase_core::Instance>() {
+        let Some(n) = world.get::<primase_core::Name>(e) else {
+            continue;
+        };
+        for p in prefixes.iter().filter(|p| n.0.starts_with(p.as_str())) {
+            left.insert(e);
+            matched.insert(p.clone());
+        }
+    }
+    (left, matched)
 }
 
 /// How the pause-map picture draws a material's triangles.
