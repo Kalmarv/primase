@@ -21,8 +21,9 @@
 //! 31; BC1 and BC7, 9 and 11 levels, none and two external; games/riders-republic docs/recon/texture-format-validation.md,
 //! bff28dc and 0ad60f1, where each level's bytes and both formats' decodes are checked independently). Refused, naming
 //! it: another first byte, u32 at 9, 13 or 21, reference tag or compiled header marker, a compiled header
-//! disagreeing with the first, or pixels not ending the body. [`format`] knows the format codes those fixtures
-//! establish (2 BC1, 10 BC7); [`StoredTextureMap::levels`] refuses another.
+//! disagreeing with the first, or pixels not ending the body. [`StoredTextureMap::levels`] slices the levels for
+//! the format codes whose storage the census establishes ([`storage`]), refusing another code or pixels the levels
+//! don't fill; [`format`] names the codec only for the codes fixtures establish one for (2 BC1, 10 BC7).
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -44,6 +45,40 @@ pub fn format(code: u32) -> Option<TexFormat> {
     match code {
         2 => Some(TexFormat::Bc1),
         10 => Some(TexFormat::Bc7),
+        _ => None,
+    }
+}
+
+/// How a format code's levels are stored: bytes per 4x4 block, or bytes per pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Storage {
+    Blocks(u32),
+    Pixels(u32),
+}
+
+impl Storage {
+    /// A `w` x `h` level's bytes (blocks round each axis up to 4).
+    pub fn level_size(self, w: u32, h: u32) -> Option<usize> {
+        let (units, bytes) = match self {
+            Storage::Blocks(b) => (u64::from(w.div_ceil(4)).checked_mul(u64::from(h.div_ceil(4)))?, b),
+            Storage::Pixels(b) => (u64::from(w).checked_mul(u64::from(h))?, b),
+        };
+        usize::try_from(units.checked_mul(u64::from(bytes))?).ok()
+    }
+}
+
+/// How a format code's levels are stored, for the codes where every TextureMap of Riders Republic (build 25394987)
+/// with that code fills its held levels exactly in this one class and in no other of the five measured (8 and 16 bytes
+/// per block; 1, 4 and 8 bytes per pixel; worlds/anvil/tests/census.rs): 2, 3, 6 (8 per block); 4, 5, 7, 10 (16 per
+/// block); 11, 12 (1 per pixel); 0, 15 (4 per pixel; 14 of code 0's 344 and 1 of code 15's 4 fill none, and are
+/// refused); 20 (8 per pixel). This is the storage only: which codec a code is ([`format`]) the bytes don't say.
+pub fn storage(code: u32) -> Option<Storage> {
+    match code {
+        2 | 3 | 6 => Some(Storage::Blocks(8)),
+        4 | 5 | 7 | 10 => Some(Storage::Blocks(16)),
+        11 | 12 => Some(Storage::Pixels(1)),
+        0 | 15 => Some(Storage::Pixels(4)),
+        20 => Some(Storage::Pixels(8)),
         _ => None,
     }
 }
@@ -224,17 +259,17 @@ impl StoredTextureMap {
     }
 
     /// The levels this body holds (from `references.len()` to the mip count), each its bytes, refused unless the
-    /// format is known and they fill the pixels exactly.
+    /// format code's storage is established ([`storage`]) and they fill the pixels exactly.
     pub fn levels(&self) -> Result<Vec<&[u8]>, Error> {
-        let f = format(self.format).ok_or_else(|| Error::Pixels {
-            why: format!("format code {} isn't established", self.format),
+        let f = storage(self.format).ok_or_else(|| Error::Pixels {
+            why: format!("format code {}: its storage isn't established", self.format),
         })?;
         let first = u32::try_from(self.references.len()).unwrap_or(u32::MAX);
         let mut out = Vec::new();
         let mut at = 0usize;
         for i in first..self.mip_count {
             let (w, h) = self.level_size(i);
-            let size = f.checked_level_size(w, h).ok_or_else(|| Error::Pixels {
+            let size = f.level_size(w, h).ok_or_else(|| Error::Pixels {
                 why: format!("level {i}: {w} x {h} past this machine"),
             })?;
             let end = at.saturating_add(size);
@@ -323,7 +358,7 @@ mod tests {
         // pixels not filling the levels, and an unestablished format
         let t = StoredTextureMap::parse(&body(8, 4, 2, 3, &[77], &[1; 24])).expect("parse");
         assert!(t.levels().is_err());
-        let t = StoredTextureMap::parse(&body(8, 4, 5, 3, &[77], &[1; 32])).expect("parse");
+        let t = StoredTextureMap::parse(&body(8, 4, 9, 3, &[77], &[1; 32])).expect("parse");
         assert!(t.levels().is_err());
     }
 }

@@ -140,9 +140,36 @@ fn census_forge(path: &Path, tallies: &mut BTreeMap<&'static str, Tally>) {
                 .map_err(|e| e.to_string())
                 .and_then(|t| {
                     tally.outcome(format!("format code {}", t.format));
+                    if texture::storage(t.format).is_none() {
+                        // a measurement for codes not established: which storage classes the held levels fill exactly
+                        let classes = [
+                            ("8 bytes per 4x4 block", TexFormat::Bc1),
+                            ("16 bytes per 4x4 block", TexFormat::Bc3),
+                            ("1 byte per pixel", TexFormat::R8Unorm),
+                            ("4 bytes per pixel", TexFormat::Rgba8Unorm),
+                            ("8 bytes per pixel", TexFormat::Rgba16Float),
+                        ];
+                        let first = u32::try_from(t.references.len()).unwrap_or(u32::MAX);
+                        let closes: Vec<&str> = classes
+                            .iter()
+                            .filter(|(_, f)| {
+                                (first..t.mip_count)
+                                    .map(|i| {
+                                        let (w, h) = t.level_size(i);
+                                        f.checked_level_size(w, h)
+                                    })
+                                    .try_fold(0usize, |sum, s| s.map(|s| sum + s))
+                                    == Some(t.pixels.len())
+                            })
+                            .map(|(name, _)| *name)
+                            .collect();
+                        tally.outcome(format!("format code {} closes as {closes:?}", t.format));
+                    }
                     t.levels().map_err(|e| e.to_string())?;
                     // each external level: a CompiledMip of this map, at its level, sized for it
-                    let f = texture::format(t.format).unwrap_or(TexFormat::Bc1);
+                    let Some(f) = texture::storage(t.format) else {
+                        return Ok(());
+                    };
                     for (level, m) in (0u32..).zip(&t.references) {
                         let Some(e) = forge.find(m.id) else {
                             tally.outcome("external level in another forge");
@@ -152,12 +179,12 @@ fn census_forge(path: &Path, tallies: &mut BTreeMap<&'static str, Tally>) {
                         let mip = StoredMip::parse(&mip.body).map_err(|e| format!("external level: {e}"))?;
                         let (w, h) = t.level_size(level);
                         if (mip.parent, mip.level, Some(mip.image.len()))
-                            != (r.class_id, level, f.checked_level_size(w, h))
+                            != (r.class_id, level, f.level_size(w, h))
                         {
                             return Err(format!(
                                 "external level {level}: parent, level, bytes {:?}, the map's {:?}",
                                 (mip.parent, mip.level, mip.image.len()),
-                                (r.class_id, level, f.checked_level_size(w, h))
+                                (r.class_id, level, f.level_size(w, h))
                             ));
                         }
                     }
