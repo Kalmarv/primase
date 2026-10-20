@@ -292,7 +292,7 @@ fn world(order: Order) -> World {
 /// The ReSkate recipe a program runs on the raised world, in the pass manager.
 const RECIPE: &str = "lower-layered-reskate{overlays=all}, prepare-reskate-textures, prepare-reskate-grinds, snap-reskate-markers, \
                       prepare-reskate-water{extent=content,margin=400}, \
-                      prepare-reskate-pause-map{from=geometry,height=256,extent=content}, \
+                      prepare-reskate-pause-map{from=geometry,height=256,extent=content,leave-out=nothing,colour=mean}, \
                       select-reskate-lights{per_cell=2,cell=200}, prepare-reskate-overlays{step=0.004}, \
                       prepare-reskate-blend-order{grid=200}";
 

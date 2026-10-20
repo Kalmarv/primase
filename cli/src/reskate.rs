@@ -8,7 +8,7 @@
 //! `prepare-reskate-textures` (material tints multiplied into texture copies; the writer writes no tint), a budget
 //! if wanted (`budget-reskate-textures{max=N}`), `prepare-reskate-grinds` for grind curves (the writer builds no
 //! prism), `snap-reskate-markers` (the writer snaps no marker), the pause map if wanted
-//! (`prepare-reskate-pause-map{from=geometry,height=2160,extent=content}`, what the old writer always drew; without it
+//! (`prepare-reskate-pause-map{from=geometry,height=2160,extent=content,leave-out=nothing,colour=mean}`, what the old writer always drew; without it
 //! the map has none) and, last, `prepare-reskate-overlays{step=0.004}` (the writer stacks no decal of its own) and
 //! `prepare-reskate-blend-order{grid=200}` (the writer splits no blend chain of its own), then
 //! `prepare-reskate-collision{surfaces=coalesce,weld=mm}` (how the collision is written; without it, exactly), then

@@ -54,7 +54,7 @@ writers:
            prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004},
            prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},
            summarize-reskate-map, plan-reskate-blend-budget{objects=pool}\", and a pause map if wanted:
-           prepare-reskate-pause-map{from=geometry,height=2160,extent=content}; a spawn from place-spawn at --select)";
+           prepare-reskate-pause-map{from=geometry,height=2160,extent=content,leave-out=nothing,colour=mean}; a spawn from place-spawn at --select)";
 
 /// Every summary a world crate merges over a conversion's parts, by name.
 pub fn summaries() -> SummaryRegistry {
@@ -337,7 +337,7 @@ mod tests {
                 let reskate = format!(
                     "{passes}, bake-normal-scale, raise-skate{{name=n,light_scale=standard}}, lower-layered-reskate{{overlays=all}}, \
                      cap-textures{{max=256,normals=box}}, prepare-reskate-textures, budget-reskate-textures{{max=64}}, snap-reskate-markers, \
-                     prepare-reskate-pause-map{{from=geometry,height=2160,extent=content}}, \
+                     prepare-reskate-pause-map{{from=geometry,height=2160,extent=content,leave-out=nothing,colour=mean}}, \
                      prepare-reskate-uv-repeats{{decals=omit,blended=cutout}}, prepare-reskate-overlays{{step=0.004}}, prepare-reskate-blend-order{{grid=200}}, \
                      prepare-reskate-collision{{surfaces=coalesce,weld=mm}}, summarize-reskate-map, \
                      plan-reskate-blend-budget{{objects=pool}}"

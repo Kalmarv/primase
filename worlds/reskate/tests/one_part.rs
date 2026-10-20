@@ -251,7 +251,7 @@ fn the_preparation_passes_run_under_the_pass_manager() {
                    lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250}, \
                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds, \
                    place-reskate-spawn{at=centre}, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
-                   prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content}, \
+                   prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content,leave-out=nothing,colour=mean}, \
                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004}, \
                    prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},                    summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
     let pipeline = registry.parse(program).unwrap();
