@@ -298,6 +298,8 @@ fn decoded_extrema_meet_the_stored_bounds() {
         ("PRIMASE_ANVIL_FORGE_USNAT", 652_571),
         ("PRIMASE_ANVIL_FORGE_USNAT", 644_520),
         ("PRIMASE_ANVIL_FORGE_USNAT", 313_892),
+        ("PRIMASE_ANVIL_FORGE_USNAT", 651_945),
+        ("PRIMASE_ANVIL_FORGE_USNAT", 651_944),
     ];
     for (input, entry) in fixtures {
         let Some(path) = real_data(input) else {
@@ -320,25 +322,31 @@ fn decoded_extrema_meet_the_stored_bounds() {
     }
 }
 
-/// A Mesh of another compiled layout (`MeshData`'s CRC-32 at marker+13, 3 at marker+4: MAD_MOD_FAVELA_Wooden_BigTurn_B
-/// LOD0) is refused as that layout, before any of its fields is read at this layout's offsets.
+/// Meshes of the inline layout (`MeshData`'s CRC-32 at marker+13, 3 at marker+4; u32 indices): the Favela BigTurn B
+/// and A LOD0s, counts as a separate read-only decode found them (games/riders-republic
+/// docs/recon/layoutb-favela-observation.md, d099244). One range each, past 65535 vertices, its descriptor's count the
+/// low 16 bits.
 #[test]
-fn another_compiled_layout_is_refused() {
+fn inline_meshes_read_their_u32_indices() {
     let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
         return;
     };
     let mut w = World::new();
-    match read_meshes(&path, &[651_945], SourceFrame::WORLD, &mut w) {
-        Err(Error::Mesh {
-            entry: 651_945,
-            source:
-                mesh::Error::Layout {
-                    id: 0x0645_ABB5,
-                    flags: 3,
-                },
-        }) => {}
-        other => panic!("{other:?}"),
+    let placed = read_meshes(&path, &[651_945, 651_944], SourceFrame::WORLD, &mut w).expect("read");
+    for (p, (vertices, triangles)) in placed.into_iter().zip([(93_906, 64_211), (72_260, 46_142)]) {
+        let m = w
+            .get::<AnvilMesh>(w.get::<Instance>(p).expect("placed").prototype)
+            .expect("buffers");
+        assert_eq!((m.positions.len(), m.triangles.len()), (vertices, triangles));
+        assert_eq!(m.ranges, [0]);
+        assert_eq!(m.materials, [2_151_033_132_404]);
+        assert!(m.triangles.iter().flatten().any(|&i| i > 65_535));
+        assert!(m.positions.iter().flatten().all(|x| x.is_finite()));
+        ranges_tile(m);
     }
+    let stored = stored(&path, 651_945);
+    assert!(matches!(stored.layout, mesh::Layout::Inline(_)));
+    assert_eq!(stored.material_list.descriptors[0].vertex_count, 28_370);
 }
 
 /// The materials the bowls' tails name are Material resources of the same forge: each ClassID finds an entry whose

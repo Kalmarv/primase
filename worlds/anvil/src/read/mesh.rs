@@ -1,41 +1,46 @@
 //! A Mesh resource's body: its compiled mesh's vertex and index buffers, read as stored. Nothing about a vertex's
 //! fields is decided here beyond their layout; [`StoredVertex::position`] is the one decode, its evidence the bounds.
 //!
-//! The body (little-endian; offsets from the body's start, after the resource's class id and extension):
-//! - a 61-byte header, kept as stored; its bounds (two f32 triples at 20 and 36) are read;
-//! - at 61, the compiled mesh: its marker 0xFC9E1595 (u32), a zero byte at marker+4, its layout 0xC351EE43 (u32 at
-//!   marker+13; the offsets after it are this layout's), the vertex stride (u32 at marker+22), the range record
+//! The body (little-endian; offsets from the body's start, after the resource's class id and extension) starts with a
+//! 61-byte header, kept as stored, whose bounds (two f32 triples at 20 and 36) are read. At 61 the compiled mesh
+//! starts: its marker 0xFC9E1595 (CRC-32 of `CompiledMesh`), a byte at marker+4, 8 bytes, and at marker+13 a u32
+//! that with that byte names its layout ([`Layout`]). Two layouts are read; another is refused:
+//!
+//! - **ranged** (0 at marker+4, 0xC351EE43 at marker+13): the vertex stride (u32 at marker+22), the range record
 //!   count N (u32 at marker+63), then from marker+75 N range records, each the record id 0x07B19A87 (u32), a version
 //!   byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
-//!   carries 8 more bytes;
-//! - the vertex buffer's byte length (u32), then the vertices (stride bytes each);
-//! - 8 bytes, kept as stored; the index buffer's byte length (u32), then the indices (u16);
-//! - the tail ([`StoredTail`]): a u32 byte length (32 per range) and that many bytes; 8 bytes; `MeshData` (its
-//!   CRC-32 0x0645ABB5 and 18 bytes); one `MeshPrimitive` entry per range (its CRC-32 0xA57387EF, vertex base, a u32,
-//!   vertex count, first index, triangle count, version 1, 8 bytes) and 20 bytes holding the range count at +8 after
-//!   the last; one material descriptor per range (0x0B1D34C1, 4 bytes, a zero byte, the range's vertex count as u16, a
-//!   zero byte, the u64 ClassID of a Material, 8 bytes); the range count (u32) and 6 bytes; one 31-byte group per
-//!   range, holding its descriptor's Material ClassID at +8 and +17; 20 bytes, ending the body.
+//!   carries 8 more bytes. Then the vertex buffer's byte length (u32) and the vertices; 8 bytes; the index buffer's
+//!   byte length (u32) and the indices (u16). Then a u32 byte length (32 per range) and that many bytes; 8 bytes;
+//!   `MeshData` (its CRC-32 0x0645ABB5 and 18 bytes); one `MeshPrimitive` entry per range ([`StoredPrimitive`], 8
+//!   bytes after each); a u32 0 where another entry's marker would be, and 4 bytes; then the material list.
+//! - **inline** (3 at marker+4, `MeshData`'s CRC-32 at marker+13): `MeshData`'s 18 bytes; one `MeshPrimitive` entry;
+//!   the vertex buffer's byte length (u32, 24 bytes per vertex of the entry's count) and the vertices; 8 bytes; the
+//!   index buffer's byte length (u32) and the indices (u32); then the material list.
 //!
-//! The indices are in ranges, one per record: a range runs from its first index to the next record's (the last to the
-//! buffer's end), and its stored indices count from its vertex base; its vertices run from its base to the next
-//! record's (the last to the buffer's end). Refused, naming it: a header without the marker at 61, another layout or
-//! stride,
-//! record id or version, a buffer past the body, an index buffer not of whole triangles, and ranges that don't
-//! partition the buffers in order (the first at index and vertex 0, each range at a whole triangle and at or after the
-//! one before, none past either buffer) or an index outside its range's vertices. An empty range (no indices, or no
-//! vertices) and vertices no triangle names are read, not refused: nothing establishes that they can't be stored.
-//! Observed, not required: on seven Mesh resources (Riders Republic build 25394987: one, two, three, five and six
-//! records, strides 24) no range is empty and every vertex is named. The records' 8 extra bytes and the 8 bytes
-//! before the indices are not established and are kept as stored.
+//! A `MeshPrimitive` entry: its CRC-32 0xA57387EF, vertex base, a u32, vertex count, first index, triangle count and
+//! version 1. The material list, ending the body ([`MaterialList`]): the range count (u32) and 8 bytes; one material
+//! descriptor per range (0x0B1D34C1, 4 bytes, a zero byte, a u16 vertex count, a zero byte, the u64 ClassID of a
+//! Material, 8 bytes); the range count (u32) and 6 bytes; one 31-byte group per range, holding its descriptor's ClassID
+//! at +8 and +17; 20 bytes.
 //!
-//! The tail's grammar is established on the same meshes (games/riders-republic docs/recon/material-chain-binding.md,
-//! 2b3215e: every byte to the body's end accounted for, and the Material ClassIDs resolving to Material resources).
-//! Refused: another block length, marker, version or range count, a byte other than 0 either side of a descriptor's
-//! vertex count, a group's ClassID not its descriptor's, or bytes left after the last 20. [`StoredMesh::materials`]
-//! refuses a `MeshPrimitive` entry or descriptor that disagrees with its range. That descriptor *k* is range *k*'s
-//! material is read from their order and the vertex counts agreeing; how the engine binds it is not established. The
-//! bytes kept as stored are not interpreted.
+//! The indices are in ranges: a ranged mesh's one per record, running from its first index to the next record's (the
+//! last to the buffer's end), its stored indices counting from its vertex base and its vertices running from its base
+//! to the next record's; an inline mesh's one, its `MeshPrimitive` entry's, which must cover both buffers. Refused,
+//! naming it: a header without the marker at 61, another layout or stride, record id, marker, version or range count,
+//! a buffer past the body, an index buffer not of whole triangles, ranges that don't partition the buffers in order
+//! (the first at index and vertex 0, each range at a whole triangle and at or after the one before, none past either
+//! buffer), an index outside its range's vertices, a byte other than 0 either side of a descriptor's vertex count, a
+//! group's ClassID not its descriptor's, or bytes left after the last 20. [`StoredMesh::materials`] refuses a
+//! `MeshPrimitive` entry or descriptor that disagrees with its range. An empty range and vertices no triangle names are
+//! read, not refused.
+//!
+//! Established on seven ranged meshes (Riders Republic build 25394987: one to six records, strides 24; every byte to
+//! the body's end accounted for, games/riders-republic docs/recon/material-chain-binding.md, 2b3215e) and two inline
+//! ones (the Favela BigTurn A and B LOD0s, 72,260 and 93,906 vertices; docs/recon/layoutb-favela-observation.md,
+//! d099244). Observed, not required: no range is empty and every vertex is named. A descriptor's vertex count is its
+//! range's low 16 bits (the two inline meshes' counts pass 65535 and are stored so). That descriptor *k* is range *k*'s
+//! material is read from their order and the counts agreeing; how the engine binds it is not established. The bytes
+//! kept as stored are not interpreted.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -48,20 +53,19 @@ use std::ops::Range;
 pub const MESH: u32 = 0x415D_9568;
 /// The compiled mesh's marker (CRC-32 of `CompiledMesh`).
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;
-/// The one compiled mesh layout read: the u32 at marker+13 (its name unknown), with the byte at marker+4 0. Another
-/// layout places its fields elsewhere: one with `MeshData`'s CRC-32 (0x0645ABB5) there and 3 at marker+4 is seen.
-pub const LAYOUT: u32 = 0xC351_EE43;
+/// The ranged layout's id at marker+13 (its name unknown).
+pub const RANGED: u32 = 0xC351_EE43;
 /// Where the compiled mesh starts in the body.
 pub const HEADER: usize = 61;
 /// A range record's id.
 pub const RANGE_RECORD: u32 = 0x07B1_9A87;
 /// The one vertex stride read.
 pub const STRIDE: u32 = 24;
-/// `MeshData`'s marker in the tail (its CRC-32).
+/// `MeshData`'s marker (its CRC-32): the inline layout's id at marker+13, and in the ranged layout's tail.
 pub const MESH_DATA: u32 = 0x0645_ABB5;
-/// A `MeshPrimitive` entry's marker in the tail (its CRC-32).
+/// A `MeshPrimitive` entry's marker (its CRC-32).
 pub const MESH_PRIMITIVE: u32 = 0xA573_87EF;
-/// A material descriptor's marker in the tail (its name unknown).
+/// A material descriptor's marker (its name unknown).
 pub const MATERIAL_DESCRIPTOR: u32 = 0x0B1D_34C1;
 /// The type of the resources material descriptors refer to (CRC-32 of `Material`).
 pub const MATERIAL: u32 = 0x85C8_17C3;
@@ -78,7 +82,8 @@ pub enum Error {
     #[error("Mesh body: {found:#010x} at 61, not the compiled mesh marker 0xFC9E1595")]
     Marker { found: u32 },
     #[error(
-        "Mesh compiled layout {id:#010x} at marker+13, byte {flags} at marker+4: only 0xC351EE43 and 0 are read"
+        "Mesh compiled layout {id:#010x} at marker+13, byte {flags} at marker+4: only 0xC351EE43 with 0 (ranged) and \
+         0x0645ABB5 with 3 (inline) are read"
     )]
     Layout { id: u32, flags: u8 },
     #[error("Mesh vertex stride {0}: only 24 is read")]
@@ -114,16 +119,16 @@ pub struct StoredVertex {
     pub direction_a: [u8; 4],
     /// Bytes 12..16 (a packed direction: the tangent, where its geometry agrees).
     pub direction_b: [u8; 4],
-    /// Bytes 16..20 (observed 0xFFFF, 0xFFFF).
+    /// Bytes 16..20.
     pub unknown: [u16; 2],
     /// Bytes 20..24 (texture coordinates; their divisor isn't stored).
     pub uv: [u16; 2],
 }
 
 impl StoredVertex {
-    /// The position: each component times the scale over 32768. The evidence is the extrema only: on the four
-    /// fixtures (tests/meshes.rs) the decoded positions' least and greatest coordinates lie within one quantization
-    /// step of the header's stored bounds. No single vertex between them is checked against anything.
+    /// The position: each component times the scale over 32768. The evidence is the extrema only: on the fixtures
+    /// (tests/meshes.rs) the decoded positions' least and greatest coordinates lie within one quantization step of the
+    /// header's stored bounds. No single vertex between them is checked against anything.
     pub fn position(&self) -> [f32; 3] {
         let s = f32::from(self.scale) / 32768.0;
         self.position.map(|v| f32::from(v) * s)
@@ -137,25 +142,7 @@ pub struct MeshRange {
     pub vertices: Range<usize>,
 }
 
-/// A Mesh body's compiled buffers, as stored.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredMesh {
-    /// The 61 header bytes.
-    pub header: Vec<u8>,
-    /// The header's bounds: its minimum and maximum corners.
-    pub bounds: [[f32; 3]; 2],
-    /// The compiled mesh's bytes from its marker to its first range record (75), as stored.
-    pub compiled_head: Vec<u8>,
-    pub stride: u32,
-    pub records: Vec<RangeRecord>,
-    pub vertices: Vec<StoredVertex>,
-    /// The 8 bytes between the vertices and the index buffer's length.
-    pub gap: [u8; 8],
-    pub indices: Vec<u16>,
-    pub tail: StoredTail,
-}
-
-/// One `MeshPrimitive` entry of the tail (36 bytes after its marker's).
+/// One `MeshPrimitive` entry as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredPrimitive {
     pub vertex_base: u32,
@@ -164,15 +151,16 @@ pub struct StoredPrimitive {
     pub vertex_count: u32,
     pub first_index: u32,
     pub triangle_count: u32,
-    pub rest: [u8; 8],
+    /// The 8 bytes after an entry in the ranged layout's tail (none after the inline layout's).
+    pub rest: Option<[u8; 8]>,
 }
 
-/// One material descriptor of the tail (28 bytes).
+/// One material descriptor as stored (28 bytes).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterialDescriptor {
     /// The 4 bytes after its marker.
     pub head: [u8; 4],
-    /// Its range's vertex count, as a u16 between two zero bytes (a width beyond 16 bits isn't established).
+    /// Its range's vertex count's low 16 bits, between two zero bytes.
     pub vertex_count: u16,
     /// The ClassID of a Material resource.
     pub material: u64,
@@ -180,18 +168,11 @@ pub struct MaterialDescriptor {
     pub rest: [u8; 8],
 }
 
-/// A Mesh body's tail after the index buffer, as stored (its grammar in the module documentation).
+/// The material list ending a Mesh body, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredTail {
-    /// The 32-byte blocks, one per range.
-    pub blocks: Vec<[u8; 32]>,
-    /// The 8 bytes after them.
-    pub gap: [u8; 8],
-    /// `MeshData`'s 18 bytes after its marker.
-    pub mesh_data: [u8; 18],
-    pub primitives: Vec<StoredPrimitive>,
-    /// The 20 bytes after the last entry (the range count at +8).
-    pub primitives_end: [u8; 20],
+pub struct MaterialList {
+    /// The 8 bytes after the first range count.
+    pub head: [u8; 8],
     pub descriptors: Vec<MaterialDescriptor>,
     /// The 6 bytes after the second range count.
     pub groups_head: [u8; 6],
@@ -201,130 +182,56 @@ pub struct StoredTail {
     pub trailer: [u8; 20],
 }
 
-impl StoredTail {
-    /// The tail of `body` from `at`, for `n` ranges; it must end the body.
-    pub fn parse(body: &[u8], at: usize, n: usize) -> Result<StoredTail, Error> {
-        let refuse = |what: &'static str, why: String| Error::Tail { what, why };
-        let mut c = Cursor { b: body, at };
-        let marker = |c: &mut Cursor<'_>, what: &'static str, want: u32| -> Result<(), Error> {
-            let found = c.u32(what)?;
-            if found == want {
-                Ok(())
-            } else {
-                Err(refuse(what, format!("{found:#010x}, not {want:#010x}")))
-            }
-        };
-        let block_bytes = c.u32("block length")?;
-        if usize::try_from(block_bytes).ok() != n.checked_mul(32) {
-            return Err(refuse(
-                "block length",
-                format!("{block_bytes}, not 32 for each of {n} ranges"),
-            ));
-        }
-        let blocks = (0..n).map(|_| c.array::<32>("block")).collect::<Result<_, _>>()?;
-        let gap = c.array::<8>("bytes before MeshData")?;
-        marker(&mut c, "MeshData marker", MESH_DATA)?;
-        let mesh_data = c.array::<18>("MeshData")?;
-        let mut primitives = Vec::with_capacity(n);
-        for _ in 0..n {
-            marker(&mut c, "MeshPrimitive marker", MESH_PRIMITIVE)?;
-            let vertex_base = c.u32("MeshPrimitive vertex base")?;
-            let reserved = c.u32("MeshPrimitive")?;
-            let vertex_count = c.u32("MeshPrimitive vertex count")?;
-            let first_index = c.u32("MeshPrimitive first index")?;
-            let triangle_count = c.u32("MeshPrimitive triangle count")?;
-            let version = c.u32("MeshPrimitive version")?;
-            if version != 1 {
-                return Err(refuse("MeshPrimitive version", format!("{version}, not 1")));
-            }
-            primitives.push(StoredPrimitive {
-                vertex_base,
-                reserved,
-                vertex_count,
-                first_index,
-                triangle_count,
-                rest: c.array::<8>("MeshPrimitive")?,
-            });
-        }
-        let primitives_end = c.array::<20>("bytes after the MeshPrimitive entries")?;
-        let [m0, m1, m2, m3, _, _, _, _, n0, n1, n2, n3, ..] = primitives_end;
-        let next = u32::from_le_bytes([m0, m1, m2, m3]);
-        let ranges = u32::from_le_bytes([n0, n1, n2, n3]);
-        if next != 0 || usize::try_from(ranges).ok() != Some(n) {
-            return Err(refuse(
-                "bytes after the MeshPrimitive entries",
-                format!(
-                    "{next:#010x} where another entry's marker would be and {ranges} at +8, for {n} ranges"
-                ),
-            ));
-        }
-        let mut descriptors = Vec::with_capacity(n);
-        for _ in 0..n {
-            marker(&mut c, "material descriptor marker", MATERIAL_DESCRIPTOR)?;
-            let head = c.array::<4>("material descriptor")?;
-            let [z0, v0, v1, z1] = c.array::<4>("material descriptor vertex count")?;
-            if [z0, z1] != [0, 0] {
-                return Err(refuse(
-                    "material descriptor vertex count",
-                    format!("bytes {z0} and {z1} either side of it: only 0 is read"),
-                ));
-            }
-            let material = u64::from_le_bytes(c.array::<8>("material descriptor ClassID")?);
-            descriptors.push(MaterialDescriptor {
-                head,
-                vertex_count: u16::from_le_bytes([v0, v1]),
-                material,
-                rest: c.array::<8>("material descriptor")?,
-            });
-        }
-        let after = c.u32("range count after the descriptors")?;
-        if usize::try_from(after).ok() != Some(n) {
-            return Err(refuse(
-                "range count after the descriptors",
-                format!("{after}, not the {n} ranges"),
-            ));
-        }
-        let groups_head = c.array::<6>("bytes before the groups")?;
-        let mut groups = Vec::with_capacity(n);
-        for d in &descriptors {
-            let g = c.array::<31>("group")?;
-            let id = |at: usize| {
-                g.get(at..at.saturating_add(8))
-                    .and_then(|b| b.try_into().ok())
-                    .map(u64::from_le_bytes)
-            };
-            if id(8) != Some(d.material) || id(17) != Some(d.material) {
-                return Err(refuse(
-                    "group",
-                    format!(
-                        "ClassIDs {:?} and {:?}, not its descriptor's {}",
-                        id(8),
-                        id(17),
-                        d.material
-                    ),
-                ));
-            }
-            groups.push(g);
-        }
-        let trailer = c.array::<20>("last bytes")?;
-        if c.at != body.len() {
-            return Err(refuse(
-                "end",
-                format!("{} bytes after its last 20", body.len().saturating_sub(c.at)),
-            ));
-        }
-        Ok(StoredTail {
-            blocks,
-            gap,
-            mesh_data,
-            primitives,
-            primitives_end,
-            descriptors,
-            groups_head,
-            groups,
-            trailer,
-        })
-    }
+/// The ranged layout's fields, as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ranged {
+    /// The compiled mesh's bytes from its marker to its first range record (75).
+    pub compiled_head: Vec<u8>,
+    pub records: Vec<RangeRecord>,
+    /// The tail's 32-byte blocks, one per range.
+    pub blocks: Vec<[u8; 32]>,
+    /// The 8 bytes after them.
+    pub blocks_gap: [u8; 8],
+    /// `MeshData`'s 18 bytes after its marker.
+    pub mesh_data: [u8; 18],
+    pub primitives: Vec<StoredPrimitive>,
+    /// The 4 bytes after the zero ending the entries.
+    pub primitives_end: [u8; 4],
+}
+
+/// The inline layout's fields, as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inline {
+    /// `MeshData`'s 18 bytes after its marker.
+    pub mesh_data: [u8; 18],
+    pub primitive: StoredPrimitive,
+}
+
+/// A compiled mesh's layout.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// Range records before the buffers, u16 indices, `MeshData` and the `MeshPrimitive` entries after.
+    Ranged(Ranged),
+    /// `MeshData` and one `MeshPrimitive` entry before the buffers, u32 indices.
+    Inline(Inline),
+}
+
+/// A Mesh body's compiled buffers, as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredMesh {
+    /// The 61 header bytes.
+    pub header: Vec<u8>,
+    /// The header's bounds: its minimum and maximum corners.
+    pub bounds: [[f32; 3]; 2],
+    /// The 8 bytes after the compiled mesh's layout byte (marker+5).
+    pub compiled_flags: [u8; 8],
+    pub layout: Layout,
+    pub vertices: Vec<StoredVertex>,
+    /// The 8 bytes between the vertices and the index buffer's length.
+    pub gap: [u8; 8],
+    /// The indices (u16 in the ranged layout, u32 in the inline).
+    pub indices: Vec<u32>,
+    pub material_list: MaterialList,
 }
 
 /// Little-endian fields read in order, each bounded.
@@ -360,6 +267,202 @@ impl<'a> Cursor<'a> {
     fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
         Ok(u32::from_le_bytes(self.array(what)?))
     }
+    /// A u32 that must be `want`, refused as a tail field otherwise.
+    fn marker(&mut self, what: &'static str, want: u32) -> Result<(), Error> {
+        let found = self.u32(what)?;
+        if found == want {
+            Ok(())
+        } else {
+            Err(Error::Tail {
+                what,
+                why: format!("{found:#010x}, not {want:#010x}"),
+            })
+        }
+    }
+    /// A u32 that must be the range count `n`.
+    fn count(&mut self, what: &'static str, n: usize) -> Result<(), Error> {
+        let found = self.u32(what)?;
+        if usize::try_from(found).ok() == Some(n) {
+            Ok(())
+        } else {
+            Err(Error::Tail {
+                what,
+                why: format!("{found}, not the {n} ranges"),
+            })
+        }
+    }
+    /// A byte length read as a usize.
+    fn length(&mut self, what: &'static str) -> Result<usize, Error> {
+        usize::try_from(self.u32(what)?).map_err(|_| Error::Buffer {
+            what,
+            why: "length past this machine".into(),
+        })
+    }
+    /// A `MeshPrimitive` entry after its marker, with the 8 bytes after it when `rest`.
+    fn primitive(&mut self, rest: bool) -> Result<StoredPrimitive, Error> {
+        self.marker("MeshPrimitive marker", MESH_PRIMITIVE)?;
+        let vertex_base = self.u32("MeshPrimitive vertex base")?;
+        let reserved = self.u32("MeshPrimitive")?;
+        let vertex_count = self.u32("MeshPrimitive vertex count")?;
+        let first_index = self.u32("MeshPrimitive first index")?;
+        let triangle_count = self.u32("MeshPrimitive triangle count")?;
+        let version = self.u32("MeshPrimitive version")?;
+        if version != 1 {
+            return Err(Error::Tail {
+                what: "MeshPrimitive version",
+                why: format!("{version}, not 1"),
+            });
+        }
+        Ok(StoredPrimitive {
+            vertex_base,
+            reserved,
+            vertex_count,
+            first_index,
+            triangle_count,
+            rest: if rest {
+                Some(self.array::<8>("MeshPrimitive")?)
+            } else {
+                None
+            },
+        })
+    }
+    /// `vertex_bytes` of stride-24 vertices.
+    fn vertices(&mut self, vertex_bytes: usize) -> Result<Vec<StoredVertex>, Error> {
+        if vertex_bytes.checked_rem(24) != Some(0) {
+            return Err(Error::Buffer {
+                what: "vertex buffer",
+                why: format!("{vertex_bytes} bytes, not whole 24-byte vertices"),
+            });
+        }
+        let raw = self.take(vertex_bytes, "vertex buffer")?;
+        Ok(raw.as_chunks::<24>().0.iter().map(vertex).collect())
+    }
+    /// The index buffer: its byte length, then indices of `width` bytes (2 or 4) in whole triangles.
+    fn indices(&mut self, width: usize) -> Result<Vec<u32>, Error> {
+        let index_bytes = self.length("index buffer length")?;
+        if index_bytes.checked_rem(width.saturating_mul(3)) != Some(0) {
+            return Err(Error::Buffer {
+                what: "index buffer",
+                why: format!("{index_bytes} bytes, not whole triangles of {width}-byte indices"),
+            });
+        }
+        let raw = self.take(index_bytes, "index buffer")?;
+        Ok(if width == 2 {
+            raw.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|w| u32::from(u16::from_le_bytes(*w)))
+                .collect()
+        } else {
+            raw.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| u32::from_le_bytes(*w))
+                .collect()
+        })
+    }
+    /// The material list for `n` ranges, which must end the body.
+    fn material_list(&mut self, n: usize) -> Result<MaterialList, Error> {
+        self.count("range count before the descriptors", n)?;
+        let head = self.array::<8>("bytes before the descriptors")?;
+        let mut descriptors = Vec::with_capacity(n);
+        for _ in 0..n {
+            self.marker("material descriptor marker", MATERIAL_DESCRIPTOR)?;
+            let head = self.array::<4>("material descriptor")?;
+            let [z0, v0, v1, z1] = self.array::<4>("material descriptor vertex count")?;
+            if [z0, z1] != [0, 0] {
+                return Err(Error::Tail {
+                    what: "material descriptor vertex count",
+                    why: format!("bytes {z0} and {z1} either side of it: only 0 is read"),
+                });
+            }
+            let material = u64::from_le_bytes(self.array::<8>("material descriptor ClassID")?);
+            descriptors.push(MaterialDescriptor {
+                head,
+                vertex_count: u16::from_le_bytes([v0, v1]),
+                material,
+                rest: self.array::<8>("material descriptor")?,
+            });
+        }
+        self.count("range count after the descriptors", n)?;
+        let groups_head = self.array::<6>("bytes before the groups")?;
+        let mut groups = Vec::with_capacity(n);
+        for d in &descriptors {
+            let g = self.array::<31>("group")?;
+            let id = |at: usize| {
+                g.get(at..at.saturating_add(8))
+                    .and_then(|b| b.try_into().ok())
+                    .map(u64::from_le_bytes)
+            };
+            if id(8) != Some(d.material) || id(17) != Some(d.material) {
+                return Err(Error::Tail {
+                    what: "group",
+                    why: format!(
+                        "ClassIDs {:?} and {:?}, not its descriptor's {}",
+                        id(8),
+                        id(17),
+                        d.material
+                    ),
+                });
+            }
+            groups.push(g);
+        }
+        let trailer = self.array::<20>("last bytes")?;
+        if self.at != self.b.len() {
+            return Err(Error::Tail {
+                what: "end",
+                why: format!("{} bytes after its last 20", self.b.len().saturating_sub(self.at)),
+            });
+        }
+        Ok(MaterialList {
+            head,
+            descriptors,
+            groups_head,
+            groups,
+            trailer,
+        })
+    }
+}
+
+fn vertex(v: &[u8; 24]) -> StoredVertex {
+    let [
+        p0,
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        s0,
+        s1,
+        a0,
+        a1,
+        a2,
+        a3,
+        b0,
+        b1,
+        b2,
+        b3,
+        u0,
+        u1,
+        u2,
+        u3,
+        t0,
+        t1,
+        t2,
+        t3,
+    ] = *v;
+    StoredVertex {
+        position: [
+            i16::from_le_bytes([p0, p1]),
+            i16::from_le_bytes([p2, p3]),
+            i16::from_le_bytes([p4, p5]),
+        ],
+        scale: i16::from_le_bytes([s0, s1]),
+        direction_a: [a0, a1, a2, a3],
+        direction_b: [b0, b1, b2, b3],
+        unknown: [u16::from_le_bytes([u0, u1]), u16::from_le_bytes([u2, u3])],
+        uv: [u16::from_le_bytes([t0, t1]), u16::from_le_bytes([t2, t3])],
+    }
 }
 
 fn f32s(b: &[u8; 12]) -> [f32; 3] {
@@ -377,34 +480,54 @@ impl StoredMesh {
         let mut c = Cursor { b: body, at: 0 };
         let header = c.take(HEADER, "header")?.to_vec();
         let bound = |at: usize| -> Result<[f32; 3], Error> {
-            let s = header.get(at..at.saturating_add(12)).ok_or(Error::Short {
-                what: "header bounds",
-                at,
-                have: body.len(),
-            })?;
-            Ok(f32s(s.try_into().map_err(|_| Error::Short {
-                what: "header bounds",
-                at,
-                have: body.len(),
-            })?))
+            header
+                .get(at..at.saturating_add(12))
+                .and_then(|s| s.try_into().ok())
+                .map(f32s)
+                .ok_or(Error::Short {
+                    what: "header bounds",
+                    at,
+                    have: body.len(),
+                })
         };
         let bounds = [bound(20)?, bound(36)?];
-        let marker = HEADER;
-        let compiled_head = c.take(75, "compiled mesh head")?.to_vec();
+        let found = c.u32("compiled mesh marker")?;
+        if found != COMPILED_MESH {
+            return Err(Error::Marker { found });
+        }
+        let [flags] = c.array::<1>("compiled mesh layout byte")?;
+        let compiled_flags = c.array::<8>("compiled mesh")?;
+        let id = c.u32("compiled mesh layout")?;
+        match (id, flags) {
+            (RANGED, 0) => Self::ranged(body, c, header, bounds, compiled_flags),
+            (MESH_DATA, 3) => Self::inline(c, header, bounds, compiled_flags),
+            _ => Err(Error::Layout { id, flags }),
+        }
+    }
+
+    fn ranged(
+        body: &[u8],
+        mut c: Cursor<'_>,
+        header: Vec<u8>,
+        bounds: [[f32; 3]; 2],
+        compiled_flags: [u8; 8],
+    ) -> Result<StoredMesh, Error> {
+        // the compiled head is kept whole, from its marker
+        let compiled_head = body
+            .get(HEADER..HEADER.saturating_add(75))
+            .ok_or(Error::Short {
+                what: "compiled mesh head",
+                at: HEADER,
+                have: body.len(),
+            })?
+            .to_vec();
+        c.at = HEADER.saturating_add(75);
         let word = |at: usize| -> u32 {
             compiled_head
                 .get(at..at.saturating_add(4))
                 .and_then(|w| w.try_into().ok())
                 .map_or(0, u32::from_le_bytes)
         };
-        let found = word(0);
-        if found != COMPILED_MESH {
-            return Err(Error::Marker { found });
-        }
-        let (id, flags) = (word(13), compiled_head.get(4).copied().unwrap_or_default());
-        if (id, flags) != (LAYOUT, 0) {
-            return Err(Error::Layout { id, flags });
-        }
         let stride = word(22);
         if stride != STRIDE {
             return Err(Error::Stride(stride));
@@ -420,7 +543,6 @@ impl StoredMesh {
                 why: format!("count {count} at marker+63: not a record count the body can hold"),
             });
         }
-        debug_assert_eq!(c.at, marker.saturating_add(75));
         let mut records = Vec::with_capacity(n);
         for index in 0..n {
             let id = c.u32("range record id")?;
@@ -439,8 +561,7 @@ impl StoredMesh {
             }
             let first_index = c.u32("range record first index")?;
             let vertex_base = c.u32("range record vertex base")?;
-            let last = index.checked_add(1) == Some(n);
-            let extension = if last {
+            let extension = if index.checked_add(1) == Some(n) {
                 None
             } else {
                 Some([c.u32("range record extension")?, c.u32("range record extension")?])
@@ -452,109 +573,122 @@ impl StoredMesh {
                 extension,
             });
         }
-        let vertex_bytes = usize::try_from(c.u32("vertex buffer length")?).map_err(|_| Error::Buffer {
-            what: "vertex buffer",
-            why: "length past this machine".into(),
-        })?;
-        let stride_len = usize::try_from(stride).map_err(|_| Error::Stride(stride))?;
-        if vertex_bytes.checked_rem(stride_len) != Some(0) {
-            return Err(Error::Buffer {
-                what: "vertex buffer",
-                why: format!("{vertex_bytes} bytes, not whole {stride}-byte vertices"),
-            });
-        }
-        let raw = c.take(vertex_bytes, "vertex buffer")?;
-        let vertices = raw
-            .as_chunks::<24>()
-            .0
-            .iter()
-            .map(|v| {
-                let [
-                    p0,
-                    p1,
-                    p2,
-                    p3,
-                    p4,
-                    p5,
-                    s0,
-                    s1,
-                    a0,
-                    a1,
-                    a2,
-                    a3,
-                    b0,
-                    b1,
-                    b2,
-                    b3,
-                    u0,
-                    u1,
-                    u2,
-                    u3,
-                    t0,
-                    t1,
-                    t2,
-                    t3,
-                ] = *v;
-                StoredVertex {
-                    position: [
-                        i16::from_le_bytes([p0, p1]),
-                        i16::from_le_bytes([p2, p3]),
-                        i16::from_le_bytes([p4, p5]),
-                    ],
-                    scale: i16::from_le_bytes([s0, s1]),
-                    direction_a: [a0, a1, a2, a3],
-                    direction_b: [b0, b1, b2, b3],
-                    unknown: [u16::from_le_bytes([u0, u1]), u16::from_le_bytes([u2, u3])],
-                    uv: [u16::from_le_bytes([t0, t1]), u16::from_le_bytes([t2, t3])],
-                }
-            })
-            .collect();
+        let vertex_bytes = c.length("vertex buffer length")?;
+        let vertices = c.vertices(vertex_bytes)?;
         let gap = c.array::<8>("bytes before the index buffer")?;
-        let index_bytes = usize::try_from(c.u32("index buffer length")?).map_err(|_| Error::Buffer {
-            what: "index buffer",
-            why: "length past this machine".into(),
-        })?;
-        if index_bytes.checked_rem(6) != Some(0) {
-            return Err(Error::Buffer {
-                what: "index buffer",
-                why: format!("{index_bytes} bytes, not whole triangles of u16"),
+        let indices = c.indices(2)?;
+        let block_bytes = c.u32("block length")?;
+        if usize::try_from(block_bytes).ok() != n.checked_mul(32) {
+            return Err(Error::Tail {
+                what: "block length",
+                why: format!("{block_bytes}, not 32 for each of {n} ranges"),
             });
         }
-        let indices = c
-            .take(index_bytes, "index buffer")?
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|w| u16::from_le_bytes(*w))
-            .collect();
-        let tail = StoredTail::parse(body, c.at, records.len())?;
+        let blocks = (0..n).map(|_| c.array::<32>("block")).collect::<Result<_, _>>()?;
+        let blocks_gap = c.array::<8>("bytes before MeshData")?;
+        c.marker("MeshData marker", MESH_DATA)?;
+        let mesh_data = c.array::<18>("MeshData")?;
+        let primitives = (0..n).map(|_| c.primitive(true)).collect::<Result<_, _>>()?;
+        c.marker("MeshPrimitive marker after the last", 0)?;
+        let primitives_end = c.array::<4>("bytes after the MeshPrimitive entries")?;
+        let materials = c.material_list(n)?;
         Ok(StoredMesh {
             header,
             bounds,
-            compiled_head,
-            stride,
-            records,
+            compiled_flags,
+            layout: Layout::Ranged(Ranged {
+                compiled_head,
+                records,
+                blocks,
+                blocks_gap,
+                mesh_data,
+                primitives,
+                primitives_end,
+            }),
             vertices,
             gap,
             indices,
-            tail,
+            material_list: materials,
         })
     }
 
-    /// Each range's indices and vertices, refused unless they tile both
-    /// buffers (the first at 0, each at a whole triangle and at or after the one before, the last ending each buffer).
+    fn inline(
+        mut c: Cursor<'_>,
+        header: Vec<u8>,
+        bounds: [[f32; 3]; 2],
+        compiled_flags: [u8; 8],
+    ) -> Result<StoredMesh, Error> {
+        let mesh_data = c.array::<18>("MeshData")?;
+        let primitive = c.primitive(false)?;
+        let vertex_bytes = c.length("vertex buffer length")?;
+        let count = usize::try_from(primitive.vertex_count).unwrap_or(usize::MAX);
+        if count.checked_mul(24) != Some(vertex_bytes) {
+            return Err(Error::Buffer {
+                what: "vertex buffer",
+                why: format!("{vertex_bytes} bytes, not 24 for each of its MeshPrimitive's {count} vertices"),
+            });
+        }
+        let vertices = c.vertices(vertex_bytes)?;
+        let gap = c.array::<8>("bytes before the index buffer")?;
+        let indices = c.indices(4)?;
+        let materials = c.material_list(1)?;
+        Ok(StoredMesh {
+            header,
+            bounds,
+            compiled_flags,
+            layout: Layout::Inline(Inline { mesh_data, primitive }),
+            vertices,
+            gap,
+            indices,
+            material_list: materials,
+        })
+    }
+
+    /// The `MeshPrimitive` entries, one per range.
+    pub fn primitives(&self) -> &[StoredPrimitive] {
+        match &self.layout {
+            Layout::Ranged(r) => &r.primitives,
+            Layout::Inline(i) => std::slice::from_ref(&i.primitive),
+        }
+    }
+
+    /// Each range's indices and vertices, refused unless they tile both buffers (the first at 0, each at a whole
+    /// triangle and at or after the one before, the last ending each buffer).
     pub fn ranges(&self) -> Result<Vec<MeshRange>, Error> {
         let at = |x: u32| usize::try_from(x).unwrap_or(usize::MAX);
-        let refuse = |index: usize, why: String| Error::Record { index, why };
-        let mut out = Vec::with_capacity(self.records.len());
-        for (index, r) in self.records.iter().enumerate() {
-            let (first, base) = (at(r.first_index), at(r.vertex_base));
-            let (end, vertices_end) = self
+        let starts: Vec<(usize, usize)> = match &self.layout {
+            Layout::Ranged(r) => r
                 .records
+                .iter()
+                .map(|r| (at(r.first_index), at(r.vertex_base)))
+                .collect(),
+            Layout::Inline(i) => {
+                // its one entry must cover both buffers
+                let p = &i.primitive;
+                let covers = at(p.triangle_count).checked_mul(3) == Some(self.indices.len())
+                    && at(p.vertex_count) == self.vertices.len();
+                if !covers {
+                    return Err(Error::Record {
+                        index: 0,
+                        why: format!(
+                            "MeshPrimitive of {} triangles and {} vertices, the buffers {} indices and {} vertices",
+                            p.triangle_count,
+                            p.vertex_count,
+                            self.indices.len(),
+                            self.vertices.len()
+                        ),
+                    });
+                }
+                vec![(at(p.first_index), at(p.vertex_base))]
+            }
+        };
+        let refuse = |index: usize, why: String| Error::Record { index, why };
+        let mut out = Vec::with_capacity(starts.len());
+        for (index, &(first, base)) in starts.iter().enumerate() {
+            let (end, vertices_end) = starts
                 .get(index.saturating_add(1))
-                .map_or((self.indices.len(), self.vertices.len()), |next| {
-                    (at(next.first_index), at(next.vertex_base))
-                });
+                .copied()
+                .unwrap_or((self.indices.len(), self.vertices.len()));
             if index == 0 && (first, base) != (0, 0) {
                 return Err(refuse(
                     index,
@@ -587,13 +721,15 @@ impl StoredMesh {
         Ok(out)
     }
 
-    /// Each range's material: its descriptor's Material ClassID, refused unless the tail's `MeshPrimitive` entry and
-    /// descriptor for each range agree with it (vertex base and count, first index, triangle count).
+    /// Each range's material: its descriptor's Material ClassID, refused unless the range's `MeshPrimitive` entry and
+    /// descriptor agree with it (vertex base and count, first index, triangle count; the descriptor's count is the
+    /// range's low 16 bits).
     pub fn materials(&self) -> Result<Vec<u64>, Error> {
         let ranges = self.ranges()?;
+        let primitives = self.primitives();
         let mut out = Vec::with_capacity(ranges.len());
         for (k, r) in ranges.iter().enumerate() {
-            let (Some(p), Some(d)) = (self.tail.primitives.get(k), self.tail.descriptors.get(k)) else {
+            let (Some(p), Some(d)) = (primitives.get(k), self.material_list.descriptors.get(k)) else {
                 return Err(Error::Tail {
                     what: "ranges",
                     why: format!("no entry for range {k}"),
@@ -613,13 +749,14 @@ impl StoredMesh {
                 vertices,
                 r.indices.start,
                 r.indices.len() / 3,
-                vertices,
+                vertices & 0xFFFF,
             ];
             if stored != range {
                 return Err(Error::Tail {
                     what: "ranges",
                     why: format!(
-                        "range {k}: stored (vertex base, vertex count, first index, triangle count, descriptor vertex                          count) {stored:?}, the range's {range:?}"
+                        "range {k}: stored (vertex base, vertex count, first index, triangle count, descriptor's \
+                         count) {stored:?}, the range's {range:?}"
                     ),
                 });
             }
@@ -635,7 +772,9 @@ impl StoredMesh {
         for (index, MeshRange { indices, vertices }) in self.ranges()?.into_iter().enumerate() {
             let stored = self.indices.get(indices.clone()).unwrap_or_default();
             for (k, &i) in stored.iter().enumerate() {
-                let v = vertices.start.saturating_add(usize::from(i));
+                let v = vertices
+                    .start
+                    .saturating_add(usize::try_from(i).unwrap_or(usize::MAX));
                 if !vertices.contains(&v) {
                     return Err(Error::Record {
                         index,
@@ -659,76 +798,22 @@ impl StoredMesh {
 #[allow(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
     reason = "test fixtures built by hand"
 )]
 mod tests {
     use super::*;
 
-    /// A mesh of `vertices` vertices and these indices, its records these (first index, vertex base).
-    fn mesh(vertices: usize, indices: &[u16], records: &[(u32, u32)]) -> StoredMesh {
-        let vertex = StoredVertex {
-            position: [0; 3],
-            scale: 1,
-            direction_a: [0; 4],
-            direction_b: [0; 4],
-            unknown: [0xFFFF; 2],
-            uv: [0; 2],
-        };
-        StoredMesh {
-            header: vec![0; HEADER],
-            bounds: [[0.0; 3]; 2],
-            compiled_head: vec![0; 75],
-            stride: STRIDE,
-            records: records
-                .iter()
-                .enumerate()
-                .map(|(k, &(first_index, vertex_base))| RangeRecord {
-                    pad: [0; 3],
-                    first_index,
-                    vertex_base,
-                    extension: (k + 1 < records.len()).then_some([0, 0]),
-                })
-                .collect(),
-            vertices: vec![vertex; vertices],
-            gap: [0; 8],
-            indices: indices.to_vec(),
-            tail: StoredTail {
-                blocks: Vec::new(),
-                gap: [0; 8],
-                mesh_data: [0; 18],
-                primitives: Vec::new(),
-                primitives_end: [0; 20],
-                descriptors: Vec::new(),
-                groups_head: [0; 6],
-                groups: Vec::new(),
-                trailer: [0; 20],
-            },
-        }
-    }
-
-    /// A tail's bytes for these ranges (vertex base, vertex count, first index, triangle count) and their materials.
-    fn tail(ranges: &[[u32; 4]], materials: &[u64]) -> Vec<u8> {
-        let n = u32::try_from(ranges.len()).expect("few");
+    /// A material list's bytes for these descriptor counts and materials.
+    fn material_list(counts: &[u16], materials: &[u64]) -> Vec<u8> {
+        let n = counts.len() as u32;
         let mut b = Vec::new();
-        b.extend((32 * n).to_le_bytes());
-        b.extend(vec![7; 32 * ranges.len()]);
-        b.extend([0; 8]);
-        b.extend(MESH_DATA.to_le_bytes());
-        b.extend([0; 18]);
-        for r in ranges {
-            b.extend(MESH_PRIMITIVE.to_le_bytes());
-            for x in [r[0], 0, r[1], r[2], r[3], 1] {
-                b.extend(x.to_le_bytes());
-            }
-            b.extend([0; 8]);
-        }
-        b.extend([0; 8]);
         b.extend(n.to_le_bytes());
         b.extend([0; 8]);
-        for (r, m) in ranges.iter().zip(materials) {
+        for (c, m) in counts.iter().zip(materials) {
             b.extend(MATERIAL_DESCRIPTOR.to_le_bytes());
             b.extend([1, 0, 0, 0, 0]);
-            b.extend(u16::try_from(r[1]).expect("small").to_le_bytes());
+            b.extend(c.to_le_bytes());
             b.push(0);
             b.extend(m.to_le_bytes());
             b.extend([0; 8]);
@@ -747,28 +832,122 @@ mod tests {
         b
     }
 
+    fn primitive(b: &mut Vec<u8>, [base, count, first, triangles]: [u32; 4]) {
+        b.extend(MESH_PRIMITIVE.to_le_bytes());
+        for x in [base, 0, count, first, triangles, 1] {
+            b.extend(x.to_le_bytes());
+        }
+    }
+
+    /// The header and the compiled mesh's first 17 bytes.
+    fn head(flags: u8, layout: u32) -> Vec<u8> {
+        let mut b = vec![0; HEADER];
+        b.extend(COMPILED_MESH.to_le_bytes());
+        b.push(flags);
+        b.extend([0; 8]);
+        b.extend(layout.to_le_bytes());
+        b
+    }
+
+    /// A ranged body of `vertices` vertices, these u16 indices, records (first index, vertex base) and materials.
+    fn ranged(vertices: usize, indices: &[u16], records: &[(u32, u32)], materials: &[u64]) -> Vec<u8> {
+        let n = records.len();
+        let mut b = head(0, RANGED);
+        let mut rest = vec![0; 75 - 17];
+        rest[22 - 17..26 - 17].copy_from_slice(&STRIDE.to_le_bytes());
+        rest[63 - 17..67 - 17].copy_from_slice(&(n as u32).to_le_bytes());
+        b.extend(rest);
+        for (k, (first, base)) in records.iter().enumerate() {
+            b.extend(RANGE_RECORD.to_le_bytes());
+            b.extend([1, 0, 0, 0]);
+            b.extend(first.to_le_bytes());
+            b.extend(base.to_le_bytes());
+            if k + 1 < n {
+                b.extend([0; 8]);
+            }
+        }
+        b.extend(((vertices * 24) as u32).to_le_bytes());
+        b.extend(vec![0; vertices * 24]);
+        b.extend([0; 8]);
+        b.extend(((indices.len() * 2) as u32).to_le_bytes());
+        indices.iter().for_each(|i| b.extend(i.to_le_bytes()));
+        b.extend(((32 * n) as u32).to_le_bytes());
+        b.extend(vec![7; 32 * n]);
+        b.extend([0; 8]);
+        b.extend(MESH_DATA.to_le_bytes());
+        b.extend([0; 18]);
+        let mut counts = Vec::new();
+        for (k, &(first, base)) in records.iter().enumerate() {
+            let (end, vend) = records
+                .get(k + 1)
+                .copied()
+                .unwrap_or((indices.len() as u32, vertices as u32));
+            primitive(&mut b, [base, vend - base, first, (end - first) / 3]);
+            b.extend([0; 8]);
+            counts.push((vend - base) as u16);
+        }
+        b.extend([0; 8]);
+        b.extend(material_list(&counts, materials));
+        b
+    }
+
+    /// An inline body of `vertices` vertices, these u32 indices and one material.
+    fn inline(vertices: usize, indices: &[u32], material: u64) -> Vec<u8> {
+        let mut b = head(3, MESH_DATA);
+        b.extend([0; 18]);
+        primitive(&mut b, [0, vertices as u32, 0, (indices.len() / 3) as u32]);
+        b.extend(((vertices * 24) as u32).to_le_bytes());
+        b.extend(vec![0; vertices * 24]);
+        b.extend([0; 8]);
+        b.extend(((indices.len() * 4) as u32).to_le_bytes());
+        indices.iter().for_each(|i| b.extend(i.to_le_bytes()));
+        b.extend(material_list(&[vertices as u16], &[material]));
+        b
+    }
+
+    fn refused_as(body: &[u8]) -> &'static str {
+        match StoredMesh::parse(body) {
+            Err(Error::Tail { what, .. } | Error::Short { what, .. } | Error::Buffer { what, .. }) => what,
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+
+    /// A ranged mesh of these records, parsed.
+    fn mesh(vertices: usize, indices: &[u16], records: &[(u32, u32)]) -> StoredMesh {
+        let mut m = StoredMesh::parse(&ranged(vertices, &[], &[(0, 0)], &[1])).expect("parse");
+        m.indices = indices.iter().map(|&i| u32::from(i)).collect();
+        m.vertices = vec![m.vertices.first().copied().unwrap_or(vertex(&[0; 24])); vertices];
+        if let Layout::Ranged(r) = &mut m.layout {
+            r.records = records
+                .iter()
+                .map(|&(first_index, vertex_base)| RangeRecord {
+                    pad: [0; 3],
+                    first_index,
+                    vertex_base,
+                    extension: None,
+                })
+                .collect();
+        }
+        m
+    }
+
     #[test]
-    fn a_tail_reads_each_ranges_material() {
-        let ranges = [[0, 3, 0, 1], [3, 3, 3, 1]];
-        let bytes = tail(&ranges, &[11, 22]);
-        let t = StoredTail::parse(&bytes, 0, 2).expect("tail");
-        assert_eq!(
-            t.descriptors.iter().map(|d| d.material).collect::<Vec<_>>(),
-            [11, 22]
-        );
-        let mut m = mesh(6, &[0, 1, 2, 0, 1, 2], &[(0, 0), (3, 3)]);
-        m.tail = t;
+    fn a_ranged_body_reads_its_ranges_and_materials() {
+        let m =
+            StoredMesh::parse(&ranged(6, &[0, 1, 2, 0, 2, 1], &[(0, 0), (3, 3)], &[11, 22])).expect("parse");
+        assert_eq!(m.triangles().expect("read"), [[0, 1, 2], [3, 5, 4]]);
         assert_eq!(m.materials().expect("materials"), [11, 22]);
-        // a MeshPrimitive entry disagreeing with its range
+        // a MeshPrimitive entry or a descriptor's count disagreeing with its range
         let mut wrong = m.clone();
-        wrong.tail.primitives[1].vertex_base = 2;
+        if let Layout::Ranged(r) = &mut wrong.layout {
+            r.primitives[1].vertex_base = 2;
+        }
         assert!(matches!(
             wrong.materials(),
             Err(Error::Tail { what: "ranges", .. })
         ));
-        // a descriptor's vertex count disagreeing
         let mut wrong = m;
-        wrong.tail.descriptors[0].vertex_count = 4;
+        wrong.material_list.descriptors[0].vertex_count = 4;
         assert!(matches!(
             wrong.materials(),
             Err(Error::Tail { what: "ranges", .. })
@@ -776,35 +955,73 @@ mod tests {
     }
 
     #[test]
+    fn an_inline_body_reads_its_one_range_and_u32_indices() {
+        // 70,000 vertices: an index past 65535, and a descriptor count of the low 16 bits (70,000 - 65,536)
+        let n = 70_000;
+        let body = inline(n, &[0, 1, 69_999, 69_999, 1, 2], 33);
+        let m = StoredMesh::parse(&body).expect("parse");
+        assert_eq!(m.triangles().expect("read"), [[0, 1, 69_999], [69_999, 1, 2]]);
+        assert_eq!(m.material_list.descriptors[0].vertex_count, 4464);
+        assert_eq!(m.materials().expect("materials"), [33]);
+        // its entry not covering the buffers
+        let mut wrong = m;
+        if let Layout::Inline(i) = &mut wrong.layout {
+            i.primitive.triangle_count = 1;
+        }
+        assert!(matches!(wrong.triangles(), Err(Error::Record { index: 0, .. })));
+    }
+
+    #[test]
+    fn another_layout_is_refused() {
+        for (flags, id) in [(3, RANGED), (0, MESH_DATA), (0, 1)] {
+            let mut b = head(flags, id);
+            b.extend([0; 200]);
+            assert!(matches!(
+                StoredMesh::parse(&b),
+                Err(Error::Layout { id: i, flags: f }) if (i, f) == (id, flags)
+            ));
+        }
+    }
+
+    #[test]
     fn a_tail_off_its_grammar_is_refused() {
-        let good = tail(&[[0, 3, 0, 1], [3, 3, 3, 1]], &[11, 22]);
-        let what = |bytes: &[u8], n: usize| match StoredTail::parse(bytes, 0, n) {
-            Err(Error::Tail { what, .. }) => what,
-            Err(Error::Short { what, .. }) => what,
-            other => panic!("not refused: {other:?}"),
-        };
-        // another range count than the mesh's
-        assert_eq!(what(&good, 3), "block length");
-        // a group's ClassID flipped (the first group's first copy)
+        let good = ranged(6, &[0, 1, 2, 0, 1, 2], &[(0, 0), (3, 3)], &[11, 22]);
         let groups = good.len() - 20 - 2 * 31;
-        let mut b = good.clone();
-        b[groups + 8] ^= 0xFF;
-        assert_eq!(what(&b, 2), "group");
-        // a nonzero byte beside a descriptor's vertex count
         let descriptors = groups - 6 - 4 - 2 * 28;
-        let mut b = good.clone();
-        b[descriptors + 11] = 1;
-        assert_eq!(what(&b, 2), "material descriptor vertex count");
-        // a MeshPrimitive of another version
-        let primitives = 4 + 64 + 8 + 22;
-        let mut b = good.clone();
-        b[primitives + 24] = 2;
-        assert_eq!(what(&b, 2), "MeshPrimitive version");
-        // a byte past the end, and one short
+        let after_primitives = descriptors - 12 - 8;
+        let primitives = after_primitives - 2 * 36;
+        let edit = |at: usize, x: u8| {
+            let mut b = good.clone();
+            b[at] = x;
+            b
+        };
+        assert_eq!(refused_as(&edit(groups + 8, 0xFF)), "group");
+        assert_eq!(
+            refused_as(&edit(descriptors + 11, 1)),
+            "material descriptor vertex count"
+        );
+        assert_eq!(refused_as(&edit(primitives + 24, 2)), "MeshPrimitive version");
+        assert_eq!(
+            refused_as(&edit(after_primitives, 1)),
+            "MeshPrimitive marker after the last"
+        );
+        assert_eq!(
+            refused_as(&edit(descriptors - 12, 3)),
+            "range count before the descriptors"
+        );
         let mut b = good.clone();
         b.push(0);
-        assert_eq!(what(&b, 2), "end");
-        assert_eq!(what(&good[..good.len() - 1], 2), "last bytes");
+        assert_eq!(refused_as(&b), "end");
+        assert_eq!(refused_as(&good[..good.len() - 1]), "last bytes");
+        // the inline layout's: a vertex buffer not its entry's count, and the same list
+        let good = inline(3, &[0, 1, 2], 5);
+        let vertex_bytes = HEADER + 17 + 18 + 28;
+        let mut b = good.clone();
+        b[vertex_bytes] = 0;
+        assert_eq!(refused_as(&b), "vertex buffer");
+        let mut b = good.clone();
+        b.push(0);
+        assert_eq!(refused_as(&b), "end");
     }
 
     fn refused(m: &StoredMesh) -> usize {
