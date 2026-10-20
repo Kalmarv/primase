@@ -36,7 +36,14 @@ budgets, so a part refuses all three).
 the map state and hour (resolve-state{assign=gta.map:online;gta.hour:12}), the region rules (gta-select-region{...}),
 lights, collision and water, then each part's GTA passes.
 readers:
-  gta          --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--reach M]
+  gta          --gta <install> --keys <key folder> --region <legion|vespucci|x0,y0,x1,y1> [--reach M] (a region's web
+               tiles, R its rectangle x0=..,y0=..,x1=..,y1=.. (Legion: x0=95,y0=-1034,x1=295,y1=-834), L
+               foliage=leave-out,river=leave-out: --select \"resolve-state{assign=gta.map:online;gta.hour:12},
+               gta-select-region{R,min_size=0.5}, lower-gta-lights{R}, gta-select-collision, lower-gta-collision{R,L},
+               lower-gta-surfaces, gta-select-water{R,clip=kept}\" --passes \"select-lod{form=finest},
+               lower-gta-embedded-collision{L}, lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr{night=false},
+               gta-winding, gta-tint, gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals\", and
+               for KTX2 tiles prepare-web-textures{color=512,normal=512,mask=256,memo-mib=512} after them)
   skate-scene  --scene <folder> (a skate scene's web tiles: --select \"select-lod{form=finest}, lower-skate-lights\"
                --passes \"lower-skate-pbr, normalize-normals, fill-missing-texcoords,
                prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}\", and for KTX2 tiles
@@ -308,7 +315,7 @@ pub fn run(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     /// Pipelines a GTA conversion may be given (examples of the passes in their order: a selection by day, at night
-    /// and with the hour kept, each part's GTA passes, and the ReSkate writer's documented passes after them) pass the
+    /// and with the hour kept, each part's GTA passes, and the ReSkate and web writers' documented passes after them) pass the
     /// checks made from the passes' declarations (Pipeline::check), apart and in the order convert runs them, with no
     /// game data.
     #[test]
@@ -342,8 +349,14 @@ mod tests {
                      prepare-reskate-collision{{surfaces=coalesce,weld=mm}}, summarize-reskate-map, \
                      plan-reskate-blend-budget{{objects=pool}}"
                 );
+                let web =
+                    format!("{passes}, prepare-web-textures{{color=512,normal=512,mask=256,memo-mib=512}}");
                 pipelines.push(format!("{select}, {passes}"));
                 pipelines.extend([select, passes, reskate]);
+                // prepare-web-textures is registered with the KTX2 encoder only
+                if cfg!(feature = "ktx2") {
+                    pipelines.push(web);
+                }
             }
         }
         for text in pipelines {
