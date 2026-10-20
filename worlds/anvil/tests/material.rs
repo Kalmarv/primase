@@ -60,7 +60,8 @@ fn materials_and_a_texture_set_read_their_references() {
         assert_eq!((r.type_id, r.body.len()), (type_id, body), "entry {entry}");
         let stored = StoredReferences::parse(&r.body).expect("references");
         assert_eq!(stored.rest.len(), body - 21);
-        for (id, (want, target)) in stored.references.into_iter().zip(references) {
+        for (reference, (want, target)) in stored.references.into_iter().zip(references) {
+            let id = reference.expect("a reference").id;
             assert_eq!(id, want, "entry {entry}");
             let found = forge.find(id).map(|k| {
                 let t = resource(k);

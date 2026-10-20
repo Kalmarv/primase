@@ -5,8 +5,9 @@ use std::fs::File;
 
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
-use primase_anvil::read::lod::{LOD_SELECTOR, LevelReference, StoredLodSelector};
+use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::mesh::MESH;
+use primase_anvil::read::reference::Reference;
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_testdata::real_data;
 
@@ -22,7 +23,7 @@ fn lod_selectors_read_their_levels_and_dependencies() {
         let block = read_entry(&payload, MAX_RECORD).expect("entry");
         Resource::parse(&block.resource.data).expect("resource")
     };
-    let mesh = |id: u64| Some(LevelReference { mode: 1, id });
+    let mesh = |id: u64| Some(Reference { mode: 1, id });
     // entry, body length, references, first floats, bytes 34..39, u32s at 39, dependencies, their words
     let fixtures = [
         (

@@ -11,14 +11,16 @@
 //! Established on two LODSelectors of the base WhiteRoom forge (Riders Republic build 25394987: entries 24 and 159,
 //! one direct reference and none, two direct references and two dependencies; every byte consumed to the body's end,
 //! and every reference and dependency resolving to a Mesh record; games/riders-republic
-//! docs/recon/placement-darkroom-handoff.md, b8dae7b). Refused, naming it: another first byte, level marker or
-//! reference tag, a `03` reference with a nonzero byte, a level count other than 0 (what follows a nonzero count is
+//! docs/recon/placement-darkroom-handoff.md, b8dae7b). Refused, naming it: another first byte or level marker, a
+//! reference [`crate::read::reference`] refuses, a level count other than 0 (what follows a nonzero count is
 //! not established here), a dependency byte other than 0, a second count other than d, or bytes after the last 6.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
+
+use crate::read::reference::{self, Reference};
 
 /// A record type: equals the CRC-32 of the ASCII string `LODSelector` (the name a label).
 pub const LOD_SELECTOR: u32 = 0x51DC_6B80;
@@ -38,17 +40,10 @@ pub enum Error {
         found: u64,
         read: &'static str,
     },
+    #[error("LODSelector level reference: {0}")]
+    Reference(#[source] crate::read::reference::Error),
     #[error("LODSelector body: {0} bytes after its end")]
     Trailing(usize),
-}
-
-/// A level's reference as stored (tag `01`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LevelReference {
-    /// The byte after the tag (1 on every fixture).
-    pub mode: u8,
-    /// A Mesh's ClassID on every fixture.
-    pub id: u64,
 }
 
 /// One level as stored.
@@ -56,7 +51,7 @@ pub struct LevelReference {
 pub struct StoredLevel {
     /// Its first u64 (on both fixtures the selector's ClassID + 13 + the level's index; meaning not established).
     pub head: u64,
-    pub reference: Option<LevelReference>,
+    pub reference: Option<Reference>,
     /// The three f32 after the reference, as stored.
     pub floats: [f32; 3],
     /// The 5 bytes after them.
@@ -147,30 +142,8 @@ impl StoredLodSelector {
                     read: "0xA360319A",
                 });
             }
-            let reference = match c.u8("reference tag")? {
-                1 => Some(LevelReference {
-                    mode: c.u8("reference")?,
-                    id: c.u64("reference")?,
-                }),
-                3 => {
-                    let rest = c.array::<9>("reference")?;
-                    if rest != [0; 9] {
-                        return Err(Error::Value {
-                            what: "empty reference's bytes",
-                            found: rest.iter().map(|&b| u64::from(b)).sum(),
-                            read: "all 0",
-                        });
-                    }
-                    None
-                }
-                tag => {
-                    return Err(Error::Value {
-                        what: "reference tag",
-                        found: u64::from(tag),
-                        read: "1 or 3",
-                    });
-                }
-            };
+            let reference =
+                reference::parse(c.array::<{ reference::LENGTH }>("reference")?).map_err(Error::Reference)?;
             let floats = [c.f32("level")?, c.f32("level")?, c.f32("level")?];
             let bytes_34 = c.array::<5>("level")?;
             let u32_39 = c.u32("level")?;
@@ -276,7 +249,7 @@ mod tests {
     fn a_body_reads_its_levels_and_dependencies() {
         let s = StoredLodSelector::parse(&body([None, Some(5), None, None, None], &[8], 0)).expect("parse");
         assert_eq!(s.levels.len(), LEVELS);
-        assert_eq!(s.levels[1].reference, Some(LevelReference { mode: 1, id: 5 }));
+        assert_eq!(s.levels[1].reference, Some(Reference { mode: 1, id: 5 }));
         assert_eq!(s.levels[0].reference, None);
         assert_eq!(
             (s.dependencies.as_slice(), s.dependency_words.as_slice()),
@@ -298,22 +271,10 @@ mod tests {
         ));
         let mut b = good.clone();
         b[12 + 12] = 2;
-        assert!(matches!(
-            StoredLodSelector::parse(&b),
-            Err(Error::Value {
-                what: "reference tag",
-                ..
-            })
-        ));
+        assert!(matches!(StoredLodSelector::parse(&b), Err(Error::Reference(_))));
         let mut b = good.clone();
         b[60 + 13] = 1;
-        assert!(matches!(
-            StoredLodSelector::parse(&b),
-            Err(Error::Value {
-                what: "empty reference's bytes",
-                ..
-            })
-        ));
+        assert!(matches!(StoredLodSelector::parse(&b), Err(Error::Reference(_))));
         assert!(matches!(
             StoredLodSelector::parse(&body([Some(5), None, None, None, None], &[], 1)),
             Err(Error::Value {

@@ -122,10 +122,17 @@ fn census_forge(path: &Path, tallies: &mut BTreeMap<&'static str, Tally>) {
                     Ok(m)
                 })
                 .map(|m| {
-                    tally.outcome(match m.layout {
-                        Layout::Ranged(_) => "ranged",
-                        Layout::Inline(_) => "inline",
-                    });
+                    let (layout, mesh_data) = match &m.layout {
+                        Layout::Ranged(r) => ("ranged", r.mesh_data),
+                        Layout::Inline(i) => ("inline", i.mesh_data),
+                    };
+                    tally.outcome(layout);
+                    // a measured relation, not a reading: MeshData's first byte against the vertex count
+                    tally.outcome(format!(
+                        "{layout}: MeshData first byte {}, more than 65,535 vertices {}",
+                        mesh_data[0],
+                        m.vertices.len() > 65_535
+                    ));
                     tally.outcome(format!("{} ranges", m.ranges().map_or(0, |r| r.len())));
                 })
                 .map_err(|e| e.to_string()),

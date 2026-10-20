@@ -8,17 +8,20 @@
 //!
 //! - **ranged** (0 at marker+4, 0xC351EE43 at marker+13): a u32 at marker+22 (24 on every ranged fixture, equal to
 //!   the vertex size; only 24 is read), the range record count N (u32 at marker+63), then from marker+75 N range
-//!   records, each 0x07B19A87 (u32), a byte (1), three bytes, and two u32: the range's first index and its vertex base; every record but the last
-//!   carries 8 more bytes. Then the vertex buffer's byte length (u32) and the vertices; 8 bytes; the index buffer's
-//!   byte length (u32) and the indices (u16). Then a u32 byte length (32 per range) and that many bytes; 8 bytes;
-//!   `MeshData` (its CRC-32 0x0645ABB5 and 18 bytes); one `MeshPrimitive` entry per range ([`StoredPrimitive`], 8
-//!   bytes after each); a u32 0 where another entry's marker would be, and 4 bytes; then the material list.
+//!   records, each 0x07B19A87 (u32), a byte (1), three bytes, and two u32: the range's first index and its vertex
+//!   base; every record but the last carries 8 more bytes. Then the vertex buffer's byte length (u32) and the
+//!   vertices; 8 bytes; the index buffer's byte length (u32) and the indices (u16). Then a u32 byte length (32 per
+//!   range) and that many bytes; 8 bytes; `MeshData` (its CRC-32 0x0645ABB5 and 18 bytes); one
+//!   `MeshPrimitive` entry per range ([`StoredPrimitive`], 8 bytes after each); a u32 0 where another entry's marker
+//!   would be, and 4 bytes; then the material list.
 //! - **inline** (3 at marker+4, `MeshData`'s CRC-32 at marker+13): `MeshData`'s 18 bytes; one `MeshPrimitive` entry;
 //!   the vertex buffer's byte length (u32, 24 bytes per vertex of the entry's count) and the vertices; 8 bytes; the
-//!   index buffer's byte length (u32) and the indices (u32); then the material list.
+//!   index buffer's byte length (u32) and the indices, 2 bytes each when `MeshData`'s first byte is 0 and 4 when it
+//!   is 1; then the material list.
 //!
 //! A `MeshPrimitive` entry: 0xA57387EF (equal to the CRC-32 of `MeshPrimitive`), vertex base, a u32, vertex count,
-//! first index, triangle count and a u32 (1); the four counts are checked against the ranges, so they are established. The material list, ending the body ([`MaterialList`]): the range count (u32) and 8 bytes; one material
+//! first index, triangle count and a u32 (1); the four counts are checked against the ranges, so they are
+//! established. The material list, ending the body ([`MaterialList`]): the range count (u32) and 8 bytes; one material
 //! descriptor per range (0x0B1D34C1, 4 bytes, a zero byte, a u16 vertex count, a zero byte, the u64 ClassID of a
 //! Material, 8 bytes); the range count (u32) and 6 bytes; one 31-byte group per range, holding its descriptor's ClassID
 //! at +8 and +17; 20 bytes.
@@ -218,7 +221,7 @@ pub struct Inline {
 pub enum Layout {
     /// Range records before the buffers, u16 indices, `MeshData` and the `MeshPrimitive` entries after.
     Ranged(Ranged),
-    /// `MeshData` and one `MeshPrimitive` entry before the buffers, u32 indices.
+    /// `MeshData` and one `MeshPrimitive` entry before the buffers, 2- or 4-byte indices by `MeshData`'s first byte.
     Inline(Inline),
 }
 
@@ -430,6 +433,22 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// An inline mesh's index width, by `MeshData`'s first byte: 0, 2 bytes; 1, 4 bytes. Established by the census
+/// (worlds/anvil/tests/census.rs): with it every inline mesh's index buffer is whole triangles of its MeshPrimitive's
+/// count. Not a ranged mesh's: one has 1 there and 2-byte indices its ranges and MeshPrimitive entries agree with.
+/// Measured over every mesh of Riders Republic (110,779), the byte is 1 exactly when the mesh has more than 65,535
+/// vertices; that relation is recorded, not read.
+fn index_width(mesh_data: &[u8; 18]) -> Result<usize, Error> {
+    match mesh_data.first() {
+        Some(0) => Ok(2),
+        Some(1) => Ok(4),
+        found => Err(Error::Tail {
+            what: "MeshData",
+            why: format!("first byte {found:?}: only 0 (2-byte indices) and 1 (4-byte) are read"),
+        }),
+    }
+}
+
 fn vertex(v: &[u8; 24]) -> StoredVertex {
     let [
         p0,
@@ -636,7 +655,7 @@ impl StoredMesh {
         }
         let vertices = c.vertices(vertex_bytes)?;
         let gap = c.array::<8>("bytes before the index buffer")?;
-        let indices = c.indices(4)?;
+        let indices = c.indices(index_width(&mesh_data)?)?;
         let materials = c.material_list(1)?;
         Ok(StoredMesh {
             header,
@@ -897,10 +916,11 @@ mod tests {
         b
     }
 
-    /// An inline body of `vertices` vertices, these u32 indices and one material.
+    /// An inline body of `vertices` vertices, these 4-byte indices and one material.
     fn inline(vertices: usize, indices: &[u32], material: u64) -> Vec<u8> {
         let mut b = head(3, MESH_DATA);
-        b.extend([0; 18]);
+        b.push(1);
+        b.extend([0; 17]);
         primitive(&mut b, [0, vertices as u32, 0, (indices.len() / 3) as u32]);
         b.extend(((vertices * 24) as u32).to_le_bytes());
         b.extend(vec![0; vertices * 24]);
@@ -975,6 +995,30 @@ mod tests {
             i.primitive.triangle_count = 1;
         }
         assert!(matches!(wrong.triangles(), Err(Error::Record { index: 0, .. })));
+    }
+
+    #[test]
+    fn an_inline_bodys_index_width_is_meshdatas_first_byte() {
+        // 2-byte indices when it is 0
+        let mut b = head(3, MESH_DATA);
+        b.push(0);
+        b.extend([0; 17]);
+        primitive(&mut b, [0, 3, 0, 1]);
+        b.extend(72u32.to_le_bytes());
+        b.extend([0; 72]);
+        b.extend([0; 8]);
+        b.extend(6u32.to_le_bytes());
+        [0u16, 2, 1].iter().for_each(|i| b.extend(i.to_le_bytes()));
+        b.extend(material_list(&[3], &[9]));
+        let m = StoredMesh::parse(&b).expect("parse");
+        assert_eq!(m.triangles().expect("read"), [[0, 2, 1]]);
+        // another first byte is refused
+        let at = HEADER + 17;
+        b[at] = 2;
+        assert!(matches!(
+            StoredMesh::parse(&b),
+            Err(Error::Tail { what: "MeshData", .. })
+        ));
     }
 
     #[test]
