@@ -58,9 +58,9 @@ fn extrema(positions: &[[f32; 3]]) -> [[f32; 3]; 2] {
 /// It checks vertex indexing, not a normal reading: with the wrong indices of an earlier reader (c1f82990), Prada's
 /// middle range measured mixed.
 fn facing(m: &AnvilMesh) -> (usize, usize) {
-    let rest = m.stride as usize - 8;
+    let stride = m.stride as usize;
     let n = |i: u32| {
-        let b = &m.attributes[i as usize * rest..];
+        let b = &m.vertex_records[i as usize * stride + 8..];
         [b[0], b[1], b[2]].map(|b| f32::from(b) / 127.5 - 1.0)
     };
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];

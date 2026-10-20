@@ -256,23 +256,25 @@ impl Pass for LowerAnvilMesh {
             } else {
                 log.omit(
                     &format!(
-                        "texture coordinates: not read for stride {} (where they are isn't established)",
-                        m.stride
+                        "texture coordinates: not read for kind {} stride {} (where they are isn't established)",
+                        m.kind, m.stride
                     ),
                     1,
                 );
             }
             match self.normals {
-                MeshNormals::Packed | MeshNormals::Packed127 if m.stride == 24 => {
+                MeshNormals::Packed | MeshNormals::Packed127 if m.kind == 2 && m.stride == 24 => {
                     let decode = |x: u8| match self.normals {
                         MeshNormals::Packed127 => (f32::from(x) - 127.0) / 127.0,
                         _ => f32::from(x) / 127.5 - 1.0,
                     };
-                    let rest = usize::try_from(m.stride).unwrap_or(24).saturating_sub(8);
                     let normals = m
-                        .attributes
-                        .chunks_exact(rest.max(1))
-                        .map(|b| {
+                        .vertex_records
+                        .as_chunks::<24>()
+                        .0
+                        .iter()
+                        .map(|r| {
+                            let b = [r[8], r[9], r[10]];
                             let d = [b[0], b[1], b[2]].map(decode);
                             let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                             let d = if len > 0.0 {
@@ -294,8 +296,8 @@ impl Pass for LowerAnvilMesh {
                 }
                 MeshNormals::Packed | MeshNormals::Packed127 => log.omit(
                     &format!(
-                        "normals: not read for stride {} (where they are isn't established)",
-                        m.stride
+                        "normals: not read for kind {} stride {} (where they are isn't established)",
+                        m.kind, m.stride
                     ),
                     1,
                 ),

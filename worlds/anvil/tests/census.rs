@@ -74,7 +74,11 @@ fn against(m: &StoredMesh, row: &Value) -> Vec<String> {
                         "vertex_count",
                         "material_id",
                     ]
-                    .map(|k| s[k].as_u64().unwrap_or(u64::MAX))
+                    // RRAssetStudio writes null for a material whose stored ClassID is 0
+                    .map(|k| match &s[k] {
+                        Value::Null if k == "material_id" => 0,
+                        v => v.as_u64().unwrap_or(u64::MAX),
+                    })
                 })
                 .collect()
         })
@@ -83,8 +87,9 @@ fn against(m: &StoredMesh, row: &Value) -> Vec<String> {
         differ.push(format!("submeshes {ours:?}, RRAssetStudio's {theirs:?}"));
     }
     let positions: Vec<u8> = m
-        .vertices
         .positions()
+        .unwrap_or_default()
+        .into_iter()
         .flatten()
         .flat_map(f32::to_le_bytes)
         .collect();
@@ -229,9 +234,9 @@ fn census_forge(
                     Ok(m)
                 })
                 .map(|m| {
-                    let (layout, mesh_data) = match &m.layout {
-                        Layout::Ranged(r) => ("ranged", r.mesh_data),
-                        Layout::Inline(i) => ("inline", i.mesh_data),
+                    let (layout, first_byte) = match &m.layout {
+                        Layout::Ranged(r) => ("ranged", r.mesh_data[0]),
+                        Layout::Inline(i) => ("inline", i.declaration[0]),
                     };
                     if let Some(o) = oracle {
                         match o.get(&(label.clone(), k)) {
@@ -251,7 +256,7 @@ fn census_forge(
                     // a measured relation, not a reading: MeshData's first byte against the vertex count
                     tally.outcome(format!(
                         "{layout}: MeshData first byte {}, more than 65,535 vertices {}",
-                        mesh_data[0],
+                        first_byte,
                         m.vertices.len() > 65_535
                     ));
                     tally.outcome(format!("{} ranges", m.ranges().map_or(0, |r| r.len())));

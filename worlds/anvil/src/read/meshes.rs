@@ -88,6 +88,7 @@ pub fn read_meshes(
             .collect::<Result<_, _>>()?;
         let materials = stored.materials().map_err(mesh_err)?;
         let v = &stored.vertices;
+        let positions = stored.positions().map_err(mesh_err)?;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
         w.insert(
@@ -96,17 +97,18 @@ pub fn read_meshes(
                 entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
                 index_id: index.id,
                 frame,
-                positions: v.positions().map(|p| frame.point(p)).collect(),
+                positions: positions.into_iter().map(|p| frame.point(p)).collect(),
                 triangles,
                 ranges,
                 materials,
+                kind: stored.kind,
                 stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
-                attributes: v
-                    .iter()
-                    .flat_map(|x| x.get(8..).unwrap_or_default())
-                    .copied()
-                    .collect(),
-                words_20: v.words_20(),
+                vertex_records: v.bytes.clone(),
+                words_20: if stored.kind == 2 {
+                    v.words_20()
+                } else {
+                    Vec::new()
+                },
             },
         );
         let placement = w.spawn();
