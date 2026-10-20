@@ -3,7 +3,9 @@
 //!
 //! [`super::area::read_area`] decodes every model, texture and collision file it keeps while it reads (the archive's files
 //! are compressed whole), so the read world already holds the payloads: a part's load is its roots' closure, nothing
-//! read again. A prototype's box before any pass is its stored model's posed box in the world frame, the extent the
+//! read again, with the source files (`fromsoft.texture_payloads`, `fromsoft.shader_programs`) its materials bind
+//! and no others, shared with the read world rather than copied. The read is eager: the whole area's source stays
+//! resident while the conversion runs, whatever the part size. A prototype's box before any pass is its stored model's posed box in the world frame, the extent the
 //! read's region rule uses. What the read left out or could not find ([`super::area::Report::notices`]) is the
 //! reader's notices; a load takes nothing from the source and notices nothing.
 use std::collections::BTreeSet;
@@ -15,6 +17,8 @@ use primase_core::{Entity, World};
 use super::area::{Options, read_area};
 use crate::components::models::SourceModel;
 use crate::dcx::Decoder;
+use crate::materials::Material;
+use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
 
 /// See the module documentation.
 #[derive(Debug)]
@@ -91,7 +95,15 @@ impl Reader for AreaReader<'_> {
         Ok((world, self.record(&r)))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
-        Ok((world.subset(&world.closure(roots.iter().copied())), Report::new()))
+        let mut part = world.subset(&world.closure(roots.iter().copied()));
+        let (textures, programs) = scope_sources(&mut part)?;
+        Ok((
+            part,
+            vec![(
+                "sekiro part".into(),
+                format!("{textures} texture files and {programs} layered-shader programs its materials bind"),
+            )],
+        ))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "fromsoft"]
@@ -106,6 +118,30 @@ impl Reader for AreaReader<'_> {
             .flatten()
             .map(|b| b.map(|c| c.map(f64::from)))
     }
+}
+
+/// Keep in `part` only the source files its materials bind: their bindings' texture files and their layered
+/// definitions' programs. Returns how many of each it keeps.
+fn scope_sources(part: &mut World) -> Result<(usize, usize)> {
+    let mut textures = BTreeSet::new();
+    let mut programs = BTreeSet::new();
+    for (_, m) in part.iter::<Material>() {
+        textures.extend(m.bindings.values().map(|b| b.texture.clone()));
+        if let Some(l) = &m.layered {
+            textures.extend(l.bindings.values().map(|b| b.texture.clone()));
+            programs.insert(l.program_name()?);
+        }
+    }
+    let mut kept = (0, 0);
+    if let Some(p) = part.resource_mut::<TexturePayloads>() {
+        p.0.retain(|name, _| textures.contains(name));
+        kept.0 = p.0.len();
+    }
+    if let Some(p) = part.resource_mut::<ShaderPrograms>() {
+        p.0.retain(|name, _| programs.contains(name));
+        kept.1 = p.0.len();
+    }
+    Ok(kept)
 }
 
 #[cfg(test)]
@@ -145,5 +181,77 @@ mod tests {
         assert_eq!(notices, read.notices());
         // taken once: the conversion asks again after each load, and a load notices nothing
         assert!(reader.notices().is_empty());
+    }
+
+    /// A part loads the texture files its own materials bind, the very buffers the read holds, and no other part's.
+    #[test]
+    fn a_part_loads_only_the_source_files_its_materials_bind() {
+        use crate::materials::Binding;
+        use std::sync::Arc;
+        let mut reader = AreaReader::new(
+            "install",
+            "m11_01",
+            Decoder {
+                oodle: None,
+                max_output: 0,
+            },
+            Options::default(),
+        );
+        let mut world = World::new();
+        let mut material = |texture: &str| {
+            let mut m = crate::materials::resolve(
+                &crate::flver::Material {
+                    name: "fixture".into(),
+                    mtd: "fixture.mtd".into(),
+                    gx: vec![],
+                    textures: vec![],
+                },
+                None,
+                |_| true,
+            );
+            m.bindings.insert(
+                "Texture2D_8_AlbedoMap".into(),
+                Binding {
+                    texture: texture.into(),
+                    scale: [1.; 2],
+                    uv_number: 1,
+                    available: true,
+                },
+            );
+            let e = world.spawn();
+            world.insert(e, m);
+            e
+        };
+        let a = material("a_a");
+        let _b = material("b_a");
+        let file = |byte: u8| -> Arc<[u8]> { Arc::from(vec![byte; 4]) };
+        world.insert_resource(TexturePayloads(
+            [("a_a", 1), ("b_a", 2), ("unbound_a", 3)]
+                .into_iter()
+                .map(|(n, b)| (n.to_owned(), file(b)))
+                .collect(),
+        ));
+        world.insert_resource(ShaderPrograms(
+            [("M[Multiple]_0_Gbuf.ppo".to_owned(), file(4))]
+                .into_iter()
+                .collect(),
+        ));
+        let (part, report) = reader.load(&world, &BTreeSet::from([a])).unwrap();
+        let payloads = &part.resource::<TexturePayloads>().unwrap().0;
+        assert_eq!(payloads.keys().collect::<Vec<_>>(), ["a_a"]);
+        // the read's buffer, not a copy
+        assert!(Arc::ptr_eq(
+            &payloads["a_a"],
+            &world.resource::<TexturePayloads>().unwrap().0["a_a"]
+        ));
+        // no layered material: no program
+        assert!(part.resource::<ShaderPrograms>().unwrap().0.is_empty());
+        assert_eq!(
+            report,
+            [(
+                "sekiro part".to_string(),
+                "1 texture files and 0 layered-shader programs its materials bind".to_string()
+            )]
+        );
     }
 }

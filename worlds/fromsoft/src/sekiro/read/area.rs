@@ -537,7 +537,7 @@ fn shader_programs<'a>(
     archive: &Archive,
     decoder: &Decoder<'_>,
     materials: impl Iterator<Item = &'a materials::LayeredMaterial>,
-) -> Result<BTreeMap<String, Vec<u8>>> {
+) -> Result<source::Payloads> {
     let wanted = materials
         .map(materials::LayeredMaterial::program_name)
         .collect::<Result<BTreeSet<_>>>()?;
@@ -566,7 +566,7 @@ fn shader_programs<'a>(
         for shader in Binder::read(&file.bytes, decoder)?.files {
             let name = leaf(shader.name.as_deref());
             if wanted.contains(&name) {
-                programs.insert(name, shader.bytes);
+                programs.insert(name, shader.bytes.into());
             }
         }
     }

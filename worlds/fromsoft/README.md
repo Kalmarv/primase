@@ -288,6 +288,16 @@ converts frames; it does not lower:
   `fromsoft.area_extras` resource; what the read covered (area, region, margin,
   states) is `fromsoft.read_scope`.
 
+The read is eager: it decodes every kept model,
+texture, program and collision file before any part is planned, and through
+`sekiro::convert::AreaReader` that read world stays resident for the whole
+conversion, so a conversion in parts does not bound the source it holds by part
+size. A part's load is its roots' closure with only the texture files and
+programs its materials bind, sharing the read's buffers (`Arc<[u8]>`) rather
+than copying them; the part-size counters (`PartSize.loaded/written`) count
+components, not these resources, and are no measure of total memory. What the
+read leaves out or cannot find is the reader's notices.
+
 A region (world east/north rectangle) is an explicit partial read: a placement
 is kept when its model's extent (every vertex a face set uses, static vertices
 posed by their bones) reaches the region within `region_margin`; lights and spawn

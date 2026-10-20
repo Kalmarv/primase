@@ -1,7 +1,7 @@
 //! Area-weighted static layer grouping over an area whose geometry `lower-fromsoft-geometry` lowered: each layered
 //! part keeps its raw per-vertex shader inputs (`fromsoft.layer_inputs`); grouping and baking are the bake pass's.
 use crate::layer_bake::grouping::{self, Features};
-use crate::sekiro::source::{LayerInputs, PrototypeSource, ShaderPrograms, TexturePayloads};
+use crate::sekiro::source::{LayerInputs, Payloads, PrototypeSource, ShaderPrograms, TexturePayloads};
 use crate::{Result, invalid, materials::Material};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
 use primase_meshops::vector::Vec3;
@@ -12,11 +12,11 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Debug)]
 pub struct AreaBake<'a> {
     pub groups: Vec<MaterialGroups>,
-    shaders: &'a BTreeMap<String, Vec<u8>>,
-    payloads: &'a BTreeMap<String, Vec<u8>>,
+    shaders: &'a Payloads,
+    payloads: &'a Payloads,
 }
 /// Nothing, for a world without the resource.
-static EMPTY: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+static EMPTY: Payloads = BTreeMap::new();
 impl<'a> AreaBake<'a> {
     /// Group the layered parts of a world's placed prototypes by bake inputs, over the world's own source data.
     pub fn from_world(world: &'a World) -> Result<Self> {
@@ -25,11 +25,7 @@ impl<'a> AreaBake<'a> {
         Self::with_sources(world, shaders, payloads)
     }
     /// The same over source data held apart from `world`.
-    pub fn with_sources(
-        world: &World,
-        shaders: &'a BTreeMap<String, Vec<u8>>,
-        payloads: &'a BTreeMap<String, Vec<u8>>,
-    ) -> Result<Self> {
+    pub fn with_sources(world: &World, shaders: &'a Payloads, payloads: &'a Payloads) -> Result<Self> {
         let mut groups = groups(world)?;
         for group in &mut groups {
             let material = group.material.layered.as_ref().expect("layered group");
@@ -90,14 +86,11 @@ pub struct PartGroups {
     pub assignments: Vec<usize>,
 }
 
-fn program<'a>(
-    programs: &'a BTreeMap<String, Vec<u8>>,
-    material: &crate::materials::LayeredMaterial,
-) -> Result<&'a [u8]> {
+fn program<'a>(programs: &'a Payloads, material: &crate::materials::LayeredMaterial) -> Result<&'a [u8]> {
     let name = material.program_name()?;
     programs
         .get(&name)
-        .map(Vec::as_slice)
+        .map(|b| &b[..])
         .ok_or_else(|| invalid("layer shader", 0, format!("missing {name}")))
 }
 

@@ -50,6 +50,10 @@ fn source(shader: &str) -> materials::Material {
 fn unavailable(m: &mut materials::Material, kind: &str) {
     m.bindings.get_mut(kind).expect("a fixture binding").available = false;
 }
+/// No texture files.
+fn no_payloads() -> BTreeMap<String, Vec<u8>> {
+    BTreeMap::new()
+}
 fn payload(rgba: &[u8]) -> Vec<u8> {
     primase_dds::write_dx10(&Texture {
         width: rgba.len() as u32 / 4,
@@ -101,7 +105,7 @@ fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
                 .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
                 .unwrap();
             assert_eq!(t.levels[0][2], 255);
-            pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
+            pbr::lower(&mut world, &no_payloads(), None).unwrap();
             assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &p);
         } else {
             // No evidenced consumer for this family: dielectric, not glTF's 1.
@@ -131,10 +135,7 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&words)];
         world.insert(e, m);
-        assert!(
-            pbr::lower(&mut world, &BTreeMap::new(), None).is_err(),
-            "{words:?}"
-        );
+        assert!(pbr::lower(&mut world, &no_payloads(), None).is_err(), "{words:?}");
     }
     {
         let mut world = World::new();
@@ -144,7 +145,7 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&[1, 237, 1, half]); 2];
         world.insert(e, m);
-        assert!(pbr::lower(&mut world, &BTreeMap::new(), None).is_err());
+        assert!(pbr::lower(&mut world, &no_payloads(), None).is_err());
     }
     for records in [
         vec![gx(&[2, 237, 1, half, 237, 0, 1])],
@@ -157,7 +158,7 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = records.clone();
         world.insert(e, m);
-        let log = pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
+        let log = pbr::lower(&mut world, &no_payloads(), None).unwrap();
         assert_eq!(world.get::<PbrMaterial>(e).unwrap().metallic, 0.);
         assert_eq!(log.approximations[UNKNOWN], 1);
         assert_eq!(world.get::<materials::Material>(e).unwrap().gx, records);
@@ -256,7 +257,7 @@ fn baked_bindings_and_factors_are_authoritative() {
     };
     world.insert(e, expected.clone());
     assert!(pbr::required_textures(&world).unwrap().is_empty());
-    pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
+    pbr::lower(&mut world, &no_payloads(), None).unwrap();
     assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
 }
 #[test]
@@ -264,7 +265,7 @@ fn missing_source_data_is_not_a_silent_default() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, source("MetallicTex"));
-    assert!(pbr::lower(&mut world, &BTreeMap::new(), None).is_err());
+    assert!(pbr::lower(&mut world, &no_payloads(), None).is_err());
 }
 
 #[test]
@@ -299,7 +300,7 @@ fn baked_emission_presence_controls_missing_radiance_diagnostic() {
             expected.emissive_strength = 4.;
         }
         world.insert(e, expected.clone());
-        let log = pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
+        let log = pbr::lower(&mut world, &no_payloads(), None).unwrap();
         assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
         assert_eq!(
             log.approximations
@@ -383,7 +384,7 @@ fn repeated_lowering_preserves_channels_factors_and_entity_count() {
         [255, 13, 51, 255]
     );
     let entities = world.entities().count();
-    pbr::lower(&mut world, &BTreeMap::new(), None).unwrap();
+    pbr::lower(&mut world, &no_payloads(), None).unwrap();
     assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
     assert_eq!(world.entities().count(), entities);
     assert_eq!(

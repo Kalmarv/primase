@@ -64,13 +64,13 @@ impl Catalog {
         archive: &Archive,
         decoder: &Decoder<'_>,
         wanted: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, Vec<u8>>> {
+    ) -> Result<crate::sekiro::source::Payloads> {
         let mut out = BTreeMap::new();
         let mut groups = BTreeMap::<&str, BTreeSet<&str>>::new();
         for name in wanted {
             match self.entries.get(name) {
                 Some(Location::Inline(bytes)) => {
-                    out.insert(name.clone(), bytes.clone());
+                    out.insert(name.clone(), bytes.as_slice().into());
                 }
                 Some(Location::Split(path)) => {
                     groups.entry(path).or_default().insert(name);
@@ -103,7 +103,7 @@ impl Catalog {
                         }
                     })
                     .ok_or_else(|| invalid("Sekiro texture", 0, format!("package name mismatch {name}")))?;
-                out.insert(name, t.dds.clone());
+                out.insert(name, t.dds.as_slice().into());
             }
         }
         if out.len() != wanted.len() {

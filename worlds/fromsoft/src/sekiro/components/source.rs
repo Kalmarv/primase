@@ -452,10 +452,13 @@ pub fn byte4_uv_members(
         .collect()
 }
 
+/// Source files by name, as stored, each an immutable buffer: a world's copy (a part's) shares them.
+pub type Payloads = BTreeMap<String, std::sync::Arc<[u8]>>;
+
 /// Source texture files by stem, as stored (DDS bytes), for every texture a selected material binds. Kept for
 /// the passes that lower or bake materials; not serialised.
 #[derive(Clone, Debug, Default)]
-pub struct TexturePayloads(pub BTreeMap<String, Vec<u8>>);
+pub struct TexturePayloads(pub Payloads);
 impl Resource for TexturePayloads {
     const NAME: &'static str = "fromsoft.texture_payloads";
 }
@@ -463,7 +466,7 @@ impl Resource for TexturePayloads {
 /// The G-buffer pixel shader programs (`<shader>_<switch>_Gbuf.ppo`, DXBC as stored) of the selected layered
 /// materials, for passes that evaluate them. Not serialised.
 #[derive(Clone, Debug, Default)]
-pub struct ShaderPrograms(pub BTreeMap<String, Vec<u8>>);
+pub struct ShaderPrograms(pub Payloads);
 impl Resource for ShaderPrograms {
     const NAME: &'static str = "fromsoft.shader_programs";
 }

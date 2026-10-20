@@ -233,11 +233,11 @@ pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
     Ok(names)
 }
 
-fn read(payloads: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<Texture> {
+fn read(payloads: &BTreeMap<String, impl AsRef<[u8]>>, name: &str) -> Result<Texture> {
     let bytes = payloads
         .get(name)
         .ok_or_else(|| invalid("Sekiro PBR", 0, format!("missing DDS {name}")))?;
-    primase_dds::read(bytes).map_err(|e| invalid("Sekiro PBR DDS", 0, e))
+    primase_dds::read(bytes.as_ref()).map_err(|e| invalid("Sekiro PBR DDS", 0, e))
 }
 fn pixels(t: &Texture) -> Result<Vec<u8>> {
     let level = t
@@ -256,7 +256,7 @@ fn spawn(world: &mut World, name: String, t: Texture) -> Entity {
 }
 fn texture(
     world: &mut World,
-    payloads: &BTreeMap<String, Vec<u8>>,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     cache: &mut BTreeMap<(String, bool), Entity>,
     name: &str,
     normal: bool,
@@ -354,7 +354,7 @@ pub enum Layers {
 /// basis is checked against [`super::normals::consumer_basis`]; an assumed or unclassified basis is counted.
 pub fn lower(
     world: &mut World,
-    payloads: &BTreeMap<String, Vec<u8>>,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
 ) -> Result<PassLog> {
     lower_materials(world, payloads, layers, None).map(|(log, _)| log)
@@ -365,7 +365,7 @@ pub fn lower(
 /// main-layer preview (`layers=preview`).
 pub fn lower_drawn(
     world: &mut World,
-    payloads: &BTreeMap<String, Vec<u8>>,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
 ) -> Result<(PassLog, BTreeSet<Entity>)> {
     let drawn: BTreeSet<Entity> = world
@@ -385,7 +385,7 @@ pub fn lower_drawn(
 
 fn lower_materials(
     world: &mut World,
-    payloads: &BTreeMap<String, Vec<u8>>,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
     only: Option<&BTreeSet<Entity>>,
 ) -> Result<(PassLog, BTreeSet<Entity>)> {
@@ -689,16 +689,26 @@ mod tests {
         );
         let e = world.spawn();
         world.insert(e, m);
-        assert!(lower(&mut world.clone(), &BTreeMap::new(), None).is_err());
+        assert!(lower(&mut world.clone(), &BTreeMap::<String, Vec<u8>>::new(), None).is_err());
         let mut preserved = world.clone();
-        let log = lower(&mut preserved, &BTreeMap::new(), Some(Layers::Preserve)).unwrap();
+        let log = lower(
+            &mut preserved,
+            &BTreeMap::<String, Vec<u8>>::new(),
+            Some(Layers::Preserve),
+        )
+        .unwrap();
         assert!(preserved.get::<PbrMaterial>(e).is_none());
         assert_eq!(
             log.counts["layered materials kept as source data (layers=preserve)"],
             1
         );
         assert!(log.approximations.is_empty());
-        let log = lower(&mut world, &BTreeMap::new(), Some(Layers::Preview)).unwrap();
+        let log = lower(
+            &mut world,
+            &BTreeMap::<String, Vec<u8>>::new(),
+            Some(Layers::Preview),
+        )
+        .unwrap();
         let p = world.get::<PbrMaterial>(e).unwrap();
         assert_eq!(p.base_color_texture.unwrap().texture, reader);
         assert_eq!(p.metallic, 0.);
