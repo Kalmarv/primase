@@ -451,12 +451,31 @@ pub fn drop_hidden_models(w: &mut World, log: &mut PassLog) -> Result<(), String
     Ok(())
 }
 
+/// How `f` rebuilt a mesh's primitives ([`for_each_mesh`]): for each primitive now, the old one it comes from, and for
+/// each primitive now, `Some(map)` where its vertices were compacted or reordered (new vertex `i` is its source
+/// primitive's vertex `map[i]`), `None` where they are its source's as they were.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rebuilt {
+    pub from: Vec<usize>,
+    pub vertices: Vec<Option<Vec<u32>>>,
+}
+
+impl From<Vec<usize>> for Rebuilt {
+    /// Primitives rebuilt, every one's vertices as they were.
+    fn from(from: Vec<usize>) -> Rebuilt {
+        let vertices = vec![None; from.len()];
+        Rebuilt { from, vertices }
+    }
+}
+
 /// Calls `f` on every drawable mesh (every entity with `core.mesh` and [`GtaSources`]: prototypes and their LOD forms);
-/// where `f` rebuilds the primitives it gives each one's old index, and the entity's per-primitive components follow
-/// ([`World::remap_primitives`]). An error for a mesh still holding `gta.bones` (`gta-pose-fragments` runs first).
+/// where `f` rebuilds the primitives ([`Rebuilt`]) the entity's per-primitive components follow
+/// ([`World::remap_primitives`]), then its per-vertex components the vertices of each primitive `f` compacted or
+/// reordered ([`World::remap_vertices`]). An error for a mesh still holding `gta.bones` (`gta-pose-fragments` runs
+/// first), and for a [`Rebuilt`] whose vertex maps are not one per primitive.
 pub fn for_each_mesh(
     w: &mut World,
-    mut f: impl FnMut(&mut Mesh) -> Result<Option<Vec<usize>>, String>,
+    mut f: impl FnMut(&mut Mesh) -> Result<Option<Rebuilt>, String>,
 ) -> Result<(), String> {
     let holders: Vec<Entity> = w.iter::<GtaSources>().map(|(e, _)| e).collect();
     for e in holders {
@@ -465,7 +484,24 @@ pub fn for_each_mesh(
                 "{e:?}: a mesh still at its stored pose: gta-pose-fragments runs first"
             ));
         }
-        w.edit_mesh(e, &mut f)?;
+        let mut vertices = Vec::new();
+        w.edit_mesh(e, |mesh| {
+            let Some(r) = f(mesh)? else { return Ok(None) };
+            if r.vertices.len() != r.from.len() {
+                return Err(format!(
+                    "{e:?}: {} vertex maps for {} primitives",
+                    r.vertices.len(),
+                    r.from.len()
+                ));
+            }
+            vertices = r.vertices;
+            Ok(Some(r.from))
+        })?;
+        for (k, map) in vertices.into_iter().enumerate() {
+            if let Some(map) = map {
+                w.remap_vertices(e, k, &map).map_err(|m| format!("{e:?}: {m}"))?;
+            }
+        }
     }
     Ok(())
 }
@@ -591,7 +627,8 @@ impl Pass for LowerGtaPbr {
                     log.dropped(primase_core::ledger::Measure::Primitives, s.reason(), 1);
                 }
                 skip.is_none()
-            }))
+            })
+            .map(Rebuilt::from))
         })?;
         // a mesh whose every primitive was dropped draws nothing: no mesh (a prototype's own mesh stays while it has
         // other forms, which core.lods needs it for)
@@ -947,12 +984,14 @@ pub fn emission_by_vertex(
     }
     for_each_mesh(w, |mesh| {
         let mut from = Vec::with_capacity(mesh.primitives().len());
+        let mut vertices = Vec::with_capacity(mesh.primitives().len());
         let mut out = Vec::with_capacity(mesh.primitives().len());
         let mut split = false;
         for (k, p) in std::mem::take(mesh).into_primitives().into_iter().enumerate() {
             let m = p.material.filter(|m| emitting.contains(m));
             let Some((m, blue)) = m.and_then(|m| Some((m, blues(&p)?))) else {
                 from.push(k);
+                vertices.push(None);
                 out.push(p);
                 continue;
             };
@@ -986,21 +1025,24 @@ pub fn emission_by_vertex(
             }
             if let [(255, _)] = groups.as_slice() {
                 from.push(k);
+                vertices.push(None);
                 out.push(p);
                 continue;
             }
             split = true;
             for (b, i) in groups {
-                let mut q =
-                    primase_meshops::subset_primitive(&p, &i).map_err(|e| format!("emission split: {e}"))?;
+                // each group's vertices compacted: per-vertex components follow them (for_each_mesh)
+                let (mut q, gathered) = primase_meshops::subset_primitive_gathered(&p, &i)
+                    .map_err(|e| format!("emission split: {e}"))?;
                 q.material = Some(if b == 255 { m } else { copies[&(m, b)] });
                 from.push(k);
+                vertices.push(Some(gathered));
                 out.push(q);
             }
             log.count("primitives split by their vertices' emission", 1);
         }
         *mesh = Mesh::new(out);
-        Ok(split.then_some(from))
+        Ok(split.then_some(Rebuilt { from, vertices }))
     })
 }
 
@@ -1625,8 +1667,26 @@ mod tests {
         assert!(roughness(512.0) < roughness(100.0));
     }
 
+    /// One value per vertex of each primitive: follows primitives and vertices.
+    #[derive(Clone, Debug, PartialEq)]
+    struct PerVertex(Vec<Vec<u8>>);
+
+    impl primase_core::Component for PerVertex {
+        const NAME: &'static str = "test.per_vertex";
+        fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+            Some(primase_core::remap_list(&self.0, from).map(PerVertex))
+        }
+        fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+            let list = self.0.get(primitive)?;
+            let mut out = self.0.clone();
+            out[primitive] = from.iter().map(|&i| list[i as usize]).collect();
+            Some(Ok(PerVertex(out)))
+        }
+    }
+
     /// An emissive primitive whose first triangle's vertices are full blue and whose second's are 0: split in two, the
-    /// second drawn with a copy of the material that emits nothing; its source follows the split.
+    /// second drawn with a copy of the material that emits nothing; its source and a per-vertex component follow the
+    /// split (each half's vertices compacted).
     #[test]
     fn emission_follows_vertex_blue() {
         use crate::components::{GtaShader, GtaSources};
@@ -1687,11 +1747,22 @@ mod tests {
                 sources: vec![[0, 7]],
             },
         );
+        w.insert(proto, PerVertex(vec![vec![10, 11, 12, 13, 14, 15]]));
         super::LowerGtaPbr::default()
             .run(&mut w, &mut primase_core::pass::PassLog::default())
             .unwrap();
         let mesh = w.get::<primase_core::Mesh>(proto).unwrap();
         assert_eq!(mesh.primitives().len(), 2);
+        // each half's vertices compacted, the per-vertex values with them
+        assert!(
+            mesh.primitives()
+                .iter()
+                .all(|p| p.positions().map(<[_]>::len) == Some(3))
+        );
+        assert_eq!(
+            w.get::<PerVertex>(proto),
+            Some(&PerVertex(vec![vec![10, 11, 12], vec![13, 14, 15]]))
+        );
         assert_eq!(mesh.primitives()[0].material, Some(m));
         let dark = mesh.primitives()[1].material.unwrap();
         assert_ne!(dark, m);
