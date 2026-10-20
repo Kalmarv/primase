@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::{Curve, Entity, Name, Source, World};
+use primase_core::{Curve, Entity, Name, Source, Transform, World};
 use primase_unity::components::{
     UNITY, UnityBehaviour, UnityCollider, UnityLight, UnityObject, UnityRenderer,
 };
@@ -44,7 +44,8 @@ fn class(b: &UnityBehaviour) -> &str {
 /// Every entity of `w` that the Unity level read made from a renderer, collider or light of scene `level`, given
 /// [`SkatebirdUnder`] when a [`SkatebirdRole`] script is on its GameObject or one above it; and each `GrindableRail`
 /// chain of the scene as an entity with `core.curve` (kind `rail`: its nodes' world positions in the core frame, in
-/// chain order, `closed` for a chain with no start), [`SkatebirdRail`], `core.name` (the first node's GameObject path),
+/// chain order, `closed` for a chain with no start), an identity `core.transform` (the points are world space; it
+/// makes the rail a placed thing, which may carry state), [`SkatebirdRail`], `core.name` (the first node's GameObject path),
 /// `core.source` (`<scene file>/<path id>` of its first node's script) and the first node's `unity.active` /
 /// `unity.enabled` condition. Run after [`primase_unity::level::read_level`] into the same world. Script fields decode
 /// by [`scripts`]' named layouts; another layout, or a chain link to anything but a `GrindableRail` of the scene, is an
@@ -236,6 +237,8 @@ pub fn read_scripted(player: &Player, level: &str, w: &mut World) -> Result<Scri
                 up: None,
             },
         );
+        // the points are world space; the identity transform places the curve, so it can carry its GameObject's state
+        w.insert(e, Transform::IDENTITY);
         w.insert(e, Name(path.clone()));
         w.insert(e, Source(source));
         if let Some(c) = axes.condition(w, &scene, &off, &path) {

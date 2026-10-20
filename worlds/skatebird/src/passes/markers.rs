@@ -323,7 +323,8 @@ mod tests {
             drop: 0.05,
             margin: 10.0,
             travel: 5,
-            play_max_extent: 100.0,
+            // the fixtures' floor is 200 m across
+            play_max_extent: 500.0,
         }
     }
 
