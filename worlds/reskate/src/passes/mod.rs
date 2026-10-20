@@ -59,8 +59,8 @@ pub use lights::{
 };
 pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
 pub use pause_map::{
-    PauseExtent, PauseSource, PrepareReskatePauseMap, SkatePauseImage, SkatePausePicture,
-    prepare_reskate_pause_map,
+    PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut, PauseSource, PrepareReskatePauseMap,
+    SkatePauseImage, SkatePausePicture, prepare_reskate_pause_map,
 };
 pub use raise::{
     LightCalibration, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate,

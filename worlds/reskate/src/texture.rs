@@ -9,6 +9,7 @@ use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_hash::{content_bytes, content_finish, content_string, content_word};
 use primase_texcodec::{Decoder, TexDecoder};
 
+use crate::pausemap::{PYRAMID_TOP, Pyramid};
 use crate::{Error, Result};
 
 /// Hash64's initial state.
@@ -523,6 +524,9 @@ pub struct TexLib {
     by_content: HashMap<u64, usize>,
     out: Vec<OutTexture>,
     pub unsupported: u64,
+    /// Each texture's mip chain for a pause-map picture that samples textures ([`TexLib::keep_pyramids`]); `None`:
+    /// none kept.
+    pyramids: Option<HashMap<usize, Pyramid>>,
 }
 
 /// Hash tags of [`TexLib::register_pixels`].
@@ -627,6 +631,35 @@ impl TexLib {
             by_content: HashMap::new(),
             out: Vec::new(),
             unsupported: 0,
+            pyramids: None,
+        }
+    }
+
+    /// Keep each texture registered from now on as a [`Pyramid`] (its largest level at most [`PYRAMID_TOP`] on a side
+    /// and its box-filtered levels below), for a pause-map picture that samples the textures.
+    pub fn keep_pyramids(&mut self) {
+        self.pyramids.get_or_insert_with(HashMap::new);
+    }
+
+    /// Texture `id`'s pyramid; `None` when none is kept or its pixels could not be decoded.
+    pub fn pyramid(&self, id: i32) -> Option<&Pyramid> {
+        let id = usize::try_from(id).ok()?;
+        self.pyramids.as_ref()?.get(&id)
+    }
+
+    /// Texture `id`'s pyramid kept from `pixels` (width, height, RGBA8), halved down to [`PYRAMID_TOP`], when pyramids
+    /// are kept and it has none yet.
+    fn keep_pyramid(&mut self, id: usize, pixels: impl FnOnce() -> Option<(u32, u32, Vec<u8>)>) {
+        if let Some(kept) = &mut self.pyramids
+            && !kept.contains_key(&id)
+            && let Some((mut w, mut h, mut px)) = pixels()
+        {
+            while w.max(h) > PYRAMID_TOP {
+                px = half(w, h, px);
+                w = (w >> 1).max(1);
+                h = (h >> 1).max(1);
+            }
+            kept.insert(id, Pyramid::new(w, h, px));
         }
     }
 
@@ -677,6 +710,15 @@ impl TexLib {
         let id = self.write(r, alpha)?;
         if id >= 0 {
             self.by_key.insert((r.key, alpha), id as usize);
+            let src = &*r.src;
+            self.keep_pyramid(id as usize, || {
+                let (mip, w, h) = mip_for(src.width, src.height, src.levels, PYRAMID_TOP);
+                src.decode(mip, w, h)
+                    .ok()
+                    .flatten()
+                    .filter(|px| px.len() >= (w * h * 4) as usize)
+                    .map(|px| (w, h, px))
+            });
         }
         Ok(id)
     }
@@ -705,6 +747,7 @@ impl TexLib {
             rgb,
         );
         self.by_key.insert((key, a < 255), id);
+        self.keep_pyramid(id, || Some((4, 4, px)));
         id as i32
     }
 
@@ -729,7 +772,7 @@ impl TexLib {
         } else {
             Vec::new()
         };
-        self.add(
+        let id = self.add(
             name,
             w,
             h,
@@ -740,7 +783,9 @@ impl TexLib {
             data,
             ".png",
             mean,
-        ) as i32
+        );
+        self.keep_pyramid(id, || Some((w, h, rgba.to_vec())));
+        id as i32
     }
 
     #[allow(clippy::too_many_arguments)]

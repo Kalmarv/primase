@@ -128,6 +128,10 @@ fn passes() -> Vec<Box<dyn Pass>> {
             PrepareReskatePauseMap::new(PauseSource::Geometry {
                 height: 720,
                 extent: PauseExtent::Content,
+                drawing: primase_reskate::passes::PauseDrawing {
+                    leave_out: primase_reskate::passes::PauseLeaveOut::Nothing,
+                    colour: primase_reskate::passes::PauseColour::Mean,
+                },
             })
             .unwrap(),
         ),

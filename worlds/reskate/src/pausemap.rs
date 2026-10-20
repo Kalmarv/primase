@@ -1,5 +1,6 @@
 //! The pause-menu map picture (ui/map_image.png, ui/map_image.json, ui/map_clouds.png): a top-down software
-//! rasteriser drawing every triangle in its texture's mean colour, highest surface on top, shaded by slope.
+//! rasteriser drawing every triangle in its texture's mean colour or sampling its texture ([`Paint`]), highest surface
+//! on top, shaded by slope.
 
 use crate::Result;
 use crate::records::MapImageJson;
@@ -20,6 +21,177 @@ pub struct PauseMap {
     pub triangles: i64,
     given: bool,
     pub sea_tint: bool,
+}
+
+/// The side the first level of a [`Pyramid`] is at most.
+pub const PYRAMID_TOP: u32 = 128;
+
+/// A texture's mip chain as the picture samples it: RGBA8 levels (sRGB bytes), the first the texture's largest level
+/// at most [`PYRAMID_TOP`] on a side, each next one box-filtered down to 1 x 1.
+#[derive(Debug)]
+pub struct Pyramid {
+    levels: Vec<(u32, u32, Vec<u8>)>,
+}
+
+/// How a sample past the texture's edge reads it (the material's wrap).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseWrap {
+    Repeat,
+    Clamp,
+    Mirror,
+}
+
+impl PauseWrap {
+    /// Texel coordinate `i` of a level `n` texels long.
+    fn texel(self, i: i64, n: u32) -> usize {
+        let n = i64::from(n.max(1));
+        (match self {
+            PauseWrap::Repeat => i.rem_euclid(n),
+            PauseWrap::Clamp => i.clamp(0, n - 1),
+            PauseWrap::Mirror => {
+                let m = i.rem_euclid(2 * n);
+                if m >= n { 2 * n - 1 - m } else { m }
+            }
+        }) as usize
+    }
+}
+
+impl Pyramid {
+    /// The chain from a `w` x `h` RGBA8 level (at most [`PYRAMID_TOP`] on a side), down to 1 x 1.
+    pub fn new(w: u32, h: u32, rgba: Vec<u8>) -> Pyramid {
+        let mut levels = vec![(w, h, rgba)];
+        while let Some((w, h, px)) = levels.last()
+            && (*w > 1 || *h > 1)
+        {
+            let next = crate::texture::half(*w, *h, px.clone());
+            levels.push(((w >> 1).max(1), (h >> 1).max(1), next));
+        }
+        Pyramid { levels }
+    }
+
+    /// The first level's size.
+    pub fn top(&self) -> (u32, u32) {
+        (self.levels[0].0, self.levels[0].1)
+    }
+
+    /// The colour at `uv`, bilinear in the level whose texel best matches `footprint` first-level texels per pixel
+    /// (sRGB bytes as floats).
+    pub fn sample(&self, uv: [f32; 2], footprint: f32, wrap: PauseWrap) -> [f32; 3] {
+        let k = if footprint > 1.0 {
+            (footprint.log2().round() as usize).min(self.levels.len() - 1)
+        } else {
+            0
+        };
+        let (w, h, px) = &self.levels[k];
+        let (x, y) = (uv[0] * *w as f32 - 0.5, uv[1] * *h as f32 - 0.5);
+        let (fx, fy) = (x.floor(), y.floor());
+        let (ax, ay) = (x - fx, y - fy);
+        let at = |i: i64, j: i64| {
+            let o = (wrap.texel(j, *h) * *w as usize + wrap.texel(i, *w)) * 4;
+            [px[o], px[o + 1], px[o + 2]].map(f32::from)
+        };
+        let (i, j) = (fx as i64, fy as i64);
+        let (c00, c10, c01, c11) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+        std::array::from_fn(|c| {
+            (c00[c] * (1.0 - ax) + c10[c] * ax) * (1.0 - ay) + (c01[c] * (1.0 - ax) + c11[c] * ax) * ay
+        })
+    }
+}
+
+/// What the picture paints a mesh's triangles with.
+#[derive(Clone, Copy, Debug)]
+pub enum Paint<'a> {
+    /// One colour, 0xRRGGBB.
+    Flat(u32),
+    /// The texture `pyramid` at the vertices' coordinates `uv` (two per vertex), times `factor` (linear RGB), wrapping
+    /// as `wrap` says.
+    Texture {
+        pyramid: &'a Pyramid,
+        uv: &'a [f32],
+        factor: [f32; 3],
+        wrap: PauseWrap,
+    },
+}
+
+/// An sRGB byte value (as a float) in linear light.
+fn linear(c: f32) -> f32 {
+    let c = c / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// One triangle's paint: its colour at barycentric weights.
+struct Painter<'a> {
+    paint: &'a Paint<'a>,
+    /// The vertices' coordinates (textured), and the footprint in first-level texels per pixel.
+    uv: [[f32; 2]; 3],
+    footprint: f32,
+    shade: f32,
+}
+
+impl<'a> Painter<'a> {
+    /// Vertices `v` at screen points `s` (signed doubled area `area`), shaded by `shade`.
+    fn of(paint: &'a Paint<'a>, v: [usize; 3], s: [(f32, f32); 3], area: f32, shade: f32) -> Painter<'a> {
+        let (mut uv, mut footprint) = ([[0.0; 2]; 3], 1.0);
+        if let Paint::Texture {
+            pyramid, uv: coords, ..
+        } = paint
+        {
+            uv = v.map(|i| {
+                [
+                    coords.get(i * 2).copied().unwrap_or(0.0),
+                    coords.get(i * 2 + 1).copied().unwrap_or(0.0),
+                ]
+            });
+            if area.abs() >= 1e-6 {
+                // the barycentric weights' screen gradients, and so the coordinates'
+                let [(x0, y0), (x1, y1), (x2, y2)] = s;
+                let inv = 1.0 / area;
+                let dx = [(y1 - y2) * inv, (y2 - y0) * inv, (y0 - y1) * inv];
+                let dy = [(x2 - x1) * inv, (x0 - x2) * inv, (x1 - x0) * inv];
+                let (tw, th) = pyramid.top();
+                let grad = |d: [f32; 3], c: usize| (0..3).map(|k| d[k] * uv[k][c]).sum::<f32>();
+                footprint = [
+                    grad(dx, 0) * tw as f32,
+                    grad(dx, 1) * th as f32,
+                    grad(dy, 0) * tw as f32,
+                    grad(dy, 1) * th as f32,
+                ]
+                .into_iter()
+                .fold(0.0f32, |a, g| a.max(g.abs()));
+            }
+        }
+        Painter {
+            paint,
+            uv,
+            footprint,
+            shade,
+        }
+    }
+
+    /// The pixel's colour at barycentric weights `b`, packed as the picture stores it.
+    fn colour(&self, b: [f32; 3]) -> u32 {
+        let rgb = match self.paint {
+            Paint::Flat(rgb) => [(rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255].map(|c| c as f32),
+            Paint::Texture {
+                pyramid,
+                factor,
+                wrap,
+                ..
+            } => {
+                let uv = [0, 1].map(|c| (0..3).map(|k| b[k] * self.uv[k][c]).sum::<f32>());
+                let texel = pyramid.sample(uv, self.footprint, *wrap);
+                std::array::from_fn(|c| {
+                    f32::from(primase_image::linear_to_srgb8_f32(linear(texel[c]) * factor[c]))
+                })
+            }
+        };
+        let [r, g, b] = rgb.map(|c| (c * self.shade) as u32);
+        0xFF00_0000u32 | b << 16 | g << 8 | r
+    }
 }
 
 const PADDING: f32 = 1.1;
@@ -83,27 +255,24 @@ impl PauseMap {
         }
     }
 
-    /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), in one colour.
+    /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), painted with `paint`.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(&mut self, pos: &[f32], idx: &[u32], origin: Vec3, ex: Vec3, ey: Vec3, ez: Vec3, rgb: u32) {
-        let (r, g, b) = (
-            ((rgb >> 16) & 255) as f32,
-            ((rgb >> 8) & 255) as f32,
-            (rgb & 255) as f32,
-        );
+    pub fn draw(
+        &mut self,
+        pos: &[f32],
+        idx: &[u32],
+        origin: Vec3,
+        ex: Vec3,
+        ey: Vec3,
+        ez: Vec3,
+        paint: &Paint<'_>,
+    ) {
         let (w, h) = (self.w as i32, self.h as i32);
         for t in (0..idx.len().saturating_sub(2)).step_by(3) {
-            let (i0, i1, i2) = (
-                idx[t] as usize * 3,
-                idx[t + 1] as usize * 3,
-                idx[t + 2] as usize * 3,
-            );
-            let p0 = origin + ex * pos[i0] + ey * pos[i0 + 1] + ez * pos[i0 + 2];
-            let p1 = origin + ex * pos[i1] + ey * pos[i1 + 1] + ez * pos[i1 + 2];
-            let p2 = origin + ex * pos[i2] + ey * pos[i2 + 1] + ez * pos[i2 + 2];
-            let (x0, y0) = ((p0.x - self.min_x) * self.sx, (self.max_y - p0.y) * self.sy);
-            let (x1, y1) = ((p1.x - self.min_x) * self.sx, (self.max_y - p1.y) * self.sy);
-            let (x2, y2) = ((p2.x - self.min_x) * self.sx, (self.max_y - p2.y) * self.sy);
+            let v = [idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize];
+            let p = v.map(|i| origin + ex * pos[i * 3] + ey * pos[i * 3 + 1] + ez * pos[i * 3 + 2]);
+            let s = p.map(|q| ((q.x - self.min_x) * self.sx, (self.max_y - q.y) * self.sy));
+            let [(x0, y0), (x1, y1), (x2, y2)] = s;
             let mut bx0 = x0.min(x1.min(x2)).floor() as i32;
             let mut bx1 = x0.max(x1.max(x2)).ceil() as i32;
             let mut by0 = y0.min(y1.min(y2)).floor() as i32;
@@ -111,31 +280,27 @@ impl PauseMap {
             if bx1 < 0 || by1 < 0 || bx0 >= w || by0 >= h {
                 continue;
             }
-            let n = (p1 - p0).cross(p2 - p0);
+            let n = (p[1] - p[0]).cross(p[2] - p[0]);
             let nl = n.length();
             let shade = if nl > 1e-12 {
                 0.62 + 0.38 * n.z.abs() / nl
             } else {
                 1.0
             };
-            let col =
-                0xFF00_0000u32 | ((b * shade) as u32) << 16 | ((g * shade) as u32) << 8 | (r * shade) as u32;
             let area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
             bx0 = bx0.max(0);
             by0 = by0.max(0);
             bx1 = bx1.min(w - 1);
             by1 = by1.min(h - 1);
             self.triangles += 1;
+            let painter = Painter::of(paint, v, s, area, shade);
             if area.abs() < 1e-6 || (bx1 - bx0 <= 1 && by1 - by0 <= 1) {
                 let px = ((x0 + x1 + x2) / 3.0) as i32;
                 let py = ((y0 + y1 + y2) / 3.0) as i32;
                 if (px as u32) < w as u32 && (py as u32) < h as u32 {
-                    let z = (p0.z + p1.z + p2.z) / 3.0;
-                    let o = py as usize * self.w + px as usize;
-                    if z > self.depth[o] || (z == self.depth[o] && col > self.rgba[o]) {
-                        self.depth[o] = z;
-                        self.rgba[o] = col;
-                    }
+                    let z = (p[0].z + p[1].z + p[2].z) / 3.0;
+                    let third = 1.0 / 3.0;
+                    self.plot(py as usize * self.w + px as usize, z, painter.colour([third; 3]));
                 }
                 continue;
             }
@@ -150,14 +315,22 @@ impl PauseMap {
                     if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                         continue;
                     }
-                    let z = p0.z * w0 + p1.z * w1 + p2.z * w2;
-                    let o = py as usize * self.w + px as usize;
-                    if z > self.depth[o] || (z == self.depth[o] && col > self.rgba[o]) {
-                        self.depth[o] = z;
-                        self.rgba[o] = col;
-                    }
+                    let z = p[0].z * w0 + p[1].z * w1 + p[2].z * w2;
+                    self.plot(
+                        py as usize * self.w + px as usize,
+                        z,
+                        painter.colour([w0, w1, w2]),
+                    );
                 }
             }
+        }
+    }
+
+    /// Pixel `o` takes `col` at height `z` when it is the highest there (ties: the larger colour, for a stable order).
+    fn plot(&mut self, o: usize, z: f32, col: u32) {
+        if z > self.depth[o] || (z == self.depth[o] && col > self.rgba[o]) {
+            self.depth[o] = z;
+            self.rgba[o] = col;
         }
     }
 
@@ -286,5 +459,109 @@ impl PauseMap {
             ("ui/map_image.json".into(), json),
             ("ui/map_clouds.png".into(), clouds),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Texels of `w` x `h` RGBA8, each (r, g, b) from `f(x, y)`, opaque.
+    fn image(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let [r, g, b] = f(x, y);
+                [r, g, b, 255]
+            })
+            .collect()
+    }
+
+    /// A pyramid halves down to 1 x 1; a sample at a texel's centre in the first level is that texel; the footprint
+    /// picks the level whose texel matches it, the last past the chain.
+    #[test]
+    fn a_pyramid_samples_bilinear_at_the_footprints_level() {
+        let p = Pyramid::new(4, 2, image(4, 2, |x, y| [(x * 60) as u8, (y * 200) as u8, 7]));
+        assert_eq!(
+            p.levels.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(),
+            [(4, 2), (2, 1), (1, 1)]
+        );
+        for (x, y) in [(0u32, 0u32), (3, 1), (2, 0)] {
+            let uv = [(x as f32 + 0.5) / 4.0, (y as f32 + 0.5) / 2.0];
+            assert_eq!(
+                p.sample(uv, 1.0, PauseWrap::Clamp),
+                [(x * 60) as f32, (y * 200) as f32, 7.0]
+            );
+        }
+        // halfway between texels 0 and 1 of row 0: the mean
+        assert_eq!(p.sample([0.25, 0.25], 1.0, PauseWrap::Clamp)[0], 30.0);
+        // a footprint of two texels reads the 2 x 1 level, of a hundred the 1 x 1
+        let mid = p.levels[1].2[0];
+        assert_eq!(p.sample([0.25, 0.5], 2.0, PauseWrap::Clamp)[0], f32::from(mid));
+        let last = p.levels[2].2[0];
+        assert_eq!(p.sample([0.9, 0.1], 100.0, PauseWrap::Repeat)[0], f32::from(last));
+    }
+
+    /// Repeat wraps around, clamp holds the edge, mirror reflects.
+    #[test]
+    fn wraps_address_texels_past_the_edge() {
+        assert_eq!(PauseWrap::Repeat.texel(-1, 4), 3);
+        assert_eq!(PauseWrap::Repeat.texel(5, 4), 1);
+        assert_eq!(
+            (PauseWrap::Clamp.texel(-1, 4), PauseWrap::Clamp.texel(5, 4)),
+            (0, 3)
+        );
+        assert_eq!(
+            (PauseWrap::Mirror.texel(4, 4), PauseWrap::Mirror.texel(-1, 4)),
+            (3, 0)
+        );
+    }
+
+    /// A quad covering the picture, its texture red on the left and blue on the right (u across, clamped): the
+    /// picture's left edge is red, its right edge blue; a flat quad above it paints its one colour.
+    #[test]
+    fn a_textured_quad_is_drawn_by_its_texture_and_a_flat_one_by_its_colour() {
+        let mut pm = PauseMap::new([0.0, 0.0, 16.0, 9.0], Vec3::ZERO, 90);
+        let pos = [-100., -100., 0., 100., -100., 0., 100., 100., 0., -100., 100., 0.];
+        let idx = [0, 1, 2, 0, 2, 3];
+        let uv = [0., 0., 1., 0., 1., 1., 0., 1.];
+        let pyramid = Pyramid::new(
+            2,
+            1,
+            image(2, 1, |x, _| if x == 0 { [255, 0, 0] } else { [0, 0, 255] }),
+        );
+        let paint = Paint::Texture {
+            pyramid: &pyramid,
+            uv: &uv,
+            factor: [1.0; 3],
+            wrap: PauseWrap::Clamp,
+        };
+        pm.draw(
+            &pos,
+            &idx,
+            Vec3::ZERO,
+            Vec3::UNIT_X,
+            Vec3::UNIT_Y,
+            Vec3::UNIT_Z,
+            &paint,
+        );
+        let at = |pm: &PauseMap, x: usize| pm.rgba[(pm.h / 2) * pm.w + x];
+        let (left, right) = (at(&pm, 0), at(&pm, pm.w - 1));
+        // the left edge samples u ~0.3, between the texel centres: mostly red; the right edge is past the blue
+        // texel's centre, clamped: blue
+        assert!(left & 255 > 200 && (left >> 16) & 255 < 60, "{left:08x}");
+        assert_eq!((right & 255, (right >> 16) & 255), (0, 255), "{right:08x}");
+        // a flat quad a metre above: its colour (0xRRGGBB in, red in the low byte out), unshaded facing up
+        let above = [-100., -100., 1., 100., -100., 1., 100., 100., 1., -100., 100., 1.];
+        pm.draw(
+            &above,
+            &idx,
+            Vec3::ZERO,
+            Vec3::UNIT_X,
+            Vec3::UNIT_Y,
+            Vec3::UNIT_Z,
+            &Paint::Flat(0x102030),
+        );
+        assert_eq!(at(&pm, 0), 0xFF30_2010);
     }
 }

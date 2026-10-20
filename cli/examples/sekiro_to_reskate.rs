@@ -24,9 +24,9 @@ use primase_image::{CapMode, CapTextures, NormalDownscale, NormalizeNormals};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
-    ClipReskateRegion, LightCalibration, OceanMaterials, PauseExtent, PauseSource, PlaceReskateSpawn,
-    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision, PrepareReskateFloor,
-    PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
+    ClipReskateRegion, LightCalibration, OceanMaterials, PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut,
+    PauseSource, PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision,
+    PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
     PrepareReskateUvRepeats, PrepareReskateWater, RaiseOptions, RaiseSkate, RepeatBlended, RepeatDecals,
     SnapReskateMarkers, SummarizeReskateMap, WaterExtent,
 };
@@ -80,7 +80,11 @@ fn main() -> Result<()> {
             Box::new(PlaceReskateSpawn::centre()),
             Box::new(SnapReskateMarkers::for_encoding(&e)?),
             Box::new(PrepareReskateWater::new(WaterExtent::Region { margin: 400.0 }, OceanMaterials::Stated)?),
-            Box::new(PrepareReskatePauseMap::new(PauseSource::Geometry { height: 2160, extent: PauseExtent::Region })?),
+            Box::new(PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 2160,
+                extent: PauseExtent::Region,
+                drawing: PauseDrawing { leave_out: PauseLeaveOut::Nothing, colour: PauseColour::Mean },
+            })?),
             Box::new(CapTextures::new(256)?.with_mode(CapMode { normals: NormalDownscale::Box, ..CapMode::default() })),
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),

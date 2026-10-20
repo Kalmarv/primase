@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::assembly::{SoupSeg, SoupWorld, soup_cell};
 use crate::blend_order::{self, Geometry};
 use crate::collision::{Collision, CollisionResult, LeafVisit, PropSoup};
+use crate::components::pause_map::{PauseColour, PauseDrawing, PauseLeaveOut};
 use crate::components::{
     BlendBudgetMode, ChainGroup, ChainTile, OverlayPiece, OverlayTotals, SkateBlendBudget, SkateBlendChains,
     SkateOverlayStack, StackedPiece,
@@ -17,7 +18,7 @@ use crate::material::{MatLib, Material, VClass};
 use crate::model::{CollisionMode, Hull, MapObject, Placement, ProtoInfo, SrcMesh, SrcPart, TileOut};
 use crate::overlay::{self, OverlayStats, Parts, Piece};
 use crate::passes::pause_map::SkatePausePicture;
-use crate::pausemap::PauseMap;
+use crate::pausemap::{Paint, PauseMap, PauseWrap};
 use crate::records::{
     Basis, EffectJson, LightJson, MapJson, MaterialJson, ObjectJson, OceanMaterial, SpawnJson,
     StreamingDistances, SurfaceMaterial, TextureEntry, TexturesIndex, TrainerJson, TrainerSpot,
@@ -59,10 +60,32 @@ pub struct WriterOptions {
 }
 
 impl WriterOptions {
-    /// Whether the writer draws its geometry into the pause-map picture.
-    fn draws_pause(&self) -> bool {
-        matches!(self.pause, Some(SkatePausePicture::Geometry { .. }))
+    /// How the writer draws its geometry into the pause-map picture (`None`: it does not).
+    fn pause_drawing(&self) -> Option<PauseDrawing> {
+        match self.pause {
+            Some(SkatePausePicture::Geometry { drawing, .. }) => Some(drawing),
+            _ => None,
+        }
     }
+}
+
+/// How the pause-map picture draws a material's triangles.
+#[derive(Clone, Copy, Debug)]
+enum PausePick {
+    /// Not drawn: a decal, glass or blended surface.
+    Hidden,
+    /// Left out: its material casts no shadow (`leave-out=shadowless`), counted.
+    Shadowless,
+    /// In one colour (0xRRGGBB): the mean colour.
+    Flat(u32),
+    /// In the mean colour though `colour=texture` asked for its texture, which could not be sampled; counted.
+    Untextured(u32),
+    /// Its base texture `tex` sampled, times `factor` (linear), wrapping as `wrap` says.
+    Texture {
+        tex: i32,
+        factor: [f32; 3],
+        wrap: PauseWrap,
+    },
 }
 
 /// What the writer did, for stats.json.
@@ -104,6 +127,11 @@ pub struct WriteResult {
     /// Water outlines the map's extent limit cut, and those left with no area (not drawn).
     pub water_cut_at_limit: usize,
     pub water_without_area: usize,
+    /// Pause-map picture: triangles left out because their material casts no shadow (`leave-out=shadowless`).
+    pub pause_shadowless: i64,
+    /// Pause-map picture: per material name, the triangles drawn in the mean colour because no texture could be
+    /// sampled (`colour=texture`).
+    pub pause_untextured: BTreeMap<String, i64>,
     /// Lights whose basis came from the fallback axis (no usable tangent).
     pub lights_without_tangent: usize,
     /// The overlay stack's lift record: per mesh file (`meshes/...`), per primitive in file order, each vertex's lift
@@ -772,14 +800,19 @@ impl MapWriter {
                 bounds.map(f64::from),
                 off,
             )),
-            Some(SkatePausePicture::Geometry { height, extent }) => Some(PauseMap::new(
+            Some(SkatePausePicture::Geometry { height, extent, .. }) => Some(PauseMap::new(
                 extent.map_or(o.region, |e| e.map(f64::from)),
                 off,
                 *height,
             )),
             None => None,
         };
-        let tex = TexLib::encoding();
+        let mut tex = TexLib::encoding();
+        if o.pause_drawing()
+            .is_some_and(|d| d.colour == PauseColour::Texture)
+        {
+            tex.keep_pyramids();
+        }
         Ok(MapWriter {
             o,
             ctx: Ctx {
@@ -1470,15 +1503,73 @@ impl MapWriter {
         }
     }
 
-    fn map_colour(&self, cache: &mut HashMap<usize, u32>, mat: usize) -> u32 {
+    /// How the pause-map picture draws map material `mat`'s triangles (the picture's drawing choice `d`).
+    fn pause_pick(&self, cache: &mut HashMap<usize, PausePick>, mat: usize, d: PauseDrawing) -> PausePick {
         *cache.entry(mat).or_insert_with(|| {
             let m = self.ctx.mats.by_id(mat);
             if matches!(m.class, VClass::Decal | VClass::Glass | VClass::Alpha) {
-                return 0;
+                return PausePick::Hidden;
+            }
+            if d.leave_out == PauseLeaveOut::Shadowless && m.cast_shadows == Some(false) {
+                return PausePick::Shadowless;
             }
             let c = self.ctx.tex.mean_of(m.tex);
-            if c == 0 { 0x010101 } else { c }
+            let mean = if c == 0 { 0x010101 } else { c };
+            match d.colour {
+                PauseColour::Mean => PausePick::Flat(mean),
+                PauseColour::Texture if self.ctx.tex.pyramid(m.tex).is_none() => PausePick::Untextured(mean),
+                PauseColour::Texture => PausePick::Texture {
+                    tex: m.tex,
+                    factor: m.base_factor.map_or([1.0; 3], |f| [f[0], f[1], f[2]]),
+                    wrap: match m.wrap.as_deref() {
+                        Some("extend") => PauseWrap::Clamp,
+                        Some("mirror") => PauseWrap::Mirror,
+                        _ => PauseWrap::Repeat,
+                    },
+                },
+            }
         })
+    }
+
+    /// Triangles `idx` of `pos` (coordinates `uv`), drawn into the pause-map picture as `pick` says, map material `mat`'s,
+    /// placed by `origin` and the basis; what is left out or drawn without its texture counted.
+    #[allow(clippy::too_many_arguments)]
+    fn pause_draw(
+        &mut self,
+        pick: PausePick,
+        mat: usize,
+        (pos, uv, idx): (&[f32], &[f32], &[u32]),
+        origin: Vec3,
+        ex: Vec3,
+        ey: Vec3,
+        ez: Vec3,
+    ) {
+        let tris = (idx.len() / 3) as i64;
+        let paint = match pick {
+            PausePick::Hidden => return,
+            PausePick::Shadowless => {
+                self.r.pause_shadowless += tris;
+                return;
+            }
+            PausePick::Flat(c) => Paint::Flat(c),
+            PausePick::Untextured(c) => {
+                let name = self.ctx.mats.by_id(mat).name.clone();
+                *self.r.pause_untextured.entry(name).or_default() += tris;
+                Paint::Flat(c)
+            }
+            PausePick::Texture { tex, factor, wrap } => match self.ctx.tex.pyramid(tex) {
+                Some(pyramid) => Paint::Texture {
+                    pyramid,
+                    uv,
+                    factor,
+                    wrap,
+                },
+                None => unreachable!("picked only with a pyramid"),
+            },
+        };
+        if let Some(pm) = &mut self.pm {
+            pm.draw(pos, idx, origin, ex, ey, ez, &paint);
+        }
     }
 
     /// One placement's prototype collision: a hull written whole, else its triangles into the tile's solid or water
@@ -1675,7 +1766,7 @@ impl MapWriter {
         let mut tiles: Vec<TileOut> = Vec::new();
         let edge = apron(r, o.apron);
         let rules = PlacementRules::of(&o);
-        let mut colours: HashMap<usize, u32> = HashMap::new();
+        let mut colours: HashMap<usize, PausePick> = HashMap::new();
         for (band, band_sels) in per_band.iter().enumerate() {
             if band_sels.is_empty() {
                 continue;
@@ -1817,15 +1908,19 @@ impl MapWriter {
                         self.r.proto_list[info].count += 1;
                         let iname = format!("i_{tx}_{ty}_{}_{}", to.instances, self.r.proto_list[info].name);
                         let rows = MapObject::rows(s.ex, s.ey, s.ez, s.pos + off);
-                        if o.draws_pause() {
+                        if let Some(d) = o.pause_drawing() {
                             for p in &m.parts {
                                 let mat = source.material_of(p, row, &mut self.ctx)?;
-                                let pc = self.map_colour(&mut colours, mat);
-                                if pc != 0
-                                    && let Some(pm) = &mut self.pm
-                                {
-                                    pm.draw(&p.pos, &p.idx, s.pos + off, s.ex, s.ey, s.ez, pc);
-                                }
+                                let pick = self.pause_pick(&mut colours, mat, d);
+                                self.pause_draw(
+                                    pick,
+                                    mat,
+                                    (&p.pos, &p.uv, &p.idx),
+                                    s.pos + off,
+                                    s.ex,
+                                    s.ey,
+                                    s.ez,
+                                );
                             }
                         }
                         let pr = &self.protos[&key];
@@ -1897,24 +1992,18 @@ impl MapWriter {
                 };
                 if !parts.is_empty() {
                     to.mesh = Some(format!("t_{tx}_{ty}.glb"));
-                    if o.draws_pause() {
-                        let keys: Vec<usize> = parts.keys().copied().collect();
-                        for k in keys {
-                            let pc = self.map_colour(&mut colours, k);
-                            if pc != 0
-                                && let Some(pm) = &mut self.pm
-                            {
-                                let a = &parts[&k];
-                                pm.draw(
-                                    &a.pos,
-                                    &a.idx,
-                                    Vec3::new(origin.x + off.x, origin.y + off.y, off.z),
-                                    Vec3::UNIT_X,
-                                    Vec3::UNIT_Y,
-                                    Vec3::UNIT_Z,
-                                    pc,
-                                );
-                            }
+                    if let Some(d) = o.pause_drawing() {
+                        for (&k, a) in &parts {
+                            let pick = self.pause_pick(&mut colours, k, d);
+                            self.pause_draw(
+                                pick,
+                                k,
+                                (&a.pos, &a.uv, &a.idx),
+                                Vec3::new(origin.x + off.x, origin.y + off.y, off.z),
+                                Vec3::UNIT_X,
+                                Vec3::UNIT_Y,
+                                Vec3::UNIT_Z,
+                            );
                         }
                     }
                     let lim = o.limit;

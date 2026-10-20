@@ -141,6 +141,10 @@ fn main() -> Result<(), BoxError> {
             } else {
                 primase_reskate::passes::PauseExtent::Content
             },
+            drawing: primase_reskate::passes::PauseDrawing {
+                leave_out: primase_reskate::passes::PauseLeaveOut::Nothing,
+                colour: primase_reskate::passes::PauseColour::Mean,
+            },
         }
     };
     passes.push(Box::new(primase_reskate::passes::PrepareReskatePauseMap::new(

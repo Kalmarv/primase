@@ -29,8 +29,38 @@ pub enum SkatePausePicture {
         bounds: [f32; 4],
     },
     /// The map's geometry drawn top-down, `height` pixels high, over ground `extent` (`None`: the map's own content
-    /// bounds as the writer measures them).
-    Geometry { height: usize, extent: Option<[f32; 4]> },
+    /// bounds as the writer measures them), as `drawing` says.
+    Geometry {
+        height: usize,
+        extent: Option<[f32; 4]>,
+        drawing: PauseDrawing,
+    },
+}
+
+/// Which triangles a pause-map picture drawn from the geometry leaves out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseLeaveOut {
+    /// Those whose material casts no shadow (`skate.material` `cast_shadows` false: a room's shell, its ceiling
+    /// included, selected by `set-reskate-shadow-casting`), counted.
+    Shadowless,
+    /// None.
+    Nothing,
+}
+
+/// The colour a pause-map picture drawn from the geometry gives a triangle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseColour {
+    /// Its material's base texture's mean colour.
+    Mean,
+    /// Its material's base texture sampled at each pixel (module documentation of `prepare-reskate-pause-map`).
+    Texture,
+}
+
+/// How a pause-map picture drawn from the geometry draws it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PauseDrawing {
+    pub leave_out: PauseLeaveOut,
+    pub colour: PauseColour,
 }
 
 impl Resource for SkatePausePicture {

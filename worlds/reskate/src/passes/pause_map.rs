@@ -1,14 +1,24 @@
-//! `prepare-reskate-pause-map{from=image | from=geometry,height=H,extent=region|content|x0,y0,x1,y1}`: the pause-menu
-//! map picture a map writer writes (`ui/map_image.png`, `ui/map_image.json`, `ui/map_clouds.png`), chosen explicitly.
+//! `prepare-reskate-pause-map{from=image | from=geometry,height=H,extent=region|content|x0,y0,x1,y1,
+//! leave-out=shadowless|nothing,colour=mean|texture}`: the pause-menu map picture a map writer writes
+//! (`ui/map_image.png`, `ui/map_image.json`, `ui/map_clouds.png`), chosen explicitly.
 //!
 //! - `from=image`: the scene's own picture (`skate.scene` `pause_map`: its image, decoded by the reader's loader into
 //!   [`SkatePauseImage`], and the ground bounds it covers). An error when the scene names none or it was not loaded.
-//! - `from=geometry`: a top-down picture of the map's drawn geometry (each triangle in its material's texture mean
-//!   colour, highest surface on top, shaded by slope; decals, glass and blended surfaces left out), `height` pixels
-//!   high and 16:9, over `extent`: the scene's stated region (`region`; an error without one), the map's own content
-//!   bounds as the writer measures them (`content`), or a ground rectangle; padded by 10% and at least 50 m high.
+//! - `from=geometry`: a top-down picture of the map's drawn geometry (highest surface on top, shaded by slope; decals,
+//!   glass and blended surfaces left out), `height` pixels high and 16:9, over `extent`: the scene's stated region
+//!   (`region`; an error without one), the map's own content bounds as the writer measures them (`content`), or a
+//!   ground rectangle; padded by 10% and at least 50 m high. Two more choices, both required:
+//!   - `leave-out=shadowless` leaves out the triangles whose material casts no shadow (`skate.material`
+//!     `cast_shadows` false: an indoor level's shell and ceiling, as `set-reskate-shadow-casting` selected them), so
+//!     the picture shows the room from above, counted in the writer's report; `leave-out=nothing` draws them.
+//!   - `colour=mean` draws each triangle in its material's base texture's mean colour; `colour=texture` samples the
+//!     base texture at each pixel through the triangle's coordinates (transforms are baked before `raise-skate`),
+//!     times the material's base colour factor (in linear light), wrapping as the material says: bilinear, in the
+//!     level of the texture's mip chain (at most 128 pixels on a side, box-filtered) whose texel best matches the
+//!     pixel's footprint. A material with no texture loaded is drawn in its mean colour, reported by name.
+//!
 //!   The writer rasterises its prepared geometry into the picture as it encodes it; this pass decides that it does,
-//!   at what size and over what.
+//!   at what size, over what and how.
 //!
 //! The pass records the choice in [`SkatePausePicture`]; without it the writer writes no pause-map picture. The
 //! picture is the map's: in a part of a map converted in several, `extent=content` with no stated region is the map's
@@ -19,6 +29,8 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Resource, World};
 
 pub use crate::components::pause_map::{SkatePauseImage, SkatePausePicture};
+
+pub use crate::components::pause_map::{PauseColour, PauseDrawing, PauseLeaveOut};
 
 use crate::components::{SkateContentBounds, SkateScene};
 
@@ -38,8 +50,12 @@ pub enum PauseExtent {
 pub enum PauseSource {
     /// The scene's own picture.
     Image,
-    /// The map's geometry, `height` pixels high (at least 9), over `extent`.
-    Geometry { height: usize, extent: PauseExtent },
+    /// The map's geometry, `height` pixels high (at least 9), over `extent`, drawn as `drawing` says.
+    Geometry {
+        height: usize,
+        extent: PauseExtent,
+        drawing: PauseDrawing,
+    },
 }
 
 /// See the module documentation. Made by [`PrepareReskatePauseMap::new`]; from options by the same call.
@@ -52,7 +68,7 @@ impl PrepareReskatePauseMap {
     /// An error for a picture under 9 pixels high (16:9 needs a whole pixel across) or a rectangle that is not finite
     /// with east0 < east1 and north0 < north1.
     pub fn new(source: PauseSource) -> Result<PrepareReskatePauseMap, String> {
-        if let PauseSource::Geometry { height, extent } = source {
+        if let PauseSource::Geometry { height, extent, .. } = source {
             if height < 9 {
                 return Err(format!("height {height}: at least 9 pixels"));
             }
@@ -72,10 +88,20 @@ impl PrepareReskatePauseMap {
         self.source
     }
 
-    /// From its options, through [`PrepareReskatePauseMap::new`]: `from=image`, or `from=geometry` with `height` and
-    /// `extent=region|content` or `x0,y0,x1,y1`.
+    /// From its options, through [`PrepareReskatePauseMap::new`]: `from=image`, or `from=geometry` with `height`,
+    /// `extent=region|content` or `x0,y0,x1,y1`, `leave-out=shadowless|nothing` and `colour=mean|texture`.
     pub fn from_options(o: &Options) -> Result<PrepareReskatePauseMap, String> {
-        const KEYS: [&str; 7] = ["from", "height", "extent", "x0", "y0", "x1", "y1"];
+        const KEYS: [&str; 9] = [
+            "from",
+            "height",
+            "extent",
+            "x0",
+            "y0",
+            "x1",
+            "y1",
+            "leave-out",
+            "colour",
+        ];
         if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
@@ -110,7 +136,29 @@ impl PrepareReskatePauseMap {
                         );
                     }
                 };
-                PauseSource::Geometry { height, extent }
+                let leave_out = match o.get("leave-out").map(String::as_str) {
+                    Some("shadowless") => PauseLeaveOut::Shadowless,
+                    Some("nothing") => PauseLeaveOut::Nothing,
+                    Some(v) => return Err(format!("leave-out={v}: shadowless or nothing")),
+                    None => {
+                        return Err(
+                            "leave-out is required with from=geometry: shadowless (materials casting no shadow) or \
+                             nothing"
+                                .into(),
+                        );
+                    }
+                };
+                let colour = match o.get("colour").map(String::as_str) {
+                    Some("mean") => PauseColour::Mean,
+                    Some("texture") => PauseColour::Texture,
+                    Some(v) => return Err(format!("colour={v}: mean or texture")),
+                    None => return Err("colour is required with from=geometry: mean or texture".into()),
+                };
+                PauseSource::Geometry {
+                    height,
+                    extent,
+                    drawing: PauseDrawing { leave_out, colour },
+                }
             }
             Some(v) => return Err(format!("from={v}: image or geometry")),
             None => return Err("from is required: image or geometry".into()),
@@ -134,9 +182,29 @@ impl Pass for PrepareReskatePauseMap {
             PauseSource::Image => {
                 o.insert("from".into(), "image".into());
             }
-            PauseSource::Geometry { height, extent } => {
+            PauseSource::Geometry {
+                height,
+                extent,
+                drawing,
+            } => {
                 o.insert("from".into(), "geometry".into());
                 o.insert("height".into(), height.to_string());
+                o.insert(
+                    "leave-out".into(),
+                    match drawing.leave_out {
+                        PauseLeaveOut::Shadowless => "shadowless",
+                        PauseLeaveOut::Nothing => "nothing",
+                    }
+                    .into(),
+                );
+                o.insert(
+                    "colour".into(),
+                    match drawing.colour {
+                        PauseColour::Mean => "mean",
+                        PauseColour::Texture => "texture",
+                    }
+                    .into(),
+                );
                 match extent {
                     PauseExtent::Region => {
                         o.insert("extent".into(), "region".into());
@@ -182,7 +250,11 @@ impl Pass for PrepareReskatePauseMap {
                     bounds,
                 }
             }
-            PauseSource::Geometry { height, extent } => {
+            PauseSource::Geometry {
+                height,
+                extent,
+                drawing,
+            } => {
                 let extent = match extent {
                     PauseExtent::Region => Some(w.resource::<SkateScene>().and_then(|s| s.region).ok_or(
                         "extent=region: the scene states no region (extent=content, or x0, y0, x1, y1)",
@@ -206,7 +278,11 @@ impl Pass for PrepareReskatePauseMap {
                     PauseExtent::Rect(r) => Some(r),
                 };
                 log.count("pause-map pictures: drawn from the geometry", 1);
-                SkatePausePicture::Geometry { height, extent }
+                SkatePausePicture::Geometry {
+                    height,
+                    extent,
+                    drawing,
+                }
             }
         };
         w.remove_resource::<SkatePauseImage>();
@@ -229,8 +305,20 @@ mod tests {
     fn options_round_trip_and_bad_ones_refused() {
         for good in [
             o(&[("from", "image")]),
-            o(&[("from", "geometry"), ("height", "2160"), ("extent", "content")]),
-            o(&[("from", "geometry"), ("height", "720"), ("extent", "region")]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "2160"),
+                ("extent", "content"),
+                ("leave-out", "shadowless"),
+                ("colour", "texture"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "720"),
+                ("extent", "region"),
+                ("leave-out", "nothing"),
+                ("colour", "mean"),
+            ]),
             o(&[
                 ("from", "geometry"),
                 ("height", "9"),
@@ -238,6 +326,8 @@ mod tests {
                 ("y0", "0"),
                 ("x1", "10"),
                 ("y1", "5"),
+                ("leave-out", "nothing"),
+                ("colour", "mean"),
             ]),
         ] {
             assert_eq!(
@@ -253,6 +343,34 @@ mod tests {
             o(&[("from", "geometry"), ("height", "100")]),
             o(&[("from", "geometry"), ("height", "100"), ("extent", "sea")]),
             o(&[("from", "drawing")]),
+            // the drawing choices are required, and checked
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("colour", "mean"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "nothing"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "ceilings"),
+                ("colour", "mean"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "100"),
+                ("extent", "content"),
+                ("leave-out", "nothing"),
+                ("colour", "photo"),
+            ]),
+            o(&[("from", "image"), ("colour", "mean")]),
         ] {
             assert!(PrepareReskatePauseMap::from_options(&bad).is_err(), "{bad:?}");
         }
@@ -262,8 +380,18 @@ mod tests {
     /// named and loaded; the loaded image is consumed.
     #[test]
     fn the_choice_is_recorded_for_the_writer() {
-        let geometry =
-            |extent| PrepareReskatePauseMap::new(PauseSource::Geometry { height: 720, extent }).unwrap();
+        let drawing = PauseDrawing {
+            leave_out: PauseLeaveOut::Shadowless,
+            colour: PauseColour::Texture,
+        };
+        let geometry = |extent| {
+            PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 720,
+                extent,
+                drawing,
+            })
+            .unwrap()
+        };
         let mut w = World::new();
         assert!(
             geometry(PauseExtent::Region)
@@ -277,7 +405,8 @@ mod tests {
             w.resource::<SkatePausePicture>(),
             Some(&SkatePausePicture::Geometry {
                 height: 720,
-                extent: None
+                extent: None,
+                drawing
             })
         );
         w.insert_resource(SkateScene {
@@ -292,7 +421,8 @@ mod tests {
             w.resource::<SkatePausePicture>(),
             Some(&SkatePausePicture::Geometry {
                 height: 720,
-                extent: Some([0.0, 0.0, 100.0, 50.0])
+                extent: Some([0.0, 0.0, 100.0, 50.0]),
+                drawing
             })
         );
         let image = PrepareReskatePauseMap::new(PauseSource::Image).unwrap();

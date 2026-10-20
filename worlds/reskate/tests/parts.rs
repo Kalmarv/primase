@@ -765,12 +765,18 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
 fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
     use primase_reskate::components::SkateContentBounds;
     use primase_reskate::passes::{
-        PauseExtent, PauseSource, PrepareReskatePauseMap, SkatePausePicture, SummarizeReskateContent,
+        PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut, PauseSource, PrepareReskatePauseMap,
+        SkatePausePicture, SummarizeReskateContent,
+    };
+    let drawing = PauseDrawing {
+        leave_out: PauseLeaveOut::Nothing,
+        colour: PauseColour::Mean,
     };
     let pause = || {
         PrepareReskatePauseMap::new(PauseSource::Geometry {
             height: 720,
             extent: PauseExtent::Content,
+            drawing,
         })
         .unwrap()
     };
@@ -781,7 +787,8 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         whole.resource::<SkatePausePicture>(),
         Some(&SkatePausePicture::Geometry {
             height: 720,
-            extent: None
+            extent: None,
+            drawing
         })
     );
     let mut measured = map();
@@ -835,6 +842,7 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
         let stated = SkatePausePicture::Geometry {
             height: 720,
             extent: Some(extent.map(|v| v as f32)),
+            drawing,
         };
         assert_eq!(got.take(), vec![stated; 3], "{order:?}");
     }

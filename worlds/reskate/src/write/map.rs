@@ -1215,6 +1215,10 @@ impl MapSink {
                             r.trainer_left_out as i64,
                         ),
                         ("grind curves with no usable points", r.grind_unusable as i64),
+                        (
+                            "pause-map picture: triangles of materials casting no shadow left out (leave-out=shadowless)",
+                            r.pause_shadowless,
+                        ),
                     ]
                     .into_iter()
                     .filter(|(_, n)| *n > 0)
@@ -1245,6 +1249,15 @@ impl MapSink {
                     .filter(|(_, n)| *n > 0)
                     .map(|(what, n)| (what.to_owned(), n as u64)),
                 )
+                .chain(r.pause_untextured.iter().map(|(name, n)| {
+                    (
+                        format!(
+                            "pause-map picture: triangles drawn in their material's mean colour, no texture to sample \
+                             (colour=texture): {name}"
+                        ),
+                        *n as u64,
+                    )
+                }))
                 .chain(match writer.chains() {
                     Chains::Off { left } if *left > 0 => Some((
                         "tiles' vertex-blend chain overlays drawn in the tile, in an unstable order \

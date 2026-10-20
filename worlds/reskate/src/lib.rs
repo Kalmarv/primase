@@ -142,11 +142,17 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         passes::prepare_reskate_water,
         &[("extent", "none")],
     );
-    // the pause-map picture, and its size and extent, are the program's: no default
+    // the pause-map picture, its size, extent and drawing, are the program's: no default
     reg.register_requiring(
         "prepare-reskate-pause-map",
         passes::prepare_reskate_pause_map,
-        &[("from", "geometry"), ("height", "9"), ("extent", "content")],
+        &[
+            ("from", "geometry"),
+            ("height", "9"),
+            ("extent", "content"),
+            ("leave-out", "nothing"),
+            ("colour", "mean"),
+        ],
     );
     // a light cap and its grouping are the program's: no default
     reg.register_requiring(
