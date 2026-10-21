@@ -90,6 +90,8 @@ fn road_bakes_its_lane_lines_over_a_period() {
             ("shader-uv", "texcoord"),
             ("mip-bias", "0"),
             ("terrain-ao", "0.5"),
+            ("sun-elevation", "45"),
+            ("view-cosine", "0.7"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     ))

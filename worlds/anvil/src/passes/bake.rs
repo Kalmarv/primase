@@ -1,8 +1,8 @@
-//! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X}`: Anvil
-//! Materials
+//! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X,
+//! sun-elevation=DEG,view-cosine=X}`: Anvil Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
 //! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
-//! pixel, and MAD_Road, whose paint its
+//! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, and MAD_Road, whose paint its
 //! shader computes per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
@@ -32,6 +32,11 @@
 //!   Occlusion is a texture where it isn't 1 everywhere; specular occlusion, translucency and emission have no place
 //!   here: where they aren't (1, 0, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the
 //!   programs read none).
+//! - **The sun and the eye**: a program whose colour mixes by the shaded normal's angle to the sun (`cb0[4]`) and to
+//!   the eye (`cb1[2]`: the ice templates, material-spec §27.2) is run with the sun at `sun-elevation` degrees above
+//!   the surface toward its tangent and the eye at `view-cosine` to its normal (the level's sun and a viewing angle:
+//!   stated, the game's change with every frame); its parallax march sees the surface straight on (a tangent-space
+//!   view with no xy: the march offsets nothing, §27.2).
 //! - **The camera**: a program that mixes by the distance from the camera (UniqueNormalGradient's medium and micro
 //!   albedo) is run with the camera far, where the mix is constant (the notes' choice, §27.3: the medium albedo, right
 //!   at any distance past 20 m times its `Detail Blend Range`); its micro detail, tens to hundreds of tiles across the
@@ -111,14 +116,40 @@ struct Terrain {
     sediment_switch: u32,
 }
 
-/// A program's interpolants, after `TEXCOORD0` (the UV), as the recipe's program declares them.
+/// What a program's interpolant after `TEXCOORD0` (the UV) is, as the recipe's program reads it; each given the flat
+/// surface's value: the world position at the origin, tangent +x, normal +z (with the bitangent sign +1), the eye
+/// straight on in tangent space, the clip position's w 1.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Interpolants {
-    /// `TEXCOORD1` the world position, 2 the tangent, 3 the normal and its bitangent sign, 4 the clip position.
+enum Role {
     WorldPosition,
-    /// `TEXCOORD1` the tangent, 2 the normal and its bitangent sign, 3 the clip position.
-    NoWorldPosition,
+    Tangent,
+    Normal,
+    NormalSign,
+    TangentView,
+    Clip,
 }
+
+impl Role {
+    fn value(self) -> [f32; 4] {
+        match self {
+            Role::WorldPosition => [0.0; 4],
+            Role::Tangent => [1.0, 0.0, 0.0, 0.0],
+            Role::Normal | Role::TangentView => [0.0, 0.0, 1.0, 0.0],
+            Role::NormalSign => [0.0, 0.0, 1.0, 1.0],
+            Role::Clip => [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+}
+
+/// `TEXCOORD1` the world position, 2 the tangent, 3 the normal and its bitangent sign, 4 the clip position.
+const WORLD_TANGENT_NORMAL: &[(u32, Role)] = &[
+    (1, Role::WorldPosition),
+    (2, Role::Tangent),
+    (3, Role::NormalSign),
+    (4, Role::Clip),
+];
+/// `TEXCOORD1` the tangent, 2 the normal and its bitangent sign, 3 the clip position.
+const TANGENT_NORMAL: &[(u32, Role)] = &[(1, Role::Tangent), (2, Role::NormalSign), (3, Role::Clip)];
 
 /// A paint the program computes, periodic in its UV: the Material's UV transform row, and per axis the row whose
 /// value's reciprocal is the period (a whole number of units, else the Material is refused).
@@ -130,7 +161,10 @@ struct Pattern {
 
 struct Recipe {
     template: &'static str,
-    interpolants: Interpolants,
+    /// Its interpolants after the UV, by `TEXCOORD` index.
+    interpolants: &'static [(u32, Role)],
+    /// Whether its program reads the sun's direction (`cb0[4]`) and the eye's (`cb1[2]`).
+    sun: bool,
     pattern: Option<Pattern>,
     /// `cb3` rows read (from the program's disassembly), each of which the template must bind.
     rows: &'static [u32],
@@ -160,7 +194,8 @@ const CAMERA_FAR: f32 = 1.0e6;
 const ROCKS: Recipe = Recipe {
     template: "MAD_Tex1_Rocks",
     unkept: &[],
-    interpolants: Interpolants::WorldPosition,
+    interpolants: WORLD_TANGENT_NORMAL,
+    sun: false,
     pattern: None,
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13],
     slots: &[0, 1, 2, 3, 4],
@@ -181,7 +216,8 @@ const ROCKS: Recipe = Recipe {
 const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     template: "MAD_Tex1_UniqueNormalGradient",
     unkept: &[],
-    interpolants: Interpolants::WorldPosition,
+    interpolants: WORLD_TANGENT_NORMAL,
+    sun: false,
     pattern: None,
     rows: &[
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -201,7 +237,8 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
 const ROAD: Recipe = Recipe {
     template: "MAD_Road",
     unkept: &[(1, None)],
-    interpolants: Interpolants::NoWorldPosition,
+    interpolants: TANGENT_NORMAL,
+    sun: false,
     pattern: Some(Pattern {
         uv: 13,
         frequencies: [10, 11],
@@ -220,7 +257,8 @@ const ROAD: Recipe = Recipe {
 const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     template: "MAD_Tex1_UniqueNormal_DiffuseBlend",
     unkept: &[(3, Some(1)), (4, Some(1))],
-    interpolants: Interpolants::NoWorldPosition,
+    interpolants: TANGENT_NORMAL,
+    sun: false,
     pattern: None,
     rows: &[1, 2, 3],
     slots: &[0, 1, 2, 3, 4],
@@ -229,7 +267,52 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     camera: false,
 };
 
-const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT, ROAD, UNIQUE_NORMAL_DIFFUSE_BLEND];
+/// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
+/// `ParallaxScale` 4, `TilingFrost` 5, `Frost power` 6, the deep colours 7 and 8, the surface colours 10 and 9;
+/// t75 to t81 (`ICE - Diffuse 1`, `Object - Normal`, `ICE - Roughness`, `ICE - Heighmap`, `ICE - Normal`, `ICE -
+/// Diffuse`, `ICE - MicroBump`); its eye in tangent space at `TEXCOORD3` for the parallax march; the sun and the eye.
+const HERO_ICE: Recipe = Recipe {
+    template: "MAD_Hero_Ice",
+    unkept: &[],
+    interpolants: &[
+        (1, Role::Tangent),
+        (2, Role::NormalSign),
+        (3, Role::TangentView),
+        (4, Role::Clip),
+    ],
+    sun: true,
+    pattern: None,
+    rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    slots: &[0, 1, 2, 3, 4, 5, 6],
+    engine: &[],
+    terrain: None,
+    camera: false,
+};
+
+/// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
+/// to 11, t75 to t79; its normal at `TEXCOORD1` (no tangent), its eye in tangent space at `TEXCOORD2`; the sun and the
+/// eye.
+const ICE_BRICK: Recipe = Recipe {
+    template: "MAD_IceBrick",
+    unkept: &[],
+    interpolants: &[(1, Role::Normal), (2, Role::TangentView), (3, Role::Clip)],
+    sun: true,
+    pattern: None,
+    rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    slots: &[0, 1, 2, 3, 4],
+    engine: &[],
+    terrain: None,
+    camera: false,
+};
+
+const RECIPES: &[Recipe] = &[
+    ROCKS,
+    UNIQUE_NORMAL_GRADIENT,
+    ROAD,
+    UNIQUE_NORMAL_DIFFUSE_BLEND,
+    HERO_ICE,
+    ICE_BRICK,
+];
 
 /// The pass (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
@@ -240,16 +323,27 @@ pub struct BakeAnvilMaterial {
     pub mip_bias: f32,
     /// The terrain's ambient occlusion where a Material mixes it in.
     pub terrain_ao: f32,
+    /// The sun's elevation above the surface (degrees), and the cosine of the eye's angle to its normal.
+    pub sun_elevation: f32,
+    pub view_cosine: f32,
 }
 
 impl BakeAnvilMaterial {
     /// From its options, all required.
     pub fn from_options(o: &Options) -> Result<BakeAnvilMaterial, String> {
-        let known = ["size", "normal-green", "shader-uv", "mip-bias", "terrain-ao"];
+        let known = [
+            "size",
+            "normal-green",
+            "shader-uv",
+            "mip-bias",
+            "terrain-ao",
+            "sun-elevation",
+            "view-cosine",
+        ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X";
+        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -283,12 +377,28 @@ impl BakeAnvilMaterial {
         if !(0.0..=1.0).contains(&terrain_ao) {
             return Err(format!("terrain-ao {terrain_ao}: within 0 and 1"));
         }
+        let sun_elevation: f32 = get("sun-elevation")?
+            .parse()
+            .map_err(|_| "sun-elevation is a number".to_owned())?;
+        if !(-90.0..=90.0).contains(&sun_elevation) {
+            return Err(format!(
+                "sun-elevation {sun_elevation}: within -90 and 90 degrees"
+            ));
+        }
+        let view_cosine: f32 = get("view-cosine")?
+            .parse()
+            .map_err(|_| "view-cosine is a number".to_owned())?;
+        if !(view_cosine > 0.0 && view_cosine <= 1.0) {
+            return Err(format!("view-cosine {view_cosine}: above 0, at most 1"));
+        }
         Ok(BakeAnvilMaterial {
             size,
             normal_green,
             shader_uv,
             mip_bias,
             terrain_ao,
+            sun_elevation,
+            view_cosine,
         })
     }
 }
@@ -494,6 +604,21 @@ impl BakeAnvilMaterial {
         constants
             .set_words(1, 41 * 4 + 1, &[self.mip_bias.to_bits()])
             .map_err(|e| e.to_string())?;
+        // the sun's direction (cb0[4], toward it) and the eye's (cb1[2]) against the surface's normal +z
+        if recipe.sun {
+            let (sin, cos) = f64::from(self.sun_elevation).to_radians().sin_cos();
+            let c = f64::from(self.view_cosine);
+            constants
+                .set_words(0, 4 * 4, &[cos as f32, 0.0, sin as f32].map(f32::to_bits))
+                .map_err(|e| e.to_string())?;
+            constants
+                .set_words(
+                    1,
+                    2 * 4,
+                    &[(1.0 - c * c).sqrt() as f32, 0.0, c as f32].map(f32::to_bits),
+                )
+                .map_err(|e| e.to_string())?;
+        }
         // the camera's position (cb1[0]), far along the normal from the surface (at the origin)
         if recipe.camera {
             constants
@@ -543,25 +668,12 @@ impl BakeAnvilMaterial {
             textures.insert(75 + slot, primase_shader::Texture::Image(Arc::new(image)));
         }
         let constant = |v: [f32; 4]| Input::Constant(v);
-        // the world position at the origin, tangent +x, normal +z, bitangent sign +1, the clip position's w 1
-        let frame = [
-            constant([1.0, 0.0, 0.0, 0.0]),
-            constant([0.0, 0.0, 1.0, 1.0]),
-            constant([0.0, 0.0, 0.0, 1.0]),
-        ];
         let mut inputs = BTreeMap::from([
             (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),
             (("TEXCOORD".to_owned(), 0), Input::GridUv),
         ]);
-        let first = match recipe.interpolants {
-            Interpolants::WorldPosition => {
-                inputs.insert(("TEXCOORD".to_owned(), 1), constant([0.0; 4]));
-                2
-            }
-            Interpolants::NoWorldPosition => 1,
-        };
-        for (k, input) in frame.into_iter().enumerate() {
-            inputs.insert(("TEXCOORD".to_owned(), first + k as u32), input);
+        for &(index, role) in recipe.interpolants {
+            inputs.insert(("TEXCOORD".to_owned(), index), constant(role.value()));
         }
         let raw = evaluate_raw(
             &shader,
@@ -701,6 +813,8 @@ impl Pass for BakeAnvilMaterial {
             ),
             ("mip-bias".to_owned(), self.mip_bias.to_string()),
             ("terrain-ao".to_owned(), self.terrain_ao.to_string()),
+            ("sun-elevation".to_owned(), self.sun_elevation.to_string()),
+            ("view-cosine".to_owned(), self.view_cosine.to_string()),
         ])
     }
     fn provides(&self) -> &[&'static str] {

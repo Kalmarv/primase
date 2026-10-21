@@ -146,6 +146,8 @@ fn rocks_bake_as_the_notes_formulas() {
             ("shader-uv", "texcoord"),
             ("mip-bias", "0"),
             ("terrain-ao", "0.3"),
+            ("sun-elevation", "45"),
+            ("view-cosine", "0.7"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     ))

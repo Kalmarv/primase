@@ -2035,6 +2035,8 @@ pub fn register(reg: &mut PassRegistry) {
             ("shader-uv", "texcoord"),
             ("mip-bias", "0"),
             ("terrain-ao", "0.5"),
+            ("sun-elevation", "45"),
+            ("view-cosine", "0.7"),
         ],
     );
     reg.register_requiring(
