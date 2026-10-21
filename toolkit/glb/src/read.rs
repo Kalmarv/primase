@@ -6,12 +6,22 @@
 //! ([`Gltf::from_gltf`]: where the bytes come from, a file beside it or a game's container, is the caller's);
 //! primitives of mode points, lines or triangles; `indices` unsigned byte, short or int (or none: sequential);
 //! `POSITION` float VEC3, `NORMAL` float VEC3, `TANGENT` float VEC4, `TEXCOORD_n` float or normalized unsigned
-//! byte/short VEC2, `COLOR_n` float or normalized unsigned byte/short VEC3/VEC4; application-specific attributes
-//! (named `_...`, glTF 3.7.2.1) as stored ([`AccessorData`]), for the caller to state. Everything else that could
-//! change the geometry is an error naming the item: sparse accessors, morph targets, skin attributes, a GLB's
-//! external or extra buffers, required extensions, any extension on what is read, unknown properties. Extensions
-//! a document only uses (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
+//! byte/short VEC2, `COLOR_n` float or normalized unsigned byte/short VEC3/VEC4; skin attributes: `JOINTS_n`
+//! unsigned byte/short VEC4 and `WEIGHTS_n` float or normalized unsigned byte/short VEC4, each kept as stored (a
+//! reader reads faithfully: weights are not dequantized, their sums and the joint indices are not checked here),
+//! every `JOINTS_n` with its `WEIGHTS_n`; morph targets (`targets`, with the mesh's default `weights`): per target
+//! `POSITION`, `NORMAL` and `TANGENT` deltas as float VEC3, or normalized byte/short VEC3 dequantized by glTF
+//! 3.11's rule (`max(c / 127, -1)`, `max(c / 32767, -1)`, in f64, rounded once to f32: core has no integer form for
+//! a delta, so this is the stated conversion), every target as long as POSITION and every primitive of a mesh with
+//! as many targets; sparse accessors and accessors without a `bufferView` (zeros), read into the same tightly
+//! packed elements as any other; any accessor's elements as f32 for animation samplers ([`Gltf::floats`]);
+//! application-specific attributes (named `_...`, glTF 3.7.2.1) as stored ([`AccessorData`]), for the caller to
+//! state. Everything else that could change the geometry is an error naming the item: strips, fans and loops, a
+//! GLB's external or extra buffers, required extensions, any extension on what is read, unknown properties,
+//! application-specific, texture-coordinate or color morph target attributes. Extensions a document only uses
+//! (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology};
@@ -45,6 +55,17 @@ pub struct ReadPrimitive {
     pub material_name: Option<String>,
     /// Application-specific attributes (named `_...`) by name, as stored: one element per vertex, like POSITION.
     pub custom: BTreeMap<String, AccessorData>,
+    /// The morph targets in order; every primitive of a mesh has as many.
+    pub targets: Vec<ReadTarget>,
+}
+
+/// One morph target: deltas added to the primitive's attributes, one element per vertex like POSITION. FLOAT as
+/// stored; normalized BYTE/SHORT dequantized (glTF 3.11).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadTarget {
+    pub position: Option<Vec<[f32; 3]>>,
+    pub normal: Option<Vec<[f32; 3]>>,
+    pub tangent: Option<Vec<[f32; 3]>>,
 }
 
 /// An accessor's component type (glTF 3.6.2.2).
@@ -76,6 +97,8 @@ pub enum ElementType {
     Vec2,
     Vec3,
     Vec4,
+    /// A 4x4 matrix, column-major as stored (16 components).
+    Mat4,
 }
 
 impl ElementType {
@@ -86,6 +109,7 @@ impl ElementType {
             ElementType::Vec2 => 2,
             ElementType::Vec3 => 3,
             ElementType::Vec4 => 4,
+            ElementType::Mat4 => 16,
         }
     }
 }
@@ -109,6 +133,8 @@ pub struct ReadMesh {
     pub name: Option<String>,
     pub extras: Option<Value>,
     pub primitives: Vec<ReadPrimitive>,
+    /// The mesh's default morph target weights; as many as the targets of each primitive.
+    pub weights: Option<Vec<f32>>,
 }
 
 impl ReadMesh {
@@ -256,7 +282,7 @@ impl Gltf {
             .get(index)
             .ok_or_else(|| invalid(&path, "does not exist"))?;
         let m = Obj::new(m, &path)?;
-        m.only(&["primitives", "name"])?;
+        m.only(&["primitives", "weights", "name"])?;
         let prims = match m.get("primitives") {
             Some(Value::Array(a)) if !a.is_empty() => a,
             _ => return Err(invalid(&path, "primitives missing or empty")),
@@ -265,17 +291,37 @@ impl Gltf {
             .iter()
             .enumerate()
             .map(|(i, p)| self.read_primitive(p, &format!("{path}.primitives()[{i}]")))
-            .collect::<Result<_>>()?;
+            .collect::<Result<Vec<_>>>()?;
+        let targets = primitives[0].targets.len();
+        if let Some(i) = primitives.iter().position(|p| p.targets.len() != targets) {
+            return Err(invalid(
+                &path,
+                &format!(
+                    "primitive {i} has {} morph targets, primitive 0 has {targets}",
+                    primitives[i].targets.len()
+                ),
+            ));
+        }
+        let weights = m.f32s_opt("weights")?;
+        if let Some(w) = &weights
+            && w.len() != targets
+        {
+            return Err(invalid(
+                &path,
+                &format!("{} weights for {targets} morph targets", w.len()),
+            ));
+        }
         Ok(ReadMesh {
             name: m.str_opt("name")?.map(str::to_owned),
             extras: m.get("extras").cloned(),
             primitives,
+            weights,
         })
     }
 
     fn read_primitive(&self, p: &Value, path: &str) -> Result<ReadPrimitive> {
         let p = Obj::new(p, path)?;
-        p.only(&["attributes", "indices", "material", "mode"])?;
+        p.only(&["attributes", "indices", "material", "mode", "targets"])?;
         let topology = match p.u64_opt("mode")?.unwrap_or(4) {
             0 => Topology::Points,
             1 => Topology::Lines,
@@ -330,6 +376,17 @@ impl Gltf {
                 &format!("{name} count differs from POSITION's {count}"),
             ));
         }
+        for s in streams.keys() {
+            let partner = match s {
+                Semantic::Joints(n) => Semantic::Weights(*n),
+                Semantic::Weights(n) => Semantic::Joints(*n),
+                _ => continue,
+            };
+            if !streams.contains_key(&partner) {
+                return Err(invalid(&apath, &format!("{s:?} without {partner:?}")));
+            }
+        }
+        let targets = self.read_targets(p.get("targets"), count, &format!("{path}.targets"))?;
         let indices = p
             .usize_opt("indices")?
             .map(|a| {
@@ -368,30 +425,143 @@ impl Gltf {
             material,
             material_name,
             custom,
+            targets,
         })
+    }
+
+    /// A primitive's morph targets: each a set of POSITION, NORMAL and TANGENT deltas of `count` elements.
+    fn read_targets(&self, targets: Option<&Value>, count: usize, path: &str) -> Result<Vec<ReadTarget>> {
+        let Some(targets) = targets else {
+            return Ok(Vec::new());
+        };
+        let list = match targets {
+            Value::Array(a) if !a.is_empty() => a,
+            _ => return Err(invalid(path, "not a non-empty array")),
+        };
+        list.iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let tpath = format!("{path}[{i}]");
+                let t = Obj::new(t, &tpath)?;
+                if let Some(name) = t
+                    .map
+                    .keys()
+                    .find(|k| !matches!(k.as_str(), "POSITION" | "NORMAL" | "TANGENT"))
+                {
+                    return Err(invalid(
+                        &tpath,
+                        &format!("unsupported morph target attribute {name}"),
+                    ));
+                }
+                let delta = |name: &str| -> Result<Option<Vec<[f32; 3]>>> {
+                    let Some(v) = t.get(name) else {
+                        return Ok(None);
+                    };
+                    let acc = v
+                        .as_u64()
+                        .and_then(|a| usize::try_from(a).ok())
+                        .ok_or_else(|| invalid(&tpath, &format!("{name} is not an accessor index")))?;
+                    let data = self
+                        .read_delta(acc)
+                        .map_err(|e| e.context(&format!("{tpath}.{name}")))?;
+                    if data.len() != count {
+                        return Err(invalid(
+                            &tpath,
+                            &format!("{name} has {} elements, POSITION {count}", data.len()),
+                        ));
+                    }
+                    Ok(Some(data))
+                };
+                Ok(ReadTarget {
+                    position: delta("POSITION")?,
+                    normal: delta("NORMAL")?,
+                    tangent: delta("TANGENT")?,
+                })
+            })
+            .collect()
+    }
+
+    /// A morph target attribute: VEC3, float or normalized byte/short.
+    fn read_delta(&self, index: usize) -> Result<Vec<[f32; 3]>> {
+        let acc = self.accessor(index)?;
+        let bad = || {
+            invalid(
+                &acc.path,
+                &format!(
+                    "{} {} (normalized {}) is not allowed for a morph target delta",
+                    acc.kind, acc.component, acc.normalized
+                ),
+            )
+        };
+        if acc.kind != "VEC3" {
+            return Err(bad());
+        }
+        match (acc.component, acc.normalized) {
+            (FLOAT, false) => acc.floats(),
+            (BYTE, true) => Ok(acc
+                .elements::<i8, 3>()
+                .into_iter()
+                .map(|e| e.map(|c| (f64::from(c) / 127.0).max(-1.0) as f32))
+                .collect()),
+            (SHORT, true) => Ok(acc
+                .elements::<i16, 3>()
+                .into_iter()
+                .map(|e| e.map(|c| (f64::from(c) / 32767.0).max(-1.0) as f32))
+                .collect()),
+            _ => Err(bad()),
+        }
+    }
+
+    /// Accessor `index`'s elements flattened to f32, for animation samplers: FLOAT as stored (finite), normalized
+    /// integers dequantized by glTF 3.11 (`c / 255`, `c / 65535`, `max(c / 127, -1)`, `max(c / 32767, -1)`, in f64,
+    /// rounded once). Unnormalized integers are refused; which types an animation path allows is the caller's.
+    pub fn floats(&self, index: usize) -> Result<(ElementType, Vec<f32>)> {
+        let acc = self.accessor(index)?;
+        let component = acc.component_type()?;
+        let element = acc.element_type();
+        if element == ElementType::Mat4 && component != ComponentType::F32 {
+            return Err(invalid(&acc.path, "a MAT4 is read as FLOAT only"));
+        }
+        let n = element.components();
+        let v: Vec<f32> = match (component, acc.normalized) {
+            (ComponentType::F32, false) => {
+                let v: Vec<f32> = acc.scalars::<f32>(n).collect();
+                if let Some(k) = v.iter().position(|x| !x.is_finite()) {
+                    return Err(invalid(&acc.path, &format!("component {k} is not finite")));
+                }
+                v
+            }
+            (ComponentType::U8, true) => acc
+                .scalars::<u8>(n)
+                .map(|c| (f64::from(c) / 255.0) as f32)
+                .collect(),
+            (ComponentType::U16, true) => acc
+                .scalars::<u16>(n)
+                .map(|c| (f64::from(c) / 65535.0) as f32)
+                .collect(),
+            (ComponentType::I8, true) => acc
+                .scalars::<i8>(n)
+                .map(|c| (f64::from(c) / 127.0).max(-1.0) as f32)
+                .collect(),
+            (ComponentType::I16, true) => acc
+                .scalars::<i16>(n)
+                .map(|c| (f64::from(c) / 32767.0).max(-1.0) as f32)
+                .collect(),
+            (c, normalized) => {
+                return Err(invalid(
+                    &acc.path,
+                    &format!("{c:?} (normalized {normalized}) has no float form"),
+                ));
+            }
+        };
+        Ok((element, v))
     }
 
     /// Accessor `index`'s elements as stored.
     pub fn accessor_data(&self, index: usize) -> Result<AccessorData> {
         let acc = self.accessor(index)?;
-        let component = match acc.component {
-            BYTE => ComponentType::I8,
-            UNSIGNED_BYTE => ComponentType::U8,
-            SHORT => ComponentType::I16,
-            UNSIGNED_SHORT => ComponentType::U16,
-            UNSIGNED_INT => ComponentType::U32,
-            _ => ComponentType::F32,
-        };
-        // glTF 3.6.2.3: only 8- and 16-bit integers are normalized
-        if acc.normalized && matches!(component, ComponentType::U32 | ComponentType::F32) {
-            return Err(invalid(&acc.path, &format!("{component:?} is normalized")));
-        }
-        let element = match acc.kind {
-            "SCALAR" => ElementType::Scalar,
-            "VEC2" => ElementType::Vec2,
-            "VEC3" => ElementType::Vec3,
-            _ => ElementType::Vec4,
-        };
+        let component = acc.component_type()?;
+        let element = acc.element_type();
         let elem = element.components() * component.size();
         // the accessor checked that its last element ends inside its view
         let bytes = (0..acc.count)
@@ -432,6 +602,17 @@ impl Gltf {
                 Stream::U8x4(acc.ints()?)
             }
             (Semantic::Color(_), "VEC4") if unorm => Stream::U16x4(acc.ints()?),
+            (Semantic::Joints(_), "VEC4") if !acc.normalized && acc.component == UNSIGNED_BYTE => {
+                Stream::U8x4(acc.ints()?)
+            }
+            (Semantic::Joints(_), "VEC4") if !acc.normalized && acc.component == UNSIGNED_SHORT => {
+                Stream::U16x4(acc.ints()?)
+            }
+            (Semantic::Weights(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
+            (Semantic::Weights(_), "VEC4") if unorm && acc.component == UNSIGNED_BYTE => {
+                Stream::U8x4(acc.ints()?)
+            }
+            (Semantic::Weights(_), "VEC4") if unorm => Stream::U16x4(acc.ints()?),
             _ => return Err(bad()),
         };
         if semantic == Semantic::Position
@@ -486,14 +667,9 @@ impl Gltf {
             "type",
             "max",
             "min",
+            "sparse",
             "name",
         ])?;
-        if a.get("sparse").is_some() {
-            return Err(invalid(&path, "sparse"));
-        }
-        let view = a
-            .usize_opt("bufferView")?
-            .ok_or_else(|| invalid(&path, "no bufferView (implicit zeros are not read)"))?;
         let component = a.u64("componentType")?;
         let csize = match component {
             BYTE | UNSIGNED_BYTE => 1,
@@ -506,47 +682,173 @@ impl Gltf {
             Some("VEC2") => "VEC2",
             Some("VEC3") => "VEC3",
             Some("VEC4") => "VEC4",
+            Some("MAT4") => "MAT4",
             other => return Err(invalid(&path, &format!("type {other:?}"))),
         };
         let n = match kind {
             "SCALAR" => 1,
             "VEC2" => 2,
             "VEC3" => 3,
-            _ => 4,
+            "VEC4" => 4,
+            _ => 16,
         };
         let count = a.usize("count")?;
         let offset = a.usize_opt("byteOffset")?.unwrap_or(0);
-        let (bytes, declared_stride) = self.view(view).map_err(|e| e.context(&path))?;
         let elem = csize * n;
-        let stride = declared_stride.unwrap_or(elem);
-        if stride < elem || stride % csize != 0 || offset % csize != 0 {
-            return Err(invalid(&path, "misaligned offset or stride"));
-        }
-        let need = if count == 0 {
-            0
-        } else {
-            (count - 1)
-                .checked_mul(stride)
-                .and_then(|x| x.checked_add(offset + elem))
-                .ok_or_else(|| invalid(&path, "size overflows"))?
-        };
-        if need > bytes.len() {
-            return Err(invalid(&path, "runs past its buffer view"));
-        }
         let normalized = a.bool_opt("normalized")?.unwrap_or(false);
         let (min, max) = (a.f32s_opt("min")?, a.f32s_opt("max")?);
+        let sparse = a.get("sparse");
+        // The dense part: the view's elements as laid out there, or none (glTF 3.6.2.1: zeros).
+        let dense = match a.usize_opt("bufferView")? {
+            None => {
+                if a.get("byteOffset").is_some() {
+                    return Err(invalid(&path, "byteOffset without a bufferView"));
+                }
+                None
+            }
+            Some(view) => {
+                let (bytes, declared_stride) = self.view(view).map_err(|e| e.context(&path))?;
+                let stride = declared_stride.unwrap_or(elem);
+                if stride < elem || stride % csize != 0 || offset % csize != 0 {
+                    return Err(invalid(&path, "misaligned offset or stride"));
+                }
+                let need = if count == 0 {
+                    0
+                } else {
+                    (count - 1)
+                        .checked_mul(stride)
+                        .and_then(|x| x.checked_add(offset + elem))
+                        .ok_or_else(|| invalid(&path, "size overflows"))?
+                };
+                if need > bytes.len() {
+                    return Err(invalid(&path, "runs past its buffer view"));
+                }
+                Some((&bytes[offset.min(bytes.len())..], stride, declared_stride))
+            }
+        };
+        let (bytes, stride, declared_stride) = match (dense, sparse) {
+            (Some((bytes, stride, declared)), None) => (Cow::Borrowed(bytes), stride, declared),
+            (dense, sparse) => {
+                // Zeros or a sparse substitution: the elements are materialised tightly packed.
+                let total = count
+                    .checked_mul(elem)
+                    .ok_or_else(|| invalid(&path, "size overflows"))?;
+                let mut out = Vec::new();
+                out.try_reserve_exact(total)
+                    .map_err(|_| invalid(&path, &format!("{total} bytes of elements cannot be allocated")))?;
+                match dense {
+                    Some((bytes, stride, _)) => {
+                        for k in 0..count {
+                            out.extend_from_slice(&bytes[k * stride..k * stride + elem]);
+                        }
+                    }
+                    None => out.resize(total, 0),
+                }
+                if let Some(sparse) = sparse {
+                    self.substitute(sparse, &path, count, csize, elem, &mut out)?;
+                }
+                (Cow::Owned(out), elem, dense.and_then(|(_, _, declared)| declared))
+            }
+        };
         Ok(Accessor {
             path,
             component,
             normalized,
             kind,
             count,
-            bytes: &bytes[offset.min(bytes.len())..],
+            bytes,
             stride,
             declared_stride,
             min,
             max,
         })
+    }
+
+    /// Overwrite the elements `sparse` names (glTF 3.6.2.4) in `out`, the accessor's `count` tightly packed elements.
+    fn substitute(
+        &self,
+        sparse: &Value,
+        accessor: &str,
+        count: usize,
+        csize: usize,
+        elem: usize,
+        out: &mut [u8],
+    ) -> Result<()> {
+        let path = format!("{accessor}.sparse");
+        let sparse = Obj::new(sparse, &path)?;
+        sparse.only(&["count", "indices", "values"])?;
+        let n = sparse.usize("count")?;
+        if n == 0 || n > count {
+            return Err(invalid(&path, &format!("count {n} outside 1-{count}")));
+        }
+        let ipath = format!("{path}.indices");
+        let indices = Obj::new(
+            sparse
+                .get("indices")
+                .ok_or_else(|| invalid(&path, "no indices"))?,
+            &ipath,
+        )?;
+        indices.only(&["bufferView", "byteOffset", "componentType"])?;
+        let vpath = format!("{path}.values");
+        let values = Obj::new(
+            sparse.get("values").ok_or_else(|| invalid(&path, "no values"))?,
+            &vpath,
+        )?;
+        values.only(&["bufferView", "byteOffset"])?;
+
+        // Both views hold tightly packed elements, so neither may declare a stride.
+        let view = |o: &Obj, size: usize| -> Result<&[u8]> {
+            let (bytes, stride) = self.view(o.usize("bufferView")?).map_err(|e| e.context(o.path))?;
+            if stride.is_some() {
+                return Err(invalid(o.path, "a sparse buffer view must not have a byteStride"));
+            }
+            let offset = o.usize_opt("byteOffset")?.unwrap_or(0);
+            if offset % size.min(4) != 0 {
+                return Err(invalid(
+                    o.path,
+                    &format!("byteOffset {offset} is not a multiple of {size}"),
+                ));
+            }
+            let end = n
+                .checked_mul(size)
+                .and_then(|x| x.checked_add(offset))
+                .filter(|&e| e <= bytes.len())
+                .ok_or_else(|| invalid(o.path, "runs past its buffer view"))?;
+            Ok(&bytes[offset..end])
+        };
+        let isize = match indices.u64("componentType")? {
+            UNSIGNED_BYTE => 1,
+            UNSIGNED_SHORT => 2,
+            UNSIGNED_INT => 4,
+            c => return Err(invalid(&ipath, &format!("componentType {c}"))),
+        };
+        let idx = view(&indices, isize)?;
+        let vals = view(&values, elem)?;
+        if values.usize_opt("byteOffset")?.unwrap_or(0) % csize != 0 {
+            return Err(invalid(
+                &vpath,
+                &format!("byteOffset is not a multiple of {csize}"),
+            ));
+        }
+        let mut previous = None;
+        for k in 0..n {
+            let at = &idx[k * isize..(k + 1) * isize];
+            let i = match isize {
+                1 => usize::from(at[0]),
+                2 => usize::from(u16::from_le_bytes([at[0], at[1]])),
+                _ => usize::try_from(u32::from_le_bytes([at[0], at[1], at[2], at[3]]))
+                    .map_err(|_| invalid(&ipath, "index too large"))?,
+            };
+            if i >= count {
+                return Err(invalid(&ipath, &format!("index {k} is {i}, {count} elements")));
+            }
+            if previous.is_some_and(|p| p >= i) {
+                return Err(invalid(&ipath, &format!("index {k} ({i}) does not increase")));
+            }
+            previous = Some(i);
+            out[i * elem..(i + 1) * elem].copy_from_slice(&vals[k * elem..(k + 1) * elem]);
+        }
+        Ok(())
     }
 }
 
@@ -586,7 +888,9 @@ fn semantic(name: &str) -> Option<Semantic> {
         "TANGENT" => Some(Semantic::Tangent),
         _ => set("TEXCOORD_")
             .map(Semantic::TexCoord)
-            .or_else(|| set("COLOR_").map(Semantic::Color)),
+            .or_else(|| set("COLOR_").map(Semantic::Color))
+            .or_else(|| set("JOINTS_").map(Semantic::Joints))
+            .or_else(|| set("WEIGHTS_").map(Semantic::Weights)),
     }
 }
 
@@ -596,8 +900,9 @@ struct Accessor<'a> {
     normalized: bool,
     kind: &'static str,
     count: usize,
-    /// From the accessor's first element to the end of its view.
-    bytes: &'a [u8],
+    /// From the accessor's first element to the end of its view; or, sparse or without a view, its elements
+    /// materialised tightly packed.
+    bytes: Cow<'a, [u8]>,
     stride: usize,
     declared_stride: Option<usize>,
     min: Option<Vec<f32>>,
@@ -613,6 +918,18 @@ impl Scalar for u8 {
     const SIZE: usize = 1;
     fn from_le(b: &[u8]) -> Self {
         b[0]
+    }
+}
+impl Scalar for i8 {
+    const SIZE: usize = 1;
+    fn from_le(b: &[u8]) -> Self {
+        i8::from_le_bytes([b[0]])
+    }
+}
+impl Scalar for i16 {
+    const SIZE: usize = 2;
+    fn from_le(b: &[u8]) -> Self {
+        i16::from_le_bytes([b[0], b[1]])
     }
 }
 impl Scalar for u16 {
@@ -635,6 +952,38 @@ impl Scalar for f32 {
 }
 
 impl Accessor<'_> {
+    fn component_type(&self) -> Result<ComponentType> {
+        let component = match self.component {
+            BYTE => ComponentType::I8,
+            UNSIGNED_BYTE => ComponentType::U8,
+            SHORT => ComponentType::I16,
+            UNSIGNED_SHORT => ComponentType::U16,
+            UNSIGNED_INT => ComponentType::U32,
+            _ => ComponentType::F32,
+        };
+        // glTF 3.6.2.3: only 8- and 16-bit integers are normalized
+        if self.normalized && matches!(component, ComponentType::U32 | ComponentType::F32) {
+            return Err(invalid(&self.path, &format!("{component:?} is normalized")));
+        }
+        Ok(component)
+    }
+
+    fn element_type(&self) -> ElementType {
+        match self.kind {
+            "SCALAR" => ElementType::Scalar,
+            "VEC2" => ElementType::Vec2,
+            "VEC3" => ElementType::Vec3,
+            "VEC4" => ElementType::Vec4,
+            _ => ElementType::Mat4,
+        }
+    }
+
+    /// Every component of every element in order, `n` per element; `T` must match the component type.
+    fn scalars<T: Scalar>(&self, n: usize) -> impl Iterator<Item = T> {
+        (0..self.count)
+            .flat_map(move |k| (0..n).map(move |c| T::from_le(&self.bytes[k * self.stride + c * T::SIZE..])))
+    }
+
     /// Elements of `N` scalars of `T`; `T` must match the component type (callers check it).
     fn elements<T: Scalar, const N: usize>(&self) -> Vec<[T; N]> {
         (0..self.count)

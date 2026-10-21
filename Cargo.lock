@@ -941,6 +941,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "primase-core",
+ "primase-testdata",
  "serde_json",
  "thiserror",
 ]

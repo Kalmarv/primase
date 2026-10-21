@@ -392,6 +392,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "third-party: Khronos glTF-Validator 2.0.0-dev.3.10",
     },
     Variable {
+        name: "PRIMASE_KHRONOS_GLTF",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"a folder of Khronos glTF-Sample-Assets models, one folder per model (`<Model>/<Model>.glb` or `.gltf` with its buffers, and `expected.json` written by pygltflib from the same file)"#,
+        status: Status::Live,
+        source: "third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expected.json by pygltflib 1.16.5",
+    },
+    Variable {
         name: "PRIMASE_OODLE5",
         kind: Kind::Input,
         gate: true,

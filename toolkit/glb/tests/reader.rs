@@ -72,19 +72,19 @@ fn rejects_what_it_does_not_read() {
     type Mutation = fn(&mut Value);
     let cases: Vec<(&str, Mutation, &str)> = vec![
         (
-            "sparse",
+            "sparse without indices",
             |d| d["accessors"][0]["sparse"] = json!({"count": 1}),
-            "sparse",
+            "no indices",
         ),
         (
-            "morph targets",
-            |d| d["meshes"][0]["primitives"][0]["targets"] = json!([{}]),
-            "targets",
+            "morph target of another kind",
+            |d| d["meshes"][0]["primitives"][0]["targets"] = json!([{"TEXCOORD_0": 2}]),
+            "unsupported morph target attribute TEXCOORD_0",
         ),
         (
-            "skin attribute",
+            "skin attribute of the wrong type",
             |d| d["meshes"][0]["primitives"][0]["attributes"]["JOINTS_0"] = json!(0),
-            "JOINTS_0",
+            "not allowed for Joints(0)",
         ),
         (
             "aliasing set name",
@@ -184,13 +184,6 @@ fn rejects_what_it_does_not_read() {
             "missing material",
             |d| d["meshes"][0]["primitives"][0]["material"] = json!(3),
             "materials[3]",
-        ),
-        (
-            "implicit zeros",
-            |d| {
-                d["accessors"][2].as_object_mut().unwrap().remove("bufferView");
-            },
-            "no bufferView",
         ),
         (
             "misaligned",
