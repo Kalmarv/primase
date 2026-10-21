@@ -33,6 +33,9 @@ pub use crate::read::material::MATERIAL_TEMPLATE;
 pub const DESCRIPTOR: u32 = 0xD933_DB50;
 /// A binding record's marker.
 pub const BINDING: u32 = 0x92D2_20DD;
+/// The type of a template's shader-state node (the notes, docs/material-spec.md §21: one in every template body, 428 of
+/// 428), whose id follows the descriptor run directly.
+pub const SHADER_STATE: u32 = 0xB4FD_3A4C;
 
 /// One binding record as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,9 +256,30 @@ fn run(body: &[u8], first: usize) -> Option<Vec<Descriptor>> {
 }
 
 /// The template body's descriptor run: the one place where a u32 count is followed by that many descriptors read
-/// whole. Refused when there is none, or more than one.
+/// whole. A body holding no descriptor marker has an empty run where its count, 0, stands 12 bytes before the type
+/// of its one shader-state node (the node's id between: §21, 16 of 428 templates). Refused when there is no run, or
+/// more than one.
 pub fn descriptors(body: &[u8]) -> Result<Vec<Descriptor>, Error> {
     let marker = DESCRIPTOR.to_le_bytes();
+    if !body.windows(4).any(|w| w == marker) {
+        let state = SHADER_STATE.to_le_bytes();
+        let mut nodes = body
+            .windows(4)
+            .enumerate()
+            .filter(|(_, w)| *w == state)
+            .map(|(at, _)| at);
+        return match (nodes.next(), nodes.next()) {
+            (Some(at), None)
+                if at
+                    .checked_sub(12)
+                    .and_then(|count| body.get(count..count.saturating_add(4)))
+                    == Some(&[0; 4][..]) =>
+            {
+                Ok(Vec::new())
+            }
+            _ => Err(Error::None),
+        };
+    }
     let mut runs: Vec<Vec<Descriptor>> = Vec::new();
     let mut inside_a_run_up_to = 0usize;
     for first in 12..body.len() {
@@ -354,6 +378,26 @@ mod tests {
         assert_eq!(d[0].key(), 0x443B_F980);
         assert_eq!(d[1].key(), 0xE4B6_CC48);
         assert_eq!(d[0].keys, [b"Category".to_vec()]);
+    }
+
+    /// A body without descriptors: its count 0, then its shader-state node's id and type.
+    fn empty(count: u32, nodes: usize) -> Vec<u8> {
+        let mut b = vec![7; 20];
+        b.extend(count.to_le_bytes());
+        for _ in 0..nodes {
+            b.extend(5u64.to_le_bytes());
+            b.extend(SHADER_STATE.to_le_bytes());
+        }
+        b.extend([9; 9]);
+        b
+    }
+
+    #[test]
+    fn an_empty_run_is_the_zero_count_before_the_shader_state_node() {
+        assert_eq!(descriptors(&empty(0, 1)).expect("empty run"), []);
+        assert!(matches!(descriptors(&empty(1, 1)), Err(Error::None)));
+        assert!(matches!(descriptors(&empty(0, 2)), Err(Error::None)));
+        assert!(matches!(descriptors(&empty(0, 0)), Err(Error::None)));
     }
 
     #[test]
