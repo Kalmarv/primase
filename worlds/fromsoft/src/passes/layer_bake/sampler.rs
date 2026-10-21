@@ -31,3 +31,10 @@ impl BaseMipBilinearWrap {
             .map_err(|e| invalid("layer sampler", 0, e.to_string()))
     }
 }
+
+/// The policy's sampling whatever level of detail the program states: the base mip.
+impl primase_shader::Image for BaseMipBilinearWrap {
+    fn sample(&self, uv: [f32; 2], _lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
+        BaseMipBilinearWrap::sample(self, uv).map_err(|e| e.to_string())
+    }
+}

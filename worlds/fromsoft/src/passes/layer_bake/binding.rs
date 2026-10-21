@@ -1,6 +1,7 @@
 use super::BaseMipBilinearWrap;
 use crate::{Result, invalid, materials::LayeredMaterial, mtd::Value};
-use primase_dxbc::{Program, Reflection, Sample, Type};
+use primase_dxbc::{Shader, Type};
+use primase_shader::{Constants, Grid, Input, Invocation, Lane, Layout, Texture, evaluate_raw};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -20,26 +21,14 @@ impl Default for Inputs {
         }
     }
 }
-#[derive(Clone, Debug)]
-enum Source {
-    Image(Arc<BaseMipBilinearWrap>),
-    Constant([f32; 4]),
-}
-impl Source {
-    fn sample(&self, uv: [f32; 2]) -> Result<[f32; 4]> {
-        match self {
-            Self::Image(i) => i.sample(uv),
-            Self::Constant(c) => Ok(*c),
-        }
-    }
-}
+/// Evaluated by the toolkit ([`evaluate_raw`], one pixel at a time): the program, its constants and a texture per
+/// sampled slot, frozen; the main albedo's alpha, sampled beside the program at its own scale.
 #[derive(Debug)]
 pub struct Prepared {
-    program: Program,
-    reflection: Reflection,
-    buffers: Vec<(u32, Vec<[u32; 4]>)>,
-    sources: BTreeMap<u32, Source>,
-    alpha: Option<(Source, [f32; 2])>,
+    shader: Shader,
+    constants: Constants,
+    textures: BTreeMap<u32, Texture>,
+    alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
     pub policies: BTreeMap<String, u64>,
     pub decoded_bytes: usize,
     /// Static repeat policy calculated from resources used by this shader.
@@ -82,6 +71,9 @@ pub(crate) struct OutputRgb {
 }
 fn dxbc(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer DXBC", e.word * 4, e.detail)
+}
+fn evaluation(e: primase_shader::Error) -> crate::Error {
+    invalid("layer bake", e.at, e.detail)
 }
 fn fields(
     name: &str,
@@ -147,22 +139,22 @@ impl Prepared {
         sample_time: f32,
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
-        let program = Program::parse(bytes).map_err(dxbc)?;
-        let reflection = primase_dxbc::reflection(bytes).map_err(dxbc)?;
+        let shader = Shader::parse(bytes).map_err(dxbc)?;
+        let (program, reflection) = (&shader.program, &shader.reflection);
         let leaf = material
             .definition
             .shader
             .rsplit(['/', '\\'])
             .next()
             .unwrap_or("");
-        let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
+        let family = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
         if !matches!(
-            shader,
+            family,
             "M[Multiple]" | "M[MultipleGround]" | "M[Multiple]_Emissive"
         ) {
             return Err(invalid("layer binding", 0, "unsupported layered shader family"));
         }
-        let prefix = format!("{}_snp_", shader.replace(['[', ']'], "_"));
+        let prefix = format!("{}_snp_", family.replace(['[', ']'], "_"));
         let mut policies = BTreeMap::from([
             (
                 "frozen identity world, white instance colour and overhead camera".into(),
@@ -185,22 +177,31 @@ impl Prepared {
                 fields(&v.name, v.offset, &v.ty, &mut offsets, binding.slot)?;
             }
         }
-        let mut buffers: BTreeMap<u32, Vec<[u32; 4]>> = program
+        // the buffers the program reads, by slot: their words
+        let words: BTreeMap<u32, usize> = program
             .constant_buffers()
             .iter()
-            .map(|&(slot, size)| (slot, vec![[0; 4]; size as usize]))
+            .map(|&(slot, rows)| (slot, rows as usize * 4))
             .collect();
-        let mut written = BTreeMap::<(u32, usize), bool>::new();
+        let mut constants = Constants::new(&Layout {
+            buffers: words.iter().map(|(&slot, &n)| (slot, n as u32)).collect(),
+            fields: BTreeMap::new(),
+        });
+        // a field's words from `word` on, those inside a buffer the program reads (the program reads no others)
         let mut set = |name: &str, word: usize, values: &[f32]| {
             if let Some(&(slot, at)) = offsets.get(name)
-                && let Some(buffer) = buffers.get_mut(&slot)
+                && let Some(&n) = words.get(&slot)
             {
-                for (i, &v) in values.iter().enumerate() {
-                    let target = at + word + i;
-                    if let Some(vector) = buffer.get_mut(target / 4) {
-                        vector[target % 4] = v.to_bits();
-                        written.insert((slot, target), true);
-                    }
+                let start = at + word;
+                let bits: Vec<u32> = values
+                    .iter()
+                    .take(n.saturating_sub(start))
+                    .map(|v| v.to_bits())
+                    .collect();
+                if !bits.is_empty() {
+                    constants
+                        .set_words(slot, start as u32, &bits)
+                        .expect("words inside a buffer the program reads");
                 }
             }
         };
@@ -218,7 +219,7 @@ impl Prepared {
                 }
             }
         }
-        let mut sources = BTreeMap::new();
+        let mut textures = BTreeMap::new();
         let sampled_scales: Vec<_> = reflection
             .resources
             .iter()
@@ -266,7 +267,9 @@ impl Prepared {
                 if !cache.contains_key(&key) {
                     cache.insert(key.clone(), image(&key.0, key.1)?);
                 }
-                source = cache[&key].clone().map(Source::Image);
+                source = cache[&key]
+                    .clone()
+                    .map(|t| Texture::Image(t as Arc<dyn primase_shader::Image>));
                 if role == "AlbedoMap"
                     && let Some(t) = &cache[&key]
                 {
@@ -289,16 +292,16 @@ impl Prepared {
                 *policies
                     .entry(format!("preview default for missing {role} binding"))
                     .or_default() += 1;
-                source = Some(Source::Constant(match role {
+                source = Some(Texture::Constant(match role {
                     "AlbedoMap" => [0.5, 0.5, 0.5, 1.],
                     "NormalMap" => [0.5, 0.5, 1., 1.],
                     _ => [0.; 4],
                 }));
             }
-            sources.insert(resource.slot, source.expect("explicit default"));
+            textures.insert(resource.slot, source.expect("explicit default"));
         }
         for &slot in program.textures() {
-            if !sources.contains_key(&slot) {
+            if !textures.contains_key(&slot) {
                 return Err(invalid(
                     "layer binding",
                     0,
@@ -367,10 +370,9 @@ impl Prepared {
             }
             set(name, 0, &values);
         }
-        let total: usize = buffers.values().map(|v| v.len() * 4).sum();
         policies.insert(
             "buffer words left at frozen zero (including padding and unused fields)".into(),
-            (total - written.len()) as u64,
+            constants.unset_words(),
         );
         let main = slots
             .iter()
@@ -384,7 +386,7 @@ impl Prepared {
             }
             if let Some(t) = cache[&key].clone() {
                 alpha = Some((
-                    Source::Image(t),
+                    t,
                     if binding.scale.iter().all(|&v| v > 0.) {
                         binding.scale
                     } else {
@@ -398,10 +400,9 @@ impl Prepared {
         }
         let decoded_bytes = cache.values().flatten().map(|t| t.decoded_bytes()).sum();
         Ok(Self {
-            program,
-            reflection,
-            buffers: buffers.into_iter().collect(),
-            sources,
+            shader,
+            constants,
+            textures,
             alpha,
             policies,
             decoded_bytes,
@@ -452,36 +453,21 @@ impl Prepared {
         if size == 0 || size > 4096 || !period.iter().all(|v| v.is_finite() && *v > 0.) {
             return Err(invalid("layer bake", 0, "invalid size or period"));
         }
-        let mut inputs = vec![[0; 4]; self.program.input_count()];
-        let mut uv_register = None;
-        for s in &self.reflection.inputs {
-            if s.used_mask == 0 {
-                continue;
-            }
-            if s.register as usize >= inputs.len() {
-                return Err(invalid(
-                    "layer binding",
-                    0,
-                    "signature register exceeds declarations",
-                ));
-            }
-            let name = s.name.to_ascii_uppercase();
-            let values = match (name.as_str(), s.index) {
-                ("POSITION", 1) => [0., 0., 0., 1.],
-                ("NORMAL", 0) => [0., 1., 0., 0.],
-                ("TANGENT", 0) => [1., 0., 0., 1.],
-                ("TEXCOORD", 0) => {
-                    uv_register = Some(s.register as usize);
-                    [0.; 4]
-                }
-                ("TEXCOORD", 5) => params.weights_snow,
-                ("TEXCOORD", 7) => params.tint_color,
-                ("TEXCOORD", 12) => [params.detail, 0., 0., 0.],
+        // every used input by its semantic: the grid's UV in TEXCOORD0, the frozen values elsewhere
+        let mut inputs = BTreeMap::new();
+        for s in self.shader.reflection.inputs.iter().filter(|s| s.used_mask != 0) {
+            let input = match (s.name.to_ascii_uppercase().as_str(), s.index) {
+                ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
+                ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
+                ("TANGENT", 0) => Input::Constant([1., 0., 0., 1.]),
+                ("TEXCOORD", 0) => Input::Lanes([Lane::U, Lane::V, Lane::U, Lane::V]),
+                ("TEXCOORD", 5) => Input::Constant(params.weights_snow),
+                ("TEXCOORD", 7) => Input::Constant(params.tint_color),
+                ("TEXCOORD", 12) => Input::Constant([params.detail, 0., 0., 0.]),
                 ("SV_ISFRONTFACE", 0) => {
-                    inputs[s.register as usize] = [u32::MAX, 0, 0, 0];
-                    continue;
+                    Input::Lanes([Lane::Bits(u32::MAX), Lane::Bits(0), Lane::Bits(0), Lane::Bits(0)])
                 }
-                ("SV_POSITION", 0) => [0.; 4],
+                ("SV_POSITION", 0) => Input::Constant([0.; 4]),
                 _ => {
                     return Err(invalid(
                         "layer binding",
@@ -490,17 +476,28 @@ impl Prepared {
                     ));
                 }
             };
-            if s.register as usize >= inputs.len() {
-                return Err(invalid(
-                    "layer binding",
-                    0,
-                    "signature register exceeds declarations",
-                ));
-            }
-            inputs[s.register as usize] = values.map(f32::to_bits);
+            inputs.insert((s.name.clone(), s.index), input);
         }
-        let uv_register = uv_register.ok_or_else(|| invalid("layer binding", 0, "missing TEXCOORD0"))?;
-        let refs: Vec<_> = self.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
+        if !inputs
+            .keys()
+            .any(|(name, index)| name.eq_ignore_ascii_case("TEXCOORD") && *index == 0)
+        {
+            return Err(invalid("layer binding", 0, "missing TEXCOORD0"));
+        }
+        // the G-buffer normal, the second output's x, the albedo, the reflectance and the emission
+        let raw = evaluate_raw(
+            &self.shader,
+            &self.constants,
+            &self.textures,
+            &inputs,
+            Grid { size, period },
+            &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
+            Invocation::Scalar,
+        )
+        .map_err(evaluation)?;
+        let [normals, seconds, colours, reflected, emitted] = &raw.pixels[..] else {
+            unreachable!("five targets requested");
+        };
         let mut albedo = Vec::with_capacity(size as usize * size as usize * 4);
         let mut normal = Vec::with_capacity(albedo.capacity());
         let mut gloss = None;
@@ -508,103 +505,90 @@ impl Prepared {
         let mut emissive = None;
         let mut writes_emissive = None;
         let mut reflectance = capture_reflectance.then(|| Vec::with_capacity(size as usize * size as usize));
-        let (mut instructions, mut samples) = (0, 0);
         let byte = |f: f32| -> u8 { (f.clamp(0., 1.) * 255.).round_ties_even() as u8 };
-        for y in 0..size {
-            for x in 0..size {
-                let uv = [
-                    (x as f32 + 0.5) / size as f32 * period[0],
-                    (y as f32 + 0.5) / size as f32 * period[1],
-                ];
-                inputs[uv_register] = [uv[0], uv[1], uv[0], uv[1]].map(f32::to_bits);
-                let result = self
-                    .program
-                    .execute(&inputs, &refs, &mut |s: Sample| {
-                        self.sources
-                            .get(&s.texture)
-                            .ok_or_else(|| format!("unbound texture {}", s.texture))?
-                            .sample(s.uv)
-                            .map_err(|e| e.to_string())
-                    })
-                    .map_err(dxbc)?;
-                if result.output_masks.first().is_none_or(|m| m & 7 != 7)
-                    || result.output_masks.get(2).is_none_or(|m| m & 7 != 7)
-                {
-                    return Err(invalid("layer bake", 0, "missing G-buffer normal or albedo"));
-                }
-                if let Some(pixels) = &mut reflectance {
-                    pixels.push(OutputRgb {
-                        bits: result.outputs.get(3).map_or([0; 3], |v| [v[0], v[1], v[2]]),
-                        mask: result.output_masks.get(3).copied().unwrap_or(0) & 7,
-                    });
-                }
-                let writes = result.output_masks.get(1).is_some_and(|mask| mask & 1 != 0);
-                if writes_gloss.is_some_and(|previous| previous != writes) {
-                    return Err(invalid("layer bake", 0, "inconsistent second-output x coverage"));
-                }
-                writes_gloss = Some(writes);
-                if writes {
-                    let value = f32::from_bits(result.outputs[1][0]);
-                    if !value.is_finite() {
-                        return Err(invalid("layer bake", 0, "nonfinite second-output x"));
-                    }
-                    gloss
-                        .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
-                        .push(value);
-                }
-                let rgb_mask = result.output_masks.get(4).copied().unwrap_or(0) & 7;
-                if rgb_mask != 0 && rgb_mask != 7 {
-                    return Err(invalid("layer bake", 0, "partial emission RGB output"));
-                }
-                let writes = rgb_mask == 7;
-                if writes_emissive.is_some_and(|previous| previous != writes) {
-                    return Err(invalid("layer bake", 0, "inconsistent emission RGB coverage"));
-                }
-                writes_emissive = Some(writes);
-                if writes {
-                    let rgb = std::array::from_fn(|c| f32::from_bits(result.outputs[4][c]));
-                    if !rgb.iter().all(|v| v.is_finite()) {
-                        return Err(invalid("layer bake", 0, "nonfinite emission RGB"));
-                    }
-                    emissive
-                        .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
-                        .push(rgb);
-                }
-                let color = result.outputs[2].map(f32::from_bits);
-                let n = result.outputs[0].map(f32::from_bits);
-                if !color[..3].iter().chain(&n[..3]).all(|v| v.is_finite()) {
-                    return Err(invalid("layer bake", 0, "nonfinite shader output"));
-                }
-                for &c in &color[..3] {
-                    albedo.push(
-                        (primase_image::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even()
-                            as u8,
-                    );
-                }
-                albedo.push(if let Some((source, scale)) = &self.alpha {
-                    byte(source.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
-                } else {
-                    255
-                });
-                // Invert the observed G-buffer bias from the binary operand,
-                // not its rounded decimal rendering in a disassembly.
-                let bias = f32::from_bits(0x3f002008);
-                let n = primase_meshops::vector::Vec3::from([
-                    (n[0] - bias) * 2.,
-                    (n[1] - bias) * 2.,
-                    (n[2] - bias) * 2.,
-                ])
-                .normalize_or([0., 1., 0.].into());
-                normal.extend([
-                    byte(-n.z * 0.5 + 0.5),
-                    byte(n.x * 0.5 + 0.5),
-                    byte(n.y * 0.5 + 0.5),
-                    255,
-                ]);
-                instructions += result.instructions as u64;
-                samples += result.samples as u64;
+        for pixel in 0..size as usize * size as usize {
+            let (x, y) = (pixel % size as usize, pixel / size as usize);
+            let uv = [
+                (x as f32 + 0.5) / size as f32 * period[0],
+                (y as f32 + 0.5) / size as f32 * period[1],
+            ];
+            let (n, n_mask) = normals[pixel];
+            let (color, color_mask) = colours[pixel];
+            if n_mask != 7 || color_mask != 7 {
+                return Err(invalid("layer bake", 0, "missing G-buffer normal or albedo"));
             }
+            if let Some(pixels) = &mut reflectance {
+                let (bits, mask) = reflected[pixel];
+                pixels.push(OutputRgb {
+                    bits: [bits[0], bits[1], bits[2]],
+                    mask,
+                });
+            }
+            let (second, second_mask) = seconds[pixel];
+            let writes = second_mask & 1 != 0;
+            if writes_gloss.is_some_and(|previous| previous != writes) {
+                return Err(invalid("layer bake", 0, "inconsistent second-output x coverage"));
+            }
+            writes_gloss = Some(writes);
+            if writes {
+                let value = f32::from_bits(second[0]);
+                if !value.is_finite() {
+                    return Err(invalid("layer bake", 0, "nonfinite second-output x"));
+                }
+                gloss
+                    .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                    .push(value);
+            }
+            let (emission, rgb_mask) = emitted[pixel];
+            if rgb_mask != 0 && rgb_mask != 7 {
+                return Err(invalid("layer bake", 0, "partial emission RGB output"));
+            }
+            let writes = rgb_mask == 7;
+            if writes_emissive.is_some_and(|previous| previous != writes) {
+                return Err(invalid("layer bake", 0, "inconsistent emission RGB coverage"));
+            }
+            writes_emissive = Some(writes);
+            if writes {
+                let rgb = std::array::from_fn(|c| f32::from_bits(emission[c]));
+                if !rgb.iter().all(|v| v.is_finite()) {
+                    return Err(invalid("layer bake", 0, "nonfinite emission RGB"));
+                }
+                emissive
+                    .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                    .push(rgb);
+            }
+            let color = color.map(f32::from_bits);
+            let n = n.map(f32::from_bits);
+            if !color[..3].iter().chain(&n[..3]).all(|v| v.is_finite()) {
+                return Err(invalid("layer bake", 0, "nonfinite shader output"));
+            }
+            for &c in &color[..3] {
+                albedo.push(
+                    (primase_image::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
+                );
+            }
+            albedo.push(if let Some((image, scale)) = &self.alpha {
+                byte(image.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
+            } else {
+                255
+            });
+            // Invert the observed G-buffer bias from the binary operand,
+            // not its rounded decimal rendering in a disassembly.
+            let bias = f32::from_bits(0x3f002008);
+            let n = primase_meshops::vector::Vec3::from([
+                (n[0] - bias) * 2.,
+                (n[1] - bias) * 2.,
+                (n[2] - bias) * 2.,
+            ])
+            .normalize_or([0., 1., 0.].into());
+            normal.extend([
+                byte(-n.z * 0.5 + 0.5),
+                byte(n.x * 0.5 + 0.5),
+                byte(n.y * 0.5 + 0.5),
+                255,
+            ]);
         }
+        let (instructions, samples) = (raw.instructions, raw.samples);
         let mut policies = self.policies.clone();
         // A per-material decision for this bake; area censuses deduplicate
         // weight variants by their source material before summing this count.
@@ -700,23 +684,25 @@ mod tests {
         instruction(62, &[]);
         words[1] = words.len() as u32;
         Prepared {
-            program: Program::from_words(&words).unwrap(),
-            reflection: Reflection {
-                buffers: vec![],
-                resources: vec![],
-                outputs: vec![],
-                inputs: vec![primase_dxbc::Semantic {
-                    name: "TEXCOORD".into(),
-                    index: 0,
-                    system_value: 0,
-                    component_type: 3,
-                    register: 0,
-                    mask: 15,
-                    used_mask: 15,
-                }],
+            shader: Shader {
+                program: primase_dxbc::Program::from_words(&words).unwrap(),
+                reflection: primase_dxbc::Reflection {
+                    buffers: vec![],
+                    resources: vec![],
+                    outputs: vec![],
+                    inputs: vec![primase_dxbc::Semantic {
+                        name: "TEXCOORD".into(),
+                        index: 0,
+                        system_value: 0,
+                        component_type: 3,
+                        register: 0,
+                        mask: 15,
+                        used_mask: 15,
+                    }],
+                },
             },
-            buffers: vec![],
-            sources: BTreeMap::new(),
+            constants: Constants::new(&Layout::default()),
+            textures: BTreeMap::new(),
             alpha: None,
             policies: BTreeMap::new(),
             decoded_bytes: 0,
