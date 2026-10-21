@@ -1,7 +1,8 @@
 //! Sampling a decoded texture: each policy the caller's, stated. Bilinear filtering between texel centres (a texel
 //! `i` covering `[i, i + 1)`, `uv` scaled by the level's size, minus a half), each axis's address mode, the colour's
 //! transfer before filtering, at a level the caller picks. Two precisions, each a fixed order of operations: f64
-//! ([`Levels::bilinear`]) and f32 over texels decoded once ([`Decoded::bilinear`]).
+//! ([`Levels::bilinear`]) and f32 over texels decoded once ([`Decoded::bilinear`]). A level of detail from a sample's
+//! footprint ([`footprint_lod`]) and the two levels around it mixed ([`Levels::trilinear`]).
 
 use primase_core::{ColorSpace, TexRole, Texture};
 
@@ -149,6 +150,43 @@ impl Levels {
     }
 }
 
+/// The level of detail of a footprint: the UV's screen derivatives `gradients` (d/dx, then d/dy) in texels of a
+/// `width` x `height` base level, the longer one's base-2 logarithm (Direct3D's isotropic rule), plus `bias`. A
+/// footprint of no extent gives negative infinity (the finest level, whatever the bias).
+pub fn footprint_lod(width: u32, height: u32, gradients: [[f64; 2]; 2], bias: f64) -> f64 {
+    let texels = |d: [f64; 2]| (d[0] * f64::from(width)).hypot(d[1] * f64::from(height));
+    texels(gradients[0]).max(texels(gradients[1])).log2() + bias
+}
+
+impl Levels {
+    /// Trilinear at `uv`: the level of detail `lod` clamped to the stored levels, the bilinear values
+    /// ([`Levels::bilinear`]) of the level below it and the next mixed by its fraction (`a + (b - a) f`); a level
+    /// of detail that isn't a number is refused.
+    pub fn trilinear(
+        &self,
+        uv: [f64; 2],
+        lod: f64,
+        address: [Address; 2],
+        transfer: Transfer,
+    ) -> Result<[f64; 4]> {
+        if lod.is_nan() {
+            return Err(Error::Invalid(
+                "sampled texture: a level of detail that isn't a number".into(),
+            ));
+        }
+        let last = self.levels.len().saturating_sub(1);
+        let lod = lod.clamp(0.0, last as f64);
+        let below = lod.floor();
+        let (l0, f) = (below as usize, lod - below);
+        let a = self.bilinear(l0, uv, address, transfer);
+        if f == 0.0 {
+            return Ok(a);
+        }
+        let b = self.bilinear((l0 + 1).min(last), uv, address, transfer);
+        Ok(std::array::from_fn(|c| a[c] + (b[c] - a[c]) * f))
+    }
+}
+
 /// One level's texels in f32, their transfer applied.
 #[derive(Clone, Debug)]
 pub struct Decoded {
@@ -215,5 +253,27 @@ mod tests {
         let g = Levels::one(1, 1, vec![128, 128, 128, 128]).unwrap();
         let c = g.bilinear(0, [0.5, 0.5], wrap, Transfer::SrgbColour);
         assert!((c[0] - srgb_to_linear(128.0 / 255.0)).abs() < 1e-15 && (c[3] - 128.0 / 255.0).abs() < 1e-15);
+    }
+
+    /// A footprint of one base texel is level 0, of four texels level 2 (the longer derivative counts, in texels of
+    /// each axis's size); trilinear between levels 0 (black) and 1 (white) gives the fraction, and clamps to the
+    /// stored levels.
+    #[test]
+    fn trilinear_at_a_footprint() {
+        assert_eq!(
+            footprint_lod(8, 4, [[1.0 / 8.0, 0.0], [0.0, 1.0 / 4.0]], 0.0),
+            0.0
+        );
+        assert_eq!(footprint_lod(8, 4, [[0.0, 0.0], [0.0, 1.0]], 0.0), 2.0);
+        assert_eq!(footprint_lod(8, 4, [[0.0; 2]; 2], 3.0), f64::NEG_INFINITY);
+        let l = Levels {
+            width: 2,
+            height: 2,
+            levels: vec![vec![0; 16], vec![255; 4]],
+        };
+        let wrap = [Address::Wrap; 2];
+        let at = |lod| l.trilinear([0.5, 0.5], lod, wrap, Transfer::Stored).unwrap()[0];
+        assert_eq!((at(-1.0), at(0.25), at(1.0), at(7.0)), (0.0, 0.25, 1.0, 1.0));
+        assert!(l.trilinear([0.5, 0.5], f64::NAN, wrap, Transfer::Stored).is_err());
     }
 }
