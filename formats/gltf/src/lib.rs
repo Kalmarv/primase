@@ -3,6 +3,7 @@
 //! - [`write()`] / [`write_file`]: a [`primase_core::World`] to one GLB (prototypes as shared meshes, placements as
 //!   nodes, `pbr.material`s, embedded PNGs, dialect components in extras); see [`write`](mod@write) for the rules.
 //! - [`prepare`]: `prepare-gltf-materials` and `fill-missing-texcoords`.
+//! - [`read`](mod@read): a glTF document into a world of one asset (skeletons, skins, morphs, placements, clips).
 //! - [`parts`]: the writer in a conversion, its [`target`] and [`GlbParts`] (one GLB per part: one per object).
 //!
 //! The GLB container, the strict reader and the vertex encoding are `primase-glb`'s.
@@ -12,6 +13,7 @@
 
 pub mod parts;
 pub mod prepare;
+pub mod read;
 mod rig;
 pub mod write;
 
@@ -20,6 +22,7 @@ use std::path::PathBuf;
 use primase_core::Entity;
 
 pub use parts::{GlbParts, target};
+pub use read::{ReadReport, read_glb};
 pub use write::{
     GroupBy, Piece, Selected, Selection, WriteOptions, WriteReport, write, write_document, write_file,
 };

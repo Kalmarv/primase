@@ -327,8 +327,10 @@ impl Component for ClipBinding {
         out.extend(self.rig);
         out.extend(&self.meshes);
     }
-    /// The clip a `core.clip`; its joint channels on the rig's skeleton (so it needs a rig when it has any); its morph
-    /// channels on morph sets some mesh occurrence draws (their prototype's).
+    /// The clip a `core.clip`; its joint channels on the rig's skeleton (so it needs a rig when it has any); each of its
+    /// meshes an occurrence drawing a morph set the clip's morph channels drive (its prototype's, or its own mesh). A
+    /// morph channel none of its meshes draws drives nothing through this binding (an occurrence posed into a static
+    /// mesh leaves it).
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
         let clip = w
             .get::<Clip>(self.clip)
@@ -341,22 +343,24 @@ impl Component for ClipBinding {
             ),
             None => None,
         };
-        let drawn: BTreeSet<Entity> = self
-            .meshes
-            .iter()
-            .map(|&m| w.get::<Instance>(m).map_or(m, |i| i.prototype))
-            .collect();
+        let mut driven = BTreeSet::new();
         for c in &clip.channels {
             match c.target {
                 ClipTarget::Joint { skeleton: s, .. } if Some(s) != skeleton => {
                     return Err(format!("a joint channel on {s:?}, the rig poses {skeleton:?}"));
                 }
-                ClipTarget::Morph { geometry, .. } if !drawn.contains(&geometry) => {
-                    return Err(format!(
-                        "a morph channel on {geometry:?}, which none of its meshes draws"
-                    ));
+                ClipTarget::Morph { geometry, .. } => {
+                    driven.insert(geometry);
                 }
                 _ => {}
+            }
+        }
+        for &m in &self.meshes {
+            let drawn = w.get::<Instance>(m).map_or(m, |i| i.prototype);
+            if !driven.contains(&drawn) {
+                return Err(format!(
+                    "mesh {m:?} draws {drawn:?}, whose morph set the clip does not drive"
+                ));
             }
         }
         Ok(())
@@ -599,14 +603,14 @@ mod tests {
             },
             "outside its clip",
         );
-        // a binding without the rig its joint channels need, or without a mesh drawing its morph set
+        // a binding without the rig its joint channels need, or listing a mesh whose morph set the clip does not drive
         fails(
             &|w, _, b| w.get_mut::<ClipBinding>(b).unwrap().rig = None,
             "the rig poses None",
         );
         fails(
-            &|w, _, b| w.get_mut::<ClipBinding>(b).unwrap().meshes.clear(),
-            "none of its meshes draws",
+            &|w, c, b| w.get_mut::<ClipBinding>(b).unwrap().meshes.push(c),
+            "whose morph set the clip does not drive",
         );
     }
 }

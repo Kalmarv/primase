@@ -178,7 +178,8 @@ impl Pass for EvaluateClip {
 /// rests), in the occurrence's own space. Each such occurrence gets a prototype of its own (a copy of the one it drew,
 /// with the posed mesh and without skin, morphs, file link or joint and weight streams); one drawing its own mesh is
 /// changed in place. Exact for that pose; the animation is not kept (counted). A skinned prototype with levels of
-/// detail is refused: choose a form first (`select-lod`).
+/// detail is refused: choose a form first (`select-lod`). A clip binding listing a posed occurrence no longer drives
+/// it: the occurrence leaves its list (counted).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoseSkin;
 
@@ -199,7 +200,7 @@ impl Pass for PoseSkin {
         ]
     }
     fn modifies(&self) -> &[&'static str] {
-        &[Instance::NAME, Mesh::NAME]
+        &[Instance::NAME, Mesh::NAME, ClipBinding::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let occurrences: BTreeSet<Entity> = w
@@ -207,6 +208,7 @@ impl Pass for PoseSkin {
             .map(|(e, _)| e)
             .chain(w.iter::<MorphWeights>().map(|(e, _)| e))
             .collect();
+        let mut posed_occurrences = BTreeSet::new();
         for e in occurrences {
             let drawn = w.get::<Instance>(e).map_or(e, |i| i.prototype);
             if w.has::<Lods>(drawn) {
@@ -297,6 +299,18 @@ impl Pass for PoseSkin {
                 "occurrences posed into static meshes (their animation not kept)",
                 1,
             );
+            posed_occurrences.insert(e);
+        }
+        // a clip no longer drives what was posed: its bindings leave those occurrences
+        let bindings: Vec<Entity> = w.iter::<ClipBinding>().map(|(b, _)| b).collect();
+        for b in bindings {
+            let binding = w.get_mut::<ClipBinding>(b).ok_or("a clip binding is gone")?;
+            let before = binding.meshes.len();
+            binding.meshes.retain(|m| !posed_occurrences.contains(m));
+            let left = before - binding.meshes.len();
+            if left > 0 {
+                log.count("posed occurrences taken out of clip bindings", left as u64);
+            }
         }
         Ok(())
     }
@@ -668,7 +682,7 @@ mod tests {
             ClipBinding {
                 clip,
                 rig: Some(rigs[0]),
-                meshes: vec![placed[0]],
+                meshes: Vec::new(),
             },
         );
         (w, proto, rigs, placed)
@@ -759,7 +773,7 @@ mod tests {
             ClipBinding {
                 clip,
                 rig: Some(rigs[0]),
-                meshes: vec![placed[0]],
+                meshes: Vec::new(),
             },
         );
         let err = e.run(&mut w, &mut PassLog::default()).unwrap_err();

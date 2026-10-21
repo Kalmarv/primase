@@ -92,7 +92,7 @@ pub struct Skin {
 
 /// How far a [`WeightRule::SumsToOne`] vertex's weights may sum from 1: one step of 8-bit storage over four
 /// influences, rounded each.
-const SUM_TOLERANCE: f32 = 4.0 / 255.0;
+pub const SUM_TOLERANCE: f32 = 4.0 / 255.0;
 
 /// A weights stream decoded to floats (integers as normalised); `None` for a type weights can't be.
 fn weights(s: &Stream) -> Option<Vec<[f32; 4]>> {
