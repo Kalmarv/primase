@@ -3,6 +3,7 @@
 pub mod archive;
 pub mod data;
 pub mod entity;
+pub mod floor;
 pub mod forge;
 pub mod grid;
 pub mod lod;

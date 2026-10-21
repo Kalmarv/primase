@@ -5,10 +5,11 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::world::Resource;
 use primase_core::{
-    Collision, Component, Entity, LodForm, Lods, Mesh, Primitive, Semantic, Stream, Surfaces, Topology, World,
+    Collision, Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Stream, Surfaces,
+    Topology, Transform, World,
 };
 
-use crate::components::{AnvilLods, AnvilMesh, AnvilMeshShape};
+use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape};
 
 /// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
 /// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
@@ -369,6 +370,208 @@ impl Pass for LowerAnvilLods {
     }
 }
 
+/// Where in its cell a FloorHeightData word's sample lies: the program's stated choice, as a half-cell shift isn't
+/// detectable in the Riders Republic notes' fit (it changes the residual by 0.1 m).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellPoint {
+    /// At the cell's corner: x = origin x + side x column.
+    Corner,
+    /// At its centre, half a side further along each axis.
+    Centre,
+}
+
+/// `lower-anvil-floor`: every FloorHeightData grid ([`AnvilFloorHeight`]) becomes ground: a core mesh of the cells
+/// whose samples lie in `rect` (x0, y0, x1, y1, in the grid's own units), every `step`-th column and row, two
+/// triangles to each square of samples, placed once. A sample's height is the trailer's scale times its word plus
+/// `offset`, the word `lo + (hi - lo) index / 3` computed exactly. Every option is required: the offset isn't stored
+/// (the notes fit 925 to 928 m), and how the game rounds the word isn't read (under one word step either way).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LowerAnvilFloor {
+    pub rect: [f64; 4],
+    pub step: u32,
+    pub offset: f64,
+    pub sample: CellPoint,
+}
+
+impl LowerAnvilFloor {
+    /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `offset=METRES`, `sample=corner|centre`, all required.
+    pub fn from_options(o: &Options) -> Result<LowerAnvilFloor, String> {
+        if let Some(k) = o
+            .keys()
+            .find(|k| !["rect", "step", "offset", "sample"].contains(&k.as_str()))
+        {
+            return Err(format!("unknown option {k}"));
+        }
+        let get = |k: &str| {
+            o.get(k).map(String::as_str).ok_or_else(|| {
+                format!("{k} is required: rect=x0,y0,x1,y1, step=N, offset=METRES (not stored), sample=corner|centre")
+            })
+        };
+        let rect: Vec<f64> = get("rect")?
+            .split(',')
+            .map(|v| {
+                v.trim()
+                    .parse::<f64>()
+                    .map_err(|_| format!("rect: {v} is not a number"))
+            })
+            .collect::<Result<_, _>>()?;
+        let [x0, y0, x1, y1] = rect[..] else {
+            return Err("rect takes four numbers, x0,y0,x1,y1".to_owned());
+        };
+        if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
+            return Err(format!("rect {x0},{y0},{x1},{y1}: x0 < x1 and y0 < y1"));
+        }
+        let step: u32 = get("step")?
+            .parse()
+            .map_err(|_| "step is a whole number".to_owned())?;
+        if step == 0 {
+            return Err("step is at least 1".to_owned());
+        }
+        let offset: f64 = get("offset")?
+            .parse()
+            .map_err(|_| "offset is a number".to_owned())?;
+        if !offset.is_finite() {
+            return Err(format!("offset {offset}: a finite number"));
+        }
+        let sample = match get("sample")? {
+            "corner" => CellPoint::Corner,
+            "centre" => CellPoint::Centre,
+            v => return Err(format!("sample={v} is not corner or centre")),
+        };
+        Ok(LowerAnvilFloor {
+            rect: [x0, y0, x1, y1],
+            step,
+            offset,
+            sample,
+        })
+    }
+
+    /// The columns (or rows) whose samples lie in `from..=to`, every `step`-th, of `cells` cells of side `side` from
+    /// `origin`, the sample `shift` into the cell.
+    fn indices(&self, origin: f64, side: f64, shift: f64, cells: u32, (from, to): (f64, f64)) -> Vec<u32> {
+        let first = ((from - origin - shift) / side).ceil().max(0.0);
+        let last = ((to - origin - shift) / side).floor().min(f64::from(cells) - 1.0);
+        if first.is_nan() || last.is_nan() || first > last {
+            return Vec::new();
+        }
+        // in range of u32: clamped to 0..cells above
+        let (first, last) = (first as u32, last as u32);
+        (first..=last).step_by(self.step as usize).collect()
+    }
+}
+
+impl Pass for LowerAnvilFloor {
+    fn name(&self) -> &'static str {
+        "lower-anvil-floor"
+    }
+    fn options(&self) -> Options {
+        let [x0, y0, x1, y1] = self.rect;
+        let sample = match self.sample {
+            CellPoint::Corner => "corner",
+            CellPoint::Centre => "centre",
+        };
+        Options::from([
+            ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
+            ("step".to_owned(), self.step.to_string()),
+            ("offset".to_owned(), self.offset.to_string()),
+            ("sample".to_owned(), sample.to_owned()),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[AnvilFloorHeight::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Mesh::NAME, Instance::NAME, Transform::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[AnvilFloorHeight::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "ground heights from a stated offset; each word computed exactly where the game's rounding isn't read"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let grids: Vec<Entity> = w.iter::<AnvilFloorHeight>().map(|(e, _)| e).collect();
+        for e in grids {
+            let Some(grid) = w.remove::<AnvilFloorHeight>(e) else {
+                continue;
+            };
+            let frame = grid.frame;
+            let side = f64::from(grid.cell);
+            let shift = match self.sample {
+                CellPoint::Corner => 0.0,
+                CellPoint::Centre => side / 2.0,
+            };
+            let [ox, oy] = grid.origin.map(f64::from);
+            let [dx, dy] = grid.cells;
+            let [x0, y0, x1, y1] = self.rect;
+            let columns = self.indices(ox, side, shift, dx, (x0, x1));
+            let rows = self.indices(oy, side, shift, dy, (y0, y1));
+            if columns.len() < 2 || rows.len() < 2 {
+                log.omit(
+                    "FloorHeightData grids with under 2 by 2 samples in the rectangle",
+                    1,
+                );
+                continue;
+            }
+            let scale = f64::from(grid.scale);
+            let mut positions = Vec::with_capacity(columns.len() * rows.len());
+            let mut zero = 0;
+            for &r in &rows {
+                for &c in &columns {
+                    let (lo, hi, index) = grid
+                        .cell(c, r)
+                        .ok_or_else(|| format!("cell ({c}, {r}) outside the grid"))?;
+                    let (lo, hi) = (f64::from(lo), f64::from(hi));
+                    let word = lo + (hi - lo) * f64::from(index) / 3.0;
+                    zero += u64::from(word == 0.0);
+                    let x = ox + side * f64::from(c) + shift;
+                    let y = oy + side * f64::from(r) + shift;
+                    positions.push(frame.point([x as f32, y as f32, (scale * word + self.offset) as f32]));
+                }
+            }
+            let width = u32::try_from(columns.len()).map_err(|_| "too many columns".to_owned())?;
+            let height = u32::try_from(rows.len()).map_err(|_| "too many rows".to_owned())?;
+            let flip = frame.flips_winding();
+            let mut indices = Vec::new();
+            for r in 0..height - 1 {
+                for c in 0..width - 1 {
+                    let [a, b] = [r * width + c, r * width + c + 1];
+                    let [d, f] = [a + width, b + width];
+                    for t in [[a, b, f], [a, f, d]] {
+                        indices.extend(if flip { [t[0], t[2], t[1]] } else { t });
+                    }
+                }
+            }
+            log.count("ground samples", positions.len() as u64);
+            log.count("ground triangles", (indices.len() / 3) as u64);
+            log.count("ground samples of word 0", zero);
+            log.approximate("ground samples at a stated height offset", positions.len() as u64);
+            let mut streams = BTreeMap::new();
+            streams.insert(Semantic::Position, Stream::F32x3(positions));
+            w.insert(
+                e,
+                Mesh::new(vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams,
+                    indices: Some(indices),
+                    material: None,
+                }]),
+            );
+            let placed = w.spawn();
+            w.insert(
+                placed,
+                Instance {
+                    prototype: e,
+                    variant: 0,
+                },
+            );
+            w.insert(placed, Transform::IDENTITY);
+            log.place(placed);
+        }
+        Ok(())
+    }
+}
+
 /// Register Anvil's passes by name.
 pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
@@ -377,6 +580,16 @@ pub fn register(reg: &mut PassRegistry) {
         &[("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
+    reg.register_requiring(
+        "lower-anvil-floor",
+        |o| Ok(Box::new(LowerAnvilFloor::from_options(o)?)),
+        &[
+            ("rect", "-64,-64,64,64"),
+            ("step", "1"),
+            ("offset", "0"),
+            ("sample", "corner"),
+        ],
+    );
     reg.register_requiring(
         "lower-anvil-mesh",
         |o| Ok(Box::new(LowerAnvilMesh::from_options(o)?)),

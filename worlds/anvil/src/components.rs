@@ -175,3 +175,48 @@ impl Component for AnvilDataLayers {
         u64::try_from(self.actions.len() * 12).unwrap_or(u64::MAX)
     }
 }
+
+/// A FloorHeightData block: two words and sixteen 2-bit indices between them, cell (r, c) of the block (r along y)
+/// at bits 2 (4 r + c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloorBlock {
+    pub lo: u16,
+    pub hi: u16,
+    pub indices: u32,
+}
+
+/// A FloorHeightData grid (`anvil.floor_height`): its cell side, the metres per word step and corner its trailer
+/// stores, its cells along x and y, its 4x4-cell blocks row by row (a row along x), and the frame the program states
+/// for its points. `lower-anvil-floor` makes ground of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilFloorHeight {
+    pub frame: primase_core::frame::SourceFrame,
+    pub cell: f32,
+    pub scale: f32,
+    pub origin: [f32; 2],
+    pub cells: [u32; 2],
+    pub blocks: Vec<FloorBlock>,
+}
+
+impl AnvilFloorHeight {
+    /// The cell at `column` (along x) and `row` (along y): its block's words and its index (0 to 3); `None` outside
+    /// the grid.
+    pub fn cell(&self, column: u32, row: u32) -> Option<(u16, u16, u8)> {
+        let [dx, dy] = self.cells;
+        if column >= dx || row >= dy {
+            return None;
+        }
+        let at = usize::try_from(row / 4).ok()? * usize::try_from(dx / 4).ok()?
+            + usize::try_from(column / 4).ok()?;
+        let b = self.blocks.get(at)?;
+        let shift = ((row % 4) * 4 + column % 4) * 2;
+        Some((b.lo, b.hi, u8::try_from((b.indices >> shift) & 3).ok()?))
+    }
+}
+
+impl Component for AnvilFloorHeight {
+    const NAME: &'static str = "anvil.floor_height";
+    fn payload_bytes(&self) -> u64 {
+        u64::try_from(self.blocks.len() * 8).unwrap_or(u64::MAX)
+    }
+}
