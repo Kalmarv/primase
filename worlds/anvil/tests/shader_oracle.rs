@@ -5,7 +5,7 @@
 //! shouldn't read), the evaluator primase's own; the permutations are the notes' (their opaque G-buffer one per
 //! template). Each test asserts its largest differences under 1e-6 and prints them.
 
-use primase_anvil::passes::formulas::{Rough, metalness, occlusion, roughness, sat, tint, tinted};
+use primase_anvil::passes::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tint, tinted};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template;
 use primase_core::layered::height_blend;
@@ -535,4 +535,66 @@ fn mad_tex1_terrain_blend() {
         worst.see("class", f64::from(class), 3.0);
     }
     worst.check("MAD_Tex1_TerrainBlend");
+}
+
+/// MAD_Tex1_Emissive's and MAD_Tex1_UGE's opaque G-buffer case: t75 normal map, t76 albedo, t77 emissive mask, t23
+/// the exposure (loaded); cb3[1..7] Metalness, Emissive Scale, Hue, Saturate, Luminosity, Alpha, Vertex Color (0 or
+/// 1), the UV rows at `uv`. o0 = (albedo tinted everywhere, roughness raw), o1.w metalness, o2.z the emission: the
+/// mask's lane `lane` times the scale over the exposure.
+fn emissive(s: &Shader, seed: u64, uv: usize, lane: usize, template: &str) {
+    let mut r = Random(seed);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (normal, albedo, mask, colour) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (metal, scale, exposure) = (r.next(), r.range(0.0, 50.0), r.range(0.25, 8.0));
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let vci = f64::from(case % 2);
+        let mut cb3 = r.decoys(uv + 2);
+        for (row, v) in [metal, scale, hsl[0], hsl[1], hsl[2], r.next(), vci]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, uv);
+        let out = run(
+            s,
+            &[
+                (75, normal),
+                (76, albedo),
+                (77, mask),
+                (23, [exposure, 0.0, 0.0, 0.0]),
+            ],
+            &cb3,
+            colour,
+        );
+        let tinted = tinted(rgb(albedo), 1.0, hsl);
+        let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|k| tinted[k] * factor(k)));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+        let e = emission(mask[lane], scale, exposure);
+        // relative: the emission reaches 200
+        worst.see("emission (relative)", out[2][2] / e.max(1.0), e / e.max(1.0));
+    }
+    worst.check(template);
+}
+
+/// MAD_Tex1_Emissive (DataPC 61043, at 0x0692CE): the UV rows at 8, emission the mask's red.
+#[test]
+fn mad_tex1_emissive() {
+    let Some(s) = shader("DataPC.forge", 61043, 0x06_92CE) else {
+        return;
+    };
+    emissive(&s, 0x0061_0430_0006_92CE, 8, 0, "MAD_Tex1_Emissive");
+}
+
+/// MAD_Tex1_UGE (DataPC 42674, at 0x09798B): `Overriden Emissive Scale` cb3[8] a decoy (read only by the instanced
+/// permutations), the UV rows at 9, emission the mask's alpha.
+#[test]
+fn mad_tex1_uge() {
+    let Some(s) = shader("DataPC.forge", 42674, 0x09_798B) else {
+        return;
+    };
+    emissive(&s, 0x0042_6740_0009_798B, 9, 3, "MAD_Tex1_UGE");
 }

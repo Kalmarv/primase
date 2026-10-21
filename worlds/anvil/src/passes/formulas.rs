@@ -74,6 +74,11 @@ pub fn metalness(b: f64, metal: Option<f64>) -> f64 {
     metal.map_or(b, |m| b * m)
 }
 
+/// Emission of the emissive mask's lane `m` at `Emissive Scale` `scale` over the exposure `exposure`.
+pub fn emission(m: f64, scale: f64, exposure: f64) -> f64 {
+    m * scale / exposure
+}
+
 /// Occlusion of the mask's blue `b` at the switch `on`: `1 + on (b - 1)`.
 pub fn occlusion(b: f64, on: f64) -> f64 {
     1.0 + on * (b - 1.0)

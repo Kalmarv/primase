@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 pub mod formulas;
 mod material;
 mod splat;
-pub use material::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
+pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv};
 pub use splat::{Splat, SplatUv};
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
@@ -1468,6 +1468,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("alpha", "opaque"),
             ("unset", "white"),
             ("shader-uv", "texcoord"),
+            ("emissive-exposure", "1"),
         ],
     );
     reg.register_requiring(
