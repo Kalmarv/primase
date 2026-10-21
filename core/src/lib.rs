@@ -3,6 +3,7 @@
 //! See `docs/DESIGN.md` §3-4 and CONTRIBUTING.md for the conventions every crate follows.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod asset;
 pub mod clip;
 pub mod components;
 pub mod convert;
@@ -36,6 +37,7 @@ pub mod provenance;
 pub mod rig;
 pub mod skeleton;
 pub mod skin;
+pub use asset::{Asset, PlaceAssets, Role, place_assets};
 pub use clip::{
     AdditiveReference, Channel, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, Property,
     RootMotion, RootSpace,
@@ -62,12 +64,13 @@ pub use world::{
     OpaqueData, Resource, World, remap_list,
 };
 
-/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `resolve-state`,
+/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `place-assets`, `resolve-state`,
 /// `translate-world`), as every crate registers its own: a program builds its registry from these.
 pub fn register(reg: &mut pass::PassRegistry) {
     reg.register("select-lod", select_lod);
     reg.register("drop-optional", drop_optional);
     reg.register("place-spawn", place_spawn);
+    reg.register("place-assets", place_assets);
     reg.register("resolve-state", state::resolve_state);
     reg.register_requiring("translate-world", translate::translate_world, &[("by", "0,0,0")]);
 }

@@ -2,6 +2,7 @@
 //! [`Resource::NAME`]): what a coverage report lists, whether or not a reader, pass or writer mentions it. The types
 //! are listed once here; an architecture test holds the list to every `Component` and `Resource` core implements.
 
+use crate::asset::Asset;
 use crate::clip::{Clip, ClipBinding};
 use crate::collider::{Collider, Heightfield};
 use crate::components::{
@@ -53,7 +54,7 @@ declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
-        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, Clip, ClipBinding;
+        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, Clip, ClipBinding, Asset;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces,
 }
 
