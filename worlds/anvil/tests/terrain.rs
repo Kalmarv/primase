@@ -10,7 +10,8 @@ use primase_anvil::read::terrain::{TerrainRead, read_terrain};
 use primase_anvil::read::tnl::TERRAIN_NODE_LAYER;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::{Mesh, Transform, World};
+use primase_core::pbr::PbrMaterial;
+use primase_core::{ColorSpace, Mesh, Semantic, Stream, TexFormat, Texture, Transform, World};
 use primase_testdata::real_data;
 
 #[test]
@@ -53,12 +54,21 @@ fn the_campus_ground_reads_and_lowers() {
         .find(|t| (t.row, t.column) == (146, 73))
         .expect("node");
     let z = 5000.0 * f64::from(tile.heights[96 * 132 + 40]) / f64::from(1u32 << 20);
+    // the colour texture starts with node (146, 72)'s first block, as stored
+    let first_block = t
+        .tiles
+        .iter()
+        .find(|t| (t.row, t.column) == (146, 72))
+        .expect("node")
+        .colour[..8]
+        .to_vec();
     let pass = LowerAnvilTerrain {
         rect,
         step: 1,
         range: 5000.0,
         offset: 0.0,
         sample: CellPoint::Corner,
+        colour: ColorSpace::Srgb,
     };
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let mut report = RunReport::default();
@@ -85,6 +95,24 @@ fn the_campus_ground_reads_and_lowers() {
     assert!((f64::from(at[2]) - z).abs() < 1e-3, "{at:?} against {z}");
     // the notes' window around it spans 2308.8 to 2357.2 m
     assert!(p.iter().all(|q| (2300.0..2360.0).contains(&q[2])));
+    // drawn with the colour of nodes (146..=148, 72..=74), 384 x 384 texels, each sample at its texel's centre
+    let primitive = &mesh.primitives()[0];
+    let material = w
+        .get::<PbrMaterial>(primitive.material.expect("material"))
+        .expect("material");
+    let texture = w
+        .get::<Texture>(material.base_color_texture.expect("colour").texture)
+        .expect("texture");
+    assert_eq!(
+        (texture.width, texture.height, texture.format, texture.color_space),
+        (384, 384, TexFormat::Bc1, ColorSpace::Srgb)
+    );
+    assert_eq!(texture.levels[0].len(), 96 * 96 * 8);
+    assert_eq!(texture.levels[0][..8], first_block[..]);
+    let Some(Stream::F32x2(uv)) = primitive.streams.get(&Semantic::TexCoord(0)) else {
+        panic!("texture coordinates");
+    };
+    assert_eq!(uv[0], [0.5 / 384.0, 0.5 / 384.0]);
 }
 
 /// The ground at (x, y), bilinear between the 0.5 m samples of `t`'s level-8 tiles, at range 5000 and offset 0.

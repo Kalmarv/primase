@@ -1,5 +1,6 @@
 //! A terrain's nodes of one level read into a world: those of a TerrainNodeLayer whose squares meet a rectangle, each
-//! TNLChunk found through an [`Archive`] and its height block decoded ([`crate::read::tnl_code::heights`]).
+//! TNLChunk found through an [`Archive`], its height block decoded ([`crate::read::tnl_code::heights`]) and its colour
+//! tile's blocks interleaved as stored ([`crate::read::tnl_code::tile`]).
 //!
 //! Where the quadtree's square lies is the program's stated choice, as nothing in the layer or its chunks stores it: the
 //! Riders Republic notes place it on the world's GridLayout square ((-8192, -8192), side 16,384) by the colour tiles
@@ -107,7 +108,14 @@ pub fn read_terrain(
             .into_iter()
             .map(|v| i32::try_from(v).map_err(|_| Error::Range { position }))
             .collect::<Result<_, _>>()?;
-        tiles.push(TerrainTile { row, column, heights });
+        let colour =
+            tnl_code::tile(&chunk.blocks[1], false).map_err(|source| Error::Code { position, at, source })?;
+        tiles.push(TerrainTile {
+            row,
+            column,
+            heights,
+            colour,
+        });
     }
     let e = w.spawn();
     w.insert(

@@ -3,13 +3,14 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
 use primase_core::world::Resource;
 use primase_core::{
-    Collision, Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Stream, Surfaces,
-    Topology, Transform, World,
+    Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Stream,
+    Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
 };
 
-use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain};
+use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain, TerrainTile};
 
 /// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
 /// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
@@ -600,9 +601,13 @@ impl Pass for LowerAnvilFloor {
 /// (x0, y0, x1, y1), every `step`-th along each axis, two triangles to each square, placed once. A node's 128 x 128
 /// samples cover its square (the 4 more it stores are its +x and +y neighbours' first, which the census finds equal
 /// on all 173,740 same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
-/// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. Every option is
-/// required: the range (an f32 5000 in the Terrain entity, its meaning a tool claim) and the offset (0 by the Riders
-/// Republic notes' 101 props on one plaza) aren't stored as such, and the half-sample convention isn't tested.
+/// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. The mesh is drawn
+/// with a base-colour texture of the nodes' colour tiles as stored (their 32 x 32 BC1 blocks a node, side by side),
+/// each sample at the centre of its texel, in the colour space `colour` states; whether the game's terrain shading
+/// adds more (detail textures by the material raster) isn't read, so the material is that colour alone. Every option
+/// is required: the range (an f32 5000 in the Terrain entity, its meaning a tool claim) and the offset (0 by the Riders
+/// Republic notes' 101 props on one plaza) aren't stored as such, and neither the half-sample convention nor the colour
+/// tiles' colour space is established.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilTerrain {
     pub rect: [f64; 4],
@@ -610,18 +615,27 @@ pub struct LowerAnvilTerrain {
     pub range: f64,
     pub offset: f64,
     pub sample: CellPoint,
+    pub colour: ColorSpace,
 }
 
-/// A terrain tile's side in samples, and the samples of it its node covers.
+/// A terrain tile's side in samples (and in colour texels), the samples of it its node covers, and its colour tile's
+/// side in 4 x 4 blocks.
 const TERRAIN_TILE: usize = 132;
 const TERRAIN_CORE: u32 = 128;
+const TERRAIN_BLOCKS: usize = 33;
 
 impl LowerAnvilTerrain {
     /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `range=METRES`, `offset=METRES`, `sample=corner|centre`, all
     /// required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilTerrain, String> {
-        let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre";
-        let g = ground_options(o, &["range"], usage)?;
+        let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such),                      sample=corner|centre, colour=srgb|linear";
+        let g = ground_options(o, &["range", "colour"], usage)?;
+        let colour = match o.get("colour").map(String::as_str) {
+            Some("srgb") => ColorSpace::Srgb,
+            Some("linear") => ColorSpace::Linear,
+            Some(v) => return Err(format!("colour={v} is not srgb or linear")),
+            None => return Err(format!("colour is required: {usage}")),
+        };
         let range: f64 = o
             .get("range")
             .ok_or_else(|| format!("range is required: {usage}"))?
@@ -636,6 +650,7 @@ impl LowerAnvilTerrain {
             range,
             offset: g.offset,
             sample: g.sample,
+            colour,
         })
     }
 }
@@ -656,19 +671,33 @@ impl Pass for LowerAnvilTerrain {
             ("range".to_owned(), self.range.to_string()),
             ("offset".to_owned(), self.offset.to_string()),
             ("sample".to_owned(), sample.to_owned()),
+            (
+                "colour".to_owned(),
+                match self.colour {
+                    ColorSpace::Srgb => "srgb",
+                    ColorSpace::Linear => "linear",
+                }
+                .to_owned(),
+            ),
         ])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilTerrain::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Mesh::NAME, Instance::NAME, Transform::NAME]
+        &[
+            Mesh::NAME,
+            Instance::NAME,
+            Transform::NAME,
+            Texture::NAME,
+            PbrMaterial::NAME,
+        ]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilTerrain::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "ground heights from a stated range and offset"
+        "ground heights from a stated range and offset, drawn with its colour tiles alone"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
@@ -702,12 +731,21 @@ impl Pass for LowerAnvilTerrain {
                 log.omit("terrains with under 2 by 2 samples in the rectangle", 1);
                 continue;
             }
-            let tiles: BTreeMap<(u32, u32), &Vec<i32>> = t
+            let tiles: BTreeMap<(u32, u32), &TerrainTile> = t
                 .tiles
                 .iter()
-                .filter(|tile| tile.heights.len() == TERRAIN_TILE * TERRAIN_TILE)
-                .map(|tile| ((tile.row, tile.column), &tile.heights))
+                .filter(|tile| {
+                    tile.heights.len() == TERRAIN_TILE * TERRAIN_TILE
+                        && tile.colour.len() == TERRAIN_BLOCKS * TERRAIN_BLOCKS * 8
+                })
+                .map(|tile| ((tile.row, tile.column), tile))
                 .collect();
+            // the nodes the samples lie in: the texture holds their 128 x 128 texels, side by side
+            let (first_row, first_column) = (rows[0] / TERRAIN_CORE, columns[0] / TERRAIN_CORE);
+            let (node_rows, node_columns) = (
+                rows[rows.len() - 1] / TERRAIN_CORE - first_row + 1,
+                columns[columns.len() - 1] / TERRAIN_CORE - first_column + 1,
+            );
             let unit = self.range * 2f64.powi(level as i32 - 28);
             let mut positions = Vec::with_capacity(columns.len() * rows.len());
             for &gy in &rows {
@@ -717,7 +755,7 @@ impl Pass for LowerAnvilTerrain {
                     let tile = tiles
                         .get(&node)
                         .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
-                    let value = f64::from(tile[i * TERRAIN_TILE + j]);
+                    let value = f64::from(tile.heights[i * TERRAIN_TILE + j]);
                     let x = t.origin[0] + spacing * f64::from(gx) + shift;
                     let y = t.origin[1] + spacing * f64::from(gy) + shift;
                     positions.push(
@@ -739,22 +777,80 @@ impl Pass for LowerAnvilTerrain {
                     }
                 }
             }
+            // the colour: each node's first 32 x 32 blocks (its 128 x 128 texels), copied as stored
+            let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
+            let core_blocks = TERRAIN_CORE as usize / 4;
+            let mut blocks = Vec::with_capacity((texels_wide as usize / 4) * (texels_high as usize / 4) * 8);
+            for by in 0..node_rows as usize * core_blocks {
+                for bx in 0..node_columns as usize * core_blocks {
+                    let node = (
+                        first_row + (by / core_blocks) as u32,
+                        first_column + (bx / core_blocks) as u32,
+                    );
+                    let tile = tiles
+                        .get(&node)
+                        .ok_or_else(|| format!("node {node:?} not read"))?;
+                    let at = ((by % core_blocks) * TERRAIN_BLOCKS + bx % core_blocks) * 8;
+                    blocks.extend_from_slice(&tile.colour[at..at + 8]);
+                }
+            }
+            // each sample at its texel's centre
+            let mut uvs = Vec::with_capacity(positions.len());
+            for &gy in &rows {
+                for &gx in &columns {
+                    uvs.push([
+                        ((f64::from(gx - first_column * TERRAIN_CORE) + 0.5) / f64::from(texels_wide)) as f32,
+                        ((f64::from(gy - first_row * TERRAIN_CORE) + 0.5) / f64::from(texels_high)) as f32,
+                    ]);
+                }
+            }
             log.count("terrain nodes used", tiles.len() as u64);
             log.count("ground samples", positions.len() as u64);
             log.count("ground triangles", (indices.len() / 3) as u64);
+            log.count(
+                "ground colour texels",
+                u64::from(texels_wide) * u64::from(texels_high),
+            );
             log.approximate(
                 "ground samples at a stated range and offset",
                 positions.len() as u64,
             );
+            log.approximate("ground drawn with its colour tiles alone", 1);
+            let texture = w.spawn();
+            w.insert(
+                texture,
+                Texture {
+                    width: texels_wide,
+                    height: texels_high,
+                    format: TexFormat::Bc1,
+                    levels: vec![blocks],
+                    color_space: self.colour,
+                    role: TexRole::Color,
+                    normal: None,
+                },
+            );
+            let material = w.spawn();
+            w.insert(
+                material,
+                PbrMaterial {
+                    base_color_texture: Some(TextureRef {
+                        wrap: [Wrap::Clamp; 2],
+                        ..TextureRef::new(texture)
+                    }),
+                    metallic: 0.0,
+                    ..PbrMaterial::default()
+                },
+            );
             let mut streams = BTreeMap::new();
             streams.insert(Semantic::Position, Stream::F32x3(positions));
+            streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
             w.insert(
                 e,
                 Mesh::new(vec![Primitive {
                     topology: Topology::Triangles,
                     streams,
                     indices: Some(indices),
-                    material: None,
+                    material: Some(material),
                 }]),
             );
             let placed = w.spawn();
@@ -799,6 +895,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("range", "1"),
             ("offset", "0"),
             ("sample", "corner"),
+            ("colour", "srgb"),
         ],
     );
     reg.register_requiring(

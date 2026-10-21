@@ -229,6 +229,9 @@ pub struct TerrainTile {
     pub row: u32,
     pub column: u32,
     pub heights: Vec<i32>,
+    /// Its colour tile as stored: 33 x 33 BC1 blocks row by row (8 bytes each, two RGB565 words then sixteen 2-bit
+    /// indices), 132 x 132 texels, texel (i, j) at sample (i, j).
+    pub colour: Vec<u8>,
 }
 
 /// Terrain nodes of one level (`anvil.terrain`): their tiles, where the program states the quadtree's square lies
@@ -246,7 +249,11 @@ pub struct AnvilTerrain {
 impl Component for AnvilTerrain {
     const NAME: &'static str = "anvil.terrain";
     fn payload_bytes(&self) -> u64 {
-        let samples: usize = self.tiles.iter().map(|t| t.heights.len()).sum();
-        u64::try_from(samples * 4).unwrap_or(u64::MAX)
+        let bytes: usize = self
+            .tiles
+            .iter()
+            .map(|t| t.heights.len() * 4 + t.colour.len())
+            .sum();
+        u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
