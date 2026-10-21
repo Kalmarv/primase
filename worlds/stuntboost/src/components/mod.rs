@@ -404,13 +404,13 @@ impl Component for StuntboostAttributes {
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(primase_core::remap_list(&self.0, from).map(StuntboostAttributes))
     }
-    /// `None` for a primitive with no attribute.
+    /// Unchanged for a primitive with no attribute.
     fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
         let Some(named) = self.0.get(primitive) else {
             return Some(Err(format!("primitive {primitive} of {}", self.0.len())));
         };
         if named.is_empty() {
-            return None;
+            return Some(Ok(self.clone()));
         }
         let remapped: Result<BTreeMap<String, StuntboostAttribute>, String> = named
             .iter()

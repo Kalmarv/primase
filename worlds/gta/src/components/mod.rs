@@ -361,8 +361,12 @@ impl Component for GtaBlendStreams {
                 })
                 .collect()
         };
-        let Some(Some(b)) = self.0.get(primitive) else {
-            return None;
+        let Some(entry) = self.0.get(primitive) else {
+            return Some(Err(format!("primitive {primitive} of {}", self.0.len())));
+        };
+        // a geometry without blend streams: nothing to follow
+        let Some(b) = entry else {
+            return Some(Ok(self.clone()));
         };
         let remapped = (|| {
             Ok(BlendStreams {

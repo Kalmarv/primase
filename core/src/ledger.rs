@@ -613,7 +613,7 @@ mod tests {
         let moved = |w: &mut World| {
             let form = w.spawn();
             w.insert(form, Mesh::new(vec![prim(1)]));
-            w.move_components(form, Entity::from_index(0));
+            w.move_components(form, Entity::from_index(0)).unwrap();
         };
         assert_eq!(left_out(moved, vec![]), (Measure::Primitives, 2, 0));
         run(moved, vec![(Measure::Primitives, 2)]).unwrap();
@@ -656,7 +656,7 @@ mod tests {
         }
         fn moved(w: &mut World) -> Entity {
             let to = w.spawn();
-            w.move_components(Entity::from_index(0), to);
+            w.move_components(Entity::from_index(0), to).unwrap();
             for e in [Entity::from_index(1), Entity::from_index(2)] {
                 w.get_mut::<Instance>(e).unwrap().prototype = to;
             }

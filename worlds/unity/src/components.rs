@@ -66,6 +66,15 @@ impl Component for UnityMesh {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
+    /// The submesh each primitive is follows the rebuilt primitives.
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(
+            primase_core::remap_list(&self.drawn, from).map(|drawn| UnityMesh {
+                drawn,
+                ..self.clone()
+            }),
+        )
+    }
 
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         if self.mesh.path_id == 0 {
@@ -896,6 +905,23 @@ impl Component for UnityCollider {
 mod tests {
     use super::*;
     use crate::shader::fixture;
+
+    /// The submesh each primitive is follows a rebuild of the primitive list (one split in two, one dropped).
+    #[test]
+    fn a_meshs_submeshes_follow_its_primitives() {
+        let m = UnityMesh {
+            mesh: UnityObject {
+                file: "level1".into(),
+                path_id: 7,
+            },
+            submeshes: Some((2, 3)),
+            drawn: vec![2, 3, 4],
+        };
+        let r = m.remap_primitives(&[0, 0, 2]).unwrap().unwrap();
+        assert_eq!(r.drawn, [2, 2, 4]);
+        assert_eq!((r.mesh, r.submeshes), (m.mesh.clone(), m.submeshes));
+        assert!(m.remap_primitives(&[3]).unwrap().is_err());
+    }
 
     #[test]
     fn queue_tags_read_as_shaderlab_writes_them() {

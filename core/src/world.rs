@@ -78,19 +78,22 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     }
 
     /// The component after its entity's mesh primitives were rebuilt, for a component that holds something per
-    /// primitive: new primitive `i` comes from old primitive `from[i]` (a source may repeat, when a primitive is
-    /// split, or be absent, when one is dropped). `None`: the component does not follow primitives (the default).
-    /// An index the component does not have is an error. [`World::remap_primitives`] calls it; [`remap_list`] does
-    /// the work for a list with one entry per primitive.
+    /// primitive ([`Geometry::PerPrimitive`], [`Geometry::PerVertex`]): new primitive `i` comes from old primitive
+    /// `from[i]` (a source may repeat, when a primitive is split, or be absent, when one is dropped). Such a component
+    /// always answers (a value holding nothing per primitive answers with itself); `None`, the default, is for
+    /// components of [`Geometry::None`], and [`World::remap_primitives`] refuses a dependent component that gives it.
+    /// An index the component does not have is an error. [`remap_list`] does the work for a list with one entry per
+    /// primitive.
     fn remap_primitives(&self, _from: &[usize]) -> Option<Result<Self, String>> {
         None
     }
 
     /// The component after the vertices of its entity's mesh primitive `primitive` were compacted or reordered, for a
-    /// component that holds something per vertex: new vertex `i` of that primitive is old vertex `from[i]` (a source
-    /// may repeat or be absent). `None`: the component holds nothing per vertex of that primitive (the default). An
-    /// index the component does not have is an error. [`World::remap_vertices`] calls it; every pass that compacts or
-    /// reorders a primitive's vertices calls that. After a rebuild of the primitive list
+    /// component that holds something per vertex ([`Geometry::PerVertex`]): new vertex `i` of that primitive is old
+    /// vertex `from[i]` (a source may repeat or be absent). Such a component always answers (with itself when it holds
+    /// nothing for that primitive); `None`, the default, is for the others, and [`World::remap_vertices`] refuses a
+    /// per-vertex component that gives it. An index the component does not have is an error. Every pass that compacts
+    /// or reorders a primitive's vertices calls [`World::remap_vertices`]. After a rebuild of the primitive list
     /// ([`World::rebuild_primitives`], [`Component::remap_primitives`]) a primitive's per-vertex data is its source
     /// primitive's, and the vertex map is relative to that source.
     fn remap_vertices(&self, _primitive: usize, _from: &[u32]) -> Option<Result<Self, String>> {
@@ -277,6 +280,7 @@ trait AnyColumn: Any + Send + Sync {
     fn contains(&self, e: Entity) -> bool;
     fn remove_entity(&mut self, e: Entity);
     fn version(&self) -> u32;
+    fn geometry(&self) -> Geometry;
     /// `None` when the entity has no such component; else its JSON view.
     fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>>;
     /// Every value's `Component::verify`, and that each entity its `Component::references` names is alive, as
@@ -336,6 +340,9 @@ impl<T: Component> AnyColumn for Column<T> {
     }
     fn version(&self) -> u32 {
         T::VERSION
+    }
+    fn geometry(&self) -> Geometry {
+        T::GEOMETRY
     }
     fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>> {
         self.values.get(&e).map(Component::to_json)
@@ -652,10 +659,33 @@ impl World {
 
     /// Every component of `from`, typed and opaque, moved onto `to`, replacing `to`'s of the same name (`to` keeps
     /// the others), then `from` despawned: for a pass that swaps one form of an entity for another without knowing
-    /// its components (`select-lod`). False, and nothing changed, unless both are alive and differ.
-    pub fn move_components(&mut self, from: Entity, to: Entity) -> bool {
+    /// its components (`select-lod`). `Ok(false)`, and nothing changed, unless both are alive and differ.
+    ///
+    /// Refused, changing nothing, when it would leave data describing one mesh beside another
+    /// ([`Component::GEOMETRY`]): `from` brings a mesh (`core.mesh` or `core.mesh_file`) while `to` keeps such data
+    /// `from` has none of (take `to`'s away first: [`World::remove_mesh`]), or `from` brings such data without a mesh
+    /// onto a `to` that has one.
+    pub fn move_components(&mut self, from: Entity, to: Entity) -> Result<bool, String> {
         if from == to || !self.alive.contains(&from) || !self.alive.contains(&to) {
-            return false;
+            return Ok(false);
+        }
+        let has_mesh = |e| self.has::<crate::Mesh>(e) || self.has::<crate::MeshFile>(e);
+        let (from_mesh, to_mesh) = (has_mesh(from), has_mesh(to));
+        let mut stale: Vec<&'static str> = self
+            .columns
+            .values()
+            .filter(|c| c.geometry().describes_mesh())
+            .filter(|c| {
+                let (at_from, at_to) = (c.contains(from), c.contains(to));
+                (from_mesh && at_to && !at_from) || (!from_mesh && to_mesh && at_from)
+            })
+            .map(|c| c.name())
+            .collect();
+        if !stale.is_empty() {
+            stale.sort_unstable();
+            return Err(format!(
+                "moving {from:?} onto {to:?} would leave data describing one mesh beside another: {stale:?}"
+            ));
         }
         for c in self.columns.values_mut() {
             c.move_entity(from, to);
@@ -668,7 +698,7 @@ impl World {
         self.alive.remove(&from);
         self.forget_in_resources(|x| x == from);
         self.note_copy(from, to);
-        true
+        Ok(true)
     }
 
     /// A new entity with a copy of every typed and opaque component of `e`; `None` when `e` is not alive. Shallow:
@@ -767,6 +797,13 @@ impl World {
         columns.sort_by_key(|(_, c)| c.name());
         for (name, c) in columns {
             match c.remapped(e, from) {
+                None if c.contains(e) && c.geometry().describes_mesh() => {
+                    return Err(format!(
+                        "{}: holds data per primitive ({:?}) but does not follow a change to them",
+                        c.name(),
+                        c.geometry()
+                    ));
+                }
                 None => {}
                 Some(Ok(v)) => done.push((*name, v)),
                 Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
@@ -807,6 +844,12 @@ impl World {
         columns.sort_by_key(|(_, c)| c.name());
         for (name, c) in columns {
             match c.vertices_remapped(e, primitive, from) {
+                None if c.contains(e) && c.geometry() == Geometry::PerVertex => {
+                    return Err(format!(
+                        "{}: holds data per vertex but does not follow a change to them",
+                        c.name()
+                    ));
+                }
                 None => {}
                 Some(Ok(v)) => done.push((*name, v)),
                 Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
@@ -820,8 +863,8 @@ impl World {
         Ok(())
     }
 
-    /// Take `e`'s mesh away with every per-primitive component it has (each typed component that follows its
-    /// primitives, [`Component::remap_primitives`]) and its file link (`core.mesh_file`, which a load would restore it
+    /// Take `e`'s mesh away with every component describing it (each typed component whose [`Component::GEOMETRY`]
+    /// says it holds something per primitive or vertex) and its file link (`core.mesh_file`, which a load would restore it
     /// from): for an entity left drawing nothing, whose per-primitive data would describe no primitive, or one whose
     /// geometry another replaces (`select-lod`). A mesh still only in its file (`core.mesh_file` without `core.mesh`, as
     /// a world is before its load) goes the same way, with the per-primitive data describing it. Returns the names
@@ -837,7 +880,7 @@ impl World {
         let mut per_primitive: Vec<(&'static str, TypeId)> = self
             .columns
             .iter()
-            .filter(|(_, c)| c.remapped(e, &[]).is_some())
+            .filter(|(_, c)| c.contains(e) && c.geometry().describes_mesh())
             .map(|(k, c)| (c.name(), *k))
             .collect();
         per_primitive.sort();
@@ -1758,6 +1801,93 @@ mod tests {
         }
     }
 
+    /// States it holds something per primitive (or per vertex) but does not answer an edit: what a component that
+    /// forgot to follow its mesh looks like to the World.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Unanswering(crate::Geometry);
+    impl Component for Unanswering {
+        const NAME: &'static str = "test.unanswering";
+        const GEOMETRY: crate::Geometry = crate::Geometry::PerVertex;
+        fn remap_primitives(&self, _from: &[usize]) -> Option<Result<Self, String>> {
+            (self.0 != crate::Geometry::PerPrimitive).then(|| Ok(self.clone()))
+        }
+        fn remap_vertices(&self, _primitive: usize, _from: &[u32]) -> Option<Result<Self, String>> {
+            None
+        }
+    }
+
+    fn points(n: usize) -> crate::Primitive {
+        crate::Primitive {
+            topology: crate::Topology::Points,
+            streams: [(crate::Semantic::Position, crate::Stream::F32x3(vec![[0.0; 3]; n]))].into(),
+            indices: None,
+            material: None,
+        }
+    }
+
+    /// A component stating it describes the mesh must answer the edits it describes: one that doesn't is refused,
+    /// naming it, and nothing changes. One stating `None` is kept as it is.
+    #[test]
+    fn edits_refuse_a_dependent_component_that_does_not_answer() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, crate::Mesh::new(vec![points(2), points(2)]));
+        w.insert(e, A(7));
+        // per primitive: a rebuild of the list is refused
+        w.insert(e, Unanswering(crate::Geometry::PerPrimitive));
+        let err = w
+            .rebuild_primitives(e, |m| Ok((vec![m.primitives()[1].clone()], vec![1])))
+            .unwrap_err();
+        assert!(
+            err.contains("test.unanswering") && err.contains("per primitive"),
+            "{err}"
+        );
+        assert_eq!(
+            w.get::<crate::Mesh>(e).unwrap().primitives().len(),
+            2,
+            "nothing changed"
+        );
+        // per vertex: it answers the rebuild, but a compaction is refused
+        w.insert(e, Unanswering(crate::Geometry::PerVertex));
+        let err = w.remap_vertices(e, 0, &[1]).unwrap_err();
+        assert!(
+            err.contains("test.unanswering") && err.contains("per vertex"),
+            "{err}"
+        );
+        // a component of Geometry::None follows nothing and is never refused
+        w.remove::<Unanswering>(e);
+        w.rebuild_primitives(e, |m| Ok((vec![m.primitives()[1].clone()], vec![1])))
+            .unwrap();
+        w.remap_vertices(e, 0, &[1]).unwrap();
+        assert_eq!(w.get::<A>(e), Some(&A(7)));
+    }
+
+    /// Moving one form onto another can't leave data describing one mesh beside another: `from` bringing a mesh
+    /// while `to` keeps per-primitive data `from` lacks, or `from` bringing such data without a mesh onto `to`'s mesh,
+    /// is refused, changing nothing. With `to`'s mesh taken away first it moves.
+    #[test]
+    fn a_move_leaving_stale_mesh_data_is_refused() {
+        use crate::{MaterialVariants, Mesh};
+        let mut w = World::new();
+        let (to, from) = (w.spawn(), w.spawn());
+        w.insert(to, Mesh::new(vec![points(1)]));
+        w.insert(to, MaterialVariants(vec![Default::default()]));
+        w.insert(from, Mesh::new(vec![points(3), points(3)]));
+        let err = w.move_components(from, to).unwrap_err();
+        assert!(err.contains("core.material_variants"), "{err}");
+        assert!(w.is_alive(from) && w.get::<Mesh>(to).unwrap().primitives().len() == 1);
+        // data without a mesh onto a mesh
+        let bare = w.spawn();
+        w.insert(bare, MaterialVariants(vec![]));
+        let err = w.move_components(bare, to).unwrap_err();
+        assert!(err.contains("core.material_variants"), "{err}");
+        assert!(w.is_alive(bare));
+        // the old geometry taken away first: the move goes through
+        w.remove_mesh(to).unwrap();
+        assert!(w.move_components(from, to).unwrap());
+        assert_eq!(w.get::<Mesh>(to).unwrap().primitives().len(), 2);
+    }
+
     /// A primitive's vertices compacted: a per-vertex component follows them (after a rebuild that kept only
     /// primitive 1, from its source primitive's values); one that holds nothing per vertex is kept; an index the
     /// component lacks fails naming it, and an opaque component refuses, each changing nothing.
@@ -1898,15 +2028,15 @@ mod tests {
             data: OpaqueData::Bytes(vec![3, 2, 1]),
         };
         w.insert_opaque(from, "game.form", opaque.clone());
-        assert!(!w.move_components(from, from));
-        assert!(!w.move_components(from, Entity::from_index(999)));
+        assert!(!w.move_components(from, from).unwrap());
+        assert!(!w.move_components(from, Entity::from_index(999)).unwrap());
         assert_eq!(w.get::<A>(from), Some(&A(9)), "a refused move changes nothing");
-        assert!(w.move_components(from, to));
+        assert!(w.move_components(from, to).unwrap());
         assert!(!w.is_alive(from));
         assert_eq!(w.get::<A>(to), Some(&A(9)));
         assert_eq!(w.get::<B>(to), Some(&B("kept")));
         assert_eq!(w.get_opaque(to, "game.form"), Some(&opaque));
-        assert!(!w.move_components(from, to));
+        assert!(!w.move_components(from, to).unwrap());
         assert_ne!(w.spawn(), from, "the moved-from id is not reused");
     }
 

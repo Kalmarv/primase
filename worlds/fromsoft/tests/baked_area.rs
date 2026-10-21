@@ -193,7 +193,7 @@ fn respawn_materials_reversed(world: &mut World) {
     let mut moved = BTreeMap::new();
     for &old in sources.iter().rev() {
         let new = world.spawn();
-        assert!(world.move_components(old, new));
+        assert!(world.move_components(old, new).unwrap());
         moved.insert(old, new);
     }
     let meshes: Vec<_> = world.iter::<Mesh>().map(|(e, _)| e).collect();

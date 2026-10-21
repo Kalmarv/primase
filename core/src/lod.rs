@@ -234,7 +234,7 @@ impl Pass for SelectLod {
                     for name in w.remove_mesh(proto)? {
                         log.record_removed(name);
                     }
-                    let moved = w.move_components(f.form, proto);
+                    let moved = w.move_components(f.form, proto)?;
                     debug_assert!(moved, "checked alive above");
                     let draws = w.has::<Mesh>(proto) || w.has::<MeshFile>(proto);
                     log.count(

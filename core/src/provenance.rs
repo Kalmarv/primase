@@ -106,10 +106,10 @@ impl Component for Provenance {
         crate::json::to_value(self).map(Some)
     }
     /// Origins present and unrepeated; parts index them and, when the entity has a mesh, number its primitives.
-    /// The parts follow the rebuilt primitives; without parts the provenance is not per primitive.
+    /// The parts follow the rebuilt primitives; without parts the provenance holds nothing per primitive and stays.
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         if self.parts.is_empty() {
-            return None;
+            return Some(Ok(self.clone()));
         }
         Some(crate::remap_list(&self.parts, from).map(|parts| Provenance {
             parts,

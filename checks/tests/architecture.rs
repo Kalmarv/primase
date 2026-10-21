@@ -31,6 +31,8 @@
 //!   real-data registry (`toolkit/testdata/src/inputs.rs`), every declared name is read somewhere, and
 //!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry. Names are whole string
 //!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
+//! - `component_geometry_hooks`: every component's stated geometry (`const GEOMETRY`) matches the remap hooks it
+//!   implements, in every crate, tests included.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
 //!   decodes bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file
 //!   says are there and are not are its error, never a panic or a wrapped size.
@@ -1460,6 +1462,70 @@ fn core_names_listed() {
         missing.is_empty() && extra.is_empty(),
         "core/src/names.rs lists other types than core implements as components and resources: not listed {missing:?}, \
          listed but not implemented {extra:?}"
+    );
+}
+
+/// Every component's stated geometry ([`primase_core::Geometry`], `const GEOMETRY`) matches the hooks it implements,
+/// in every crate, tests included: `PerPrimitive` implements `remap_primitives`, `PerVertex` that and
+/// `remap_vertices`, `None` neither. The World refuses at run time a dependent component that does not answer an
+/// edit; this sees a missing hook before an edit reaches one.
+#[test]
+fn component_geometry_hooks() {
+    let mut wrong = Vec::new();
+    let mut seen = 0;
+    for m in members() {
+        for f in rust_files(&root().join(&m.path)) {
+            let t = lex(&read(&root().join(&f)));
+            for i in 1..t.len().saturating_sub(1) {
+                if !(ident(&t[i], "for") && ident(&t[i - 1], "Component")) {
+                    continue;
+                }
+                let Some(open) = (i..t.len()).find(|&k| punct(&t[k], '{')) else {
+                    continue;
+                };
+                let body = &t[open..block_end(&t, open)];
+                let ty = match &t[i + 1] {
+                    Tok::Ident(ty) => ty.clone(),
+                    other => format!("{other:?}"),
+                };
+                let declared = body.iter().position(|x| ident(x, "GEOMETRY")).and_then(|g| {
+                    body[g..]
+                        .iter()
+                        .take_while(|x| !punct(x, ';'))
+                        .filter_map(|x| match x {
+                            Tok::Ident(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .last()
+                });
+                let has = |hook: &str| body.windows(2).any(|w| ident(&w[0], "fn") && ident(&w[1], hook));
+                let hooks = (has("remap_primitives"), has("remap_vertices"));
+                let expected = match declared {
+                    Some("None") => (false, false),
+                    Some("PerPrimitive") => (true, false),
+                    Some("PerVertex") => (true, true),
+                    other => {
+                        wrong.push(format!("{f}: {ty} states no geometry ({other:?})"));
+                        continue;
+                    }
+                };
+                seen += 1;
+                if hooks != expected {
+                    wrong.push(format!(
+                        "{f}: {ty} states {} but implements remap_primitives {}, remap_vertices {}",
+                        declared.unwrap_or("?"),
+                        hooks.0,
+                        hooks.1
+                    ));
+                }
+            }
+        }
+    }
+    assert!(seen > 100, "only {seen} components found: the scan is broken");
+    assert!(
+        wrong.is_empty(),
+        "components whose stated geometry and hooks disagree:\n  {}",
+        wrong.join("\n  ")
     );
 }
 

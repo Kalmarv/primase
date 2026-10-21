@@ -61,6 +61,29 @@ impl Component for BlendOpacity {
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(primase_core::remap_list(&self.0, from).map(BlendOpacity))
     }
+    /// The opacities follow the primitive's compacted or reordered vertices; a primitive that isn't blended stays.
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        let Some(entry) = self.0.get(primitive) else {
+            return Some(Err(format!("primitive {primitive} of {}", self.0.len())));
+        };
+        let Some(opacity) = entry else {
+            return Some(Ok(self.clone()));
+        };
+        let gathered: Result<Vec<f32>, String> = from
+            .iter()
+            .map(|&i| {
+                usize::try_from(i)
+                    .ok()
+                    .and_then(|i| opacity.get(i).copied())
+                    .ok_or_else(|| format!("vertex {i} of {}", opacity.len()))
+            })
+            .collect();
+        Some(gathered.map(|o| {
+            let mut out = self.clone();
+            out.0[primitive] = Some(o);
+            out
+        }))
+    }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let mesh = w.get::<Mesh>(e).ok_or("blend opacity without core.mesh")?;
         if self.0.len() != mesh.primitives().len() {
@@ -85,5 +108,22 @@ impl Component for BlendOpacity {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Per-vertex opacity follows a compaction of its primitive's vertices; a primitive that isn't blended stays, and a
+    /// vertex the list lacks is an error.
+    #[test]
+    fn opacity_follows_compacted_vertices() {
+        let o = BlendOpacity(vec![None, Some(vec![0.0, 0.5, 1.0])]);
+        let r = o.remap_vertices(1, &[2, 0]).unwrap().unwrap();
+        assert_eq!(r.0, [None, Some(vec![1.0, 0.0])]);
+        assert_eq!(o.remap_vertices(0, &[0]).unwrap().unwrap(), o);
+        assert!(o.remap_vertices(1, &[3]).unwrap().is_err());
+        assert!(o.remap_vertices(2, &[0]).unwrap().is_err());
     }
 }
