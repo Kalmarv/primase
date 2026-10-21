@@ -878,48 +878,63 @@ impl StoredMesh {
         Ok(out)
     }
 
-    /// Each range's material: its descriptor's Material ClassID, refused unless the range's `MeshPrimitive` entry and
-    /// descriptor agree with it (vertex base and count, first index, triangle count; the descriptor's count is the
-    /// range's low 16 bits).
+    /// Each range's material: its descriptor's Material ClassID, refused unless the descriptor's count is the range's
+    /// vertex count's low 16 bits and the range has a `MeshPrimitive` entry. In the ranged layout the entries
+    /// themselves aren't checked against the ranges (see [`StoredMesh::stale_entries`]): on some meshes they describe
+    /// another layout, where the range records, the descriptors and RRAssetStudio agree on the ranges. In the inline
+    /// layout, which has no range records, they must agree.
     pub fn materials(&self) -> Result<Vec<u64>, Error> {
         let ranges = self.ranges()?;
         let primitives = self.primitives();
         let mut out = Vec::with_capacity(ranges.len());
         for (k, r) in ranges.iter().enumerate() {
-            let (Some(p), Some(d)) = (primitives.get(k), self.material_list.descriptors.get(k)) else {
+            let (Some(_), Some(d)) = (primitives.get(k), self.material_list.descriptors.get(k)) else {
                 return Err(Error::Tail {
                     what: "ranges",
                     why: format!("no entry for range {k}"),
                 });
             };
-            let stored = [
-                p.vertex_base,
-                p.vertex_count,
-                p.first_index,
-                p.triangle_count,
-                u32::from(d.vertex_count),
-            ]
-            .map(|x| usize::try_from(x).unwrap_or(usize::MAX));
-            let vertices = r.vertices.len();
-            let range = [
-                r.vertices.start,
-                vertices,
-                r.indices.start,
-                r.indices.len() / 3,
-                vertices & 0xFFFF,
-            ];
-            if stored != range {
+            let count = r.vertices.len() & 0xFFFF;
+            if usize::from(d.vertex_count) != count {
                 return Err(Error::Tail {
                     what: "ranges",
                     why: format!(
-                        "range {k}: stored (vertex base, vertex count, first index, triangle count, descriptor's \
-                         count) {stored:?}, the range's {range:?}"
+                        "range {k}: the descriptor's count {}, the range's {count} (low 16 bits)",
+                        d.vertex_count
                     ),
                 });
             }
             out.push(d.material);
         }
+        // the inline layout has no range records: its entries are the ranges' only statement, so they must agree
+        if let (Layout::Inline(_), Some(why)) = (&self.layout, self.stale_entries()?) {
+            return Err(Error::Tail { what: "ranges", why });
+        }
         Ok(out)
+    }
+
+    /// Where the `MeshPrimitive` entries disagree with the ranges (vertex base and count, first index, triangle count):
+    /// the first range that does, and how; `None` where they agree (on all but a few dozen of the game's meshes).
+    pub fn stale_entries(&self) -> Result<Option<String>, Error> {
+        let ranges = self.ranges()?;
+        let primitives = self.primitives();
+        for (k, (r, p)) in ranges.iter().zip(primitives).enumerate() {
+            let stored = [p.vertex_base, p.vertex_count, p.first_index, p.triangle_count]
+                .map(|x| usize::try_from(x).unwrap_or(usize::MAX));
+            let range = [
+                r.vertices.start,
+                r.vertices.len(),
+                r.indices.start,
+                r.indices.len() / 3,
+            ];
+            if stored != range {
+                return Ok(Some(format!(
+                    "range {k}: entry (vertex base, vertex count, first index, triangle count) {stored:?}, the \
+                     range's {range:?}"
+                )));
+            }
+        }
+        Ok(None)
     }
 
     /// The indices as vertex indices: in the ranged layout each range's counted from its vertex base, in the inline
@@ -1103,15 +1118,16 @@ mod tests {
             StoredMesh::parse(&ranged(6, &[0, 1, 2, 0, 2, 1], &[(0, 0), (3, 3)], &[11, 22])).expect("parse");
         assert_eq!(m.triangles().expect("read"), [[0, 1, 2], [3, 5, 4]]);
         assert_eq!(m.materials().expect("materials"), [11, 22]);
-        // a MeshPrimitive entry or a descriptor's count disagreeing with its range
-        let mut wrong = m.clone();
-        if let Layout::Ranged(r) = &mut wrong.layout {
+        assert_eq!(m.stale_entries().expect("entries"), None);
+        // MeshPrimitive entries disagreeing with the ranges: kept as stored and reported, the ranges read
+        let mut stale = m.clone();
+        if let Layout::Ranged(r) = &mut stale.layout {
+            r.primitives[0].vertex_count = 72;
             r.primitives[1].vertex_base = 2;
         }
-        assert!(matches!(
-            wrong.materials(),
-            Err(Error::Tail { what: "ranges", .. })
-        ));
+        assert_eq!(stale.materials().expect("materials"), [11, 22]);
+        assert!(stale.stale_entries().expect("entries").is_some());
+        // a descriptor's count disagreeing with its range: refused
         let mut wrong = m;
         wrong.material_list.descriptors[0].vertex_count = 4;
         assert!(matches!(

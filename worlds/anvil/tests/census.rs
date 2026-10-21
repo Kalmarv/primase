@@ -496,6 +496,9 @@ fn census_forge(
                 })
                 .map(|m| {
                     levels.meshes.insert(r.class_id, m.bounds);
+                    if m.stale_entries().is_ok_and(|e| e.is_some()) {
+                        tally.outcome("MeshPrimitive entries other than the ranges");
+                    }
                     let (layout, first_byte) = match &m.layout {
                         Layout::Ranged(r) => ("ranged", r.mesh_data[0]),
                         Layout::Inline(i) => ("inline", i.declaration[0]),
