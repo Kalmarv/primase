@@ -22,6 +22,15 @@
 //! evaluated per vertex then interpolated (the core blend interpolates channels, then evaluates): both are named
 //! approximations of the lowering pass, not of this arithmetic.
 //!
+//! **Vertex colour.** The materials made here take `COLOR_0` as the layers they come from do
+//! ([`primase_core::VertexColor`]): an overlay copy of a layer marked Ignored is Ignored (a Tex2 layer is: its
+//! colour factor is not lowered), so `lower-tint-reskate` does not read the primitive's `COLOR_0` ramp as a tint on it;
+//! a black base (a null slot 0) and the black darkening overlay are Ignored (there is no colour to tint); and when the
+//! weights are read from `COLOR_0` itself, every material made is Ignored (the stream is the weights there, not a
+//! colour); a base layer that took it is copied (once per material) and the copy marked, since the layer's material
+//! may be drawn elsewhere and keeps its colour there. A layer with no mark keeps taking `COLOR_0` as a colour, as
+//! before. The counts are logged.
+//!
 //! The chain needs the overlays drawn in slot order, and the game does not draw a surface's overlapping decal
 //! sections in their section order (measured: three coplanar overlays in all six section orders gave four
 //! different results, matching neither section nor material-key order, the same from every view). Where two or
@@ -36,11 +45,24 @@
 //! Runtime: the in-game results and gates of this lowering are on ReSkate v2.1.0-pre (the latest release, the
 //! official runtime for it) with maps compiled by ReSkate Studio 20261012.
 
-use primase_core::{Entity, Mesh, World};
+use primase_core::{Entity, Mesh, Semantic, VertexColor, World, uses_color0};
 
 pub use crate::components::layered::{BlendOpacity, VertexBlend};
 
 use crate::decal::decal_opacity;
+
+/// What the materials made from the blends do with `COLOR_0` ([`VertexColor`]), counted for the log.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ColourCarried {
+    /// Overlay copies marked [`VertexColor::Ignored`]: their layer says so, they are black, or the weights are
+    /// `COLOR_0`.
+    overlays_ignored: u64,
+    /// Black base layers (a null slot 0) marked Ignored.
+    black_marked: u64,
+    /// Copies of base layer materials that take `COLOR_0` as a colour, made Ignored because the weights are in it
+    /// (one per source material: the source itself may be drawn elsewhere and keeps its colour).
+    base_copies: u64,
+}
 
 /// What an overlay draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -599,6 +621,9 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         log.count(area, counts.overlapping_area.round() as u64);
         // ---- materials: base = slot 0's material (black when null), overlays = decal copies
         let mut made: BTreeMap<(Entity, Option<OverlayLayer>), Entity> = BTreeMap::new();
+        let mut carried = ColourCarried::default();
+        // per base layer material taken as a colour while the weights are in COLOR_0: its copy that is not
+        let mut ignored_bases: BTreeMap<Entity, Entity> = BTreeMap::new();
         for (_, parts) in &plans {
             for (_, _, _, what) in parts {
                 let Some((m, layer)) = *what else { continue };
@@ -610,12 +635,31 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                     .get::<SkateMaterial>(m)
                     .map(|s| s.key.clone())
                     .unwrap_or_default();
+                // COLOR_0 as the weights is not a colour: no material made from the blend takes it as one
+                let weights_in_color0 = l.reads(Semantic::Color(0));
                 let entity = match layer {
                     None => match &l.layers[0] {
+                        Some(layer0) if weights_in_color0 && uses_color0(world, layer0.material) => {
+                            // the layer's material is shared (an ordinary primitive, another blend whose weights
+                            // are elsewhere may draw it and keep its colour): this use gets a copy of its own
+                            *ignored_bases.entry(layer0.material).or_insert_with(|| {
+                                let copy = world.spawn();
+                                world.copy_components(layer0.material, copy);
+                                if let Some(mut s) = world.get::<SkateMaterial>(copy).cloned() {
+                                    s.key = format!("{}~base", s.key);
+                                    world.insert(copy, s);
+                                }
+                                world.insert(copy, VertexColor::Ignored);
+                                carried.base_copies += 1;
+                                copy
+                            })
+                        }
                         Some(layer0) => layer0.material,
                         None => {
                             let e = world.spawn();
                             world.insert(e, black(format!("{key}~base"), MaterialClass::Opaque));
+                            world.insert(e, VertexColor::Ignored);
+                            carried.black_marked += 1;
                             e
                         }
                     },
@@ -630,10 +674,14 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                                 (None, "~darkening".to_owned(), VertexBlend::Darkening)
                             }
                         };
-                        let mut s = match src.and_then(|s| world.get::<SkateMaterial>(s).cloned()) {
-                            Some(s) => s,
-                            None => black(String::new(), MaterialClass::Decal),
-                        };
+                        // the copy takes COLOR_0 as its layer does; a black one (a null slot, the darkening) has no
+                        // colour to tint
+                        let (mut s, layer_ignores) =
+                            match src.and_then(|l| Some((l, world.get::<SkateMaterial>(l).cloned()?))) {
+                                Some((l, s)) => (s, !uses_color0(world, l)),
+                                None => (black(String::new(), MaterialClass::Decal), true),
+                            };
+                        let ignores = weights_in_color0 || layer_ignores;
                         s.key = format!("{key}{tag}");
                         s.class = MaterialClass::Decal;
                         s.domain = Some(Domain::Decal);
@@ -641,12 +689,28 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                         let e = world.spawn();
                         world.insert(e, s);
                         world.insert(e, mark);
+                        if ignores {
+                            world.insert(e, VertexColor::Ignored);
+                            carried.overlays_ignored += 1;
+                        }
                         e
                     }
                 };
                 made.insert((m, layer), entity);
             }
         }
+        log.count(
+            "overlay materials that do not take COLOR_0 as a colour (their layer's, black, or the weights are in it)",
+            carried.overlays_ignored,
+        );
+        log.count(
+            "black base materials that do not take COLOR_0 as a colour",
+            carried.black_marked,
+        );
+        log.count(
+            "base material copies that do not take COLOR_0 as a colour (the original takes it, the weights are in it)",
+            carried.base_copies,
+        );
         // ---- apply
         for ((entity, parts), (_, from)) in plans.into_iter().zip(remaps) {
             let mut primitives = Vec::new();

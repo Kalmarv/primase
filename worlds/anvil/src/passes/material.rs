@@ -137,6 +137,15 @@
 //! cut-out and 40 solid Tex1 and Wind Materials), else opaque; 1 and 6 (additive-looking) aren't lowered, drawn
 //! opaque, reported.
 //!
+//! **Decals1 drawn blended is a decal.** A Material of `MAD_Decals1` or `MAD_Decals1_Graffiti` whose lowered alpha is
+//! blended (`alpha=prelude` and its BlendMode 4) gets `core.draw_order` layer Decal at the queue of the deferred decals
+//! (`lower-anvil-decals`), so a consumer keeps it blended over the surface beneath it, biased and shadowless, and does
+//! not cut it out. The reason is the template's own: its pixel stage writes the albedo's alpha to the G-buffer
+//! (docs/material-spec.md §13.3, o0.w and o2.w of every permutation), which is what the engine's decals do to the
+//! surface under them, and BlendMode 4 is the blend the Material states; the same template with BlendMode 0 and an
+//! alpha test (the graffiti Materials) is a cutout and stays a mask. Not checked in the running game. A forced
+//! `alpha=opaque` or `alpha=mask` lowers none of them as blended, so none gets the layer.
+//!
 //! Every option is the program's: `underground-view` and `fake-river-s` state what the static export takes for a view
 //! and a vertex value the shaders read; the normal map's green sign against glTF's isn't established, nor the alpha test's
 //! reference (alpha=mask states one; alpha=prelude the prelude's reading), nor what the game binds for a texture a Material leaves unset (unset=white: the
@@ -149,12 +158,13 @@ use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, W
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Name, NormalBasis,
-    NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole, Texture,
-    VertexColor, World,
+    ColorSpace, Component, DrawLayer, DrawOrder, Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile,
+    Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole,
+    Texture, VertexColor, World,
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
+use super::decals::DECAL_QUEUE;
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
 use crate::components::{
     AnvilMaterial, AnvilTextureMap, AnvilWorldUv, MaterialBinding, MaterialFlags, MaterialValue,
@@ -1113,6 +1123,7 @@ impl Pass for LowerAnvilMaterial {
             LayeredMaterial::NAME,
             Texture::NAME,
             VertexColor::NAME,
+            DrawOrder::NAME,
             Name::NAME,
             AnvilWorldUv::NAME,
         ]
@@ -1949,6 +1960,15 @@ impl Pass for LowerAnvilMaterial {
                 }
             };
             if !layered {
+                if matches!(name.as_str(), "MAD_Decals1" | "MAD_Decals1_Graffiti")
+                    && pbr.alpha_mode == AlphaMode::Blend
+                {
+                    w.insert(e, DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE));
+                    log.count(
+                        "Decals1 Materials drawn blended (BlendMode 4), in the decal layer",
+                        1,
+                    );
+                }
                 w.insert(e, pbr);
             }
             if !takes_colour {
@@ -2571,5 +2591,106 @@ mod tests {
         assert!(uv_transform(&[2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.8727, 0.0], ShaderUv::TexCoord).is_err());
         assert!(uv_transform(&[1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.8727, 0.0], ShaderUv::TexCoord).is_err());
         assert!(uv_transform(&[1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], ShaderUv::TexCoord).is_err());
+    }
+
+    /// A Material of `template` with its layout's (`TEX1`'s or `DECALS1`'s) properties all 0 (and the graffiti's
+    /// `EmissivePower`), the prelude's
+    /// `BlendMode`, `AlphaTestValue` and `AlphaTestEnabled` as given; lowered with `alpha`.
+    fn lowered(
+        template: &str,
+        blend_mode: u32,
+        test: u8,
+        enabled: u8,
+        alpha: AlphaChoice,
+    ) -> (World, Entity, PassLog) {
+        let mut w = World::new();
+        let e = w.spawn();
+        let mut reads: Vec<(u32, u32)> = if template == "MAD_Tex1" { TEX1 } else { DECALS1 }.reads.to_vec();
+        reads.push(DECALS1_GRAFFITI_EMISSIVE_POWER);
+        let mut booleans = [0; 35];
+        booleans[MaterialFlags::ALPHA_TEST_ENABLED] = enabled;
+        w.insert(
+            e,
+            AnvilMaterial {
+                index_id: 1,
+                template: None,
+                template_name: Some(template.to_owned()),
+                bindings: reads
+                    .iter()
+                    .map(|&(at, key)| (key, MaterialBinding::Scalar { vec4: at }))
+                    .collect(),
+                values: reads
+                    .iter()
+                    .map(|&(_, key)| (key, MaterialValue::Float(0.0)))
+                    .collect(),
+                texture_set: Vec::new(),
+                textures: Vec::new(),
+                defaults: Vec::new(),
+                frame: primase_core::frame::SourceFrame::WORLD,
+                flags: MaterialFlags {
+                    blend_mode,
+                    alpha_display_mode: 0,
+                    alpha_test_value: test,
+                    booleans,
+                },
+                shaders: None,
+            },
+        );
+        let pass = LowerAnvilMaterial {
+            normal_green: NormalGreen::Up,
+            alpha,
+            shader_uv: ShaderUv::TexCoord,
+            emissive_exposure: 1.0,
+            underground_view: 0.5,
+            fake_river_s: 0.0,
+        };
+        let mut log = PassLog::default();
+        pass.run(&mut w, &mut log).expect("lowered");
+        (w, e, log)
+    }
+
+    /// Decals1's prelude states how it is drawn: BlendMode 4 (blended) is a decal, kept blended in the decal layer at
+    /// the deferred decals' queue (2,500; conventional depth write: none); BlendMode 0 with an alpha test (the
+    /// graffiti Materials: AlphaTestValue 128, enabled) is a mask and states no draw order; another template's
+    /// BlendMode 4 is not a decal; a forced alpha lowers none as blended.
+    #[test]
+    fn decals1_drawn_blended_are_decals() {
+        let decal = DrawOrder {
+            layer: DrawLayer::Decal,
+            queue: 2500,
+            depth_write: false,
+        };
+        for template in ["MAD_Decals1", "MAD_Decals1_Graffiti"] {
+            let (w, e, log) = lowered(template, 4, 0, 0, AlphaChoice::Prelude);
+            assert_eq!(
+                w.get::<PbrMaterial>(e).unwrap().alpha_mode,
+                AlphaMode::Blend,
+                "{template}"
+            );
+            assert_eq!(w.get::<DrawOrder>(e), Some(&decal), "{template}");
+            assert_eq!(
+                log.counts["Decals1 Materials drawn blended (BlendMode 4), in the decal layer"],
+                1
+            );
+            let (w, e, log) = lowered(template, 0, 128, 1, AlphaChoice::Prelude);
+            assert_eq!(
+                w.get::<PbrMaterial>(e).unwrap().alpha_mode,
+                AlphaMode::Mask {
+                    cutoff: 128.0 / 255.0
+                },
+                "{template}"
+            );
+            assert_eq!(w.get::<DrawOrder>(e), None, "{template}");
+            assert!(!log.counts.keys().any(|k| k.contains("decal layer")));
+            for forced in [AlphaChoice::Opaque, AlphaChoice::Mask(0.5)] {
+                let (w, e, _) = lowered(template, 4, 0, 0, forced);
+                assert_ne!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, AlphaMode::Blend);
+                assert_eq!(w.get::<DrawOrder>(e), None, "{template}");
+            }
+        }
+        // the same BlendMode 4 on a template that is no decal
+        let (w, e, _) = lowered("MAD_Tex1", 4, 0, 0, AlphaChoice::Prelude);
+        assert_eq!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, AlphaMode::Blend);
+        assert_eq!(w.get::<DrawOrder>(e), None);
     }
 }

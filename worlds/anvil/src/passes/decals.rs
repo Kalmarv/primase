@@ -324,7 +324,7 @@ enum DrawKey {
 
 /// The queue a decal material is given: after the alpha-tested surfaces, before the blended ones (the convention other
 /// readers' decals take; the engine's pass sequence draws its deferred decals after the opaque surfaces they cover).
-const DECAL_QUEUE: i32 = 2500;
+pub(super) const DECAL_QUEUE: i32 = 2500;
 
 impl LowerAnvilDecals {
     /// A decal material on `target`, of the model `m`'s textures composed: base colour the Diffuse with its alpha
