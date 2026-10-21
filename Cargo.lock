@@ -775,6 +775,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-animation"
+version = "0.1.0"
+dependencies = [
+ "primase-core",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-anvil"
 version = "0.1.0"
 dependencies = [
