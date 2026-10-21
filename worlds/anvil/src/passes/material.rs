@@ -78,8 +78,8 @@ use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, W
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, LayeredMaterial, NormalBasis, NormalConvention, NormalGreen, NormalX,
-    NormalZ, Semantic, TexFormat, TexRole, Texture, VertexColor, World,
+    ColorSpace, Component, Entity, LayeredMaterial, Name, NormalBasis, NormalConvention, NormalGreen,
+    NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, VertexColor, World,
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
@@ -608,6 +608,7 @@ impl Pass for LowerAnvilMaterial {
             LayeredMaterial::NAME,
             Texture::NAME,
             VertexColor::NAME,
+            Name::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -847,7 +848,9 @@ impl Pass for LowerAnvilMaterial {
                     ];
                     let mut layers = Vec::with_capacity(2);
                     let mut heights = Vec::with_capacity(2);
-                    for ((diffuse, normals, mask, hsl, offset), uv) in parts.into_iter().zip([uv_a, uv_b]) {
+                    for (((diffuse, normals, mask, hsl, offset), uv), which) in
+                        parts.into_iter().zip([uv_a, uv_b]).zip(["A", "B"])
+                    {
                         let (Some(d), Some(n), Some(k)) = (diffuse, normals, mask) else {
                             layers.push(None);
                             continue;
@@ -861,6 +864,9 @@ impl Pass for LowerAnvilMaterial {
                         };
                         set_normal(w, n, normal);
                         let layer = w.spawn();
+                        if let Some(Name(material)) = w.get::<Name>(e).cloned() {
+                            w.insert(layer, Name(format!("{material} layer {which}")));
+                        }
                         w.insert(
                             layer,
                             PbrMaterial {
