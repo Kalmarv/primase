@@ -50,21 +50,30 @@ impl Component for Asset {
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.members.iter().map(|(e, _)| *e));
     }
-    /// Each member once and not the root; a rig a `core.skeleton`; a clip a `core.clip`; a part or an alternative a
-    /// prototype (a mesh or a mesh file) or a placement.
+    /// Each member once and not the root; each what its role says, in core's form or still in its source's: a rig a
+    /// `core.skeleton`, a clip a `core.clip`, a part or an alternative a prototype (a mesh or a mesh file) or a
+    /// placement, or any of them holding a component outside core (a reader's model, skeleton or clip as the source
+    /// stores it, which a pass lowers).
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let names = w.component_names();
+        let in_source_form = |m: Entity| {
+            names
+                .iter()
+                .any(|n| !n.starts_with("core.") && w.entity_has_named(m, n))
+        };
         let mut seen = BTreeSet::new();
         for &(m, role) in &self.members {
             if m == e || !seen.insert(m) {
                 return Err(format!("member {m:?} is the root or listed twice"));
             }
-            let fits = match role {
-                Role::Rig => w.has::<Skeleton>(m),
-                Role::Clip => w.has::<crate::Clip>(m),
-                Role::Part | Role::Alternative => {
-                    w.has::<Mesh>(m) || w.has::<MeshFile>(m) || w.has::<Instance>(m)
-                }
-            };
+            let fits = in_source_form(m)
+                || match role {
+                    Role::Rig => w.has::<Skeleton>(m),
+                    Role::Clip => w.has::<crate::Clip>(m),
+                    Role::Part | Role::Alternative => {
+                        w.has::<Mesh>(m) || w.has::<MeshFile>(m) || w.has::<Instance>(m)
+                    }
+                };
             if !fits {
                 return Err(format!("member {m:?} is not what its role {role:?} says"));
             }
@@ -450,6 +459,30 @@ mod tests {
                 .iter()
                 .any(|(_, _, m)| m.contains("not what its role"))
         );
+    }
+
+    /// A member still in its source's form (a reader's model before a pass lowers it to a mesh) fits its role; one
+    /// holding only core components that are not its role's does not.
+    #[test]
+    fn a_member_in_its_sources_form_fits_its_role() {
+        let (mut w, root, parts, _) = world();
+        w.remove::<Mesh>(parts[1]);
+        w.insert(parts[1], Name("model".into()));
+        assert!(
+            w.verify_components()
+                .iter()
+                .any(|(_, _, m)| m.contains("not what its role Part says"))
+        );
+        w.insert_opaque(
+            parts[1],
+            "source.model",
+            crate::Opaque {
+                version: 1,
+                data: crate::OpaqueData::Bytes(vec![1, 2, 3]),
+            },
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        assert!(w.closure([root]).contains(&parts[1]));
     }
 
     fn registry() -> PassManager {

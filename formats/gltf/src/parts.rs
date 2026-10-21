@@ -248,7 +248,7 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
         format!("{k} vertex streams not written: skin attributes of a mesh drawn without its skin")
     });
     by(&mut out, &report.extras_unencoded, &|k| {
-        format!("{k} components without a JSON form, not in the extras")
+        format!("{k} (a component or resource) without a JSON form, not in the extras")
     });
     by(&mut out, &report.components_unwritten, &|k| {
         format!("{k} components on entities the glTF does not write")

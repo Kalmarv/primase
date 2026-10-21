@@ -154,3 +154,65 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
     }
     Ok(())
 }
+
+/// Each part a writer was given: its asset roots' sources, and whether it holds a skin.
+type Parts = Vec<(Vec<String>, bool)>;
+
+/// A writer that keeps what it is given ([`Parts`]).
+struct Kept(std::rc::Rc<std::cell::RefCell<Parts>>);
+
+impl primase_core::convert::Writer for Kept {
+    fn target(&self) -> primase_core::pass::Target {
+        primase_core::pass::Target::new("kept").carry_unknown()
+    }
+    fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
+        let sources = part
+            .iter::<primase_core::Asset>()
+            .filter_map(|(e, _)| part.get::<primase_core::Source>(e).map(|s| s.0.clone()))
+            .collect();
+        let skinned = part.iter::<primase_core::Skin>().next().is_some();
+        self.0.borrow_mut().push((sources, skinned));
+        Ok(())
+    }
+    fn finish(self: Box<Self>) -> primase_core::convert::Result<primase_core::convert::Finished> {
+        Ok(Vec::new().into())
+    }
+}
+
+/// The character through a conversion, as a program writing one file per object runs it: read (the asset verifies
+/// with its part still the source's model), divided by asset (one part), lowered with its skin and placed in the
+/// part's passes.
+#[test]
+#[allow(unsafe_code)]
+fn a_character_converts_as_one_part_per_asset() -> Result<()> {
+    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+        return Ok(());
+    };
+    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+        return Ok(());
+    };
+    // SAFETY: explicitly supplied trusted native decoder.
+    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut reg = primase_core::pass::PassRegistry::new();
+    primase_core::register(&mut reg);
+    primase_fromsoft::sekiro::passes::register(&mut reg);
+    let manager = primase_core::pass::PassManager::new(reg).with_pass_checks(true);
+    let kept = std::rc::Rc::default();
+    primase_core::convert::convert_parts(
+        &mut primase_fromsoft::sekiro::CharacterReader::new(install, "c1010", decoder),
+        &mut primase_core::convert::PlannedParts::default(),
+        Box::new(Kept(std::rc::Rc::clone(&kept))),
+        &manager,
+        &manager.registry.parse("partition-by-asset")?,
+        &manager.registry.parse(
+            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw}, place-assets",
+        )?,
+    )
+    .map_err(|e| e as Box<dyn std::error::Error>)?;
+    assert_eq!(*kept.borrow(), [(vec!["chr/c1010".to_owned()], true)]);
+    Ok(())
+}
