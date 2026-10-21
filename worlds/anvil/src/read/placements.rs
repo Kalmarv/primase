@@ -18,7 +18,10 @@
 //!   Entities read). What each instance places is the caller's stated [`InstancedLevels`].
 //! - In more than one slot, in the LODSelectorInstance itself or in an ImpostorInstanceData: not seen, refused.
 //!
-//! Levels referring to an Impostor are counted, not placed.
+//! Levels referring to an Impostor are counted, not placed. An Entity or EntityGroup whose `IsHidden` or `IsPhantom`
+//! is set isn't placed at all ([`Placed::hidden_or_phantom`]): on Riders Republic those are UI, HUD and editor helpers
+//! (docs/placement.md §19.1). A Visual whose MeshInstanceData is a fake (`IsFake`: the far terrain's cells) places as
+//! any other, each placement marked [`AnvilFake`] for the program to leave out or keep.
 //!
 //! Collision: each RigidBodyComponent's shape (the reference at its offset 748) is placed once at its owner's T R, as
 //! a prototype holding the shape's collision in the owner's local frame; an EntityGroup's (a merged shape spanning
@@ -26,7 +29,9 @@
 //! transform) are read, a ReferenceListShape placing each child at its transform in the list; another type is counted
 //! ([`Placed::shapes_unread`]), and so are the RigidBodies of owners with a scale other than 1, whose placement isn't
 //! established ([`Placed::scaled_collision`]). An instanced Entity's is placed at each instance or not, as the caller
-//! states ([`InstancedCollision`]).
+//! states ([`InstancedCollision`]). Each collision placement carries its RigidBody's filter ([`AnvilCollisionFilter`]:
+//! the registry's `QueryFlags`, `CollisionLayerBits` and `IsGround`); a RigidBody whose `QueryFlags` set `WaterLevel`
+//! and not `Static` is a water surface, not ground, and isn't placed ([`Placed::water_bodies`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -34,15 +39,16 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilLods, AnvilMaterial,
-    AnvilMaterialOverrides, AnvilMesh, AnvilShaders, AnvilWater, CollisionMaterialRef, DataLayerAction,
-    DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
+    AnvilCollisionFilter, AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals,
+    AnvilFake, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilShaders,
+    AnvilWater, CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue,
+    ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
 use crate::read::entity::{
-    ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity,
-    StoredEntityGroup, Visual,
+    CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot,
+    StoredEntity, StoredEntityGroup, Visual, query,
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
@@ -207,6 +213,18 @@ pub struct Placed {
     pub deferred_decals: Vec<Entity>,
     /// HoudiniDecalInstancerComponents whose body can't be read (recorded in `refused` too).
     pub deferred_decals_unread: u64,
+    /// Entities and EntityGroups not placed at all (their Visuals, collision, lakes and decals) because their
+    /// `IsHidden` or `IsPhantom` is set: UI, HUD and editor helpers (docs/placement.md §19.1). A group's members are
+    /// listed still: each has flags of its own.
+    pub hidden_or_phantom: u64,
+    /// Placements of fake MeshInstanceData, marked [`AnvilFake`].
+    pub fakes: u64,
+    /// RigidBodies not placed as collision: water surfaces (`QueryFlags` `WaterLevel` set and `Static` clear: on
+    /// Riders Republic the river surfaces, docs/placement.md §19.2).
+    pub water_bodies: u64,
+    /// RigidBodies placed whose `QueryFlags` `Static` is clear (and `WaterLevel` too), each marked as every collision
+    /// placement is ([`AnvilCollisionFilter`]).
+    pub not_static: u64,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -230,6 +248,13 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
     }
 }
 
+/// A Mesh body's `MaxCullingDistance`: its GraphicObject's f32 at 4 (registry-named-fields §4, §10; 0 where short).
+fn max_culling_distance(body: &[u8]) -> f32 {
+    body.get(4..8)
+        .and_then(|w| <[u8; 4]>::try_from(w).ok())
+        .map_or(0.0, f32::from_le_bytes)
+}
+
 /// The name of the entry `id` names in `archive`, if any.
 fn entry_name(archive: &Archive, id: u64) -> Option<String> {
     let at = archive.find(id)?;
@@ -250,6 +275,8 @@ struct Shows {
     overrides: Vec<(u8, Vec<(u64, u64)>)>,
     /// Its mesh slots.
     mesh_slots: u64,
+    /// A fake MeshInstanceData's mark, where one of its slots (or its MeshInstanceData) is a fake.
+    fake: Option<AnvilFake>,
 }
 
 /// A MeshInstanceData's material-info entries as (source, replacement) pairs, in stored order.
@@ -296,6 +323,10 @@ fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
             .map(|&(level, m)| (level, pairs(m)))
             .collect(),
         mesh_slots: u64::try_from(slots.len()).unwrap_or(u64::MAX),
+        fake: slots.iter().find(|(_, m)| m.is_fake()).map(|(_, m)| AnvilFake {
+            mesh_index: m.fake_mesh_index(),
+            near: m.is_near_fake(),
+        }),
     })
 }
 
@@ -324,6 +355,10 @@ pub struct Placer<'a> {
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: how many of its leading levels its LODSelector's dependencies fill.
     dependency_levels: HashMap<u64, u8>,
+    /// Per object id: its level distances, where it states any.
+    distances: HashMap<u64, AnvilLodDistances>,
+    /// Per (prototype, object id): the copy of a prototype that two objects with other distances share.
+    distance_copies: HashMap<(Entity, u64), Entity>,
     /// Per object id and level: the prototype placing every mesh level from that level on.
     wholes: HashMap<(u64, u8), Entity>,
     /// The entities some prototype holds as a level-of-detail form (each form belongs to one prototype).
@@ -379,6 +414,8 @@ impl<'a> Placer<'a> {
             decal_models: HashMap::new(),
             objects: HashMap::new(),
             dependency_levels: HashMap::new(),
+            distances: HashMap::new(),
+            distance_copies: HashMap::new(),
             wholes: HashMap::new(),
             forms: HashSet::new(),
             prototypes: HashSet::new(),
@@ -667,9 +704,6 @@ impl<'a> Placer<'a> {
         Ok(e)
     }
 
-    /// The entity holding the TextureMap `id` names, read once: a core texture of its levels (its CompiledMips', then
-    /// its own), colour space linear and role other until a lowering states them, and its [`AnvilTextureMap`]. `None`
-    /// where it isn't a TextureMap, its format code's codec isn't established, or it can't be read (recorded).
     /// The entity holding the DDecalModel `id` names, read once: its [`AnvilDecalModel`], its textures read too.
     /// `None` where it isn't a DDecalModel or can't be read (recorded in `placed`).
     fn decal_model(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
@@ -713,6 +747,9 @@ impl<'a> Placer<'a> {
         e
     }
 
+    /// The entity holding the TextureMap `id` names, read once: a core texture of its levels (its CompiledMips', then
+    /// its own), colour space linear and role other until a lowering states them, and its [`AnvilTextureMap`]. `None`
+    /// where it isn't a TextureMap, its format code's codec isn't established, or it can't be read (recorded).
     fn texture(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
         if let Some(&e) = self.textures.get(&id) {
             return e;
@@ -756,7 +793,19 @@ impl<'a> Placer<'a> {
             Some(at) => {
                 let r = self.archive.resource(at)?;
                 match r.type_id {
-                    MESH => Some(vec![(0, self.mesh(at, &r.body, id, placed)?)]),
+                    MESH => {
+                        let culling = max_culling_distance(&r.body);
+                        if culling > 0.0 {
+                            self.distances.insert(
+                                id,
+                                AnvilLodDistances {
+                                    levels: Vec::new(),
+                                    culling,
+                                },
+                            );
+                        }
+                        Some(vec![(0, self.mesh(at, &r.body, id, placed)?)])
+                    }
                     LOD_SELECTOR => {
                         let s =
                             StoredLodSelector::parse(&r.body).map_err(|source| Error::Lod { at, source })?;
@@ -764,6 +813,10 @@ impl<'a> Placer<'a> {
                         let filled = u8::try_from(s.dependencies.len()).unwrap_or(u8::MAX);
                         self.dependency_levels.insert(id, filled);
                         let mut levels = Vec::new();
+                        let mut distances = AnvilLodDistances {
+                            levels: Vec::new(),
+                            culling: 0.0,
+                        };
                         for (level, id_at) in (0u8..).zip(ids) {
                             let Some(reference) = id_at else {
                                 continue;
@@ -775,7 +828,15 @@ impl<'a> Placer<'a> {
                             match mesh {
                                 Some((m, r)) if r.type_id == MESH => {
                                     match self.mesh(m, &r.body, reference, placed) {
-                                        Ok(e) => levels.push((level, e)),
+                                        Ok(e) => {
+                                            levels.push((level, e));
+                                            let switch = s
+                                                .levels
+                                                .get(usize::from(level))
+                                                .map_or(0.0, |l| l.switch_distance());
+                                            distances.levels.push((level, switch));
+                                            distances.culling = max_culling_distance(&r.body);
+                                        }
                                         Err(e) => {
                                             placed.refused.push((reference, e.to_string()));
                                             self.refused_levels.insert((id, level));
@@ -784,6 +845,9 @@ impl<'a> Placer<'a> {
                                 }
                                 _ => placed.impostor_levels = placed.impostor_levels.saturating_add(1),
                             }
+                        }
+                        if !levels.is_empty() {
+                            self.distances.insert(id, distances);
                         }
                         (!levels.is_empty()).then_some(levels)
                     }
@@ -820,6 +884,32 @@ impl<'a> Placer<'a> {
         };
         self.wholes.insert((id, detail), p);
         Some(p)
+    }
+
+    /// `p` (a prototype placing the object `object`) carrying the object's level distances: itself where it carries
+    /// none yet or the same, else one copy of it per object (a mesh the only level of two objects with other
+    /// distances).
+    fn with_distances(&mut self, p: Entity, object: u64) -> Entity {
+        let Some(d) = self.distances.get(&object).cloned() else {
+            return p;
+        };
+        match self.world.get::<AnvilLodDistances>(p) {
+            None => {
+                self.world.insert(p, d);
+                p
+            }
+            Some(have) if *have == d => p,
+            Some(_) => {
+                if let Some(&c) = self.distance_copies.get(&(p, object)) {
+                    return c;
+                }
+                let c = self.world.duplicate(p).unwrap_or(p);
+                self.world.insert(c, d);
+                self.prototypes.insert(c);
+                self.distance_copies.insert((p, object), c);
+                c
+            }
+        }
     }
 
     /// `e` (a mesh level's entity) as a form of one prototype: itself the first time, else a copy (another
@@ -875,6 +965,10 @@ impl<'a> Placer<'a> {
                 });
             }
         };
+        if e.is_hidden() || e.is_phantom() {
+            placed.hidden_or_phantom = placed.hidden_or_phantom.saturating_add(1);
+            return Ok(());
+        }
         let name = self.name(at).unwrap_or_default();
         let layers = (!e.data_layers.is_empty()).then(|| AnvilDataLayers {
             actions: e
@@ -893,6 +987,7 @@ impl<'a> Placer<'a> {
             .chain(e.decals().map(|v| (v, true)))
         {
             let shows = shows(v, at)?;
+            let fake = shows.fake;
             let found = match v.object {
                 Some(object) => self.levels(object.id, placed)?.map(|l| (object.id, l)),
                 None => None,
@@ -960,6 +1055,7 @@ impl<'a> Placer<'a> {
                     (prototype, transforms, overrides)
                 }
             };
+            let prototype = self.with_distances(prototype, object);
             for t in transforms {
                 let p = self.world.spawn();
                 self.world.insert(p, Name(name.clone()));
@@ -981,6 +1077,10 @@ impl<'a> Placer<'a> {
                 }
                 if let Some(layers) = &layers {
                     self.world.insert(p, layers.clone());
+                }
+                if let Some(fake) = fake {
+                    self.world.insert(p, fake);
+                    placed.fakes = placed.fakes.saturating_add(1);
                 }
                 placed.placements.push(p);
                 if decal {
@@ -1089,10 +1189,27 @@ impl<'a> Placer<'a> {
         };
         for c in &e.components {
             let ComponentBody::RigidBody {
-                shape: Some(shape), ..
+                shape: Some(shape),
+                bytes,
             } = &c.body
             else {
                 continue;
+            };
+            let filter = match CollisionFilter::parse(bytes) {
+                Ok(f) => f,
+                Err(why) => {
+                    placed.refused.push((c.id, why.to_string()));
+                    continue;
+                }
+            };
+            if filter.queries(query::WATER_LEVEL) && !filter.queries(query::STATIC) {
+                placed.water_bodies = placed.water_bodies.saturating_add(1);
+                continue;
+            }
+            let mark = AnvilCollisionFilter {
+                query: filter.query,
+                layers: filter.layers,
+                ground: filter.ground,
             };
             if instances.is_some() && self.instanced_collision == InstancedCollision::Skip {
                 placed.instanced_collision = placed.instanced_collision.saturating_add(1);
@@ -1113,6 +1230,9 @@ impl<'a> Placer<'a> {
                     .collect(),
                 None => vec![owner],
             };
+            if !filter.queries(query::STATIC) {
+                placed.not_static = placed.not_static.saturating_add(1);
+            }
             for owner in owners {
                 for &(prototype, local) in &parts {
                     let p = self.world.spawn();
@@ -1129,6 +1249,7 @@ impl<'a> Placer<'a> {
                     if let Some(layers) = &layers {
                         self.world.insert(p, layers.clone());
                     }
+                    self.world.insert(p, mark);
                     placed.collisions.push(p);
                 }
             }

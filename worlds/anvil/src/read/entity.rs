@@ -101,7 +101,8 @@ pub struct MeshInstance {
     /// Its instance matrices, column-major (none: placed once by its owner).
     pub instances: Vec<[f32; 16]>,
     pub bounds: BoundingVolume,
-    /// The 16 bytes after them, as stored.
+    /// The 16 bytes after them, as stored: an `InstanceShaderConstants` pointer (`03`), `IsFake`, `IsNearFake`,
+    /// `FakeMeshIndex` (u32) and the `CompiledMeshInstance` pointer's tag and id (registry-named-fields §9).
     pub reserved: [u8; 16],
     /// The CompiledMeshInstance's 17 bytes after its type, as stored.
     pub compiled: [u8; 17],
@@ -109,6 +110,23 @@ pub struct MeshInstance {
     pub material_infos: Vec<[u64; 3]>,
     /// One bounding volume per instance.
     pub instance_bounds: Vec<BoundingVolume>,
+}
+
+impl MeshInstance {
+    /// `IsFake`: set on exactly the 1,031 `MAD_USNAT_FarFake_<n>_Cell` Entities of Riders Republic, the far terrain's
+    /// cells (docs/placement.md §19.4).
+    pub fn is_fake(&self) -> bool {
+        self.reserved[1] != 0
+    }
+    /// `IsNearFake`.
+    pub fn is_near_fake(&self) -> bool {
+        self.reserved[2] != 0
+    }
+    /// `FakeMeshIndex` (the cell number `n` on every FarFake cell).
+    pub fn fake_mesh_index(&self) -> u32 {
+        let [_, _, _, a, b, c, d, ..] = self.reserved;
+        u32::from_le_bytes([a, b, c, d])
+    }
 }
 
 /// An ImpostorInstanceData as stored.
@@ -184,6 +202,122 @@ pub enum ComponentBody {
     },
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
+}
+
+/// A RigidBody's `CollisionFilterInfo` as the game's registry names it (registry-named-fields §9, §10): its
+/// `QueryFlags` (a `QueryLayerBits`: 34 bit fields, each stored as a u64 0 or 1, from the RigidBodyComponent's offset
+/// 68) and its two `CollisionLayerBits` (24 each, from 352 and 556), as bit masks by slot, and its `IsGround` (797).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollisionFilter {
+    pub query: u64,
+    pub layers: [u32; 2],
+    pub ground: bool,
+}
+
+/// `QueryLayerBits` slots by the registry's names (the others are unnamed or unset in the data).
+pub mod query {
+    pub const STATIC: u32 = 0;
+    pub const DYNAMIC: u32 = 2;
+    pub const CAMERA_COLLISION: u32 = 3;
+    pub const CAMERA_OCCLUSION: u32 = 5;
+    pub const CHARACTER: u32 = 9;
+    pub const WATER_LEVEL: u32 = 10;
+    pub const PARTICLE: u32 = 11;
+    pub const RAYCAST: u32 = 19;
+    pub const OCCLUSION_HEIGHT_TEST: u32 = 20;
+    pub const TARGETING: u32 = 21;
+    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
+    pub const TERRAIN_LOD0: u32 = 25;
+}
+
+/// `CollisionLayerBits` slots by the registry's names.
+pub mod layer {
+    pub const STATIC: u32 = 0;
+    pub const DYNAMIC: u32 = 2;
+    pub const DEBRIS: u32 = 3;
+    pub const DETECTION_ZONE: u32 = 4;
+    pub const MAIN_CHARACTER: u32 = 5;
+    pub const CHARACTER: u32 = 6;
+    pub const CHARACTER_NO_INTERACTIVE: u32 = 7;
+    pub const WATER_LEVEL: u32 = 13;
+    pub const TARGETABLE: u32 = 14;
+    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
+    pub const TERRAIN_LOD0: u32 = 16;
+}
+
+impl CollisionFilter {
+    /// Whether `QueryFlags` slot `slot` ([`query`]) is set.
+    pub fn queries(&self, slot: u32) -> bool {
+        self.query.checked_shr(slot).is_some_and(|q| q & 1 == 1)
+    }
+
+    /// The filter of a RigidBodyComponent's `bytes` (from its offset 0). Refused where a slot holds other than 0 or 1
+    /// or the body is short.
+    pub fn parse(bytes: &[u8]) -> Result<CollisionFilter, Error> {
+        let slots = |at: usize, n: usize| -> Result<u64, Error> {
+            let mut bits = 0u64;
+            for k in 0..n {
+                let from = k
+                    .checked_mul(8)
+                    .and_then(|o| o.checked_add(at))
+                    .unwrap_or(usize::MAX);
+                let word = bytes
+                    .get(from..from.saturating_add(8))
+                    .and_then(|w| <[u8; 8]>::try_from(w).ok())
+                    .map(u64::from_le_bytes)
+                    .ok_or(Error::Short {
+                        what: "RigidBody bit slot",
+                        at: from,
+                        have: bytes.len(),
+                    })?;
+                match word {
+                    0 => {}
+                    1 => {
+                        bits |= 1u64
+                            .checked_shl(u32::try_from(k).unwrap_or(u32::MAX))
+                            .unwrap_or(0)
+                    }
+                    found => {
+                        return Err(Error::Value {
+                            what: "RigidBody bit slot",
+                            at: from,
+                            found,
+                            read: "0 or 1",
+                        });
+                    }
+                }
+            }
+            Ok(bits)
+        };
+        let ground = match bytes.get(797) {
+            Some(0) => false,
+            Some(1) => true,
+            Some(&found) => {
+                return Err(Error::Value {
+                    what: "RigidBody IsGround",
+                    at: 797,
+                    found: u64::from(found),
+                    read: "0 or 1",
+                });
+            }
+            None => {
+                return Err(Error::Short {
+                    what: "RigidBody IsGround",
+                    at: 797,
+                    have: bytes.len(),
+                });
+            }
+        };
+        Ok(CollisionFilter {
+            query: slots(68, 34)?,
+            // 24 slots: within u32
+            layers: [
+                u32::try_from(slots(352, 24)?).unwrap_or(u32::MAX),
+                u32::try_from(slots(556, 24)?).unwrap_or(u32::MAX),
+            ],
+            ground,
+        })
+    }
 }
 
 /// How an Entity body ends.
@@ -970,6 +1104,25 @@ impl StoredEntity {
             ComponentBody::Visual(v) => Some(v),
             ComponentBody::StaticDecal(_) | ComponentBody::RigidBody { .. } | ComponentBody::Raw(_) => None,
         })
+    }
+
+    /// Its run's bool at `at` (the registry's Entity bit-field group in order: docs/placement.md §19, entity-grammar
+    /// §8.26) set.
+    fn run_bool(&self, at: usize) -> bool {
+        self.run.get(at).is_some_and(|&b| b != 0)
+    }
+    /// `IsMovable`: its run's byte 2.
+    pub fn is_movable(&self) -> bool {
+        self.run_bool(2)
+    }
+    /// `IsPhantom`: its run's byte 3 (on 3,834 Entities of Riders Republic, every one a UI or HUD widget, a
+    /// checkpoint letter, a collectible balloon or an editor helper: docs/placement.md §19.1).
+    pub fn is_phantom(&self) -> bool {
+        self.run_bool(3)
+    }
+    /// `IsHidden`: its run's byte 4 (on 200, all UI).
+    pub fn is_hidden(&self) -> bool {
+        self.run_bool(4)
     }
 }
 

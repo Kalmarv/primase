@@ -234,6 +234,65 @@ impl Component for AnvilLods {
     }
 }
 
+/// A collision placement's RigidBody filter (`anvil.collision_filter`: [`crate::read::entity::CollisionFilter`]): its
+/// `QueryFlags` and two `CollisionLayerBits` as bit masks by the registry's slots
+/// ([`crate::read::entity::query`], [`crate::read::entity::layer`]), and its `IsGround` as stored (what it marks
+/// isn't established: fences, lights and steel sheets among its 33,960, docs/placement.md §19.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilCollisionFilter {
+    pub query: u64,
+    pub layers: [u32; 2],
+    pub ground: bool,
+}
+
+impl Component for AnvilCollisionFilter {
+    const NAME: &'static str = "anvil.collision_filter";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// A placement whose MeshInstanceData is a fake (`anvil.fake`: its `IsFake` set; docs/placement.md §19.4): its
+/// `FakeMeshIndex` and `IsNearFake`. On Riders Republic exactly the far terrain's cells (`MAD_USNAT_FarFake_<n>_Cell`,
+/// the index `n`), which stand in for the near ground at a distance: a program leaves them out where it draws the
+/// ground itself, or keeps them as a horizon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilFake {
+    pub mesh_index: u32,
+    pub near: bool,
+}
+
+impl Component for AnvilFake {
+    const NAME: &'static str = "anvil.fake";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// A prototype's level distances as its object stores them (`anvil.lod_distances`; registry-named-fields §2, §4,
+/// docs/placement.md §19.5): each mesh level's `SwitchDistance` (its LODDescriptor's: the level's far limit, rising
+/// level to level on all 686 selectors of two areas), finest first, as `(level, metres)`; and the last mesh level's
+/// Mesh's `MaxCullingDistance` (0: none). A Mesh placed directly has no levels. The game's draw distance is
+/// [`AnvilLodDistances::draw_distance`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilLodDistances {
+    pub levels: Vec<(u8, f32)>,
+    pub culling: f32,
+}
+
+impl AnvilLodDistances {
+    /// The last level's switch distance, capped by its mesh's culling distance where that is set (above 0); `None`
+    /// where neither is.
+    pub fn draw_distance(&self) -> Option<f32> {
+        let culling = (self.culling > 0.0).then_some(self.culling);
+        match (self.levels.last().map(|&(_, d)| d), culling) {
+            (Some(d), Some(c)) => Some(d.min(c)),
+            (d, c) => d.or(c),
+        }
+    }
+}
+
+impl Component for AnvilLodDistances {
+    const NAME: &'static str = "anvil.lod_distances";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
 /// A placement's material overrides as its MeshInstanceData store them (`anvil.material_overrides`): per LOD level
 /// (its LODSelectorInstance slot), the pairs of a source Material and the Material that replaces it (an identity pair
 /// where none is replaced), by ClassID, in stored order. That a level's mesh range draws with the replacement of its

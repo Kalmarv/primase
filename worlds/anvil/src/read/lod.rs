@@ -56,7 +56,8 @@ pub struct StoredLevel {
     /// Its first u64 (on both fixtures the selector's ClassID + 13 + the level's index; meaning not established).
     pub head: u64,
     pub reference: Option<Reference>,
-    /// The three f32 after the reference, as stored.
+    /// The three f32 after the reference, as stored: `SwitchDistance`, `TransitionZoneSize` and
+    /// `FadeTimeMultiplier` (registry-named-fields §2).
     pub floats: [f32; 3],
     /// The 5 bytes after them.
     pub bytes_34: [u8; 5],
@@ -121,6 +122,13 @@ impl Cursor<'_> {
     }
     fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
         Ok(f32::from_le_bytes(self.array(what)?))
+    }
+}
+
+impl StoredLevel {
+    /// Its `SwitchDistance`: the level's far limit.
+    pub fn switch_distance(&self) -> f32 {
+        self.floats[0]
     }
 }
 
