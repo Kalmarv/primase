@@ -728,6 +728,91 @@ impl Cursor<'_> {
                 self.take(n.saturating_mul(66), "AnimationParameters")?;
                 self.take(1, "AnimatedEntityComponent")?;
             }
+            // 0xE139F584 (unnamed): 4 bytes, an EventListener (an object, a byte, a count n: only 0 read, 13 bytes), a
+            // flag byte, k ids (01, a u64), 9 bytes, a SoundInstance (00, an object, 52 bytes) (the notes: 113 + 9 k,
+            // the one sequential end or the next component's header on 1,990 of 2,014; the rest hold objects in the
+            // EventListener, without a rule)
+            0xE139_F584 => {
+                self.take(4, "component")?;
+                self.object("EventListener", 0x2E8B_5553)?;
+                self.take(1, "EventListener")?;
+                if self.u32("EventListener count")? != 0 {
+                    return Ok(None);
+                }
+                self.take(14, "EventListener")?;
+                let k = self.count("component ids", 9)?;
+                self.take(k.saturating_mul(9), "component ids")?;
+                self.take(9, "component")?;
+                self.expect("SoundInstance", 0, 1)?;
+                self.object("SoundInstance", 0x7E42_F87F)?;
+                self.take(52, "SoundInstance")?;
+            }
+            // BulkComponent (crowds): 4 bytes, BulkSettings (an object, a u32), a BulkRandomCompositionTemplate (00, an
+            // object, an f32), t 36-byte BulkTemplates, a u32, an f32, c 45-byte members, 4 bytes, a 04-tagged object
+            // and a byte, k BulkStates (an object, 9 bytes, a reference), 37 bytes, k SoundInstances (an object, 52
+            // bytes), f f32, 17 bytes (the notes: the one sequential end on 2,481 of 2,481)
+            0x3083_58A4 => {
+                self.take(4, "BulkComponent")?;
+                self.object("BulkSettings", 0x4404_F7CC)?;
+                self.take(4, "BulkSettings")?;
+                self.expect("BulkRandomCompositionTemplate", 0, 1)?;
+                self.object("BulkRandomCompositionTemplate", 0x3E7C_FA88)?;
+                self.take(4, "BulkRandomCompositionTemplate")?;
+                let t = self.count("BulkTemplate count", 36)?;
+                for _ in 0..t {
+                    self.expect("BulkTemplate", 0, 1)?;
+                    self.object("BulkTemplate", 0x3621_488A)?;
+                    self.take(14, "BulkTemplate")?;
+                    self.expect("BulkTemplate", 0, 1)?;
+                    self.take(8, "BulkTemplate")?;
+                }
+                self.take(8, "BulkComponent")?;
+                let c = self.count("BulkComponent member count", 45)?;
+                for _ in 0..c {
+                    self.object("BulkComponent member", 0x7A98_3CEC)?;
+                    self.take(33, "BulkComponent member")?;
+                }
+                self.take(4, "BulkComponent")?;
+                self.expect("BulkComponent object", 4, 1)?;
+                self.object("BulkComponent object", 0xEACA_451C)?;
+                self.take(1, "BulkComponent")?;
+                let k = self.count("BulkState count", 31)?;
+                for _ in 0..k {
+                    self.object("BulkState", 0x7888_7331)?;
+                    self.take(19, "BulkState")?;
+                }
+                self.take(37, "BulkComponent")?;
+                for _ in 0..k {
+                    self.object("SoundInstance", 0x7E42_F87F)?;
+                    self.take(52, "SoundInstance")?;
+                }
+                let f = self.count("BulkComponent floats", 4)?;
+                self.take(f.saturating_mul(4), "BulkComponent floats")?;
+                self.take(17, "BulkComponent")?;
+            }
+            // FXComponent: 4 bytes, an object, 6 bytes, a reference (its FX), an f32, an object, a u32, n parameters
+            // (a u32 id, a u32, a u16, a u16 kind, a u32, the value by its kind: 0x0A an f32, 0x0D a vec4; another
+            // kind has no rule), 11 bytes (the notes: 67 + the parameters', the one sequential end or the next
+            // component's header on every one of the 1,089 bodies reached)
+            0xD2BF_93A6 => {
+                self.take(4, "FXComponent")?;
+                self.object("FXComponent", 0x1159_8A66)?;
+                self.take(20, "FXComponent")?;
+                self.object("FXComponent", 0x32D3_3700)?;
+                self.take(4, "FXComponent")?;
+                let n = self.count("FXComponent parameter count", 16)?;
+                for _ in 0..n {
+                    self.take(10, "FXComponent parameter")?;
+                    let kind = u16::from_le_bytes(self.array::<2>("FXComponent parameter kind")?);
+                    self.take(4, "FXComponent parameter")?;
+                    match kind {
+                        0x0A => self.take(4, "FXComponent parameter value")?,
+                        0x0D => self.take(16, "FXComponent parameter value")?,
+                        _ => return Ok(None),
+                    };
+                }
+                self.take(11, "FXComponent")?;
+            }
             // OutOfBoundsVisualComponent (the notes: 169 on 716 of 716)
             0x2994_1A30 => {
                 self.take(169, "component")?;
