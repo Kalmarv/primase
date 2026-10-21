@@ -10,6 +10,12 @@
 //! - where `s < 1` a last overlay, black, with opacity `1 - s` scales that by `s`, giving the core blend exactly;
 //! - where `s > 1` (possible with `identity`) the weights are scaled to sum to 1 (counted).
 //!
+//! A layer's UV set and transform (core samples every texture of the layer at the transform of its selected set) go
+//! into the coordinates of the parts that draw it: the base (slot 0) and each of its overlays (their own copies of
+//! the primitive) get `TexCoord(0)` = the transform applied to the selected set, per vertex in f32, exact up to that
+//! rounding because the transform is affine and so commutes with interpolation. The layer materials' own texture
+//! transforms are raise-skate's (baked before it); a skate material samples `TexCoord(0)` untransformed.
+//!
 //! A null slot is a layer of black (core: it contributes black without redistributing its weight). An overlay keeps
 //! only triangles with some corner whose opacity, as written ([`crate::decal::decal_opacity`]),
 //! is above zero. The game's decal fades through a mask-shaped dissolve rather than linear alpha, and weights are
@@ -256,6 +262,35 @@ fn weights_of(
         .collect())
 }
 
+/// `p` drawn with `layer`'s coordinates: `TexCoord(0)` the layer's transform of its selected set (a float pair
+/// stream; another or none is an error). True where that changes them.
+fn with_layer_uvs(p: &mut primase_core::Primitive, layer: &primase_core::Layer) -> Result<bool, String> {
+    use primase_core::{Semantic, Stream};
+    let set = layer.texcoord.unwrap_or(0);
+    if set == 0 && layer.transform.is_none() {
+        return Ok(false);
+    }
+    let uvs = match p.streams.get(&Semantic::TexCoord(set)) {
+        Some(Stream::F32x2(v)) => v,
+        Some(_) => {
+            return Err(format!(
+                "a layer's coordinates TexCoord({set}) are not float pairs"
+            ));
+        }
+        None => {
+            return Err(format!(
+                "a layer samples TexCoord({set}), which its primitive lacks"
+            ));
+        }
+    };
+    let moved = uvs
+        .iter()
+        .map(|&uv| layer.transform.map_or(uv, |t| t.apply(uv)))
+        .collect();
+    p.streams.insert(Semantic::TexCoord(0), Stream::F32x2(moved));
+    Ok(true)
+}
+
 /// A black material: a null slot's layer, and the darkening overlay.
 fn black(key: String, class: crate::components::MaterialClass) -> crate::components::SkateMaterial {
     use crate::components::{AlphaMode, Domain, MaterialClass, SkateMaterial};
@@ -434,11 +469,6 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 ));
             }
             for layer in l.layers.iter().flatten() {
-                if layer.texcoord.unwrap_or(0) != 0 || layer.transform.is_some() {
-                    return Err(format!(
-                        "layered material {e:?}: per-layer UV sets and transforms are not supported yet"
-                    ));
-                }
                 if !world.has::<SkateMaterial>(layer.material) {
                     return Err(format!("layered material {e:?}: a layer is not a skate.material"));
                 }
@@ -482,6 +512,13 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                     .unwrap_or_else(|| (0..p.vertex_count() as u32).collect());
                 let mut base = p.clone();
                 base.indices = Some(idx.clone());
+                if let Some(layer) = &l.layers[0]
+                    && with_layer_uvs(&mut base, layer)?
+                {
+                    *tally
+                        .entry("parts drawn at their layer's coordinates")
+                        .or_default() += 1;
+                }
                 parts.push((i, base, None, Some((m, None))));
                 *tally.entry("layered base triangles").or_default() += (idx.len() / 3) as u64;
                 base_area += idx
@@ -493,6 +530,14 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
                 for o in overlay_parts(&w, l.layers.len(), &idx, &positions, self.overlays, &mut counts) {
                     let mut q = p.clone();
                     q.indices = Some(o.indices.clone());
+                    if let OverlayLayer::Slot(k) = o.layer
+                        && let Some(layer) = &l.layers[k]
+                        && with_layer_uvs(&mut q, layer)?
+                    {
+                        *tally
+                            .entry("parts drawn at their layer's coordinates")
+                            .or_default() += 1;
+                    }
                     let n = (o.indices.len() / 3) as u64;
                     overlay_area += o
                         .indices
@@ -1055,6 +1100,62 @@ mod tests {
             log.counts["blends no placed primitive draws (not raised), left out"],
             1
         );
+    }
+
+    /// Each part draws its layer at the layer's coordinates: the base slot 0's transform of TexCoord(0), the overlay slot
+    /// 1's transform of its selected set TexCoord(1), worked by hand; a selected set the primitive lacks is refused,
+    /// nothing changed.
+    #[test]
+    fn each_part_draws_its_layer_at_the_layers_coordinates() {
+        use primase_core::pbr::UvTransform;
+        let (mut world, m, mesh) = layered_world(true, Some(1));
+        {
+            let l = world.get_mut::<LayeredMaterial>(m).unwrap();
+            let base = l.layers[0].as_mut().unwrap();
+            base.transform = Some(UvTransform {
+                offset: [0.5, 0.0],
+                scale: [2.0, 4.0],
+                rotation: 0.0,
+            });
+            let over = l.layers[1].as_mut().unwrap();
+            over.texcoord = Some(1);
+            over.transform = Some(UvTransform {
+                offset: [0.0, 1.0],
+                scale: [3.0, 3.0],
+                rotation: 0.0,
+            });
+        }
+        // the triangle with the given coordinate sets
+        let with = |world: &mut World, sets: Vec<(u8, Vec<[f32; 2]>)>| {
+            let mut p = world.get::<Mesh>(mesh).unwrap().primitives()[0].clone();
+            for (n, v) in sets {
+                p.streams.insert(Semantic::TexCoord(n), Stream::F32x2(v));
+            }
+            world.insert(mesh, Mesh::new(vec![p]));
+        };
+        let mut refused = world.clone();
+        with(
+            &mut world,
+            vec![
+                (0, vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                (1, vec![[0.25, 0.5], [0.5, 0.5], [0.25, 0.75]]),
+            ],
+        );
+        let mut log = PassLog::default();
+        LowerLayeredReskate::new(OverlayLimit::All)
+            .run(&mut world, &mut log)
+            .unwrap();
+        let prims = world.get::<Mesh>(mesh).unwrap().primitives();
+        let uv = |p: &Primitive| match &p.streams[&Semantic::TexCoord(0)] {
+            Stream::F32x2(v) => v.clone(),
+            s => panic!("{s:?}"),
+        };
+        assert_eq!(uv(&prims[0]), vec![[0.5, 0.0], [2.5, 0.0], [0.5, 4.0]]);
+        assert_eq!(uv(&prims[1]), vec![[0.75, 2.5], [1.5, 2.5], [0.75, 3.25]]);
+        assert_eq!(log.counts["parts drawn at their layer's coordinates"], 2);
+        // the overlay's set missing: refused, nothing changed
+        with(&mut refused, vec![(0, vec![[0.0, 0.0]; 3])]);
+        refused_unchanged(refused, "TexCoord(1)");
     }
 
     #[test]
