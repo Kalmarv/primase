@@ -1,7 +1,7 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X}`: Anvil
 //! Materials
-//! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; so far MAD_Tex1_Rocks, which
-//! combines maps at three UV sets per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
+//! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
+//! MAD_Tex1_UniqueNormalGradient, which combine maps at several UV sets per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
 //!
@@ -20,13 +20,20 @@
 //!   everywhere (0.5 leaves the albedo as it is; every Rocks Material sets the switch); the sediment layer index
 //!   (`t16`) is 0, no sediment, which takes the `Use Terrain Sediments` term out exactly; the rest are 0. A Material
 //!   whose switch is on is counted as so approximated.
-//! - **Output** (layout B, §15.4): base colour `o0.rgb` (sRGB), roughness `o0.w`, metalness 0 (layout B has no
-//!   metalness: the lighting pass uses F0 0.04 and the albedo as diffuse), the normal decoded from `o1` as the
-//!   lighting pass decodes it (its octahedral x, y and the low bits of `o1.z`, the target an 8-bit UNORM one), in the
-//!   frame the shader builds (x along the tangent, y along cross(N, T) w, z along the normal: as a stored normal map
-//!   is read, so `normal-green` states its green as `lower-anvil-material`'s does), occlusion `o1.w` (a texture where
-//!   it isn't 1 everywhere). Specular occlusion and translucency (`o2.zw`) have no PBR place: where they aren't
-//!   (1, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the program reads none).
+//! - **Output** (§15.4, by the shading class the program writes): base colour `o0.rgb` (sRGB), roughness `o0.w`, the
+//!   normal decoded from `o1` as the lighting pass decodes it (its octahedral x, y and the low bits of `o1.z`, the
+//!   target an 8-bit UNORM one), in the frame the shader builds (x along the tangent, y along cross(N, T) w, z along
+//!   the normal: as a stored normal map is read, so `normal-green` states its green as `lower-anvil-material`'s
+//!   does); layout B (classes 3 to 5: Rocks) has no metalness (the lighting pass uses F0 0.04 and the albedo as
+//!   diffuse) and its occlusion in `o1.w`, its specular occlusion and translucency in `o2.zw`; layout A (class 1)
+//!   its metalness in `o1.w`, emission in `o2.z`, occlusion, specular occlusion and translucency in `o3.xzw`.
+//!   Occlusion is a texture where it isn't 1 everywhere; specular occlusion, translucency and emission have no place
+//!   here: where they aren't (1, 0, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the
+//!   programs read none).
+//! - **The camera**: a program that mixes by the distance from the camera (UniqueNormalGradient's medium and micro
+//!   albedo) is run with the camera far, where the mix is constant (the notes' choice, §27.3: the medium albedo, right
+//!   at any distance past 20 m times its `Detail Blend Range`); its micro detail, tens to hundreds of tiles across the
+//!   UV square, is sampled at the bake texel's footprint like every texture.
 //!
 //! The texture covers the shader's UV square (`shader-uv` relating it to the mesh's `TexCoord(0)` as for
 //! `lower-anvil-material`), repeating: exact on a mesh whose UV leaves the square only where the Material's
@@ -106,7 +113,14 @@ struct Recipe {
     /// The engine's textures the program reads: bound to zero, except the terrain's ambient occlusion.
     engine: &'static [u32],
     terrain: Option<Terrain>,
+    /// Whether its program reads the camera's position (`cb1[0]`) against the world position (`TEXCOORD1`): run with
+    /// the camera [`CAMERA_FAR`] from the surface.
+    camera: bool,
 }
+
+/// How far the camera is put from the surface (metres) for a program that mixes by the distance: past every mix's
+/// range.
+const CAMERA_FAR: f32 = 1.0e6;
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
 /// value, hue and saturation at 4 to 6, the terrain switches at 7 and 8, the detail tiling at 9 and 10, the dirt
@@ -123,9 +137,26 @@ const ROCKS: Recipe = Recipe {
         ao_switch: 7,
         sediment_switch: 8,
     }),
+    camera: false,
 };
 
-const RECIPES: &[Recipe] = &[ROCKS];
+/// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
+/// falloff, width and threshold (3, 4, 5; 6, 14, 13; 11, 10, 9) and colours 15, 17, 16, `Micro Tiling` 7, `Detail
+/// Blend Range` 8, `Dirt Color Erode` 12, value, hue and saturation 18 to 20; the medium normal and albedo, the OBJ
+/// normal and mask, the dirt mask and the micro normal and albedo at t75 to t81; no engine texture; the camera's
+/// distance mixing the micro albedo toward the medium.
+const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
+    template: "MAD_Tex1_UniqueNormalGradient",
+    rows: &[
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ],
+    slots: &[0, 1, 2, 3, 4, 5, 6],
+    engine: &[],
+    terrain: None,
+    camera: true,
+};
+
+const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT];
 
 /// The pass (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
@@ -277,8 +308,10 @@ struct Baked {
     roughness: Vec<u8>,
     normal: Vec<u8>,
     occlusion: Option<Vec<u8>>,
-    /// Whether specular occlusion and translucency are (1, 0) everywhere.
-    plain_o2: bool,
+    /// Whether specular occlusion, translucency and emission are (1, 0, 0) everywhere.
+    plain: bool,
+    /// Whether some texel is metallic (layout A).
+    metal: bool,
     /// Whether the Material mixes in the terrain's ambient occlusion, and its sediments.
     terrain_ao: bool,
     sediment: bool,
@@ -348,6 +381,12 @@ impl BakeAnvilMaterial {
         constants
             .set_words(1, 41 * 4 + 1, &[self.mip_bias.to_bits()])
             .map_err(|e| e.to_string())?;
+        // the camera's position (cb1[0]), far along the normal from the surface (at the origin)
+        if recipe.camera {
+            constants
+                .set_words(1, 0, &[0.0, 0.0, CAMERA_FAR].map(f32::to_bits))
+                .map_err(|e| e.to_string())?;
+        }
         let mut textures = BTreeMap::new();
         for &slot in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
@@ -401,7 +440,7 @@ impl BakeAnvilMaterial {
                 size: self.size,
                 period: [1.0; 2],
             },
-            &[(0, 15), (1, 15), (2, 15)],
+            &[(0, 15), (1, 15), (2, 15), (3, 15)],
             Invocation::Quads,
         )
         .map_err(|e| e.to_string())?;
@@ -411,7 +450,8 @@ impl BakeAnvilMaterial {
             roughness: Vec::with_capacity(n * n * 4),
             normal: Vec::with_capacity(n * n * 4),
             occlusion: None,
-            plain_o2: true,
+            plain: true,
+            metal: false,
             terrain_ao,
             sediment,
         };
@@ -424,32 +464,42 @@ impl BakeAnvilMaterial {
             };
             for x in 0..n {
                 let p = row * n + x;
-                let (o0, o1, o2) = (raw.pixels[0][p], raw.pixels[1][p], raw.pixels[2][p]);
+                let [o0, o1, o2, o3] = [0, 1, 2, 3].map(|t| raw.pixels[t][p]);
                 if [o0.1, o1.1, o2.1] != [15; 3] {
                     return Err("the program leaves a G-buffer target unwritten".into());
                 }
-                let [o0, o1, o2] = [o0.0, o1.0, o2.0].map(|v| v.map(f32::from_bits));
+                let o3_written = o3.1 == 15;
+                let [o0, o1, o2, o3] = [o0.0, o1.0, o2.0, o3.0].map(|v| v.map(f32::from_bits));
                 if !o0.iter().chain(&o1).all(|v| v.is_finite()) {
                     return Err("the program writes a value that isn't finite".into());
                 }
                 let (normal, class) = decode_normal([o1[0], o1[1], o1[2]]);
-                if !(3..=5).contains(&class) {
-                    return Err(format!("shading class {class}, not layout B's (3 to 5)"));
-                }
+                // (metalness, occlusion, specular occlusion, translucency, emission) by the layout
+                let (metal, ao, specular, translucency, emission) = match class {
+                    3..=5 => (0.0, o1[3], o2[2], o2[3], 0.0),
+                    1 if o3_written => (o1[3], o3[0], o3[2], o3[3], o2[2]),
+                    _ => {
+                        return Err(format!(
+                            "shading class {class}, not layout A's (1, four targets) or B's (3 to 5)"
+                        ));
+                    }
+                };
                 for c in &o0[..3] {
                     baked.base.push(
                         (primase_image::linear_to_srgb(f64::from(c.clamp(0.0, 1.0))) * 255.0).round() as u8,
                     );
                 }
                 baked.base.push(255);
-                baked.roughness.extend([255, unorm8(o0[3]), 0, 255]);
+                let metal = unorm8(metal);
+                baked.metal |= metal != 0;
+                baked.roughness.extend([255, unorm8(o0[3]), metal, 255]);
                 baked
                     .normal
                     .extend(normal.map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8));
                 baked.normal.push(255);
-                let ao = unorm8(o1[3]);
+                let ao = unorm8(ao);
                 occlusion.extend([ao, ao, ao, 255]);
-                baked.plain_o2 &= o2[2] == 1.0 && o2[3] == 0.0;
+                baked.plain &= specular == 1.0 && translucency == 0.0 && emission == 0.0;
             }
         }
         if occlusion.as_chunks::<4>().0.iter().any(|t| t[0] != 255) {
@@ -597,10 +647,10 @@ impl Pass for BakeAnvilMaterial {
                     1,
                 );
             }
-            if !baked.plain_o2 {
+            if !baked.plain {
                 log.omit(
                     &format!(
-                        "{} Materials' specular occlusion or translucency (no PBR place): left out",
+                        "{} Materials' specular occlusion, translucency or emission (no place here): left out",
                         recipe.template
                     ),
                     1,
@@ -611,7 +661,7 @@ impl Pass for BakeAnvilMaterial {
                 PbrMaterial {
                     base_color: [1.0; 4],
                     base_color_texture: Some(TextureRef::new(base)),
-                    metallic: 0.0,
+                    metallic: if baked.metal { 1.0 } else { 0.0 },
                     roughness: 1.0,
                     metallic_roughness_texture: Some(TextureRef::new(rough)),
                     occlusion_texture: occlusion.map(TextureRef::new),
