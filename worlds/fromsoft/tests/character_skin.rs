@@ -1,8 +1,11 @@
 //! A Sekiro character read by itself against SoulsFormats' reading of the same files (`PRIMASE_FROMSOFT_SKIN_ORACLE`,
 //! one folder per character id): every bone's name, parent and local transform (ours converted back to the file's
 //! frame, against SoulsFormats' `ComputeLocalTransform`, within 2e-5 for f32 Euler arithmetic), every mesh's dynamic
-//! flag, palette and vertex count, and every vertex's position, bone indices and weights as stored (exact). Then the
-//! character lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
+//! flag, palette and vertex count, and every vertex's position, bone indices and weights as stored (exact). Every
+//! texture its materials bind is read (some are kept in other characters' and shared packages). Then the character
+//! lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
+use std::collections::BTreeSet;
+
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
 use primase_fromsoft::dcx::Decoder;
@@ -39,6 +42,20 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
         let dir = oracle.join(&id);
         let mut world = World::new();
         let report = primase_fromsoft::sekiro::read_character(&install, &id, &decoder, &mut world)?;
+        // every texture its materials bind is read, wherever the game keeps it
+        let payloads = world
+            .resource::<primase_fromsoft::sekiro::source::TexturePayloads>()
+            .ok_or("no texture payloads")?;
+        let unbound: BTreeSet<&str> = world
+            .iter::<primase_fromsoft::materials::Material>()
+            .flat_map(|(_, m)| m.bindings.values())
+            .filter(|b| !payloads.0.contains_key(&b.texture))
+            .map(|b| b.texture.as_str())
+            .collect();
+        assert!(
+            unbound.is_empty(),
+            "{id}: textures bound but not read: {unbound:?}"
+        );
         let (_, skeleton) = world.iter::<Skeleton>().next().ok_or("no skeleton")?;
         let model = &world.iter::<SourceModel>().next().ok_or("no model")?.1.0;
         // bones
