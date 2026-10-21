@@ -14,6 +14,10 @@
 //!   `sat(COLOR0.a + Vertex AO)` on the base colour, 1 where Vertex AO is at least 1) isn't a COLOR_0 product: left
 //!   out, reported, as are the effects without a PBR place (translucency, specular occlusion, near fade, dead-tree
 //!   thinning, wind debug). MAD_Tex1_Rocks isn't lowered: it combines maps sampled at three UV sets per pixel.
+//! - **MAD_Clutters_Grass** (layout B, §15.2: [`GRASS`]): base colour its diffuse, alpha its `1 - Alpha` map's red
+//!   (TextureSet slot 18), roughness its normal map's alpha, metalness 0, occlusion `1 + OnOffAO (mask.b - 1)`,
+//!   two-sided. Its noise tint (weighted by a noise tiled in world space), translucency, specular occlusion and
+//!   per-instance dither fade are left out, reported.
 //! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted by `Hue`, `Saturation` and `Luminosity` in
 //!   HSV where its mask (t77, the Material's TextureSet slot 7) has red, everywhere on Decals1 (no mask); roughness
 //!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
@@ -336,6 +340,24 @@ pub const LEAVES: Reads = Reads {
         (31, 0x8A6E_48BC),
         (32, 0x02FD_4532),
         (33, 0x7091_389B),
+    ],
+};
+
+/// MAD_Clutters_Grass's (§15.2; its cb3[1..9] the vertex shader's wind): Translucency 10, Specular Occlusion 11,
+/// Metalness 12 (read by no pixel shader), the noise tint's Value 13, Saturation 14, On-Off 15 and Hue 17, On Off AO
+/// 16. Its textures t75..t79: mask (slot 7), alpha (slot 18), diffuse (slot 0), normal (slot 1), the world-space tint
+/// noise.
+pub const GRASS: Reads = Reads {
+    textures: &[],
+    constants: &[
+        (10, 0x50C4_05F8),
+        (11, 0x9181_5960),
+        (12, 0x6726_790A),
+        (13, 0xDFF0_3A61),
+        (14, 0x338D_C0B2),
+        (15, 0x13DC_5DE5),
+        (16, 0x9F36_C4C8),
+        (17, 0x2D46_EEA4),
     ],
 };
 
@@ -748,6 +770,76 @@ impl Pass for LowerAnvilMaterial {
                         occlusion_texture: occlusion.map(sampled_by),
                         normal_texture: normals.map(sampled_by),
                         alpha_mode,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_Clutters_Grass", _) if !binds_all(&m, &GRASS) => {
+                    log.omit(
+                        "Materials of template \"MAD_Clutters_Grass\" (it doesn't bind the properties its evaluated \
+                         shader reads: a neutral placeholder drawn)",
+                        1,
+                    );
+                    placeholder()
+                }
+                ("MAD_Clutters_Grass", _) => {
+                    // layout B, shading class 4 (foliage): non-metal; each texture its binding's, else its TextureSet slot
+                    let of = |shader: u32, set: usize| {
+                        i.texture(shader)
+                            .or_else(|| m.texture_set.get(set).copied().flatten())
+                    };
+                    let (mask, alpha, diffuse, normals) = (of(0, 7), of(1, 18), of(2, 0), of(3, 1));
+                    let scalar = |v: u32| i.scalar(v);
+                    if scalar(15) != 0.0 && [13, 14, 17].iter().any(|&v| scalar(v) != 0.0) {
+                        log.omit(
+                            "Clutters_Grass Materials' noise tint (weighted by a noise tiled in world space, not the \
+                             mesh's uv): left out",
+                            1,
+                        );
+                    }
+                    for (v, what) in [(10, "translucency"), (11, "specular occlusion")] {
+                        if scalar(v) != 0.0 {
+                            log.omit(
+                                &format!("Clutters_Grass Materials' {what} (no PBR place): left out"),
+                                1,
+                            );
+                        }
+                    }
+                    log.omit(
+                        "Clutters_Grass Materials' per-instance dither fade by distance: left out",
+                        1,
+                    );
+                    if alpha.is_none() {
+                        log.omit(
+                            "Clutters_Grass alpha maps unset (TextureSet slot 18): the diffuse alpha",
+                            1,
+                        );
+                    }
+                    let base = match diffuse {
+                        Some(d) => Some(base_colour(w, &mut made, d, [0.0; 3], None, alpha)?),
+                        None => None,
+                    };
+                    let mr = match normals {
+                        Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), None)?),
+                        None => None,
+                    };
+                    let ao_on = scalar(16);
+                    let occlusion = match mask {
+                        Some(k) if ao_on != 0.0 => Some(occlusion_of(w, &mut made, k, ao_on)?),
+                        _ => None,
+                    };
+                    if let Some(n) = normals {
+                        set_normal(w, n, normal);
+                    }
+                    log.count("MAD_Clutters_Grass Materials lowered", 1);
+                    PbrMaterial {
+                        base_color_texture: base.map(TextureRef::new),
+                        metallic: 1.0,
+                        roughness: 1.0,
+                        metallic_roughness_texture: mr.map(TextureRef::new),
+                        occlusion_texture: occlusion.map(TextureRef::new),
+                        normal_texture: normals.map(TextureRef::new),
+                        alpha_mode,
+                        double_sided: true,
                         ..PbrMaterial::default()
                     }
                 }

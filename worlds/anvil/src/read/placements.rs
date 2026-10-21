@@ -496,9 +496,10 @@ impl<'a> Placer<'a> {
         Ok(e)
     }
 
-    /// The entity holding the Material `id` names, read once: its [`AnvilMaterial`]. `None` where it isn't a
-    /// Material or can't be read (recorded in `placed`).
-    fn material(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
+    /// The entity holding the Material `id` names, read once: its [`AnvilMaterial`], its textures read too. `None`
+    /// where it isn't a Material or can't be read (recorded in `placed`). Placing reads a mesh's Materials so, where the
+    /// placer reads Materials ([`Placer::with_materials`]); a caller may read one by its id.
+    pub fn material(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
         if let Some(&e) = self.materials.get(&id) {
             return e;
         }
