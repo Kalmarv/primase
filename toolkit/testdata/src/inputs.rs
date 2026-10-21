@@ -480,6 +480,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`skin` mode)"#,
     },
     Variable {
+        name: "PRIMASE_FROMSOFT_PART_ORACLE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of SoulsFormats dumps of the Wolf's parts, one folder per part name (`bd_m_9120_l`): the files of PRIMASE_FROMSOFT_SKIN_ORACLE's skeleton.json, meshes.jsonl, meshes/<i>.bin and chrbnd.json (the partsbnd's members), for the part's FLVER; worlds/fromsoft/tests/sekiro_parts.rs"#,
+        status: Status::Live,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`skin` mode, area `part:<name>`)"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_OBJECT_ORACLE",
         kind: Kind::Input,
         gate: true,

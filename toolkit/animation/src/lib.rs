@@ -4,6 +4,7 @@
 //! `core.skeleton`, `core.skin`, `core.morphs`); this crate is the arithmetic, in f64, each result rounded once to f32.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod assemble;
 pub mod curve;
 pub mod deform;
 pub mod joint_table;
@@ -15,6 +16,7 @@ pub mod retarget;
 pub mod retarget_skin;
 pub mod weights;
 
+pub use assemble::{AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, assemble_character};
 pub use map::{MapClip, Rests, Unmapped, map_clip};
 pub use passes::{EvaluateClip, NormalizeSkinWeights, PoseSkin, RootChoice, register};
 pub use retarget::{Reference, RetargetClip, Translation, retarget_clip};

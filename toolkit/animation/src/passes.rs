@@ -485,6 +485,17 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("time", "0"), ("root", "ignore")],
     );
     reg.register_requiring(
+        "assemble-character",
+        crate::assemble::assemble_character,
+        &[
+            ("correspondence", "by-name"),
+            ("reference-pose", "own"),
+            ("tolerance", "0.001"),
+            ("unweighted-rests", "report"),
+            ("name", "character"),
+        ],
+    );
+    reg.register_requiring(
         "retarget-skin",
         crate::retarget_skin::retarget_skin,
         &[("unmapped", "refuse")],
