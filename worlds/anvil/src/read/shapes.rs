@@ -14,7 +14,7 @@ use std::path::Path;
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::AnvilMeshShape;
+use crate::components::{AnvilMeshShape, CollisionMaterialRef};
 use crate::read::data::{Resource, read_entry};
 use crate::read::forge::Forge;
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
@@ -74,7 +74,16 @@ pub fn read_mesh_shapes(
         let shape = MeshShape::parse(&resource.body).map_err(|source| Error::Shape { entry, source })?;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
-        w.insert(prototype, anvil_mesh_shape(&shape, entry, index.id, frame)?);
+        let material_name = |id| {
+            forge
+                .find(id)
+                .and_then(|k| forge.names.get(k))
+                .map(|n| n.name.clone())
+        };
+        w.insert(
+            prototype,
+            anvil_mesh_shape(&shape, entry, index.id, frame, &material_name)?,
+        );
         let placement = w.spawn();
         w.insert(placement, Name(name));
         w.insert(
@@ -91,16 +100,30 @@ pub fn read_mesh_shapes(
 }
 
 /// The [`AnvilMeshShape`] of the MeshShape `shape` (forge entry `entry`, index id `index_id`), its positions converted
-/// through `frame` and its faces reversed where `frame` mirrors.
+/// through `frame`, its faces reversed where `frame` mirrors, and its CollisionMaterials named by `name`.
 pub fn anvil_mesh_shape(
     shape: &MeshShape,
     entry: usize,
     index_id: u64,
     frame: SourceFrame,
+    name: &dyn Fn(u64) -> Option<String>,
 ) -> Result<AnvilMeshShape, Error> {
     let g = shape
         .geometry()
         .map_err(|source| Error::Shape { entry, source })?;
+    let surfaces = shape
+        .surfaces()
+        .map_err(|source| Error::Shape { entry, source })?;
+    let materials = surfaces
+        .references
+        .iter()
+        .map(|r| {
+            r.map(|r| CollisionMaterialRef {
+                id: r.id,
+                name: name(r.id),
+            })
+        })
+        .collect();
     let flip = frame.flips_winding();
     let faces = g
         .faces
@@ -117,5 +140,7 @@ pub fn anvil_mesh_shape(
         faces,
         face_edges: g.face_edges,
         edge_faces: g.edge_faces,
+        materials,
+        face_materials: surfaces.per_face,
     })
 }

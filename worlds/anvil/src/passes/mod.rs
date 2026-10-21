@@ -12,31 +12,58 @@ use primase_core::{
 };
 
 use crate::components::{
-    AnvilCollisionShape, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain, ShapeGeometry,
-    TerrainTile,
+    AnvilCollisionShape, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain,
+    CollisionMaterialRef, ShapeGeometry, TerrainTile,
 };
 
-/// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
-/// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
-/// established, so the program names one, and its class is left unstated). The geometry is consumed.
+/// What names a lowered collision surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceBy {
+    /// Each face's (or primitive's) CollisionMaterial, by its entry's name; `surface` where it has none, or its name
+    /// isn't read.
+    CollisionMaterial,
+    /// `surface`, for everything.
+    One,
+}
+
+/// `lower-anvil-collision{by=collision-material|one,surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`])
+/// becomes `core.collision` on its prototype, each triangle of the surface its CollisionMaterial's entry name names
+/// (`by=collision-material`; `surface` where it has none) or every triangle of `surface` (`by=one`). A surface named
+/// so is unclassified: what a CollisionMaterial is to physics isn't read. The geometry is consumed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerAnvilCollision {
+    pub by: SurfaceBy,
     pub surface: String,
 }
 
 impl LowerAnvilCollision {
-    /// From its options: `surface`, required.
+    /// From its options: `by` and `surface`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilCollision, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "surface") {
+        if let Some(k) = o.keys().find(|k| !["by", "surface"].contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
+        let by = match o.get("by").map(String::as_str) {
+            Some("collision-material") => SurfaceBy::CollisionMaterial,
+            Some("one") => SurfaceBy::One,
+            Some(v) => return Err(format!("by={v} is not collision-material or one")),
+            None => return Err("by=collision-material|one is required".to_owned()),
+        };
         let surface = o
             .get("surface")
             .filter(|s| !s.is_empty())
-            .ok_or("surface=NAME is required: what a MeshShape's surfaces are isn't established")?;
+            .ok_or("surface=NAME is required: the surface of what has no CollisionMaterial (or every surface, by=one)")?;
         Ok(LowerAnvilCollision {
+            by,
             surface: surface.clone(),
         })
+    }
+
+    /// The surface name for a CollisionMaterial (or none).
+    fn name<'m>(&'m self, material: Option<&'m CollisionMaterialRef>) -> &'m str {
+        match (self.by, material.and_then(|m| m.name.as_deref())) {
+            (SurfaceBy::CollisionMaterial, Some(name)) => name,
+            _ => &self.surface,
+        }
     }
 }
 
@@ -45,7 +72,10 @@ impl Pass for LowerAnvilCollision {
         "lower-anvil-collision"
     }
     fn options(&self) -> Options {
-        Options::from([("surface".to_owned(), self.surface.clone())])
+        Options::from([
+            ("by".to_owned(), by_text(self.by).to_owned()),
+            ("surface".to_owned(), self.surface.clone()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilMeshShape::NAME]
@@ -65,43 +95,68 @@ impl Pass for LowerAnvilCollision {
             return Ok(());
         }
         let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
-        let surface = surfaces.index(&self.surface).map_err(|e| e.to_string())?;
         for e in shapes {
             let Some(shape) = w.remove::<AnvilMeshShape>(e) else {
                 continue;
             };
+            // each stored material's surface, then each face's
+            let named = shape
+                .materials
+                .iter()
+                .map(|m| surfaces.index(self.name(m.as_ref())).map_err(|e| e.to_string()))
+                .collect::<Result<Vec<u16>, String>>()?;
+            let fallback = surfaces.index(&self.surface).map_err(|e| e.to_string())?;
             let triangles = shape.faces.len();
+            let face_surfaces: Vec<u16> = (0..triangles)
+                .map(|i| {
+                    let k = shape.face_materials.get(i).map_or(0, |&k| usize::from(k));
+                    named.get(k).copied().unwrap_or(fallback)
+                })
+                .collect();
+            for i in 0..triangles {
+                let k = shape.face_materials.get(i).map_or(0, |&k| usize::from(k));
+                let name = self.name(shape.materials.get(k).and_then(Option::as_ref));
+                log.count(&format!("collision triangles of surface {name}"), 1);
+            }
             w.insert(
                 e,
                 Collision {
                     positions: shape.positions,
                     triangles: shape.faces,
-                    surfaces: vec![surface; triangles],
+                    surfaces: face_surfaces,
                 },
             );
             log.count("MeshShapes lowered to collision", 1);
-            log.count(
-                &format!("collision triangles of surface {}", self.surface),
-                triangles as u64,
-            );
         }
         w.insert_resource(surfaces);
         Ok(())
     }
 }
 
-/// `lower-anvil-shapes`: every SphereShape, CapsuleShape and BoxShape ([`AnvilCollisionShape`]) becomes a core
-/// collider of that shape, its surface the one `surface` names (what a CollisionMaterial is as a surface isn't
-/// lowered here yet).
+/// `lower-anvil-shapes{by=collision-material|one,surface=NAME}`: every SphereShape, CapsuleShape and BoxShape
+/// ([`AnvilCollisionShape`]) becomes a core collider of that shape, of the surface its CollisionMaterial's entry name
+/// names or `surface`, as for `lower-anvil-collision`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerAnvilShapes {
+    pub by: SurfaceBy,
     pub surface: String,
 }
 
 impl LowerAnvilShapes {
-    /// From its options: `surface`, required.
+    /// From its options: `by` and `surface`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilShapes, String> {
-        LowerAnvilCollision::from_options(o).map(|c| LowerAnvilShapes { surface: c.surface })
+        LowerAnvilCollision::from_options(o).map(|c| LowerAnvilShapes {
+            by: c.by,
+            surface: c.surface,
+        })
+    }
+}
+
+/// `by`'s option text.
+fn by_text(by: SurfaceBy) -> &'static str {
+    match by {
+        SurfaceBy::CollisionMaterial => "collision-material",
+        SurfaceBy::One => "one",
     }
 }
 
@@ -110,7 +165,10 @@ impl Pass for LowerAnvilShapes {
         "lower-anvil-shapes"
     }
     fn options(&self) -> Options {
-        Options::from([("surface".to_owned(), self.surface.clone())])
+        Options::from([
+            ("by".to_owned(), by_text(self.by).to_owned()),
+            ("surface".to_owned(), self.surface.clone()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilCollisionShape::NAME]
@@ -130,11 +188,17 @@ impl Pass for LowerAnvilShapes {
             return Ok(());
         }
         let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
-        let surface = surfaces.index(&self.surface).map_err(|e| e.to_string())?;
+        let namer = LowerAnvilCollision {
+            by: self.by,
+            surface: self.surface.clone(),
+        };
         for e in shapes {
             let Some(s) = w.remove::<AnvilCollisionShape>(e) else {
                 continue;
             };
+            let name = namer.name(s.material.as_ref());
+            let surface = surfaces.index(name).map_err(|e| e.to_string())?;
+            log.count(&format!("collision shapes of surface {name}"), 1);
             let (shape, what) = match s.geometry {
                 ShapeGeometry::Sphere { centre, radius } => (
                     Shape::Sphere {
@@ -947,12 +1011,12 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-anvil-collision",
         |o| Ok(Box::new(LowerAnvilCollision::from_options(o)?)),
-        &[("surface", "rr-diagnostic-unknown")],
+        &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
     );
     reg.register_requiring(
         "lower-anvil-shapes",
         |o| Ok(Box::new(LowerAnvilShapes::from_options(o)?)),
-        &[("surface", "rr-diagnostic-unknown")],
+        &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
     reg.register_requiring(

@@ -34,7 +34,8 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh, ShapeGeometry,
+    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh, CollisionMaterialRef,
+    ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -177,6 +178,12 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
     Transform {
         cols: [lin(0), lin(1), lin(2), [0, 1, 2].map(|r| (t[r] + o[3][r]) as f32)],
     }
+}
+
+/// The name of the entry `id` names in `archive`, if any.
+fn entry_name(archive: &Archive, id: u64) -> Option<String> {
+    let at = archive.find(id)?;
+    Some(archive.forge(at.forge)?.names.get(at.entry)?.name.clone())
 }
 
 /// A shape's parts: each a collision prototype and its transform within the shape's owner, if any.
@@ -324,7 +331,8 @@ impl<'a> Placer<'a> {
         let (geometry, material, local) = match r.type_id {
             MESH_SHAPE => {
                 let shape = MeshShape::parse(&r.body).map_err(|source| Error::Shape { at, source })?;
-                let component = anvil_mesh_shape(&shape, at.entry, id, frame)?;
+                let archive = &*self.archive;
+                let component = anvil_mesh_shape(&shape, at.entry, id, frame, &|m| entry_name(archive, m))?;
                 let e = self.prototype(at);
                 self.world.insert(e, component);
                 return Ok(Ok(vec![(e, None)]));
@@ -378,7 +386,10 @@ impl<'a> Placer<'a> {
                 entry: u32::try_from(at.entry).unwrap_or(u32::MAX),
                 index_id: id,
                 geometry,
-                material: material.map(|m| m.id),
+                material: material.map(|m| CollisionMaterialRef {
+                    id: m.id,
+                    name: entry_name(self.archive, m.id),
+                }),
             },
         );
         Ok(Ok(vec![(e, local)]))

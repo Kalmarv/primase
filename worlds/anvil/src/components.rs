@@ -5,7 +5,8 @@ use primase_core::{Component, Entity, World};
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
-/// face's edge ids and each edge's face ids as stored. `entry` and `index_id` name the forge entry it came from.
+/// face's edge ids and each edge's face ids as stored, and the CollisionMaterials its tail names with each face's index
+/// into them. `entry` and `index_id` name the forge entry it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMeshShape {
     pub entry: u32,
@@ -14,6 +15,17 @@ pub struct AnvilMeshShape {
     pub faces: Vec<[u32; 3]>,
     pub face_edges: Vec<[u32; 3]>,
     pub edge_faces: Vec<[u16; 2]>,
+    /// The CollisionMaterials its tail names, in stored order (`None`: a null reference).
+    pub materials: Vec<Option<CollisionMaterialRef>>,
+    /// Each face's index into `materials`, as stored (empty: every face the first).
+    pub face_materials: Vec<u8>,
+}
+
+/// A CollisionMaterial a collision shape names: its ClassID, and its entry's name where a forge read holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollisionMaterialRef {
+    pub id: u64,
+    pub name: Option<String>,
 }
 
 impl Component for AnvilMeshShape {
@@ -27,7 +39,21 @@ impl Component for AnvilMeshShape {
             .find(|&&i| usize::try_from(i).map_or(true, |i| i >= n))
         {
             Some(i) => Err(format!("a face names position {i} of {n}")),
-            None => Ok(()),
+            None if !self.face_materials.is_empty() && self.face_materials.len() != self.faces.len() => {
+                Err(format!(
+                    "{} face materials for {} faces",
+                    self.face_materials.len(),
+                    self.faces.len()
+                ))
+            }
+            None => match self
+                .face_materials
+                .iter()
+                .find(|&&k| usize::from(k) >= self.materials.len())
+            {
+                Some(k) => Err(format!("a face names material {k} of {}", self.materials.len())),
+                None => Ok(()),
+            },
         }
     }
     fn payload_bytes(&self) -> u64 {
@@ -278,14 +304,14 @@ pub enum ShapeGeometry {
 }
 
 /// A SphereShape, CapsuleShape or BoxShape on its prototype (`anvil.collision_shape`): its geometry and its
-/// CollisionMaterial's ClassID as stored. `entry` and `index_id` name the forge entry it came from.
+/// CollisionMaterial. `entry` and `index_id` name the forge entry it came from.
 /// `lower-anvil-shapes` makes core colliders of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilCollisionShape {
     pub entry: u32,
     pub index_id: u64,
     pub geometry: ShapeGeometry,
-    pub material: Option<u64>,
+    pub material: Option<CollisionMaterialRef>,
 }
 
 impl Component for AnvilCollisionShape {

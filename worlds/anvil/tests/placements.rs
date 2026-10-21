@@ -5,7 +5,8 @@ use primase_anvil::components::{
     AnvilCollisionShape, AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape, ShapeGeometry,
 };
 use primase_anvil::passes::{
-    LowerAnvilCollision, LowerAnvilLods, LowerAnvilMesh, LowerAnvilShapes, MeshNormals, UvV, UvWords,
+    LowerAnvilCollision, LowerAnvilLods, LowerAnvilMesh, LowerAnvilShapes, MeshNormals, SurfaceBy, UvV,
+    UvWords,
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
@@ -13,7 +14,7 @@ use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Place
 use primase_anvil::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::{Collider, Instance, Lods, Mesh, Name, Transform, World};
+use primase_core::{Collider, Instance, Lods, Mesh, Name, Surfaces, Transform, World};
 use primase_testdata::real_data;
 
 /// The cube root of a transform's determinant: its uniform scale where it is one.
@@ -356,15 +357,29 @@ fn collision_lies_within_its_owners_bounds() {
     let pipeline = Pipeline {
         passes: vec![
             Box::new(LowerAnvilShapes {
+                by: SurfaceBy::CollisionMaterial,
                 surface: surface.clone(),
             }),
-            Box::new(LowerAnvilCollision { surface }),
+            Box::new(LowerAnvilCollision {
+                by: SurfaceBy::CollisionMaterial,
+                surface,
+            }),
         ],
     };
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let mut report = RunReport::default();
     manager.run(&mut w, &pipeline, &mut report).expect("lower");
     assert_eq!(w.iter::<Collider>().count(), prototypes);
+    // their surfaces: the game's CollisionMaterials by name (CM_...), every shape and face of these resolving to one
+    let surfaces = w.resource::<Surfaces>().expect("surfaces");
+    let names: Vec<&str> = surfaces.0.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names
+            .iter()
+            .all(|n| n.starts_with("CM_") || *n == "rr-diagnostic-unknown"),
+        "{names:?}"
+    );
+    assert!(names.len() > 3, "{names:?}");
     assert_eq!(
         w.iter::<AnvilCollisionShape>().count() + w.iter::<AnvilMeshShape>().count(),
         0
