@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 primase-bytes.workspace = true
 primase-compress.workspace = true
+sha1.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

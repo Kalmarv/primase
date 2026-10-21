@@ -13,6 +13,7 @@ pub mod bundle;
 pub mod db;
 pub mod depot;
 pub mod ebx;
+pub mod fbmod;
 pub mod lookup;
 mod read;
 pub mod toc;

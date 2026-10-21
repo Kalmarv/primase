@@ -608,6 +608,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "third-party: ReSkate Studio's CLI (20261012)",
     },
     Variable {
+        name: "PRIMASE_RESKATE_FBMOD",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`PRIMASE_OODLE9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs"#,
+        status: Status::Live,
+        source: "ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle",
+    },
+    Variable {
         name: "PRIMASE_CODEC_CORPUS",
         kind: Kind::Input,
         gate: true,

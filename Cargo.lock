@@ -934,6 +934,7 @@ dependencies = [
  "primase-bytes",
  "primase-compress",
  "primase-testdata",
+ "sha1",
  "thiserror",
 ]
 
