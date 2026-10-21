@@ -108,7 +108,8 @@ use std::path::Path;
 
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::entity::{
-    BoundingVolume, ENTITY, ENTITY_GROUP, Instance, Slot, StoredEntity, StoredEntityGroup, Visual,
+    BoundingVolume, ComponentBody, ENTITY, ENTITY_GROUP, Instance, Slot, StoredEntity, StoredEntityGroup,
+    Visual,
 };
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::grid::{
@@ -294,6 +295,7 @@ fn entity_outcomes(tally: &mut Tally, e: &StoredEntity) {
             }
             Instance::Mesh(_) => "Visual MeshInstanceData".into(),
             Instance::Raw { kind, .. } => format!("Visual instance {kind:08X} kept"),
+            Instance::None => "Visual without instance data".into(),
         });
     }
     let instanced = e.visuals().any(|v| match &v.instance {
@@ -301,7 +303,7 @@ fn entity_outcomes(tally: &mut Tally, e: &StoredEntity) {
             .iter()
             .any(|s| matches!(s, Slot::Mesh(m) if !m.instances.is_empty())),
         Instance::Mesh(m) => !m.instances.is_empty(),
-        Instance::Raw { .. } => false,
+        Instance::Raw { .. } | Instance::None => false,
     });
     tally.outcome(if instanced { "instanced" } else { "not instanced" });
     // refused by the placement reader: whether the scale applies to instances isn't established
@@ -401,6 +403,35 @@ impl Levels {
                 t.outcome(format!("{what}: {fit}"));
             }
         }
+    }
+}
+
+/// Each RigidBodyComponent's body length and the type its forge's index gives its shape (the reference at its offset
+/// 748, which the reader requires), named where the type is.
+fn rigid_bodies(tally: &mut Tally, e: &StoredEntity, forge: &Forge) {
+    for c in &e.components {
+        let ComponentBody::RigidBody { shape, bytes } = &c.body else {
+            continue;
+        };
+        let to = match shape {
+            None => "none (03)".to_owned(),
+            Some(r) => match forge.find(r.id) {
+                None => format!("mode {}, an id in no entry of this forge", r.mode),
+                Some(k) => {
+                    let t = forge.names[k].type_id;
+                    let name = match t {
+                        0xB22B_3E61 => "MeshShape".to_owned(),
+                        0x2D67_5BA2 => "ReferenceListShape".to_owned(),
+                        0xFA3F_7A18 => "SphereShape".to_owned(),
+                        0xB859_9052 => "CapsuleShape".to_owned(),
+                        0x4EC6_8E98 => "BoxShape".to_owned(),
+                        _ => format!("{t:08X}"),
+                    };
+                    format!("mode {}, a {name}", r.mode)
+                }
+            },
+        };
+        tally.outcome(format!("RigidBody {} B, shape: {to}", bytes.len()));
     }
 }
 
@@ -554,12 +585,14 @@ fn census_forge(
             ENTITY => StoredEntity::parse(&r.body)
                 .map(|e| {
                     entity_outcomes(tally, &e);
+                    rigid_bodies(tally, &e, &forge);
                     levels.gather(&e, false);
                 })
                 .map_err(|e| e.to_string()),
             ENTITY_GROUP => StoredEntityGroup::parse(&r.body)
                 .map(|g| {
                     entity_outcomes(tally, &g.entity);
+                    rigid_bodies(tally, &g.entity, &forge);
                     levels.gather(&g.entity, true);
                     tally.outcome(format!(
                         "{} members, last word {}",

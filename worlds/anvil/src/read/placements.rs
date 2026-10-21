@@ -19,8 +19,14 @@
 //! - In more than one slot, in the LODSelectorInstance itself or in an ImpostorInstanceData: not seen, refused.
 //!
 //! Levels referring to an Impostor are counted, not placed.
+//!
+//! Collision: each RigidBodyComponent's shape (the reference at its offset 748) is placed once at its owner's T R, as
+//! a prototype holding the shape's collision in the owner's local frame; an EntityGroup's (a merged shape spanning
+//! its instances, the notes find) likewise. MeshShapes are read; other shape types are counted
+//! ([`Placed::shapes_unread`]), and so are the RigidBodies of instanced Entities and of owners with a scale other than
+//! 1, whose placement isn't established ([`Placed::instanced_collision`], [`Placed::scaled_collision`]).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
@@ -28,11 +34,14 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::{AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh};
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
-    ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity, StoredEntityGroup, Visual,
+    ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity,
+    StoredEntityGroup, Visual,
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::mesh::{MESH, StoredMesh};
+use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
+use crate::read::shapes::anvil_mesh_shape;
 
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +76,14 @@ pub enum Error {
     Instances(At, &'static str),
     #[error("{0:?}: slot {1} holds a MeshInstanceData but its object's level {1} isn't a Mesh")]
     Slot(At, u8),
+    #[error("{at:?}: {source}")]
+    Shape {
+        at: At,
+        #[source]
+        source: crate::read::mesh_shape::Error,
+    },
+    #[error(transparent)]
+    Shapes(#[from] crate::read::shapes::Error),
 }
 
 /// What an instanced Visual places at each instance: the caller's stated choice, as whether the game draws an
@@ -99,6 +116,19 @@ pub struct Placed {
     /// The member references of the EntityGroups placed, in order. Members aren't placed through their group: each is
     /// an Entity or EntityGroup of its own, which the caller places where it lists it.
     pub members: Vec<u64>,
+    /// The collision placements: each RigidBodyComponent's shape, at its owner's T R s.
+    pub collisions: Vec<Entity>,
+    /// RigidBodyComponents whose shape is of a type this reader doesn't read, by the type (or 0: an id in no forge).
+    pub shapes_unread: BTreeMap<u32, u64>,
+    /// RigidBodyComponents of instanced Entities: how one shape stands for the instances isn't established, so not
+    /// placed.
+    pub instanced_collision: u64,
+    /// StaticDecalComponents: decal geometry made for its one placement, not placed (the Entity's own Visuals are).
+    pub static_decals: u64,
+    /// RigidBodyComponents of owners with a scale other than 1: whether it applies to the shape isn't established
+    /// (the notes: of 298 scaled owners of ReferenceList or Sphere shapes, 154 fit only unscaled, 67 only scaled), so
+    /// not placed.
+    pub scaled_collision: u64,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -163,7 +193,7 @@ fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
             mesh_slots
         }
         Shown::Mesh(m) => vec![(0, m)],
-        Shown::Raw { .. } => Vec::new(),
+        Shown::Raw { .. } | Shown::None => Vec::new(),
     };
     let mut holding = slots.iter().filter(|(_, m)| !m.instances.is_empty());
     let instances = match (holding.next(), holding.next()) {
@@ -192,6 +222,8 @@ pub struct Placer<'a> {
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: the prototype placing every mesh level.
     wholes: HashMap<u64, Entity>,
+    /// Per shape id: the prototype holding its collision (`None`: a type not read, or in no forge).
+    shapes: HashMap<u64, Option<Entity>>,
 }
 
 impl<'a> Placer<'a> {
@@ -202,7 +234,46 @@ impl<'a> Placer<'a> {
             instanced,
             objects: HashMap::new(),
             wholes: HashMap::new(),
+            shapes: HashMap::new(),
         }
+    }
+
+    /// The collision prototype of the shape `id` names, read once: a MeshShape's [`AnvilMeshShape`](crate::components::AnvilMeshShape)
+    /// in the frame meshes are read in (the shape is in its owner's local frame, as its meshes are: the Riders
+    /// Republic notes find the owner's stored bounds holding mesh and shape under s R on 213 of 213 and 218 of 218).
+    /// Other shape types are counted in `placed`.
+    fn shape(&mut self, w: &mut World, id: u64, placed: &mut Placed) -> Result<Option<Entity>, Error> {
+        if let Some(&p) = self.shapes.get(&id) {
+            if p.is_none() {
+                let kind = self
+                    .archive
+                    .find(id)
+                    .and_then(|at| self.archive.forge(at.forge)?.names.get(at.entry))
+                    .map_or(0, |n| n.type_id);
+                *placed.shapes_unread.entry(kind).or_default() += 1;
+            }
+            return Ok(p);
+        }
+        let Some(at) = self.archive.find(id) else {
+            *placed.shapes_unread.entry(0).or_default() += 1;
+            self.shapes.insert(id, None);
+            return Ok(None);
+        };
+        let r = self.archive.resource(at)?;
+        if r.type_id != MESH_SHAPE {
+            *placed.shapes_unread.entry(r.type_id).or_default() += 1;
+            self.shapes.insert(id, None);
+            return Ok(None);
+        }
+        let shape = MeshShape::parse(&r.body).map_err(|source| Error::Shape { at, source })?;
+        let component = anvil_mesh_shape(&shape, at.entry, id, self.frame)?;
+        let e = w.spawn();
+        if let Some(name) = self.name(at) {
+            w.insert(e, Name(name));
+        }
+        w.insert(e, component);
+        self.shapes.insert(id, Some(e));
+        Ok(Some(e))
     }
 
     /// The name of the entry at `at`, if its forge names it.
@@ -298,12 +369,15 @@ impl<'a> Placer<'a> {
     /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
     pub fn place(&mut self, w: &mut World, at: At, placed: &mut Placed) -> Result<(), Error> {
         let r = self.archive.resource(at)?;
-        let e = match r.type_id {
-            ENTITY => StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
+        let (e, group) = match r.type_id {
+            ENTITY => (
+                StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
+                false,
+            ),
             ENTITY_GROUP => {
                 let g = StoredEntityGroup::parse(&r.body).map_err(|source| Error::Entity { at, source })?;
                 placed.members.extend(g.members.iter().map(|m| m.id));
-                g.entity
+                (g.entity, true)
             }
             found => {
                 return Err(Error::Type {
@@ -392,6 +466,50 @@ impl<'a> Placer<'a> {
                 }
                 placed.placements.push(p);
             }
+        }
+        placed.static_decals = placed.static_decals.saturating_add(
+            e.components
+                .iter()
+                .filter(|c| matches!(c.body, ComponentBody::StaticDecal(_)))
+                .count() as u64,
+        );
+        // collision: each RigidBodyComponent's shape, once at its owner's T R (an EntityGroup's merged shape spans its
+        // instances: the notes, docs/skate-plan.md), where the owner's scale is 1
+        let instanced = e
+            .visuals()
+            .any(|v| shows(v, at).is_ok_and(|s| s.instances.is_some()));
+        for c in &e.components {
+            let ComponentBody::RigidBody {
+                shape: Some(shape), ..
+            } = &c.body
+            else {
+                continue;
+            };
+            if instanced && !group {
+                placed.instanced_collision = placed.instanced_collision.saturating_add(1);
+                continue;
+            }
+            if e.scale != 1.0 {
+                placed.scaled_collision = placed.scaled_collision.saturating_add(1);
+                continue;
+            }
+            let Some(prototype) = self.shape(w, shape.id, placed)? else {
+                continue;
+            };
+            let p = w.spawn();
+            w.insert(p, Name(name.clone()));
+            w.insert(
+                p,
+                Instance {
+                    prototype,
+                    variant: 0,
+                },
+            );
+            w.insert(p, self.frame.transform(&transform(&e.matrix, 1.0)));
+            if let Some(layers) = &layers {
+                w.insert(p, layers.clone());
+            }
+            placed.collisions.push(p);
         }
         Ok(())
     }

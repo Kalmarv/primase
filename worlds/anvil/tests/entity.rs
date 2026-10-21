@@ -33,7 +33,7 @@ fn first_mesh(e: &StoredEntity) -> (usize, usize) {
                 _ => None,
             }),
             Instance::Mesh(m) => Some((m.instances.len(), m.material_infos.len())),
-            Instance::Raw { .. } => None,
+            Instance::Raw { .. } | Instance::None => None,
         })
         .unwrap_or_default()
 }

@@ -1,7 +1,7 @@
 //! Real Entities placed into a world through an archive of Riders Republic's forges (searched patch first: a stated
 //! order), then their meshes and levels lowered under the pass manager with its checks on. Instance counts and scales
 //! as the Riders Republic placement notes give them (docs/placement.md §14).
-use primase_anvil::components::{AnvilLods, AnvilMaterialOverrides, AnvilMesh};
+use primase_anvil::components::{AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape};
 use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, MeshNormals, UvV, UvWords};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -52,6 +52,25 @@ fn fixtures_place_and_lower() {
     for (found, noted) in scales.iter().zip([1.13, 1.03, 1.15]) {
         assert!((found - noted).abs() < 0.01, "{scales:?}");
     }
+    // the aspen's RigidBody: an instanced Entity's collision isn't placed
+    assert_eq!((placed.collisions.len(), placed.instanced_collision), (0, 1));
+    // plastic cups: a RigidBody whose shape is a MeshShape, placed once at the Entity's transform
+    let before = placed.placements.len();
+    placer
+        .place(
+            &mut w,
+            At {
+                forge: 1,
+                entry: 47_242,
+            },
+            &mut placed,
+        )
+        .expect("place");
+    let cups = placed.placements[before];
+    let collision = *placed.collisions.last().expect("collision");
+    let shape = w.get::<Instance>(collision).expect("placed").prototype;
+    assert!(w.has::<AnvilMeshShape>(shape));
+    assert_eq!(w.get::<Transform>(collision), w.get::<Transform>(cups));
     // a plain decal, scale 2.2497, one placement
     let before = placed.placements.len();
     placer
@@ -150,6 +169,8 @@ fn groups_place_their_own_visuals_and_report_members() {
     let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Selector);
     placer.place(&mut w, at, &mut placed).expect("place");
     assert_eq!((placed.placements.len(), placed.members.len()), (3, 0));
+    // its RigidBody's shape, a ReferenceListShape: counted, not read
+    assert_eq!(placed.shapes_unread.get(&0x2D67_5BA2), Some(&1));
     // WhiteRoom's light group: no components, three member Entities listed by no cell (docs/placement.md §5)
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_WhiteRoom.forge")]).expect("archive");
     let at = named(&archive, 0, "Light_Spot_CharaGroup");

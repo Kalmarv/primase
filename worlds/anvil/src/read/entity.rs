@@ -33,6 +33,15 @@ pub const ENTITY: u32 = 0x0984_415E;
 pub const ENTITY_GROUP: u32 = 0x3F74_2D26;
 /// A Visual component's type.
 pub const VISUAL: u32 = 0xEC65_8D29;
+/// A component type read with a Visual's grammar (the AC schemas name it StaticDecalComponent: a tool claim; the Riders
+/// Republic notes measure the grammar on 614 bodies, 608 of them then read to their last byte).
+pub const STATIC_DECAL: u32 = 0x2F3A_7F6D;
+/// A RigidBodyComponent's type: the CRC-32 of its name.
+pub const RIGID_BODY: u32 = 0xC177_D702;
+/// Where in a RigidBodyComponent's body (after its type) the reference to its shape lies: a reference on every one of
+/// Riders Republic's, naming a MeshShape, SphereShape, ReferenceListShape, CapsuleShape or BoxShape (the census; the
+/// notes' collision placement, docs/skate-plan.md).
+const SHAPE_AT: usize = 748;
 /// A bounding volume's type.
 pub const BOUNDING_VOLUME: u32 = 0x4AEC_3476;
 /// A LODSelectorInstance's type.
@@ -135,6 +144,8 @@ pub enum Instance {
     Mesh(MeshInstance),
     /// Kept as stored (a LightInstance's 311 bytes, the tail within; a SplashFXInstanceData's).
     Raw { kind: u32, id: u64, bytes: Vec<u8> },
+    /// None: the instance tag `03` (null), as a StaticDecalComponent with no object holds.
+    None,
 }
 
 /// A Visual component as stored.
@@ -160,6 +171,14 @@ pub struct Component {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComponentBody {
     Visual(Visual),
+    /// A StaticDecalComponent: a Visual's grammar, its object decal geometry made for this one placement (the Riders
+    /// Republic notes: on every CITYSCHOOL wall a LODSelector named for the Entity's own StaticDecalComponent).
+    StaticDecal(Visual),
+    /// A RigidBodyComponent: its bytes as stored, and the shape the reference at its offset 748 names.
+    RigidBody {
+        shape: Option<Reference>,
+        bytes: Vec<u8>,
+    },
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
 }
@@ -368,7 +387,26 @@ impl Cursor<'_> {
     fn visual(&mut self) -> Result<Visual, Error> {
         let head = self.array::<4>("Visual")?;
         let object = self.reference()?;
-        self.expect("Visual instance tag", 0, 1)?;
+        let at = self.at;
+        match self.u8("Visual instance tag")? {
+            0 => {}
+            3 => {
+                return Ok(Visual {
+                    head,
+                    object,
+                    instance: Instance::None,
+                    tail: self.visual_tail()?,
+                });
+            }
+            found => {
+                return Err(Error::Value {
+                    what: "Visual instance tag",
+                    at,
+                    found: u64::from(found),
+                    read: "0, or 3 (none)",
+                });
+            }
+        }
         let id = self.u64("Visual instance")?;
         let kind = self.u32("Visual instance type")?;
         let (instance, tail) = match kind {
@@ -585,7 +623,7 @@ impl StoredEntity {
     pub fn visuals(&self) -> impl Iterator<Item = &Visual> {
         self.components.iter().filter_map(|c| match &c.body {
             ComponentBody::Visual(v) => Some(v),
-            ComponentBody::Raw(_) => None,
+            ComponentBody::StaticDecal(_) | ComponentBody::RigidBody { .. } | ComponentBody::Raw(_) => None,
         })
     }
 }
@@ -638,10 +676,25 @@ fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
         c.expect("component tag", 4, 1)?;
         let id = c.u64("component")?;
         let kind = c.u32("component type")?;
-        let body = if kind == VISUAL {
-            ComponentBody::Visual(c.visual()?)
-        } else {
-            ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?)
+        let start = c.at;
+        let body = match kind {
+            VISUAL => ComponentBody::Visual(c.visual()?),
+            STATIC_DECAL => ComponentBody::StaticDecal(c.visual()?),
+            RIGID_BODY => {
+                let bytes = c.raw_component(kind)?.ok_or(Error::Component { index, kind })?;
+                let at = start.saturating_add(SHAPE_AT);
+                let shape: [u8; reference::LENGTH] = bytes
+                    .get(SHAPE_AT..SHAPE_AT.saturating_add(reference::LENGTH))
+                    .and_then(|r| r.try_into().ok())
+                    .ok_or(Error::Short {
+                        what: "RigidBodyComponent shape",
+                        at,
+                        have: bytes.len(),
+                    })?;
+                let shape = reference::parse(shape).map_err(|source| Error::Reference { at, source })?;
+                ComponentBody::RigidBody { shape, bytes }
+            }
+            _ => ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?),
         };
         components.push(Component { id, kind, body });
     }

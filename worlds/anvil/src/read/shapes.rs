@@ -71,33 +71,10 @@ pub fn read_mesh_shapes(
                 type_id: resource.type_id,
             });
         }
-        let shape = |source| Error::Shape { entry, source };
-        let g = MeshShape::parse(&resource.body)
-            .map_err(shape)?
-            .geometry()
-            .map_err(shape)?;
-        let flip = frame.flips_winding();
-        let faces = g
-            .faces
-            .iter()
-            .map(|f| {
-                let [a, b, c] = f.map(u32::from);
-                if flip { [a, c, b] } else { [a, b, c] }
-            })
-            .collect();
+        let shape = MeshShape::parse(&resource.body).map_err(|source| Error::Shape { entry, source })?;
         let prototype = w.spawn();
         w.insert(prototype, Name(name.clone()));
-        w.insert(
-            prototype,
-            AnvilMeshShape {
-                entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
-                index_id: index.id,
-                positions: g.positions.iter().map(|&p| frame.point(p)).collect(),
-                faces,
-                face_edges: g.face_edges,
-                edge_faces: g.edge_faces,
-            },
-        );
+        w.insert(prototype, anvil_mesh_shape(&shape, entry, index.id, frame)?);
         let placement = w.spawn();
         w.insert(placement, Name(name));
         w.insert(
@@ -111,4 +88,34 @@ pub fn read_mesh_shapes(
         placements.push(placement);
     }
     Ok(placements)
+}
+
+/// The [`AnvilMeshShape`] of the MeshShape `shape` (forge entry `entry`, index id `index_id`), its positions converted
+/// through `frame` and its faces reversed where `frame` mirrors.
+pub fn anvil_mesh_shape(
+    shape: &MeshShape,
+    entry: usize,
+    index_id: u64,
+    frame: SourceFrame,
+) -> Result<AnvilMeshShape, Error> {
+    let g = shape
+        .geometry()
+        .map_err(|source| Error::Shape { entry, source })?;
+    let flip = frame.flips_winding();
+    let faces = g
+        .faces
+        .iter()
+        .map(|f| {
+            let [a, b, c] = f.map(u32::from);
+            if flip { [a, c, b] } else { [a, b, c] }
+        })
+        .collect();
+    Ok(AnvilMeshShape {
+        entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
+        index_id,
+        positions: g.positions.iter().map(|&p| frame.point(p)).collect(),
+        faces,
+        face_edges: g.face_edges,
+        edge_faces: g.edge_faces,
+    })
 }
