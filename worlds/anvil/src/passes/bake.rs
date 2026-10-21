@@ -1,7 +1,8 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X}`: Anvil
 //! Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
-//! MAD_Tex1_UniqueNormalGradient, which combine maps at several UV sets per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
+//! MAD_Tex1_UniqueNormalGradient, which combine maps at several UV sets per pixel, and MAD_Road, whose paint its
+//! shader computes per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
 //!
@@ -35,6 +36,11 @@
 //!   at any distance past 20 m times its `Detail Blend Range`); its micro detail, tens to hundreds of tiles across the
 //!   UV square, is sampled at the bake texel's footprint like every texture.
 //!
+//! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
+//! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
+//! on the texture references instead (`lower-anvil-material`'s reading of a UV transform, so `shader-uv` there too):
+//! exact for a period the Material states as a whole number of units.
+//!
 //! The texture covers the shader's UV square (`shader-uv` relating it to the mesh's `TexCoord(0)` as for
 //! `lower-anvil-material`), repeating: exact on a mesh whose UV leaves the square only where the Material's
 //! function repeats with period 1, which the recipe requires of its UV transforms (integer coefficients). What isn't
@@ -45,7 +51,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,
@@ -53,7 +59,7 @@ use primase_core::{
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
 use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, evaluate_raw};
 
-use super::material::ShaderUv;
+use super::material::{ShaderUv, uv_transform};
 use crate::components::{
     AnvilMaterial, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
 };
@@ -104,14 +110,37 @@ struct Terrain {
     sediment_switch: u32,
 }
 
+/// A program's interpolants, after `TEXCOORD0` (the UV), as the recipe's program declares them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Interpolants {
+    /// `TEXCOORD1` the world position, 2 the tangent, 3 the normal and its bitangent sign, 4 the clip position.
+    WorldPosition,
+    /// `TEXCOORD1` the tangent, 2 the normal and its bitangent sign, 3 the clip position.
+    NoWorldPosition,
+}
+
+/// A paint the program computes, periodic in its UV: the Material's UV transform row, and per axis the row whose
+/// value's reciprocal is the period (a whole number of units, else the Material is refused).
+#[derive(Clone, Copy)]
+struct Pattern {
+    uv: u32,
+    frequencies: [u32; 2],
+}
+
 struct Recipe {
     template: &'static str,
+    interpolants: Interpolants,
+    pattern: Option<Pattern>,
     /// `cb3` rows read (from the program's disassembly), each of which the template must bind.
     rows: &'static [u32],
     /// Texture slots (`t(75 + slot)`).
     slots: &'static [u32],
-    /// The engine's textures the program reads: bound to zero, except the terrain's ambient occlusion.
-    engine: &'static [u32],
+    /// Slots whose value reaches only outputs the bake doesn't keep (emission): bound to 0 where the Material sets
+    /// none.
+    unkept: &'static [u32],
+    /// The engine's textures the program reads, each bound to a value (the terrain's ambient occlusion to
+    /// `terrain-ao`).
+    engine: &'static [(u32, f32)],
     terrain: Option<Terrain>,
     /// Whether its program reads the camera's position (`cb1[0]`) against the world position (`TEXCOORD1`): run with
     /// the camera [`CAMERA_FAR`] from the surface.
@@ -129,9 +158,12 @@ const CAMERA_FAR: f32 = 1.0e6;
 /// t20 and t22.
 const ROCKS: Recipe = Recipe {
     template: "MAD_Tex1_Rocks",
+    unkept: &[],
+    interpolants: Interpolants::WorldPosition,
+    pattern: None,
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13],
     slots: &[0, 1, 2, 3, 4],
-    engine: &[13, 14, 16, 19, 20, 22],
+    engine: &[(13, 0.0), (14, 0.0), (16, 0.0), (19, 0.0), (20, 0.0), (22, 0.0)],
     terrain: Some(Terrain {
         ao_texture: 19,
         ao_switch: 7,
@@ -147,6 +179,9 @@ const ROCKS: Recipe = Recipe {
 /// distance mixing the micro albedo toward the medium.
 const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     template: "MAD_Tex1_UniqueNormalGradient",
+    unkept: &[],
+    interpolants: Interpolants::WorldPosition,
+    pattern: None,
     rows: &[
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ],
@@ -156,7 +191,28 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     camera: true,
 };
 
-const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT];
+/// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
+/// `Luminosity` 5, `Line Offset` 7, `Line Width` 8, `Line Gap` 9, `Line Frequency` 10, `Lane Width` 11, `Lane Offset`
+/// 12, `3.Base tiling` 13 and 14 (`Alpha`, 6, not read by its key); `1.Normal Map` t75, `4.Emissive Mask` t76; the
+/// exposure t23, which its emission is divided by (1: the emission isn't baked); the emissive mask reaches only the
+/// emission (its one Material sets none: bound to 0). Its paint's period: one over its
+/// line frequency along u, one over its lane width along v.
+const ROAD: Recipe = Recipe {
+    template: "MAD_Road",
+    unkept: &[1],
+    interpolants: Interpolants::NoWorldPosition,
+    pattern: Some(Pattern {
+        uv: 13,
+        frequencies: [10, 11],
+    }),
+    rows: &[1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14],
+    slots: &[0, 1],
+    engine: &[(23, 1.0)],
+    terrain: None,
+    camera: false,
+};
+
+const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT, ROAD];
 
 /// The pass (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
@@ -315,6 +371,8 @@ struct Baked {
     /// Whether the Material mixes in the terrain's ambient occlusion, and its sediments.
     terrain_ao: bool,
     sediment: bool,
+    /// A pattern's: the transform from the mesh's UV to its texture.
+    transform: Option<UvTransform>,
 }
 
 /// An 8-bit UNORM store of `x` (what the G-buffer target holds).
@@ -351,7 +409,37 @@ impl BakeAnvilMaterial {
         let (terrain_ao, sediment) = recipe.terrain.map_or((false, false), |t| {
             (switched(t.ao_switch), switched(t.sediment_switch))
         });
+        // a pattern's period per axis, and its Material's UV transform as stored
+        let period = match recipe.pattern {
+            None => None,
+            Some(p) => {
+                let period = p.frequencies.map(|r| rows.get(&r).map_or(0.0, |v| 1.0 / v[0]));
+                if !period
+                    .iter()
+                    .all(|&q| (1.0..=64.0).contains(&q) && q.fract() == 0.0)
+                {
+                    return Err(format!(
+                        "a pattern period {period:?} that isn't a whole number of units (1 to 64)"
+                    ));
+                }
+                let floats = m
+                    .bindings
+                    .iter()
+                    .find(|(_, b)| *b == MaterialBinding::UvTransform { vec4: p.uv })
+                    .and_then(|(k, _)| {
+                        m.values.iter().find_map(|(key, v)| match v {
+                            MaterialValue::Floats(f) if key == k => Some(f.clone()),
+                            _ => None,
+                        })
+                    })
+                    .ok_or("its pattern's UV transform isn't set")?;
+                Some((p, period, floats))
+            }
+        };
         for (key, binding) in &m.bindings {
+            if period.is_some() {
+                break;
+            }
             if let MaterialBinding::UvTransform { vec4 } = binding
                 && let Some(r) = rows.get(vec4).zip(rows.get(&vec4.saturating_add(1)))
                 && ![r.0[0], r.1[1]].iter().all(|s| s.fract() == 0.0)
@@ -377,6 +465,14 @@ impl BakeAnvilMaterial {
                 .set_words(3, row.saturating_mul(4), &v.map(f32::to_bits))
                 .map_err(|e| e.to_string())?;
         }
+        // a pattern is baked in the shader's own UV: its Material's transform the identity
+        if let Some((p, _, _)) = &period {
+            for (row, v) in [(p.uv, [1.0f32, 0.0, 0.0, 0.0]), (p.uv + 1, [0.0, 1.0, 0.0, 0.0])] {
+                constants
+                    .set_words(3, row.saturating_mul(4), &v.map(f32::to_bits))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         // the engine's mip bias (cb1[41].y)
         constants
             .set_words(1, 41 * 4 + 1, &[self.mip_bias.to_bits()])
@@ -388,9 +484,9 @@ impl BakeAnvilMaterial {
                 .map_err(|e| e.to_string())?;
         }
         let mut textures = BTreeMap::new();
-        for &slot in recipe.engine {
+        for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
-            let value = if ao { self.terrain_ao } else { 0.0 };
+            let value = if ao { self.terrain_ao } else { value };
             textures.insert(slot, primase_shader::Texture::Constant([value; 4]));
         }
         for &slot in recipe.slots {
@@ -400,14 +496,18 @@ impl BakeAnvilMaterial {
                 .find(|(_, b)| *b == MaterialBinding::Texture { slot })
                 .map(|(k, _)| *k)
                 .ok_or_else(|| format!("its template binds no texture at t{}", 75 + slot))?;
-            let e = m
-                .values
-                .iter()
-                .find_map(|(k, v)| match v {
-                    MaterialValue::Texture { texture, .. } if *k == key => *texture,
-                    _ => None,
-                })
-                .ok_or_else(|| format!("no texture at t{} (unset, or not read)", 75 + slot))?;
+            let set = m.values.iter().find_map(|(k, v)| match v {
+                MaterialValue::Texture { texture, .. } if *k == key => *texture,
+                _ => None,
+            });
+            let e = match set {
+                Some(e) => e,
+                None if recipe.unkept.contains(&slot) => {
+                    textures.insert(75 + slot, primase_shader::Texture::Constant([0.0; 4]));
+                    continue;
+                }
+                None => return Err(format!("no texture at t{} (unset, or not read)", 75 + slot)),
+            };
             let t = w
                 .get::<Texture>(e)
                 .ok_or("a bound texture holds no core texture")?;
@@ -423,14 +523,26 @@ impl BakeAnvilMaterial {
             textures.insert(75 + slot, primase_shader::Texture::Image(Arc::new(image)));
         }
         let constant = |v: [f32; 4]| Input::Constant(v);
-        let inputs = BTreeMap::from([
+        // the world position at the origin, tangent +x, normal +z, bitangent sign +1, the clip position's w 1
+        let frame = [
+            constant([1.0, 0.0, 0.0, 0.0]),
+            constant([0.0, 0.0, 1.0, 1.0]),
+            constant([0.0, 0.0, 0.0, 1.0]),
+        ];
+        let mut inputs = BTreeMap::from([
             (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),
             (("TEXCOORD".to_owned(), 0), Input::GridUv),
-            (("TEXCOORD".to_owned(), 1), constant([0.0; 4])),
-            (("TEXCOORD".to_owned(), 2), constant([1.0, 0.0, 0.0, 0.0])),
-            (("TEXCOORD".to_owned(), 3), constant([0.0, 0.0, 1.0, 1.0])),
-            (("TEXCOORD".to_owned(), 4), constant([0.0, 0.0, 0.0, 1.0])),
         ]);
+        let first = match recipe.interpolants {
+            Interpolants::WorldPosition => {
+                inputs.insert(("TEXCOORD".to_owned(), 1), constant([0.0; 4]));
+                2
+            }
+            Interpolants::NoWorldPosition => 1,
+        };
+        for (k, input) in frame.into_iter().enumerate() {
+            inputs.insert(("TEXCOORD".to_owned(), first + k as u32), input);
+        }
         let raw = evaluate_raw(
             &shader,
             &constants,
@@ -438,7 +550,7 @@ impl BakeAnvilMaterial {
             &inputs,
             Grid {
                 size: self.size,
-                period: [1.0; 2],
+                period: period.as_ref().map_or([1.0; 2], |(_, q, _)| *q),
             },
             &[(0, 15), (1, 15), (2, 15), (3, 15)],
             Invocation::Quads,
@@ -454,13 +566,29 @@ impl BakeAnvilMaterial {
             metal: false,
             terrain_ao,
             sediment,
+            transform: None,
         };
+        if let Some((_, q, f)) = &period {
+            // the Material's scales and translations over the period: the texture is one period
+            let mut f = f.clone();
+            for (k, q) in [(0, q[0]), (1, q[1]), (2, q[0]), (3, q[1])] {
+                if let Some(v) = f.get_mut(k) {
+                    *v = (f64::from(*v) / f64::from(q)) as f32;
+                }
+            }
+            baked.transform = Some(
+                uv_transform(&f, self.shader_uv)
+                    .map_err(|why| format!("its pattern's UV transform: {why}"))?
+                    .unwrap_or(UvTransform::IDENTITY),
+            );
+        }
         let mut occlusion = Vec::with_capacity(n * n * 4);
         for y in 0..n {
             // the texture's row y is the shader's v = (y + 0.5) / n, or 1 minus it
-            let row = match self.shader_uv {
-                ShaderUv::TexCoord => y,
-                ShaderUv::OneMinusV => n - 1 - y,
+            // (a pattern's rows are in its own UV, which its transform maps from the mesh's)
+            let row = match (self.shader_uv, &period) {
+                (ShaderUv::OneMinusV, None) => n - 1 - y,
+                _ => y,
             };
             for x in 0..n {
                 let p = row * n + x;
@@ -656,17 +784,21 @@ impl Pass for BakeAnvilMaterial {
                     1,
                 );
             }
+            let sampled = |t: Entity| TextureRef {
+                transform: baked.transform,
+                ..TextureRef::new(t)
+            };
             w.insert(
                 e,
                 PbrMaterial {
                     base_color: [1.0; 4],
-                    base_color_texture: Some(TextureRef::new(base)),
+                    base_color_texture: Some(sampled(base)),
                     metallic: if baked.metal { 1.0 } else { 0.0 },
                     roughness: 1.0,
-                    metallic_roughness_texture: Some(TextureRef::new(rough)),
-                    occlusion_texture: occlusion.map(TextureRef::new),
+                    metallic_roughness_texture: Some(sampled(rough)),
+                    occlusion_texture: occlusion.map(sampled),
                     occlusion_strength: 1.0,
-                    normal_texture: Some(TextureRef::new(normal_map)),
+                    normal_texture: Some(sampled(normal_map)),
                     alpha_mode: AlphaMode::Opaque,
                     double_sided: false,
                     ..PbrMaterial::default()

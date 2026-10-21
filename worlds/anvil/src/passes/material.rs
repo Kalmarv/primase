@@ -784,7 +784,7 @@ impl Inputs<'_> {
 
 /// A UV property's 8 floats as a transform of the mesh's `TexCoord(0)` (see the module documentation): `None` for
 /// the identity, or why it isn't lowered.
-fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTransform>, &'static str> {
+pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTransform>, &'static str> {
     let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f else {
         return Err("not 8 floats");
     };
