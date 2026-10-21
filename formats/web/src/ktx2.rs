@@ -26,7 +26,7 @@ pub enum Role {
     Colour,
     /// A normal map: written as PNG.
     Normal,
-    /// Metallic-roughness, occlusion, specular strength, weight masks: linear.
+    /// Metallic-roughness, occlusion, specular strength, weight masks, height maps: linear.
     Mask,
 }
 
@@ -276,7 +276,8 @@ impl TextureEncoder {
                     .as_f64()
                     .unwrap_or(1.) as f32;
                 let cutoff = material["alphaCutoff"].as_f64().unwrap_or(0.5) as f32;
-                // PRIMASE_layered_material version 2: every mask a weight channel samples is linear data
+                // PRIMASE_layered_material: every mask a weight channel samples (version 2) and every height map
+                // (version 3) is linear data
                 let mut masks = Vec::new();
                 let channels = "/extensions/PRIMASE_layered_material/weights/channels";
                 for (i, c) in material
@@ -298,6 +299,12 @@ impl TextureEncoder {
                         }
                     }
                 }
+                let heights = "/extensions/PRIMASE_layered_material/weights/heights";
+                let slots = material
+                    .pointer(heights)
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                masks.extend((0..slots).map(|i| format!("{heights}/{i}/mask/texture/index")));
                 for (pointer, role) in [
                     ("/pbrMetallicRoughness/baseColorTexture/index", Role::Colour),
                     ("/emissiveTexture/index", Role::Colour),
@@ -1164,6 +1171,38 @@ mod tests {
             role(&format!("{channels}/1/threshold/m/mask/texture/index")),
             "mask"
         );
+    }
+
+    /// A version 3 material's height maps are masks, and each binding names the texture of its own role: the image
+    /// bound as base colour and as a height map is written twice, the height binding moved to the mask's texture.
+    #[test]
+    fn height_maps_are_masks() {
+        let png = png_rgba(4, 4, &[200, 180, 160, 17].repeat(16)).unwrap();
+        let height = json!({"mask":{"texture":{"index":0},"channels":[1,0,0,0],"bias":0}});
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":png.len()}],
+            "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
+            "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
+            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},
+                "extensions":{"PRIMASE_layered_material":{"version":3,"weights":{"attribute":"COLOR_0",
+                "mapping":"identity","heights":[height,{"vertex":{"attribute":"COLOR_0","channel":1}}]},
+                "composition":{"height":{"contrast":0.5}},"layers":[{"material":0},{"material":0}]}}}]});
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
+        let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
+        let doc: Value = serde_json::from_slice(chunks.json).unwrap();
+        let texture =
+            |pointer: &str| doc["materials"][0].pointer(pointer).unwrap().as_u64().unwrap() as usize;
+        let role = |t: usize| {
+            let image = doc["textures"][t]["extensions"]["KHR_texture_basisu"]["source"]
+                .as_u64()
+                .unwrap() as usize;
+            doc["images"][image]["extras"]["primase.web_texture"]["role"].clone()
+        };
+        let colour = texture("/pbrMetallicRoughness/baseColorTexture/index");
+        let mask = texture("/extensions/PRIMASE_layered_material/weights/heights/0/mask/texture/index");
+        assert_eq!(doc["textures"].as_array().unwrap().len(), 2);
+        assert_ne!(colour, mask);
+        assert_eq!((role(colour), role(mask)), (json!("colour"), json!("mask")));
     }
 
     /// The writer writes an image in each role it is bound in, at the size it is given: never resized, sides that

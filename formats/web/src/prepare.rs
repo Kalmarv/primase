@@ -2,7 +2,8 @@
 //! which writes what it is given and never lowers a resolution.
 //!
 //! Each texture a material binds is sampled in one role ([`Role`]): colour (base colour, emissive, specular colour),
-//! normal, or mask (metallic-roughness, occlusion, specular strength, a layered material's weight masks). A texture
+//! normal, or mask (metallic-roughness, occlusion, specular strength, a layered material's weight masks and height
+//! maps). A texture
 //! bound in several roles gets a copy per further role (`<name>~mask`, `<name>~normal`), its bindings in that role
 //! moved to the copy, so each is filtered and encoded as what it is. Data textures (`TexRole::Data`) are left as
 //! stored.
@@ -297,6 +298,10 @@ enum Slot {
         channel: usize,
         source: usize,
     },
+    /// A layered material's height source of slot `slot` (the height composition).
+    Height {
+        slot: usize,
+    },
 }
 
 impl Slot {
@@ -304,7 +309,11 @@ impl Slot {
         match self {
             Slot::BaseColor | Slot::Emissive | Slot::SpecularColor => Role::Colour,
             Slot::Normal => Role::Normal,
-            Slot::MetallicRoughness | Slot::Occlusion | Slot::Specular | Slot::Mask { .. } => Role::Mask,
+            Slot::MetallicRoughness
+            | Slot::Occlusion
+            | Slot::Specular
+            | Slot::Mask { .. }
+            | Slot::Height { .. } => Role::Mask,
         }
     }
 }
@@ -352,16 +361,27 @@ fn bindings(w: &World) -> Vec<(Entity, Slot, Entity)> {
                 }
             }
         }
+        for (slot, s) in l.weights.heights.iter().enumerate() {
+            if let Source::Mask { texture, .. } = s {
+                out.push((e, Slot::Height { slot }, texture.texture));
+            }
+        }
     }
     out
 }
 
 /// Bind `slot` of `material` to `texture`.
 fn rebind(w: &mut World, material: Entity, slot: Slot, texture: Entity) {
-    if let Slot::Mask { channel, source } = slot {
+    if let Slot::Mask { .. } | Slot::Height { .. } = slot {
         let mut l = w.get::<LayeredMaterial>(material).expect("bound").clone();
-        let c = &mut l.weights.channels.as_mut().expect("bound")[channel];
-        if let Source::Mask { texture: r, .. } = sources_mut(c).swap_remove(source) {
+        let s = match slot {
+            Slot::Mask { channel, source } => {
+                sources_mut(&mut l.weights.channels.as_mut().expect("bound")[channel]).swap_remove(source)
+            }
+            Slot::Height { slot } => &mut l.weights.heights[slot],
+            _ => unreachable!("a layered slot"),
+        };
+        if let Source::Mask { texture: r, .. } = s {
             r.texture = texture;
         }
         w.insert(material, l);
@@ -678,6 +698,65 @@ mod tests {
                 .0
                 .values()
                 .any(|p| p.source_dimensions == [513, 3] && p.cap == 256)
+        );
+    }
+
+    /// A height map of the height composition is a mask: capped by the mask cap, and given a copy of its own where
+    /// the same texture is also a base colour, the height binding moved to the copy.
+    #[test]
+    fn height_maps_are_prepared_as_masks() {
+        use primase_core::layered::{Composition, Layer, LayerWeights};
+        use primase_core::{Semantic, WeightMapping};
+        let (mut w, wall, _, m, _) = world();
+        let layered = w.spawn();
+        let layer = Some(Layer {
+            material: m,
+            texcoord: None,
+            transform: None,
+        });
+        w.insert(
+            layered,
+            LayeredMaterial {
+                layers: vec![layer.clone(), layer],
+                weights: LayerWeights {
+                    composition: Composition::Height { contrast: 0.5 },
+                    heights: vec![
+                        Source::Mask {
+                            texture: TextureRef::new(wall),
+                            channels: [1., 0., 0., 0.],
+                            bias: 0.,
+                        },
+                        Source::Vertex {
+                            semantic: Semantic::Color(0),
+                            channel: 1,
+                        },
+                    ],
+                    ..LayerWeights::new(Semantic::Color(0), WeightMapping::Identity)
+                },
+            },
+        );
+        pass(&[("color", "512"), ("normal", "512"), ("mask", "64")])
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        let l = w.get::<LayeredMaterial>(layered).unwrap();
+        let Source::Mask { texture, .. } = &l.weights.heights[0] else {
+            panic!("a mask height");
+        };
+        let mr = w
+            .get::<PbrMaterial>(m)
+            .unwrap()
+            .metallic_roughness_texture
+            .unwrap()
+            .texture;
+        assert_eq!(texture.texture, mr, "the height map shares the mask copy of wall");
+        let t = w.get::<Texture>(texture.texture).unwrap();
+        assert_eq!(
+            (
+                t.width,
+                t.height,
+                w.get::<Name>(texture.texture).unwrap().0.as_str()
+            ),
+            (64, 4, "wall~mask")
         );
     }
 
