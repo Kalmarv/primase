@@ -156,7 +156,7 @@ fn mad_tex1() {
     let Some(s) = shader("DataPC.forge", 61047, 0x0B_8247) else {
         return;
     };
-    let mut r = Random(0x6104_7000_0B82_47);
+    let mut r = Random(0x0061_0470_000B_8247);
     let mut worst = Worst::default();
     for case in 0..40 {
         let (normal, diffuse, mask, colour) = (r.texel(), r.texel(), r.texel(), r.texel());
@@ -193,7 +193,7 @@ fn mad_fake() {
     let Some(s) = shader("DataPC.forge", 62269, 0x04_36A1) else {
         return;
     };
-    let mut r = Random(0x6226_9000_0436_A1);
+    let mut r = Random(0x0062_2690_0004_36A1);
     let mut worst = Worst::default();
     for _ in 0..40 {
         let (albedo, normal) = (r.texel(), r.texel());
@@ -213,7 +213,7 @@ fn mad_decals1() {
     let Some(s) = shader("DataPC.forge", 42665, 0x04_05CC) else {
         return;
     };
-    let mut r = Random(0x4266_5000_0405_CC);
+    let mut r = Random(0x0042_6650_0004_05CC);
     let mut worst = Worst::default();
     for _ in 0..40 {
         let (normal, diffuse) = (r.texel(), r.texel());
@@ -243,7 +243,7 @@ fn mad_tex1_wind() {
     let Some(s) = shader("DataPC.forge", 62255, 0x0B_96A2) else {
         return;
     };
-    let mut r = Random(0x6225_5000_0B96_A2);
+    let mut r = Random(0x0062_2550_000B_96A2);
     let mut worst = Worst::default();
     for _ in 0..40 {
         let (normal, diffuse, mask) = (r.texel(), r.texel(), r.texel());
@@ -271,7 +271,7 @@ fn mad_bark() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 16714, 0x05_2F93) else {
         return;
     };
-    let mut r = Random(0x1671_4000_052F_93);
+    let mut r = Random(0x0016_7140_0005_2F93);
     let mut worst = Worst::default();
     for _ in 0..40 {
         let (noise, normal, diffuse, mask) = (r.texel(), r.texel(), r.texel(), r.texel());
@@ -303,7 +303,7 @@ fn mad_tex1_leaves() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 16742, 0x08_E817) else {
         return;
     };
-    let mut r = Random(0x1674_2000_08E8_17);
+    let mut r = Random(0x0016_7420_0008_E817);
     let mut worst = Worst::default();
     for case in 0..40 {
         let (noise, normal, diffuse, mask) = (r.texel(), r.texel(), r.texel(), r.texel());
@@ -347,7 +347,7 @@ fn mad_clutters_grass() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 256_868, 0x05_4B67) else {
         return;
     };
-    let mut r = Random(0x2568_6800_054B_67);
+    let mut r = Random(0x0025_6868_0005_4B67);
     let mut worst = Worst::default();
     for _ in 0..40 {
         let (mask, alpha, diffuse, normal, noise) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
@@ -378,7 +378,7 @@ fn mad_tex2() {
     let Some(s) = shader("DataPC_MAD_WhiteRoom.forge", 211, 0x07_FD79) else {
         return;
     };
-    let mut r = Random(0x0211_0000_07FD_79);
+    let mut r = Random(0x0002_1100_0007_FD79);
     let mut worst = Worst::default();
     for _ in 0..50 {
         let (d_a, d_b, n_a, n_b, m_a, m_b) =
