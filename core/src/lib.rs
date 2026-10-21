@@ -37,6 +37,7 @@ pub use priority::{DropOptional, Priority, drop_optional};
 pub mod state;
 pub mod summary;
 pub mod texformat;
+pub mod translate;
 pub mod world;
 
 pub use components::*;
@@ -48,11 +49,12 @@ pub use world::{
     Resource, World, remap_list,
 };
 
-/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `resolve-state`), as every
-/// crate registers its own: a program builds its registry from these.
+/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `resolve-state`,
+/// `translate-world`), as every crate registers its own: a program builds its registry from these.
 pub fn register(reg: &mut pass::PassRegistry) {
     reg.register("select-lod", select_lod);
     reg.register("drop-optional", drop_optional);
     reg.register("place-spawn", place_spawn);
     reg.register("resolve-state", state::resolve_state);
+    reg.register_requiring("translate-world", translate::translate_world, &[("by", "0,0,0")]);
 }
