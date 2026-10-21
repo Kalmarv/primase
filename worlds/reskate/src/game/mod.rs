@@ -7,6 +7,7 @@
 //! unmirrored. A Frostbite `LinearTransform` (`right`, `up`, `forward`, `trans`: the rows of a row-vector matrix) is
 //! the affine map whose columns are those four vectors.
 
+pub mod rig;
 pub mod skeleton;
 
 use primase_core::Transform;

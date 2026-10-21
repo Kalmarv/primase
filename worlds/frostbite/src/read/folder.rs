@@ -249,4 +249,45 @@ impl Source<'_> {
         }
         Err(Error::Missing(format!("no bundle of {toc} holds the EBX {name}")))
     }
+
+    /// Every EBX document of the bundle named `bundle_name` in the TOC at `toc`, by its file GUID: its name and where
+    /// it lies (read it with [`Source::read_ebx`]). Each document's payload is read for its GUID, not parsed.
+    pub fn ebx_index(&self, toc: &str, bundle_name: &str) -> Result<BTreeMap<[u8; 16], EbxEntry>> {
+        let t = self.folder.toc(toc)?;
+        let (_, region) = t
+            .bundles
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(bundle_name))
+            .ok_or_else(|| Error::Missing(format!("{toc} has no bundle {bundle_name}")))?;
+        let (files, inline) = bundle::read_region(region)?;
+        let (m, first, _) = self
+            .manifest(&files, &inline)?
+            .ok_or_else(|| Error::Missing(format!("{bundle_name} has no manifest")))?;
+        let mut out = BTreeMap::new();
+        for (i, e) in m.ebx.iter().enumerate() {
+            let entry = EbxEntry {
+                name: e.name.clone(),
+                file: files[first + i],
+                size: e.size as usize,
+            };
+            let guid = crate::ebx::read_file_guid(&self.payload(entry.file, entry.size)?)?;
+            out.insert(guid, entry);
+        }
+        Ok(out)
+    }
+
+    /// The EBX document at `entry`, read.
+    pub fn read_ebx(&self, entry: &EbxEntry) -> Result<crate::ebx::Document> {
+        crate::ebx::read(&self.payload(entry.file, entry.size)?)
+    }
+}
+
+/// Where an EBX document of a bundle lies ([`Source::ebx_index`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EbxEntry {
+    /// Its name in the bundle's manifest.
+    pub name: String,
+    pub file: FileRef,
+    /// Its payload's size.
+    pub size: usize,
 }
