@@ -1109,3 +1109,99 @@ fn mad_tex1_fake_river() {
     }
     worst.check("MAD_Tex1_FakeRiver");
 }
+
+/// A sampler answering each sample of t75 with the coordinates it was asked for (`(u, v, 0, 1)`), every other
+/// texture a constant.
+struct Coordinates;
+
+impl Sampler for Coordinates {
+    fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {
+        Ok(if r.texture == 75 {
+            [r.uv[0], r.uv[1], 0.0, 1.0]
+        } else {
+            [0.5, 0.5, 1.0, 1.0]
+        })
+    }
+    fn load(&mut self, _r: Load) -> Result<[u32; 4], String> {
+        Ok([0; 4])
+    }
+    fn structured(&mut self, _slot: u32, _element: u32, _offset: u32) -> Result<u32, String> {
+        Ok(0)
+    }
+    fn store(&mut self, _request: Store) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// MAD_Outskirt (§27.14.3): its program samples the albedo at `((P, 1) . cb2[0], (P, 1) . cb2[1]) + offset) scale`
+/// (P its TEXCOORD0, the object position; cb2[0..1] the placement matrix's first two rows, source frame); the lowering's
+/// rows ([`world_uv_rows`]) on the same point through the placement, converted to core's frame (ENU), give the same
+/// coordinates, whatever the matrix's third row.
+#[test]
+fn mad_outskirt_maps_by_the_world_position() {
+    let Some(s) = template_key("MAD_Outskirt", 0x40_0000) else {
+        return;
+    };
+    let frame = primase_core::frame::SourceFrame::ENU;
+    let mut r = Random(0x0048_0000_0040_0000);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let p = [r.range(-50.0, 50.0), r.range(-50.0, 50.0), r.range(-50.0, 50.0)];
+        let rows: [[f64; 4]; 3] = std::array::from_fn(|_| {
+            [
+                r.range(-1.0, 1.0),
+                r.range(-1.0, 1.0),
+                r.range(-1.0, 1.0),
+                r.range(-5000.0, 5000.0),
+            ]
+        });
+        let (offset, scale, tiling) = (
+            [r.range(-20000.0, 0.0), r.range(-20000.0, 0.0)],
+            r.range(1e-5, 1e-4),
+            16.0,
+        );
+        let mut cb3 = r.decoys(4);
+        set(&mut cb3, 1, tiling);
+        set(&mut cb3, 2, scale);
+        cb3[3] = [offset[0], offset[1], 0.0, 0.0];
+        let inputs: Vec<[u32; 4]> = s
+            .reflection()
+            .inputs
+            .iter()
+            .map(|i| match (i.name.as_str(), i.register) {
+                ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
+                (_, 1) => bits([p[0], p[1], p[2], 1.0]),
+                (_, reg) if reg % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
+                _ => bits([0.0, 0.0, 1.0, 1.0]),
+            })
+            .collect();
+        let buffers: Vec<(u32, Vec<[u32; 4]>)> = s
+            .constant_buffers()
+            .iter()
+            .map(|&(slot, size)| {
+                let v = (0..size as usize)
+                    .map(|row| match slot {
+                        2 if row < 2 => bits(rows[row]),
+                        3 => cb3.get(row).copied().map_or([0; 4], bits),
+                        _ => [0; 4],
+                    })
+                    .collect();
+                (slot, v)
+            })
+            .collect();
+        let views: Vec<(u32, &[[u32; 4]])> = buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
+        let out = s.execute(&inputs, &views, &mut Coordinates).expect("runs");
+        let albedo = float(out.outputs[0][0]);
+        let albedo_v = float(out.outputs[0][1]);
+        // the point through the placement (source frame), in core's frame, through the lowering's rows
+        let source: [f64; 3] =
+            std::array::from_fn(|k| rows[k][0] * p[0] + rows[k][1] * p[1] + rows[k][2] * p[2] + rows[k][3]);
+        let core = frame.point(source.map(|x| x as f32)).map(f64::from);
+        let want = primase_anvil::passes::world_uv_rows(frame, offset, scale)
+            .map(|row| row[0] * core[0] + row[1] * core[1] + row[2] * core[2] + row[3]);
+        // the coordinates are the f32 world position's (thousands of metres) times 1e-5: a few f32 ulps of it
+        worst.see("u", albedo, want[0]);
+        worst.see("v", albedo_v, want[1]);
+    }
+    worst.check("MAD_Outskirt");
+}

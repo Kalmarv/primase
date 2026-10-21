@@ -50,6 +50,11 @@
 //!   (an `AO Mult` outside 0 to 1 is the placeholder, reported); its normal map the generic `Texture` t76, the
 //!   TextureSet's slot 1; roughness 1, metalness 0; two-sided where its flags say. Its specular occlusion (0.2) has no
 //!   PBR place, reported.
+//! - **MAD_Outskirt** (§27.14.3; layout B): its textures sampled at the world position, `uv = (P.xy + offset) scale`
+//!   (`P` the vertex through its placement's matrix, in the source's frame; `offset by 16k`, `divide by 32k`): base
+//!   colour t75, its normal map t76 at `Tiling` times that uv, roughness 1, metalness 0. The rows of that map, in core's
+//!   frame through the Material's ([`world_uv_rows`]), go on the material ([`AnvilWorldUv`]); `lower-anvil-world-uv`
+//!   writes each placement's texture coordinates from them.
 //! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted by `Hue`, `Saturation` and `Luminosity` in
 //!   HSV where its mask (t77, the Material's TextureSet slot 7) has red, everywhere on Decals1 (no mask); roughness
 //!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
@@ -149,7 +154,9 @@ use primase_core::{
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
-use crate::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue};
+use crate::components::{
+    AnvilMaterial, AnvilTextureMap, AnvilWorldUv, MaterialBinding, MaterialFlags, MaterialValue,
+};
 
 /// How the alpha channel is drawn: the program's statement.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -788,6 +795,30 @@ pub const UNDERGROUND_BOX: Reads = Reads {
     constants: &[(1, 0x0DC5_9729), (2, 0x94CC_C693)],
 };
 
+/// MAD_Outskirt's (§27.14.3): `1:Albedo_Base` t75, `Normal_Snow` t76; `Tiling` 1, `divide by 32k` 2, `offset by 16k`
+/// 3 (a vec4: x and y).
+pub const OUTSKIRT: Reads = Reads {
+    textures: &[(0, 0x60DC_8A41), (1, 0x05AF_873A)],
+    constants: &[(1, 0xACA1_F4B8), (2, 0x1968_648B), (3, 0xD2CD_A52F)],
+};
+
+/// The rows taking a world point in core's frame (`(x, y, z, 1)`) to MAD_Outskirt's texture coordinates
+/// `((s.x + offset.x) scale, (s.y + offset.y) scale)`, `s` the point in the source's `frame` (its x and y, as its
+/// program dots the position with the placement matrix's first two rows).
+pub fn world_uv_rows(frame: primase_core::frame::SourceFrame, offset: [f64; 2], scale: f64) -> [[f64; 4]; 2] {
+    // the source's x and y are linear in core's coordinates: each a coefficient per core axis
+    let axis = |k: usize| frame.point_to_source(std::array::from_fn(|i| if i == k { 1.0 } else { 0.0 }));
+    let columns = [axis(0), axis(1), axis(2)];
+    std::array::from_fn(|r| {
+        [
+            f64::from(columns[0][r]) * scale,
+            f64::from(columns[1][r]) * scale,
+            f64::from(columns[2][r]) * scale,
+            offset[r] * scale,
+        ]
+    })
+}
+
 /// SHD_Nat_Veg_Grass_AO's (§27.14.8): `0: Layer1 Diffuse + Alpha Map` t75, the generic `Texture` t76 (its normal
 /// map, the TextureSet's slot 1); `AO Mult` 1.
 pub const GRASS_AO: Reads = Reads {
@@ -1082,6 +1113,7 @@ impl Pass for LowerAnvilMaterial {
             Texture::NAME,
             VertexColor::NAME,
             Name::NAME,
+            AnvilWorldUv::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -1512,6 +1544,40 @@ impl Pass for LowerAnvilMaterial {
                         1,
                     );
                     placeholder()
+                }
+                ("MAD_Outskirt", _) if binds_all(&m, &OUTSKIRT) => {
+                    let albedo = i.texture(0);
+                    if let Some(a) = albedo {
+                        set_colour(w, a, TexRole::Color);
+                    }
+                    let normals = i.texture(1);
+                    if let Some(n) = normals {
+                        set_normal(w, n, normal);
+                    }
+                    let offset = i.vector(3).unwrap_or([0.0; 4]);
+                    w.insert(
+                        e,
+                        AnvilWorldUv {
+                            rows: world_uv_rows(m.frame, [offset[0], offset[1]], i.scalar(2)),
+                        },
+                    );
+                    let tiling = i.scalar(1) as f32;
+                    log.count("MAD_Outskirt Materials lowered (mapped by the world position)", 1);
+                    PbrMaterial {
+                        base_color_texture: albedo.map(TextureRef::new),
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        normal_texture: normals.map(|n| TextureRef {
+                            transform: Some(UvTransform {
+                                offset: [0.0, 0.0],
+                                scale: [tiling, tiling],
+                                rotation: 0.0,
+                            }),
+                            ..TextureRef::new(n)
+                        }),
+                        alpha_mode,
+                        ..PbrMaterial::default()
+                    }
                 }
                 (_, _) if tex2.is_some_and(|rows| rows.state.is_some_and(|s| i.scalar(s) != 0.0)) => {
                     log.omit(

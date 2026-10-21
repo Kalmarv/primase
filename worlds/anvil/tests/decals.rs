@@ -156,7 +156,7 @@ fn pass() -> LowerAnvilDecals {
         range: f64::from(1u32 << 23),
         offset: 0.0,
         sample: CellPoint::Corner,
-        family: FamilyRule::Bytes48And49,
+        family: FamilyRule::WriteGBufferRoughness,
         cutoff: CUTOFF,
         lift: LIFT,
     }

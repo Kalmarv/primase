@@ -1,5 +1,5 @@
-//! `lower-anvil-decals{rect=x0,y0,x1,y1,step=N,range=METRES,offset=METRES,sample=corner|centre,family=bytes-48-49,
-//! cutoff=X,lift=UNITS}`:
+//! `lower-anvil-decals{rect=x0,y0,x1,y1,step=N,range=METRES,offset=METRES,sample=corner|centre,
+//! family=write-gbuffer-roughness,cutoff=X,lift=UNITS}`:
 //! the deferred decals ([`AnvilDeferredDecals`]) of the box family (`ddecal.hlsl` PS 381 with VS 382, material-spec
 //! §23) become meshes draped on the ground `lower-anvil-terrain` draws with the same `rect`, `step`, `range`, `offset`
 //! and `sample` (run before it, while the terrain is read). Each value is the engine's, read, or a stated choice:
@@ -7,10 +7,10 @@
 //! - **Which** (stated): the decals whose box's centre lies in `rect` (x0 <= x < x1, y0 <= y < y1), of a DDecalModel
 //!   of the box family by `family`'s rule; the terrain family (PS 353: the engine writes those into the terrain's
 //!   bake, not the G-buffer) and models without a Diffuse, Normal or Mask1 left out, counted. Which permutation a
-//!   model draws with isn't read (the engine's selector wasn't found): `family=bytes-48-49` states the rule
-//!   [`family`] (material-spec §23.8: body bytes 48 and 49 are bits 6 and 7 of the model's flag word, equal on all 70
-//!   models, 1 on the 17 whose names and textures are road lines, cracks, tire traces and guidance, 0 on the 53
-//!   trails, borders, ground and footprints).
+//!   model draws with isn't read (the engine's selector wasn't found): `family=write-gbuffer-roughness` states the
+//!   rule [`family`] (material-spec §23.8, §23.9: body byte 49 is the model's `WriteGBufferRoughness`, by the class
+//!   registry; 1 on the 17 models whose names and textures are road lines, cracks, tire traces and guidance, 0 on the
+//!   53 trails, borders, ground and footprints; byte 48, unnamed, equal to it on all 70).
 //! - **Geometry** (the shader's box test, executed in §23.2; the surface a choice): the engine draws a decal on every
 //!   surface inside its box: `|(P - c) . X| / |X|^2 <= 1`, the same along `Y`, and its depth. This pass takes the
 //!   ground's surface alone: each ground triangle (the grid's own, [`GroundGrid`]) cut to the box, its pieces kept
@@ -75,16 +75,16 @@ pub enum Family {
 /// The stated rule naming a model's family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FamilyRule {
-    /// [`family`]: body bytes 48 and 49.
-    Bytes48And49,
+    /// [`family`]: its `WriteGBufferRoughness`.
+    WriteGBufferRoughness,
 }
 
-/// A DDecalModel's family by `family=bytes-48-49`: its body bytes 48 and 49 (its flags 6 and 7) both 1, the box
-/// family; both 0, the terrain family; `None` otherwise.
+/// A DDecalModel's family by `family=write-gbuffer-roughness`: its `WriteGBufferRoughness` (body byte 49, its flag 7)
+/// 1, the box family; 0, the terrain family; `None` otherwise.
 pub fn family(m: &AnvilDecalModel) -> Option<Family> {
-    match (m.flags[6], m.flags[7]) {
-        (1, 1) => Some(Family::Box),
-        (0, 0) => Some(Family::Terrain),
+    match m.flags[7] {
+        1 => Some(Family::Box),
+        0 => Some(Family::Terrain),
         _ => None,
     }
 }
@@ -94,7 +94,7 @@ impl LowerAnvilDecals {
     /// `lower-anvil-terrain` it lies on), `family`, `cutoff` and `lift`.
     pub fn from_options(o: &Options) -> Result<LowerAnvilDecals, String> {
         let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES, sample=corner|centre (the ground's, as \
-                     lower-anvil-terrain's), family=bytes-48-49, cutoff=X (ref / scale), lift=UNITS";
+                     lower-anvil-terrain's), family=write-gbuffer-roughness, cutoff=X (ref / scale), lift=UNITS";
         let g = ground_options(o, &["range", "family", "cutoff", "lift"], usage)?;
         let number = |k: &str| -> Result<f64, String> {
             let v: f64 = o
@@ -109,8 +109,8 @@ impl LowerAnvilDecals {
             }
         };
         let family = match o.get("family").map(String::as_str) {
-            Some("bytes-48-49") => FamilyRule::Bytes48And49,
-            Some(v) => return Err(format!("family={v} is not bytes-48-49")),
+            Some("write-gbuffer-roughness") => FamilyRule::WriteGBufferRoughness,
+            Some(v) => return Err(format!("family={v} is not write-gbuffer-roughness")),
             None => return Err(format!("family is required: {usage}")),
         };
         let range = number("range")?;
@@ -398,7 +398,7 @@ impl Pass for LowerAnvilDecals {
             (
                 "family".to_owned(),
                 match self.family {
-                    FamilyRule::Bytes48And49 => "bytes-48-49",
+                    FamilyRule::WriteGBufferRoughness => "write-gbuffer-roughness",
                 }
                 .to_owned(),
             ),
@@ -497,7 +497,7 @@ impl LowerAnvilDecals {
                 );
                 continue;
             };
-            let FamilyRule::Bytes48And49 = self.family;
+            let FamilyRule::WriteGBufferRoughness = self.family;
             match family(&m) {
                 Some(Family::Box) => {}
                 Some(Family::Terrain) => {

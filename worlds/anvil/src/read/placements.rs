@@ -721,6 +721,7 @@ impl<'a> Placer<'a> {
                 values,
                 texture_set,
                 textures,
+                frame: self.frame,
                 flags: m.flags(),
                 shaders,
             },

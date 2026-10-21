@@ -656,8 +656,9 @@ pub struct BoundTexture {
 }
 
 /// A Material on its own entity (`anvil.material`): its template (ClassID and entry name), the template's bindings
-/// and the Material's property values, each by the property's key, and each texture binding resolved (`textures`).
-/// `lower-anvil-material` makes PBR of it.
+/// and the Material's property values, each by the property's key, and each texture binding resolved (`textures`);
+/// the frame the program states for the source's points (a template that maps its textures by the world position reads
+/// it). `lower-anvil-material` makes PBR of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMaterial {
     pub index_id: u64,
@@ -669,9 +670,23 @@ pub struct AnvilMaterial {
     pub texture_set: Vec<Option<Entity>>,
     /// Its template's texture bindings, each resolved.
     pub textures: Vec<BoundTexture>,
+    pub frame: primase_core::frame::SourceFrame,
     pub flags: MaterialFlags,
     /// Its template's shader permutations ([`AnvilShaders`]), where the reader reads them.
     pub shaders: Option<Entity>,
+}
+
+/// A lowered material whose shader maps its textures by the world position (`anvil.world_uv`; MAD_Outskirt): the two
+/// rows taking a world point (core frame, `(x, y, z, 1)`) to its texture coordinates. `lower-anvil-world-uv` writes
+/// them into `TexCoord(0)` per placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnvilWorldUv {
+    pub rows: [[f64; 4]; 2],
+}
+
+impl Component for AnvilWorldUv {
+    const NAME: &'static str = "anvil.world_uv";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// A Material's flags as stored: body 41 to 84 (of the 102 bytes after its references, 20 to 63), the fields the

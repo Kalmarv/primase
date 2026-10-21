@@ -8,11 +8,13 @@ pub mod formulas;
 mod material;
 mod splat;
 mod water;
+mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, family};
-pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo};
+pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
+pub use world_uv::LowerAnvilWorldUv;
 
 use primase_core::layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
@@ -2142,6 +2144,7 @@ pub fn register(reg: &mut PassRegistry) {
         &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
+    reg.register("lower-anvil-world-uv", |_| Ok(Box::new(LowerAnvilWorldUv)));
     reg.register_requiring(
         "lower-anvil-material",
         |o| Ok(Box::new(LowerAnvilMaterial::from_options(o)?)),
@@ -2190,7 +2193,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("range", "1"),
             ("offset", "0"),
             ("sample", "corner"),
-            ("family", "bytes-48-49"),
+            ("family", "write-gbuffer-roughness"),
             ("cutoff", "0.4"),
             ("lift", "0.01"),
         ],
