@@ -20,6 +20,16 @@
 //! buffer's vec4 f2, a vec4 there, or a UV transform's two rows from vec4 f2 (docs/material-spec.md §2: executing the
 //! game's pixel shaders on values so placed reproduces their outputs); how far the run extends isn't established, so
 //! every record found is returned, none inferred.
+//!
+//! A texture binding's TextureParameter record ([`texture_parameter`]; Riders Republic docs/material-spec.md §27.0):
+//! its marker 0x7D08460D, a byte 0, its TextureSet channel and slot (u32 each), a u32 0, and two references, the
+//! default set and the default texture (each null where the template names none). It is found as the notes find it,
+//! not by walking the template's object tree (whose layout isn't read): the binding's 10 bytes link a property object
+//! by its u64 id; the object starts where that id first occurs in the body, and its record is the first marker at or
+//! after it. The census (worlds/anvil/tests/template_defaults.rs) checks it on every texture binding of every
+//! MaterialTemplate: a record found and parsed for each (but the two generic bindings of MAD_CHR_Classic_noVWIND_Screen
+//! and _ScreenFlipbook, whose links occur nowhere but in themselves: none), none shared by two bindings of a
+//! template.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -130,11 +140,109 @@ pub fn bindings(body: &[u8]) -> Result<Vec<Binding>, BindingError> {
     Ok(out)
 }
 
+/// A TextureParameter record's marker.
+pub const TEXTURE_PARAMETER: u32 = 0x7D08_460D;
+
+/// A texture binding's TextureParameter record (see the module documentation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureParameter {
+    /// Where its marker starts in the body.
+    pub at: usize,
+    pub channel: u32,
+    pub slot: u32,
+    /// The default set and texture the template names (none: null).
+    pub set: Option<crate::read::reference::Reference>,
+    pub texture: Option<crate::read::reference::Reference>,
+}
+
+impl TextureParameter {
+    /// The record whose marker is at `at` of `body`: refused where its byte or third word isn't 0 or a reference
+    /// doesn't read.
+    pub fn parse(body: &[u8], at: usize) -> Result<TextureParameter, BindingError> {
+        let mut c = Cursor { b: body, at };
+        let short = BindingError::Short(at);
+        let (Some(marker), Some(zero), Some(channel), Some(slot), Some(third)) = (
+            c.u32(),
+            c.take(1).and_then(|b| b.first().copied()),
+            c.u32(),
+            c.u32(),
+            c.u32(),
+        ) else {
+            return Err(short);
+        };
+        if marker != TEXTURE_PARAMETER || zero != 0 || third != 0 {
+            return Err(BindingError::Parameter(at));
+        }
+        let mut reference = || -> Result<Option<crate::read::reference::Reference>, BindingError> {
+            let bytes: [u8; crate::read::reference::LENGTH] = c
+                .take(crate::read::reference::LENGTH)
+                .and_then(|b| b.try_into().ok())
+                .ok_or(BindingError::Short(at))?;
+            crate::read::reference::parse(bytes).map_err(|source| BindingError::Reference { at, source })
+        };
+        let set = reference()?;
+        let texture = reference()?;
+        Ok(TextureParameter {
+            at,
+            channel,
+            slot,
+            set,
+            texture,
+        })
+    }
+}
+
+impl Binding {
+    /// The u64 its 10 bytes link: a reference's id, or the tag-0 form's (none where the reference is null).
+    pub fn link(&self) -> Option<u64> {
+        match &self.target {
+            Target::Reference(r) => r.map(|r| r.id),
+            Target::Stored(bytes) => bytes
+                .get(2..10)
+                .and_then(|w| <[u8; 8]>::try_from(w).ok())
+                .map(u64::from_le_bytes),
+        }
+    }
+}
+
+/// The TextureParameter record of the texture binding `b` of `body` (see the module documentation): `None` where it
+/// isn't a texture binding, links nothing, or its link or a marker after it isn't in the body.
+pub fn texture_parameter(body: &[u8], b: &Binding) -> Result<Option<TextureParameter>, BindingError> {
+    if !matches!(b.kind(), BindingKind::Texture { .. }) {
+        return Ok(None);
+    }
+    let Some(link) = b.link() else {
+        return Ok(None);
+    };
+    let id = link.to_le_bytes();
+    // the binding's own link (at its marker + 26) is no object: on two character templates' generic bindings the
+    // linked u64 occurs nowhere else
+    let own = b.at.checked_add(26);
+    let Some(object) = body
+        .windows(8)
+        .enumerate()
+        .position(|(at, w)| w == id && Some(at) != own)
+    else {
+        return Ok(None);
+    };
+    let marker = TEXTURE_PARAMETER.to_le_bytes();
+    let Some(after) = body
+        .get(object..)
+        .and_then(|rest| rest.windows(4).position(|w| w == marker))
+    else {
+        return Ok(None);
+    };
+    let at = object.checked_add(after).ok_or(BindingError::Short(object))?;
+    TextureParameter::parse(body, at).map(Some)
+}
+
 /// Why a binding record can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum BindingError {
     #[error("MaterialTemplate binding at {0}: the body ends inside it")]
     Short(usize),
+    #[error("MaterialTemplate TextureParameter at {0}: its byte or third word isn't 0")]
+    Parameter(usize),
     #[error("MaterialTemplate binding at {at}: {source}")]
     Reference {
         at: usize,

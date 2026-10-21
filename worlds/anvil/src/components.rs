@@ -625,8 +625,39 @@ pub enum MaterialValue {
     Other,
 }
 
+/// Where a texture binding's texture comes from, as the engine resolves it (Riders Republic docs/material-spec.md
+/// §27.0, the notes' reading of the data: the Material's records override its TextureSet, which overrides the
+/// template's defaults).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureFrom {
+    /// The Material's record for the binding (its property's key; a generic `Texture`'s also its slot and channel).
+    Record,
+    /// The Material's record with a null texture: whether the engine takes that as no texture or as absent (the
+    /// fallback then) isn't read; the texture is none, the fallback kept.
+    NullRecord { fallback: Option<Entity> },
+    /// No record, channel 0: the Material's TextureSet's slot.
+    Set,
+    /// No record, channel 1 or 2: the template's default texture.
+    Default,
+    /// None of them (or the template's TextureParameter not found).
+    Unset,
+}
+
+/// A texture binding of a Material's template resolved: its key, its shader slot `t(75 + shader_slot)`, the
+/// TextureParameter's TextureSet slot and channel (none where the template's record isn't found), the texture and
+/// where it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundTexture {
+    pub key: u32,
+    pub shader_slot: u32,
+    pub parameter: Option<(u32, u32)>,
+    pub texture: Option<Entity>,
+    pub from: TextureFrom,
+}
+
 /// A Material on its own entity (`anvil.material`): its template (ClassID and entry name), the template's bindings
-/// and the Material's property values, each by the property's key. `lower-anvil-material` makes PBR of it.
+/// and the Material's property values, each by the property's key, and each texture binding resolved (`textures`).
+/// `lower-anvil-material` makes PBR of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMaterial {
     pub index_id: u64,
@@ -636,6 +667,8 @@ pub struct AnvilMaterial {
     pub values: Vec<(u32, MaterialValue)>,
     /// Its TextureSet's 19 slots, each its TextureMap's texture entity (empty where it has no TextureSet).
     pub texture_set: Vec<Option<Entity>>,
+    /// Its template's texture bindings, each resolved.
+    pub textures: Vec<BoundTexture>,
     pub flags: MaterialFlags,
     /// Its template's shader permutations ([`AnvilShaders`]), where the reader reads them.
     pub shaders: Option<Entity>,
@@ -703,6 +736,11 @@ impl Component for AnvilMaterial {
             _ => None,
         }));
         out.extend(self.texture_set.iter().flatten());
+        out.extend(self.textures.iter().filter_map(|t| t.texture));
+        out.extend(self.textures.iter().filter_map(|t| match t.from {
+            TextureFrom::NullRecord { fallback } => fallback,
+            _ => None,
+        }));
         out.extend(self.shaders);
     }
 }

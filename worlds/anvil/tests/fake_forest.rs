@@ -21,6 +21,7 @@ fn material(w: &mut World, template: &str) -> Entity {
             bindings: Vec::new(),
             values: Vec::new(),
             texture_set: Vec::new(),
+            textures: Vec::new(),
             flags: MaterialFlags {
                 blend_mode: 0,
                 alpha_display_mode: 1,
@@ -107,7 +108,7 @@ fn fake_forest_takes_its_vertex_colour_decoded() {
 /// map the TextureSet's slot 1, two-sided by its flags.
 #[test]
 fn grass_ao_takes_its_vertex_alpha_as_occlusion() {
-    use primase_anvil::components::{MaterialBinding, MaterialValue};
+    use primase_anvil::components::{BoundTexture, MaterialBinding, MaterialValue, TextureFrom};
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
     let mut w = World::new();
     let texture = |w: &mut World| {
@@ -147,6 +148,23 @@ fn grass_ao_takes_its_vertex_alpha_as_occlusion() {
             (0x5E05_FBCF, MaterialValue::Float(1.0)),
         ];
         m.texture_set = vec![Some(diffuse), Some(normal)];
+        // as the reader resolves them: the diffuse its record, the generic normal map the set's slot 1
+        m.textures = vec![
+            BoundTexture {
+                key: 0x74B9_1491,
+                shader_slot: 0,
+                parameter: Some((0, 0)),
+                texture: Some(diffuse),
+                from: TextureFrom::Record,
+            },
+            BoundTexture {
+                key: 0x4DDB_34EE,
+                shader_slot: 1,
+                parameter: Some((1, 0)),
+                texture: Some(normal),
+                from: TextureFrom::Set,
+            },
+        ];
         m.flags.booleans[MaterialFlags::TWO_SIDED] = 1;
     }
     let colour = [[10, 20, 30, 255], [10, 20, 30, 128], [10, 20, 30, 0]];

@@ -65,19 +65,23 @@
 //!   only ones its placed permutation reads; the team looks are runtime state); its hue wraps where Tex1's doesn't, so
 //!   a negative Neutral hue (none placed) is the placeholder, reported.
 //! - **MAD_Tex2_TintBFromShaderConstants** (§27.5): MAD_Tex2 with layer B tinted by the Neutral constants.
-//! - **MAD_Grounds** (§27.7): with its generic masks empty (white, as on every placed Material) and no tire wear (its
-//!   program's `COLOR1.x`, which the meshes don't carry, stated 1: reported), its arithmetic is one layer as a Tex1 without
-//!   mask or occlusion: layer A, or layer B where `Use Blend` is 1 (a fractional one, a mask set or a `Tire Albedo`
-//!   above 1 is the placeholder, reported); its diffuse tinted by `Hue`, `Saturate` and `Luminosity` everywhere,
-//!   roughness and metalness the normal map's alpha and blue raw, both layers at `Base tiling`.
+//! - **MAD_Grounds** (§27.7, corrected): its masks are real (t79 the TextureSet's slot 7, t80 the template's
+//!   parquet default), but with the neutral vertex the meshes' lowering states (no tire wear: its program's scalar
+//!   `c` 1; the vertex colour white: reported) and `Use Blend` 0, a `Tire Albedo` at most 1 and a `Tire Vertex Color
+//!   Impact` at least 0, its arithmetic is layer A alone whatever the masks: the tire factors 1, the vertex-colour term
+//!   the identity, a Tex1 without mask or occlusion, its diffuse tinted by `Hue`, `Saturate` and `Luminosity`
+//!   everywhere, roughness and metalness the normal map's alpha and blue raw, at `Base tiling`. Otherwise (the Diorama:
+//!   `Use Blend` 1 blends the layers by the parquet mask at another UV) the placeholder, reported.
 //! - **MAD_Tex1_Graffiti_Mode_DecalFX** (§27.10, its alpha-tested permutation `0x404000` read): an atlas logo cut out
 //!   with a flat colour. Where its `TeamBlendRatio` is at least 1 its screen-space stripes are the team colour
 //!   everywhere, so with an opaque team colour (its alpha 1) the base colour is the team colour to the 2.2 (its
 //!   shader's decode), the base colour texture white with the atlas's alpha, sampled at the logo's cell (`Color -
 //!   Logo` 1: the cell `DecalStateID` of a `DecalDimXY` atlas, as its shader computes it; 0: `Base tiling`), cut out at
 //!   its `AlphaTestValue` over 255 (the engine sets its shader's reference so where `AlphaTestEnabled` is on), whatever
-//!   `alpha` states; roughness 1, no metalness, the mesh's normal. Its emission over an unset emissive mask isn't
-//!   drawn (the engine's default not known), reported. Otherwise the placeholder, reported.
+//!   `alpha` states; roughness 1, no metalness, the mesh's normal. Its emission is `EmissiveMult g^2` over
+//!   `emissive-exposure` (its shader's `colour.a EmissiveMult (0.5 (2 g - 1) + 0.5)^2 / t23`, the team colour's alpha
+//!   1), `g` the green of its emissive mask t76 at the mask's own tiling (`cb3[11]`; the template's default
+//!   GFX_Jammer_NormalMap where the Material sets none), coloured by the albedo. Otherwise the placeholder, reported.
 //! - **MAD_FakeForest** (§26.6, executed by the notes: the far forest's canopy cells and tree proxies): no texture,
 //!   no property; its albedo is `pow(saturate(COLOR0.rgb), 2.2)` per vertex (the engine's 2.2, not the sRGB curve),
 //!   so the pass writes that into `COLOR_0` (the colour core multiplies) of every primitive drawn with it and with
@@ -382,14 +386,17 @@ pub const TEX1_TEAM_COLOURED: Tex1Layout = Tex1Layout {
     ..TEX1
 };
 
-/// MAD_Grounds' layer A (§27.7; its keys the CRC-32 of its labels): `Hue`, `Saturate`, `Luminosity` 1 to 3, `9 - Use
-/// Blend` 11, `5 - Base tiling` 12; `3 - Normal Map A` t75, `1 - Diffuse Alpha A` t76. Metalness and roughness the
-/// normal map's blue and alpha raw; no mask, occlusion or vertex colour (see the module documentation).
+/// MAD_Grounds' layer A (§27.7; its keys the CRC-32 of its labels, its rows read): `Hue`, `Saturate`, `Luminosity` 1
+/// to 3, `Tire Albedo` 8, `Tire Vertex Color Impact` 10, `9 - Use Blend` 11, `5 - Base tiling` 12; `3 - Normal Map A`
+/// t75, `1 - Diffuse Alpha A` t76. Metalness and roughness the normal map's blue and alpha raw; no mask, occlusion or
+/// vertex colour (see the module documentation).
 pub const GROUNDS_A: Tex1Layout = Tex1Layout {
     reads: &[
         (1, 0xEE58_1D0E),
         (2, 0xCC63_AC50),
         (3, 0xFD62_B19F),
+        (8, 0xFEEB_CEB6),
+        (10, 0xD1BC_3B7E),
         (11, 0xFDBA_E6B2),
         (12, 0x3DA2_6308),
     ],
@@ -406,13 +413,6 @@ pub const GROUNDS_A: Tex1Layout = Tex1Layout {
     mask: None,
     emission: None,
     alpha: None,
-};
-
-/// MAD_Grounds' layer B: `4 - Normal Map B` t77, `2 - Diffuse Alpha B` t78, otherwise layer A's.
-pub const GROUNDS_B: Tex1Layout = Tex1Layout {
-    normal: TextureSource::Bound(2),
-    diffuse: TextureSource::Bound(3),
-    ..GROUNDS_A
 };
 
 /// MAD_Tex1_TerrainBlend (§14.7, §15.1): MAD_Tex1's cb3[2..7], `EnableTerrainBlend` 14, `Base tiling` 15. Its
@@ -890,18 +890,14 @@ struct Inputs<'m> {
 }
 
 impl Inputs<'_> {
-    /// The texture its template binds at shader slot `t(75 + slot)`, from the Material's property of that key.
+    /// The texture its template binds at shader slot `t(75 + slot)`, resolved as the engine resolves it (the Material's
+    /// record, else its TextureSet's slot or the template's default: [`crate::components::BoundTexture`]).
     fn texture(&self, slot: u32) -> Option<Entity> {
-        let key = self
-            .m
-            .bindings
+        self.m
+            .textures
             .iter()
-            .find(|(_, b)| *b == MaterialBinding::Texture { slot })?
-            .0;
-        self.m.values.iter().find_map(|(k, v)| match v {
-            MaterialValue::Texture { texture, .. } if *k == key => *texture,
-            _ => None,
-        })
+            .find(|t| t.shader_slot == slot)
+            .and_then(|t| t.texture)
     }
 
     /// The scalar its template binds at the constant buffer's vec4 `vec4`; 0 where the Material sets none.
@@ -942,7 +938,16 @@ impl Inputs<'_> {
     fn source(&self, source: TextureSource) -> Option<Entity> {
         match source {
             TextureSource::Bound(n) => self.texture(n),
-            TextureSource::Set(k) => self.m.texture_set.get(k).copied().flatten(),
+            // the binding whose TextureParameter names the set's slot `k` at channel 0, resolved; else the slot itself
+            TextureSource::Set(k) => match self
+                .m
+                .textures
+                .iter()
+                .find(|t| t.parameter == u32::try_from(k).ok().map(|k| (k, 0)))
+            {
+                Some(t) => t.texture,
+                None => self.m.texture_set.get(k).copied().flatten(),
+            },
         }
     }
 
@@ -1128,7 +1133,6 @@ impl Pass for LowerAnvilMaterial {
                 "MAD_Tex1_UGE" => Some(TEX1_UGE),
                 "MAD_Tex1_Graffiti_Mode" => Some(TEX1_GRAFFITI),
                 "MAD_Tex1_TeamColoured" => Some(TEX1_TEAM_COLOURED),
-                "MAD_Grounds" if i.scalar(11) == 1.0 => Some(GROUNDS_B),
                 "MAD_Grounds" => Some(GROUNDS_A),
                 _ => None,
             };
@@ -1142,9 +1146,10 @@ impl Pass for LowerAnvilMaterial {
                 "MAD_Tex2_Graffiti_Mode" => Some(&TEX2_GRAFFITI_ROWS),
                 _ => None,
             };
-            if name == "MAD_Grounds" && grounds_reduce(&i, &m) {
+            if name == "MAD_Grounds" && grounds_reduce(&i) {
                 log.approximate(
-                    "Grounds Materials' tire wear (a per-vertex scalar the meshes don't carry): none (stated)",
+                    "Grounds Materials' tire wear and vertex colour (per-vertex values the meshes' lowering doesn't \
+                     carry): none and white (stated)",
                     1,
                 );
             }
@@ -1157,16 +1162,16 @@ impl Pass for LowerAnvilMaterial {
                     );
                     placeholder()
                 }
-                ("MAD_Grounds", _) if !grounds_reduce(&i, &m) => {
+                ("MAD_Grounds", _) if !grounds_reduce(&i) => {
                     log.omit(
-                        "Grounds Materials whose arithmetic isn't one layer (a fractional Use Blend, a mask set, or a \
-                         Tire Albedo above 1): a placeholder",
+                        "Grounds Materials whose arithmetic isn't one layer (a Use Blend other than 0, a Tire Albedo \
+                         above 1 or a negative Tire Vertex Color Impact): a placeholder",
                         1,
                     );
                     placeholder()
                 }
                 ("MAD_Tex1_Graffiti_Mode_DecalFX", _) => {
-                    match decal_fx(w, &mut made, &i, &m, self.shader_uv, log)? {
+                    match decal_fx(w, &mut made, &i, &m, self.shader_uv, self.emissive_exposure, log)? {
                         Some(pbr) => pbr,
                         None => placeholder(),
                     }
@@ -1998,12 +2003,12 @@ fn vertex_colours(
     Ok(())
 }
 
-/// Whether a MAD_Grounds Material's arithmetic is one layer (§27.7): `Use Blend` (11) 0 or 1, its generic masks (its
-/// TextureSet's slot 7) empty, so white, and `Tire Albedo` (8) at most 1, so that with no tire wear (the per-vertex
-/// scalar stated 1) the tire factors are 1.
-fn grounds_reduce(i: &Inputs, m: &AnvilMaterial) -> bool {
-    let blend = i.scalar(11);
-    (blend == 0.0 || blend == 1.0) && m.texture_set.get(7).copied().flatten().is_none() && i.scalar(8) <= 1.0
+/// Whether a MAD_Grounds Material's arithmetic is layer A alone with the neutral vertex (§27.7, `c` 1 and the vertex
+/// colour white): `Use Blend` (11) 0, so the blend is 0 whatever its mask; `Tire Albedo` (8) at most 1, so its factor
+/// `sat(c - TA + 1)` is 1 (the other tire factor is 1 for any mask at `c` 1); `Tire Vertex Color Impact` (10) at least
+/// 0, so `w1 = 1 - sat(c + TVI)` is 0 and the vertex-colour term is the identity for any mask.
+fn grounds_reduce(i: &Inputs) -> bool {
+    i.scalar(11) == 0.0 && i.scalar(8) <= 1.0 && i.scalar(10) >= 0.0
 }
 
 /// MAD_Tex1_Graffiti_Mode_DecalFX lowered (see the module documentation); `None`, reported, where its arithmetic isn't
@@ -2014,6 +2019,7 @@ fn decal_fx(
     i: &Inputs<'_>,
     m: &AnvilMaterial,
     shader_uv: ShaderUv,
+    exposure: f64,
     log: &mut PassLog,
 ) -> Result<Option<PbrMaterial>, String> {
     let refuse = |log: &mut PassLog, why: &str| {
@@ -2069,20 +2075,55 @@ fn decal_fx(
         }
         _ => return Ok(refuse(log, "with a Color - Logo between 0 and 1")),
     };
-    if i.texture(1).is_none() && i.scalar(7) != 0.0 {
-        log.omit(
-            "DecalFX Materials' emission over an unset emissive mask (the engine's default not known): no emission drawn",
-            1,
-        );
-    } else if i.texture(1).is_some() {
-        log.omit("DecalFX Materials' emission (not lowered)", 1);
-    }
+    // emission: EmissiveMult g^2 over the exposure, coloured by the albedo (the team colour to the 2.2)
+    let colour = [0, 1, 2].map(|c| sat(team[c]).powf(2.2) as f32);
+    let k = i.scalar(7) / exposure;
+    let (emissive, emissive_texture, emissive_strength) = match i.texture(1) {
+        _ if k == 0.0 => ([0.0; 3], None, 1.0),
+        _ if k < 0.0 => {
+            log.omit(
+                "DecalFX Materials' negative EmissiveMult (no glTF emission): no emission drawn",
+                1,
+            );
+            ([0.0; 3], None, 1.0)
+        }
+        None => {
+            log.omit(
+                "DecalFX Materials whose emissive mask resolves to none: no emission drawn",
+                1,
+            );
+            ([0.0; 3], None, 1.0)
+        }
+        Some(mask) => {
+            let lane = made_texture(w, made, (mask, "decal emission", [0; 5]), |w| {
+                derived(w, mask, TexRole::Color, ColorSpace::Srgb, |_, c| {
+                    let v = primase_image::linear_to_srgb8(c[1] * c[1]);
+                    [v, v, v, 255]
+                })
+            })?;
+            let uv = lowered_uv(i, Some(11), shader_uv, "DecalFX emissive", log);
+            let e = colour.map(|c| f64::from(c) * k);
+            let top = e.iter().copied().fold(0.0, f64::max);
+            let (factor, strength) = if top <= 1.0 {
+                (e, 1.0)
+            } else {
+                (e.map(|x| x / top), top)
+            };
+            (
+                factor.map(|x| x as f32),
+                Some(TextureRef {
+                    transform: uv,
+                    ..TextureRef::new(lane)
+                }),
+                strength as f32,
+            )
+        }
+    };
     let shape = made_texture(w, made, (diffuse, "decal alpha", [0; 5]), |w| {
         derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, _| {
             [255, 255, 255, t.rgba[3]]
         })
     })?;
-    let colour = [0, 1, 2].map(|c| sat(team[c]).powf(2.2) as f32);
     log.count("DecalFX Materials lowered (a flat team colour, cut out)", 1);
     Ok(Some(PbrMaterial {
         base_color: [colour[0], colour[1], colour[2], 1.0],
@@ -2092,6 +2133,9 @@ fn decal_fx(
         }),
         metallic: 0.0,
         roughness: 1.0,
+        emissive,
+        emissive_texture,
+        emissive_strength,
         alpha_mode: AlphaMode::Mask {
             cutoff: f32::from(m.flags.alpha_test_value) / 255.0,
         },

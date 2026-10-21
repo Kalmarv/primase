@@ -41,8 +41,8 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::{
     AnvilCollisionFilter, AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals,
     AnvilFake, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilShaders,
-    AnvilWater, CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue,
-    ShapeGeometry,
+    AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding,
+    MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
@@ -247,6 +247,9 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
         cols: [lin(0), lin(1), lin(2), [0, 1, 2].map(|r| (t[r] + o[3][r]) as f32)],
     }
 }
+
+/// A generic `Texture` binding's key: the CRC-32 of its label.
+const GENERIC_TEXTURE: u32 = 0x4DDB_34EE;
 
 /// The name of the entry `id` names in `archive`, if any.
 fn entry_name(archive: &Archive, id: u64) -> Option<String> {
@@ -601,12 +604,21 @@ impl<'a> Placer<'a> {
         }
         let mut bindings = Vec::new();
         let mut shaders = None;
+        // each texture binding's key, shader slot and TextureParameter
+        let mut texture_bindings: Vec<(u32, u32, Option<template::TextureParameter>)> = Vec::new();
         if let Some((id, t)) = template.and_then(|id| Some((id, self.archive.find(id)?))) {
             let body = self.archive.resource(t)?.body;
             if self.read_shaders {
                 shaders = Some(self.template_shaders(id, t, &body)?);
             }
             let read = template::bindings(&body).map_err(|source| Error::Bindings { at: t, source })?;
+            for b in &read {
+                if let BindingKind::Texture { slot } = b.kind() {
+                    let p = template::texture_parameter(&body, b)
+                        .map_err(|source| Error::Bindings { at: t, source })?;
+                    texture_bindings.push((b.key, slot, p));
+                }
+            }
             bindings = read
                 .iter()
                 .map(|b| {
@@ -622,7 +634,17 @@ impl<'a> Placer<'a> {
                 .collect();
         }
         let mut values = Vec::with_capacity(m.properties.len());
+        // the Material's texture records: (its value's index, key, slot, channel, whether its texture is null)
+        let mut records: Vec<(usize, u32, u32, u32, bool)> = Vec::new();
         for p in &m.properties {
+            if let Payload::Texture {
+                words: [channel, slot, _],
+                references: [_, map],
+                ..
+            } = &p.payload
+            {
+                records.push((values.len(), p.key, *slot, *channel, map.is_none()));
+            }
             let value = match &p.payload {
                 Payload::Int(v) => MaterialValue::Int(*v),
                 Payload::Float(v) => MaterialValue::Float(*v),
@@ -642,6 +664,48 @@ impl<'a> Placer<'a> {
             };
             values.push((p.key, value));
         }
+        let mut textures = Vec::with_capacity(texture_bindings.len());
+        for &(key, shader_slot, p) in &texture_bindings {
+            // a generic `Texture` (its key the CRC-32 of the label, or shared by two of the template's bindings)
+            // matches a record by its slot and channel too
+            let generic =
+                key == GENERIC_TEXTURE || texture_bindings.iter().filter(|(k, ..)| *k == key).count() > 1;
+            let parameter = p.map(|p| (p.slot, p.channel));
+            let record = records.iter().find(|&&(_, k, slot, channel, _)| {
+                k == key && (!generic || parameter == Some((slot, channel)))
+            });
+            let fallback = |placer: &mut Self, placed: &mut Placed| -> (Option<Entity>, TextureFrom) {
+                match p {
+                    Some(p) if p.channel == 0 => match texture_set.get(p.slot as usize).copied().flatten() {
+                        Some(t) => (Some(t), TextureFrom::Set),
+                        None => (None, TextureFrom::Unset),
+                    },
+                    Some(p) => match p.texture.and_then(|r| placer.texture(r.id, placed)) {
+                        Some(t) => (Some(t), TextureFrom::Default),
+                        None => (None, TextureFrom::Unset),
+                    },
+                    None => (None, TextureFrom::Unset),
+                }
+            };
+            let (texture, from) = match record {
+                Some(&(.., true)) => {
+                    let (fallback, _) = fallback(self, placed);
+                    (None, TextureFrom::NullRecord { fallback })
+                }
+                Some(&(index, ..)) => match values.get(index).map(|(_, v)| v) {
+                    Some(MaterialValue::Texture { texture, .. }) => (*texture, TextureFrom::Record),
+                    _ => (None, TextureFrom::Unset),
+                },
+                None => fallback(self, placed),
+            };
+            textures.push(BoundTexture {
+                key,
+                shader_slot,
+                parameter,
+                texture,
+                from,
+            });
+        }
         let e = self.world.spawn();
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
@@ -656,6 +720,7 @@ impl<'a> Placer<'a> {
                 bindings,
                 values,
                 texture_set,
+                textures,
                 flags: m.flags(),
                 shaders,
             },

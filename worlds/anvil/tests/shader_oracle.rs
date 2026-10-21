@@ -748,10 +748,10 @@ fn mad_tex2_tint_b() {
     worst.check("MAD_Tex2_TintBFromShaderConstants");
 }
 
-/// MAD_Grounds (§27.7) as the lowering reduces it: its generic masks t79, t80 white, the per-vertex tire scalar
-/// (COLOR1.x, its program read) 1, `UV World` (cb3[9]) 0, `Use Blend` (cb3[11]) 0 or 1, `Tire
-/// Albedo` (cb3[8]) at most 1, every other scalar random: the albedo is the chosen layer's diffuse tinted by cb3[1..3]
-/// everywhere, roughness and metalness its normal map's alpha and blue, occlusion 1, whatever COLOR0 is.
+/// MAD_Grounds (§27.7, corrected) with the neutral vertex the lowering states (COLOR0 white; the scalar `c` 1, the
+/// harness's second colour), `Use Blend` (cb3[11]) 0, `Tire Albedo` (8) at most 1 and `Tire Vertex Color Impact` (10) at
+/// least 0: layer A tinted, its normal map's alpha and blue raw, whatever its masks t79 and t80 (random here) and the
+/// other rows (Vertex Color Mask Intensity 4, On Off 5, Tires Intensity 6 and Roughness 7).
 #[test]
 fn mad_grounds() {
     let Some(s) = gbuffer("DataPC_MAD_USNAT.forge", "MAD_Grounds") else {
@@ -759,15 +759,14 @@ fn mad_grounds() {
     };
     let mut r = Random(0x0018_2108_0000_0003);
     let mut worst = Worst::default();
-    for case in 0..40 {
-        let (d_a, d_b, n_a, n_b, colour) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+    for _ in 0..40 {
+        let (d_a, d_b, n_a, n_b) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (mask, blend_mask) = (r.texel(), r.texel());
         let hsl = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
-        let blend = f64::from(case % 2);
         let mut cb3 = r.decoys(24);
         set(&mut cb3, 1, hsl[0]);
         set(&mut cb3, 2, hsl[1]);
         set(&mut cb3, 3, hsl[2]);
-        // Vertex Color Mask Intensity, Vertex Color - On Off, Tires Intensity, Tires Roughness, Tire Albedo
         set(&mut cb3, 4, r.range(0.5, 10.0));
         set(&mut cb3, 5, r.next());
         set(&mut cb3, 6, r.next());
@@ -776,24 +775,22 @@ fn mad_grounds() {
         // UV World - on Off, Tire Vertex Color Impact, Use Blend
         set(&mut cb3, 9, 0.0);
         set(&mut cb3, 10, r.next());
-        set(&mut cb3, 11, blend);
+        set(&mut cb3, 11, 0.0);
         for row in [12, 15, 18, 21] {
             uv_rows(&mut cb3, row);
         }
-        let white = [1.0; 4];
         let textures = [
             (75, n_a),
             (76, d_a),
             (77, n_b),
             (78, d_b),
-            (79, white),
-            (80, white),
+            (79, mask),
+            (80, blend_mask),
         ];
-        let out = run(&s, &textures, &cb3, colour);
-        let (d, n) = if blend == 1.0 { (d_b, n_b) } else { (d_a, n_a) };
-        worst.rgb("albedo", out[0], tinted(rgb(d), 1.0, hsl));
-        worst.see("roughness", out[0][3], roughness(n[3], Rough::Raw));
-        worst.see("metalness", out[1][3], metalness(n[2], None));
+        let out = run(&s, &textures, &cb3, [1.0; 4]);
+        worst.rgb("albedo", out[0], tinted(rgb(d_a), 1.0, hsl));
+        worst.see("roughness", out[0][3], roughness(n_a[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(n_a[2], None));
         worst.see("occlusion", out[3][0], 1.0);
     }
     worst.check("MAD_Grounds");
@@ -831,8 +828,16 @@ fn mad_tex1_graffiti_mode_decal_fx() {
             (2, 18, [0.0; 4]),
             (2, 11, [0.0, 0.0, 0.0, 1.0]),
         ];
-        let out = run_with(&s, &[(75, atlas), (76, mask)], &cb3, r.texel(), &engine);
+        let out = run_with(
+            &s,
+            &[(75, atlas), (76, mask), (23, [1.0; 4])],
+            &cb3,
+            r.texel(),
+            &engine,
+        );
         worst.rgb("albedo", out[0], [0, 1, 2].map(|c| team[c].powf(2.2)));
+        // the lowering's emission: EmissiveMult (cb3[7]) g^2, the exposure t23 at 1, the team colour's alpha 1
+        worst.see("emission", out[2][2], cb3[7][0] * mask[1] * mask[1]);
         worst.see("roughness", out[0][3], 1.0);
         worst.see("metalness", out[1][3], 0.0);
     }

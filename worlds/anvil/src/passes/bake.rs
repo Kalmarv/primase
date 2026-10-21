@@ -632,16 +632,14 @@ impl BakeAnvilMaterial {
             textures.insert(slot, primase_shader::Texture::Constant([value; 4]));
         }
         for &slot in recipe.slots {
-            let key = m
-                .bindings
+            // the texture the binding resolves to (the Material's record, its TextureSet's slot, or the template's
+            // default)
+            let set = m
+                .textures
                 .iter()
-                .find(|(_, b)| *b == MaterialBinding::Texture { slot })
-                .map(|(k, _)| *k)
-                .ok_or_else(|| format!("its template binds no texture at t{}", 75 + slot))?;
-            let set = m.values.iter().find_map(|(k, v)| match v {
-                MaterialValue::Texture { texture, .. } if *k == key => *texture,
-                _ => None,
-            });
+                .find(|t| t.shader_slot == slot)
+                .ok_or_else(|| format!("its template binds no texture at t{}", 75 + slot))?
+                .texture;
             let e = match set {
                 Some(e) => e,
                 None if recipe.unkept.iter().any(|&(s, row)| {

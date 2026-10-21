@@ -9,7 +9,7 @@ use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
-use primase_core::{NormalGreen, Texture, World};
+use primase_core::{Name, NormalGreen, Texture, World};
 use primase_testdata::real_data;
 
 /// The value at `cb3` row `row` of `m`: a scalar's (in `.x`) or a vector's.
@@ -116,4 +116,44 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
         log.counts["DecalFX Materials lowered (a flat team colour, cut out)"],
         1
     );
+    // its emission: EmissiveMult g^2 over the exposure (1), coloured by the albedo; g from the template's default mask
+    let em = row(&m, 7)[0];
+    let k: [f64; 3] = std::array::from_fn(|c| f64::from(pbr.base_color[c]) * em);
+    let top = k.iter().copied().fold(0.0, f64::max);
+    for c in 0..3 {
+        let got = f64::from(pbr.emissive[c]) * f64::from(pbr.emissive_strength);
+        assert!(
+            (got - k[c]).abs() <= 1e-4 * top,
+            "emission {c}: {got} against {}",
+            k[c]
+        );
+    }
+    let lane = w
+        .get::<Texture>(pbr.emissive_texture.as_ref().expect("the emissive mask").texture)
+        .expect("texture");
+    let mask = m
+        .textures
+        .iter()
+        .find(|t| t.shader_slot == 1)
+        .and_then(|t| t.texture)
+        .expect("the default mask resolved");
+    assert_eq!(
+        w.get::<Name>(mask).map(|n| n.0.as_str()),
+        Some("GFX_Jammer_NormalMap")
+    );
+    let g = w.get::<Texture>(mask).expect("mask");
+    let first = primase_image::map_rgba8_levels(
+        g,
+        0..1,
+        primase_image::TextureMetadata {
+            color_space: primase_core::ColorSpace::Linear,
+            role: primase_core::TexRole::Other,
+            normal: None,
+        },
+        |x| Ok(x.rgba),
+    )
+    .expect("decode")
+    .levels[0][1];
+    let want = primase_image::linear_to_srgb8((f64::from(first) / 255.0).powi(2));
+    assert_eq!(lane.levels[0][..3], [want; 3]);
 }

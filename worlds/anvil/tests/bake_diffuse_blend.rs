@@ -18,19 +18,13 @@ const SIZE: u32 = 64;
 
 /// A bound texture of `m` at `t(75 + slot)`: its levels and transfer.
 fn bound(w: &World, m: &AnvilMaterial, slot: u32) -> (Levels, Transfer) {
-    let key = m
-        .bindings
-        .iter()
-        .find(|(_, b)| *b == MaterialBinding::Texture { slot })
-        .expect("bound")
-        .0;
+    // the texture the binding resolves to (the Material's record, its set's slot or the template's default)
     let e = m
-        .values
+        .textures
         .iter()
-        .find_map(|(k, v)| match v {
-            MaterialValue::Texture { texture, .. } if *k == key => *texture,
-            _ => None,
-        })
+        .find(|t| t.shader_slot == slot)
+        .expect("bound")
+        .texture
         .expect("set");
     let transfer = if w.get::<AnvilTextureMap>(e).expect("map").field_25 == 1 {
         Transfer::SrgbColour
