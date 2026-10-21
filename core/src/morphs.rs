@@ -115,6 +115,55 @@ impl Deltas {
     }
 }
 
+impl Deltas {
+    /// The deltas for a primitive whose vertices were rebuilt as blends of the old ones: a new vertex's delta is the
+    /// blend of its old vertices' deltas, so the morphed surface stays the surface the blended vertex lies on. A sparse
+    /// vertex without an entry has delta 0; a new vertex is listed when any old vertex it blends is.
+    fn blended(&self, from: &[crate::VertexBlend]) -> Result<Deltas, String> {
+        let mut out = self.clone();
+        /// A new vertex and, for each old vertex it blends, its entry in the deltas (if it has one) and weight.
+        type Picked = (u32, Vec<(Option<usize>, f32)>);
+        let mut picked: Vec<Picked> = Vec::new();
+        for (new, b) in (0u32..).zip(from) {
+            let terms: Vec<(Option<usize>, f32)> = b
+                .terms()
+                .map(|(old, w)| match &self.indices {
+                    None => (Some(old as usize), w),
+                    Some(indices) => (indices.binary_search(&old).ok(), w),
+                })
+                .collect();
+            if self.indices.is_none() || terms.iter().any(|(k, _)| k.is_some()) {
+                picked.push((new, terms));
+            }
+        }
+        out.indices = self
+            .indices
+            .as_ref()
+            .map(|_| picked.iter().map(|&(new, _)| new).collect());
+        for (dst, src) in out.attributes_mut().zip(
+            [&self.positions, &self.normals, &self.tangents]
+                .into_iter()
+                .flatten(),
+        ) {
+            *dst = picked
+                .iter()
+                .map(|(_, terms)| {
+                    let mut sum = [0.0f64; 3];
+                    for &(k, w) in terms {
+                        let Some(k) = k else { continue };
+                        let d = src.get(k).ok_or_else(|| format!("vertex {k} of {}", src.len()))?;
+                        for (s, x) in sum.iter_mut().zip(d) {
+                            *s += f64::from(w) * f64::from(*x);
+                        }
+                    }
+                    Ok(sum.map(|x| x as f32))
+                })
+                .collect::<Result<_, String>>()?;
+        }
+        Ok(out)
+    }
+}
+
 impl Morphs {
     /// Target `id`.
     pub fn target(&self, id: MorphId) -> Option<&Target> {
@@ -182,6 +231,23 @@ impl Component for Morphs {
             Ok(out)
         })();
         Some(remapped)
+    }
+    fn blend_vertices(&self, primitive: usize, from: &[crate::VertexBlend]) -> Option<Result<Self, String>> {
+        let blended = (|| {
+            let mut out = self.clone();
+            for f in out.targets.iter_mut().flat_map(|t| &mut t.frames) {
+                let n = f.primitives.len();
+                let slot = f
+                    .primitives
+                    .get_mut(primitive)
+                    .ok_or_else(|| format!("primitive {primitive} of {n}"))?;
+                if let Some(d) = slot {
+                    *d = d.blended(from)?;
+                }
+            }
+            Ok(out)
+        })();
+        Some(blended)
     }
     /// Position deltas map by the linear part exactly. Normal and tangent deltas have an exact image only under a
     /// similarity (a rotation or mirror with one scale), where they turn with the rotation; under any other map a
@@ -418,6 +484,42 @@ mod tests {
         let rebuilt = m.remap_primitives(&[1]).unwrap().unwrap();
         assert!(rebuilt.targets[0].frames[0].primitives == [None]);
         assert!(rebuilt.targets[1].frames[0].primitives[0].is_some());
+    }
+
+    /// Hand-worked blends: dense deltas interpolated (new 0 the middle of old 0 and 2; new 1 a copy of old 1), sparse
+    /// ones listed for every new vertex blending a listed one, with 0 for an unlisted old vertex.
+    #[test]
+    fn deltas_follow_blended_vertices_dense_and_sparse() {
+        use crate::VertexBlend;
+        let half = |a, b| VertexBlend {
+            sources: [a, b, b],
+            weights: [0.5, 0.5, 0.0],
+        };
+        let m = morphs();
+        let from = [half(0, 2), VertexBlend::copy(1)];
+        let dense = m.blend_vertices(0, &from).unwrap().unwrap();
+        let d = dense.targets[0].frames[0].primitives[0].as_ref().unwrap();
+        let old = m.targets[0].frames[0].primitives[0].as_ref().unwrap();
+        let (p0, p1, p2) = (
+            old.positions.as_ref().unwrap()[0],
+            old.positions.as_ref().unwrap()[1],
+            old.positions.as_ref().unwrap()[2],
+        );
+        assert_eq!(
+            d.positions,
+            Some(vec![[0, 1, 2].map(|k| (p0[k] + p2[k]) / 2.0), p1])
+        );
+        // sparse: the old 1 and 2 are listed, so new 0 (old 0 and 2) is listed with half of old 2's delta, new 1 (old 1)
+        // with its own; a new vertex of unlisted old vertices only is not listed
+        let from = [half(0, 2), VertexBlend::copy(1), VertexBlend::copy(0)];
+        let sparse = m.blend_vertices(1, &from).unwrap().unwrap();
+        let s = sparse.targets[1].frames[1].primitives[1].as_ref().unwrap();
+        let old = m.targets[1].frames[1].primitives[1].as_ref().unwrap();
+        assert_eq!(s.indices, Some(vec![0, 1]));
+        let p = old.positions.as_ref().unwrap();
+        assert_eq!(s.positions, Some(vec![p[1].map(|x| x / 2.0), p[0]]));
+        // a dense delta the old primitive lacks is an error
+        assert!(m.blend_vertices(0, &[VertexBlend::copy(9)]).unwrap().is_err());
     }
 
     /// Positions map by the linear part; normals turn under a similarity (90 degrees about z: (0, 1, 0) to (-1, 0, 0),

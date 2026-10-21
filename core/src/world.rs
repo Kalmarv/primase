@@ -100,6 +100,18 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
         None
     }
 
+    /// The component after the vertices of its entity's mesh primitive `primitive` were rebuilt as blends of old ones
+    /// ([`VertexBlend`]), for a component that holds something per vertex ([`Geometry::PerVertex`]): new vertex `i`
+    /// is the combination `from[i]` of old vertices, in whatever way the component's data combines (a morph target's
+    /// delta is interpolated, the way the surface it moves is). It answers as [`Component::remap_vertices`] does: with
+    /// itself when it holds nothing for that primitive; `None`, the default, is for a component that does not know how
+    /// to combine its data, and [`World::blend_vertices`] refuses a per-vertex component that gives it. An index the
+    /// component does not have is an error. A vertex that is a copy of one old vertex ([`VertexBlend::copy`]) is the
+    /// case [`Component::remap_vertices`] states, and a component answering one answers the other alike.
+    fn blend_vertices(&self, _primitive: usize, _from: &[VertexBlend]) -> Option<Result<Self, String>> {
+        None
+    }
+
     /// The component after its entity's local space was mapped by `l` (a pass that bakes a placement's mirror or
     /// shear into a copy of its geometry, so transforms stay rigid). [`World::apply_linear`] calls it for every
     /// component of the entity. The default is [`Linearity::Unsupported`]: a component that holds local-space
@@ -157,6 +169,37 @@ pub fn remap_list<T: Clone>(list: &[T], from: &[usize]) -> Result<Vec<T>, String
         })
         .collect()
 }
+
+/// A new vertex of a triangle primitive made as a weighted combination of up to three old vertices of it (the corners
+/// of the triangle it lies in): `sum weights[k] * old vertex sources[k]`, the weights non-negative and summing to 1. A
+/// copy of one old vertex has weight 1 on it; unused entries have weight 0. See [`Component::blend_vertices`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VertexBlend {
+    pub sources: [u32; 3],
+    pub weights: [f32; 3],
+}
+
+impl VertexBlend {
+    /// The old vertex `v` itself.
+    pub fn copy(v: u32) -> VertexBlend {
+        VertexBlend {
+            sources: [v; 3],
+            weights: [1.0, 0.0, 0.0],
+        }
+    }
+
+    /// The old vertices with a weight above zero, with their weights, in order.
+    pub fn terms(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
+        self.sources
+            .iter()
+            .copied()
+            .zip(self.weights)
+            .filter(|&(_, w)| w > 0.0)
+    }
+}
+
+/// A component's value rebuilt for blended vertices, not stored yet, with the column's type.
+type Blended = (TypeId, Box<dyn Any + Send>);
 
 /// A world resource: one value per world (the frame, a game's archive index, a run's options, the environment).
 pub trait Resource: Any + Clone + fmt::Debug + Send + Sync {
@@ -315,7 +358,16 @@ trait AnyColumn: Any + Send + Sync {
         primitive: usize,
         from: &[u32],
     ) -> Option<Result<Box<dyn Any + Send>, String>>;
-    /// Store a value [`AnyColumn::remapped`], [`AnyColumn::vertices_remapped`] or [`AnyColumn::linear`] made.
+    /// `e`'s value with primitive `primitive`'s vertices rebuilt as blends ([`Component::blend_vertices`]), not stored
+    /// yet; `None` when `e` has none or it cannot combine its vertices.
+    fn vertices_blended(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[VertexBlend],
+    ) -> Option<Result<Box<dyn Any + Send>, String>>;
+    /// Store a value [`AnyColumn::remapped`], [`AnyColumn::vertices_remapped`], [`AnyColumn::vertices_blended`] or
+    /// [`AnyColumn::linear`] made.
     fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>);
     /// A copy of `from`'s value, if it has one, onto `to`.
     fn copy_entity(&mut self, from: Entity, to: Entity);
@@ -420,6 +472,15 @@ impl<T: Component> AnyColumn for Column<T> {
         from: &[u32],
     ) -> Option<Result<Box<dyn Any + Send>, String>> {
         let r = self.values.get(&e)?.remap_vertices(primitive, from)?;
+        Some(r.map(|v| Box::new(v) as Box<dyn Any + Send>))
+    }
+    fn vertices_blended(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[VertexBlend],
+    ) -> Option<Result<Box<dyn Any + Send>, String>> {
+        let r = self.values.get(&e)?.blend_vertices(primitive, from)?;
         Some(r.map(|v| Box::new(v) as Box<dyn Any + Send>))
     }
     fn put_remapped(&mut self, e: Entity, value: Box<dyn Any + Send>) {
@@ -861,6 +922,76 @@ impl World {
             }
         }
         Ok(())
+    }
+
+    /// Rebuild every per-vertex component of `e` ([`Component::blend_vertices`]) for its mesh primitive `primitive`,
+    /// whose vertices a pass made as blends of the old ones: new vertex `i` is `from[i]`. The pass changes the primitive
+    /// itself and calls this for every other component, so it need not know the dialects' components. All or nothing,
+    /// like [`World::remap_vertices`]: an error (an index a component does not have, a component that cannot combine
+    /// its vertices, an opaque component on `e`) names the cause and changes nothing.
+    pub fn blend_vertices(
+        &mut self,
+        e: Entity,
+        primitive: usize,
+        from: &[VertexBlend],
+    ) -> Result<(), String> {
+        let done = self.blended_components(e, primitive, from)?;
+        for (name, v) in done {
+            if let Some(c) = self.columns.get_mut(&name) {
+                c.put_remapped(e, v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Why [`World::blend_vertices`] would refuse, without changing anything: a pass checks every entity before it
+    /// changes any.
+    pub fn check_blend_vertices(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[VertexBlend],
+    ) -> Result<(), String> {
+        self.blended_components(e, primitive, from).map(|_| ())
+    }
+
+    fn blended_components(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[VertexBlend],
+    ) -> Result<Vec<Blended>, String> {
+        let mut opaque: Vec<&String> = self
+            .opaque
+            .iter()
+            .filter(|(_, values)| values.contains_key(&e))
+            .map(|(name, _)| name)
+            .collect();
+        if !opaque.is_empty() {
+            opaque.sort();
+            return Err(format!(
+                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them, \
+                 or give them a typed form, before the pass)"
+            ));
+        }
+        let mut done = Vec::new();
+        // by name, so the error reported is always the same one
+        let mut columns: Vec<_> = self.columns.iter().collect();
+        columns.sort_by_key(|(_, c)| c.name());
+        for (name, c) in columns {
+            match c.vertices_blended(e, primitive, from) {
+                None if c.contains(e) && c.geometry() == Geometry::PerVertex => {
+                    return Err(format!(
+                        "{}: holds data per vertex but cannot combine vertices (it has no blend_vertices)",
+                        c.name()
+                    ));
+                }
+                None => {}
+                Some(Ok(v)) => done.push((*name, v)),
+                Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
+            }
+        }
+        Ok(done)
     }
 
     /// Take `e`'s mesh away with every component describing it (each typed component whose [`Component::GEOMETRY`]

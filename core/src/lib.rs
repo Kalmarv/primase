@@ -66,7 +66,7 @@ pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
 pub use world::{
     Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Geometry, Linearity, Opaque,
-    OpaqueData, Resource, World, remap_list,
+    OpaqueData, Resource, VertexBlend, World, remap_list,
 };
 
 /// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `place-assets`, `select-assets`,

@@ -25,6 +25,12 @@ pub fn register(reg: &mut PassRegistry) {
         |o: &Options| Ok(Box::new(crate::PackTextureAtlas::from_options(o)?)),
         &[("size", "2048")],
     );
+    // what a destination that draws one material needs is the program's: both options required
+    reg.register_requiring(
+        "set-material-modes",
+        |o: &Options| Ok(Box::new(crate::SetMaterialModes::from_options(o)?)),
+        &[("alpha", "opaque"), ("double-sided", "false")],
+    );
     reg.register_requiring("cap-textures", crate::cap_textures, &[("max", "256")]);
     reg.register("bake-layer-channels", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),

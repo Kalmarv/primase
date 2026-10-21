@@ -31,6 +31,7 @@ pub use parametric::{FlattenCurves, TessellateColliders};
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
+    uv_tiles::register(reg);
     // a diagnostic with no choices: what collides drawn, to inspect it
     reg.register("draw-collision", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
@@ -91,6 +92,8 @@ pub use shadow_casting::{SetShadowCasting, set_shadow_casting};
 mod split;
 pub use split::{SplitByCollision, split_by_collision};
 mod texcoords;
+mod uv_tiles;
+pub use uv_tiles::{MAX_TILES_PER_TRIANGLE, SplitUvTiles, split_uv_tiles};
 mod variants;
 pub use variants::{SpecializeMaterialVariants, UnusedVariants, specialize_material_variants};
 pub mod vector;

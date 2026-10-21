@@ -12,6 +12,8 @@ pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
 pub use frames::{Bitangent, UvFrameNormals};
 mod layers;
 pub use layers::{BakeLayerChannels, register};
+mod modes;
+pub use modes::SetMaterialModes;
 mod normals;
 mod orm;
 pub use orm::{MissingLevels, OrmSize, PackOrm};
@@ -41,6 +43,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/frames.rs", include_bytes!("frames.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
+    ("image/modes.rs", include_bytes!("modes.rs")),
     ("image/normals.rs", include_bytes!("normals.rs")),
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
