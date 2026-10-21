@@ -80,6 +80,8 @@ pub struct AnvilMesh {
     pub triangles: Vec<[u32; 3]>,
     pub ranges: Vec<u32>,
     pub materials: Vec<u64>,
+    /// Each range's Material entity, where the reader read the Materials (empty otherwise).
+    pub material_entities: Vec<Option<Entity>>,
     pub kind: u8,
     pub stride: u32,
     pub vertex_records: Vec<u8>,
@@ -88,6 +90,9 @@ pub struct AnvilMesh {
 
 impl Component for AnvilMesh {
     const NAME: &'static str = "anvil.mesh";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.material_entities.iter().flatten());
+    }
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let n = self.positions.len();
         let stride = usize::try_from(self.stride).unwrap_or(0);
@@ -110,6 +115,13 @@ impl Component for AnvilMesh {
                 .ranges
                 .last()
                 .is_none_or(|&s| usize::try_from(s).is_ok_and(|s| s <= self.triangles.len()));
+        if !self.material_entities.is_empty() && self.material_entities.len() != self.ranges.len() {
+            return Err(format!(
+                "{} material entities for {} ranges",
+                self.material_entities.len(),
+                self.ranges.len()
+            ));
+        }
         if self.materials.len() != self.ranges.len() {
             return Err(format!(
                 "{} materials for {} ranges",
@@ -329,4 +341,66 @@ pub struct AnvilCollisionShape {
 
 impl Component for AnvilCollisionShape {
     const NAME: &'static str = "anvil.collision_shape";
+}
+
+/// What a MaterialTemplate binding binds (see [`crate::read::template::BindingKind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaterialBinding {
+    Texture { slot: u32 },
+    Scalar { vec4: u32 },
+    Vector { vec4: u32 },
+    UvTransform { vec4: u32 },
+    Other,
+}
+
+/// A Material property's value, as its record stores it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaterialValue {
+    Int(i32),
+    Float(f32),
+    Float4([f32; 4]),
+    /// A texture: its TextureMap's entity (`None`: the record refers to none, or it couldn't be read), and the
+    /// record's TextureSet slot and channel.
+    Texture {
+        texture: Option<Entity>,
+        slot: u32,
+        channel: u32,
+    },
+    /// Another payload, not read here.
+    Other,
+}
+
+/// A Material on its own entity (`anvil.material`): its template (ClassID and entry name), the template's bindings
+/// and the Material's property values, each by the property's key. `lower-anvil-material` makes PBR of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilMaterial {
+    pub index_id: u64,
+    pub template: Option<u64>,
+    pub template_name: Option<String>,
+    pub bindings: Vec<(u32, MaterialBinding)>,
+    pub values: Vec<(u32, MaterialValue)>,
+}
+
+impl Component for AnvilMaterial {
+    const NAME: &'static str = "anvil.material";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.values.iter().filter_map(|(_, v)| match v {
+            MaterialValue::Texture { texture, .. } => *texture,
+            _ => None,
+        }));
+    }
+}
+
+/// What the reader keeps of a TextureMap on its texture's entity (`anvil.texture_map`): its ClassID, engine format
+/// code and the u32 at 25 (1 on maps the game samples as sRGB, by the Riders Republic notes' size-bucket join; a
+/// stated choice for the lowering).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilTextureMap {
+    pub index_id: u64,
+    pub code: u32,
+    pub field_25: u32,
+}
+
+impl Component for AnvilTextureMap {
+    const NAME: &'static str = "anvil.texture_map";
 }

@@ -41,11 +41,15 @@ pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 /// agreeing (AnvilToolkit 1.3.7's Breakpoint table and RRAssetStudio v3's) with the census's storage, and by a real
 /// sample decoding by primase-texcodec equal to the third-party bcdec's on every byte (worlds/anvil/tests/texture.rs):
 /// 2 and 3 BC1, 4 BC2, 5 BC3, 6 BC4, 7 BC5, 10 BC7, 12 R8, 20 RGBA16F (BC7 also equal to texture2ddecoder's; BC2, R8
-/// and RGBA16F also to RRAssetStudio's). Not codes the two tools disagree on (0: BGRA8 or RGBA8; 11: A8 or R8) or
-/// only one names. Colour space and role are not read: neither tool's table holds an sRGB format. Another code is
-/// `None`: not refused as stored, but its codec isn't established.
+/// and RGBA16F also to RRAssetStudio's). 0 is B8G8R8A8, where the two tools disagree (BGRA8 or RGBA8), by what the
+/// game's own data means: the engine's built-in default normal texture (DataPC entry 139325) stores `ff 80 80 ff`, a
+/// flat normal only as B, G, R, A, and the skin-colour palette decodes to skin tones only so (the Riders Republic notes,
+/// docs/material-spec.md §7). Not 11 (A8 or R8) or a code only one tool names. Colour space and role are not read:
+/// neither tool's table holds an sRGB format. Another code is `None`: not refused as stored, but its codec isn't
+/// established.
 pub fn format(code: u32) -> Option<TexFormat> {
     match code {
+        0 => Some(TexFormat::Bgra8Unorm),
         2 | 3 => Some(TexFormat::Bc1),
         4 => Some(TexFormat::Bc2),
         5 => Some(TexFormat::Bc3),

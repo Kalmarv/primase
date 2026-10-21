@@ -124,6 +124,7 @@ pub fn anvil_mesh(
         triangles,
         ranges,
         materials,
+        material_entities: Vec::new(),
         kind: stored.kind,
         stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
         vertex_records: v.bytes.clone(),

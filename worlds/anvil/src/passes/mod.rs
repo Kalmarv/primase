@@ -368,8 +368,9 @@ pub enum UvV {
 }
 
 /// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed|packed-127}`: a
-/// diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype, one triangle
-/// primitive, no material: positions and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as
+/// diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype: one triangle
+/// primitive with no material, or, where the reader read its Materials, a primitive per stored range, of the vertices
+/// its triangles use, drawn with the range's Material entity; positions and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as
 /// two 16-bit words per `uv-words` over `uv-divisor`, the second per `uv-v`; normals per `normals`. (RRAssetStudio
 /// reads the words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from
 /// 10,773 to 650 against unsigned, by a separate count; neither proves what the game does.) That bytes 20..24 are texture coordinates, their divisor and origin, and
@@ -556,19 +557,55 @@ impl Pass for LowerAnvilMesh {
             }
             let triangles = m.triangles.len() as u64;
             streams.insert(Semantic::Position, Stream::F32x3(m.positions));
-            w.insert(
-                e,
-                Mesh::new(vec![Primitive {
+            let primitives = if m.material_entities.is_empty() {
+                vec![Primitive {
                     topology: Topology::Triangles,
                     streams,
                     indices: Some(m.triangles.into_iter().flatten().collect()),
                     material: None,
-                }]),
-            );
+                }]
+            } else {
+                // a primitive per range, of its own vertices, drawn with its Material
+                let ends = m.ranges.iter().skip(1).copied().chain([m.triangles.len() as u32]);
+                m.ranges
+                    .iter()
+                    .zip(ends)
+                    .zip(&m.material_entities)
+                    .map(|((&start, end), &material)| {
+                        let tris = m.triangles.get(start as usize..end as usize).unwrap_or_default();
+                        let mut keep: Vec<u32> = tris.iter().flatten().copied().collect();
+                        keep.sort_unstable();
+                        keep.dedup();
+                        let new: BTreeMap<u32, u32> = (0u32..).zip(&keep).map(|(i, &v)| (v, i)).collect();
+                        Primitive {
+                            topology: Topology::Triangles,
+                            streams: streams.iter().map(|(s, v)| (*s, gather(v, &keep))).collect(),
+                            indices: Some(tris.iter().flatten().map(|v| new[v]).collect()),
+                            material,
+                        }
+                    })
+                    .collect()
+            };
+            log.count("primitives lowered", primitives.len() as u64);
+            w.insert(e, Mesh::new(primitives));
             log.count("Meshes lowered", 1);
             log.count("triangles lowered", triangles);
         }
         Ok(())
+    }
+}
+
+/// The elements of `stream` at `keep`, in that order.
+fn gather(stream: &Stream, keep: &[u32]) -> Stream {
+    fn pick<T: Copy>(v: &[T], keep: &[u32]) -> Vec<T> {
+        keep.iter().filter_map(|&i| v.get(i as usize).copied()).collect()
+    }
+    match stream {
+        Stream::F32x2(v) => Stream::F32x2(pick(v, keep)),
+        Stream::F32x3(v) => Stream::F32x3(pick(v, keep)),
+        Stream::F32x4(v) => Stream::F32x4(pick(v, keep)),
+        Stream::U8x4(v) => Stream::U8x4(pick(v, keep)),
+        Stream::U16x4(v) => Stream::U16x4(pick(v, keep)),
     }
 }
 

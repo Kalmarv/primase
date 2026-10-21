@@ -31,11 +31,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use primase_core::frame::SourceFrame;
-use primase_core::{Entity, Instance, Name, Transform, World};
+use primase_core::{ColorSpace, Entity, Instance, Name, TexRole, Texture, Transform, World};
 
 use crate::components::{
-    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh, CollisionMaterialRef,
-    DataLayerAction, ShapeGeometry,
+    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
+    AnvilTextureMap, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -43,14 +43,18 @@ use crate::read::entity::{
     StoredEntityGroup, Visual,
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use crate::read::mesh::{MESH, StoredMesh};
+use crate::read::material::{Payload, StoredMaterial, TEXTURE_MAP};
+use crate::read::mesh::{MATERIAL, MESH, StoredMesh};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
+use crate::read::mip::StoredMip;
 use crate::read::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
     StoredReferenceList, StoredSphere,
 };
 use crate::read::shapes::anvil_mesh_shape;
+use crate::read::template::{self, BindingKind};
+use crate::read::texture::{self, StoredTextureMap};
 
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +97,34 @@ pub enum Error {
     },
     #[error(transparent)]
     Shapes(#[from] crate::read::shapes::Error),
+    #[error("{at:?}: {source}")]
+    Material {
+        at: At,
+        #[source]
+        source: crate::read::material::MaterialError,
+    },
+    #[error("{at:?}: {source}")]
+    Bindings {
+        at: At,
+        #[source]
+        source: crate::read::template::BindingError,
+    },
+    #[error("{at:?}: {source}")]
+    Texture {
+        at: At,
+        #[source]
+        source: crate::read::texture::Error,
+    },
+    #[error("{at:?}: format code {code}: its codec isn't established")]
+    Codec { at: At, code: u32 },
+    #[error("{at:?}: its CompiledMip for level {level} isn't found, or is another's")]
+    Mip { at: At, level: u32 },
+    #[error("{at:?}: {source}")]
+    MipBody {
+        at: At,
+        #[source]
+        source: crate::read::mip::Error,
+    },
     #[error("{at:?}: {source}")]
     ShapeBody {
         at: At,
@@ -261,6 +293,12 @@ pub struct Placer<'a> {
     frame: SourceFrame,
     instanced: InstancedLevels,
     instanced_collision: InstancedCollision,
+    /// Whether meshes' Materials are read.
+    read_materials: bool,
+    /// Per Material id, its entity (`None`: not a Material, or not read).
+    materials: HashMap<u64, Option<Entity>>,
+    /// Per TextureMap id, its texture's entity.
+    textures: HashMap<u64, Option<Entity>>,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: the prototype placing every mesh level.
@@ -273,6 +311,13 @@ pub struct Placer<'a> {
 
 impl<'a> Placer<'a> {
     /// The placer placing instanced Entities' collision as `choice` states ([`InstancedCollision::Skip`] by default).
+    /// The placer reading each mesh's Materials too ([`AnvilMaterial`], their textures as core textures), linked
+    /// from its ranges.
+    pub fn with_materials(mut self) -> Placer<'a> {
+        self.read_materials = true;
+        self
+    }
+
     pub fn with_instanced_collision(mut self, choice: InstancedCollision) -> Placer<'a> {
         self.instanced_collision = choice;
         self
@@ -291,6 +336,9 @@ impl<'a> Placer<'a> {
             frame,
             instanced,
             instanced_collision: InstancedCollision::Skip,
+            read_materials: false,
+            materials: HashMap::new(),
+            textures: HashMap::new(),
             objects: HashMap::new(),
             wholes: HashMap::new(),
             shapes: HashMap::new(),
@@ -425,15 +473,174 @@ impl<'a> Placer<'a> {
     }
 
     /// An entity holding the AnvilMesh of the Mesh at `at`, whose body is `body` and ClassID `id`.
-    fn mesh(&mut self, at: At, body: &[u8], id: u64) -> Result<Entity, Error> {
+    fn mesh(&mut self, at: At, body: &[u8], id: u64, placed: &mut Placed) -> Result<Entity, Error> {
         let stored = StoredMesh::parse(body).map_err(|source| Error::Mesh { at, source })?;
+        let mut mesh = anvil_mesh(&stored, at.entry, id, self.frame)?;
+        if self.read_materials {
+            let ids = mesh.materials.clone();
+            mesh.material_entities = ids.into_iter().map(|m| self.material(m, placed)).collect();
+        }
         let e = self.world.spawn();
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
-        self.world
-            .insert(e, anvil_mesh(&stored, at.entry, id, self.frame)?);
+        self.world.insert(e, mesh);
         Ok(e)
+    }
+
+    /// The entity holding the Material `id` names, read once: its [`AnvilMaterial`]. `None` where it isn't a
+    /// Material or can't be read (recorded in `placed`).
+    fn material(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
+        if let Some(&e) = self.materials.get(&id) {
+            return e;
+        }
+        let e = match self.read_material(id, placed) {
+            Ok(e) => e,
+            Err(why) => {
+                placed.refused.push((id, why.to_string()));
+                None
+            }
+        };
+        self.materials.insert(id, e);
+        e
+    }
+
+    fn read_material(&mut self, id: u64, placed: &mut Placed) -> Result<Option<Entity>, Error> {
+        let Some(at) = self.archive.find(id) else {
+            return Ok(None);
+        };
+        let r = self.archive.resource(at)?;
+        if r.type_id != MATERIAL {
+            return Ok(None);
+        }
+        let m = StoredMaterial::parse(&r.body).map_err(|source| Error::Material { at, source })?;
+        let template = m.references[0].map(|t| t.id);
+        let mut bindings = Vec::new();
+        if let Some(t) = template.and_then(|t| self.archive.find(t)) {
+            let body = self.archive.resource(t)?.body;
+            let read = template::bindings(&body).map_err(|source| Error::Bindings { at: t, source })?;
+            bindings = read
+                .iter()
+                .map(|b| {
+                    let kind = match b.kind() {
+                        BindingKind::Texture { slot } => MaterialBinding::Texture { slot },
+                        BindingKind::Scalar { vec4 } => MaterialBinding::Scalar { vec4 },
+                        BindingKind::Vector { vec4 } => MaterialBinding::Vector { vec4 },
+                        BindingKind::UvTransform { vec4 } => MaterialBinding::UvTransform { vec4 },
+                        BindingKind::Other => MaterialBinding::Other,
+                    };
+                    (b.key, kind)
+                })
+                .collect();
+        }
+        let mut values = Vec::with_capacity(m.properties.len());
+        for p in &m.properties {
+            let value = match &p.payload {
+                Payload::Int(v) => MaterialValue::Int(*v),
+                Payload::Float(v) => MaterialValue::Float(*v),
+                Payload::Float4(v) => MaterialValue::Float4(*v),
+                Payload::Texture {
+                    words: [channel, slot, _],
+                    references: [_, map],
+                    ..
+                } => MaterialValue::Texture {
+                    texture: map.and_then(|map| self.texture(map.id, placed)),
+                    slot: *slot,
+                    channel: *channel,
+                },
+                _ => MaterialValue::Other,
+            };
+            values.push((p.key, value));
+        }
+        let e = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(e, Name(name));
+        }
+        let template_name = template.and_then(|t| entry_name(self.archive, t));
+        self.world.insert(
+            e,
+            AnvilMaterial {
+                index_id: id,
+                template,
+                template_name,
+                bindings,
+                values,
+            },
+        );
+        Ok(Some(e))
+    }
+
+    /// The entity holding the TextureMap `id` names, read once: a core texture of its levels (its CompiledMips', then
+    /// its own), colour space linear and role other until a lowering states them, and its [`AnvilTextureMap`]. `None`
+    /// where it isn't a TextureMap, its format code's codec isn't established, or it can't be read (recorded).
+    fn texture(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
+        if let Some(&e) = self.textures.get(&id) {
+            return e;
+        }
+        let e = match self.read_texture(id) {
+            Ok(e) => e,
+            Err(why) => {
+                placed.refused.push((id, why.to_string()));
+                None
+            }
+        };
+        self.textures.insert(id, e);
+        e
+    }
+
+    fn read_texture(&mut self, id: u64) -> Result<Option<Entity>, Error> {
+        let Some(at) = self.archive.find(id) else {
+            return Ok(None);
+        };
+        let r = self.archive.resource(at)?;
+        if r.type_id != TEXTURE_MAP {
+            return Ok(None);
+        }
+        let t = StoredTextureMap::parse(&r.body).map_err(|source| Error::Texture { at, source })?;
+        let Some(format) = texture::format(t.format) else {
+            return Err(Error::Codec { at, code: t.format });
+        };
+        let mut levels = Vec::with_capacity(usize::try_from(t.mip_count).unwrap_or(0));
+        for (level, m) in (0u32..).zip(&t.references) {
+            let mip_at = self.archive.find(m.id).ok_or(Error::Mip { at, level })?;
+            let body = self.archive.resource(mip_at)?.body;
+            let mip = StoredMip::parse(&body).map_err(|source| Error::MipBody { at: mip_at, source })?;
+            if mip.parent != id || mip.level != level {
+                return Err(Error::Mip { at, level });
+            }
+            levels.push(mip.image);
+        }
+        levels.extend(
+            t.levels()
+                .map_err(|source| Error::Texture { at, source })?
+                .into_iter()
+                .map(<[u8]>::to_vec),
+        );
+        let e = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(e, Name(name));
+        }
+        self.world.insert(
+            e,
+            Texture {
+                width: t.width,
+                height: t.height,
+                format,
+                levels,
+                color_space: ColorSpace::Linear,
+                role: TexRole::Other,
+                normal: None,
+            },
+        );
+        self.world.insert(
+            e,
+            AnvilTextureMap {
+                index_id: id,
+                code: t.format,
+                field_25: t.field_25,
+            },
+        );
+        Ok(Some(e))
     }
 
     /// The mesh levels of the object `id` names, read once.
@@ -460,7 +667,7 @@ impl<'a> Placer<'a> {
             Some(at) => {
                 let r = self.archive.resource(at)?;
                 match r.type_id {
-                    MESH => Some(vec![(0, self.mesh(at, &r.body, id)?)]),
+                    MESH => Some(vec![(0, self.mesh(at, &r.body, id, placed)?)]),
                     LOD_SELECTOR => {
                         let s =
                             StoredLodSelector::parse(&r.body).map_err(|source| Error::Lod { at, source })?;
@@ -475,7 +682,7 @@ impl<'a> Placer<'a> {
                             };
                             match mesh {
                                 Some((m, r)) if r.type_id == MESH => {
-                                    match self.mesh(m, &r.body, reference.id) {
+                                    match self.mesh(m, &r.body, reference.id, placed) {
                                         Ok(e) => levels.push((level, e)),
                                         Err(e) => {
                                             placed.refused.push((reference.id, e.to_string()));
