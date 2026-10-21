@@ -1,12 +1,13 @@
 //! `bake-layer-channels`: per-pixel layer weights evaluated at the vertices, for targets that blend by vertex weights
-//! only (skate). Each layered material with channels or the over composition gets a new colour stream on every
-//! primitive drawn with it, holding the channels evaluated at that vertex (masks sampled at its UVs), and becomes the
-//! original form: that stream, the same mapping, summed. Between vertices the weights then interpolate instead of
+//! only (skate). Each layered material with channels or the over or height composition gets a new colour stream on
+//! every primitive drawn with it, holding the channels evaluated at that vertex (masks and heights sampled at its UVs),
+//! and becomes the original form: that stream, the same mapping (with over or height, the slot weights themselves and
+//! the identity mapping), summed. Between vertices the weights then interpolate instead of
 //! following the mask: an approximation, counted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::layered::{Composition, Source, over_as_sum};
+use primase_core::layered::{Composition, Source, height_blend, over_as_sum};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{TextureRef, Wrap};
 use primase_core::{
@@ -124,6 +125,14 @@ impl Pass for BakeLayerChannels {
                     out.push(match l.weights.composition {
                         Composition::Sum => ch,
                         Composition::Over => over_as_sum(l.weights.mapping.evaluate(ch), slots),
+                        Composition::Height { contrast } => {
+                            let mut heights = [0.0; 4];
+                            for (h, s) in heights.iter_mut().zip(&l.weights.heights) {
+                                *h =
+                                    source(s, p, v, &masks).map_err(|m| format!("{e:?} on {mesh:?}: {m}"))?;
+                            }
+                            height_blend(l.weights.mapping.evaluate(ch), heights, slots, contrast)
+                        }
                     });
                 }
                 streams.push((mesh, i, Stream::F32x4(out)));
@@ -143,14 +152,22 @@ impl Pass for BakeLayerChannels {
                     log.approximate("primitives with layer weights baked at their vertices", 1);
                 }
             }
-            if l.weights.composition == Composition::Over {
-                // the stream already holds the slot weights
-                l.weights.mapping = WeightMapping::Identity;
-                log.approximate("over compositions baked to summed vertex weights", 1);
+            match l.weights.composition {
+                Composition::Over => {
+                    // the stream already holds the slot weights
+                    l.weights.mapping = WeightMapping::Identity;
+                    log.approximate("over compositions baked to summed vertex weights", 1);
+                }
+                Composition::Height { .. } => {
+                    l.weights.mapping = WeightMapping::Identity;
+                    log.approximate("height compositions baked to summed vertex weights", 1);
+                }
+                Composition::Sum => {}
             }
             l.weights.attribute = Semantic::Color(n);
             l.weights.channels = None;
             l.weights.composition = Composition::Sum;
+            l.weights.heights.clear();
             w.insert(e, l);
             log.count("layered materials baked", 1);
         }

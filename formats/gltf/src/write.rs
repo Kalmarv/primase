@@ -28,7 +28,10 @@
 //!   the same file (the layer materials are written like any other; their images are shared) with the layer's UV
 //!   set and transform. The host material is a verbatim copy of the first non-null layer's material (name and extras
 //!   aside), so a reader that ignores the extension shows one plausible layer. The extension is only in
-//!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted.
+//!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted. Its
+//!   `version` is 2 with per-pixel channels or the over composition, 3 with the height composition
+//!   (`"composition": {"height": {"contrast": c}}` and `weights.heights`, a source per slot), so an older consumer
+//!   doesn't draw it as the form it knows.
 //! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
 //!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
 //!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
@@ -1217,6 +1220,13 @@ impl Writer<'_> {
             }
             weights.insert("channels".into(), Value::Array(out));
         }
+        if !layered.weights.heights.is_empty() {
+            let mut out = Vec::with_capacity(layered.weights.heights.len());
+            for h in &layered.weights.heights {
+                out.push(self.layer_source(e, h, &mut sets)?);
+            }
+            weights.insert("heights".into(), Value::Array(out));
+        }
         let mut host = match first {
             Some(i) => match &self.materials[i] {
                 Value::Object(m) => m.clone(),
@@ -1238,13 +1248,27 @@ impl Writer<'_> {
             host.insert("extras".into(), extras);
         }
         let mut ext = Map::new();
-        // version 2: per-pixel channels or the over composition; a version 1 consumer must not draw it as version 1
-        if layered.weights.per_pixel() {
-            ext.insert("version".into(), json!(2));
+        // version 2: per-pixel channels or the over composition; 3: the height composition. An older consumer must not
+        // draw it as the version it knows
+        match layered.weights.composition {
+            Composition::Height { .. } => {
+                ext.insert("version".into(), json!(3));
+            }
+            _ if layered.weights.per_pixel() => {
+                ext.insert("version".into(), json!(2));
+            }
+            _ => {}
         }
         ext.insert("weights".into(), Value::Object(weights));
-        if layered.weights.composition == Composition::Over {
-            ext.insert("composition".into(), json!("over"));
+        match layered.weights.composition {
+            Composition::Over => {
+                ext.insert("composition".into(), json!("over"));
+            }
+            Composition::Height { contrast } => {
+                let c = self.factors(e, &[contrast])?[0].clone();
+                ext.insert("composition".into(), json!({"height": {"contrast": c}}));
+            }
+            Composition::Sum => {}
         }
         ext.insert("layers".into(), Value::Array(layers));
         host.insert("extensions".into(), json!({ LAYERED: Value::Object(ext) }));
@@ -1257,44 +1281,45 @@ impl Writer<'_> {
         Ok((i, sets))
     }
 
+    /// A weight or height source as `PRIMASE_layered_material` writes it.
+    fn layer_source(&mut self, e: Entity, s: &Source, sets: &mut BTreeSet<u8>) -> Result<Value> {
+        Ok(match s {
+            Source::Vertex { semantic, channel } => {
+                let attribute = match semantic {
+                    Semantic::Color(n) => format!("COLOR_{n}"),
+                    Semantic::TexCoord(n) => format!("TEXCOORD_{n}"),
+                    other => {
+                        return Err(Error::World {
+                            entity: e,
+                            detail: format!("a weight channel reads {other:?}: COLOR_n or TEXCOORD_n only"),
+                        });
+                    }
+                };
+                json!({"vertex": {"attribute": attribute, "channel": channel}})
+            }
+            Source::Mask {
+                texture,
+                channels,
+                bias,
+            } => {
+                let info = self
+                    .texture_info(Some(*texture), sets)?
+                    .ok_or_else(|| Error::World {
+                        entity: e,
+                        detail: format!("mask texture {:?} could not be written", texture.texture),
+                    })?;
+                json!({"mask": {
+                    "texture": info,
+                    "channels": self.factors(e, channels)?,
+                    "bias": self.factors(e, &[*bias])?[0].clone(),
+                }})
+            }
+        })
+    }
+
     /// A per-pixel weight channel as `PRIMASE_layered_material` writes it.
     fn layer_channel(&mut self, e: Entity, c: &Channel, sets: &mut BTreeSet<u8>) -> Result<Value> {
-        let mut source = |s: &Source| -> Result<Value> {
-            Ok(match s {
-                Source::Vertex { semantic, channel } => {
-                    let attribute = match semantic {
-                        Semantic::Color(n) => format!("COLOR_{n}"),
-                        Semantic::TexCoord(n) => format!("TEXCOORD_{n}"),
-                        other => {
-                            return Err(Error::World {
-                                entity: e,
-                                detail: format!(
-                                    "a weight channel reads {other:?}: COLOR_n or TEXCOORD_n only"
-                                ),
-                            });
-                        }
-                    };
-                    json!({"vertex": {"attribute": attribute, "channel": channel}})
-                }
-                Source::Mask {
-                    texture,
-                    channels,
-                    bias,
-                } => {
-                    let info = self
-                        .texture_info(Some(*texture), sets)?
-                        .ok_or_else(|| Error::World {
-                            entity: e,
-                            detail: format!("mask texture {:?} could not be written", texture.texture),
-                        })?;
-                    json!({"mask": {
-                        "texture": info,
-                        "channels": self.factors(e, channels)?,
-                        "bias": self.factors(e, &[*bias])?[0].clone(),
-                    }})
-                }
-            })
-        };
+        let mut source = |s: &Source| self.layer_source(e, s, sets);
         Ok(match c {
             Channel::Source(s) => json!({"source": source(s)?}),
             Channel::Lerp { a, b, t } => json!({"lerp": {"a": source(a)?, "b": source(b)?, "t": source(t)?}}),

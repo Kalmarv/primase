@@ -155,3 +155,20 @@ fn channels_match_the_mapping_and_their_masks_are_references() {
             .contains("not alive")
     );
 }
+
+/// The height blend worked by hand from the formula (MAD_Tex2's, riders-republic docs/material-spec.md §4.3): weights
+/// (0.5, 0.5), heights (0.8, 0.4), so p = (0.4, 0.2) and m = 0.4.
+#[test]
+fn height_blend_weights_worked_by_hand() {
+    use primase_core::layered::height_blend;
+    let close = |a: [f32; 4], b: [f32; 4]| (0..4).all(|i| (a[i] - b[i]).abs() < 1e-6);
+    // contrast 0.5: u = (0.4 + 0.1, 0.2 + 0.1) = (0.5, 0.3), normalized (0.625, 0.375)
+    let got = height_blend([0.5, 0.5, 0.0, 0.0], [0.8, 0.4, 0.0, 0.0], 2, 0.5);
+    assert!(close(got, [0.625, 0.375, 0.0, 0.0]), "{got:?}");
+    // contrast 0.9: u = (0.4 - 0.3, max(0.2 - 0.3, 0)) = (0.1, 0): the lower layer drops out
+    let got = height_blend([0.5, 0.5, 0.0, 0.0], [0.8, 0.4, 0.0, 0.0], 2, 0.9);
+    assert!(close(got, [1.0, 0.0, 0.0, 0.0]), "{got:?}");
+    // contrast 1: every u is 0, no weight
+    let got = height_blend([0.5, 0.5, 0.0, 0.0], [0.8, 0.4, 0.0, 0.0], 2, 1.0);
+    assert!(close(got, [0.0; 4]), "{got:?}");
+}

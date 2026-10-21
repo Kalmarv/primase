@@ -14,6 +14,13 @@
 //!   `sat(COLOR0.a + Vertex AO)` on the base colour, 1 where Vertex AO is at least 1) isn't a COLOR_0 product: left
 //!   out, reported, as are the effects without a PBR place (translucency, specular occlusion, near fade, dead-tree
 //!   thinning, wind debug). MAD_Tex1_Rocks isn't lowered: it combines maps sampled at three UV sets per pixel.
+//! - **MAD_Tex2** (§4.3: [`TEX2`]): a height blend of two layers ([`LayeredMaterial`] with
+//!   [`Composition::Height`]). Each layer an ordinary material at its own UV transform (`Base tiling A`, `B`): its
+//!   diffuse tinted in HSV by its mask's red, roughness `S(sat((a + Roughness Offset - 0.1) 1.25))` and metalness
+//!   `b` of its normal map, occlusion `1 + OnOffAO (mask.b - 1)`; B weighted by
+//!   `w = sat((COLOR0.a - 0.5) Alpha Contrast + 0.5 + Alpha Contrast Alpha Offset)`, A by `1 - w`, each by its
+//!   diffuse's alpha as its height, at the Height Contrast. Its colour factor `1 + Vertex Color Intensity
+//!   (COLOR0.rgb - 1)` isn't lowered, reported.
 //! - **MAD_Clutters_Grass** (layout B, §15.2: [`GRASS`]): base colour its diffuse, alpha its `1 - Alpha` map's red
 //!   (TextureSet slot 18), roughness its normal map's alpha, metalness 0, occlusion `1 + OnOffAO (mask.b - 1)`,
 //!   two-sided. Its noise tint (weighted by a noise tiled in world space), translucency, specular occlusion and
@@ -67,11 +74,12 @@
 
 use std::collections::BTreeMap;
 
+use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
-    TexRole, Texture, VertexColor, World,
+    ColorSpace, Component, Entity, LayeredMaterial, NormalBasis, NormalConvention, NormalGreen, NormalX,
+    NormalZ, Semantic, TexFormat, TexRole, Texture, VertexColor, World,
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
@@ -361,6 +369,38 @@ pub const GRASS: Reads = Reads {
     ],
 };
 
+/// MAD_Tex2's (§4.3; the layers A = (t78 diffuse, t75 normal, t80 mask) and B = (t76, t77, t79)): normal A t75,
+/// diffuse B t76, normal B t77, diffuse A t78, mask B t79, mask A t80; Vertex Color Intensity 1, Height Contrast 2,
+/// Alpha Offset 3, Alpha Contrast 4, Hue / Saturation / Luminosity A 5-7 and B 8-10, Roughness Offset 1 and 2 at 11
+/// and 12, On Off AO 13, `Base tiling A` 14, `Base tiling B` 17.
+pub const TEX2: Reads = Reads {
+    textures: &[
+        (0, 0x840C_4002),
+        (1, 0xB72C_97CC),
+        (2, 0xE0FC_E9CD),
+        (3, 0xE4B6_CC48),
+        (4, 0x8E92_3E53),
+        (5, 0xFCAC_D4EA),
+    ],
+    constants: &[
+        (1, 0x422F_B075),
+        (2, 0xA72E_5763),
+        (3, 0xA7B7_68D7),
+        (4, 0xD4D4_90B6),
+        (5, 0x2803_E854),
+        (6, 0x968A_7B9F),
+        (7, 0x9F39_AFF6),
+        (8, 0xB10A_B9EE),
+        (9, 0x0F83_2A25),
+        (10, 0x0630_FE4C),
+        (11, 0xDFF7_205B),
+        (12, 0x46FE_71E1),
+        (13, 0xCBBE_0755),
+        (14, 0x6CB3_7F10),
+        (17, 0xF5BA_2EAA),
+    ],
+};
+
 /// Whether `m`'s template binds every texture and constant `reads` names where it names it.
 fn binds_all(m: &AnvilMaterial, reads: &Reads) -> bool {
     reads
@@ -563,7 +603,12 @@ impl Pass for LowerAnvilMaterial {
         &[AnvilMaterial::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME]
+        &[
+            PbrMaterial::NAME,
+            LayeredMaterial::NAME,
+            Texture::NAME,
+            VertexColor::NAME,
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &[Texture::NAME]
@@ -612,6 +657,8 @@ impl Pass for LowerAnvilMaterial {
             };
             // whether the Material's shader takes COLOR0 as a factor of the base colour, as COLOR_0 is
             let mut takes_colour = false;
+            // whether it became a layered material (no PBR material of its own then)
+            let mut layered = false;
             let pbr = match (name.as_str(), layout) {
                 ("MAD_Fake" | "MAD_CHR_Basic" | "MAD_Fake_Sediment", _) => {
                     if name == "MAD_Fake_Sediment" && [1, 2].iter().any(|&v| i.scalar(v) != 0.0) {
@@ -627,7 +674,7 @@ impl Pass for LowerAnvilMaterial {
                         set_colour(w, a, TexRole::Color);
                     }
                     let mr = match normals {
-                        Some(n) => Some(metal_rough(w, &mut made, n, None, None)?),
+                        Some(n) => Some(metal_rough(w, &mut made, n, None, Rough::Raw)?),
                         None => None,
                     };
                     if let Some(n) = normals {
@@ -749,7 +796,7 @@ impl Pass for LowerAnvilMaterial {
                         })?)
                     } else {
                         match normals {
-                            Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), None)?),
+                            Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), Rough::Raw)?),
                             None => None,
                         }
                     };
@@ -771,6 +818,111 @@ impl Pass for LowerAnvilMaterial {
                         normal_texture: normals.map(sampled_by),
                         alpha_mode,
                         ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_Tex2", _) if !binds_all(&m, &TEX2) => {
+                    log.omit(
+                        "Materials of template \"MAD_Tex2\" (it doesn't bind the properties its evaluated shader reads: \
+                         a neutral placeholder drawn)",
+                        1,
+                    );
+                    placeholder()
+                }
+                ("MAD_Tex2", _) => {
+                    let scalar = |v: u32| i.scalar(v);
+                    if scalar(1) != 0.0 {
+                        log.omit(
+                            "Tex2 Materials' vertex-colour factor (COLOR0 weights the layers; its colour factor isn't \
+                             lowered)",
+                            1,
+                        );
+                    }
+                    let uv_a = lowered_uv(&i, Some(14), self.shader_uv, "Tex2 A", log);
+                    let uv_b = lowered_uv(&i, Some(17), self.shader_uv, "Tex2 B", log);
+                    let ao_on = scalar(13);
+                    // each layer an ordinary material: (diffuse, normal map, mask, its HSL, its roughness offset)
+                    let parts = [
+                        (i.texture(3), i.texture(0), i.texture(5), [5, 6, 7], 11),
+                        (i.texture(1), i.texture(2), i.texture(4), [8, 9, 10], 12),
+                    ];
+                    let mut layers = Vec::with_capacity(2);
+                    let mut heights = Vec::with_capacity(2);
+                    for ((diffuse, normals, mask, hsl, offset), uv) in parts.into_iter().zip([uv_a, uv_b]) {
+                        let (Some(d), Some(n), Some(k)) = (diffuse, normals, mask) else {
+                            layers.push(None);
+                            continue;
+                        };
+                        let base = base_colour(w, &mut made, d, hsl.map(scalar), Some(k), None)?;
+                        let mr = metal_rough(w, &mut made, n, None, Rough::Tex2(scalar(offset)))?;
+                        let occlusion = if ao_on != 0.0 {
+                            Some(occlusion_of(w, &mut made, k, ao_on)?)
+                        } else {
+                            None
+                        };
+                        set_normal(w, n, normal);
+                        let layer = w.spawn();
+                        w.insert(
+                            layer,
+                            PbrMaterial {
+                                base_color_texture: Some(TextureRef::new(base)),
+                                metallic: 1.0,
+                                roughness: 1.0,
+                                metallic_roughness_texture: Some(TextureRef::new(mr)),
+                                occlusion_texture: occlusion.map(TextureRef::new),
+                                normal_texture: Some(TextureRef::new(n)),
+                                ..PbrMaterial::default()
+                            },
+                        );
+                        w.insert(layer, VertexColor::Ignored);
+                        // the layer's height: its diffuse's alpha, at its own uv
+                        heights.push(Source::Mask {
+                            texture: TextureRef {
+                                transform: uv,
+                                ..TextureRef::new(d)
+                            },
+                            channels: [0.0, 0.0, 0.0, 1.0],
+                            bias: 0.0,
+                        });
+                        layers.push(Some(Layer {
+                            material: layer,
+                            texcoord: None,
+                            transform: uv,
+                        }));
+                    }
+                    if heights.len() == 2 {
+                        // w = sat((COLOR0.a - 0.5) AlphaContrast + 0.5 + AlphaContrast AlphaOffset): layer B's weight,
+                        // A's 1 - w (= sat(1 - that))
+                        let (contrast, offset) = (scalar(4), scalar(3));
+                        let k0 = (0.5 + contrast * offset - 0.5 * contrast) as f32;
+                        let k1 = contrast as f32;
+                        let alpha = Source::Vertex {
+                            semantic: Semantic::Color(0),
+                            channel: 3,
+                        };
+                        let threshold = |k: [f32; 4]| Channel::Threshold {
+                            v: alpha.clone(),
+                            m: alpha.clone(),
+                            k,
+                        };
+                        let mut weights = LayerWeights::new(Semantic::Color(0), WeightMapping::Identity);
+                        weights.channels = Some(vec![
+                            threshold([1.0 - k0, -k1, 0.0, 0.0]),
+                            threshold([k0, k1, 0.0, 0.0]),
+                        ]);
+                        weights.composition = Composition::Height {
+                            contrast: scalar(2) as f32,
+                        };
+                        weights.heights = heights;
+                        w.insert(e, LayeredMaterial { layers, weights });
+                        log.count("MAD_Tex2 Materials lowered (a height blend of two layers)", 1);
+                        layered = true;
+                        placeholder()
+                    } else {
+                        log.omit(
+                            "Tex2 Materials missing a layer's diffuse, normal map or mask: a placeholder",
+                            1,
+                        );
+                        placeholder()
                     }
                 }
                 ("MAD_Clutters_Grass", _) if !binds_all(&m, &GRASS) => {
@@ -819,7 +971,7 @@ impl Pass for LowerAnvilMaterial {
                         None => None,
                     };
                     let mr = match normals {
-                        Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), None)?),
+                        Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), Rough::Raw)?),
                         None => None,
                     };
                     let ao_on = scalar(16);
@@ -917,7 +1069,13 @@ impl Pass for LowerAnvilMaterial {
                         None => None,
                     };
                     let mr = match normals {
-                        Some(n) => Some(metal_rough(w, &mut made, n, metal, rough_offset)?),
+                        Some(n) => Some(metal_rough(
+                            w,
+                            &mut made,
+                            n,
+                            metal,
+                            rough_offset.map_or(Rough::Raw, Rough::Offset),
+                        )?),
                         None => None,
                     };
                     let occlusion = match mask {
@@ -949,7 +1107,9 @@ impl Pass for LowerAnvilMaterial {
                     placeholder()
                 }
             };
-            w.insert(e, pbr);
+            if !layered {
+                w.insert(e, pbr);
+            }
             if !takes_colour {
                 w.insert(e, VertexColor::Ignored);
             }
@@ -1068,23 +1228,48 @@ fn occlusion_of(
     })
 }
 
+/// How a template makes roughness of its normal map's alpha `a`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Rough {
+    /// `a`.
+    Raw,
+    /// `S(sat(a + offset))` (Tex1, Decals1).
+    Offset(f64),
+    /// `S(sat((a + offset - 0.1) 1.25))` (Tex2).
+    Tex2(f64),
+}
+
 /// The metallic-roughness texture made of the normal map `n`'s blue and alpha: metalness `b * metal` (`b` where
-/// `None`), roughness `S(sat(a + offset))` (`a` where `None`).
+/// `None`), roughness by `rough`.
 fn metal_rough(
     w: &mut World,
     made: &mut BTreeMap<MadeKey, Entity>,
     n: Entity,
     metal: Option<f64>,
-    offset: Option<f64>,
+    rough: Rough,
 ) -> Result<Entity, String> {
     let bits = |x: Option<f64>| x.map_or(u64::MAX, f64::to_bits);
-    made_texture(w, made, (n, "mr", [bits(metal), bits(offset), 0, 0, 0]), |w| {
-        derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
-            let rough = offset.map_or(c[3], |o| smooth(sat(c[3] + o)));
-            let metal = metal.map_or(c[2], |m| c[2] * m);
-            [255, byte(rough), byte(metal), 255]
-        })
-    })
+    let (curve, offset) = match rough {
+        Rough::Raw => (0, None),
+        Rough::Offset(o) => (1, Some(o)),
+        Rough::Tex2(o) => (2, Some(o)),
+    };
+    made_texture(
+        w,
+        made,
+        (n, "mr", [bits(metal), bits(offset), curve, 0, 0]),
+        |w| {
+            derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
+                let rough = match rough {
+                    Rough::Raw => c[3],
+                    Rough::Offset(o) => smooth(sat(c[3] + o)),
+                    Rough::Tex2(o) => smooth(sat((c[3] + o - 0.1) * 1.25)),
+                };
+                let metal = metal.map_or(c[2], |m| c[2] * m);
+                [255, byte(rough), byte(metal), 255]
+            })
+        },
+    )
 }
 
 /// The neutral grey a Material not lowered is drawn with.

@@ -5,7 +5,8 @@
 //! composition combines the layers: [`Composition::Sum`] is `sum(weight[i] * layer[i])` with the weights not
 //! normalized (unused weight and null layers contribute black); [`Composition::Over`] starts from slot 0 and lerps
 //! each later slot over it by its weight, in slot order, which equals Sum with weight `w_i * prod_{j>i}(1 - w_j)` per
-//! pixel. Blend normals with the same weights and then normalize the resulting direction. An all-zero normal sum has
+//! pixel; [`Composition::Height`] blends by each layer's height ([`LayerWeights::heights`], [`height_blend`]): the
+//! layers whose weighted height is near the highest show, the rest fade out within the contrast. Blend normals with the same weights and then normalize the resulting direction. An all-zero normal sum has
 //! no direction; a consumer must state its fallback rather than inventing a source normal.
 use crate::{Component, Entity, JsonError, Semantic, World, pbr::TextureRef, pbr::UvTransform};
 use serde::Serialize;
@@ -68,6 +69,10 @@ pub struct LayerWeights {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channels: Option<Vec<Channel>>,
     pub composition: Composition,
+    /// With [`Composition::Height`], each slot's height per pixel (a layer's own height map, sampled with its own UV
+    /// set and transform), one per slot; empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub heights: Vec<Source>,
 }
 
 impl LayerWeights {
@@ -78,6 +83,7 @@ impl LayerWeights {
             mapping,
             channels: None,
             composition: Composition::Sum,
+            heights: Vec::new(),
         }
     }
     /// Whether a consumer must evaluate anything per pixel beyond interpolating one vertex attribute and summing.
@@ -87,13 +93,34 @@ impl LayerWeights {
 }
 
 /// How the weighted layers combine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Composition {
     /// `sum(weight[i] * layer[i])`.
     Sum,
     /// Slot 0, then `lerp(colour, layer[i], weight[i])` for each later slot in order.
     Over,
+    /// Each slot's weight `w_i` times its height `h_i` ([`LayerWeights::heights`]) is `p_i`, the highest `m`; slot `i`
+    /// gets `u_i = max(p_i - (m - (1 - contrast)), 0)`, normalized by their sum ([`height_blend`]). Where every `u_i`
+    /// is 0 (a contrast of 1 or more) the blend has no weight: a consumer states its fallback.
+    Height { contrast: f32 },
+}
+
+/// [`Composition::Height`]'s weights of `slots` slots from their mapped weights and heights; all 0 where every
+/// `u_i` is (see there).
+pub fn height_blend(weights: [f32; 4], heights: [f32; 4], slots: usize, contrast: f32) -> [f32; 4] {
+    let slots = slots.min(4);
+    let p: Vec<f32> = (0..slots).map(|i| weights[i] * heights[i]).collect();
+    let m = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let u: Vec<f32> = p.iter().map(|&x| (x - (m - (1.0 - contrast))).max(0.0)).collect();
+    let sum: f32 = u.iter().sum();
+    let mut out = [0.0; 4];
+    if sum > 0.0 {
+        for (o, x) in out.iter_mut().zip(&u) {
+            *o = x / sum;
+        }
+    }
+    out
 }
 
 /// A value read per pixel.
@@ -151,6 +178,29 @@ impl Channel {
     }
 }
 
+/// A weight or height source's own checks: a vertex channel within 0..=3, a mask texture alive with finite weights.
+fn check_source(world: &World, what: &str, s: &Source) -> Result<(), String> {
+    match s {
+        Source::Vertex { channel, .. } if *channel > 3 => {
+            Err(format!("{what}: vertex channel {channel} past 3"))
+        }
+        Source::Vertex { .. } => Ok(()),
+        Source::Mask {
+            texture,
+            channels,
+            bias,
+        } => {
+            if !world.is_alive(texture.texture) {
+                return Err(format!("{what}: mask texture {:?} is not alive", texture.texture));
+            }
+            if !channels.iter().chain([bias]).all(|x| x.is_finite()) {
+                return Err(format!("{what}: mask weights {channels:?} + {bias} not finite"));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// The value of a mask texture's sample `rgba` (0..1 per channel).
 pub fn mask_value(channels: [f32; 4], bias: f32, rgba: [f32; 4]) -> f32 {
     (0..4).map(|i| channels[i] * rgba[i]).sum::<f32>() + bias
@@ -176,23 +226,24 @@ pub struct LayeredMaterial {
     pub weights: LayerWeights,
 }
 impl LayeredMaterial {
-    /// Whether its weights read vertex stream `semantic`: the attribute, or with per-pixel channels a vertex source.
+    /// Whether its weights read vertex stream `semantic`: the attribute, or with per-pixel channels a vertex source;
+    /// or a height a vertex source.
     pub fn reads(&self, semantic: Semantic) -> bool {
-        match &self.weights.channels {
+        let reads = |s: &Source| matches!(s, Source::Vertex { semantic: v, .. } if *v == semantic);
+        let weights = match &self.weights.channels {
             None => self.weights.attribute == semantic,
-            Some(channels) => channels
-                .iter()
-                .flat_map(Channel::sources)
-                .any(|s| matches!(s, Source::Vertex { semantic: v, .. } if *v == semantic)),
-        }
+            Some(channels) => channels.iter().flat_map(Channel::sources).any(reads),
+        };
+        weights || self.weights.heights.iter().any(reads)
     }
-    /// The mask textures its channels sample.
+    /// The mask textures its channels and heights sample.
     pub fn mask_textures(&self) -> impl Iterator<Item = &TextureRef> {
         self.weights
             .channels
             .iter()
             .flatten()
             .flat_map(Channel::sources)
+            .chain(&self.weights.heights)
             .filter_map(|s| match s {
                 Source::Mask { texture, .. } => Some(texture),
                 Source::Vertex { .. } => None,
@@ -202,8 +253,9 @@ impl LayeredMaterial {
 
 impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
-    /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`.
-    const VERSION: u32 = 3;
+    /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`; 4: the height composition
+    /// and its `heights`.
+    const VERSION: u32 = 4;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.layers.iter().flatten().map(|layer| layer.material));
         out.extend(self.mask_textures().map(|t| t.texture));
@@ -230,31 +282,30 @@ impl Component for LayeredMaterial {
                     return Err(format!("channel {i}: threshold {k:?} is not finite"));
                 }
                 for s in c.sources() {
-                    match s {
-                        Source::Vertex { channel, .. } if *channel > 3 => {
-                            return Err(format!("channel {i}: vertex channel {channel} past 3"));
-                        }
-                        Source::Vertex { .. } => {}
-                        Source::Mask {
-                            texture,
-                            channels,
-                            bias,
-                        } => {
-                            if !world.is_alive(texture.texture) {
-                                return Err(format!(
-                                    "channel {i}: mask texture {:?} is not alive",
-                                    texture.texture
-                                ));
-                            }
-                            if !channels.iter().chain([bias]).all(|x| x.is_finite()) {
-                                return Err(format!(
-                                    "channel {i}: mask weights {channels:?} + {bias} not finite"
-                                ));
-                            }
-                        }
-                    }
+                    check_source(world, &format!("channel {i}"), s)?;
                 }
             }
+        }
+        match self.weights.composition {
+            Composition::Height { contrast } => {
+                if !contrast.is_finite() {
+                    return Err(format!("height composition: contrast {contrast} is not finite"));
+                }
+                if self.weights.heights.len() != self.layers.len() {
+                    return Err(format!(
+                        "height composition: {} heights for {} slots",
+                        self.weights.heights.len(),
+                        self.layers.len()
+                    ));
+                }
+                for (i, s) in self.weights.heights.iter().enumerate() {
+                    check_source(world, &format!("height {i}"), s)?;
+                }
+            }
+            Composition::Sum | Composition::Over if !self.weights.heights.is_empty() => {
+                return Err("heights without the height composition".into());
+            }
+            Composition::Sum | Composition::Over => {}
         }
         for (i, layer) in self.layers.iter().enumerate() {
             // that the material is alive, the world checks for every reference

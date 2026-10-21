@@ -292,3 +292,46 @@ fn per_pixel_channels_and_over_are_version_2() {
             && ext["weights"].get("channels").is_none()
     );
 }
+
+#[test]
+fn the_height_composition_is_version_3_with_a_height_per_slot() {
+    use primase_core::layered::{Composition, Source};
+    use primase_core::pbr::TextureRef;
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    let (mut w, host) = world(Some(Semantic::Color(0)), WeightMapping::Identity, 2);
+    let height = w.spawn();
+    w.insert(
+        height,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![0, 0, 0, 200]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Mask,
+            normal: None,
+        },
+    );
+    let h = Source::Mask {
+        texture: TextureRef::new(height),
+        channels: [0.0, 0.0, 0.0, 1.0],
+        bias: 0.0,
+    };
+    let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+    l.weights.composition = Composition::Height { contrast: 0.5 };
+    l.weights.heights = vec![h.clone(), h];
+    w.insert(host, l);
+    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
+    assert_eq!(ext["version"], 3);
+    assert_eq!(
+        ext["composition"],
+        serde_json::json!({"height": {"contrast": 0.5}})
+    );
+    let heights = ext["weights"]["heights"].as_array().unwrap();
+    assert_eq!(heights.len(), 2);
+    assert_eq!(
+        heights[0]["mask"]["channels"],
+        serde_json::json!([0.0, 0.0, 0.0, 1.0])
+    );
+}
