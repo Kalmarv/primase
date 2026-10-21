@@ -575,6 +575,159 @@ impl Cursor<'_> {
                 }
                 self.take(13, "component")?;
             }
+            // UICheckpointController: 51 bytes (the notes: the next component's header exactly there on 18,259 of
+            // 18,259)
+            0x4CB6_2343 => {
+                self.take(51, "UICheckpointController")?;
+            }
+            // CheckpointComponent: 4 bytes, a count k, k inline objects (00, a u64, a type, its body), 226 bytes; each
+            // object's size by its type, observed on every body measured (the notes: 18,085 of 18,395 groups holding
+            // it then parse to their end); a type outside the table has no rule
+            0x69D5_E169 => {
+                self.take(4, "CheckpointComponent")?;
+                let k = self.count("CheckpointComponent count", 41)?;
+                for _ in 0..k {
+                    self.expect("CheckpointComponent object", 0, 1)?;
+                    self.u64("CheckpointComponent object")?;
+                    let size: usize = match self.u32("CheckpointComponent object type")? {
+                        0xB0AE_57CB => 56,
+                        0x66D1_487D => 53,
+                        0x0AB1_C905 | 0x0F5F_CE90 => 49,
+                        0xA117_C2BE => 76,
+                        0x1FA3_0270 | 0x4247_DAA2 | 0xC75E_1946 => 41,
+                        0xF24B_6C13 => 264,
+                        0x065C_746A => 52,
+                        0x956F_6AB5 => 93,
+                        0x2350_A2E0 => 115,
+                        0xB114_3610 => 43,
+                        0x561E_06FC => 121,
+                        0x74E3_8111 => 73,
+                        _ => return Ok(None),
+                    };
+                    self.take(size.saturating_sub(13), "CheckpointComponent object")?;
+                }
+                self.take(226, "CheckpointComponent")?;
+            }
+            // FakeWaterMeshComponent: 4 bytes, a reference (its FakeWaterComponentChunk), a FakeWaterMeshInstance
+            // (00, an object, a count k and 64 k bytes), a bounding volume, 10 bytes, the 125-byte Visual tail, 3 vec4,
+            // a u32, a vertex count V, a u32, V 8-byte vertices (4 f16), an index count I, a u32, I u16 indices (the
+            // notes: 274 + 8 V + 2 I, the one sequential end on 512 of 512)
+            0x961F_3B5D => {
+                self.take(14, "FakeWaterMeshComponent")?;
+                self.expect("FakeWaterMeshInstance", 0, 1)?;
+                self.object("FakeWaterMeshInstance", 0xC345_7872)?;
+                let k = self.count("FakeWaterMeshInstance count", 64)?;
+                self.take(k.saturating_mul(64), "FakeWaterMeshInstance")?;
+                self.take(40 + 10 + 125 + 48 + 4, "FakeWaterMeshComponent")?;
+                let v = self.count("FakeWaterMeshComponent vertex count", 8)?;
+                self.take(4, "FakeWaterMeshComponent")?;
+                self.take(v.saturating_mul(8), "FakeWaterMeshComponent vertices")?;
+                let i = self.count("FakeWaterMeshComponent index count", 2)?;
+                self.take(4, "FakeWaterMeshComponent")?;
+                self.take(i.saturating_mul(2), "FakeWaterMeshComponent indices")?;
+            }
+            // AutoFakeOrchestratorComponent: 4 bytes, n SubMeshFakeIndexSpans (an object, a count m, m FakeIndexSpans
+            // of an object and two u32), a count p and 8 p bytes, 9 bytes (the notes: the one sequential end on 4,052
+            // of 4,052)
+            0xD4B4_4556 => {
+                self.take(4, "AutoFakeOrchestratorComponent")?;
+                let n = self.count("AutoFakeOrchestratorComponent count", 16)?;
+                for _ in 0..n {
+                    self.object("SubMeshFakeIndexSpans", 0x2AFD_2E35)?;
+                    let m = self.count("SubMeshFakeIndexSpans count", 20)?;
+                    for _ in 0..m {
+                        self.object("FakeIndexSpan", 0xE747_72BA)?;
+                        self.take(8, "FakeIndexSpan")?;
+                    }
+                }
+                let p = self.count("AutoFakeOrchestratorComponent run", 8)?;
+                self.take(p.saturating_mul(8), "AutoFakeOrchestratorComponent run")?;
+                self.take(9, "AutoFakeOrchestratorComponent")?;
+            }
+            // DominoComponent: 4 bytes, a u32, an AIScriptInstance (00, an object), 2 bytes, a reference (its script),
+            // a count n, n parameters, 21 bytes (the notes: 2,384 of 2,626 bodies end there); a parameter's value by its
+            // kind (W's low byte), a value kind or embedded class outside the rule has none
+            0xBE71_1F06 => {
+                self.take(8, "DominoComponent")?;
+                self.expect("AIScriptInstance", 0, 1)?;
+                self.object("AIScriptInstance", 0x5EFD_B48C)?;
+                self.take(12, "DominoComponent")?;
+                let n = self.count("DominoComponent parameter count", 82)?;
+                for _ in 0..n {
+                    self.expect("DominoScriptInstanceParameter", 0, 1)?;
+                    self.object("DominoScriptInstanceParameter", 0xEE14_E8BE)?;
+                    self.expect("DominoDataProviderData", 0, 1)?;
+                    self.object("DominoDataProviderData", 0x295E_9B7D)?;
+                    self.object("DominoDynamic", 0x1A24_BE34)?;
+                    self.expect("DominoDynamic", 3, 4)?;
+                    self.object("DominoType", 0x86F5_9438)?;
+                    let kind = self.u32("DominoType kind")? & 0xFF;
+                    let class = self.u32("DominoType class")?;
+                    self.take(4, "DominoType")?;
+                    self.expect("Value", 0xDCB6_7730, 4)?;
+                    self.expect("Value class", u64::from(class), 4)?;
+                    self.take(8, "Value")?;
+                    match kind {
+                        0x1C => {
+                            self.take(10, "Value reference")?;
+                        }
+                        0x12 => {
+                            self.expect("Value object", 0, 1)?;
+                            self.u64("Value object")?;
+                        }
+                        0x1D => {
+                            let m = self.count("Value list", 9)?;
+                            for _ in 0..m {
+                                self.expect("Value list item", 0, 1)?;
+                                self.u64("Value list item")?;
+                            }
+                        }
+                        0x00 => {
+                            self.take(1, "Value")?;
+                        }
+                        0x16 => {
+                            self.u64("Value embedded object")?;
+                            let size = match self.u32("Value embedded class")? {
+                                0x7E42_F87F => 52,
+                                0xB7DE_E7C7 => 84,
+                                _ => return Ok(None),
+                            };
+                            self.take(size, "Value embedded object")?;
+                        }
+                        _ => return Ok(None),
+                    }
+                    self.take(13, "DominoScriptInstanceParameter")?;
+                }
+                self.take(21, "DominoComponent")?;
+            }
+            // WaterComponent: 4 bytes, a reference (its WaterMesh), a WaterMeshInstance (00, an object, a count k and
+            // 64 k bytes), a bounding volume, 10 bytes, the 125-byte Visual tail, a RiverQuadTree (an object, 2 vec4, a
+            // byte, n 61-byte nodes), a byte, m 49-byte WaterPatchDescs, 3 references (the notes: 290 + 61 n + 49 m, the
+            // one sequential end on 36 of 36)
+            0x996D_F94F => {
+                self.take(14, "WaterComponent")?;
+                self.expect("WaterMeshInstance", 0, 1)?;
+                self.object("WaterMeshInstance", 0xC15B_678F)?;
+                let k = self.count("WaterMeshInstance count", 64)?;
+                self.take(k.saturating_mul(64), "WaterMeshInstance")?;
+                self.take(40 + 10 + 125, "WaterComponent")?;
+                self.object("RiverQuadTree", 0x92DB_01AE)?;
+                self.take(33, "RiverQuadTree")?;
+                let n = self.count("RiverQuadTree node count", 61)?;
+                self.take(n.saturating_mul(61), "RiverQuadTreeNode")?;
+                self.take(1, "WaterComponent")?;
+                let m = self.count("WaterPatchDesc count", 49)?;
+                self.take(m.saturating_mul(49), "WaterPatchDesc")?;
+                self.take(30, "WaterComponent")?;
+            }
+            // AnimatedEntityComponent: 4 bytes, a count n, n 66-byte AnimationParameters, a byte (the notes: 9 + 66 n,
+            // the one sequential end or the next component's header on 2,041 of 2,041)
+            0x2996_CA50 => {
+                self.take(4, "AnimatedEntityComponent")?;
+                let n = self.count("AnimatedEntityComponent count", 66)?;
+                self.take(n.saturating_mul(66), "AnimationParameters")?;
+                self.take(1, "AnimatedEntityComponent")?;
+            }
             // OutOfBoundsVisualComponent (the notes: 169 on 716 of 716)
             0x2994_1A30 => {
                 self.take(169, "component")?;
