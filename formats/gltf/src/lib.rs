@@ -3,12 +3,14 @@
 //! - [`write()`] / [`write_file`]: a [`primase_core::World`] to one GLB (prototypes as shared meshes, placements as
 //!   nodes, `pbr.material`s, embedded PNGs, dialect components in extras); see [`write`](mod@write) for the rules.
 //! - [`prepare`]: `prepare-gltf-materials` and `fill-missing-texcoords`.
+//! - [`parts`]: the writer in a conversion, its [`target`] and [`GlbParts`] (one GLB per part: one per object).
 //!
 //! The GLB container, the strict reader and the vertex encoding are `primase-glb`'s.
 //!
 //! Frames: the world frame is glTF's (metres, right-handed, +Y up, -Z forward), so nothing is converted.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod parts;
 pub mod prepare;
 mod rig;
 pub mod write;
@@ -17,6 +19,7 @@ use std::path::PathBuf;
 
 use primase_core::Entity;
 
+pub use parts::{GlbParts, target};
 pub use write::{
     GroupBy, Piece, Selected, Selection, WriteOptions, WriteReport, write, write_document, write_file,
 };
