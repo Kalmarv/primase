@@ -113,7 +113,9 @@ fn run_with(
         .iter()
         .map(|i| match (i.name.as_str(), i.register) {
             ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
-            ("COLOR", _) => bits(colour),
+            ("COLOR", _) if i.index == 0 => bits(colour),
+            // a second vertex colour (MAD_Grounds' tire scalar, COLOR1.x): 1s
+            ("COLOR", _) => bits([1.0; 4]),
             ("SV_IsFrontFace", _) => [u32::MAX; 4],
             (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
             (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
@@ -631,4 +633,168 @@ fn mad_tex1_graffiti_mode() {
         worst.see("emission", out[2][2], 0.0);
     }
     worst.check("MAD_Tex1_Graffiti_Mode");
+}
+
+/// The G-buffer pixel program (key 0x400000, docs/shaders.md §6.2) of the MaterialTemplate named `template` in the
+/// forge file `forge`, found through its permutation table.
+fn gbuffer(forge: &str, template: &str) -> Option<Shader> {
+    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
+    let names = &archive.forge(0).expect("forge").names;
+    let entry = names
+        .iter()
+        .position(|n| n.type_id == template::MATERIAL_TEMPLATE && n.name == template)
+        .unwrap_or_else(|| panic!("no template {template} in {forge}"));
+    let body = archive.resource(At { forge: 0, entry }).expect("template").body;
+    let p = template::permutations(&body).expect("permutations");
+    let program = p
+        .iter()
+        .find(|x| x.stage == template::Stage::Pixel && x.key == 0x40_0000)
+        .expect("the G-buffer permutation");
+    Some(Shader::parse_stripped(program.container).expect("the shader parses"))
+}
+
+/// MAD_Tex1_TeamColoured (§27.9): MAD_Tex1's formulas with its rows moved: cb3[1] Metalness, [2] Roughness Offset,
+/// [3] On Off AO, [4] Vertex Color Intensity, [5..7] the Neutral hue, saturation and luminosity, [8..13] Teammate and
+/// Opponent (decoys: not read), [14..15] the UV rows; t75 normal map, t76 diffuse, t77 mask. Hues from 0 up (a
+/// negative one wraps where Tex1's tint doesn't; the lowering refuses it).
+#[test]
+fn mad_tex1_team_coloured() {
+    let Some(s) = gbuffer("DataPC_MAD_USNAT.forge", "MAD_Tex1_TeamColoured") else {
+        return;
+    };
+    let mut r = Random(0x0044_5380_0000_0001);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (normal, diffuse, mask, colour) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (metal, offset, ao_on) = (r.next(), r.range(-0.5, 0.5), r.next());
+        let hsl = [r.range(0.0, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let vci = f64::from(case % 2);
+        let mut cb3 = r.decoys(16);
+        for (row, v) in [metal, offset, ao_on, vci, hsl[0], hsl[1], hsl[2]]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, 14);
+        let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
+        let albedo = tinted(rgb(diffuse), mask[0], hsl);
+        let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+        worst.see("occlusion", out[3][0], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Tex1_TeamColoured");
+}
+
+/// MAD_Tex2_TintBFromShaderConstants (§27.5): MAD_Tex2's formulas with layer B tinted by the Neutral constants
+/// cb3[11..13], the roughness offsets at [8], [9], On Off AO at [10], Teammate and Opponent [14..19] decoys, the UV
+/// rows at 20 and 23; MAD_Tex2's textures.
+#[test]
+fn mad_tex2_tint_b() {
+    let Some(s) = gbuffer("DataPC_MAD_USNAT.forge", "MAD_Tex2_TintBFromShaderConstants") else {
+        return;
+    };
+    let mut r = Random(0x0020_7000_0000_0002);
+    let mut worst = Worst::default();
+    for _ in 0..50 {
+        let (d_a, d_b, n_a, n_b, m_a, m_b) =
+            (r.texel(), r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+        let (contrast, alpha_offset, alpha_contrast) =
+            (r.range(0.1, 0.99), r.range(-0.5, 0.5), r.range(0.0, 4.0));
+        let hsl_a = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let neutral = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let (off_a, off_b, ao_on) = (r.range(-0.2, 0.2), r.range(-0.2, 0.2), r.next());
+        let colour = r.texel();
+        let mut cb3 = r.decoys(26);
+        for (row, v) in [0.0, contrast, alpha_offset, alpha_contrast]
+            .into_iter()
+            .chain(hsl_a)
+            .chain([off_a, off_b, ao_on])
+            .chain(neutral)
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, 20);
+        uv_rows(&mut cb3, 23);
+        let textures = [(75, n_a), (76, d_b), (77, n_b), (78, d_a), (79, m_b), (80, m_a)];
+        let out = run(&s, &textures, &cb3, colour);
+        let w = sat((colour[3] - 0.5) * alpha_contrast + 0.5 + alpha_contrast * alpha_offset);
+        let mapped = [1.0 - w, w, 0.0, 0.0].map(|x| x as f32);
+        let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
+        let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
+        let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], neutral));
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
+        let (ra, rb) = (
+            roughness(n_a[3], Rough::Tex2(off_a)),
+            roughness(n_b[3], Rough::Tex2(off_b)),
+        );
+        worst.see("roughness", out[0][3], k[0] * ra + k[1] * rb);
+        worst.see(
+            "metalness",
+            out[1][3],
+            k[0] * metalness(n_a[2], None) + k[1] * metalness(n_b[2], None),
+        );
+        let (oa, ob) = (occlusion(m_a[2], ao_on), occlusion(m_b[2], ao_on));
+        worst.see("occlusion", out[3][0], k[0] * oa + k[1] * ob);
+    }
+    worst.check("MAD_Tex2_TintBFromShaderConstants");
+}
+
+/// MAD_Grounds (§27.7) as the lowering reduces it: its generic masks t79, t80 white, the per-vertex tire scalar
+/// (COLOR1.x, its program read) 1, `UV World` (cb3[9]) 0, `Use Blend` (cb3[11]) 0 or 1, `Tire
+/// Albedo` (cb3[8]) at most 1, every other scalar random: the albedo is the chosen layer's diffuse tinted by cb3[1..3]
+/// everywhere, roughness and metalness its normal map's alpha and blue, occlusion 1, whatever COLOR0 is.
+#[test]
+fn mad_grounds() {
+    let Some(s) = gbuffer("DataPC_MAD_USNAT.forge", "MAD_Grounds") else {
+        return;
+    };
+    let mut r = Random(0x0018_2108_0000_0003);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (d_a, d_b, n_a, n_b, colour) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+        let hsl = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let blend = f64::from(case % 2);
+        let mut cb3 = r.decoys(24);
+        set(&mut cb3, 1, hsl[0]);
+        set(&mut cb3, 2, hsl[1]);
+        set(&mut cb3, 3, hsl[2]);
+        // Vertex Color Mask Intensity, Vertex Color - On Off, Tires Intensity, Tires Roughness, Tire Albedo
+        set(&mut cb3, 4, r.range(0.5, 10.0));
+        set(&mut cb3, 5, r.next());
+        set(&mut cb3, 6, r.next());
+        set(&mut cb3, 7, r.next());
+        set(&mut cb3, 8, r.next());
+        // UV World - on Off, Tire Vertex Color Impact, Use Blend
+        set(&mut cb3, 9, 0.0);
+        set(&mut cb3, 10, r.next());
+        set(&mut cb3, 11, blend);
+        for row in [12, 15, 18, 21] {
+            uv_rows(&mut cb3, row);
+        }
+        let white = [1.0; 4];
+        let textures = [
+            (75, n_a),
+            (76, d_a),
+            (77, n_b),
+            (78, d_b),
+            (79, white),
+            (80, white),
+        ];
+        let out = run(&s, &textures, &cb3, colour);
+        let (d, n) = if blend == 1.0 { (d_b, n_b) } else { (d_a, n_a) };
+        worst.rgb("albedo", out[0], tinted(rgb(d), 1.0, hsl));
+        worst.see("roughness", out[0][3], roughness(n[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(n[2], None));
+        worst.see("occlusion", out[3][0], 1.0);
+    }
+    worst.check("MAD_Grounds");
 }

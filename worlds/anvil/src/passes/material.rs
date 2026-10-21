@@ -36,6 +36,15 @@
 //! - **MAD_Tex1_Graffiti_Mode** (§17.2, [`TEX1_GRAFFITI`]): as MAD_Tex1 (its mask and normal map from the TextureSet's
 //!   slots 7 and 1, metalness and roughness raw, no vertex colour) where its logo is 0 and its team and custom
 //!   colours' alphas 0, as on all four of its Materials; otherwise the placeholder, reported (runtime state).
+//! - **MAD_Tex1_TeamColoured** (§27.9): MAD_Tex1 with the Neutral hue, saturation and luminosity as its tint (the
+//!   only ones its placed permutation reads; the team looks are runtime state); its hue wraps where Tex1's doesn't, so
+//!   a negative Neutral hue (none placed) is the placeholder, reported.
+//! - **MAD_Tex2_TintBFromShaderConstants** (§27.5): MAD_Tex2 with layer B tinted by the Neutral constants.
+//! - **MAD_Grounds** (§27.7): with its generic masks empty (white, as on every placed Material) and no tire wear (its
+//!   program's `COLOR1.x`, which the meshes don't carry, stated 1: reported), its arithmetic is one layer as a Tex1 without
+//!   mask or occlusion: layer A, or layer B where `Use Blend` is 1 (a fractional one, a mask set or a `Tire Albedo`
+//!   above 1 is the placeholder, reported); its diffuse tinted by `Hue`, `Saturate` and `Luminosity` everywhere,
+//!   roughness and metalness the normal map's alpha and blue raw, both layers at `Base tiling`.
 //! - **MAD_FakeForest** (§26.6, executed by the notes: the far forest's canopy cells and tree proxies): no texture,
 //!   no property; its albedo is `pow(saturate(COLOR0.rgb), 2.2)` per vertex (the engine's 2.2, not the sRGB curve),
 //!   so the pass writes that into `COLOR_0` (the colour core multiplies) of every primitive drawn with it and with
@@ -296,6 +305,61 @@ pub const TEX1: Tex1Layout = Tex1Layout {
     alpha: None,
 };
 
+/// MAD_Tex1_TeamColoured (§27.9; its binding table read): `3 - Metalness` 1, `Roughness Offset` 2, `On Off - AO` 3,
+/// `Vertex Color Intensity` 4, the Neutral hue, saturation and luminosity 5 to 7 (Teammate 8 to 10 and Opponent 11 to
+/// 13 not read by its placed key), `Base tiling` 14; its textures MAD_Tex1's.
+pub const TEX1_TEAM_COLOURED: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0xC7C3_A6D7),
+        (2, 0x89D1_84DE),
+        (3, 0x6338_B6C4),
+        (4, 0x95DD_8185),
+        (5, 0x1FEF_B952),
+        (6, 0x9FB2_DBA5),
+        (7, 0x07A7_C462),
+        (14, 0x7091_389B),
+    ],
+    tint: [5, 6, 7],
+    roughness_offset: Some(2),
+    ao: Some(3),
+    vertex_colour: Some(4),
+    uv: Some(14),
+    ..TEX1
+};
+
+/// MAD_Grounds' layer A (§27.7; its keys the CRC-32 of its labels): `Hue`, `Saturate`, `Luminosity` 1 to 3, `9 - Use
+/// Blend` 11, `5 - Base tiling` 12; `3 - Normal Map A` t75, `1 - Diffuse Alpha A` t76. Metalness and roughness the
+/// normal map's blue and alpha raw; no mask, occlusion or vertex colour (see the module documentation).
+pub const GROUNDS_A: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0xEE58_1D0E),
+        (2, 0xCC63_AC50),
+        (3, 0xFD62_B19F),
+        (11, 0xFDBA_E6B2),
+        (12, 0x3DA2_6308),
+    ],
+    metalness: Metalness::Blue,
+    tint: [1, 2, 3],
+    roughness_offset: None,
+    ao: None,
+    vertex_colour: None,
+    uv: Some(12),
+    translucency: None,
+    terrain_blend: None,
+    normal: TextureSource::Bound(0),
+    diffuse: TextureSource::Bound(1),
+    mask: None,
+    emission: None,
+    alpha: None,
+};
+
+/// MAD_Grounds' layer B: `4 - Normal Map B` t77, `2 - Diffuse Alpha B` t78, otherwise layer A's.
+pub const GROUNDS_B: Tex1Layout = Tex1Layout {
+    normal: TextureSource::Bound(2),
+    diffuse: TextureSource::Bound(3),
+    ..GROUNDS_A
+};
+
 /// MAD_Tex1_TerrainBlend (§14.7, §15.1): MAD_Tex1's cb3[2..7], `EnableTerrainBlend` 14, `Base tiling` 15. Its
 /// G-buffer permutations write shading class 3 (layout B, §15.4) on every path and read no `3 - Metalness` (cb3[1]):
 /// metalness 0.
@@ -542,6 +606,56 @@ pub const TEX2: Reads = Reads {
         (14, 0x6CB3_7F10),
         (17, 0xF5BA_2EAA),
     ],
+};
+
+/// Where a Tex2 template's shader reads the rows that differ between its variants (§4.3, §27.5): layer B's tint, the
+/// two roughness offsets, the occlusion switch and the two UV transforms (VCI, the height contrast, alpha offset and
+/// contrast at 1 to 4 and layer A's tint at 5 to 7 in both).
+pub struct Tex2Rows {
+    pub reads: Reads,
+    pub tint_b: [u32; 3],
+    pub roughness_offsets: [u32; 2],
+    pub ao: u32,
+    pub uv: [u32; 2],
+}
+
+/// MAD_Tex2's rows.
+pub const TEX2_ROWS: Tex2Rows = Tex2Rows {
+    reads: TEX2,
+    tint_b: [8, 9, 10],
+    roughness_offsets: [11, 12],
+    ao: 13,
+    uv: [14, 17],
+};
+
+/// MAD_Tex2_TintBFromShaderConstants' rows (its binding table read): MAD_Tex2's 1 to 7, roughness offsets 8 and 9,
+/// `On Off - AO` 10, layer B tinted by the Neutral hue, saturation and luminosity 11 to 13 (Teammate 14 to 16 and
+/// Opponent 17 to 19 not read by its placed key), `Base tiling A` 20 and `B` 23; its textures MAD_Tex2's.
+pub const TEX2_TINT_B_ROWS: Tex2Rows = Tex2Rows {
+    reads: Reads {
+        textures: TEX2.textures,
+        constants: &[
+            (1, 0x422F_B075),
+            (2, 0xA72E_5763),
+            (3, 0xA7B7_68D7),
+            (4, 0xD4D4_90B6),
+            (5, 0x2803_E854),
+            (6, 0x968A_7B9F),
+            (7, 0x9F39_AFF6),
+            (8, 0xDFF7_205B),
+            (9, 0x46FE_71E1),
+            (10, 0xCBBE_0755),
+            (11, 0x1FEF_B952),
+            (12, 0x9FB2_DBA5),
+            (13, 0x07A7_C462),
+            (20, 0x6CB3_7F10),
+            (23, 0xF5BA_2EAA),
+        ],
+    },
+    tint_b: [11, 12, 13],
+    roughness_offsets: [8, 9],
+    ao: 10,
+    uv: [20, 23],
 };
 
 /// Whether `m`'s template binds every texture and constant `reads` names where it names it.
@@ -832,13 +946,43 @@ impl Pass for LowerAnvilMaterial {
                 "MAD_Tex1_Emissive" => Some(TEX1_EMISSIVE),
                 "MAD_Tex1_UGE" => Some(TEX1_UGE),
                 "MAD_Tex1_Graffiti_Mode" => Some(TEX1_GRAFFITI),
+                "MAD_Tex1_TeamColoured" => Some(TEX1_TEAM_COLOURED),
+                "MAD_Grounds" if i.scalar(11) == 1.0 => Some(GROUNDS_B),
+                "MAD_Grounds" => Some(GROUNDS_A),
                 _ => None,
             };
             // whether the Material's shader takes COLOR0 as a factor of the base colour, as COLOR_0 is
             let mut takes_colour = false;
             // whether it became a layered material (no PBR material of its own then)
             let mut layered = false;
+            let tex2 = match name.as_str() {
+                "MAD_Tex2" => Some(&TEX2_ROWS),
+                "MAD_Tex2_TintBFromShaderConstants" => Some(&TEX2_TINT_B_ROWS),
+                _ => None,
+            };
+            if name == "MAD_Grounds" && grounds_reduce(&i, &m) {
+                log.approximate(
+                    "Grounds Materials' tire wear (a per-vertex scalar the meshes don't carry): none (stated)",
+                    1,
+                );
+            }
             let pbr = match (name.as_str(), layout) {
+                ("MAD_Tex1_TeamColoured", _) if i.scalar(5) < 0.0 => {
+                    log.omit(
+                        "TeamColoured Materials with a negative Neutral hue (it wraps where Tex1's tint doesn't): a \
+                         placeholder",
+                        1,
+                    );
+                    placeholder()
+                }
+                ("MAD_Grounds", _) if !grounds_reduce(&i, &m) => {
+                    log.omit(
+                        "Grounds Materials whose arithmetic isn't one layer (a fractional Use Blend, a mask set, or a \
+                         Tire Albedo above 1): a placeholder",
+                        1,
+                    );
+                    placeholder()
+                }
                 ("MAD_FakeForest", _) => {
                     takes_colour = true;
                     forest.insert(e);
@@ -1012,15 +1156,17 @@ impl Pass for LowerAnvilMaterial {
                         ..PbrMaterial::default()
                     }
                 }
-                ("MAD_Tex2", _) if !binds_all(&m, &TEX2) => {
+                (_, _) if tex2.is_some_and(|rows| !binds_all(&m, &rows.reads)) => {
                     log.omit(
-                        "Materials of template \"MAD_Tex2\" (it doesn't bind the properties its evaluated shader reads: \
-                         a neutral placeholder drawn)",
+                        &format!(
+                            "Materials of template {name:?} (it doesn't bind the properties its evaluated shader reads: \
+                             a neutral placeholder drawn)"
+                        ),
                         1,
                     );
                     placeholder()
                 }
-                ("MAD_Tex2", _) => {
+                (_, _) if let Some(rows) = tex2 => {
                     let scalar = |v: u32| i.scalar(v);
                     if scalar(1) != 0.0 {
                         log.omit(
@@ -1029,13 +1175,25 @@ impl Pass for LowerAnvilMaterial {
                             1,
                         );
                     }
-                    let uv_a = lowered_uv(&i, Some(14), self.shader_uv, "Tex2 A", log);
-                    let uv_b = lowered_uv(&i, Some(17), self.shader_uv, "Tex2 B", log);
-                    let ao_on = scalar(13);
+                    let uv_a = lowered_uv(&i, Some(rows.uv[0]), self.shader_uv, "Tex2 A", log);
+                    let uv_b = lowered_uv(&i, Some(rows.uv[1]), self.shader_uv, "Tex2 B", log);
+                    let ao_on = scalar(rows.ao);
                     // each layer an ordinary material: (diffuse, normal map, mask, its HSL, its roughness offset)
                     let parts = [
-                        (i.texture(3), i.texture(0), i.texture(5), [5, 6, 7], 11),
-                        (i.texture(1), i.texture(2), i.texture(4), [8, 9, 10], 12),
+                        (
+                            i.texture(3),
+                            i.texture(0),
+                            i.texture(5),
+                            [5, 6, 7],
+                            rows.roughness_offsets[0],
+                        ),
+                        (
+                            i.texture(1),
+                            i.texture(2),
+                            i.texture(4),
+                            rows.tint_b,
+                            rows.roughness_offsets[1],
+                        ),
                     ];
                     let mut layers = Vec::with_capacity(2);
                     let mut heights = Vec::with_capacity(2);
@@ -1111,7 +1269,10 @@ impl Pass for LowerAnvilMaterial {
                         };
                         weights.heights = heights;
                         w.insert(e, LayeredMaterial { layers, weights });
-                        log.count("MAD_Tex2 Materials lowered (a height blend of two layers)", 1);
+                        log.count(
+                            &format!("{name} Materials lowered (a height blend of two layers)"),
+                            1,
+                        );
                         layered = true;
                         placeholder()
                     } else {
@@ -1427,6 +1588,14 @@ fn forest_colours(w: &mut World, forest: &BTreeSet<Entity>, log: &mut PassLog) -
         }
     }
     Ok(())
+}
+
+/// Whether a MAD_Grounds Material's arithmetic is one layer (§27.7): `Use Blend` (11) 0 or 1, its generic masks (its
+/// TextureSet's slot 7) empty, so white, and `Tire Albedo` (8) at most 1, so that with no tire wear (the per-vertex
+/// scalar stated 1) the tire factors are 1.
+fn grounds_reduce(i: &Inputs, m: &AnvilMaterial) -> bool {
+    let blend = i.scalar(11);
+    (blend == 0.0 || blend == 1.0) && m.texture_set.get(7).copied().flatten().is_none() && i.scalar(8) <= 1.0
 }
 
 /// A made texture's key: its source, what it is, and the parameters' bits (and other sources' indices) it is made of.
