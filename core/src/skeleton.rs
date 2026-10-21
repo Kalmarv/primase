@@ -75,8 +75,9 @@ impl Rest {
 
     /// The rest with both its sides converted from `frame` into the world's (`C M C^-1`, [`SourceFrame::transform`]).
     /// Exact: a frame is a signed permutation of the axes with a unit scale. A rotation conjugated by a signed
-    /// permutation `C` stays a rotation whose quaternion is `(det(C) C v, w)`; a scale's axes are permuted (their
-    /// signs cancel); a translation converts as a point.
+    /// permutation `C` stays a rotation whose quaternion is `(det(C) C v, w)`; a scale's axes are permuted, the frame's
+    /// signs cancelling (`C diag(s) C^-1`) and the scale's own kept (a mirrored joint stays mirrored); a translation
+    /// converts as a point.
     pub fn converted(&self, frame: &SourceFrame) -> Rest {
         match *self {
             Rest::Affine(m) => Rest::Affine(frame.transform(&m)),
@@ -87,7 +88,10 @@ impl Rest {
             } => {
                 let v = frame.direction([rotation[0], rotation[1], rotation[2]]);
                 let v = if frame.determinant() < 0 { v.map(|x| -x) } else { v };
-                let s = frame.direction(scale).map(f32::abs);
+                // the frame's sign on each axis cancels: direction() applies it once, the axes' own signs once more
+                let signs = frame.direction([1.0; 3]);
+                let d = frame.direction(scale);
+                let s = [d[0] * signs[0], d[1] * signs[1], d[2] * signs[2]];
                 Rest::Trs {
                     translation: frame.point(translation),
                     rotation: [v[0], v[1], v[2], rotation[3]],
@@ -269,10 +273,20 @@ mod tests {
             trs([0.0; 3], [0.0, 0.0, S, S], [1.0; 3]).converted(&mirror),
             trs([0.0; 3], [0.0, 0.0, S, S], [1.0; 3])
         );
-        for frame in [enu, mirror] {
+        // a mirrored joint stays mirrored: its scale's own signs kept, only its axes permuted (the world frame changes
+        // nothing; ENU swaps y and z)
+        let mirrored = trs([0.0; 3], [0.0, 0.0, 0.0, 1.0], [-2.0, 3.0, 4.0]);
+        assert_eq!(mirrored.converted(&SourceFrame::WORLD), mirrored);
+        assert_eq!(
+            mirrored.converted(&enu),
+            trs([0.0; 3], [0.0, 0.0, 0.0, 1.0], [-2.0, 4.0, 3.0])
+        );
+        for frame in [SourceFrame::WORLD, enu, mirror] {
             for rest in [
                 trs([1.0, 2.0, 3.0], [0.0, 0.0, S, S], [1.0, 2.0, 3.0]),
                 trs([0.5, -1.0, 2.0], [S, 0.0, 0.0, S], [2.0, 1.0, 1.0]),
+                trs([0.5, -1.0, 2.0], [S, 0.0, 0.0, S], [-2.0, 3.0, 4.0]),
+                trs([1.0, 2.0, 3.0], [0.0, 0.0, S, S], [2.0, -1.0, -0.5]),
             ] {
                 let a = rest.converted(&frame).matrix();
                 let b = frame.transform(&rest.matrix());

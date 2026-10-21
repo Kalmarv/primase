@@ -219,12 +219,20 @@ impl Skin {
                 }
             }
             Some(Influences::Streams { sets }) => {
-                let mut sums = vec![0.0f32; p.vertex_count()];
+                let vertices = p.vertex_count();
+                let mut sums = vec![0.0f32; vertices];
                 for k in 0..sets {
                     let j = joints(&p.streams[&Semantic::Joints(k)])
                         .ok_or_else(|| format!("primitive {i}: Joints({k}) is not an integer stream"))?;
                     let wt = weights(&p.streams[&Semantic::Weights(k)])
                         .ok_or_else(|| format!("primitive {i}: Weights({k}) is not a four-value stream"))?;
+                    if j.len() != vertices || wt.len() != vertices {
+                        return Err(format!(
+                            "primitive {i}: Joints({k}) and Weights({k}) hold {} and {} values for {vertices} vertices",
+                            j.len(),
+                            wt.len()
+                        ));
+                    }
                     for (v, (j, wt)) in j.iter().zip(&wt).enumerate() {
                         if let Some(x) = j.iter().find(|&&x| !in_range(x)) {
                             return Err(format!(
@@ -492,6 +500,18 @@ mod tests {
                 w.insert(e, m);
             },
             "not finite or negative",
+        );
+        // joint and weight streams longer than the positions: named, not a panic (the mesh's own check names it too)
+        fails(
+            &|w, e, _| {
+                let mut m = w.get::<Mesh>(e).unwrap().clone();
+                let mut p = m.primitive_mut(0).unwrap();
+                let streams = p.streams_mut();
+                streams.insert(Semantic::Joints(0), Stream::U8x4(vec![[0, 0, 0, 0]; 4]));
+                streams.insert(Semantic::Weights(0), Stream::U8x4(vec![[255, 0, 0, 0]; 4]));
+                w.insert(e, m);
+            },
+            "hold 4 and 4 values for 3 vertices",
         );
         // streams that do not match the influences: two sets said, one stored
         fails(
