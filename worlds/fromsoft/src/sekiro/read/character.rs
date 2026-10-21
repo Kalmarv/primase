@@ -1,5 +1,10 @@
 //! One Sekiro character read by itself: `chr/<id>.chrbnd` (its FLVER and the textures it embeds) and, when the install
-//! has one, `chr/<id>.texbnd` (more of its textures), into a world of one asset ([`primase_core::Asset`]):
+//! has one, `chr/<id>.texbnd` (more of its textures), into a world of one asset ([`primase_core::Asset`]). Its
+//! materials also bind textures it does not hold, which it reads from where the game keeps them: the texbnd of each
+//! other character a material names (in its definition's name or a texture path: c1010's bodies use `c1019_body_merge`,
+//! whose textures are in `chr/c1019.texbnd`, a character with no model), `parts/common_body.tpf` (the textures every
+//! character shares: hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf` (the system textures materials
+//! fall back to). The result:
 //!
 //! - a skeleton entity: the FLVER's bones as `core.skeleton` ([`crate::pose::skeleton`]: every bone, its stored name
 //!   and parent, its rest in the world frame);
@@ -71,6 +76,21 @@ fn character_id(id: &str) -> Result<&str> {
     }
 }
 
+/// The character ids `text` names, lowercased: `c` and four digits, not inside a longer word or number (`c1019` in
+/// `c1019_body_merge_SSS.mtd` and in `N:/NTC/data/Model/chr/c1019/tex/c1019_body_merge_a.tif`).
+fn named_characters(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let b = lower.as_bytes();
+    (0..b.len())
+        .filter(|&i| {
+            (i == 0 || !b[i - 1].is_ascii_alphanumeric()) && b.get(i + 5).is_none_or(|c| !c.is_ascii_digit())
+        })
+        .filter_map(|i| lower.get(i..i + 5))
+        .filter(|s| character_id(s).is_ok())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The member of `binder` whose file name is `leaf`.
 fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b crate::BinderFile> {
     binder.files.iter().find(|f| {
@@ -119,7 +139,18 @@ pub fn read_character(
         meshes: model.meshes.len(),
         ..CharacterReport::default()
     };
-    // textures: what the chrbnd embeds, the texbnd's, and the system textures materials fall back to
+    let definitions = material_definitions(&archive, decoder)?;
+    // textures: what the chrbnd embeds, the texbnd's, the texbnds of the other characters its materials name, the
+    // textures shared by every character, and the system textures materials fall back to
+    let mut named = BTreeSet::new();
+    for m in &model.materials {
+        named.extend(named_characters(&m.mtd));
+        named.extend(m.textures.iter().flat_map(|t| named_characters(&t.path)));
+        if let Some(d) = definitions.get(&materials::stem(&m.mtd)) {
+            named.extend(d.textures.iter().flat_map(|t| named_characters(&t.path)));
+        }
+    }
+    named.remove(id);
     let mut catalog = textures::Catalog::default();
     let add_packages = |binder: &Binder, catalog: &mut textures::Catalog| -> Result<()> {
         for f in &binder.files {
@@ -131,15 +162,19 @@ pub fn read_character(
         Ok(())
     };
     add_packages(&chrbnd, &mut catalog)?;
-    let texbnd_path = format!("/chr/{id}.texbnd.dcx");
-    if textures::has(&archive, &texbnd_path) {
-        add_packages(
-            &Binder::read(&archive.read(&texbnd_path, decoder)?, decoder)?,
-            &mut catalog,
-        )?;
+    for owner in std::iter::once(id).chain(named.iter().map(String::as_str)) {
+        let texbnd_path = format!("/chr/{owner}.texbnd.dcx");
+        if textures::has(&archive, &texbnd_path) {
+            add_packages(
+                &Binder::read(&archive.read(&texbnd_path, decoder)?, decoder)?,
+                &mut catalog,
+            )?;
+        }
     }
-    if textures::has(&archive, "/other/systex.tpf.dcx") {
-        catalog.add(&archive.read("/other/systex.tpf.dcx", decoder)?)?;
+    for shared in ["/parts/common_body.tpf.dcx", "/other/systex.tpf.dcx"] {
+        if textures::has(&archive, shared) {
+            catalog.add(&archive.read(shared, decoder)?)?;
+        }
     }
     for f in &chrbnd.files {
         let name = f.name.as_deref().unwrap_or("");
@@ -152,7 +187,6 @@ pub fn read_character(
     if textures::has(&archive, &format!("/chr/{id}.anibnd.dcx")) {
         report.unread.push(format!("{id}.anibnd"));
     }
-    let definitions = material_definitions(&archive, decoder)?;
     let resolved: Vec<materials::Material> = model
         .materials
         .iter()
@@ -294,6 +328,25 @@ mod tests {
         assert_eq!(character_id("c1010").unwrap(), "c1010");
         for bad in ["c101", "m1010", "c10a0", "../c1010", "c10100"] {
             assert!(character_id(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn materials_name_characters_as_whole_ids() {
+        assert_eq!(named_characters("c1019_body_merge_SSS.mtd"), ["c1019"]);
+        assert_eq!(
+            named_characters("N:\\NTC\\data\\Model\\chr\\C1019\\tex\\c1010_cape_a.tif"),
+            ["c1019", "c1010"]
+        );
+        for none in [
+            "",
+            "C[DetailBlend]_Alp.mtd",
+            "abc1019_x",
+            "c10190_x",
+            "c101_x",
+            "FC_A_0000_Metal_01_a.tif",
+        ] {
+            assert!(named_characters(none).is_empty(), "{none}");
         }
     }
 }
