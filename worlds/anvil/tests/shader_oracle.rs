@@ -798,3 +798,61 @@ fn mad_grounds() {
     }
     worst.check("MAD_Grounds");
 }
+
+/// MAD_Tex1_Graffiti_Mode_DecalFX (§27.10), its alpha-tested permutation 0x404000, as the lowering reduces it: with
+/// `TeamBlendRatio` (cb3[6]) at least 1 and an opaque team colour (cb3[4]), the albedo is the team colour to the 2.2
+/// whatever the atlas (t75) and the custom colour (cb3[3]) hold; roughness 1, metalness 0. The fade and the alpha test
+/// pass (cb2[16] = (0, 1), cb2[18].y 0); the object's screen origin finite (cb2[11].w 1).
+#[test]
+fn mad_tex1_graffiti_mode_decal_fx() {
+    let Some(s) = gbuffer_key(
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "MAD_Tex1_Graffiti_Mode_DecalFX",
+        0x40_4000,
+    ) else {
+        return;
+    };
+    let mut r = Random(0x0015_6678_0040_4000);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (atlas, mask) = (r.texel(), r.texel());
+        let mut cb3 = r.decoys(13);
+        cb3[1] = [f64::from(case % 9), 0.0, 0.0, 0.0];
+        cb3[2] = [f64::from(case % 2), 0.0, 0.0, 0.0];
+        cb3[3] = r.texel();
+        let team = [r.next(), r.next(), r.next(), 1.0];
+        cb3[4] = team;
+        cb3[5] = [3.0, 3.0, 0.0, 0.0];
+        cb3[6] = [r.range(1.0, 3.0), 0.0, 0.0, 0.0];
+        uv_rows(&mut cb3, 8);
+        uv_rows(&mut cb3, 11);
+        let engine = [
+            (2, 16, [0.0, 1.0, 0.0, 0.0]),
+            (2, 18, [0.0; 4]),
+            (2, 11, [0.0, 0.0, 0.0, 1.0]),
+        ];
+        let out = run_with(&s, &[(75, atlas), (76, mask)], &cb3, r.texel(), &engine);
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|c| team[c].powf(2.2)));
+        worst.see("roughness", out[0][3], 1.0);
+        worst.see("metalness", out[1][3], 0.0);
+    }
+    worst.check("MAD_Tex1_Graffiti_Mode_DecalFX");
+}
+
+/// The pixel program of key `key` of the MaterialTemplate named `template` in the forge file `forge`.
+fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
+    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
+    let names = &archive.forge(0).expect("forge").names;
+    let entry = names
+        .iter()
+        .position(|n| n.type_id == template::MATERIAL_TEMPLATE && n.name == template)
+        .unwrap_or_else(|| panic!("no template {template} in {forge}"));
+    let body = archive.resource(At { forge: 0, entry }).expect("template").body;
+    let p = template::permutations(&body).expect("permutations");
+    let program = p
+        .iter()
+        .find(|x| x.stage == template::Stage::Pixel && x.key == key)
+        .expect("the permutation");
+    Some(Shader::parse_stripped(program.container).expect("the shader parses"))
+}

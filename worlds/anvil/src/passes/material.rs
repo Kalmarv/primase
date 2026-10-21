@@ -45,6 +45,14 @@
 //!   mask or occlusion: layer A, or layer B where `Use Blend` is 1 (a fractional one, a mask set or a `Tire Albedo`
 //!   above 1 is the placeholder, reported); its diffuse tinted by `Hue`, `Saturate` and `Luminosity` everywhere,
 //!   roughness and metalness the normal map's alpha and blue raw, both layers at `Base tiling`.
+//! - **MAD_Tex1_Graffiti_Mode_DecalFX** (§27.10, its alpha-tested permutation `0x404000` read): an atlas logo cut out
+//!   with a flat colour. Where its `TeamBlendRatio` is at least 1 its screen-space stripes are the team colour
+//!   everywhere, so with an opaque team colour (its alpha 1) the base colour is the team colour to the 2.2 (its
+//!   shader's decode), the base colour texture white with the atlas's alpha, sampled at the logo's cell (`Color -
+//!   Logo` 1: the cell `DecalStateID` of a `DecalDimXY` atlas, as its shader computes it; 0: `Base tiling`), cut out at
+//!   its `AlphaTestValue` over 255 (the engine sets its shader's reference so where `AlphaTestEnabled` is on), whatever
+//!   `alpha` states; roughness 1, no metalness, the mesh's normal. Its emission over an unset emissive mask isn't
+//!   drawn (the engine's default not known), reported. Otherwise the placeholder, reported.
 //! - **MAD_FakeForest** (§26.6, executed by the notes: the far forest's canopy cells and tree proxies): no texture,
 //!   no property; its albedo is `pow(saturate(COLOR0.rgb), 2.2)` per vertex (the engine's 2.2, not the sRGB curve),
 //!   so the pass writes that into `COLOR_0` (the colour core multiplies) of every primitive drawn with it and with
@@ -658,6 +666,40 @@ pub const TEX2_TINT_B_ROWS: Tex2Rows = Tex2Rows {
     uv: [20, 23],
 };
 
+/// MAD_Tex1_Graffiti_Mode_DecalFX (§27.10; its binding table read): `1 - Diffuse Alpha` t75, the generic `Texture`
+/// t76 (the emissive mask); `DecalStateID` 1, `Color - Logo` 2, `Color - Custom` 3, `Color - Team` 4, `DecalDimXY` 5,
+/// `TeamBlendRatio` 6, `EmissiveMult` 7, `Base tiling` 8, the emissive mask's tiling 11.
+pub const DECAL_FX: Reads = Reads {
+    textures: &[(0, 0xE4B6_CC48), (1, 0x4DDB_34EE)],
+    constants: &[
+        (1, 0x4328_423F),
+        (2, 0x89C6_17B6),
+        (3, 0xB5FD_CCE2),
+        (4, 0xA9A8_2BBA),
+        (5, 0xA53B_0410),
+        (6, 0xDF0B_BE34),
+        (7, 0xB9B5_3F6B),
+        (8, 0x5FD1_46F2),
+        (11, 0x49CE_4B2E),
+    ],
+};
+
+/// The transform of a `DecalDimXY` `(dx, dy)` atlas's cell `state` (MAD_Tex1_Graffiti_Mode_DecalFX's shader:
+/// `u / dx + state / dx`, `v / dy + (dy - (floor(state / dx + 0.01) + 1)) / dy`) as a UV property's 8 floats.
+pub fn atlas_cell(state: f64, dx: f64, dy: f64) -> [f32; 8] {
+    let row = (state / dx + 0.01).floor() + 1.0;
+    [
+        (1.0 / dx) as f32,
+        (1.0 / dy) as f32,
+        (state / dx) as f32,
+        ((dy - row) / dy) as f32,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+}
+
 /// Whether `m`'s template binds every texture and constant `reads` names where it names it.
 fn binds_all(m: &AnvilMaterial, reads: &Reads) -> bool {
     reads
@@ -667,7 +709,8 @@ fn binds_all(m: &AnvilMaterial, reads: &Reads) -> bool {
         && reads.constants.iter().all(|&(at, key)| {
             m.bindings.iter().any(|(k, b)| {
                 *k == key
-                    && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
+                    && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::Vector { vec4 }
+                        | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
             })
         })
 }
@@ -982,6 +1025,12 @@ impl Pass for LowerAnvilMaterial {
                         1,
                     );
                     placeholder()
+                }
+                ("MAD_Tex1_Graffiti_Mode_DecalFX", _) => {
+                    match decal_fx(w, &mut made, &i, &m, self.shader_uv, log)? {
+                        Some(pbr) => pbr,
+                        None => placeholder(),
+                    }
                 }
                 ("MAD_FakeForest", _) => {
                     takes_colour = true;
@@ -1596,6 +1645,100 @@ fn forest_colours(w: &mut World, forest: &BTreeSet<Entity>, log: &mut PassLog) -
 fn grounds_reduce(i: &Inputs, m: &AnvilMaterial) -> bool {
     let blend = i.scalar(11);
     (blend == 0.0 || blend == 1.0) && m.texture_set.get(7).copied().flatten().is_none() && i.scalar(8) <= 1.0
+}
+
+/// MAD_Tex1_Graffiti_Mode_DecalFX lowered (see the module documentation); `None`, reported, where its arithmetic isn't
+/// a flat-coloured cut-out.
+fn decal_fx(
+    w: &mut World,
+    made: &mut BTreeMap<MadeKey, Entity>,
+    i: &Inputs<'_>,
+    m: &AnvilMaterial,
+    shader_uv: ShaderUv,
+    log: &mut PassLog,
+) -> Result<Option<PbrMaterial>, String> {
+    let refuse = |log: &mut PassLog, why: &str| {
+        log.omit(&format!("DecalFX Materials {why}: a placeholder"), 1);
+        None
+    };
+    if !binds_all(m, &DECAL_FX) {
+        return Ok(refuse(
+            log,
+            "whose template doesn't bind the properties its shader reads",
+        ));
+    }
+    if i.scalar(6) < 1.0 {
+        return Ok(refuse(
+            log,
+            "with a TeamBlendRatio under 1 (their colour stripes in screen space)",
+        ));
+    }
+    let Some(team) = i.vector(4) else {
+        return Ok(refuse(log, "without a team colour"));
+    };
+    if sat(team[3]) != 1.0 {
+        return Ok(refuse(
+            log,
+            "whose team colour isn't opaque (the atlas's colour mixes in)",
+        ));
+    }
+    let enabled = m
+        .flags
+        .booleans
+        .get(MaterialFlags::ALPHA_TEST_ENABLED)
+        .copied()
+        .unwrap_or(0);
+    if enabled != 1 {
+        return Ok(refuse(
+            log,
+            "not alpha-tested (another permutation than the one read)",
+        ));
+    }
+    let Some(diffuse) = i.texture(0) else {
+        return Ok(refuse(log, "without their atlas"));
+    };
+    let transform = match i.scalar(2) {
+        0.0 => lowered_uv(i, Some(8), shader_uv, "DecalFX", log),
+        1.0 => {
+            let Some(dim) = i.vector(5).filter(|d| d[0] > 0.0 && d[1] > 0.0) else {
+                return Ok(refuse(log, "without an atlas size"));
+            };
+            match uv_transform(&atlas_cell(i.scalar(1), dim[0], dim[1]), shader_uv) {
+                Ok(t) => t,
+                Err(why) => return Ok(refuse(log, &format!("whose atlas cell isn't lowered ({why})"))),
+            }
+        }
+        _ => return Ok(refuse(log, "with a Color - Logo between 0 and 1")),
+    };
+    if i.texture(1).is_none() && i.scalar(7) != 0.0 {
+        log.omit(
+            "DecalFX Materials' emission over an unset emissive mask (the engine's default not known): no emission drawn",
+            1,
+        );
+    } else if i.texture(1).is_some() {
+        log.omit("DecalFX Materials' emission (not lowered)", 1);
+    }
+    let shape = made_texture(w, made, (diffuse, "decal alpha", [0; 5]), |w| {
+        derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, _| {
+            [255, 255, 255, t.rgba[3]]
+        })
+    })?;
+    let colour = [0, 1, 2].map(|c| sat(team[c]).powf(2.2) as f32);
+    log.count("DecalFX Materials lowered (a flat team colour, cut out)", 1);
+    Ok(Some(PbrMaterial {
+        base_color: [colour[0], colour[1], colour[2], 1.0],
+        base_color_texture: Some(TextureRef {
+            transform,
+            ..TextureRef::new(shape)
+        }),
+        metallic: 0.0,
+        roughness: 1.0,
+        alpha_mode: AlphaMode::Mask {
+            cutoff: f32::from(m.flags.alpha_test_value) / 255.0,
+        },
+        double_sided: false,
+        ..PbrMaterial::default()
+    }))
 }
 
 /// A made texture's key: its source, what it is, and the parameters' bits (and other sources' indices) it is made of.
