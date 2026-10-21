@@ -250,11 +250,22 @@ fn decals_on_a_plane_cover_their_footprints_with_the_engines_coordinates() {
             .collect(),
     );
     decals(&mut w, trail, vec![decal(at(60.0, 60.0), 0.0); 2]);
+    // a model whose every decal is too faded for any texel to pass ((1 - 0.7) 1 = 0.3 under the cutoff): left out
+    let (faint, _) = model(&mut w, false);
+    decals(&mut w, faint, vec![decal(at(150.0, 50.0), 0.7)]);
     let mut log = PassLog::default();
     pass().run(&mut w, &mut log).expect("lower");
     println!("{log:?}");
     assert_eq!(log.counts["deferred decals drawn"], 3);
     assert_eq!(log.omitted["deferred decals outside the rectangle"], 1);
+    assert_eq!(
+        log.omitted["deferred decals whose fade leaves no texel visible ((1 - fade) m under the cutoff)"],
+        1
+    );
+    assert!(
+        !w.has::<PbrMaterial>(faint),
+        "no material for a model nothing of which is drawn"
+    );
     assert_eq!(
         log.omitted["deferred decals of the terrain family (PS 353: the terrain's bake)"],
         2

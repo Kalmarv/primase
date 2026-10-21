@@ -73,6 +73,8 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
         alpha: AlphaChoice::Opaque,
         shader_uv: ShaderUv::TexCoord,
         emissive_exposure: 1.0,
+        underground_view: 0.5,
+        fake_river_s: 0.0,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

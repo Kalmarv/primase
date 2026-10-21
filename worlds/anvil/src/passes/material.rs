@@ -1,4 +1,4 @@
-//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X]|prelude,unset=white,shader-uv=texcoord|one-minus-v,emissive-exposure=X}`:
+//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X]|prelude,unset=white,shader-uv=texcoord|one-minus-v,emissive-exposure=X,underground-view=X,fake-river-s=S}`:
 //! Anvil Materials ([`AnvilMaterial`]) become metal-rough PBR, for the templates whose pixel shaders the Riders
 //! Republic notes evaluated (docs/material-spec.md §4: the game's own shaders run on WARP against these formulas,
 //! within 5.5e-7):
@@ -25,6 +25,31 @@
 //!   (TextureSet slot 18), roughness its normal map's alpha, metalness 0, occlusion `1 + OnOffAO (mask.b - 1)`,
 //!   two-sided. Its noise tint (weighted by a noise tiled in world space), translucency, specular occlusion and
 //!   per-instance dither fade are left out, reported.
+//! - **MAD_Tex1_SkinningSupported** is MAD_Tex1 exactly (§27.14: its rows Tex1's), **MAD_Decals1_Graffiti** MAD_Decals1
+//!   where its `EmissivePower` (row 6) is 0, as on both placed (its team colour and Fresnel emission off; otherwise the
+//!   placeholder, reported), and **MAD_Tex2_Graffiti_Mode** MAD_Tex2 ([`TEX2_GRAFFITI_ROWS`]) with each layer's
+//!   roughness its normal map's alpha raw, no vertex-colour factor, its own rows, where its `State Value` is 0 (the
+//!   graffiti palette off, as placed; otherwise the placeholder, reported).
+//! - **MAD_Tex1_Screen** (§27.14.4): base colour `0.6 sat(t75)^2.2` (its shader's decode), roughness 0.1, metalness 0,
+//!   emission `0.666667` over `emissive-exposure`, coloured by the albedo; t75 the generic `Texture`, the TextureSet's
+//!   slot 0.
+//! - **MAD_Screens** (§27.14.1): where `Use Videos` (row 5) is 0 and `Use Logos` (row 4) 0 or the `Neutral` colour
+//!   (row 7) black, as on the 56 LED and 15 team screens placed, its colour is 0 whatever the frame: black, no
+//!   emission, roughness 1. A video screen (it reads a second UV set the meshes' lowering doesn't decode) is the
+//!   placeholder, reported.
+//! - **MAD_SHD_UNLIT_UndergroundBox** (§27.14.7): its albedo is a gradient by the view, `lerp(ColorB, ColorA, x)`,
+//!   `x = 0.5 + 0.5 d.z / sqrt(|d|^2 + 1)`: `underground-view` states `x`; roughness 1, opaque (its G-buffer key has no
+//!   blend, whatever its prelude says).
+//! - **MAD_Tex1_FakeRiver** (§27.14.9): its albedo `base + t76.a (1.5 - s) (target - base)`,
+//!   `base = (1 - s) (0.07451, 0.10196, 0.06275) + (0.04706, 0.05882, 0.07059)`, `target = (0.12549, 0.16078,
+//!   0.23922)`, `s` its program's COLOR0.x (the vertex colour's red, which the albedo isn't a product of):
+//!   `fake-river-s` states it for the whole Material; the normal map t75 at 0.1 of
+//!   its strength (z rebuilt from the unscaled map, as its shader does); roughness and metalness its `3 - Metalness`.
+//! - **SHD_Nat_Veg_Grass_AO** (§27.14.8; layout B): base colour its diffuse t75 times `1 + AO Mult (COLOR0.a - 1)`,
+//!   that factor written into `COLOR_0` (`(f, f, f, 1)`) of every primitive drawn with it alone, as MAD_FakeForest's
+//!   (an `AO Mult` outside 0 to 1 is the placeholder, reported); its normal map the generic `Texture` t76, the
+//!   TextureSet's slot 1; roughness 1, metalness 0; two-sided where its flags say. Its specular occlusion (0.2) has no
+//!   PBR place, reported.
 //! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted by `Hue`, `Saturation` and `Luminosity` in
 //!   HSV where its mask (t77, the Material's TextureSet slot 7) has red, everywhere on Decals1 (no mask); roughness
 //!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
@@ -101,12 +126,13 @@
 //! cut-out and 40 solid Tex1 and Wind Materials), else opaque; 1 and 6 (additive-looking) aren't lowered, drawn
 //! opaque, reported.
 //!
-//! Every option is the program's: the normal map's green sign against glTF's isn't established, nor the alpha test's
+//! Every option is the program's: `underground-view` and `fake-river-s` state what the static export takes for a view
+//! and a vertex value the shaders read; the normal map's green sign against glTF's isn't established, nor the alpha test's
 //! reference (alpha=mask states one; alpha=prelude the prelude's reading), nor what the game binds for a texture a Material leaves unset (unset=white: the
 //! notes find the masks' settings make sense only so), nor the shader's coordinates against the mesh's (shader-uv).
 //! Other templates are drawn with a neutral placeholder, reported by name. The Materials are consumed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
 use primase_core::pass::{Options, Pass, PassLog};
@@ -147,6 +173,10 @@ pub struct LowerAnvilMaterial {
     pub shader_uv: ShaderUv,
     /// The exposure the emissive templates' emission is divided by (the engine's t23, not known: a stated value).
     pub emissive_exposure: f64,
+    /// MAD_SHD_UNLIT_UndergroundBox's gradient position `x` (its shader's, by the view: a stated value).
+    pub underground_view: f64,
+    /// MAD_Tex1_FakeRiver's `s`, its COLOR0.x (its albedo quadratic in it, not a COLOR_0 product: a stated value).
+    pub fake_river_s: f64,
 }
 
 impl LowerAnvilMaterial {
@@ -160,12 +190,14 @@ impl LowerAnvilMaterial {
             "unset",
             "shader-uv",
             "emissive-exposure",
+            "underground-view",
+            "fake-river-s",
         ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
         let usage = "normal-green=up|down, alpha=opaque|mask (with alpha-cutoff=X)|prelude, unset=white, \
-                     shader-uv=texcoord|one-minus-v, emissive-exposure=X";
+                     shader-uv=texcoord|one-minus-v, emissive-exposure=X, underground-view=X (0 to 1), fake-river-s=S";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -207,11 +239,26 @@ impl LowerAnvilMaterial {
                 "emissive-exposure {emissive_exposure}: finite and above 0"
             ));
         }
+        let number = |k: &str| -> Result<f64, String> {
+            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+            if v.is_finite() {
+                Ok(v)
+            } else {
+                Err(format!("{k} {v}: finite"))
+            }
+        };
+        let underground_view = number("underground-view")?;
+        if !(0.0..=1.0).contains(&underground_view) {
+            return Err(format!("underground-view {underground_view}: within 0 and 1"));
+        }
+        let fake_river_s = number("fake-river-s")?;
         Ok(LowerAnvilMaterial {
             normal_green,
             alpha,
             shader_uv,
             emissive_exposure,
+            underground_view,
+            fake_river_s,
         })
     }
 }
@@ -616,24 +663,78 @@ pub const TEX2: Reads = Reads {
     ],
 };
 
-/// Where a Tex2 template's shader reads the rows that differ between its variants (§4.3, §27.5): layer B's tint, the
-/// two roughness offsets, the occlusion switch and the two UV transforms (VCI, the height contrast, alpha offset and
-/// contrast at 1 to 4 and layer A's tint at 5 to 7 in both).
+/// Where a Tex2 template's shader reads its rows (§4.3, §27.5, §27.14.6): each layer's tint, the roughness offsets
+/// (none: each normal map's alpha raw), the occlusion switch, the two UV transforms, the vertex-colour intensity (none:
+/// no colour factor), the height contrast, alpha offset and alpha contrast, and its graffiti state (none: no palette).
 pub struct Tex2Rows {
     pub reads: Reads,
+    pub tint_a: [u32; 3],
     pub tint_b: [u32; 3],
-    pub roughness_offsets: [u32; 2],
+    pub roughness_offsets: Option<[u32; 2]>,
     pub ao: u32,
     pub uv: [u32; 2],
+    pub vertex_colour: Option<u32>,
+    pub height_contrast: u32,
+    pub alpha_offset: u32,
+    pub alpha_contrast: u32,
+    pub state: Option<u32>,
 }
 
 /// MAD_Tex2's rows.
 pub const TEX2_ROWS: Tex2Rows = Tex2Rows {
     reads: TEX2,
+    tint_a: [5, 6, 7],
     tint_b: [8, 9, 10],
-    roughness_offsets: [11, 12],
+    roughness_offsets: Some([11, 12]),
     ao: 13,
     uv: [14, 17],
+    vertex_colour: Some(1),
+    height_contrast: 2,
+    alpha_offset: 3,
+    alpha_contrast: 4,
+    state: None,
+};
+
+/// MAD_Tex2_Graffiti_Mode's rows (§27.14.6; its binding table read, its keys the CRC-32 of its labels): `Alpha
+/// Contrast` 1, `State Value` 2, Hue / Saturation / Luminosity A 3-5, `Height Contrast` 6, `Alpha Offset` 7, Hue /
+/// Saturation / Luminosity B 8-10, `On Off - AO` 11, `Base tiling A` 12 and `B` 15; its textures Tex2's slots (two of
+/// them under other labels). No roughness offsets, no vertex-colour factor.
+pub const TEX2_GRAFFITI_ROWS: Tex2Rows = Tex2Rows {
+    reads: Reads {
+        textures: &[
+            (0, 0x840C_4002),
+            (1, 0x7A5F_B139),
+            (2, 0xE0FC_E9CD),
+            (3, 0x94C8_3273),
+            (4, 0x8E92_3E53),
+            (5, 0xFCAC_D4EA),
+        ],
+        constants: &[
+            (1, 0xD4D4_90B6),
+            (2, 0xD2CD_C3FF),
+            (3, 0x2803_E854),
+            (4, 0x968A_7B9F),
+            (5, 0x9F39_AFF6),
+            (6, 0xA72E_5763),
+            (7, 0xA7B7_68D7),
+            (8, 0xB10A_B9EE),
+            (9, 0x0F83_2A25),
+            (10, 0x0630_FE4C),
+            (11, 0xCBBE_0755),
+            (12, 0x6CB3_7F10),
+            (15, 0xF5BA_2EAA),
+        ],
+    },
+    tint_a: [3, 4, 5],
+    tint_b: [8, 9, 10],
+    roughness_offsets: None,
+    ao: 11,
+    uv: [12, 15],
+    vertex_colour: None,
+    height_contrast: 6,
+    alpha_offset: 7,
+    alpha_contrast: 1,
+    state: Some(2),
 };
 
 /// MAD_Tex2_TintBFromShaderConstants' rows (its binding table read): MAD_Tex2's 1 to 7, roughness offsets 8 and 9,
@@ -660,10 +761,45 @@ pub const TEX2_TINT_B_ROWS: Tex2Rows = Tex2Rows {
             (23, 0xF5BA_2EAA),
         ],
     },
+    tint_a: [5, 6, 7],
     tint_b: [11, 12, 13],
-    roughness_offsets: [8, 9],
+    roughness_offsets: Some([8, 9]),
     ao: 10,
     uv: [20, 23],
+    vertex_colour: Some(1),
+    height_contrast: 2,
+    alpha_offset: 3,
+    alpha_contrast: 4,
+    state: None,
+};
+
+/// MAD_Decals1_Graffiti's `EmissivePower` (§27.14.5): row 6, its key the CRC-32 of its label.
+const DECALS1_GRAFFITI_EMISSIVE_POWER: (u32, u32) = (6, 0x52AE_793B);
+
+/// MAD_Screens' (§27.14.1; its binding table read): `Use Logos` 4, `Use Videos` 5, `Neutral` 7.
+pub const SCREENS: Reads = Reads {
+    textures: &[],
+    constants: &[(4, 0x2EBA_2876), (5, 0xEB11_E364), (7, 0x6B99_DC6C)],
+};
+
+/// MAD_SHD_UNLIT_UndergroundBox's (§27.14.7): `ColorA` 1, `ColorB` 2.
+pub const UNDERGROUND_BOX: Reads = Reads {
+    textures: &[],
+    constants: &[(1, 0x0DC5_9729), (2, 0x94CC_C693)],
+};
+
+/// SHD_Nat_Veg_Grass_AO's (§27.14.8): `0: Layer1 Diffuse + Alpha Map` t75, the generic `Texture` t76 (its normal
+/// map, the TextureSet's slot 1); `AO Mult` 1.
+pub const GRASS_AO: Reads = Reads {
+    textures: &[(0, 0x74B9_1491), (1, 0x4DDB_34EE)],
+    constants: &[(1, 0x5E05_FBCF)],
+};
+
+/// MAD_Tex1_FakeRiver's (§27.14.9): `2 - Normal Map` t75, `1 - Diffuse Alpha` t76; `3 - Metalness` 1, `3.Base
+/// tiling` 2.
+pub const FAKE_RIVER: Reads = Reads {
+    textures: &[(0, 0x443B_F980), (1, 0xE4B6_CC48)],
+    constants: &[(1, 0xC7C3_A6D7), (2, 0x7091_389B)],
 };
 
 /// MAD_Tex1_Graffiti_Mode_DecalFX (§27.10; its binding table read): `1 - Diffuse Alpha` t75, the generic `Texture`
@@ -914,6 +1050,8 @@ impl Pass for LowerAnvilMaterial {
                 .to_owned(),
             ),
             ("emissive-exposure".to_owned(), self.emissive_exposure.to_string()),
+            ("underground-view".to_owned(), self.underground_view.to_string()),
+            ("fake-river-s".to_owned(), self.fake_river_s.to_string()),
         ]);
         match self.alpha {
             AlphaChoice::Opaque => {
@@ -961,8 +1099,8 @@ impl Pass for LowerAnvilMaterial {
         };
         // made textures, per (source, what, parameters' bits)
         let mut made: BTreeMap<MadeKey, Entity> = BTreeMap::new();
-        // the Materials drawn as MAD_FakeForest, whose COLOR_0 the pass decodes
-        let mut forest: BTreeSet<Entity> = BTreeSet::new();
+        // the Materials whose shaders take COLOR0 otherwise than as a colour factor, and how the pass rewrites it
+        let mut colour_rules: BTreeMap<Entity, ColourRule> = BTreeMap::new();
         for e in materials {
             let Some(m) = w.remove::<AnvilMaterial>(e) else {
                 continue;
@@ -982,10 +1120,10 @@ impl Pass for LowerAnvilMaterial {
                 }),
             };
             let layout = match name.as_str() {
-                "MAD_Tex1" => Some(TEX1),
+                "MAD_Tex1" | "MAD_Tex1_SkinningSupported" => Some(TEX1),
                 "MAD_Tex1_TerrainBlend" => Some(TEX1_TERRAIN_BLEND),
                 "MAD_Tex1_Wind" => Some(TEX1_WIND),
-                "MAD_Decals1" => Some(DECALS1),
+                "MAD_Decals1" | "MAD_Decals1_Graffiti" => Some(DECALS1),
                 "MAD_Tex1_Emissive" => Some(TEX1_EMISSIVE),
                 "MAD_Tex1_UGE" => Some(TEX1_UGE),
                 "MAD_Tex1_Graffiti_Mode" => Some(TEX1_GRAFFITI),
@@ -1001,6 +1139,7 @@ impl Pass for LowerAnvilMaterial {
             let tex2 = match name.as_str() {
                 "MAD_Tex2" => Some(&TEX2_ROWS),
                 "MAD_Tex2_TintBFromShaderConstants" => Some(&TEX2_TINT_B_ROWS),
+                "MAD_Tex2_Graffiti_Mode" => Some(&TEX2_GRAFFITI_ROWS),
                 _ => None,
             };
             if name == "MAD_Grounds" && grounds_reduce(&i, &m) {
@@ -1034,7 +1173,7 @@ impl Pass for LowerAnvilMaterial {
                 }
                 ("MAD_FakeForest", _) => {
                     takes_colour = true;
-                    forest.insert(e);
+                    colour_rules.insert(e, ColourRule::Pow22);
                     log.omit("FakeForest Materials' translucency (0.5, no PBR place)", 1);
                     PbrMaterial {
                         base_color: [1.0; 4],
@@ -1205,6 +1344,177 @@ impl Pass for LowerAnvilMaterial {
                         ..PbrMaterial::default()
                     }
                 }
+                ("MAD_Decals1_Graffiti", _)
+                    if !(binds_all(
+                        &m,
+                        &Reads {
+                            textures: &[],
+                            constants: &[DECALS1_GRAFFITI_EMISSIVE_POWER],
+                        },
+                    ) && i.scalar(DECALS1_GRAFFITI_EMISSIVE_POWER.0) == 0.0) =>
+                {
+                    log.omit(
+                        "Decals1_Graffiti Materials with an EmissivePower (their team colour and Fresnel emission): a \
+                         placeholder",
+                        1,
+                    );
+                    placeholder()
+                }
+                ("MAD_Tex1_Screen", _) => {
+                    let diffuse = match i.source(TextureSource::Set(0)) {
+                        Some(t) => t,
+                        None => {
+                            log.count("Tex1_Screen diffuses unset: white (stated)", 1);
+                            *white.get_or_insert_with(|| white_texture(w))
+                        }
+                    };
+                    let base = made_texture(w, &mut made, (diffuse, "screen", [0; 5]), |w| {
+                        derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |_, c| {
+                            let v = |x: f64| primase_image::linear_to_srgb8(0.6 * sat(x).powf(2.2));
+                            [v(c[0]), v(c[1]), v(c[2]), 255]
+                        })
+                    })?;
+                    let k = SCREEN_EMISSION / self.emissive_exposure;
+                    let (emissive, emissive_strength) = if k <= 1.0 {
+                        ([k as f32; 3], 1.0)
+                    } else {
+                        ([1.0; 3], k as f32)
+                    };
+                    log.count("MAD_Tex1_Screen Materials lowered", 1);
+                    PbrMaterial {
+                        base_color_texture: Some(TextureRef::new(base)),
+                        metallic: 0.0,
+                        roughness: 0.1,
+                        emissive,
+                        emissive_texture: Some(TextureRef::new(base)),
+                        emissive_strength,
+                        alpha_mode,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_Screens", _)
+                    if binds_all(&m, &SCREENS)
+                        && i.scalar(5) == 0.0
+                        && (i.scalar(4) == 0.0 || i.vector(7).is_some_and(|c| c[..3] == [0.0; 3])) =>
+                {
+                    log.count(
+                        "MAD_Screens Materials lowered (black: no video, and no logo or a black Neutral colour)",
+                        1,
+                    );
+                    PbrMaterial {
+                        base_color: [0.0, 0.0, 0.0, 1.0],
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        alpha_mode,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_SHD_UNLIT_UndergroundBox", _) if binds_all(&m, &UNDERGROUND_BOX) => {
+                    let (a, b) = (i.vector(1).unwrap_or([0.0; 4]), i.vector(2).unwrap_or([0.0; 4]));
+                    let x = self.underground_view;
+                    let c: [f32; 3] = std::array::from_fn(|k| (b[k] + (a[k] - b[k]) * x) as f32);
+                    log.approximate(
+                        "UndergroundBox Materials' view gradient at the stated underground-view",
+                        1,
+                    );
+                    log.count("MAD_SHD_UNLIT_UndergroundBox Materials lowered", 1);
+                    PbrMaterial {
+                        base_color: [c[0], c[1], c[2], 1.0],
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        alpha_mode: AlphaMode::Opaque,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_Tex1_FakeRiver", _) if binds_all(&m, &FAKE_RIVER) => {
+                    let s = self.fake_river_s;
+                    let foam = match i.texture(1) {
+                        Some(t) => t,
+                        None => {
+                            log.count("FakeRiver foam maps unset: white (stated)", 1);
+                            *white.get_or_insert_with(|| white_texture(w))
+                        }
+                    };
+                    let base = made_texture(
+                        w,
+                        &mut made,
+                        (foam, "fake river", [s.to_bits(), 0, 0, 0, 0]),
+                        |w| {
+                            derived(w, foam, TexRole::Color, ColorSpace::Srgb, |_, c| {
+                                let albedo = fake_river_albedo(c[3], s);
+                                let v = |x: f64| primase_image::linear_to_srgb8(x);
+                                [v(albedo[0]), v(albedo[1]), v(albedo[2]), 255]
+                            })
+                        },
+                    )?;
+                    let normals = i.texture(0);
+                    if let Some(n) = normals {
+                        set_normal(w, n, normal);
+                    }
+                    let uv = lowered_uv(&i, Some(2), self.shader_uv, "FakeRiver", log);
+                    let sampled_by = |texture: Entity| TextureRef {
+                        transform: uv,
+                        ..TextureRef::new(texture)
+                    };
+                    let rm = sat(i.scalar(1)) as f32;
+                    log.approximate(
+                        "FakeRiver Materials' COLOR0.x (s) at the stated fake-river-s, not per vertex",
+                        1,
+                    );
+                    log.count("MAD_Tex1_FakeRiver Materials lowered", 1);
+                    PbrMaterial {
+                        base_color_texture: Some(sampled_by(base)),
+                        metallic: rm,
+                        roughness: rm,
+                        normal_texture: normals.map(sampled_by),
+                        normal_scale: 0.1,
+                        alpha_mode,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("SHD_Nat_Veg_Grass_AO", _)
+                    if binds_all(&m, &GRASS_AO) && (0.0..=1.0).contains(&i.scalar(1)) =>
+                {
+                    let diffuse = i.texture(0);
+                    if let Some(d) = diffuse {
+                        set_colour(w, d, TexRole::Color);
+                    }
+                    let normals = i.source(TextureSource::Set(1));
+                    if let Some(n) = normals {
+                        set_normal(w, n, normal);
+                    }
+                    let ao_mult = i.scalar(1);
+                    if ao_mult != 0.0 {
+                        takes_colour = true;
+                        colour_rules.insert(e, ColourRule::AlphaAo(ao_mult));
+                    }
+                    log.omit("Grass_AO Materials' specular occlusion (0.2, no PBR place)", 1);
+                    log.count("SHD_Nat_Veg_Grass_AO Materials lowered", 1);
+                    PbrMaterial {
+                        base_color_texture: diffuse.map(TextureRef::new),
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        normal_texture: normals.map(TextureRef::new),
+                        alpha_mode,
+                        double_sided: m.flags.booleans.get(MaterialFlags::TWO_SIDED) == Some(&1),
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("SHD_Nat_Veg_Grass_AO", _) => {
+                    log.omit(
+                        "Grass_AO Materials not binding their shader's rows, or with an AO Mult outside 0 to 1: a \
+                         placeholder",
+                        1,
+                    );
+                    placeholder()
+                }
+                (_, _) if tex2.is_some_and(|rows| rows.state.is_some_and(|s| i.scalar(s) != 0.0)) => {
+                    log.omit(
+                        "Tex2 graffiti Materials with a State Value (the graffiti palette, runtime state): a placeholder",
+                        1,
+                    );
+                    placeholder()
+                }
                 (_, _) if tex2.is_some_and(|rows| !binds_all(&m, &rows.reads)) => {
                     log.omit(
                         &format!(
@@ -1217,7 +1527,7 @@ impl Pass for LowerAnvilMaterial {
                 }
                 (_, _) if let Some(rows) = tex2 => {
                     let scalar = |v: u32| i.scalar(v);
-                    if scalar(1) != 0.0 {
+                    if rows.vertex_colour.is_some_and(|v| scalar(v) != 0.0) {
                         log.omit(
                             "Tex2 Materials' vertex-colour factor (COLOR0 weights the layers; its colour factor isn't \
                              lowered)",
@@ -1233,15 +1543,15 @@ impl Pass for LowerAnvilMaterial {
                             i.texture(3),
                             i.texture(0),
                             i.texture(5),
-                            [5, 6, 7],
-                            rows.roughness_offsets[0],
+                            rows.tint_a,
+                            rows.roughness_offsets.map(|o| o[0]),
                         ),
                         (
                             i.texture(1),
                             i.texture(2),
                             i.texture(4),
                             rows.tint_b,
-                            rows.roughness_offsets[1],
+                            rows.roughness_offsets.map(|o| o[1]),
                         ),
                     ];
                     let mut layers = Vec::with_capacity(2);
@@ -1254,7 +1564,8 @@ impl Pass for LowerAnvilMaterial {
                             continue;
                         };
                         let base = base_colour(w, &mut made, d, hsl.map(scalar), Some(k), None)?;
-                        let mr = metal_rough(w, &mut made, n, None, Rough::Tex2(scalar(offset)))?;
+                        let rough = offset.map_or(Rough::Raw, |o| Rough::Tex2(scalar(o)));
+                        let mr = metal_rough(w, &mut made, n, None, rough)?;
                         let occlusion = if ao_on != 0.0 {
                             Some(occlusion_of(w, &mut made, k, ao_on)?)
                         } else {
@@ -1296,7 +1607,7 @@ impl Pass for LowerAnvilMaterial {
                     if heights.len() == 2 {
                         // w = sat((COLOR0.a - 0.5) AlphaContrast + 0.5 + AlphaContrast AlphaOffset): layer B's weight,
                         // A's 1 - w (= sat(1 - that))
-                        let (contrast, offset) = (scalar(4), scalar(3));
+                        let (contrast, offset) = (scalar(rows.alpha_contrast), scalar(rows.alpha_offset));
                         let k0 = (0.5 + contrast * offset - 0.5 * contrast) as f32;
                         let k1 = contrast as f32;
                         let alpha = Source::Vertex {
@@ -1314,7 +1625,7 @@ impl Pass for LowerAnvilMaterial {
                             threshold([k0, k1, 0.0, 0.0]),
                         ]);
                         weights.composition = Composition::Height {
-                            contrast: scalar(2) as f32,
+                            contrast: scalar(rows.height_contrast) as f32,
                         };
                         weights.heights = heights;
                         w.insert(e, LayeredMaterial { layers, weights });
@@ -1559,23 +1870,57 @@ impl Pass for LowerAnvilMaterial {
                 w.insert(e, VertexColor::Ignored);
             }
         }
-        forest_colours(w, &forest, log)?;
+        vertex_colours(w, &colour_rules, log)?;
         Ok(())
     }
 }
 
-/// `COLOR_0` of every primitive drawn with a MAD_FakeForest Material of `forest` and nothing else decoded as its
-/// shader does: `pow(saturate(c), 2.2)` per colour channel (alpha as stored), in f32 (see the module documentation).
-fn forest_colours(w: &mut World, forest: &BTreeSet<Entity>, log: &mut PassLog) -> Result<(), String> {
-    if forest.is_empty() {
+/// How a Material's shader takes COLOR0, as the pass rewrites `COLOR_0` for it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ColourRule {
+    /// MAD_FakeForest's albedo: `pow(saturate(c), 2.2)` per colour channel, alpha as stored.
+    Pow22,
+    /// Grass_AO's factor `1 + m (a - 1)` of the vertex alpha `a`, on each colour channel; alpha 1.
+    AlphaAo(f64),
+}
+
+impl ColourRule {
+    fn name(self) -> &'static str {
+        match self {
+            ColourRule::Pow22 => "FakeForest",
+            ColourRule::AlphaAo(_) => "Grass_AO",
+        }
+    }
+    fn apply(self, [r, g, b, a]: [f32; 4]) -> [f32; 4] {
+        match self {
+            ColourRule::Pow22 => {
+                let d = |c: f32| f64::from(c).clamp(0.0, 1.0).powf(2.2) as f32;
+                [d(r), d(g), d(b), a]
+            }
+            ColourRule::AlphaAo(m) => {
+                let f = (1.0 + m * (f64::from(a) - 1.0)) as f32;
+                [f, f, f, 1.0]
+            }
+        }
+    }
+}
+
+/// `COLOR_0` of every primitive drawn with Materials of one rule of `rules` and nothing else rewritten by that rule, in
+/// f32 (see the module documentation).
+fn vertex_colours(
+    w: &mut World,
+    rules: &BTreeMap<Entity, ColourRule>,
+    log: &mut PassLog,
+) -> Result<(), String> {
+    if rules.is_empty() {
         return Ok(());
     }
     for (_, f) in w.iter::<MeshFile>() {
-        if f.materials.iter().flatten().any(|m| forest.contains(m)) {
-            return Err(
-                "a FakeForest Material draws a mesh still in its file: load it before lower-anvil-material"
-                    .into(),
-            );
+        if let Some(rule) = f.materials.iter().flatten().find_map(|m| rules.get(m)) {
+            return Err(format!(
+                "a {} Material draws a mesh still in its file: load it before lower-anvil-material",
+                rule.name()
+            ));
         }
     }
     let prototypes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
@@ -1594,46 +1939,60 @@ fn forest_colours(w: &mut World, forest: &BTreeSet<Entity>, log: &mut PassLog) -
                         .flat_map(|v| v.values().copied()),
                 )
                 .collect();
-            if !drawn.iter().any(|m| forest.contains(m)) {
+            let Some(&rule) = drawn.iter().find_map(|m| rules.get(m)) else {
                 continue;
-            }
-            if !drawn.iter().all(|m| forest.contains(m)) {
+            };
+            if !drawn.iter().all(|m| rules.get(m) == Some(&rule)) {
                 log.omit(
-                    "primitives drawn with a FakeForest Material and another: COLOR_0 as stored",
+                    &format!(
+                        "primitives drawn with a {} Material and another: COLOR_0 as stored",
+                        rule.name()
+                    ),
                     1,
                 );
                 continue;
             }
             match p.streams.get(&Semantic::Color(0)) {
                 None => log.omit(
-                    "FakeForest primitives without COLOR_0: drawn white (the shader's default isn't read)",
+                    &format!(
+                        "{} primitives without COLOR_0: drawn white (the shader's default isn't read)",
+                        rule.name()
+                    ),
                     1,
                 ),
-                Some(stream) => decode.push((i, stream.clone())),
+                Some(stream) => decode.push((i, rule, stream.clone())),
             }
         }
         if decode.is_empty() {
             continue;
         }
         let mesh = w.get_mut::<Mesh>(e).ok_or("listed")?;
-        for (i, stream) in decode {
+        for (i, rule, stream) in decode {
             let colours: Vec<[f32; 4]> = match stream {
                 Stream::U8x4(v) => v.iter().map(|c| c.map(|x| f32::from(x) / 255.0)).collect(),
                 Stream::U16x4(v) => v.iter().map(|c| c.map(|x| f32::from(x) / 65535.0)).collect(),
                 Stream::F32x4(v) => v,
                 Stream::F32x3(v) => v.iter().map(|&[r, g, b]| [r, g, b, 1.0]).collect(),
-                _ => return Err("a FakeForest primitive's COLOR_0 isn't a colour stream".into()),
+                _ => {
+                    return Err(format!(
+                        "a {} primitive's COLOR_0 isn't a colour stream",
+                        rule.name()
+                    ));
+                }
             };
-            let decoded = colours
-                .into_iter()
-                .map(|[r, g, b, a]| {
-                    let d = |c: f32| f64::from(c).clamp(0.0, 1.0).powf(2.2) as f32;
-                    [d(r), d(g), d(b), a]
-                })
-                .collect();
+            let rewritten = colours.into_iter().map(|c| rule.apply(c)).collect();
             let mut p = mesh.primitive_mut(i).ok_or("listed")?;
-            p.streams_mut().insert(Semantic::Color(0), Stream::F32x4(decoded));
-            log.count("FakeForest primitives' COLOR_0 decoded (pow 2.2)", 1);
+            p.streams_mut()
+                .insert(Semantic::Color(0), Stream::F32x4(rewritten));
+            log.count(
+                match rule {
+                    ColourRule::Pow22 => "FakeForest primitives' COLOR_0 decoded (pow 2.2)",
+                    ColourRule::AlphaAo(_) => {
+                        "Grass_AO primitives' COLOR_0 made its AO factor of the vertex alpha"
+                    }
+                },
+                1,
+            );
         }
     }
     Ok(())
@@ -1955,6 +2314,23 @@ fn metal_rough(
 }
 
 /// The neutral grey a Material not lowered is drawn with.
+/// MAD_Tex1_Screen's emission before the exposure: its shader's constant (§27.14.4).
+const SCREEN_EMISSION: f64 = 0.666_667;
+
+/// MAD_Tex1_FakeRiver's albedo at a foam map alpha `a` and its `s` (§27.14.9); the constants its program's f32
+/// literals, by their bits.
+pub fn fake_river_albedo(a: f64, s: f64) -> [f64; 3] {
+    let f = |bits: [u32; 3]| bits.map(|b| f64::from(f32::from_bits(b)));
+    let low = f([1_033_410_766, 1_037_095_084, 1_031_831_640]);
+    let floor = f([1_027_653_818, 1_030_811_881, 1_032_884_364]);
+    let target = f([1_040_220_275, 1_042_588_816, 1_047_852_298]);
+    let foam = a * (1.5 - s);
+    std::array::from_fn(|k| {
+        let base = (1.0 - s) * low[k] + floor[k];
+        base + foam * (target[k] - base)
+    })
+}
+
 fn placeholder() -> PbrMaterial {
     PbrMaterial {
         base_color: [0.5, 0.5, 0.5, 1.0],

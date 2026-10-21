@@ -856,3 +856,251 @@ fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
         .expect("the permutation");
     Some(Shader::parse_stripped(program.container).expect("the shader parses"))
 }
+
+/// The pixel program of key `key` of the MaterialTemplate named `template`, in the first of Riders Republic's forges
+/// (patch first) that holds it.
+fn template_key(template: &str, key: u32) -> Option<Shader> {
+    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    for forge in [
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "DataPC_MAD_USNAT.forge",
+        "DataPC_patch_01.forge",
+        "DataPC.forge",
+    ] {
+        let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
+        let names = &archive.forge(0).expect("forge").names;
+        let Some(entry) = names
+            .iter()
+            .position(|n| n.type_id == template::MATERIAL_TEMPLATE && n.name == template)
+        else {
+            continue;
+        };
+        let body = archive.resource(At { forge: 0, entry }).expect("template").body;
+        let p = template::permutations(&body).expect("permutations");
+        let program = p
+            .iter()
+            .find(|x| x.stage == template::Stage::Pixel && x.key == key)
+            .expect("the permutation");
+        return Some(Shader::parse_stripped(program.container).expect("the shader parses"));
+    }
+    panic!("no template {template}")
+}
+
+/// MAD_Tex1_SkinningSupported (§27.14): MAD_Tex1's formulas on its own G-buffer program, its rows Tex1's.
+#[test]
+fn mad_tex1_skinning_supported() {
+    let Some(s) = template_key("MAD_Tex1_SkinningSupported", 0x40_0000) else {
+        return;
+    };
+    let mut r = Random(0x0019_0000_0040_0000);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (normal, diffuse, mask, colour) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (metal, offset, ao_on) = (r.next(), r.range(-0.5, 0.5), r.next());
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let vci = f64::from(case % 2);
+        let mut cb3 = r.decoys(10);
+        for (row, v) in [metal, hsl[0], hsl[1], hsl[2], offset, ao_on, vci]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, 8);
+        let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
+        let albedo = tinted(rgb(diffuse), mask[0], hsl);
+        let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+        worst.see("occlusion", out[3][0], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Tex1_SkinningSupported");
+}
+
+/// MAD_Decals1_Graffiti (§27.14.5), its placed key 0x404004 with `EmissivePower` (cb3[6]) 0: MAD_Decals1's formulas,
+/// its Fresnel rows (7, 8) and team colour (9) decoys, no emission; the alpha test passing.
+#[test]
+fn mad_decals1_graffiti() {
+    let Some(s) = template_key("MAD_Decals1_Graffiti", 0x40_4004) else {
+        return;
+    };
+    let mut r = Random(0x0003_0000_0040_4004);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (normal, diffuse) = (r.texel(), [r.next(), r.next(), r.next(), 1.0]);
+        let (metal, offset) = (r.next(), r.range(-0.5, 0.5));
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let mut cb3 = r.decoys(10);
+        for (row, v) in [metal, hsl[0], hsl[1], hsl[2], offset, 0.0]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        let engine = [
+            (2, 16, [0.0, 1.0, 0.0, 0.0]),
+            (2, 18, [0.0; 4]),
+            (2, 11, [0.0, 0.0, 0.0, 1.0]),
+        ];
+        let out = run_with(&s, &[(75, normal), (76, diffuse)], &cb3, r.texel(), &engine);
+        worst.rgb("albedo", out[0], tinted(rgb(diffuse), 1.0, hsl));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+        worst.see("emission", out[2][2], 0.0);
+    }
+    worst.check("MAD_Decals1_Graffiti");
+}
+
+/// MAD_Tex2_Graffiti_Mode (§27.14.6) with `State Value` 0: MAD_Tex2's layers and height blend with its own rows
+/// (cb3[1] Alpha Contrast, [3..5] and [8..10] the layers' HSL, [6] Height Contrast, [7] Alpha Offset, [11] On Off AO,
+/// [12..13] and [15..16] the UV rows), each roughness its normal map's alpha raw, no vertex-colour factor.
+#[test]
+fn mad_tex2_graffiti_mode() {
+    let Some(s) = template_key("MAD_Tex2_Graffiti_Mode", 0x40_0000) else {
+        return;
+    };
+    let mut r = Random(0x0008_0000_0040_0000);
+    let mut worst = Worst::default();
+    for _ in 0..50 {
+        let (d_a, d_b, n_a, n_b, m_a, m_b) =
+            (r.texel(), r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+        let (contrast, alpha_offset, alpha_contrast) =
+            (r.range(0.1, 0.99), r.range(-0.5, 0.5), r.range(0.0, 4.0));
+        let hsl_a = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let hsl_b = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let ao_on = r.next();
+        let colour = r.texel();
+        let mut cb3 = r.decoys(17);
+        for (row, v) in [
+            (1, alpha_contrast),
+            (2, 0.0),
+            (3, hsl_a[0]),
+            (4, hsl_a[1]),
+            (5, hsl_a[2]),
+            (6, contrast),
+            (7, alpha_offset),
+            (8, hsl_b[0]),
+            (9, hsl_b[1]),
+            (10, hsl_b[2]),
+            (11, ao_on),
+        ] {
+            set(&mut cb3, row, v);
+        }
+        uv_rows(&mut cb3, 12);
+        uv_rows(&mut cb3, 15);
+        let textures = [(75, n_a), (76, d_b), (77, n_b), (78, d_a), (79, m_b), (80, m_a)];
+        let out = run(&s, &textures, &cb3, colour);
+        let w = sat((colour[3] - 0.5) * alpha_contrast + 0.5 + alpha_contrast * alpha_offset);
+        let mapped = [1.0 - w, w, 0.0, 0.0].map(|x| x as f32);
+        let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
+        let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
+        let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], hsl_b));
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
+        worst.see(
+            "roughness",
+            out[0][3],
+            k[0] * roughness(n_a[3], Rough::Raw) + k[1] * roughness(n_b[3], Rough::Raw),
+        );
+        worst.see(
+            "metalness",
+            out[1][3],
+            k[0] * metalness(n_a[2], None) + k[1] * metalness(n_b[2], None),
+        );
+        let (oa, ob) = (occlusion(m_a[2], ao_on), occlusion(m_b[2], ao_on));
+        worst.see("occlusion", out[3][0], k[0] * oa + k[1] * ob);
+    }
+    worst.check("MAD_Tex2_Graffiti_Mode");
+}
+
+/// MAD_Tex1_Screen (§27.14.4): t75 the screen; the exposure t23 at 1. Albedo `0.6 sat(t75)^2.2`, roughness 0.1,
+/// metalness 0, emission (o2.z) the pass's constant 0.666667.
+#[test]
+fn mad_tex1_screen() {
+    let Some(s) = template_key("MAD_Tex1_Screen", 0x40_0000) else {
+        return;
+    };
+    let mut r = Random(0x0004_0000_0040_0000);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let screen = r.texel();
+        let out = run(&s, &[(75, screen), (23, [1.0; 4])], &r.decoys(4), r.texel());
+        worst.rgb(
+            "albedo",
+            out[0],
+            [0, 1, 2].map(|k| 0.6 * sat(screen[k]).powf(2.2)),
+        );
+        worst.see("roughness", out[0][3], 0.1);
+        worst.see("metalness", out[1][3], 0.0);
+        worst.see("emission", out[2][2], 0.666_667);
+    }
+    worst.check("MAD_Tex1_Screen");
+}
+
+/// MAD_Screens (§27.14.1) with `Use Videos` (cb3[5]) 0 and `Use Logos` (cb3[4]) 0, or 1 with a black `Neutral` (cb3[7]):
+/// black, no emission, roughness 1, metalness 0, whatever the frame (the time cb0[0].x, the frame rate cb3[10], the
+/// sheet cb3[13] and the delays drawn at random: the frame arithmetic's udiv executed), textures and other rows.
+#[test]
+fn mad_screens_black() {
+    let Some(s) = template_key("MAD_Screens", 0x40_0000) else {
+        return;
+    };
+    let mut r = Random(0x0058_0000_0040_0000);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let mut cb3 = r.decoys(16);
+        set(&mut cb3, 5, 0.0);
+        if case % 2 == 0 {
+            set(&mut cb3, 4, 0.0);
+        } else {
+            set(&mut cb3, 4, 1.0);
+            cb3[7] = [0.0, 0.0, 0.0, r.next()];
+        }
+        set(&mut cb3, 10, r.range(0.0, 30.0));
+        cb3[13] = [r.range(1.0, 9.0).floor(), r.range(1.0, 33.0).floor(), 0.0, 0.0];
+        set(&mut cb3, 11, r.range(0.0, 200.0));
+        set(&mut cb3, 12, r.range(0.0, 200.0));
+        uv_rows(&mut cb3, 14);
+        let engine = [(0, 0, [r.range(0.0, 1000.0), 0.0, 0.0, 0.0])];
+        let textures = [(75, r.texel()), (76, r.texel()), (77, r.texel()), (23, [1.0; 4])];
+        let out = run_with(&s, &textures, &cb3, r.texel(), &engine);
+        worst.rgb("albedo", out[0], [0.0; 3]);
+        worst.see("roughness", out[0][3], 1.0);
+        worst.see("metalness", out[1][3], 0.0);
+        worst.see("emission", out[2][2], 0.0);
+    }
+    worst.check("MAD_Screens");
+}
+
+/// MAD_Tex1_FakeRiver (§27.14.9): its scalar `s` is its program's v2.x, the vertex colour's red (COLOR0.x, its input
+/// signature read), drawn at random; t75 normal map, t76 foam; cb3[1] `3 - Metalness` (roughness and metalness both),
+/// [2..3] the UV rows.
+#[test]
+fn mad_tex1_fake_river() {
+    let Some(s) = template_key("MAD_Tex1_FakeRiver", 0x40_0000) else {
+        return;
+    };
+    let mut r = Random(0x0002_0000_0040_0000);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (normal, foam, value) = (r.texel(), r.texel(), r.next());
+        let mut cb3 = r.decoys(4);
+        set(&mut cb3, 1, value);
+        uv_rows(&mut cb3, 2);
+        let colour = r.texel();
+        let out = run(&s, &[(75, normal), (76, foam)], &cb3, colour);
+        let albedo = primase_anvil::passes::fake_river_albedo(foam[3], colour[0]);
+        worst.rgb("albedo", out[0], albedo);
+        worst.see("roughness", out[0][3], value);
+        worst.see("metalness", out[1][3], value);
+    }
+    worst.check("MAD_Tex1_FakeRiver");
+}

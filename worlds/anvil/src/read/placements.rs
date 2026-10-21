@@ -52,7 +52,7 @@ use crate::read::entity::{
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
-use crate::read::mesh::{MATERIAL, MESH, StoredMesh};
+use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
 use crate::read::shape::{
@@ -246,13 +246,6 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
     Transform {
         cols: [lin(0), lin(1), lin(2), [0, 1, 2].map(|r| (t[r] + o[3][r]) as f32)],
     }
-}
-
-/// A Mesh body's `MaxCullingDistance`: its GraphicObject's f32 at 4 (registry-named-fields §4, §10; 0 where short).
-fn max_culling_distance(body: &[u8]) -> f32 {
-    body.get(4..8)
-        .and_then(|w| <[u8; 4]>::try_from(w).ok())
-        .map_or(0.0, f32::from_le_bytes)
 }
 
 /// The name of the entry `id` names in `archive`, if any.

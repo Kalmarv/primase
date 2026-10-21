@@ -145,13 +145,13 @@ fn non_float(opcode: u16) -> bool {
     flow(opcode)
         || matches!(
             opcode,
-            1 | 24 | 27..=30 | 32..=42 | 45 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87 | 138 | 140 | 167 | 180
+            1 | 24 | 27..=30 | 32..=42 | 45 | 49 | 57 | 59 | 60 | 78..=80 | 83..=85 | 87 | 138 | 140 | 167 | 180
         )
 }
 
 /// Instructions reading integer sources (and the flow conditions, which test bits): source modifiers are refused.
 fn integer_sources(opcode: u16) -> bool {
-    matches!(opcode, 1 | 3 | 8 | 13 | 30..=43 | 45 | 59 | 60 | 79 | 80 | 83..=87 | 138 | 140 | 167 | 180)
+    matches!(opcode, 1 | 3 | 8 | 13 | 30..=43 | 45 | 59 | 60 | 78..=80 | 83..=87 | 138 | 140 | 167 | 180)
 }
 
 /// The operand an instruction names its unordered-access view by: a store's first, an atomic's second (after its
@@ -452,8 +452,9 @@ impl Program {
                 | 45
                 | 164 => 3,
                 // ubfe (width, offset, source); ld_structured (element, byte offset, resource); imm_atomic_iadd
-                // (result, view, address, value); store_structured (view, element, byte offset, value)
-                35 | 38 | 50 | 55 | 69 | 138 | 167 | 168 | 180 => 4,
+                // (result, view, address, value); store_structured (view, element, byte offset, value); imul and
+                // udiv (two destinations, two sources)
+                35 | 38 | 50 | 55 | 69 | 78 | 138 | 167 | 168 | 180 => 4,
                 // sample_b and sample_l (a bias or level after the sampler); bfi (width, offset, insert, base)
                 72 | 74 | 140 => 5,
                 73 => 6,
@@ -813,7 +814,7 @@ impl Program {
         let fail = |detail| error(ins.word, detail);
         let sampling = matches!(ins.opcode, 69 | 72 | 73 | 74);
         let resource = resource_operand(ins.opcode);
-        let dests = if matches!(ins.opcode, 38 | 77) {
+        let dests = if matches!(ins.opcode, 38 | 77 | 78) {
             2
         } else if flow(ins.opcode) || matches!(ins.opcode, 164 | 168) {
             0
@@ -857,8 +858,10 @@ impl Program {
             if o.register == Register::Uav {
                 return Err(fail("a view outside a store"));
             }
-            if o.register == Register::Null && !(matches!(ins.opcode, 38 | 77) && n < 2) {
-                return Err(fail("null is supported only as an imul or sincos destination"));
+            if o.register == Register::Null && !(matches!(ins.opcode, 38 | 77 | 78) && n < 2) {
+                return Err(fail(
+                    "null is supported only as an imul, udiv or sincos destination",
+                ));
             }
             if integer_sources(ins.opcode) && !matches!(o.modifier, 0 | 4) {
                 return Err(fail("unsupported integer source modifier (abs)"));

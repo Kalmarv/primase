@@ -28,7 +28,8 @@
 //!   (`m` the model's opacity). Each vertex's `COLOR_0` alpha is `(1 - fade) m / k`, the base colour's alpha
 //!   `Mask1.B`, and the material's cutoff `cutoff / k`, `k` the greatest `(1 - fade) m` the model's drawn decals
 //!   have: the same test exactly, `cutoff` standing for `ref / scale` (0.4 by §23.5's fit; neither constant's
-//!   binding is read).
+//!   binding is read). A decal whose `(1 - fade) m` is under `cutoff` passes the test at no texel (Mask1.B at most 1):
+//!   left out, counted; so `k` is at least `cutoff` and the material's cutoff at most 1.
 //!
 //! Left out, counted: the decals' angle test (its threshold `cb3[4].z` not read), the terrain-mask colour term
 //! (`k = t18.z`, `cb0[49].x`, not read: taken 0), the Height maps (read only by parallax permutations, which models
@@ -517,8 +518,12 @@ impl LowerAnvilDecals {
             let mut decals = Vec::new();
             for d in inside {
                 let alpha = (1.0 - f64::from(d.fade)) * f64::from(m.opacity);
-                if alpha <= 0.0 {
-                    log.omit("deferred decals faded out ((1 - fade) m <= 0)", 1);
+                // even a texel of Mask1.B 1 fails the test (B (1 - fade) m >= cutoff): the engine draws none of it
+                if alpha < self.cutoff || alpha <= 0.0 {
+                    log.omit(
+                        "deferred decals whose fade leaves no texel visible ((1 - fade) m under the cutoff)",
+                        1,
+                    );
                     continue;
                 }
                 let [cx, cy] = [f64::from(d.centre[0]), f64::from(d.centre[1])];

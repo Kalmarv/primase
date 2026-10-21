@@ -566,6 +566,14 @@ fn f32s(b: &[u8; 12]) -> [f32; 3] {
     ]
 }
 
+/// A Mesh body's `MaxCullingDistance`: its GraphicObject's f32 at 4, after the ManagedObject byte, `DescriptorMask`,
+/// `Generated` and `VertexStride` (registry-named-fields §4, §10; 0 where the body is short).
+pub fn max_culling_distance(body: &[u8]) -> f32 {
+    body.get(4..8)
+        .and_then(|w| <[u8; 4]>::try_from(w).ok())
+        .map_or(0.0, f32::from_le_bytes)
+}
+
 impl StoredMesh {
     /// A Mesh resource's body (its [`crate::read::data::Resource::body`]).
     pub fn parse(body: &[u8]) -> Result<StoredMesh, Error> {

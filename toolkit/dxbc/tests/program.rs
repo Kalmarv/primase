@@ -482,6 +482,29 @@ fn sincos_writes_sine_and_cosine_and_either_may_be_null() {
     assert_eq!((r.output_masks[0], f32::from_bits(r.outputs[1][0])), (0, 1.));
 }
 
+/// udiv: the unsigned quotient and remainder (worked by hand), Direct3D's 0xFFFFFFFF for both on a zero divisor, and
+/// either destination null.
+#[test]
+fn udiv_writes_quotient_and_remainder_and_either_may_be_null() {
+    let x = lit([17, 0xFFFF_FFFF, 5, 12]);
+    let y = lit([5, 2, 0, 12]);
+    let p = shader(0, 0, &[op(78, &[&dest(2, 0), &dest(2, 1), &x, &y])]);
+    let r = Program::from_words(&p)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap();
+    assert_eq!(r.outputs[0], [3, 0x7FFF_FFFF, u32::MAX, 1]);
+    assert_eq!(r.outputs[1], [2, 1, u32::MAX, 0]);
+    // the remainder alone, the quotient to null
+    let null = [13 << 12];
+    let p = shader(0, 0, &[op(78, &[&null, &dest(2, 1), &x, &y])]);
+    let r = Program::from_words(&p)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap();
+    assert_eq!((r.output_masks[0], r.outputs[1]), (0, [2, 1, u32::MAX, 0]));
+}
+
 /// if/else/endif on a nonzero or zero test, and a loop counting to three by breakc, as structured flow.
 #[test]
 fn structured_flow_takes_its_branches_and_loops() {

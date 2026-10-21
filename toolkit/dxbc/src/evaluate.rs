@@ -354,6 +354,26 @@ impl Program {
                 });
                 continue;
             }
+            if ins.opcode == 78 {
+                // udiv: the unsigned quotient to the first destination, the remainder to the second (either may be
+                // null); a divisor of 0 gives 0xFFFFFFFF to both, as Direct3D defines it
+                let mask2 = match a[1].selection {
+                    Selection::Mask(m) => m,
+                    _ => 0,
+                };
+                let x = s.source(&a[2], mask | mask2, ins.word)?;
+                let y = s.source(&a[3], mask | mask2, ins.word)?;
+                let quotient: [u32; 4] = std::array::from_fn(|i| x[i].checked_div(y[i]).unwrap_or(u32::MAX));
+                let remainder: [u32; 4] = std::array::from_fn(|i| x[i].checked_rem(y[i]).unwrap_or(u32::MAX));
+                s.write(&a[0], quotient);
+                s.write(&a[1], remainder);
+                trace(Trace {
+                    word: ins.word,
+                    temps: &s.temps,
+                    outputs: &s.outputs,
+                });
+                continue;
+            }
             if ins.opcode == 38 {
                 let mask2 = match a[1].selection {
                     Selection::Mask(m) => m,

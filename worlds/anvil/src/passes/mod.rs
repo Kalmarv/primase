@@ -10,7 +10,7 @@ mod splat;
 mod water;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, family};
-pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv};
+pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
 
@@ -2151,6 +2151,8 @@ pub fn register(reg: &mut PassRegistry) {
             ("unset", "white"),
             ("shader-uv", "texcoord"),
             ("emissive-exposure", "1"),
+            ("underground-view", "0.5"),
+            ("fake-river-s", "0"),
         ],
     );
     reg.register_requiring(
