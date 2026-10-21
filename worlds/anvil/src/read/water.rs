@@ -15,6 +15,7 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::components::WaterPatch;
 use crate::read::reference::{self, Reference};
 
 /// A component type: WaterComponent.
@@ -44,28 +45,6 @@ pub enum Error {
     },
     #[error("WaterComponent body: {0} bytes after its end")]
     Trailing(usize),
-}
-
-/// One WaterPatchDesc.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WaterPatch {
-    /// Its object's u64 and type, as stored.
-    pub id: u64,
-    pub kind: u32,
-    /// x and y in metres, z the water level.
-    pub position: [f32; 3],
-    /// The 4 bytes at 25, as stored (`00 00 01 02` on the notes' samples).
-    pub unread: [u8; 4],
-    /// u0, v0, u1, v1 in the atlases.
-    pub rect: [f32; 4],
-    pub level: u32,
-}
-
-impl WaterPatch {
-    /// Its square's side in metres: `512 >> level` (`None` past 512's bits).
-    pub fn side(&self) -> Option<f32> {
-        512u32.checked_shr(self.level).map(|s| s as f32)
-    }
 }
 
 /// A WaterComponent's body as stored, its lake data read.

@@ -249,6 +249,28 @@ impl Component for AnvilMaterialOverrides {
     }
 }
 
+/// One WaterPatchDesc.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterPatch {
+    /// Its object's u64 and type, as stored.
+    pub id: u64,
+    pub kind: u32,
+    /// x and y in metres, z the water level.
+    pub position: [f32; 3],
+    /// The 4 bytes at 25, as stored (`00 00 01 02` on the notes' samples).
+    pub unread: [u8; 4],
+    /// u0, v0, u1, v1 in the atlases.
+    pub rect: [f32; 4],
+    pub level: u32,
+}
+
+impl WaterPatch {
+    /// Its square's side in metres: `512 >> level` (`None` past 512's bits).
+    pub fn side(&self) -> Option<f32> {
+        512u32.checked_shr(self.level).map(|s| s as f32)
+    }
+}
+
 /// A lake's surface as its WaterComponent stores it (`anvil.water`, on an entity of its own): its patches (each a
 /// square of side `512 >> level` metres from its position, at the water level; in world coordinates, the owner's
 /// matrix not applied: every one of the 2,062 lies in its owner's 1 km cell, which its matrix's translation
@@ -257,7 +279,7 @@ impl Component for AnvilMaterialOverrides {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilWater {
     pub frame: primase_core::frame::SourceFrame,
-    pub patches: Vec<crate::read::water::WaterPatch>,
+    pub patches: Vec<WaterPatch>,
     pub atlases: [Option<Entity>; 3],
 }
 
@@ -356,6 +378,17 @@ pub struct TerrainTile {
     /// of 132 x 132 texels (the terrain shader's occlusion-like factor `0.5 + v`: the notes' lead, docs/terrain.md
     /// §3.4).
     pub block_8: Vec<u8>,
+}
+
+impl TerrainTile {
+    /// Where a node's samples begin in its 132-sample tile (every raster: heights, colour, material, block 8): its core
+    /// sample (i, j), the 128 x 128 covering its square from its corner, is stored at (i + 2, j + 2); the two before and
+    /// the two after are its neighbours'. The engine's reading (docs/terrain.md §3.6 correction, §3.7): its per-node
+    /// constant block offsets every node 2 texels into its 132-texel block (`cb4[3]` = 2 mod 132 on 125 of 125 blocks in
+    /// the world snapshot), and its physics terrain reads cell (r, c) at texel (r + 2, c + 2), its 129 x 129 vertices at
+    /// texels 2 to 130. (A tile's last four equal its +x or +y neighbour's first four under either convention, so the
+    /// rasters alone don't settle it.)
+    pub const CORE_AT: usize = 2;
 }
 
 /// A terrain material's detail, as its TerrainMaterial and TextureSet give it: the f32 at 2 (`uv_scale`), the f32 at 6

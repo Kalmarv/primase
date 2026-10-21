@@ -102,6 +102,39 @@ pub fn lake_sigma(p: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|k| base[k] + ma[k] * a + mb[k] * b + mc[k] * c)
 }
 
+/// A river Material's water type from its weights `w` (`PBR_Ocean`, then `PBR_Swamp`, `PBR_SwampMud`, `PBR_Mud`,
+/// `PBR_BrownLake`, `PBR_SulfurMine`, `PBR_Gypsum`), as the river shader composes it (FlowingWater_River, executed:
+/// docs/material-spec.md §16.1): `(4 - 4 Ocean, 0.5, 5 - 5 Ocean)`, then pulled towards each preset in turn by its
+/// weight, `p += w (preset - p)`.
+pub fn river_type(w: [f64; 7]) -> [f64; 3] {
+    let presets = [
+        [12.0, 1.0, 4.0],
+        [20.0, 4.0, 4.0],
+        [8.0, 8.0, 12.0],
+        [5.0, 0.0, 15.0],
+        [1.0, 8.0, 0.0],
+        [0.0, 16.0, 0.0],
+    ];
+    let mut p = [4.0 - 4.0 * w[0], 0.5, 5.0 - 5.0 * w[0]];
+    for (weight, preset) in w[1..].iter().zip(presets) {
+        for k in 0..3 {
+            p[k] += weight * (preset[k] - p[k]);
+        }
+    }
+    p
+}
+
+/// The river shader's absorption per metre of water type `p = (a, b, c)` (§16.1, executed): its pure-water term plus
+/// the type's linear map (the lake's map differs in its pure-water term only: [`lake_sigma`]).
+pub fn river_sigma(p: [f64; 3]) -> [f64; 3] {
+    let [a, b, c] = p;
+    let base = [0.429412 + 0.000147, 0.150980 + 0.000490, 0.201961 + 0.000427];
+    let ma = [0.047059, 0.039216, 0.494118];
+    let mb = [0.004980 + 0.115803, 0.005333 + 0.126938, 0.005765 + 0.134245];
+    let mc = [0.018627, 0.055882, 0.125490];
+    std::array::from_fn(|k| base[k] + ma[k] * a + mb[k] * b + mc[k] * c)
+}
+
 /// A water column's opacity at depth `d` metres: `1 - max_c exp(-sigma_c d)` (the transmittance the shader writes,
 /// `min(1, max_c exp(-sigma_c d))`, taken from 1).
 pub fn water_opacity(sigma: [f64; 3], d: f64) -> f64 {
@@ -160,7 +193,28 @@ mod tests {
                 );
             }
         }
+        // the river Material: Ocean 1 and Gypsum 0.3 (§16.1, §20.2)
+        let river = river_type([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3]);
+        assert!(
+            river
+                .iter()
+                .zip([0.0, 5.15, 0.0])
+                .all(|(x, y)| close(*x, y, 1e-9)),
+            "{river:?}"
+        );
+        let s = river_sigma(river);
+        for (k, want) in [1.052, 0.833, 0.923].into_iter().enumerate() {
+            assert!(close(s[k], want, 0.006), "{s:?}");
+        }
+        for (d, o) in [(0.5, 0.34), (1.0, 0.57), (2.0, 0.81), (4.0, 0.96)] {
+            assert!(
+                close(water_opacity(s, d), o, 0.006),
+                "river at {d}: {}",
+                water_opacity(s, d)
+            );
+        }
         for (p, hue) in [
+            ([0.0, 5.15, 0.0], [0.28, 1.00, 0.92]),
             ([4.0, 0.5, 5.0], [0.44, 1.00, 0.22]),
             ([20.0, 4.0, 4.0], [0.56, 1.00, 0.13]),
             ([1.0, 8.0, 0.0], [0.32, 1.00, 0.38]),

@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 pub mod formulas;
 mod material;
 mod splat;
+mod water;
 pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv};
 pub use splat::{Splat, SplatUv};
+pub use water::{LowerAnvilWater, Shore};
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
@@ -22,7 +24,6 @@ use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
     AnvilTerrain, CollisionMaterialRef, ShapeGeometry, TerrainTile, UvWordsAt,
 };
-use crate::read::terrain::CORE_AT;
 
 /// What names a lowered collision surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -961,7 +962,7 @@ impl Pass for LowerAnvilFloor {
 
 /// `lower-anvil-terrain`: terrain tiles ([`AnvilTerrain`]) become ground: a core mesh of the samples in `rect`
 /// (x0, y0, x1, y1), every `step`-th along each axis, two triangles to each square, placed once. A node's 128 x 128
-/// samples cover its square, stored from index 2 of its 132 ([`crate::read::terrain::CORE_AT`]: the engine's
+/// samples cover its square, stored from index 2 of its 132 ([`TerrainTile::CORE_AT`]: the engine's
 /// reading; the census finds a tile's last four equal to its +x and +y neighbours' first four on all 173,740
 /// same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
 /// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. The mesh is drawn
@@ -1247,7 +1248,9 @@ impl Pass for LowerAnvilTerrain {
                     let tile = tiles
                         .get(&node)
                         .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
-                    let value = f64::from(tile.heights[(i + CORE_AT) * TERRAIN_TILE + j + CORE_AT]);
+                    let value = f64::from(
+                        tile.heights[(i + TerrainTile::CORE_AT) * TERRAIN_TILE + j + TerrainTile::CORE_AT],
+                    );
                     let x = t.origin[0] + spacing * f64::from(gx) + shift;
                     let y = t.origin[1] + spacing * f64::from(gy) + shift;
                     positions.push(
@@ -1272,9 +1275,9 @@ impl Pass for LowerAnvilTerrain {
                     if let Some(by) = self.collision {
                         let (gy, gx) = (rows[r as usize], columns[c as usize]);
                         let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
-                        let at = ((gy % TERRAIN_CORE) as usize + CORE_AT) * TERRAIN_TILE
+                        let at = ((gy % TERRAIN_CORE) as usize + TerrainTile::CORE_AT) * TERRAIN_TILE
                             + (gx % TERRAIN_CORE) as usize
-                            + CORE_AT;
+                            + TerrainTile::CORE_AT;
                         let material = tiles
                             .get(&node)
                             .and_then(|tile| tile.material.get(at))
@@ -1290,7 +1293,7 @@ impl Pass for LowerAnvilTerrain {
             }
             let (texture, uvs) = match self.ground {
                 GroundColour::Tile => {
-                    // the colour: each node's 128 x 128 core texels (from CORE_AT, not on its BC1 blocks' edges), decoded
+                    // the colour: each node's 128 x 128 core texels (from TerrainTile::CORE_AT, not on its BC1 blocks' edges), decoded
                     // (BC1's 8-bit decode is its meaning) and laid side by side
                     let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
                     let core = TERRAIN_CORE as usize;
@@ -1301,24 +1304,27 @@ impl Pass for LowerAnvilTerrain {
                             let tile = tiles
                                 .get(&node)
                                 .ok_or_else(|| format!("node {node:?} not read"))?;
-                            let decoded = primase_image::texture_level_rgba8(
-                                &Texture {
-                                    width: TERRAIN_TILE as u32,
-                                    height: TERRAIN_TILE as u32,
-                                    format: TexFormat::Bc1,
-                                    levels: vec![tile.colour.clone()],
-                                    color_space: self.colour,
-                                    role: TexRole::Color,
-                                    normal: None,
-                                },
-                                0,
-                            )
-                            .map_err(|e| format!("node {node:?}'s colour tile: {e}"))?;
-                            let primase_image::Samples::U8(texels) = decoded.samples else {
-                                return Err(format!("node {node:?}'s colour tile: not 8-bit"));
+                            let tile_texture = Texture {
+                                width: TERRAIN_TILE as u32,
+                                height: TERRAIN_TILE as u32,
+                                format: TexFormat::Bc1,
+                                levels: vec![tile.colour.clone()],
+                                color_space: self.colour,
+                                role: TexRole::Color,
+                                normal: None,
                             };
+                            let meta = primase_image::TextureMetadata {
+                                color_space: self.colour,
+                                role: TexRole::Color,
+                                normal: None,
+                            };
+                            let decoded =
+                                primase_image::map_rgba8_levels(&tile_texture, 0..1, meta, |x| Ok(x.rgba))
+                                    .map_err(|e| format!("node {node:?}'s colour tile: {e}"))?;
+                            let texels = &decoded.levels[0];
                             for i in 0..core {
-                                let from = ((i + CORE_AT) * TERRAIN_TILE + CORE_AT) * 4;
+                                let from =
+                                    ((i + TerrainTile::CORE_AT) * TERRAIN_TILE + TerrainTile::CORE_AT) * 4;
                                 let row = nr as usize * core + i;
                                 let to = (row * texels_wide as usize + nc as usize * core) * 4;
                                 rgba[to..to + core * 4].copy_from_slice(&texels[from..from + core * 4]);
@@ -1490,6 +1496,17 @@ pub fn register(reg: &mut PassRegistry) {
             ("unset", "white"),
             ("shader-uv", "texcoord"),
             ("emissive-exposure", "1"),
+        ],
+    );
+    reg.register_requiring(
+        "lower-anvil-water",
+        |o| Ok(Box::new(LowerAnvilWater::from_options(o)?)),
+        &[
+            ("depth", "3:2,4:1,5:0.5,6:0.5"),
+            ("river-depth", "1"),
+            ("colour-max", "0.15"),
+            ("roughness", "0.05"),
+            ("shore", "coverage"),
         ],
     );
     reg.register_requiring(

@@ -2,11 +2,12 @@
 //! read and lowered to ground under the pass manager with its checks on, in the frame the Riders Republic notes place
 //! the quadtree in (docs/terrain.md §3.3: ShortRange cell 9380, x -3584..-3456, y 1152..1280).
 use primase_anvil::components::AnvilTerrain;
+use primase_anvil::components::TerrainTile;
 use primase_anvil::passes::{CellPoint, GroundColour, LowerAnvilTerrain, SurfaceBy};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::grid::{self, StoredGridCellDataBlock, StoredGridPartition, WORLD};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
-use primase_anvil::read::terrain::{CORE_AT, TerrainRead, read_terrain};
+use primase_anvil::read::terrain::{TerrainRead, read_terrain};
 use primase_anvil::read::terrain_material::TERRAIN_MATERIAL_BANK;
 use primase_anvil::read::tnl::TERRAIN_NODE_LAYER;
 use primase_core::frame::SourceFrame;
@@ -56,13 +57,14 @@ fn the_campus_ground_reads_and_lowers() {
     let want: Vec<(u32, u32)> = (145..=148).flat_map(|r| (71..=74).map(move |c| (r, c))).collect();
     assert_eq!(nodes, want);
     // the sample at (-3500, 1200), 9,384 and 18,784 half-metres from the corner: node (row 146, column 73), sample
-    // (i, j) = (96, 40), stored from CORE_AT
+    // (i, j) = (96, 40), stored from TerrainTile::CORE_AT
     let tile = t
         .tiles
         .iter()
         .find(|t| (t.row, t.column) == (146, 73))
         .expect("node");
-    let z = 5000.0 * f64::from(tile.heights[(96 + CORE_AT) * 132 + 40 + CORE_AT]) / f64::from(1u32 << 20);
+    let z = 5000.0 * f64::from(tile.heights[(96 + TerrainTile::CORE_AT) * 132 + 40 + TerrainTile::CORE_AT])
+        / f64::from(1u32 << 20);
     let pass = LowerAnvilTerrain {
         rect,
         step: 1,
@@ -101,7 +103,7 @@ fn the_campus_ground_reads_and_lowers() {
     assert!(p.iter().all(|q| (2300.0..2360.0).contains(&q[2])));
 }
 
-/// The ground at (x, y), bilinear between the 0.5 m samples of `t`'s level-8 tiles (each node's from CORE_AT), at
+/// The ground at (x, y), bilinear between the 0.5 m samples of `t`'s level-8 tiles (each node's from TerrainTile::CORE_AT), at
 /// range 5000 and offset 0.
 fn ground_at(t: &AnvilTerrain, x: f64, y: f64) -> Option<f64> {
     let (gx, gy) = ((x + 8192.0) / 0.5, (y + 8192.0) / 0.5);
@@ -112,7 +114,8 @@ fn ground_at(t: &AnvilTerrain, x: f64, y: f64) -> Option<f64> {
             .tiles
             .iter()
             .find(|tl| (tl.row, tl.column) == (cy / 128, cx / 128))?;
-        let v = tile.heights[((cy % 128) as usize + CORE_AT) * 132 + (cx % 128) as usize + CORE_AT];
+        let v = tile.heights
+            [((cy % 128) as usize + TerrainTile::CORE_AT) * 132 + (cx % 128) as usize + TerrainTile::CORE_AT];
         Some(5000.0 * f64::from(v) / f64::from(1u32 << 20))
     };
     let (a, b) = (sample(fx, fy)?, sample(fx + 1.0, fy)?);
