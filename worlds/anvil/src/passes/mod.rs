@@ -1508,6 +1508,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("normal-green", "up"),
             ("shader-uv", "texcoord"),
             ("mip-bias", "0"),
+            ("terrain-ao", "0.5"),
         ],
     );
     reg.register_requiring(

@@ -1,4 +1,5 @@
-//! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X}`: Anvil Materials
+//! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X}`: Anvil
+//! Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; so far MAD_Tex1_Rocks, which
 //! combines maps at three UV sets per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
@@ -13,8 +14,12 @@
 //!   bound slot (sRGB where its TextureMap says so), sampled at the bake texel's own footprint (2 x 2 quads, the
 //!   implicit level from the quad's UV gradients plus `mip-bias`, the engine's `cb1[41].y`: 0 in every frame the notes
 //!   read, §17.1); the interpolants of a flat surface, tangent (1, 0, 0), normal (0, 0, 1), bitangent sign +1, so the
-//!   normal it writes is the tangent-space normal. The engine's own textures (the terrain's) are bound to zero: the
-//!   recipe takes only Materials whose switches leave the output independent of them.
+//!   normal it writes is the tangent-space normal. The engine's own textures (the terrain's, sampled at the
+//!   placement's world position, so no property of the Material) are stated: the terrain's ambient occlusion
+//!   (`t19`), which Rocks' `Use Terrain Albedo Mul` mixes into the albedo as `albedo (ao + 0.5)`, is `terrain-ao`
+//!   everywhere (0.5 leaves the albedo as it is; every Rocks Material sets the switch); the sediment layer index
+//!   (`t16`) is 0, no sediment, which takes the `Use Terrain Sediments` term out exactly; the rest are 0. A Material
+//!   whose switch is on is counted as so approximated.
 //! - **Output** (layout B, §15.4): base colour `o0.rgb` (sRGB), roughness `o0.w`, metalness 0 (layout B has no
 //!   metalness: the lighting pass uses F0 0.04 and the albedo as diffuse), the normal decoded from `o1` as the
 //!   lighting pass decodes it (its octahedral x, y and the low bits of `o1.z`, the target an 8-bit UNORM one), in the
@@ -83,29 +88,41 @@ pub fn gbuffer_pixel_key(f: &MaterialFlags) -> Result<u32, &'static str> {
 
 /// A template the pass bakes: the constant-buffer rows its program reads of the Material's properties, its texture
 /// slots, and the properties that must be 0 for the engine's textures not to reach the output.
+/// Where a recipe's program reads the terrain: its ambient occlusion texture, the row of the switch mixing it in, and
+/// the row of the sediment switch (whose term is out where the sediment layer index is 0).
+#[derive(Clone, Copy)]
+struct Terrain {
+    ao_texture: u32,
+    ao_switch: u32,
+    sediment_switch: u32,
+}
+
 struct Recipe {
     template: &'static str,
     /// `cb3` rows read (from the program's disassembly), each of which the template must bind.
     rows: &'static [u32],
     /// Texture slots (`t(75 + slot)`).
     slots: &'static [u32],
-    /// Rows of scalars that must be 0.
-    zero: &'static [(u32, &'static str)],
-    /// The engine's textures the program reads: bound to zero.
+    /// The engine's textures the program reads: bound to zero, except the terrain's ambient occlusion.
     engine: &'static [u32],
+    terrain: Option<Terrain>,
 }
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
 /// value, hue and saturation at 4 to 6, the terrain switches at 7 and 8, the detail tiling at 9 and 10, the dirt
-/// tiling at 12 and 13; the detail normal, detail albedo, object normal, object mask and dirt mask at t75 to t79. The
-/// terrain switches at 0 leave the output independent of the terrain's textures (t13, t14, t16, t19, t20, t22): each
-/// of their terms is multiplied by a switch.
+/// tiling at 12 and 13; the detail normal, detail albedo, object normal, object mask and dirt mask at t75 to t79; the
+/// terrain's page table, sediment layer index, ambient occlusion, sediment colours and heights at t13, t14, t16, t19,
+/// t20 and t22.
 const ROCKS: Recipe = Recipe {
     template: "MAD_Tex1_Rocks",
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13],
     slots: &[0, 1, 2, 3, 4],
-    zero: &[(7, "Use Terrain Albedo Mul"), (8, "Use Terrain Sediments")],
     engine: &[13, 14, 16, 19, 20, 22],
+    terrain: Some(Terrain {
+        ao_texture: 19,
+        ao_switch: 7,
+        sediment_switch: 8,
+    }),
 };
 
 const RECIPES: &[Recipe] = &[ROCKS];
@@ -117,16 +134,18 @@ pub struct BakeAnvilMaterial {
     pub normal_green: NormalGreen,
     pub shader_uv: ShaderUv,
     pub mip_bias: f32,
+    /// The terrain's ambient occlusion where a Material mixes it in.
+    pub terrain_ao: f32,
 }
 
 impl BakeAnvilMaterial {
     /// From its options, all required.
     pub fn from_options(o: &Options) -> Result<BakeAnvilMaterial, String> {
-        let known = ["size", "normal-green", "shader-uv", "mip-bias"];
+        let known = ["size", "normal-green", "shader-uv", "mip-bias", "terrain-ao"];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X";
+        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -154,11 +173,18 @@ impl BakeAnvilMaterial {
         if !mip_bias.is_finite() {
             return Err("mip-bias is finite".to_owned());
         }
+        let terrain_ao: f32 = get("terrain-ao")?
+            .parse()
+            .map_err(|_| "terrain-ao is a number".to_owned())?;
+        if !(0.0..=1.0).contains(&terrain_ao) {
+            return Err(format!("terrain-ao {terrain_ao}: within 0 and 1"));
+        }
         Ok(BakeAnvilMaterial {
             size,
             normal_green,
             shader_uv,
             mip_bias,
+            terrain_ao,
         })
     }
 }
@@ -253,6 +279,9 @@ struct Baked {
     occlusion: Option<Vec<u8>>,
     /// Whether specular occlusion and translucency are (1, 0) everywhere.
     plain_o2: bool,
+    /// Whether the Material mixes in the terrain's ambient occlusion, and its sediments.
+    terrain_ao: bool,
+    sediment: bool,
 }
 
 /// An 8-bit UNORM store of `x` (what the G-buffer target holds).
@@ -285,13 +314,10 @@ impl BakeAnvilMaterial {
                 "its template binds nothing at row {r}, which the program reads"
             ));
         }
-        for &(row, name) in recipe.zero {
-            if rows.get(&row).is_some_and(|v| v[0] != 0.0) {
-                return Err(format!(
-                    "{name} isn't 0: the engine's terrain textures reach the output"
-                ));
-            }
-        }
+        let switched = |row: u32| rows.get(&row).is_some_and(|v| v[0] != 0.0);
+        let (terrain_ao, sediment) = recipe.terrain.map_or((false, false), |t| {
+            (switched(t.ao_switch), switched(t.sediment_switch))
+        });
         for (key, binding) in &m.bindings {
             if let MaterialBinding::UvTransform { vec4 } = binding
                 && let Some(r) = rows.get(vec4).zip(rows.get(&vec4.saturating_add(1)))
@@ -324,7 +350,9 @@ impl BakeAnvilMaterial {
             .map_err(|e| e.to_string())?;
         let mut textures = BTreeMap::new();
         for &slot in recipe.engine {
-            textures.insert(slot, primase_shader::Texture::Constant([0.0; 4]));
+            let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
+            let value = if ao { self.terrain_ao } else { 0.0 };
+            textures.insert(slot, primase_shader::Texture::Constant([value; 4]));
         }
         for &slot in recipe.slots {
             let key = m
@@ -384,6 +412,8 @@ impl BakeAnvilMaterial {
             normal: Vec::with_capacity(n * n * 4),
             occlusion: None,
             plain_o2: true,
+            terrain_ao,
+            sediment,
         };
         let mut occlusion = Vec::with_capacity(n * n * 4);
         for y in 0..n {
@@ -472,6 +502,7 @@ impl Pass for BakeAnvilMaterial {
                 .to_owned(),
             ),
             ("mip-bias".to_owned(), self.mip_bias.to_string()),
+            ("terrain-ao".to_owned(), self.terrain_ao.to_string()),
         ])
     }
     fn provides(&self) -> &[&'static str] {
@@ -548,6 +579,24 @@ impl Pass for BakeAnvilMaterial {
             let occlusion = baked
                 .occlusion
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Linear, TexRole::Mask, None)));
+            if baked.terrain_ao {
+                log.approximate(
+                    &format!(
+                        "{} Materials mixing in the terrain's ambient occlusion: the stated terrain-ao",
+                        recipe.template
+                    ),
+                    1,
+                );
+            }
+            if baked.sediment {
+                log.approximate(
+                    &format!(
+                        "{} Materials mixing in the terrain's sediments: none (sediment layer 0)",
+                        recipe.template
+                    ),
+                    1,
+                );
+            }
             if !baked.plain_o2 {
                 log.omit(
                     &format!(
