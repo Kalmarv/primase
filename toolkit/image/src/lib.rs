@@ -42,6 +42,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
     ("image/rgba8.rs", include_bytes!("rgba8.rs")),
+    ("image/sampling.rs", include_bytes!("sampling.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];
