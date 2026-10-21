@@ -464,6 +464,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"ReSkate's EBX reader (the source primase's EBX reader is ported from) through our C++ harness `cos_skeleton` (games/sekiro tools/reskate-spec, commit 1e43b57): checks the port and the field reading, not the interpretation; the test's independent evidence is the asset's own poses agreeing with each other"#,
     },
     Variable {
+        name: "PRIMASE_SKATE_ECLIPSE_REFERENCE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of the decodings of three skate. clips' ECLP resources (`c_proto_ofbnb_idle_lfoot`, `c_proto_onb_inair_bs_grab_method_loop`, `c_proto_onb_trick_o_varialheel_high`): per clip `<clip>.eclp` (the bytes), `<clip>.tracks.json` (formats and every rotation, translation and scalar track's frames and values), and `sha256.txt` of the bytes; worlds/reskate/tests/game_eclipse.rs"#,
+        status: Status::Live,
+        source: r#"our own earlier Python decoder (from the executable's encoder), a port check, not an independent oracle"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_SKIN_ORACLE",
         kind: Kind::Input,
         gate: false,
