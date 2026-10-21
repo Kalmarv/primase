@@ -306,7 +306,7 @@ fn stored(path: &Path, entry: usize) -> StoredMesh {
     StoredMesh::parse(&resource.body).expect("mesh")
 }
 
-/// The decoded positions' extrema against the header's stored bounds, on every fixture: within one quantization step
+/// The decoded positions' extrema against the bounds block's stored bounds, on every fixture: within one quantization step
 /// (measured: BlackBox 1.04e-4, ReversedSphere 1.14e-4, Stand 1.5e-5, PradaBarrier 9.7e-5). This is agreement of six
 /// numbers per mesh, evidence for the position decode's scale and sign; it says nothing of any one vertex between them.
 #[test]

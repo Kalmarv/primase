@@ -1,10 +1,10 @@
 //! A Mesh resource's body: its compiled mesh's vertex and index buffers, read as stored. Nothing about a vertex's
 //! fields is decided here beyond their layout; [`StoredVertices::positions`] is the one decode, its evidence the bounds.
 //!
-//! The body (little-endian; offsets from the body's start, after the resource's class id and extension) starts with a
-//! 61-byte header, kept as stored, whose bounds (two f32 triples at 20 and 36) are read, then as many 81-byte records
-//! as the u32 at 16 counts, kept as stored (on every Mesh of Riders Republic the compiled mesh's marker is at 61 + 81
-//! times that count: 29,174 meshes with 1 to 212, the rest with 0). There the compiled mesh starts: its marker 0xFC9E1595 (CRC-32 of `CompiledMesh`), a byte at marker+4, 8 bytes, and at marker+13 a u32
+//! The body (little-endian; offsets from the body's start, after the resource's class id and extension) starts with 20
+//! bytes, kept as stored, then as many 81-byte records as the u32 at 16 counts, kept as stored, then a 41-byte block,
+//! kept, whose bounds (two f32 triples at its 0 and 16: 20 + 81 c and 36 + 81 c for c records) are read (on every Mesh
+//! of Riders Republic the compiled mesh's marker is at 61 + 81 c: 29,174 meshes with 1 to 212, the rest with 0). There the compiled mesh starts: its marker 0xFC9E1595 (CRC-32 of `CompiledMesh`), a byte at marker+4, 8 bytes, and at marker+13 a u32
 //! that with that byte names its layout ([`Layout`]). Two layouts are read; another is refused:
 //!
 //! - **ranged** (0 at marker+4, 0xC351EE43 at marker+13): a u32 at marker+22 (24 on every ranged fixture, equal to
@@ -59,8 +59,10 @@ pub const MESH: u32 = 0x415D_9568;
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;
 /// The ranged layout's id at marker+13 (its name unknown).
 pub const RANGED: u32 = 0xC351_EE43;
-/// Where the compiled mesh starts in the body.
+/// Where the compiled mesh starts in a body with no 81-byte records (20 bytes and the 41-byte bounds block).
 pub const HEADER: usize = 61;
+/// Where the 81-byte records start.
+const RECORDS: usize = 20;
 /// A range record's id.
 pub const RANGE_RECORD: u32 = 0x07B1_9A87;
 /// The vertex stride triples read (the ranged layout's u32s at marker+22, +26 and +30): one primary stream of 16,
@@ -285,11 +287,15 @@ pub enum Layout {
 /// A Mesh body's compiled buffers, as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredMesh {
-    /// The 61 header bytes.
-    pub header: Vec<u8>,
+    /// The 20 bytes before the records.
+    pub head: [u8; 20],
     /// The 81-byte records after them, as many as the u32 at 16 counts (none on meshes without), as stored.
     pub records_81: Vec<[u8; 81]>,
-    /// The header's two f32 triples at 20 and 36 (each fixture's decoded extrema lie within a step of them).
+    /// The 41 bytes after the records, as stored.
+    pub bounds_block: [u8; 41],
+    /// That block's two f32 triples at 0 and 16. On every Mesh of Riders Republic the decoded extrema
+    /// ([`StoredMesh::positions`]) lie within one quantization step of them (161 equal, 147,127 within a step; the
+    /// census), where the triples at body 20 and 36 miss by more than three steps on all 29,174 with records.
     pub bounds: [[f32; 3]; 2],
     /// The 8 bytes after the compiled mesh's layout byte (marker+5).
     pub compiled_flags: [u8; 8],
@@ -311,8 +317,9 @@ pub struct StoredMesh {
 
 /// The bytes before the compiled mesh.
 struct Head {
-    header: Vec<u8>,
+    head: [u8; 20],
     records_81: Vec<[u8; 81]>,
+    bounds_block: [u8; 41],
     bounds: [[f32; 3]; 2],
 }
 
@@ -560,20 +567,8 @@ impl StoredMesh {
     /// A Mesh resource's body (its [`crate::read::data::Resource::body`]).
     pub fn parse(body: &[u8]) -> Result<StoredMesh, Error> {
         let mut c = Cursor { b: body, at: 0 };
-        let header = c.take(HEADER, "header")?.to_vec();
-        let bound = |at: usize| -> Result<[f32; 3], Error> {
-            header
-                .get(at..at.saturating_add(12))
-                .and_then(|s| s.try_into().ok())
-                .map(f32s)
-                .ok_or(Error::Short {
-                    what: "header bounds",
-                    at,
-                    have: body.len(),
-                })
-        };
-        let bounds = [bound(20)?, bound(36)?];
-        let count = header
+        let head = c.array::<20>("head")?;
+        let count = head
             .get(16..20)
             .and_then(|w| w.try_into().ok())
             .map_or(0, u32::from_le_bytes);
@@ -581,21 +576,30 @@ impl StoredMesh {
         if count > body.len() / 81 {
             return Err(Error::Short {
                 what: "81-byte records",
-                at: HEADER,
+                at: RECORDS,
                 have: body.len(),
             });
         }
         let records_81 = (0..count)
             .map(|_| c.array::<81>("81-byte record"))
             .collect::<Result<Vec<_>, _>>()?;
+        let bounds_block = c.array::<41>("bounds block")?;
+        let bound = |at: usize| -> [f32; 3] {
+            bounds_block
+                .get(at..at.saturating_add(12))
+                .and_then(|s| s.try_into().ok())
+                .map_or([0.0; 3], f32s)
+        };
+        let bounds = [bound(0), bound(16)];
         let marker = c.at;
         let found = c.u32("compiled mesh marker")?;
         if found != COMPILED_MESH {
             return Err(Error::Marker { found, at: marker });
         }
         let head = Head {
-            header,
+            head,
             records_81,
+            bounds_block,
             bounds,
         };
         let [flags] = c.array::<1>("compiled mesh layout byte")?;
@@ -704,8 +708,9 @@ impl StoredMesh {
         let runs = [run()?, run()?, run()?, run()?];
         let materials = c.material_list(n)?;
         Ok(StoredMesh {
-            header: head.header,
+            head: head.head,
             records_81: head.records_81,
+            bounds_block: head.bounds_block,
             bounds: head.bounds,
             compiled_flags,
             layout: Layout::Ranged(Ranged {
@@ -760,8 +765,9 @@ impl StoredMesh {
         let indices = c.indices(index_width(&declaration)?)?;
         let materials = c.material_list(n)?;
         Ok(StoredMesh {
-            header: head.header,
+            head: head.head,
             records_81: head.records_81,
+            bounds_block: head.bounds_block,
             bounds: head.bounds,
             compiled_flags,
             kind: declaration.get(1).copied().unwrap_or_default(),
@@ -781,7 +787,7 @@ impl StoredMesh {
     /// 32768, the scale the f32 at bytes 4..8 of the last material descriptor's last 8 bytes (whose first four hold
     /// 31); otherwise [`StoredVertices::positions`]. A zero product is +0. Equal bit for bit to RRAssetStudio's on
     /// every mesh both read (the census gate); for the split layouts the decoded extrema also lie within three steps of
-    /// the compiled mesh's stored centre and extent (marker+38, +50) on every one, and the header bounds don't hold.
+    /// the compiled mesh's stored centre and extent (marker+38, +50) on every one.
     pub fn positions(&self) -> Result<Vec<[f32; 3]>, Error> {
         if self.positions_stream.is_empty() {
             return Ok(self.vertices.positions().collect());
@@ -1220,7 +1226,7 @@ mod tests {
         let mut b = plain.clone();
         b[16] = 2;
         for _ in 0..2 * 81 {
-            b.insert(HEADER, 0xAB);
+            b.insert(RECORDS, 0xAB);
         }
         let m = StoredMesh::parse(&b).expect("parse");
         assert_eq!(m.records_81, vec![[0xAB; 81]; 2]);

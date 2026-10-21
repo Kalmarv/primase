@@ -520,6 +520,65 @@ fn census_forge(
                         }
                     }
                     tally.outcome(layout);
+                    // a measured relation: the decoded extrema against the bounds block's triples, and against the
+                    // triples at body 20 and 36 (where the first 81-byte record lies when there are any)
+                    let at = |o: usize| -> [f32; 3] {
+                        [0, 4, 8].map(|i| {
+                            let w = r.body.get(o + i..o + i + 4).and_then(|w| w.try_into().ok());
+                            w.map_or(f32::NAN, f32::from_le_bytes)
+                        })
+                    };
+                    // a quantization step: the split layouts' scale over 32768, otherwise the largest w over 32768
+                    let step = if m.positions_stream.is_empty() {
+                        Some(
+                            m.vertices
+                                .ws()
+                                .map(|w| f32::from(w).abs() / 32768.0)
+                                .fold(0.0f32, f32::max),
+                        )
+                    } else {
+                        m.material_list.descriptors.last().map(|d| {
+                            f32::from_le_bytes([d.rest[4], d.rest[5], d.rest[6], d.rest[7]]).abs() / 32768.0
+                        })
+                    };
+                    let records = if m.records_81.is_empty() {
+                        "no records"
+                    } else {
+                        "records"
+                    };
+                    if let Ok(p) = m.positions() {
+                        let lo = p
+                            .iter()
+                            .fold([f32::INFINITY; 3], |a, v| [0, 1, 2].map(|i| a[i].min(v[i])));
+                        let hi = p
+                            .iter()
+                            .fold([f32::NEG_INFINITY; 3], |a, v| [0, 1, 2].map(|i| a[i].max(v[i])));
+                        for (which, b) in [("bounds block", m.bounds), ("body 20, 36", [at(20), at(36)])] {
+                            let d = (0..3)
+                                .flat_map(|i| [(lo[i] - b[0][i]).abs(), (hi[i] - b[1][i]).abs()])
+                                .fold(0.0f32, |a, x| {
+                                    if x.is_nan() || a.is_nan() {
+                                        f32::NAN
+                                    } else {
+                                        a.max(x)
+                                    }
+                                });
+                            let fit = if p.is_empty() {
+                                "no vertices".to_owned()
+                            } else if d == 0.0 {
+                                "equal".to_owned()
+                            } else if let Some(s) = step.filter(|s| *s > 0.0) {
+                                match d / s {
+                                    x if x <= 1.0 => "within 1 step".to_owned(),
+                                    x if x <= 3.0 => "within 3 steps".to_owned(),
+                                    _ => "beyond 3 steps".to_owned(),
+                                }
+                            } else {
+                                "unequal, no step".to_owned()
+                            };
+                            tally.outcome(format!("extrema vs {which} ({layout}, {records}): {fit}"));
+                        }
+                    }
                     // a measured relation, not a reading: MeshData's first byte against the vertex count
                     tally.outcome(format!(
                         "{layout}: MeshData first byte {}, more than 65,535 vertices {}",
