@@ -933,14 +933,16 @@ impl<'t> GroundGrid<'t> {
 /// the terrain materials its squares use, each layer a material's detail diffuse at its uv scale (step 4 of the
 /// module `splat`), its weight at each vertex the engine's blend there (the noise-jittered lookup of the material
 /// raster and the 2 x 2 sigmoid at `splat-k`, `splat-noise`: steps 1 to 3), summed per material over the four texels
-/// and interpolated across each triangle (the engine evaluates it per pixel: the approximation); a material without a
-/// detail diffuse, or a texel past every read node, has no layer, its weight shared out over the others. Each layer's
+/// and interpolated across each triangle (the engine evaluates it per pixel: the approximation); the weight of a
+/// material without a detail diffuse goes to the node's far colour (its colour tile, as the splat's fallback), a layer
+/// of its own sampling `TexCoord(1)`; a texel past every read node has neither, its weight shared out. Each layer's
 /// normal map is its material's detail normal (its TextureSet's slot 1: x and y, z rebuilt; red along the tangent +x,
 /// green toward -y with v along +y, the notes' reading of the terrain shader's frame: against core's bitangent
 /// `cross(N, T) w` a green-down map). With `splat-occlusion=block-8` each vertex's `COLOR_0` is the shader's occlusion
 /// factor `0.5 + b` there (block 8, bilinear), which the colour is multiplied by (it may pass 1). A piece takes
-/// at most 4 layers (core's weights are one vec4 a vertex): one using more is cut in quarters, down to 16 squares a
-/// side, and one still using more keeps its 4 heaviest, the others' weight shared out over them, counted. Left out
+/// at most 4 layers (core's weights are one vec4 a vertex), the far colour one where any weight goes to it: one needing
+/// more is cut in quarters, down to 16 squares a side, and one still needing more keeps its 3 heaviest detail layers
+/// and the far colour, which takes the rest's weight (an approximation, counted). Left out
 /// (counted): the ramps, the masks, the detail normals' flattening on flat ground and the per-cell uv rotation.
 ///
 /// `pieces=whole` draws the ground as one primitive with one texture over `rect`; `pieces=per-node` (with
@@ -1265,12 +1267,6 @@ impl Pass for LowerAnvilTerrain {
             };
             let (rows, columns, tiles) = (&grid.rows, &grid.columns, &grid.tiles);
             let (spacing, shift) = (grid.spacing, grid.shift);
-            // the nodes the samples lie in: the texture holds their 128 x 128 texels, side by side
-            let (first_row, first_column) = (rows[0] / TERRAIN_CORE, columns[0] / TERRAIN_CORE);
-            let (node_rows, node_columns) = (
-                rows[rows.len() - 1] / TERRAIN_CORE - first_row + 1,
-                columns[columns.len() - 1] / TERRAIN_CORE - first_column + 1,
-            );
             let mut positions = Vec::with_capacity(columns.len() * rows.len());
             for &gy in rows {
                 for &gx in columns {
@@ -1320,6 +1316,7 @@ impl Pass for LowerAnvilTerrain {
                     LayerGrid {
                         rows,
                         columns,
+                        tiles,
                         spacing,
                         shift,
                         flip,
@@ -1327,54 +1324,11 @@ impl Pass for LowerAnvilTerrain {
                     log,
                 )?,
                 GroundColour::Tile => {
-                    // the colour: each node's 128 x 128 core texels (from TerrainTile::CORE_AT, not on its BC1 blocks' edges), decoded
-                    // (BC1's 8-bit decode is its meaning) and laid side by side
-                    let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
-                    let core = TERRAIN_CORE as usize;
-                    let mut rgba = vec![0u8; texels_wide as usize * texels_high as usize * 4];
-                    for nr in 0..node_rows {
-                        for nc in 0..node_columns {
-                            let node = (first_row + nr, first_column + nc);
-                            let tile = tiles
-                                .get(&node)
-                                .ok_or_else(|| format!("node {node:?} not read"))?;
-                            let tile_texture = Texture {
-                                width: TERRAIN_TILE as u32,
-                                height: TERRAIN_TILE as u32,
-                                format: TexFormat::Bc1,
-                                levels: vec![tile.colour.clone()],
-                                color_space: self.colour,
-                                role: TexRole::Color,
-                                normal: None,
-                            };
-                            let meta = primase_image::TextureMetadata {
-                                color_space: self.colour,
-                                role: TexRole::Color,
-                                normal: None,
-                            };
-                            let decoded =
-                                primase_image::map_rgba8_levels(&tile_texture, 0..1, meta, |x| Ok(x.rgba))
-                                    .map_err(|e| format!("node {node:?}'s colour tile: {e}"))?;
-                            let texels = &decoded.levels[0];
-                            for i in 0..core {
-                                let from =
-                                    ((i + TerrainTile::CORE_AT) * TERRAIN_TILE + TerrainTile::CORE_AT) * 4;
-                                let row = nr as usize * core + i;
-                                let to = (row * texels_wide as usize + nc as usize * core) * 4;
-                                rgba[to..to + core * 4].copy_from_slice(&texels[from..from + core * 4]);
-                            }
-                        }
-                    }
-                    // each sample at its texel's centre
+                    let mosaic = ColourMosaic::new(tiles, rows, columns, self.colour)?;
                     let mut uvs = Vec::with_capacity(positions.len());
                     for &gy in rows {
                         for &gx in columns {
-                            uvs.push([
-                                ((f64::from(gx - first_column * TERRAIN_CORE) + 0.5) / f64::from(texels_wide))
-                                    as f32,
-                                ((f64::from(gy - first_row * TERRAIN_CORE) + 0.5) / f64::from(texels_high))
-                                    as f32,
-                            ]);
+                            uvs.push(mosaic.uv(gx, gy));
                         }
                     }
                     log.count("terrain nodes used", tiles.len() as u64);
@@ -1382,7 +1336,7 @@ impl Pass for LowerAnvilTerrain {
                     log.count("ground triangles", (indices.len() / 3) as u64);
                     log.count(
                         "ground colour texels",
-                        u64::from(texels_wide) * u64::from(texels_high),
+                        u64::from(mosaic.texture.width) * u64::from(mosaic.texture.height),
                     );
                     log.approximate(
                         "ground samples at a stated range and offset",
@@ -1390,18 +1344,7 @@ impl Pass for LowerAnvilTerrain {
                     );
                     log.approximate("ground drawn with its colour tiles alone", 1);
                     let texture = w.spawn();
-                    w.insert(
-                        texture,
-                        Texture {
-                            width: texels_wide,
-                            height: texels_high,
-                            format: TexFormat::Rgba8Unorm,
-                            levels: vec![rgba],
-                            color_space: self.colour,
-                            role: TexRole::Color,
-                            normal: None,
-                        },
-                    );
+                    w.insert(texture, mosaic.texture);
                     vec![GroundPiece {
                         texture: Some(texture),
                         layered: None,
@@ -1585,12 +1528,16 @@ impl Pass for LowerAnvilTerrain {
                             material: layered,
                             weights,
                             occlusion,
+                            far_uvs,
                         }),
                         _,
                     ) => {
                         streams.insert(Semantic::Color(1), Stream::F32x4(weights));
                         if let Some(o) = occlusion {
                             streams.insert(Semantic::Color(0), Stream::F32x4(o));
+                        }
+                        if let Some(uvs) = far_uvs {
+                            streams.insert(Semantic::TexCoord(1), Stream::F32x2(uvs));
                         }
                         layered
                     }
@@ -1638,22 +1585,105 @@ impl Pass for LowerAnvilTerrain {
     }
 }
 
-/// A `ground=layers` piece's colour: its layered material, its layer weights per vertex and its occlusion tint per
-/// vertex, where stated.
+/// A `ground=layers` piece's colour: its layered material, its layer weights per vertex, its occlusion tint per
+/// vertex where stated, and its far colour layer's coordinates (`TexCoord(1)`) where it has one.
 struct LayeredPiece {
     material: Entity,
     weights: Vec<[f32; 4]>,
     occlusion: Option<Vec<[f32; 4]>>,
+    far_uvs: Option<Vec<[f32; 2]>>,
+}
+
+/// The far colour of the nodes a ground's samples lie in: each node's 128 x 128 core texels (from
+/// [`TerrainTile::CORE_AT`], not on its BC1 blocks' edges), decoded (BC1's 8-bit decode is its meaning) and laid side
+/// by side, each sample at its own texel's centre.
+struct ColourMosaic {
+    texture: Texture,
+    /// The first node's row and column.
+    first: (u32, u32),
+}
+
+impl ColourMosaic {
+    fn new(
+        tiles: &BTreeMap<(u32, u32), &TerrainTile>,
+        rows: &[u32],
+        columns: &[u32],
+        colour: ColorSpace,
+    ) -> Result<Self, String> {
+        let (first_row, first_column) = (rows[0] / TERRAIN_CORE, columns[0] / TERRAIN_CORE);
+        let (node_rows, node_columns) = (
+            rows[rows.len() - 1] / TERRAIN_CORE - first_row + 1,
+            columns[columns.len() - 1] / TERRAIN_CORE - first_column + 1,
+        );
+        let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
+        let core = TERRAIN_CORE as usize;
+        let mut rgba = vec![0u8; texels_wide as usize * texels_high as usize * 4];
+        for nr in 0..node_rows {
+            for nc in 0..node_columns {
+                let node = (first_row + nr, first_column + nc);
+                let tile = tiles
+                    .get(&node)
+                    .ok_or_else(|| format!("node {node:?} not read"))?;
+                let stored = Texture {
+                    width: TERRAIN_TILE as u32,
+                    height: TERRAIN_TILE as u32,
+                    format: TexFormat::Bc1,
+                    levels: vec![tile.colour.clone()],
+                    color_space: colour,
+                    role: TexRole::Color,
+                    normal: None,
+                };
+                let meta = primase_image::TextureMetadata {
+                    color_space: colour,
+                    role: TexRole::Color,
+                    normal: None,
+                };
+                let decoded = primase_image::map_rgba8_levels(&stored, 0..1, meta, |x| Ok(x.rgba))
+                    .map_err(|e| format!("node {node:?}'s colour tile: {e}"))?;
+                let texels = &decoded.levels[0];
+                for i in 0..core {
+                    let from = ((i + TerrainTile::CORE_AT) * TERRAIN_TILE + TerrainTile::CORE_AT) * 4;
+                    let row = nr as usize * core + i;
+                    let to = (row * texels_wide as usize + nc as usize * core) * 4;
+                    rgba[to..to + core * 4].copy_from_slice(&texels[from..from + core * 4]);
+                }
+            }
+        }
+        Ok(Self {
+            texture: Texture {
+                width: texels_wide,
+                height: texels_high,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![rgba],
+                color_space: colour,
+                role: TexRole::Color,
+                normal: None,
+            },
+            first: (first_row, first_column),
+        })
+    }
+
+    /// Sample (`gx`, `gy`)'s texel centre.
+    fn uv(&self, gx: u32, gy: u32) -> [f32; 2] {
+        let centre = |g: u32, first: u32, texels: u32| {
+            ((f64::from(g - first * TERRAIN_CORE) + 0.5) / f64::from(texels)) as f32
+        };
+        [
+            centre(gx, self.first.1, self.texture.width),
+            centre(gy, self.first.0, self.texture.height),
+        ]
+    }
 }
 
 /// Squares of the ground grid, by (row, column).
 type Squares = Vec<(u32, u32)>;
 
-/// The ground grid `ground=layers` draws: its sample indices along each axis, their spacing and shift, and whether
-/// the frame flips the winding.
+/// The ground grid `ground=layers` draws: its sample indices along each axis, the nodes they lie in, their spacing and
+/// shift, and whether the frame flips the winding.
 struct LayerGrid<'g> {
     rows: &'g [u32],
     columns: &'g [u32],
+    tiles: &'g BTreeMap<(u32, u32), &'g TerrainTile>,
     spacing: f64,
     shift: f64,
     flip: bool,
@@ -1673,14 +1703,16 @@ impl LowerAnvilTerrain {
         let (width, height) = (g.columns.len(), g.rows.len());
         let x_of = |gx: u32| t.origin[0] + g.spacing * f64::from(gx) + g.shift;
         let y_of = |gy: u32| t.origin[1] + g.spacing * f64::from(gy) + g.shift;
-        // each vertex's weight per material (the engine's blend at it), on the materials with a detail diffuse
+        // each vertex's weight per material (the engine's blend at it) on the materials with a detail diffuse, and the
+        // weight of those without one (the far colour's, as the splat's)
         let (mut outside, mut undetailed) = (0u64, 0u64);
-        let mut weights: Vec<Vec<(u8, f64)>> = Vec::with_capacity(width * height);
+        let mut weights: Vec<(Vec<(u8, f64)>, f64)> = Vec::with_capacity(width * height);
         // each vertex's occlusion factor, where stated
         let mut occlusion: Vec<f32> = Vec::with_capacity(if layers.occlusion { width * height } else { 0 });
         for &gy in g.rows {
             for &gx in g.columns {
                 let mut at: Vec<(u8, f64)> = Vec::new();
+                let mut far = 0.0f64;
                 let corners = lookup.corners(x_of(gx), y_of(gy));
                 if layers.occlusion {
                     occlusion.push(
@@ -1699,6 +1731,7 @@ impl LowerAnvilTerrain {
                             };
                             if splat::layer_detail(t, layers.uv, m).is_none() {
                                 undetailed += 1;
+                                far += wt;
                                 continue;
                             }
                             if wt > 0.0 {
@@ -1710,16 +1743,19 @@ impl LowerAnvilTerrain {
                         }
                     }
                 }
-                let sum: f64 = at.iter().map(|(_, v)| v).sum();
+                // a corner past every read node has neither: its weight shared out
+                let sum: f64 = at.iter().map(|(_, v)| v).sum::<f64>() + far;
                 if sum > 0.0 {
                     for (_, v) in &mut at {
                         *v /= sum;
                     }
+                    far /= sum;
                 }
-                weights.push(at);
+                weights.push((at, far));
             }
         }
-        let at = |r: usize, c: usize| &weights[r * width + c];
+        let at = |r: usize, c: usize| &weights[r * width + c].0;
+        let far_at = |r: usize, c: usize| weights[r * width + c].1;
         // the pieces' square rectangles: a node's (or the whole), cut in quarters while it uses over 4 materials
         let mut starts: BTreeMap<(u32, u32), [usize; 4]> = BTreeMap::new();
         for r in 0..height - 1 {
@@ -1732,21 +1768,29 @@ impl LowerAnvilTerrain {
                 *b = [b[0].min(r), b[1].max(r + 1), b[2].min(c), b[3].max(c + 1)];
             }
         }
-        let used = |[r0, r1, c0, c1]: [usize; 4]| -> BTreeMap<u8, f64> {
+        // a rectangle's detail materials by summed weight, and its far colour's summed weight
+        let used = |[r0, r1, c0, c1]: [usize; 4]| -> (BTreeMap<u8, f64>, f64) {
             let mut m = BTreeMap::new();
+            let mut far = 0.0;
             for r in r0..=r1 {
                 for c in c0..=c1 {
                     for &(k, v) in at(r, c) {
                         *m.entry(k).or_insert(0.0) += v;
                     }
+                    far += far_at(r, c);
                 }
             }
-            m
+            (m, far)
+        };
+        // the layers a rectangle needs: its detail materials and the far colour where any weight goes to it
+        let slots = |b: [usize; 4]| {
+            let (m, far) = used(b);
+            m.len() + usize::from(far > 0.0)
         };
         let mut leaves = Vec::new();
         let mut stack: Vec<[usize; 4]> = starts.into_values().collect();
         while let Some(b @ [r0, r1, c0, c1]) = stack.pop() {
-            if used(b).len() <= 4 || (r1 - r0 <= 16 && c1 - c0 <= 16) {
+            if slots(b) <= 4 || (r1 - r0 <= 16 && c1 - c0 <= 16) {
                 leaves.push(b);
                 continue;
             }
@@ -1763,17 +1807,45 @@ impl LowerAnvilTerrain {
             }
         }
         leaves.sort_unstable();
-        // each terrain material's layer, made once
+        // each terrain material's layer, made once; the far colour's layer (the ground's colour mosaic, as
+        // `ground=tile` draws it), made once where a piece takes it
         let mut layer_materials: BTreeMap<u8, Entity> = BTreeMap::new();
+        let mut far_layer: Option<(Entity, ColourMosaic)> = None;
+        let mut far_pieces = 0u64;
         let mut pieces = Vec::with_capacity(leaves.len());
         let (mut trimmed, mut renormalised) = (0u64, 0u64);
+        // piece vertices left with no layer weight: every corner past every read node
+        let mut bare = 0u64;
         for b @ [r0, r1, c0, c1] in leaves {
-            let mut by_weight: Vec<(u8, f64)> = used(b).into_iter().collect();
+            let (used_by, far_used) = used(b);
+            let mut by_weight: Vec<(u8, f64)> = used_by.into_iter().collect();
             by_weight.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-            if by_weight.len() > 4 {
+            // the far colour takes what no detail layer holds: the weight of materials without a detail, and of those
+            // the cap drops
+            let far = far_used > 0.0 || by_weight.len() > 4;
+            let detail_slots = if far { 3 } else { 4 };
+            if by_weight.len() > detail_slots {
                 trimmed += 1;
             }
-            let kept: Vec<u8> = by_weight.iter().take(4).map(|&(m, _)| m).collect();
+            let kept: Vec<u8> = by_weight.iter().take(detail_slots).map(|&(m, _)| m).collect();
+            if far && far_layer.is_none() {
+                let mosaic = ColourMosaic::new(g.tiles, g.rows, g.columns, self.colour)?;
+                let texture = w.spawn();
+                w.insert(texture, mosaic.texture.clone());
+                let e = w.spawn();
+                w.insert(
+                    e,
+                    PbrMaterial {
+                        base_color_texture: Some(TextureRef {
+                            wrap: [Wrap::Clamp; 2],
+                            ..TextureRef::new(texture)
+                        }),
+                        metallic: 0.0,
+                        ..PbrMaterial::default()
+                    },
+                );
+                far_layer = Some((e, mosaic));
+            }
             let (ox, oy) = (x_of(g.columns[c0]), y_of(g.rows[r0]));
             let mut layer_list = Vec::with_capacity(kept.len());
             for &m in &kept {
@@ -1866,14 +1938,24 @@ impl LowerAnvilTerrain {
                     .collect()
             });
             let mut uvs = Vec::with_capacity(vertices.len());
+            let mut far_uvs = Vec::with_capacity(if far { vertices.len() } else { 0 });
             for &v in &vertices {
                 let (r, c) = (v as usize / width, v as usize % width);
                 let mut out = [0.0f64; 4];
                 for (slot, m) in kept.iter().enumerate() {
                     out[slot] = at(r, c).iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x);
                 }
+                let held: f64 = out.iter().sum();
+                if let (true, Some((_, mosaic))) = (far, &far_layer) {
+                    // the far colour: the rest, what the kept detail layers don't hold
+                    out[kept.len()] = (1.0 - held).max(0.0);
+                    far_uvs.push(mosaic.uv(g.columns[c], g.rows[r]));
+                }
                 let sum: f64 = out.iter().sum();
-                if sum > 0.0 && (sum - 1.0).abs() > 1e-12 {
+                if sum == 0.0 {
+                    // no layer holds any weight here (past every read node): drawn black by a sum of layers
+                    bare += 1;
+                } else if (sum - 1.0).abs() > 1e-9 {
                     renormalised += 1;
                     for x in &mut out {
                         *x /= sum;
@@ -1881,6 +1963,15 @@ impl LowerAnvilTerrain {
                 }
                 piece_weights.push(out.map(|x| x as f32));
                 uvs.push([(x_of(g.columns[c]) - ox) as f32, (y_of(g.rows[r]) - oy) as f32]);
+            }
+            if let (true, Some((material, _))) = (far, &far_layer) {
+                let material = *material;
+                layer_list.push(Some(Layer {
+                    material,
+                    texcoord: Some(1),
+                    transform: None,
+                }));
+                far_pieces += 1;
             }
             let layered = w.spawn();
             w.insert(
@@ -1896,6 +1987,7 @@ impl LowerAnvilTerrain {
                     material: layered,
                     weights: piece_weights,
                     occlusion: piece_occlusion,
+                    far_uvs: far.then_some(far_uvs),
                 }),
                 uvs,
                 vertices: Some(vertices),
@@ -1911,13 +2003,21 @@ impl LowerAnvilTerrain {
         );
         if trimmed > 0 {
             log.approximate(
-                "ground pieces using more than 4 materials at 16 squares a side: their 4 heaviest kept",
+                "ground pieces using more materials than they can hold at 16 squares a side: their 3 heaviest kept, \
+                 the rest's weight on the far colour",
                 trimmed,
+            );
+        }
+        if far_pieces > 0 {
+            log.approximate(
+                "ground pieces with a far colour layer (the weight of materials without a detail diffuse or dropped \
+                 by the cap: the node's colour tile there, as the splat's)",
+                far_pieces,
             );
         }
         if renormalised > 0 {
             log.approximate(
-                "ground vertices whose dropped layers' weight was shared out over the kept",
+                "ground vertices whose weights were normalised (a corner past every read node)",
                 renormalised,
             );
         }
@@ -1927,9 +2027,15 @@ impl LowerAnvilTerrain {
                 outside,
             );
         }
-        if undetailed > 0 {
+        if bare > 0 {
             log.omit(
-                "ground layer texels of materials without a detail diffuse (their weight shared out)",
+                "ground piece vertices with no layer weight: every corner past every read node (drawn black)",
+                bare,
+            );
+        }
+        if undetailed > 0 {
+            log.count(
+                "ground layer texels of materials without a detail diffuse (their weight on the far colour)",
                 undetailed,
             );
         }

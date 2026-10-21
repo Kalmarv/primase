@@ -1,7 +1,8 @@
 //! `lower-anvil-terrain{ground=layers}` on a hand-made terrain: a level-2 quadtree of 64 m nodes drawn at 0.5 m over
-//! its corner 128 m, its material raster two halves of one node (materials 0 and 1) and six stripes of another (2 to
-//! 7), each material a detail diffuse. Against the notes' blend (terrain.md §3.5) worked here: each vertex's layer
-//! weights; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
+//! its corner 128 m, its material raster two halves of one node (materials 0 and 1) and stripes of another (2 to
+//! 7), each material a detail diffuse (or one without), each node's colour tile one solid colour. Against the notes'
+//! blend (terrain.md §3.5) worked here: each vertex's layer weights, the far colour's the weight no detail layer
+//! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{CellPoint, GroundColour, LowerAnvilTerrain, Pieces, SplatUv, TerrainLayers};
 use primase_core::frame::SourceFrame;
@@ -13,11 +14,13 @@ use primase_core::{
 };
 
 /// The material at core sample (i, j) of node (row, column): node (0, 0) material 0 left of its middle, 1 right;
-/// node (0, 1) six stripes along x, 2 to 7; every other node 0.
+/// node (0, 1) stripes along x, 2 to 7: 21 or 22 samples wide to sample 96, then 2 wide, all six every 6 m (more than
+/// a piece of 16 squares holds); every other node 0.
 fn material(row: u32, column: u32, j: usize) -> u8 {
     match (row, column) {
         (0, 0) => u8::from(j >= 64),
-        (0, 1) => 2 + (j * 6 / 128) as u8,
+        (0, 1) if j < 96 => 2 + (j * 6 / 128) as u8,
+        (0, 1) => 2 + (j / 2 % 6) as u8,
         _ => 0,
     }
 }
@@ -30,7 +33,28 @@ fn occlusion(row: u32, column: u32) -> u8 {
 }
 const K: f64 = 12.0;
 
-fn world() -> (World, Vec<Entity>) {
+/// Node (row, column)'s colour: red, green and blue each 0 or 255 by the bits of `row * 3 + column + 1` (the 5- and
+/// 6-bit ends, which every BC1 expansion takes to 0 and 255).
+fn node_colour(row: u32, column: u32) -> [u8; 4] {
+    let i = (row * 3 + column + 1) % 8;
+    [i & 1, i >> 1 & 1, i >> 2 & 1]
+        .map(|b| if b == 1 { 255 } else { 0 })
+        .into_iter()
+        .chain([255])
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("4")
+}
+
+/// A BC1 tile of 33 x 33 blocks all of `c`: both endpoints the colour's RGB565, every index 0 (endpoint 0).
+fn solid_bc1(c: [u8; 4]) -> Vec<u8> {
+    let c565 = (u16::from(c[0] >> 3) << 11) | (u16::from(c[1] >> 2) << 5) | u16::from(c[2] >> 3);
+    let [lo, hi] = c565.to_le_bytes();
+    [lo, hi, lo, hi, 0, 0, 0, 0].repeat(33 * 33)
+}
+
+/// The hand-made terrain, `undetailed` a material without a detail diffuse.
+fn world(undetailed: Option<u8>) -> (World, Vec<Entity>) {
     let mut w = World::new();
     let texture = |w: &mut World, rgba: Vec<u8>, side: u32| {
         let e = w.spawn();
@@ -82,7 +106,7 @@ fn world() -> (World, Vec<Entity>) {
                 row,
                 column,
                 heights: vec![0; 132 * 132],
-                colour: vec![0; 33 * 33 * 8],
+                colour: solid_bc1(node_colour(row, column)),
                 material: raster,
                 // block 8 one value a node (BC4 blocks of equal endpoints)
                 block_8: [occlusion(row, column), occlusion(row, column), 0, 0, 0, 0, 0, 0].repeat(33 * 33),
@@ -102,11 +126,12 @@ fn world() -> (World, Vec<Entity>) {
             details: details
                 .iter()
                 .zip(&normals)
-                .map(|(&d, &n)| {
+                .enumerate()
+                .map(|(m, (&d, &n))| {
                     Some(TerrainDetail {
                         uv_scale: 1.0,
                         f32_6: 4.0,
-                        diffuse: Some(d),
+                        diffuse: (undetailed != Some(m as u8)).then_some(d),
                         normal: Some(n),
                     })
                 })
@@ -157,11 +182,11 @@ fn blend(x: f64, y: f64) -> Vec<(u8, f64)> {
 }
 
 fn lowered(pieces: Pieces) -> World {
-    lowered_with(pieces, false)
+    lowered_with(pieces, false, None)
 }
 
-fn lowered_with(pieces: Pieces, occlusion: bool) -> World {
-    let (mut w, _) = world();
+fn lowered_with(pieces: Pieces, occlusion: bool, undetailed: Option<u8>) -> World {
+    let (mut w, _) = world(undetailed);
     let pass = LowerAnvilTerrain {
         rect: [0.0, 0.0, 128.0, 64.0],
         step: 1,
@@ -210,60 +235,89 @@ fn triangles(p: &Primitive, o: [f32; 3]) -> Vec<[[u32; 3]; 3]> {
         .collect()
 }
 
-#[test]
-fn layers_weigh_each_vertex_as_the_engine_blends() {
-    let w = lowered(Pieces::PerNode);
-    let pieces = placed(&w);
-    let mut checked = 0;
+/// A piece's layers: per layer its material's index (the test's detail entities are its materials, in order), or
+/// none for the far colour (on `TexCoord(1)`).
+fn layer_index(w: &World, layered: &LayeredMaterial) -> Vec<Option<u8>> {
+    layered
+        .layers
+        .iter()
+        .map(|l| {
+            let l = l.as_ref().expect("layer");
+            let pbr = w.get::<primase_core::pbr::PbrMaterial>(l.material).expect("pbr");
+            let t = pbr.base_color_texture.as_ref().expect("diffuse").texture;
+            match l.texcoord {
+                Some(1) => None,
+                None => Some(w.get::<AnvilTextureMap>(t).expect("map").index_id as u8),
+                Some(n) => panic!("a layer on texture coordinates {n}"),
+            }
+        })
+        .collect()
+}
+
+/// Checks every piece's weights against the blend: each detail layer's weight the blend's, the far colour's the rest
+/// (the materials without a detail, and those the piece doesn't keep); at most 4 layers, the far colour last and only
+/// where it holds weight. Returns the pieces, the vertices checked and the far layer's vertices.
+fn check_weights(w: &World, undetailed: Option<u8>) -> (Vec<(Primitive, [f32; 3])>, usize, usize) {
+    let pieces = placed(w);
+    let (mut checked, mut far_vertices) = (0, 0);
     let mut worst = 0.0f64;
-    let mut all = Vec::new();
     for (p, o) in &pieces {
-        all.extend(triangles(p, *o));
         let layered = w
             .get::<LayeredMaterial>(p.material.expect("material"))
             .expect("layered");
         assert!(layered.layers.len() <= 4, "{} layers", layered.layers.len());
-        // each layer's material by its texture's index (the test's detail entities are its materials, in order)
-        let index: Vec<u8> = layered
-            .layers
-            .iter()
-            .map(|l| {
-                let pbr = w
-                    .get::<primase_core::pbr::PbrMaterial>(l.as_ref().expect("layer").material)
-                    .expect("pbr");
-                let t = pbr.base_color_texture.as_ref().expect("diffuse").texture;
-                w.get::<AnvilTextureMap>(t).expect("map").index_id as u8
-            })
-            .collect();
+        let index = layer_index(w, layered);
+        let far = index.iter().position(Option::is_none);
+        if let Some(f) = far {
+            assert_eq!(f, index.len() - 1, "the far colour last");
+        }
         let Some(Stream::F32x4(weights)) = p.streams.get(&Semantic::Color(1)) else {
             panic!("weights")
         };
         let pos = p.positions().expect("positions");
-        let used: std::collections::BTreeSet<u8> = pos
-            .iter()
-            .flat_map(|q| blend(f64::from(q[0] + o[0]), f64::from(q[1] + o[1])))
-            .filter(|&(_, v)| v > 0.0)
-            .map(|(m, _)| m)
-            .collect();
+        let mut far_held = 0.0f64;
         for (q, wt) in pos.iter().zip(weights) {
-            let want = blend(f64::from(q[0] + o[0]), f64::from(q[1] + o[1]));
-            // where the piece keeps every material it uses, each weight is the blend's
-            if used.len() <= 4 {
-                for (m, v) in &want {
-                    let slot = index.iter().position(|n| n == m).expect("a used material kept");
-                    worst = worst.max((f64::from(wt[slot]) - v).abs());
+            let mut rest = 0.0;
+            for (m, v) in blend(f64::from(q[0] + o[0]), f64::from(q[1] + o[1])) {
+                match index.iter().position(|n| *n == Some(m)) {
+                    Some(slot) if undetailed != Some(m) => worst = worst.max((f64::from(wt[slot]) - v).abs()),
+                    _ => rest += v,
                 }
-                checked += 1;
+            }
+            match far {
+                Some(f) => {
+                    worst = worst.max((f64::from(wt[f]) - rest).abs());
+                    far_held += f64::from(wt[f]);
+                    far_vertices += 1;
+                }
+                None => assert!(rest < 1e-12, "{rest} weight on no layer"),
             }
             let sum: f32 = wt.iter().sum();
             assert!((sum - 1.0).abs() < 1e-6, "{wt:?}");
+            checked += 1;
+        }
+        if far.is_some() {
+            assert!(far_held > 0.0, "a far colour layer holding nothing");
         }
     }
     println!(
-        "{} pieces, {checked} vertices checked, worst weight difference {worst:e}",
+        "{} pieces, {checked} vertices checked ({far_vertices} with the far colour), worst weight difference {worst:e}",
         pieces.len()
     );
     assert!(checked > 0 && worst < 1e-6, "{worst}");
+    (pieces, checked, far_vertices)
+}
+
+#[test]
+fn layers_weigh_each_vertex_as_the_engine_blends() {
+    let w = lowered(Pieces::PerNode);
+    let (pieces, _, far_vertices) = check_weights(&w, None);
+    // the cap at 16 squares: the striped node's pieces holding more than 4 materials keep 3 and the far colour
+    assert!(far_vertices > 0, "no piece over the cap");
+    let mut all = Vec::new();
+    for (p, o) in &pieces {
+        all.extend(triangles(p, *o));
+    }
     // the striped node (six materials) is cut: more than the two nodes' two pieces
     assert!(pieces.len() > 2, "{} pieces", pieces.len());
     // the triangles are the whole ground's
@@ -281,7 +335,7 @@ fn layers_weigh_each_vertex_as_the_engine_blends() {
 /// more inside its node, its node's value); every layer its material's detail normal, marked green-down, z rebuilt.
 #[test]
 fn layers_carry_their_normals_and_the_occlusion_tint() {
-    let w = lowered_with(Pieces::PerNode, true);
+    let w = lowered_with(Pieces::PerNode, true, None);
     let mut inside = 0;
     for (p, o) in placed(&w) {
         let Some(Stream::F32x4(tint)) = p.streams.get(&Semantic::Color(0)) else {
@@ -301,7 +355,7 @@ fn layers_carry_their_normals_and_the_occlusion_tint() {
         let layered = w
             .get::<LayeredMaterial>(p.material.expect("material"))
             .expect("layered");
-        for l in layered.layers.iter().flatten() {
+        for l in layered.layers.iter().flatten().filter(|l| l.texcoord.is_none()) {
             let pbr = w.get::<primase_core::pbr::PbrMaterial>(l.material).expect("pbr");
             let n = pbr.normal_texture.as_ref().expect("a detail normal").texture;
             let c = w
@@ -316,4 +370,67 @@ fn layers_carry_their_normals_and_the_occlusion_tint() {
         }
     }
     assert!(inside > 1000, "{inside}");
+}
+
+/// Material 1 (node (0, 0)'s right half) without a detail diffuse: its weight on the far colour, a layer sampling
+/// `TexCoord(1)` of the ground's colour mosaic (clamped), each vertex at the texel of its own sample, which is its
+/// node's colour.
+#[test]
+fn undetailed_weight_goes_to_the_far_colour() {
+    let w = lowered_with(Pieces::PerNode, false, Some(1));
+    let (pieces, _, far_vertices) = check_weights(&w, Some(1));
+    assert!(far_vertices > 0, "no far colour");
+    let mut texels = 0;
+    for (p, o) in &pieces {
+        let layered = w
+            .get::<LayeredMaterial>(p.material.expect("material"))
+            .expect("layered");
+        let Some(far) = layered.layers.iter().flatten().find(|l| l.texcoord == Some(1)) else {
+            assert!(!p.streams.contains_key(&Semantic::TexCoord(1)));
+            continue;
+        };
+        let pbr = w
+            .get::<primase_core::pbr::PbrMaterial>(far.material)
+            .expect("pbr");
+        let r = pbr.base_color_texture.as_ref().expect("far colour");
+        assert_eq!(r.wrap, [primase_core::pbr::Wrap::Clamp; 2]);
+        let t = w.get::<Texture>(r.texture).expect("texture");
+        assert_eq!(
+            (t.format, t.color_space, t.role),
+            (TexFormat::Rgba8Unorm, ColorSpace::Srgb, TexRole::Color)
+        );
+        let Some(Stream::F32x2(uvs)) = p.streams.get(&Semantic::TexCoord(1)) else {
+            panic!("far colour coordinates")
+        };
+        for (q, uv) in p.positions().expect("positions").iter().zip(uvs) {
+            // the sample's index along each axis (0.5 m apart from the origin), its node, its texel
+            let (gx, gy) = (
+                (f64::from(q[0] + o[0]) / 0.5).round() as u32,
+                (f64::from(q[1] + o[1]) / 0.5).round() as u32,
+            );
+            let (tx, ty) = (
+                f64::from(uv[0]) * f64::from(t.width),
+                f64::from(uv[1]) * f64::from(t.height),
+            );
+            // the texel's centre (to the f32 coordinate)
+            assert!(
+                (tx.fract() - 0.5).abs() < 1e-4 && (ty.fract() - 0.5).abs() < 1e-4,
+                "{uv:?}"
+            );
+            let (tx, ty) = (tx as usize, ty as usize);
+            assert_eq!(
+                (tx, ty),
+                (gx as usize, gy as usize),
+                "the mosaic's first node is (0, 0)"
+            );
+            let at = (ty * t.width as usize + tx) * 4;
+            assert_eq!(
+                t.levels[0][at..at + 4],
+                node_colour(gy / 128, gx / 128),
+                "sample ({gx}, {gy})"
+            );
+            texels += 1;
+        }
+    }
+    assert_eq!(texels, far_vertices);
 }
