@@ -330,6 +330,19 @@ pub struct TerrainTile {
     /// Its material raster (block 2), 132 x 132 values row by row, each an index into the terrain's material bank
     /// (empty where no bank was read).
     pub material: Vec<u8>,
+    /// Its block 8 as stored: 33 x 33 BC4 blocks row by row (two endpoints, then sixteen 3-bit indices), one channel
+    /// of 132 x 132 texels (the terrain shader's occlusion-like factor `0.5 + v`: the notes' lead, docs/terrain.md
+    /// §3.4).
+    pub block_8: Vec<u8>,
+}
+
+/// A terrain material's detail, as its TerrainMaterial and TextureSet give it: the f32 at 2 (`uv_scale`), the f32 at 6
+/// (`f32_6`: the detail tile's size in metres, a lead) and the TextureSet's slot 0 map (`diffuse`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerrainDetail {
+    pub uv_scale: f32,
+    pub f32_6: f32,
+    pub diffuse: Option<Entity>,
 }
 
 /// Terrain nodes of one level (`anvil.terrain`): their tiles, where the program states the quadtree's square lies
@@ -345,10 +358,18 @@ pub struct AnvilTerrain {
     /// Each material of the terrain's bank, in the order its rasters index them: its TerrainMaterial's
     /// CollisionMaterial (empty where no bank was read).
     pub materials: Vec<Option<CollisionMaterialRef>>,
+    /// Each material's detail, in the same order (empty where no bank was read).
+    pub details: Vec<Option<TerrainDetail>>,
+    /// The splatting noise texture (its TextureSet's slot 0), where the program names the set.
+    pub noise: Option<Entity>,
 }
 
 impl Component for AnvilTerrain {
     const NAME: &'static str = "anvil.terrain";
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.details.iter().flatten().filter_map(|d| d.diffuse));
+        out.extend(self.noise);
+    }
     fn payload_bytes(&self) -> u64 {
         let bytes: usize = self
             .tiles

@@ -7,15 +7,18 @@
 //! against the game's world map (correlation 0.891, the other orientations 0.468 or less) and by 101 placed props
 //! standing on the decoded heights there (to 0.1 m, docs/terrain.md §3.1 and §3.3).
 
+use std::collections::{BTreeSet, HashMap};
+
 use primase_core::Entity;
 use primase_core::World;
 use primase_core::frame::SourceFrame;
 
-use crate::components::{AnvilTerrain, CollisionMaterialRef, TerrainTile};
+use crate::components::{AnvilTerrain, CollisionMaterialRef, TerrainDetail, TerrainTile};
 use crate::read::archive::{Archive, At};
 use crate::read::terrain_material::{
     StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
 };
+use crate::read::textures::read_texture_set_slot;
 use crate::read::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, TNL_CHUNK, node};
 use crate::read::tnl_code;
 
@@ -49,10 +52,13 @@ pub enum Error {
         #[source]
         source: crate::read::terrain_material::Error,
     },
+    #[error(transparent)]
+    TextureMap(#[from] crate::read::textures::Error),
 }
 
-/// The CollisionMaterial of each TerrainMaterial of the bank at `bank`, in its order.
-fn bank_materials(archive: &mut Archive, bank: At) -> Result<Vec<Option<CollisionMaterialRef>>, Error> {
+/// Each TerrainMaterial of the bank at `bank`, in its order: its CollisionMaterial, and its detail with its TextureSet's
+/// id (the diffuse not yet read).
+fn bank_materials(archive: &mut Archive, bank: At) -> Result<BankMaterials, Error> {
     let r = archive.resource(bank)?;
     if r.type_id != TERRAIN_MATERIAL_BANK {
         return Err(Error::Type {
@@ -63,9 +69,11 @@ fn bank_materials(archive: &mut Archive, bank: At) -> Result<Vec<Option<Collisio
     }
     let b = StoredMaterialBank::parse(&r.body).map_err(|source| Error::Material { at: bank, source })?;
     let mut out = Vec::with_capacity(b.materials.len());
+    let mut details = Vec::with_capacity(b.materials.len());
     for m in &b.materials {
         let Some(at) = archive.find(m.id) else {
             out.push(None);
+            details.push(None);
             continue;
         };
         let r = archive.resource(at)?;
@@ -77,6 +85,14 @@ fn bank_materials(archive: &mut Archive, bank: At) -> Result<Vec<Option<Collisio
             });
         }
         let t = StoredTerrainMaterial::parse(&r.body).map_err(|source| Error::Material { at, source })?;
+        details.push(Some((
+            TerrainDetail {
+                uv_scale: t.uv_scale,
+                f32_6: t.f32_6,
+                diffuse: None,
+            },
+            t.texture_set,
+        )));
         out.push(t.collision_material.map(|c| {
             let name = archive
                 .find(c.id)
@@ -85,8 +101,14 @@ fn bank_materials(archive: &mut Archive, bank: At) -> Result<Vec<Option<Collisio
             CollisionMaterialRef { id: c.id, name }
         }));
     }
-    Ok(out)
+    Ok((out, details))
 }
+
+/// A bank's materials: each one's CollisionMaterial, and its detail and TextureSet.
+type BankMaterials = (
+    Vec<Option<CollisionMaterialRef>>,
+    Vec<Option<(TerrainDetail, Option<u64>)>>,
+);
 
 /// Where the program states the quadtree lies, and what of it to read.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,6 +124,9 @@ pub struct TerrainRead {
     /// The TerrainMaterialBank the nodes' material rasters index, where they are read with it (the terrain names
     /// none the layer reaches: the Riders Republic notes find it through the Terrain Entity, docs/terrain.md §4).
     pub bank: Option<At>,
+    /// The TextureSet of the splatting noise (`TerrainSplattingNoise_Set`, which the Terrain Entity names), where it is
+    /// read: its slot 0 map.
+    pub noise: Option<At>,
 }
 
 /// The nodes of the layer at `layer` that `what` names, as an entity holding their [`AnvilTerrain`].
@@ -125,9 +150,22 @@ pub fn read_terrain(
     let node_side = what.side / f64::from(1u32 << what.level.min(30));
     let [x0, y0, x1, y1] = what.rect;
     let [ox, oy] = what.origin;
-    let materials = match what.bank {
+    let (materials, details) = match what.bank {
         Some(bank) => bank_materials(archive, bank)?,
-        None => Vec::new(),
+        None => (Vec::new(), Vec::new()),
+    };
+    let noise = match what.noise {
+        Some(set) => {
+            let id = archive
+                .forge(set.forge)
+                .and_then(|f| f.index.get(set.entry))
+                .map(|i| i.id);
+            match id {
+                Some(id) => read_texture_set_slot(archive, w, id, 0)?,
+                None => None,
+            }
+        }
+        None => None,
     };
     let order = what.bank.map(|_| tnl_code::hilbert());
     let mut tiles = Vec::new();
@@ -164,6 +202,8 @@ pub fn read_terrain(
             .collect::<Result<_, _>>()?;
         let colour =
             tnl_code::tile(&chunk.blocks[1], false).map_err(|source| Error::Code { position, at, source })?;
+        let block_8 =
+            tnl_code::tile(&chunk.blocks[8], true).map_err(|source| Error::Code { position, at, source })?;
         let material = match &order {
             Some(order) => {
                 tnl_code::raster(&chunk.blocks[2], order)
@@ -178,8 +218,31 @@ pub fn read_terrain(
             heights,
             colour,
             material,
+            block_8,
         });
     }
+    // the diffuse of each material the tiles' rasters use, read once per TextureSet
+    let used: BTreeSet<u8> = tiles.iter().flat_map(|t| t.material.iter().copied()).collect();
+    let mut sets: HashMap<u64, Option<Entity>> = HashMap::new();
+    let mut read = Vec::with_capacity(details.len());
+    for (index, d) in (0u8..=u8::MAX).zip(details) {
+        read.push(match d {
+            Some((mut detail, Some(set))) if used.contains(&index) => {
+                detail.diffuse = match sets.get(&set) {
+                    Some(&e) => e,
+                    None => {
+                        let e = read_texture_set_slot(archive, w, set, 0)?;
+                        sets.insert(set, e);
+                        e
+                    }
+                };
+                Some(detail)
+            }
+            Some((detail, _)) => Some(detail),
+            None => None,
+        });
+    }
+    let details = read;
     let e = w.spawn();
     w.insert(
         e,
@@ -190,6 +253,8 @@ pub fn read_terrain(
             side: what.side,
             tiles,
             materials,
+            details,
+            noise,
         },
     );
     Ok(e)

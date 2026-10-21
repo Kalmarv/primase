@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 mod material;
+mod splat;
 pub use material::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
+pub use splat::{Splat, SplatUv};
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
@@ -960,9 +962,12 @@ impl Pass for LowerAnvilFloor {
 /// samples cover its square (the 4 more it stores are its +x and +y neighbours' first, which the census finds equal
 /// on all 173,740 same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
 /// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. The mesh is drawn
-/// with a base-colour texture of the nodes' colour tiles as stored (their 32 x 32 BC1 blocks a node, side by side),
-/// each sample at the centre of its texel, in the colour space `colour` states; whether the game's terrain shading
-/// adds more (detail textures by the material raster) isn't read, so the material is that colour alone. Every option
+/// with a base-colour texture: with `ground=tile` the nodes' colour tiles as stored (their 32 x 32 BC1 blocks a node,
+/// side by side), each sample at the centre of its texel, in the colour space `colour` states (the far colour: the
+/// game draws it beyond a distance); with `ground=splat` the near colour baked over `rect` (the module `splat`: the
+/// materials' detail diffuses blended as the terrain shader does, by the Riders Republic notes' reading, its choices
+/// `splat-k=K`, `splat-px=UNITS` a pixel, `splat-uv=FACTOR|over-tile-size`, `splat-noise=raw|srgb` and
+/// `splat-occlusion=block-8|none` stated), each vertex at its place in it. Every option
 /// is required: the range (an f32 5000 in the Terrain entity, its meaning a tool claim) and the offset (0 by the Riders
 /// Republic notes' 101 props on one plaza) aren't stored as such, and neither the half-sample convention nor the colour
 /// tiles' colour space is established.
@@ -984,6 +989,17 @@ pub struct LowerAnvilTerrain {
     pub collision: Option<SurfaceBy>,
     /// The surface of a square whose material has no named CollisionMaterial (or of every square, by one).
     pub surface: String,
+    /// The colour drawn: the far colour tiles, or the near colour baked.
+    pub ground: GroundColour,
+}
+
+/// What `lower-anvil-terrain` draws the ground with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GroundColour {
+    /// The nodes' far colour tiles.
+    Tile,
+    /// The near colour, baked.
+    Splat(Splat),
 }
 
 /// A terrain tile's side in samples (and in colour texels), the samples of it its node covers, and its colour tile's
@@ -998,9 +1014,60 @@ impl LowerAnvilTerrain {
     pub fn from_options(o: &Options) -> Result<LowerAnvilTerrain, String> {
         let usage = concat!(
             "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
-            "colour=srgb|linear, collision=none|collision-material|one, and surface=NAME unless collision=none"
+            "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
+            "ground=tile|splat (with splat-k=K, splat-px=UNITS, splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
+            "splat-occlusion=block-8|none)"
         );
-        let g = ground_options(o, &["range", "colour", "collision", "surface"], usage)?;
+        let splat_keys = [
+            "splat-k",
+            "splat-px",
+            "splat-uv",
+            "splat-noise",
+            "splat-occlusion",
+        ];
+        let mut known = vec!["range", "colour", "collision", "surface", "ground"];
+        known.extend(splat_keys);
+        let g = ground_options(o, &known, usage)?;
+        let get = |k: &str| {
+            o.get(k)
+                .map(String::as_str)
+                .ok_or_else(|| format!("{k} is required: {usage}"))
+        };
+        let number = |k: &str| -> Result<f64, String> {
+            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+            if v.is_finite() && v > 0.0 {
+                Ok(v)
+            } else {
+                Err(format!("{k} {v}: a positive number"))
+            }
+        };
+        let ground = match get("ground")? {
+            "tile" => {
+                if let Some(k) = splat_keys.iter().find(|k| o.contains_key(**k)) {
+                    return Err(format!("{k} is only taken with ground=splat"));
+                }
+                GroundColour::Tile
+            }
+            "splat" => GroundColour::Splat(Splat {
+                k: number("splat-k")?,
+                pixel: number("splat-px")?,
+                uv: match get("splat-uv")? {
+                    "over-tile-size" => SplatUv::OverTileSize,
+                    _ => SplatUv::Factor(number("splat-uv")?),
+                },
+                noise_srgb: match get("splat-noise")? {
+                    "raw" => false,
+                    "srgb" => true,
+                    v => return Err(format!("splat-noise={v} is not raw or srgb")),
+                },
+                occlusion: match get("splat-occlusion")? {
+                    "block-8" => true,
+                    "none" => false,
+                    v => return Err(format!("splat-occlusion={v} is not block-8 or none")),
+                },
+            }),
+            v => return Err(format!("ground={v} is not tile or splat")),
+        };
         let collision = match o.get("collision").map(String::as_str) {
             Some("none") => None,
             Some("collision-material") => Some(SurfaceBy::CollisionMaterial),
@@ -1036,6 +1103,7 @@ impl LowerAnvilTerrain {
             colour,
             collision,
             surface,
+            ground,
         })
     }
 }
@@ -1071,6 +1139,29 @@ impl Pass for LowerAnvilTerrain {
         ])
         .into_iter()
         .chain((!self.surface.is_empty()).then(|| ("surface".to_owned(), self.surface.clone())))
+        .chain(match self.ground {
+            GroundColour::Tile => vec![("ground".to_owned(), "tile".to_owned())],
+            GroundColour::Splat(s) => vec![
+                ("ground".to_owned(), "splat".to_owned()),
+                ("splat-k".to_owned(), s.k.to_string()),
+                ("splat-px".to_owned(), s.pixel.to_string()),
+                (
+                    "splat-uv".to_owned(),
+                    match s.uv {
+                        SplatUv::Factor(f) => f.to_string(),
+                        SplatUv::OverTileSize => "over-tile-size".to_owned(),
+                    },
+                ),
+                (
+                    "splat-noise".to_owned(),
+                    if s.noise_srgb { "srgb" } else { "raw" }.to_owned(),
+                ),
+                (
+                    "splat-occlusion".to_owned(),
+                    if s.occlusion { "block-8" } else { "none" }.to_owned(),
+                ),
+            ],
+        })
         .collect()
     }
     fn requires(&self) -> &[&'static str] {
@@ -1094,7 +1185,8 @@ impl Pass for LowerAnvilTerrain {
         &[AnvilTerrain::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "ground heights from a stated range and offset, drawn with its colour tiles alone"
+        "ground heights from a stated range and offset, drawn with its far colour tiles or its near colour baked by \
+         stated choices"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
@@ -1191,58 +1283,111 @@ impl Pass for LowerAnvilTerrain {
                     }
                 }
             }
-            // the colour: each node's first 32 x 32 blocks (its 128 x 128 texels), copied as stored
-            let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
-            let core_blocks = TERRAIN_CORE as usize / 4;
-            let mut blocks = Vec::with_capacity((texels_wide as usize / 4) * (texels_high as usize / 4) * 8);
-            for by in 0..node_rows as usize * core_blocks {
-                for bx in 0..node_columns as usize * core_blocks {
-                    let node = (
-                        first_row + (by / core_blocks) as u32,
-                        first_column + (bx / core_blocks) as u32,
+            let (texture, uvs) = match self.ground {
+                GroundColour::Tile => {
+                    // the colour: each node's first 32 x 32 blocks (its 128 x 128 texels), copied as stored
+                    let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
+                    let core_blocks = TERRAIN_CORE as usize / 4;
+                    let mut blocks =
+                        Vec::with_capacity((texels_wide as usize / 4) * (texels_high as usize / 4) * 8);
+                    for by in 0..node_rows as usize * core_blocks {
+                        for bx in 0..node_columns as usize * core_blocks {
+                            let node = (
+                                first_row + (by / core_blocks) as u32,
+                                first_column + (bx / core_blocks) as u32,
+                            );
+                            let tile = tiles
+                                .get(&node)
+                                .ok_or_else(|| format!("node {node:?} not read"))?;
+                            let at = ((by % core_blocks) * TERRAIN_BLOCKS + bx % core_blocks) * 8;
+                            blocks.extend_from_slice(&tile.colour[at..at + 8]);
+                        }
+                    }
+                    // each sample at its texel's centre
+                    let mut uvs = Vec::with_capacity(positions.len());
+                    for &gy in &rows {
+                        for &gx in &columns {
+                            uvs.push([
+                                ((f64::from(gx - first_column * TERRAIN_CORE) + 0.5) / f64::from(texels_wide))
+                                    as f32,
+                                ((f64::from(gy - first_row * TERRAIN_CORE) + 0.5) / f64::from(texels_high))
+                                    as f32,
+                            ]);
+                        }
+                    }
+                    log.count("terrain nodes used", tiles.len() as u64);
+                    log.count("ground samples", positions.len() as u64);
+                    log.count("ground triangles", (indices.len() / 3) as u64);
+                    log.count(
+                        "ground colour texels",
+                        u64::from(texels_wide) * u64::from(texels_high),
                     );
-                    let tile = tiles
-                        .get(&node)
-                        .ok_or_else(|| format!("node {node:?} not read"))?;
-                    let at = ((by % core_blocks) * TERRAIN_BLOCKS + bx % core_blocks) * 8;
-                    blocks.extend_from_slice(&tile.colour[at..at + 8]);
+                    log.approximate(
+                        "ground samples at a stated range and offset",
+                        positions.len() as u64,
+                    );
+                    log.approximate("ground drawn with its colour tiles alone", 1);
+                    let texture = w.spawn();
+                    w.insert(
+                        texture,
+                        Texture {
+                            width: texels_wide,
+                            height: texels_high,
+                            format: TexFormat::Bc1,
+                            levels: vec![blocks],
+                            color_space: self.colour,
+                            role: TexRole::Color,
+                            normal: None,
+                        },
+                    );
+                    (texture, uvs)
                 }
-            }
-            // each sample at its texel's centre
-            let mut uvs = Vec::with_capacity(positions.len());
-            for &gy in &rows {
-                for &gx in &columns {
-                    uvs.push([
-                        ((f64::from(gx - first_column * TERRAIN_CORE) + 0.5) / f64::from(texels_wide)) as f32,
-                        ((f64::from(gy - first_row * TERRAIN_CORE) + 0.5) / f64::from(texels_high)) as f32,
-                    ]);
+                GroundColour::Splat(splat) => {
+                    let (image, baked) = splat::bake(w, &t, self.rect, &splat, self.colour)?;
+                    let (bw, bh) = (
+                        f64::from(image.width) * splat.pixel,
+                        f64::from(image.height) * splat.pixel,
+                    );
+                    let uvs = rows
+                        .iter()
+                        .flat_map(|&gy| columns.iter().map(move |&gx| (gx, gy)))
+                        .map(|(gx, gy)| {
+                            let x = t.origin[0] + spacing * f64::from(gx) + shift;
+                            let y = t.origin[1] + spacing * f64::from(gy) + shift;
+                            [((x - x0) / bw) as f32, ((y - y0) / bh) as f32]
+                        })
+                        .collect::<Vec<_>>();
+                    log.count("terrain nodes used", tiles.len() as u64);
+                    log.count("ground samples", positions.len() as u64);
+                    log.count("ground triangles", (indices.len() / 3) as u64);
+                    log.count("ground near-colour pixels baked", baked.pixels);
+                    log.approximate(
+                        "ground samples at a stated range and offset",
+                        positions.len() as u64,
+                    );
+                    log.approximate(
+                        "ground near colour baked by the notes' reading of the terrain shader, its choices stated",
+                        1,
+                    );
+                    if baked.tile_fallback > 0 {
+                        log.omit(
+                            "ground pixels a material of which has no detail diffuse: its far colour tile there",
+                            baked.tile_fallback,
+                        );
+                    }
+                    if baked.outside > 0 {
+                        log.omit("ground pixels outside every read node: black", baked.outside);
+                    }
+                    log.omit(
+                        "ground near colour's altitude ramps, detail normals, slope normal, per-cell uv rotation and \
+                         cell-hash term (not read)",
+                        1,
+                    );
+                    let texture = w.spawn();
+                    w.insert(texture, image);
+                    (texture, uvs)
                 }
-            }
-            log.count("terrain nodes used", tiles.len() as u64);
-            log.count("ground samples", positions.len() as u64);
-            log.count("ground triangles", (indices.len() / 3) as u64);
-            log.count(
-                "ground colour texels",
-                u64::from(texels_wide) * u64::from(texels_high),
-            );
-            log.approximate(
-                "ground samples at a stated range and offset",
-                positions.len() as u64,
-            );
-            log.approximate("ground drawn with its colour tiles alone", 1);
-            let texture = w.spawn();
-            w.insert(
-                texture,
-                Texture {
-                    width: texels_wide,
-                    height: texels_high,
-                    format: TexFormat::Bc1,
-                    levels: vec![blocks],
-                    color_space: self.colour,
-                    role: TexRole::Color,
-                    normal: None,
-                },
-            );
+            };
             let material = w.spawn();
             w.insert(
                 material,
@@ -1349,6 +1494,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("offset", "0"),
             ("sample", "corner"),
             ("colour", "srgb"),
+            ("ground", "tile"),
             ("collision", "none"),
         ],
     );

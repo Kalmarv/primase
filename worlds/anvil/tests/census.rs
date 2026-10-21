@@ -886,6 +886,18 @@ fn census_forge(
                             Some(None) => "collision material: an id in no entry of this forge",
                         },
                     );
+                    tally.outcome(
+                        match m
+                            .texture_set
+                            .map(|id| forge.find(id).map(|k| forge.names[k].type_id))
+                        {
+                            None => "texture set: none",
+                            Some(Some(TEXTURE_SET)) => "texture set: a TextureSet",
+                            Some(Some(_)) => "texture set: another type",
+                            Some(None) => "texture set: an id in no entry of this forge",
+                        },
+                    );
+                    tally.outcome(format!("uv scale {}, f32 at 6 {}", m.uv_scale, m.f32_6));
                 })
                 .map_err(|e| e.to_string()),
             GRID_PARTITION => StoredGridPartition::parse(&r.body)

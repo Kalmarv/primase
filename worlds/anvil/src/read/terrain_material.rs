@@ -5,8 +5,11 @@
 //! - **TerrainMaterialBank:** `01`, a u32 count and that many references (TextureSets), a u32 count and that many
 //!   references (TerrainMaterials), a u32 count and that many references (region objects), one reference (a
 //!   TextureMap).
-//! - **TerrainMaterial** (202 bytes): its bytes kept as stored; at 180 a reference to its CollisionMaterial, at 198 a
-//!   u32 (its position in the bank, by the notes).
+//! - **TerrainMaterial** (202 bytes): its bytes kept as stored; at 2 an f32, the detail's uv scale (the engine's
+//!   per-material record holds it, the notes' read of the runtime array: docs/terrain.md §3.5 (a)); at 6 an f32 (1 to
+//!   200: the detail tile's size in metres, a lead); at 17 a u64, its TextureSet's id (bytes 15 and 16 zero, not the
+//!   reference grammar; the detail maps: slot 0 the diffuse on 103 of 105, by the notes); at 180 a reference to its
+//!   CollisionMaterial, at 198 a u32 (its position in the bank, by the notes).
 //!
 //! The grammars are the Riders Republic notes' (docs/terrain.md §4 and §3.4: TMB_MAD consumed exactly; 202 bytes on
 //! every TerrainMaterial), read on every one of the game's by the census (worlds/anvil/tests/census.rs). That a node's
@@ -29,6 +32,10 @@ pub const COLLISION_MATERIAL: u32 = 0x74F7_311D;
 
 /// A TerrainMaterial's length.
 const MATERIAL_BYTES: usize = 202;
+/// Where its f32s and TextureSet reference start.
+const UV_SCALE_AT: usize = 2;
+const F32_6_AT: usize = 6;
+const TEXTURE_SET_AT: usize = 17;
 /// Where its CollisionMaterial reference starts.
 const COLLISION_AT: usize = 180;
 /// Where its u32 index starts.
@@ -154,9 +161,15 @@ impl StoredMaterialBank {
 }
 
 /// A TerrainMaterial as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoredTerrainMaterial {
     pub bytes: Vec<u8>,
+    /// The f32 at 2: the detail's uv scale.
+    pub uv_scale: f32,
+    /// The f32 at 6 (its meaning a lead: the detail tile's size in metres).
+    pub f32_6: f32,
+    /// The u64 at 17, its TextureSet's id (`None` where 0).
+    pub texture_set: Option<u64>,
     pub collision_material: Option<Reference>,
     pub index: u32,
 }
@@ -171,6 +184,16 @@ impl StoredTerrainMaterial {
                 read: "202",
             });
         }
+        let f32_at = |at: usize| {
+            let mut c = Cursor { b: body, at };
+            c.array("f32").map(f32::from_le_bytes)
+        };
+        let (uv_scale, f32_6) = (f32_at(UV_SCALE_AT)?, f32_at(F32_6_AT)?);
+        let mut c = Cursor {
+            b: body,
+            at: TEXTURE_SET_AT,
+        };
+        let texture_set = Some(u64::from_le_bytes(c.array("texture set id")?)).filter(|&id| id != 0);
         let mut c = Cursor {
             b: body,
             at: COLLISION_AT,
@@ -183,6 +206,9 @@ impl StoredTerrainMaterial {
         let index = u32::from_le_bytes(c.array("index")?);
         Ok(StoredTerrainMaterial {
             bytes: body.to_vec(),
+            uv_scale,
+            f32_6,
+            texture_set,
             collision_material,
             index,
         })

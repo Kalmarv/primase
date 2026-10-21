@@ -31,11 +31,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use primase_core::frame::SourceFrame;
-use primase_core::{ColorSpace, Entity, Instance, Name, TexRole, Texture, Transform, World};
+use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
-    AnvilTextureMap, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
+    CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -43,18 +43,17 @@ use crate::read::entity::{
     StoredEntityGroup, Visual,
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use crate::read::material::{Payload, StoredMaterial, StoredTextureSet, TEXTURE_MAP};
+use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
-use crate::read::mip::StoredMip;
 use crate::read::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
     StoredReferenceList, StoredSphere,
 };
 use crate::read::shapes::anvil_mesh_shape;
 use crate::read::template::{self, BindingKind};
-use crate::read::texture::{self, StoredTextureMap};
+use crate::read::textures;
 
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
@@ -109,27 +108,13 @@ pub enum Error {
         #[source]
         source: crate::read::template::BindingError,
     },
-    #[error("{at:?}: {source}")]
-    Texture {
-        at: At,
-        #[source]
-        source: crate::read::texture::Error,
-    },
+    #[error(transparent)]
+    TextureMap(#[from] crate::read::textures::Error),
     #[error("{at:?}: {source}")]
     TextureSet {
         at: At,
         #[source]
         source: crate::read::material::TextureSetError,
-    },
-    #[error("{at:?}: format code {code}: its codec isn't established")]
-    Codec { at: At, code: u32 },
-    #[error("{at:?}: its CompiledMip for level {level} isn't found, or is another's")]
-    Mip { at: At, level: u32 },
-    #[error("{at:?}: {source}")]
-    MipBody {
-        at: At,
-        #[source]
-        source: crate::read::mip::Error,
     },
     #[error("{at:?}: {source}")]
     ShapeBody {
@@ -629,58 +614,7 @@ impl<'a> Placer<'a> {
     }
 
     fn read_texture(&mut self, id: u64) -> Result<Option<Entity>, Error> {
-        let Some(at) = self.archive.find(id) else {
-            return Ok(None);
-        };
-        let r = self.archive.resource(at)?;
-        if r.type_id != TEXTURE_MAP {
-            return Ok(None);
-        }
-        let t = StoredTextureMap::parse(&r.body).map_err(|source| Error::Texture { at, source })?;
-        let Some(format) = texture::format(t.format) else {
-            return Err(Error::Codec { at, code: t.format });
-        };
-        let mut levels = Vec::with_capacity(usize::try_from(t.mip_count).unwrap_or(0));
-        for (level, m) in (0u32..).zip(&t.references) {
-            let mip_at = self.archive.find(m.id).ok_or(Error::Mip { at, level })?;
-            let body = self.archive.resource(mip_at)?.body;
-            let mip = StoredMip::parse(&body).map_err(|source| Error::MipBody { at: mip_at, source })?;
-            if mip.parent != id || mip.level != level {
-                return Err(Error::Mip { at, level });
-            }
-            levels.push(mip.image);
-        }
-        levels.extend(
-            t.levels()
-                .map_err(|source| Error::Texture { at, source })?
-                .into_iter()
-                .map(<[u8]>::to_vec),
-        );
-        let e = self.world.spawn();
-        if let Some(name) = self.name(at) {
-            self.world.insert(e, Name(name));
-        }
-        self.world.insert(
-            e,
-            Texture {
-                width: t.width,
-                height: t.height,
-                format,
-                levels,
-                color_space: ColorSpace::Linear,
-                role: TexRole::Other,
-                normal: None,
-            },
-        );
-        self.world.insert(
-            e,
-            AnvilTextureMap {
-                index_id: id,
-                code: t.format,
-                field_25: t.field_25,
-            },
-        );
-        Ok(Some(e))
+        Ok(textures::read_texture_map(self.archive, self.world, id)?)
     }
 
     /// The mesh levels of the object `id` names, read once.
