@@ -886,6 +886,27 @@ impl World {
     /// has an opaque component, as [`World::remap_primitives`] refuses then (whether it describes vertices can't be
     /// known).
     pub fn remap_vertices(&mut self, e: Entity, primitive: usize, from: &[u32]) -> Result<(), String> {
+        let done = self.vertex_remapped_components(e, primitive, from)?;
+        for (name, v) in done {
+            if let Some(c) = self.columns.get_mut(&name) {
+                c.put_remapped(e, v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Why [`World::remap_vertices`] would refuse, without changing anything: a pass checks every entity before it
+    /// changes any.
+    pub fn check_remap_vertices(&self, e: Entity, primitive: usize, from: &[u32]) -> Result<(), String> {
+        self.vertex_remapped_components(e, primitive, from).map(|_| ())
+    }
+
+    fn vertex_remapped_components(
+        &self,
+        e: Entity,
+        primitive: usize,
+        from: &[u32],
+    ) -> Result<Vec<Blended>, String> {
         let mut opaque: Vec<&String> = self
             .opaque
             .iter()
@@ -895,8 +916,7 @@ impl World {
         if !opaque.is_empty() {
             opaque.sort();
             return Err(format!(
-                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them, \
-                 or give them a typed form, before the pass)"
+                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them,                  or give them a typed form, before the pass)"
             ));
         }
         let mut done = Vec::new();
@@ -916,12 +936,7 @@ impl World {
                 Some(Err(m)) => return Err(format!("{}: {m}", c.name())),
             }
         }
-        for (name, v) in done {
-            if let Some(c) = self.columns.get_mut(&name) {
-                c.put_remapped(e, v);
-            }
-        }
-        Ok(())
+        Ok(done)
     }
 
     /// Rebuild every per-vertex component of `e` ([`Component::blend_vertices`]) for its mesh primitive `primitive`,
@@ -2063,6 +2078,21 @@ mod tests {
         );
         assert!(w.remap_vertices(e, 0, &[1]).unwrap_err().contains("game.thing"));
         assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![23, 21]])));
+    }
+
+    /// `check_remap_vertices` states what `remap_vertices` would do and changes nothing.
+    #[test]
+    fn the_check_of_a_vertex_remap_changes_nothing() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, PerVertex(vec![vec![10, 11]]));
+        w.check_remap_vertices(e, 0, &[1, 0, 1]).unwrap();
+        assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![10, 11]])));
+        let err = w.check_remap_vertices(e, 0, &[2]).unwrap_err();
+        assert!(err.contains("vertex 2 of 2"), "{err}");
+        w.insert(e, Unanswering(crate::Geometry::PerVertex));
+        let err = w.check_remap_vertices(e, 0, &[0]).unwrap_err();
+        assert!(err.contains("test.unanswering"), "{err}");
     }
 
     /// A mesh taken away goes with what follows its primitives; with an opaque component (which can't be known to

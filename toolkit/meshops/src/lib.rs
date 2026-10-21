@@ -1,7 +1,9 @@
 //! Deterministic mesh operations with explicit float precision and stable topology.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod back_faces;
 pub mod collision_query;
+pub use back_faces::AddBackFaces;
 mod curves;
 mod distance;
 pub mod frames;
@@ -32,6 +34,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     nonrigid::register(reg);
     parametric::register(reg);
     uv_tiles::register(reg);
+    back_faces::register(reg);
     // a diagnostic with no choices: what collides drawn, to inspect it
     reg.register("draw-collision", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
