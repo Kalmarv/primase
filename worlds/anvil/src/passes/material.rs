@@ -3,14 +3,25 @@
 //! Republic notes evaluated (docs/material-spec.md §4: the game's own shaders run on WARP against these formulas,
 //! within 5.5e-7):
 //!
-//! - **MAD_Fake** (and MAD_CHR_Basic): base colour the texture at t75; the normal map t76's red and green, z rebuilt;
-//!   roughness t76's alpha, metalness its blue (a metallic-roughness texture made of them); two-sided.
+//! - **MAD_Fake** (and MAD_CHR_Basic, MAD_Fake_Sediment): base colour the texture at t75; the normal map t76's red
+//!   and green, z rebuilt; roughness t76's alpha, metalness its blue (a metallic-roughness texture made of them);
+//!   two-sided. Sediment's two switches mixing in the engine's terrain textures (§14.6) are left out, reported.
+//! - **MAD_Bark, MAD_Tex1_Leaves** (layout B, §14.4-5: no metalness target, so metalness 0; their textures
+//!   ([`BARK`], [`LEAVES`]) share one UV transform): Bark's base colour its diffuse, roughness its normal map's alpha;
+//!   Leaves' its diffuse tinted in HSV everywhere (its per-instance mix of tinted and plain is the tint where its value
+//!   is 0, else drawn tinted, reported), its alpha the TextureSet's slot 18 map's red (the opacity), roughness its
+//!   mask's green. Occlusion `1 + OnOffAO (mask.b - 1)`; the shaders' further factor COLOR0.a (and Leaves'
+//!   `sat(COLOR0.a + Vertex AO)` on the base colour, 1 where Vertex AO is at least 1) isn't a COLOR_0 product: left
+//!   out, reported, as are the effects without a PBR place (translucency, specular occlusion, near fade, dead-tree
+//!   thinning, wind debug). MAD_Tex1_Rocks isn't lowered: it combines maps sampled at three UV sets per pixel.
 //! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted by `Hue`, `Saturation` and `Luminosity` in
 //!   HSV where its mask (t77, the Material's TextureSet slot 7) has red, everywhere on Decals1 (no mask); roughness
 //!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
 //!   and Decals1 (`S(x) = x x (3 - 2 x)`), raw on Wind; occlusion `1 + OnOffAO (mask.b - 1)` (none on Decals1). Each
 //!   template's constants are read where its evaluated pixel shaders read them ([`TEX1`], [`TEX1_WIND`] §13.1,
-//!   [`DECALS1`] §13.2), and only if its template binds those properties there; otherwise the placeholder, reported.
+//!   [`DECALS1`] §13.2, [`TEX1_TERRAIN_BLEND`] §15.1: Tex1 with its UV at 15, its blend toward the terrain's colour
+//!   near the ground left out, reported), and only if its template binds those properties there; otherwise the
+//!   placeholder, reported.
 //!   Tex1's vertex-colour factor `1 + Vertex Color Intensity (COLOR0.rgb - 1)` is the mesh's COLOR_0 product where the
 //!   intensity is 1 (a consumer multiplies COLOR0's alpha in too, which the shader doesn't: reported), none where 0,
 //!   and otherwise not lowered, reported. Every other Material is marked [`VertexColor::Ignored`] (its shader takes no
@@ -201,6 +212,8 @@ pub struct Tex1Layout {
     pub vertex_colour: Option<u32>,
     pub uv: Option<u32>,
     pub translucency: Option<u32>,
+    /// Its switch blending toward the terrain's colour near the ground (none: no such blend).
+    pub terrain_blend: Option<u32>,
     /// Whether it samples a mask (t77, the TextureSet's slot 7).
     pub mask: bool,
 }
@@ -225,7 +238,26 @@ pub const TEX1: Tex1Layout = Tex1Layout {
     vertex_colour: Some(7),
     uv: Some(8),
     translucency: None,
+    terrain_blend: None,
     mask: true,
+};
+
+/// MAD_Tex1_TerrainBlend (§14.7, §15.1): MAD_Tex1's cb3[1..7], `EnableTerrainBlend` 14, `Base tiling` 15.
+pub const TEX1_TERRAIN_BLEND: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0xC7C3_A6D7),
+        (2, 0xEE58_1D0E),
+        (3, 0x6577_AE58),
+        (4, 0xFD62_B19F),
+        (5, 0x89D1_84DE),
+        (6, 0x6338_B6C4),
+        (7, 0x95DD_8185),
+        (14, 0x6D30_6588),
+        (15, 0x7091_389B),
+    ],
+    uv: Some(15),
+    terrain_blend: Some(14),
+    ..TEX1
 };
 
 /// MAD_Tex1_Wind (§13.1: its pixel shaders read cb3[14..20] only, cb3[1..13] the vertex shader's wind): Hue 14,
@@ -246,6 +278,7 @@ pub const TEX1_WIND: Tex1Layout = Tex1Layout {
     vertex_colour: None,
     uv: Some(19),
     translucency: Some(18),
+    terrain_blend: None,
     mask: true,
 };
 
@@ -266,8 +299,59 @@ pub const DECALS1: Tex1Layout = Tex1Layout {
     vertex_colour: None,
     uv: None,
     translucency: None,
+    terrain_blend: None,
     mask: false,
 };
+
+/// The textures (by shader slot `t(75 + slot)` and key) and constants (by vec4 and key) a template's evaluated pixel
+/// shaders read, as the template must bind them.
+pub struct Reads {
+    pub textures: &'static [(u32, u32)],
+    pub constants: &'static [(u32, u32)],
+}
+
+/// MAD_Bark's (§14.5): normal t76, diffuse t77 (its label with a trailing space); `5 - On Off - AO` 16, `Wind Debug`
+/// 17, `4 - Base tiling` 18.
+pub const BARK: Reads = Reads {
+    textures: &[(1, 0x443B_F980), (2, 0x918F_B02B)],
+    constants: &[(16, 0x6338_B6C4), (17, 0x9EF0_824F), (18, 0x8459_B8E0)],
+};
+
+/// MAD_Tex1_Leaves's (§14.4): normal t76, diffuse t77, `3 - Mask 1` t78; Specular Occlusion 21, Saturate 22, Hue 23,
+/// Near Fade 24, Vertex AO 25, Color Tint Debug 26, On Off AO 27, Luminosity 28, Dead Trees Value 29 and On Off 30,
+/// Translucency 31, Wind Debug 32, `Base tiling` 33. Its opacity is the TextureSet's slot 18 map.
+pub const LEAVES: Reads = Reads {
+    textures: &[(1, 0x443B_F980), (2, 0xE4B6_CC48), (3, 0xA1B7_D591)],
+    constants: &[
+        (21, 0x10CB_A0A5),
+        (22, 0xCC63_AC50),
+        (23, 0xEE58_1D0E),
+        (24, 0x0E8B_9837),
+        (25, 0xB554_0E5B),
+        (26, 0x856A_89B3),
+        (27, 0xDAC3_6D2C),
+        (28, 0xFD62_B19F),
+        (29, 0xD478_D1B5),
+        (30, 0x47AE_4887),
+        (31, 0x8A6E_48BC),
+        (32, 0x02FD_4532),
+        (33, 0x7091_389B),
+    ],
+};
+
+/// Whether `m`'s template binds every texture and constant `reads` names where it names it.
+fn binds_all(m: &AnvilMaterial, reads: &Reads) -> bool {
+    reads
+        .textures
+        .iter()
+        .all(|&(slot, key)| m.bindings.contains(&(key, MaterialBinding::Texture { slot })))
+        && reads.constants.iter().all(|&(at, key)| {
+            m.bindings.iter().any(|(k, b)| {
+                *k == key
+                    && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
+            })
+        })
+}
 
 /// Whether `m`'s template binds every property `layout` reads at its vec4.
 fn binds(m: &AnvilMaterial, layout: &Tex1Layout) -> bool {
@@ -478,7 +562,7 @@ impl Pass for LowerAnvilMaterial {
             basis: NormalBasis::TangentBitangent,
         };
         // made textures, per (source, what, parameters' bits)
-        let mut made: BTreeMap<(Entity, &'static str, [u64; 3]), Entity> = BTreeMap::new();
+        let mut made: BTreeMap<MadeKey, Entity> = BTreeMap::new();
         for e in materials {
             let Some(m) = w.remove::<AnvilMaterial>(e) else {
                 continue;
@@ -499,6 +583,7 @@ impl Pass for LowerAnvilMaterial {
             };
             let layout = match name.as_str() {
                 "MAD_Tex1" => Some(TEX1),
+                "MAD_Tex1_TerrainBlend" => Some(TEX1_TERRAIN_BLEND),
                 "MAD_Tex1_Wind" => Some(TEX1_WIND),
                 "MAD_Decals1" => Some(DECALS1),
                 _ => None,
@@ -506,7 +591,14 @@ impl Pass for LowerAnvilMaterial {
             // whether the Material's shader takes COLOR0 as a factor of the base colour, as COLOR_0 is
             let mut takes_colour = false;
             let pbr = match (name.as_str(), layout) {
-                ("MAD_Fake" | "MAD_CHR_Basic", _) => {
+                ("MAD_Fake" | "MAD_CHR_Basic" | "MAD_Fake_Sediment", _) => {
+                    if name == "MAD_Fake_Sediment" && [1, 2].iter().any(|&v| i.scalar(v) != 0.0) {
+                        log.omit(
+                            "Fake_Sediment Materials' terrain albedo and sediment mixing (the engine's terrain \
+                             textures): left out",
+                            1,
+                        );
+                    }
                     let albedo = i.texture(0);
                     let normals = i.texture(1);
                     if let Some(a) = albedo {
@@ -528,6 +620,134 @@ impl Pass for LowerAnvilMaterial {
                         normal_texture: normals.map(TextureRef::new),
                         alpha_mode,
                         double_sided: true,
+                        ..PbrMaterial::default()
+                    }
+                }
+                ("MAD_Bark" | "MAD_Tex1_Leaves", _)
+                    if !binds_all(&m, if name == "MAD_Bark" { &BARK } else { &LEAVES }) =>
+                {
+                    log.omit(
+                        &format!(
+                            "Materials of template {name:?} (it doesn't bind the properties its evaluated shader \
+                             reads: a neutral placeholder drawn)"
+                        ),
+                        1,
+                    );
+                    placeholder()
+                }
+                ("MAD_Bark" | "MAD_Tex1_Leaves", _) => {
+                    // layout B (docs/material-spec.md §14 (a), §15.4): no metalness, AO its own target
+                    let leaves = name == "MAD_Tex1_Leaves";
+                    let normals = i.texture(1);
+                    let diffuse = i.texture(2);
+                    let mask = match if leaves { i.texture(3) } else { None }
+                        .or_else(|| m.texture_set.get(7).copied().flatten())
+                    {
+                        Some(t) => t,
+                        None => {
+                            log.count(&format!("{name} masks unset: white (stated)"), 1);
+                            *white.get_or_insert_with(|| white_texture(w))
+                        }
+                    };
+                    let scalar = |v: u32| i.scalar(v);
+                    let (ao_on, uv_at) = if leaves {
+                        (scalar(27), 33)
+                    } else {
+                        (scalar(16), 18)
+                    };
+                    let uv = lowered_uv(&i, Some(uv_at), self.shader_uv, &name, log);
+                    let sampled_by = |texture: Entity| TextureRef {
+                        transform: uv,
+                        ..TextureRef::new(texture)
+                    };
+                    log.omit(
+                        &format!(
+                            "{name} Materials' AO factor COLOR0.a (the vertex alpha; not a COLOR_0 product)"
+                        ),
+                        1,
+                    );
+                    if scalar(if leaves { 32 } else { 17 }) != 0.0 {
+                        log.omit(&format!("{name} Materials' wind debug colour: left out"), 1);
+                    }
+                    let base = match diffuse {
+                        Some(d) if leaves => {
+                            // opacity is the TextureSet's slot 18 map's red; the tint is unmasked, and where the
+                            // per-instance mix's value (26) is 0 it applies everywhere
+                            let opacity = m.texture_set.get(18).copied().flatten();
+                            if opacity.is_none() {
+                                log.omit(
+                                    "Leaves opacity maps unset (TextureSet slot 18): the diffuse alpha",
+                                    1,
+                                );
+                            }
+                            if scalar(26) != 0.0 {
+                                log.omit(
+                                    "Leaves Materials' per-instance tint mix (its hash of the instance position): \
+                                     drawn tinted throughout",
+                                    1,
+                                );
+                            }
+                            if scalar(25) < 1.0 {
+                                log.omit(
+                                    "Leaves Materials' vertex AO sat(COLOR0.a + v) with v < 1 (not a COLOR_0 product)",
+                                    1,
+                                );
+                            }
+                            for (v, what) in [
+                                (30, "dead-tree thinning"),
+                                (24, "near-camera fade"),
+                                (31, "translucency"),
+                                (21, "specular occlusion"),
+                            ] {
+                                if scalar(v) != 0.0 {
+                                    log.omit(
+                                        &format!("Leaves Materials' {what} (no PBR place): left out"),
+                                        1,
+                                    );
+                                }
+                            }
+                            Some(base_colour(
+                                w,
+                                &mut made,
+                                d,
+                                [scalar(23), scalar(22), scalar(28)],
+                                None,
+                                opacity,
+                            )?)
+                        }
+                        Some(d) => Some(base_colour(w, &mut made, d, [0.0; 3], None, None)?),
+                        None => None,
+                    };
+                    // roughness: Leaves the mask's green, Bark the normal map's alpha
+                    let mr = if leaves {
+                        Some(made_texture(w, &mut made, (mask, "leaves rough", [0; 5]), |w| {
+                            derived(w, mask, TexRole::Mask, ColorSpace::Linear, |_, c| {
+                                [255, byte(c[1]), 0, 255]
+                            })
+                        })?)
+                    } else {
+                        match normals {
+                            Some(n) => Some(metal_rough(w, &mut made, n, Some(0.0), None)?),
+                            None => None,
+                        }
+                    };
+                    let occlusion = if ao_on != 0.0 {
+                        Some(occlusion_of(w, &mut made, mask, ao_on)?)
+                    } else {
+                        None
+                    };
+                    if let Some(n) = normals {
+                        set_normal(w, n, normal);
+                    }
+                    log.count(&format!("{name} Materials lowered"), 1);
+                    PbrMaterial {
+                        base_color_texture: base.map(sampled_by),
+                        metallic: 1.0,
+                        roughness: 1.0,
+                        metallic_roughness_texture: mr.map(sampled_by),
+                        occlusion_texture: occlusion.map(sampled_by),
+                        normal_texture: normals.map(sampled_by),
+                        alpha_mode,
                         ..PbrMaterial::default()
                     }
                 }
@@ -575,80 +795,33 @@ impl Pass for LowerAnvilMaterial {
                             1,
                         ),
                     }
+                    if layout.terrain_blend.is_some_and(|v| i.scalar(v) != 0.0) {
+                        log.omit(
+                            "TerrainBlend Materials' blend toward the terrain's colour near the ground (the engine's \
+                             terrain textures): left out",
+                            1,
+                        );
+                    }
                     if layout.translucency.is_some_and(|v| i.scalar(v) != 0.0) {
                         log.omit(
                             "Tex1_Wind Materials' translucency (written to the G-buffer as is, not PBR): left out",
                             1,
                         );
                     }
-                    let uv = match layout.uv.map(|v| i.uv(v)) {
-                        None => None,
-                        Some(None) | Some(Some(None)) => {
-                            log.omit(
-                                "Tex1 UV transforms unset (the default isn't known): untransformed",
-                                1,
-                            );
-                            None
-                        }
-                        Some(Some(Some(f))) => match uv_transform(f, self.shader_uv) {
-                            Ok(t) => {
-                                log.count("Tex1 UV transforms lowered", 1);
-                                t
-                            }
-                            Err(why) => {
-                                log.omit(&format!("Tex1 UV transforms {why}: untransformed"), 1);
-                                None
-                            }
-                        },
-                    };
+                    let uv = lowered_uv(&i, layout.uv, self.shader_uv, "Tex1", log);
                     let sampled_by = |texture: Entity| TextureRef {
                         transform: uv,
                         ..TextureRef::new(texture)
                     };
-                    let tinted = (hue, saturation, luminosity) != (0.0, 0.0, 0.0);
                     let base = match diffuse {
-                        Some(d) if tinted => {
-                            let key = (
-                                d,
-                                "tint",
-                                [hue.to_bits(), saturation.to_bits(), luminosity.to_bits()],
-                            );
-                            let key = match mask {
-                                Some(_) => key,
-                                None => (d, "tint unmasked", key.2),
-                            };
-                            let mask_image = match mask {
-                                Some(k) => w
-                                    .get::<Texture>(k)
-                                    .map(|t| {
-                                        let meta = TextureMetadata {
-                                            color_space: ColorSpace::Linear,
-                                            role: TexRole::Mask,
-                                            normal: None,
-                                        };
-                                        map_rgba8_levels(t, 0..1, meta, |texel| Ok(texel.rgba))
-                                    })
-                                    .transpose()
-                                    .map_err(|e| e.to_string())?
-                                    .map(|img| (img, srgb(w, k))),
-                                None => None,
-                            };
-                            Some(made_texture(w, &mut made, key, |w| {
-                                derived(w, d, TexRole::Color, ColorSpace::Srgb, |t, c| {
-                                    let m = mask_image
-                                        .as_ref()
-                                        .map_or(1.0, |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
-                                    let tc = tint([c[0], c[1], c[2]], hue, saturation, luminosity);
-                                    let out = [0, 1, 2].map(|k| c[k] + (tc[k] - c[k]) * m);
-                                    let enc = |x: f64| primase_image::linear_to_srgb8(x);
-                                    [enc(out[0]), enc(out[1]), enc(out[2]), byte(c[3])]
-                                })
-                            })?)
-                        }
-                        Some(d) => {
-                            set_colour(w, d, TexRole::Color);
-                            Some(d)
-                        }
+                        Some(d) => Some(base_colour(
+                            w,
+                            &mut made,
+                            d,
+                            [hue, saturation, luminosity],
+                            mask,
+                            None,
+                        )?),
                         None => None,
                     };
                     let mr = match normals {
@@ -656,15 +829,7 @@ impl Pass for LowerAnvilMaterial {
                         None => None,
                     };
                     let occlusion = match mask {
-                        Some(k) if ao_on != 0.0 => {
-                            let key = (k, "tex1 ao", [ao_on.to_bits(), 0, 0]);
-                            Some(made_texture(w, &mut made, key, |w| {
-                                derived(w, k, TexRole::Mask, ColorSpace::Linear, |_, c| {
-                                    let ao = byte(1.0 + ao_on * (c[2] - 1.0));
-                                    [ao, ao, ao, 255]
-                                })
-                            })?)
-                        }
+                        Some(k) if ao_on != 0.0 => Some(occlusion_of(w, &mut made, k, ao_on)?),
                         _ => None,
                     };
                     if let Some(n) = normals {
@@ -701,17 +866,127 @@ impl Pass for LowerAnvilMaterial {
     }
 }
 
+/// A made texture's key: its source, what it is, and the parameters' bits (and other sources' indices) it is made of.
+type MadeKey = (Entity, &'static str, [u64; 5]);
+
+/// A Material's UV transform bound at `vec4` (see the module documentation), each case reported under `what`.
+fn lowered_uv(
+    i: &Inputs,
+    vec4: Option<u32>,
+    shader_uv: ShaderUv,
+    what: &str,
+    log: &mut PassLog,
+) -> Option<UvTransform> {
+    match vec4.map(|v| i.uv(v)) {
+        None => None,
+        Some(None) | Some(Some(None)) => {
+            log.omit(
+                &format!("{what} UV transforms unset (the default isn't known): untransformed"),
+                1,
+            );
+            None
+        }
+        Some(Some(Some(f))) => match uv_transform(f, shader_uv) {
+            Ok(t) => {
+                log.count(&format!("{what} UV transforms lowered"), 1);
+                t
+            }
+            Err(why) => {
+                log.omit(&format!("{what} UV transforms {why}: untransformed"), 1);
+                None
+            }
+        },
+    }
+}
+
+/// An RGBA8 texture's level 0 and whether it is sampled as sRGB.
+fn level_0(w: &World, e: Entity) -> Result<Option<(Texture, bool)>, String> {
+    let meta = TextureMetadata {
+        color_space: ColorSpace::Linear,
+        role: TexRole::Mask,
+        normal: None,
+    };
+    w.get::<Texture>(e)
+        .map(|t| map_rgba8_levels(t, 0..1, meta, |texel| Ok(texel.rgba)))
+        .transpose()
+        .map_err(|e| e.to_string())
+        .map(|img| img.map(|img| (img, srgb(w, e))))
+}
+
+/// The base colour of `diffuse`: tinted by `hsl` (hue, saturation, luminosity offsets) in HSV where one is other than
+/// 0, by `tint_mask`'s red where given, else everywhere; its alpha `opacity`'s red where given, else its own. Each
+/// other texture is read at the texel nearest the diffuse texel's place. `diffuse` itself where nothing changes.
+fn base_colour(
+    w: &mut World,
+    made: &mut BTreeMap<MadeKey, Entity>,
+    diffuse: Entity,
+    hsl: [f64; 3],
+    tint_mask: Option<Entity>,
+    opacity: Option<Entity>,
+) -> Result<Entity, String> {
+    let tinted = hsl != [0.0; 3];
+    if !tinted && opacity.is_none() {
+        set_colour(w, diffuse, TexRole::Color);
+        return Ok(diffuse);
+    }
+    let index = |e: Option<Entity>| e.map_or(u64::MAX, |e| u64::from(e.index()));
+    let [h, s, l] = hsl.map(f64::to_bits);
+    let key = (
+        diffuse,
+        "base colour",
+        [h, s, l, index(tint_mask), index(opacity)],
+    );
+    if let Some(&e) = made.get(&key) {
+        return Ok(e);
+    }
+    let mask_image = tint_mask.map(|k| level_0(w, k)).transpose()?.flatten();
+    let opacity_image = opacity.map(|k| level_0(w, k)).transpose()?.flatten();
+    made_texture(w, made, key, |w| {
+        derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, c| {
+            let rgb = if tinted {
+                let m = mask_image
+                    .as_ref()
+                    .map_or(1.0, |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
+                let tc = tint([c[0], c[1], c[2]], hsl[0], hsl[1], hsl[2]);
+                [0, 1, 2].map(|k| c[k] + (tc[k] - c[k]) * m)
+            } else {
+                [c[0], c[1], c[2]]
+            };
+            let alpha = opacity_image
+                .as_ref()
+                .map_or(c[3], |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
+            let enc = |x: f64| primase_image::linear_to_srgb8(x);
+            [enc(rgb[0]), enc(rgb[1]), enc(rgb[2]), byte(alpha)]
+        })
+    })
+}
+
+/// The occlusion texture made of `mask`'s blue: `1 + on (b - 1)`.
+fn occlusion_of(
+    w: &mut World,
+    made: &mut BTreeMap<MadeKey, Entity>,
+    mask: Entity,
+    on: f64,
+) -> Result<Entity, String> {
+    made_texture(w, made, (mask, "ao", [on.to_bits(), 0, 0, 0, 0]), |w| {
+        derived(w, mask, TexRole::Mask, ColorSpace::Linear, |_, c| {
+            let ao = byte(1.0 + on * (c[2] - 1.0));
+            [ao, ao, ao, 255]
+        })
+    })
+}
+
 /// The metallic-roughness texture made of the normal map `n`'s blue and alpha: metalness `b * metal` (`b` where
 /// `None`), roughness `S(sat(a + offset))` (`a` where `None`).
 fn metal_rough(
     w: &mut World,
-    made: &mut BTreeMap<(Entity, &'static str, [u64; 3]), Entity>,
+    made: &mut BTreeMap<MadeKey, Entity>,
     n: Entity,
     metal: Option<f64>,
     offset: Option<f64>,
 ) -> Result<Entity, String> {
     let bits = |x: Option<f64>| x.map_or(u64::MAX, f64::to_bits);
-    made_texture(w, made, (n, "mr", [bits(metal), bits(offset), 0]), |w| {
+    made_texture(w, made, (n, "mr", [bits(metal), bits(offset), 0, 0, 0]), |w| {
         derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
             let rough = offset.map_or(c[3], |o| smooth(sat(c[3] + o)));
             let metal = metal.map_or(c[2], |m| c[2] * m);
@@ -742,8 +1017,8 @@ fn nearest(img: &Texture, t: &Rgba8Texel) -> [u8; 4] {
 /// The made texture `key` names, made once by `make`.
 fn made_texture(
     w: &mut World,
-    made: &mut BTreeMap<(Entity, &'static str, [u64; 3]), Entity>,
-    key: (Entity, &'static str, [u64; 3]),
+    made: &mut BTreeMap<MadeKey, Entity>,
+    key: MadeKey,
     make: impl FnOnce(&World) -> Result<Texture, String>,
 ) -> Result<Entity, String> {
     if let Some(&e) = made.get(&key) {
