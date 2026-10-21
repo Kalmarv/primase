@@ -956,6 +956,14 @@ impl StoredEntity {
         Ok(e)
     }
 
+    /// The StaticDecalComponents' Visuals: each a LODSelector made for its one placement (docs/entity-grammar.md §9.1).
+    pub fn decals(&self) -> impl Iterator<Item = &Visual> {
+        self.components.iter().filter_map(|c| match &c.body {
+            ComponentBody::StaticDecal(v) => Some(v),
+            _ => None,
+        })
+    }
+
     /// The Visual components.
     pub fn visuals(&self) -> impl Iterator<Item = &Visual> {
         self.components.iter().filter_map(|c| match &c.body {

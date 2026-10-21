@@ -183,7 +183,8 @@ pub struct Placed {
     pub shapes_unread: BTreeMap<u32, u64>,
     /// RigidBodyComponents of instanced Entities not placed (under [`InstancedCollision::Skip`]).
     pub instanced_collision: u64,
-    /// StaticDecalComponents: decal geometry made for its one placement, not placed (the Entity's own Visuals are).
+    /// Placements of StaticDecalComponents: decal geometry made for its one placement, placed as a Visual is (its
+    /// LODSelector at the owner's matrix: docs/entity-grammar.md §9.1), its Materials drawn as their prelude states.
     pub static_decals: u64,
     /// RigidBodyComponents of owners with a scale other than 1: whether it applies to the shape isn't established
     /// (the notes: of 298 scaled owners of ReferenceList or Sphere shapes, 154 fit only unscaled, 67 only scaled), so
@@ -773,7 +774,11 @@ impl<'a> Placer<'a> {
                 })
                 .collect(),
         });
-        for v in e.visuals() {
+        for (v, decal) in e
+            .visuals()
+            .map(|v| (v, false))
+            .chain(e.decals().map(|v| (v, true)))
+        {
             let shows = shows(v, at)?;
             let found = match v.object {
                 Some(object) => self.levels(object.id, placed)?.map(|l| (object.id, l)),
@@ -865,14 +870,11 @@ impl<'a> Placer<'a> {
                     self.world.insert(p, layers.clone());
                 }
                 placed.placements.push(p);
+                if decal {
+                    placed.static_decals = placed.static_decals.saturating_add(1);
+                }
             }
         }
-        placed.static_decals = placed.static_decals.saturating_add(
-            e.components
-                .iter()
-                .filter(|c| matches!(c.body, ComponentBody::StaticDecal(_)))
-                .count() as u64,
-        );
         // collision: each RigidBodyComponent's shape at its owner's T R (an EntityGroup's merged shape spans its
         // instances: the notes, docs/skate-plan.md), where the owner's scale is 1; an instanced Entity's at each of its
         // instances, where the caller states so

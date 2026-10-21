@@ -311,3 +311,42 @@ fn collision_lies_within_its_owners_bounds() {
         "{outside:?}"
     );
 }
+
+/// A StaticDecalComponent placed as a Visual (docs/entity-grammar.md §9.1): MAD_MOD_AREA52_Radar_Dish_A_014's decal,
+/// its LODSelector (the game's name for it: the owner's, then "StaticDecalComponent LodSelector") at the dish's own
+/// matrix, beside the dish's Visual.
+#[test]
+fn a_static_decal_is_placed_with_its_owner() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let order = ["DataPC_MAD_USNAT.forge", "DataPC.forge"];
+    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
+    let at = named(&archive, 0, "MAD_MOD_AREA52_Radar_Dish_A_014");
+    // the selector the decal shows, by its name
+    named(
+        &archive,
+        0,
+        "MAD_MOD_AREA52_Radar_Dish_A_014 StaticDecalComponent LodSelector",
+    );
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    );
+    placer.place(at, &mut placed).expect("place");
+    assert_eq!((placed.placements.len(), placed.static_decals), (2, 1));
+    let world = placer.world();
+    let [dish, decal] = [placed.placements[0], placed.placements[1]];
+    assert_eq!(world.get::<Transform>(dish), world.get::<Transform>(decal));
+    let prototype = |p| world.get::<Instance>(p).expect("placed").prototype;
+    assert_ne!(prototype(dish), prototype(decal));
+    let geometry = |e| world.has::<AnvilMesh>(e) || world.has::<AnvilLods>(e);
+    assert!(
+        geometry(prototype(decal)),
+        "the decal's prototype holds its geometry"
+    );
+}
