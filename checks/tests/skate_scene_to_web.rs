@@ -129,7 +129,8 @@ fn convert(scene: &Path, out: &Path, plain: bool) -> String {
         .unwrap();
     let passes = registry
         .parse(
-            "lower-skate-pbr, normalize-normals, fill-missing-texcoords,              prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}",
+            "lower-skate-pbr, normalize-normals, fill-missing-texcoords, \
+             prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}",
         )
         .unwrap();
     let mut reader = primase_reskate::SceneReader::new(scene.to_path_buf());
@@ -142,16 +143,7 @@ fn convert(scene: &Path, out: &Path, plain: bool) -> String {
         &passes,
     )
     .unwrap();
-    report
-        .notices()
-        .iter()
-        .map(|n| {
-            format!(
-                "{n:?}
-"
-            )
-        })
-        .collect()
+    report.notices().iter().map(|n| format!("{n:?}\n")).collect()
 }
 
 fn tiles(set: &std::path::Path) -> serde_json::Value {

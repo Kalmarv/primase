@@ -50,20 +50,18 @@ boxes (`primase_glb::mesh_file_box` reads one from a GLB's JSON alone), the
 placements whose pivot does not locate their geometry, to be filed by triangle
 centre.
 
-`Options::tile_byte_budget` (`None` by default: the program states its budget;
-the CLI's web writer uses 96 MiB) caps each file a
+`Options::tile_byte_budget` (`None` by default: the program states its budget) caps each file a
 tile carries, its GLB and its collision sidecar: a cell with a larger one is split
 into quadtree subcells, by the cell rules, until each fits (FORMAT.md, "Byte
 budget and subcells"). Cells that fit keep the bytes and names they would have
 without a budget. A tile still over it, because one placement or viewer record
 makes it so or at the level limit, is written and listed in
 `TilePlan::over_budget` (`TileSet::over_budget`); each split cell is in
-`TilePlan::splits` and a selection notice of the writer. The CLI's web writer takes
-`--budget-mib N` or `--no-budget`. The tile size is the program's too:
+`TilePlan::splits` and a selection notice of the writer. The tile size is the program's too, with no default:
 `Options::new(TileSize)` (`TileSize`: finite, above 0). The writer
 never loads or lowers: what it needs missing is an error. A tile holds its
 placements and what they refer to, and the world's lights whose position it contains. The world uses metres and +Y up. Ground tiles
-use floor(east/tile_size), floor(north/tile_size), with a default size of 200 metres.
+use floor(east/tile_size), floor(north/tile_size).
 The shared ground frame maps east to X and north to -Z.
 Negative coordinates use floor, not truncation toward zero.
 
@@ -86,9 +84,10 @@ triangle-centre partitioning, bounds and invalid inputs. Set
 
 GPU instancing is enabled by default (`Options::gpu_instancing`). Compatible
 positive TRS placements sharing a resolved mesh become `EXT_mesh_gpu_instancing`
-nodes. Mirrored/sheared placements stay plain nodes, as do matrices whose
-normalized basis cannot be reconstructed within 1e-6 per element. Instance TRS
-uses f32 accessors; source names/extras survive in `web.instances` metadata.
+nodes (mirrored and sheared placements are refused before this: `bake-nonrigid`
+first). Matrices whose normalized basis cannot be reconstructed within 1e-6 per
+element stay plain nodes. Instance TRS uses f32 accessors, an approximation of
+the matrix reported as a notice; source names/extras survive in `web.instances` metadata.
 `instanced_placements` reports how many placements were packed in each tile.
 
 Compression is enabled by default (`Options::compress`). Positions use signed
@@ -132,9 +131,10 @@ tile's optional `collision` index entry records its filename, byte size and reco
 count. The GLB carries only small references. The viewer fetches these payloads
 only when **Show collision** is enabled, and disposes collision geometry when it
 is disabled or the tile is unloaded. Render byte counts exclude these sidecars.
-Collision GLBs store exact f32 positions, u32 indices and one u8 surface per
+Collision GLBs store exact f32 positions, u32 indices and one u16 surface per
 triangle. Primitive extras `primase.collision_surfaces` reference the surface
-SCALAR accessor by index, with `domain: "triangle"` and `version: 1`. This is a
+SCALAR accessor by index, with `domain: "triangle"`, `version: 2` and the surfaces'
+`names` (FORMAT.md, "Collision sidecars"). This is a
 face attribute, not a glTF vertex attribute; consumers can obtain it through
 Three.js `parser.getDependency('accessor', index)` while loading geometry normally.
 GLTFLoader exposes these primitive extras on `mesh.geometry.userData`, rather
@@ -158,7 +158,7 @@ When publishing a new export over an old one, copy the immutable assets first
 and replace `tiles.json` last, and keep older assets while clients may still
 reference them. Indexes need short cache lifetimes; the content-addressed assets
 may be cached immutably.
-The example omits collision soups with no triangles; they have nothing to draw
+Collision soups with no triangles are not written; they have nothing to draw
 and do not create an origin tile merely because their empty bounds default to zero.
 
 A skate-scene folder's tiles are a conversion like any other: a program runs `convert` with the skate-scene reader,
@@ -184,8 +184,8 @@ extensions, so its zero-error result supplements rather than replaces that audit
 
 ## Optional KTX2 evaluation
 
-Build with `--features ktx2` and set `Options.ktx2 = true` (or pass `--ktx2`
-to the example). The default remains PNG. The optional encoder is pinned to
+Build with `--features ktx2` and set `Options.ktx2 = true` (the `synthetic_tiles`
+example does). The default remains PNG. The optional encoder is pinned to
 `basisu_c_sys = 0.9.1`; see [source identity and licences](third-party/README.md).
 Only this feature adds the native Basis encoder and bindgen/libclang requirement.
 

@@ -189,8 +189,9 @@ byte accessor (5121) and no `names`; it is no longer written. These extras
 versions are independent of the tile format version. Consumers must read the
 accessor type, not assume a byte per surface; unknown extras versions must not
 be interpreted as known ones. Names are labels, not universal physical
-properties. Triangles keep counter-clockwise fronts in world space: a soup placed
-through a mirroring transform has its triangles' index order flipped. Rendering collision is
+properties. Triangles keep counter-clockwise fronts in world space: a soup is placed
+through a rigid transform (`bake-nonrigid` moves a mirror into the soup first, flipping its triangles' index
+order). Rendering collision is
 optional and does not contribute to `triangles` in the index.
 
 ## Optional viewer records
@@ -391,11 +392,38 @@ ignores the extension does.
 - `composition` `over` (absent: `sum`): colour starts as slot 0, then `lerp(colour, layer[i], weight[i])` for each
   later slot in order. That equals the sum with weights `w_i * prod_{j>i}(1 - w_j)` (slot 0 at full weight).
 
+### Version 3: the height composition
+
+An extension object with `"version": 3` has the height composition, with or without per-pixel channels. A consumer
+that only implements versions 1 and 2 must not evaluate it as either; it draws the host.
+
+```json
+"extensions": {"PRIMASE_layered_material": {"version": 3,
+  "weights": {"attribute": "COLOR_0", "mapping": "identity",
+    "heights": [{"mask": {"texture": {"index": 6}, "channels": [0, 0, 0, 1], "bias": 0}},
+                {"mask": {"texture": {"index": 7, "texCoord": 1}, "channels": [0, 0, 0, 1], "bias": 0}}]},
+  "composition": {"height": {"contrast": 0.4}},
+  "layers": [{"material": 4}, {"material": 5, "texCoord": 1}]}}
+```
+
+- `weights.heights` has one value per slot, in slot order: the slot's height per pixel, a value as in version 2
+  (`vertex`, or `mask` sampled with its own texture info; linear data).
+- `composition` `{"height": {"contrast": c}}`: per pixel, with the mapped weights `w_i` (from the attribute or the
+  channels, as in versions 1 and 2) and the heights `h_i`, `p_i = w_i * h_i` and `m` the largest `p_i`; slot `i` gets
+  `u_i = max(p_i - (m - (1 - c)), 0)`, divided by the sum of the `u_i`. The layers whose weighted height is near the
+  highest show; the rest fade out within the contrast. Where every `u_i` is 0 (a contrast of 1 or more) the blend has
+  no weight: the consumer states its fallback.
+- Colour and normals then combine as in `sum`, with those weights.
+- A consumer that cannot evaluate it and wants the layers drawn has a program lower it first: `bake-layer-channels`
+  (primase-image) evaluates the weights at the vertices into a colour stream and writes the material as version 1, an
+  approximation it reports.
+
 ## Synthetic conformance fixture
 
 `cargo run -p primase-web --features ktx2 --example synthetic_tiles -- <output>`
 generates a small scene entirely from literal geometry and pixels. It includes
-instancing, a mirrored placement, transformed texture coordinates, compression,
+instancing, a mirrored placement (its mirror baked into its own geometry by
+`bake-nonrigid` before writing), transformed texture coordinates, compression,
 KTX2, collision and a closed curve. `plain/` is its uncompressed comparison;
 `proof.json` contains independently decoded meshopt hashes and
 `ktx2-reference.json` contains Rust transcoder mip hashes. These proof files are
