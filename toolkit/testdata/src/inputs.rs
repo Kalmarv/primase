@@ -456,6 +456,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
     },
     Variable {
+        name: "PRIMASE_SKATE_SKELETON_ORACLE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"skate.'s render skeleton as ReSkate's EBX reader reads it (`renderskeleton.json`: every bone's name, parent, name hash, rest and world basis rows and translation, inverse bind rows); worlds/reskate/tests/game_skeleton.rs"#,
+        status: Status::Live,
+        source: r#"ReSkate's EBX reader (the source primase's EBX reader is ported from) through our C++ harness `cos_skeleton` (games/sekiro tools/reskate-spec, commit 1e43b57): checks the port and the field reading, not the interpretation; the test's independent evidence is the asset's own poses agreeing with each other"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_SKIN_ORACLE",
         kind: Kind::Input,
         gate: false,

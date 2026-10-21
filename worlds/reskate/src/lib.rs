@@ -15,6 +15,7 @@ pub mod compile;
 pub mod components;
 pub mod decal;
 pub mod exact_sum;
+pub mod game;
 pub mod glb;
 pub mod grind;
 pub mod hash;

@@ -231,4 +231,22 @@ impl Source<'_> {
         }
         Ok(None)
     }
+
+    /// The EBX document named `name` (ASCII case-insensitive, as bundle manifests name them: `characters/.../x`) in
+    /// the first bundle of the TOC at `toc` (relative to the folder, as in [`Folder::tocs`]) that holds it, read; with
+    /// the bundle's name. An error when no bundle of that TOC holds it.
+    pub fn ebx(&self, toc: &str, name: &str) -> Result<(String, crate::ebx::Document)> {
+        let t = self.folder.toc(toc)?;
+        for (bundle_name, region) in &t.bundles {
+            let (files, inline) = bundle::read_region(region)?;
+            let Some((m, first, _)) = self.manifest(&files, &inline)? else {
+                continue;
+            };
+            if let Some(i) = m.ebx.iter().position(|e| e.name.eq_ignore_ascii_case(name)) {
+                let bytes = self.payload(files[first + i], m.ebx[i].size as usize)?;
+                return Ok((bundle_name.clone(), crate::ebx::read(&bytes)?));
+            }
+        }
+        Err(Error::Missing(format!("no bundle of {toc} holds the EBX {name}")))
+    }
 }

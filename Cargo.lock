@@ -1041,6 +1041,7 @@ name = "primase-reskate"
 version = "0.1.0"
 dependencies = [
  "half",
+ "primase-animation",
  "primase-bytes",
  "primase-compress",
  "primase-core",

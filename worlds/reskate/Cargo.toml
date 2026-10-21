@@ -23,6 +23,7 @@ primase-texcodec.workspace = true
 primase-dds.workspace = true
 primase-vertex.workspace = true
 primase-meshops.workspace = true
+primase-animation.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
