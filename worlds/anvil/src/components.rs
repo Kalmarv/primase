@@ -187,12 +187,19 @@ impl Component for AnvilMaterialOverrides {
     }
 }
 
-/// A placement's DataLayerActions as its Entity stores them (`anvil.data_layers`): each a DataLayer's ClassID and the
-/// u32 after it, in stored order. Which layers a world has active, and what the u32 selects, aren't read (the Riders
-/// Republic notes' lead: 0 present while the layer is active, 1 removed while it is; docs/world.md §9).
+/// A placement's DataLayerActions as its Entity stores them (`anvil.data_layers`), in stored order.
+/// `lower-anvil-data-layers` makes world state of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnvilDataLayers {
-    pub actions: Vec<(u64, u32)>,
+    pub actions: Vec<DataLayerAction>,
+}
+
+/// One DataLayerAction: its DataLayer's ClassID and entry name (where a forge read names it), and the u32 after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataLayerAction {
+    pub layer: u64,
+    pub name: Option<String>,
+    pub word: u32,
 }
 
 impl Component for AnvilDataLayers {

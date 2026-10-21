@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
+use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::world::Resource;
 use primase_core::{Collider, Shape};
 use primase_core::{
@@ -12,8 +13,8 @@ use primase_core::{
 };
 
 use crate::components::{
-    AnvilCollisionShape, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain,
-    CollisionMaterialRef, ShapeGeometry, TerrainTile,
+    AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
+    AnvilTerrain, CollisionMaterialRef, ShapeGeometry, TerrainTile,
 };
 
 /// What names a lowered collision surface.
@@ -220,6 +221,116 @@ impl Pass for LowerAnvilShapes {
             log.count(&format!("collision {what} lowered"), 1);
         }
         w.insert_resource(surfaces);
+        Ok(())
+    }
+}
+
+/// How a placement's several DataLayerActions combine: the program's stated choice (the Riders Republic notes read
+/// them as all holding, from Entities carrying two event layers that appear only in both; not established).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Combine {
+    All,
+    Any,
+}
+
+/// `lower-anvil-data-layers{combine=all|any}`: DataLayers become world state. Each DataLayer a placement's actions
+/// name becomes a global on/off axis (key `anvil.datalayer.<its name>`, or its ClassID in hex where unnamed; class
+/// `datalayer`; no default: which layers a world has on isn't read), and each placement with actions a condition: an
+/// action whose u32 is 0 holds while its layer is on, 1 while it is off (the Riders Republic notes' reading, from one
+/// layer: Back2School's 1-objects are the furniture its 0-objects replace; docs/world.md §9); another u32 is refused.
+/// `resolve-state` then makes the program's world of them. The actions are consumed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LowerAnvilDataLayers {
+    pub combine: Combine,
+}
+
+impl LowerAnvilDataLayers {
+    /// From its options: `combine`, required.
+    pub fn from_options(o: &Options) -> Result<LowerAnvilDataLayers, String> {
+        if let Some(k) = o.keys().find(|k| k.as_str() != "combine") {
+            return Err(format!("unknown option {k}"));
+        }
+        let combine = match o.get("combine").map(String::as_str) {
+            Some("all") => Combine::All,
+            Some("any") => Combine::Any,
+            Some(v) => return Err(format!("combine={v} is not all or any")),
+            None => {
+                return Err("combine=all|any is required: how a placement's several actions combine isn't established".into());
+            }
+        };
+        Ok(LowerAnvilDataLayers { combine })
+    }
+}
+
+impl Pass for LowerAnvilDataLayers {
+    fn name(&self) -> &'static str {
+        "lower-anvil-data-layers"
+    }
+    fn options(&self) -> Options {
+        let combine = match self.combine {
+            Combine::All => "all",
+            Combine::Any => "any",
+        };
+        Options::from([("combine".to_owned(), combine.to_owned())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[AnvilDataLayers::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[StateAxis::NAME, Condition::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[AnvilDataLayers::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let placements: Vec<Entity> = w.iter::<AnvilDataLayers>().map(|(e, _)| e).collect();
+        let mut axes: BTreeMap<u64, Entity> = BTreeMap::new();
+        for e in placements {
+            let Some(layers) = w.remove::<AnvilDataLayers>(e) else {
+                continue;
+            };
+            let mut literals = Vec::with_capacity(layers.actions.len());
+            for a in &layers.actions {
+                let values = match a.word {
+                    0 => 0b10,
+                    1 => 0b01,
+                    word => {
+                        return Err(format!(
+                            "DataLayer {:#x}: an action's u32 {word}, of which only 0 and 1 are read",
+                            a.layer
+                        ));
+                    }
+                };
+                let axis = match axes.get(&a.layer) {
+                    Some(&axis) => axis,
+                    None => {
+                        let axis = w.spawn();
+                        let label = a.name.clone().unwrap_or_else(|| format!("{:x}", a.layer));
+                        w.insert(
+                            axis,
+                            StateAxis {
+                                key: format!("anvil.datalayer.{label}"),
+                                domain: Domain::Bool,
+                                default: None,
+                                scope: Scope::Global,
+                                class: "datalayer".into(),
+                                source: format!("DataLayer {:#x}", a.layer),
+                            },
+                        );
+                        log.count("DataLayer axes", 1);
+                        axes.insert(a.layer, axis);
+                        axis
+                    }
+                };
+                literals.push(Literal { axis, values });
+            }
+            let condition = match self.combine {
+                Combine::All => Condition(vec![Clause(literals)]),
+                Combine::Any => Condition(literals.into_iter().map(|l| Clause(vec![l])).collect()),
+            };
+            w.insert(e, condition);
+            log.count("placements given a DataLayer condition", 1);
+        }
         Ok(())
     }
 }
@@ -1094,6 +1205,11 @@ pub fn register(reg: &mut PassRegistry) {
         &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
+    reg.register_requiring(
+        "lower-anvil-data-layers",
+        |o| Ok(Box::new(LowerAnvilDataLayers::from_options(o)?)),
+        &[("combine", "all")],
+    );
     reg.register_requiring(
         "lower-anvil-floor",
         |o| Ok(Box::new(LowerAnvilFloor::from_options(o)?)),

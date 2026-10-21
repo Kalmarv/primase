@@ -35,7 +35,7 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh, CollisionMaterialRef,
-    ShapeGeometry,
+    DataLayerAction, ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -553,7 +553,15 @@ impl<'a> Placer<'a> {
         };
         let name = self.name(at).unwrap_or_default();
         let layers = (!e.data_layers.is_empty()).then(|| AnvilDataLayers {
-            actions: e.data_layers.clone(),
+            actions: e
+                .data_layers
+                .iter()
+                .map(|&(layer, word)| DataLayerAction {
+                    layer,
+                    name: entry_name(self.archive, layer),
+                    word,
+                })
+                .collect(),
         });
         for v in e.visuals() {
             let shows = shows(v, at)?;
