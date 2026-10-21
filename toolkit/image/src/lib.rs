@@ -14,7 +14,9 @@ mod normals;
 mod orm;
 pub use orm::{MissingLevels, OrmSize, PackOrm};
 mod qoi;
+mod rgba8;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
+pub use rgba8::{LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;
 mod upscale;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
@@ -38,6 +40,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/normals.rs", include_bytes!("normals.rs")),
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
+    ("image/rgba8.rs", include_bytes!("rgba8.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];

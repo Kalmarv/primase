@@ -1887,6 +1887,16 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
             n,
         ));
     }
+    for (format, &n) in &report.textures_unrepresentable {
+        out.push((
+            NoticeKind::Unsupported,
+            format!(
+                "{format} textures, which an 8-bit PNG cannot hold exactly, not written: lower-textures-rgba8 \
+                 converts them (counted per tile)"
+            ),
+            n,
+        ));
+    }
     for (name, &n) in &report.extras_unencoded {
         out.push((
             NoticeKind::Unsupported,

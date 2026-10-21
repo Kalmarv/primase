@@ -162,6 +162,8 @@ A data image (`extras["primase.role"] = "data"`: a palette or lookup table a sha
 stored PNG, at full size and never block-compressed, and its textures use a NEAREST sampler without mips. A
 consumer samples it as stored.
 
+Images hold 8-bit values: a texture whose source values are wider, floating point or signed is not in the tiles
+(the writer reports it) unless a program converted it first (`lower-textures-rgba8`, which names each conversion).
 Image files are PNG or KTX2 UASTC LDR 4x4 with Zstandard supercompression. KTX2 textures
 use `KHR_texture_basisu` and are transcoded to a supported GPU format. Colour
 textures use sRGB; normal and data textures are linear. The writer may retain

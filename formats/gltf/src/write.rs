@@ -35,7 +35,9 @@
 //! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
 //!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
 //!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
-//!   `primase_image::load_textures`, makes its pixels).
+//!   `primase_image::load_textures`, makes its pixels). A texture whose format an 8-bit PNG cannot hold exactly
+//!   (`primase_image::rgba8_exact`: wider, floating-point or signed values) is not written, counted by format
+//!   (`textures_unrepresentable`), its slots left empty: `lower-textures-rgba8` converts it, each conversion named.
 //! - **Extras**: every component with a JSON form (`core.source`, dialect and opaque JSON components) that the glTF
 //!   itself does not express goes into the extras of the object made from its entity, as
 //!   `extras.primase["<component name>"] = {"version": n, "value": ...}`: placement -> node, prototype -> mesh,
@@ -187,7 +189,10 @@ pub struct WriteReport {
     pub primitives_color0_ignored: u64,
     /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
     pub textures_skipped: BTreeMap<String, u64>,
-    /// Material texture slots left empty because their texture was skipped.
+    /// Textures whose format an 8-bit PNG cannot hold exactly ([`primase_image::rgba8_exact`]: wider, floating-point
+    /// or signed values), by format: not written, their slots left empty (`lower-textures-rgba8` converts them).
+    pub textures_unrepresentable: BTreeMap<String, u64>,
+    /// Material texture slots left empty because their texture was skipped or could not be held exactly.
     pub texture_slots_dropped: u64,
     /// Texture slots stating a minification filter without a mip filter, or the reverse: glTF's `minFilter` names
     /// both, so neither is written.
@@ -249,6 +254,11 @@ impl fmt::Display for WriteReport {
             self.texture_slots_dropped
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
+        writeln!(
+            f,
+            "textures an 8-bit PNG cannot hold exactly (not written) {:?}",
+            self.textures_unrepresentable
+        )?;
         writeln!(
             f,
             "texture filters glTF cannot express (min without mip, or mip without min) {}",
@@ -1306,7 +1316,11 @@ impl Writer<'_> {
                     .texture_info(Some(*texture), sets)?
                     .ok_or_else(|| Error::World {
                         entity: e,
-                        detail: format!("mask texture {:?} could not be written", texture.texture),
+                        detail: format!(
+                            "mask texture {:?} could not be written (not loaded, or a format an 8-bit PNG cannot hold \
+                             exactly: lower-textures-rgba8)",
+                            texture.texture
+                        ),
                     })?;
                 json!({"mask": {
                     "texture": info,
@@ -1411,6 +1425,16 @@ impl Writer<'_> {
                         "normal texture requires tangent/bitangent basis, X in red, green up and stored Z; run normalize-normals first"
                             .into(),
                 });
+            }
+            if !primase_image::rgba8_exact(texture.format) {
+                // its values have no exact 8-bit form: lower-textures-rgba8 converts it, as a program chooses
+                *self
+                    .report
+                    .textures_unrepresentable
+                    .entry(format!("{:?}", texture.format))
+                    .or_default() += 1;
+                self.image_of_entity.insert(e, None);
+                return Ok(None);
             }
             let bytes = primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
                 entity: e,

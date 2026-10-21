@@ -450,6 +450,12 @@ impl Pass for PrepareWebTextures {
         for &(_, slot, t) in &binds {
             match w.get::<Texture>(t) {
                 Some(tex) if tex.role == TexRole::Data => {}
+                // no exact 8-bit form to filter or encode: left as stored, for the writer to report
+                Some(tex) if !primase_image::rgba8_exact(tex.format) => log.count(
+                    "texture bindings whose format an 8-bit PNG cannot hold exactly, not prepared \
+                     (lower-textures-rgba8 first)",
+                    1,
+                ),
                 Some(_) => {
                     roles.entry(t).or_default().insert(slot.role());
                 }

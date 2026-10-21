@@ -226,3 +226,62 @@ fn a_mesh_beside_a_marker_and_a_collision_soup_reports_them() {
     assert_eq!(report.entities_unwritten, 0);
     assert!(report.components_unwritten.is_empty());
 }
+
+/// A texture whose format an 8-bit PNG cannot hold exactly (half floats: 2.0 is beyond 0-1) is left out and reported
+/// by format, its slot left empty; once `lower-textures-rgba8` converts it, it is written.
+#[test]
+fn a_texture_an_8_bit_png_cannot_hold_is_left_out_until_converted() {
+    use primase_core::pass::{Pass, PassLog};
+    use primase_core::pbr::TextureRef;
+    use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+    let mut w = World::new();
+    let texture = w.spawn();
+    w.insert(
+        texture,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba16Float,
+            levels: vec![
+                [0x4000u16, 0, 0x3400, 0x3C00]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect(),
+            ],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let material = w.spawn();
+    w.insert(
+        material,
+        PbrMaterial {
+            base_color_texture: Some(TextureRef::new(texture)),
+            ..PbrMaterial::default()
+        },
+    );
+    // the quad with the texture coordinates its material samples
+    let mut primitive = quad(Some(material)).primitives()[0].clone();
+    primitive.streams.insert(
+        Semantic::TexCoord(0),
+        Stream::F32x2(vec![[0., 0.], [1., 0.], [1., 1.], [0., 1.]]),
+    );
+    let mesh = Mesh::new(vec![primitive]);
+    let prototype = w.spawn();
+    w.insert(prototype, mesh);
+    place(&mut w, prototype, "lit", 0.);
+    let (doc, report) = written(&w, None);
+    assert_eq!(
+        report.textures_unrepresentable,
+        BTreeMap::from([("Rgba16Float".to_owned(), 1)])
+    );
+    assert_eq!((report.texture_slots_dropped, report.images), (1, 0));
+    assert!(doc.get("images").is_none());
+    primase_image::LowerTexturesRgba8::default()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let (_, report) = written(&w, None);
+    assert!(report.textures_unrepresentable.is_empty());
+    assert_eq!((report.texture_slots_dropped, report.images), (0, 1));
+}

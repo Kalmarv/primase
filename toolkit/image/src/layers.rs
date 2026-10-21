@@ -23,6 +23,9 @@ pub fn register(reg: &mut PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(BakeLayerChannels)),
     });
+    reg.register("lower-textures-rgba8", |o: &Options| {
+        Ok(Box::new(crate::LowerTexturesRgba8::from_options(o)?))
+    });
     reg.register("normalize-normals", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(crate::NormalizeNormals)),
