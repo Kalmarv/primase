@@ -96,6 +96,33 @@ impl PixelShader for Shader {
     }
 }
 
+/// The checksum a container stores at bytes 4..20: MD5's block function over its bytes from 20 on, the last block
+/// padded as the compiler does (the bit count first, then the rest, `0x80`, zeros, and at 60 the bit count over 4,
+/// or 1; a rest of 56 bytes or more padded in a block of its own first). `None` for fewer than 20 bytes.
+pub fn checksum(container: &[u8]) -> Option<[u8; 16]> {
+    let data = container.get(20..)?;
+    let bits = u32::try_from(data.len()).ok()?.wrapping_mul(8);
+    let (blocks, rest) = data.as_chunks::<64>();
+    let mut state = primase_hash::MD5_INIT;
+    for block in blocks {
+        primase_hash::md5_block(&mut state, block);
+    }
+    let mut last = [0u8; 64];
+    if rest.len() < 56 {
+        last[4..4 + rest.len()].copy_from_slice(rest);
+        last[4 + rest.len()] = 0x80;
+    } else {
+        let mut first = [0u8; 64];
+        first[..rest.len()].copy_from_slice(rest);
+        first[rest.len()] = 0x80;
+        primase_hash::md5_block(&mut state, &first);
+    }
+    last[..4].copy_from_slice(&bits.to_le_bytes());
+    last[60..].copy_from_slice(&((bits >> 2) | 1).to_le_bytes());
+    primase_hash::md5_block(&mut state, &last);
+    Some(primase_hash::md5_bytes(state))
+}
+
 /// A borrowed container chunk. Offsets and lengths are checked before exposure.
 #[derive(Clone, Copy, Debug)]
 pub struct Chunk<'a> {

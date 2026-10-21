@@ -14,6 +14,7 @@ primase-core.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
 primase-image.workspace = true
+primase-dxbc.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
