@@ -203,7 +203,7 @@ fn run(order: &[usize], restartable: bool, firsts: bool) -> Result<Saw> {
     registry.summary::<Firsts>();
     registry.decision::<Total>();
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let manager = PassManager::new(PassRegistry::new());
+    let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let summarize = Pipeline {
         passes: vec![Box::new(Count { firsts }) as Box<dyn Pass>],
     };
@@ -331,7 +331,7 @@ fn summarize_with(
             restartable: true,
         },
         Box::new(Seen(Rc::new(RefCell::new(Vec::new())))),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_pass_checks(true),
         &none,
         &Summarized {
             registry: &registry,

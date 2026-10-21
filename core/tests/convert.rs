@@ -340,7 +340,7 @@ fn manager(select: &str) -> (PassManager, Pipeline, Pipeline) {
     r.register("toy-lower", |_| Ok(Box::new(ToyLower)));
     r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
     let (select, passes) = (r.parse(select).unwrap(), r.parse("toy-pass").unwrap());
-    (PassManager::new(r), select, passes)
+    (PassManager::new(r).with_pass_checks(true), select, passes)
 }
 
 /// What the toy writer writes; `toy.raw` it doesn't.
@@ -716,7 +716,7 @@ fn manager_with(select: &str, passes: &str) -> (PassManager, Pipeline, Pipeline)
     r.register("toy-add-res", |_| Ok(Box::new(ToyAddRes)));
     r.register("two-cells", |_| Ok(Box::new(TwoCells)));
     let (select, passes) = (r.parse(select).unwrap(), r.parse(passes).unwrap());
-    (PassManager::new(r), select, passes)
+    (PassManager::new(r).with_pass_checks(true), select, passes)
 }
 
 /// Writes nothing; keeps the names of the markers it is given.
@@ -1531,7 +1531,7 @@ fn a_part_sharing_its_own_root_or_context_is_refused() {
             &mut toy,
             &mut Sharing { as_root, part: None },
             w,
-            &PassManager::new(PassRegistry::new()),
+            &PassManager::new(PassRegistry::new()).with_pass_checks(true),
             &Pipeline { passes: Vec::new() },
             &Pipeline { passes: Vec::new() },
         )

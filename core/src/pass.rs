@@ -2415,7 +2415,7 @@ mod tests {
 
     #[test]
     fn undeclared_changes_and_verifier_name_the_pass() {
-        let m = PassManager::new(registry(false));
+        let m = PassManager::new(registry(false)).with_pass_checks(true);
         let mut w = world();
         let p = m.registry.parse("sneaky").unwrap();
         let err = m.run(&mut w, &p, &mut RunReport::default()).unwrap_err();
@@ -2658,7 +2658,7 @@ mod tests {
 
     fn env_run(pass: EnvPass, w: &mut World) -> Result<RunReport> {
         let mut report = RunReport::default();
-        PassManager::new(PassRegistry::new()).run(
+        PassManager::new(PassRegistry::new()).with_pass_checks(true).run(
             w,
             &Pipeline {
                 passes: vec![Box::new(pass)],
@@ -3614,7 +3614,7 @@ mod tests {
                     .collect()
             }
         }
-        let mut m = PassManager::new(registry(false));
+        let mut m = PassManager::new(registry(false)).with_pass_checks(true);
         m.add_validator(Box::new(NoPbr));
         let err = m
             .convert(&mut world(), &gltf(), Mode::Partial, &PassOptions::new())
